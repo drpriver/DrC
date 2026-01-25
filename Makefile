@@ -1,6 +1,7 @@
-.PHONY: all cpp
-cpp all: | build
-	./build $@
+BUILDTARGETS:=all cpp debug run tags
+.PHONY: $(BUILDTARGETS)
+$(BUILDTARGETS): | build
+	@./build $@
 
 build: 
 	$(CC) build.c -o $@
