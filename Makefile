@@ -6,3 +6,4 @@ $(BUILDTARGETS): | build
 build: 
 	$(CC) build.c -o $@
 	./build -b Bin
+.DEFAULT_GOAL:=all
