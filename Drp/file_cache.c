@@ -53,8 +53,6 @@ fc_create(Allocator a){
     fc->path_builder.allocator = a;
     return fc;
 }
-// Deallocates the filecache and all resources referenced by the file cache.
-// This deallocs any read files!
 static void fc_destroy(FileCache* fc){
     (void)fc; // TODO
 }
@@ -63,6 +61,7 @@ void
 fc_write_path(FileCache* fc, const char* txt, size_t len){
     msb_write_str(&fc->path_builder, txt, len);
 }
+
 static
 void
 fc_write_pathf(FileCache* fc, const char* fmt, ...){
@@ -147,7 +146,7 @@ fc_create_entry(FileCache* fc){
         if(idx >= cap2) idx = 0;
     }
 }
-// Returns if the file exists and is a file, false otherwise.
+
 static
 _Bool
 fc_is_file(FileCache* fc){
@@ -173,12 +172,15 @@ fc_is_file(FileCache* fc){
         f->exists = 1;
         result = S_ISREG(s.st_mode);
         f->is_file = result;
+        f->size_cached = 1;
+        f->data_size = s.st_size;
     }
     #endif
     finally:
     msb_reset(&fc->path_builder);
     return result;
 }
+
 static
 int
 fc_read_file(FileCache* fc, StringView* outdata){
@@ -264,11 +266,60 @@ fc_read_file(FileCache* fc, StringView* outdata){
 
     #endif
     finally:
+    #ifdef _WIN32
+    #else
     if(fd >= 0) close(fd);
+    #endif
     msb_reset(&fc->path_builder);
     return result;
 }
-static int fc_get_size(FileCache*, size_t* sz);
+
+static
+int
+fc_get_size(FileCache* fc, size_t* sz){
+    int result = 0;
+    CachedFile* f = fc_get_entry(fc);
+    if(f && f->valid){
+        if(f->size_cached){
+            *sz = f->data_size;
+            result = 0;
+            goto finally;
+        }
+    }
+    if(!f) f = fc_create_entry(fc);
+    #ifdef _WIN32
+    // TODO
+    #else
+    struct stat s;
+    int err = stat(f->path.text, &s);
+    if(err){
+        f->valid = 1;
+        f->exists = 0;
+        f->is_file = 0;
+        result = errno;
+    }
+    else {
+        f->valid = 1;
+        f->exists = 1;
+        if(!S_ISREG(s.st_mode)){
+            f->size_cached = 0;
+            f->data_cached = 0;
+            f->is_file = 0;
+            result = ENOTBLK;
+            goto finally;
+        }
+        f->is_file = 1;
+        f->size_cached = 1;
+        f->data_size = s.st_size;
+        *sz = f->data_size;
+        result = 0;
+        goto finally;
+    }
+    #endif
+    finally:
+    msb_reset(&fc->path_builder);
+    return result;
+}
 
 
 #ifdef __clang__
