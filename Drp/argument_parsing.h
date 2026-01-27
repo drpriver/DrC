@@ -438,6 +438,10 @@ struct ArgToParse {
     // For keyword arguments, whether this arg is required.
     _Bool required;
 
+    // For keyword arguments, argument can be invoked multiple times,
+    // but each time requires the flag.
+    _Bool one_at_a_time;
+
     //
     // The description of the argument. When printed, the helpstring will be
     // tokenized and adjacent whitespace will be merged into a single space.
@@ -1361,9 +1365,11 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                     }
                     found_new_kwarg:;
                     if(new_kwarg->visited){
-                        parser->failed.arg_to_parse = new_kwarg;
-                        parser->failed.arg = *arg;
-                        return ARGPARSE_DUPLICATE_KWARG;
+                        if(!new_kwarg->one_at_a_time){
+                            parser->failed.arg_to_parse = new_kwarg;
+                            parser->failed.arg = *arg;
+                            return ARGPARSE_DUPLICATE_KWARG;
+                        }
                     }
                     if(pos_arg && pos_arg != past_the_end && pos_arg->visited)
                         pos_arg++;
@@ -1397,6 +1403,8 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                 return err;
             }
             if(kwarg->num_parsed == agp_maxnum(kwarg->max_num))
+                kwarg = NULL;
+            else if(kwarg->one_at_a_time)
                 kwarg = NULL;
         }
         else if(pos_arg && pos_arg != past_the_end){
@@ -1509,10 +1517,12 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                     }
                     found_new_kwarg:;
                     if(new_kwarg->visited){
-                        parser->failed.arg_to_parse = new_kwarg;
-                        // @Sus
-                        parser->failed.arg = arg->text;
-                        return ARGPARSE_DUPLICATE_KWARG;
+                        if(!new_kwarg->one_at_a_time){
+                            parser->failed.arg_to_parse = new_kwarg;
+                            // @Sus
+                            parser->failed.arg = arg->text;
+                            return ARGPARSE_DUPLICATE_KWARG;
+                        }
                     }
                     if(pos_arg && pos_arg != past_the_end && pos_arg->visited)
                         pos_arg++;
@@ -1545,6 +1555,8 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                 return err;
             }
             if(kwarg->num_parsed == agp_maxnum(kwarg->max_num))
+                kwarg = NULL;
+            else if(kwarg->one_at_a_time)
                 kwarg = NULL;
         }
         else if(pos_arg && pos_arg != past_the_end){
