@@ -190,6 +190,8 @@ int main(int argc, char** argv, char** envp){
     MARRAY_FOR_EACH(StringView, p, cpp.framework_paths){
         log_printf(&logger, "-F %zd) %.*s", p-cpp.framework_paths.data, (int)p->length, p->text);
     }
+    log_printf(&logger, "has_include(\"%s\") : %s", filename, cpp_has_include(&cpp, 1, (StringView){strlen(filename), filename})?"true":"false");
+    log_printf(&logger, "has_include(<%s>) : %s", filename, cpp_has_include(&cpp, 0, (StringView){strlen(filename), filename})?"true":"false");
 
     return 0;
 }

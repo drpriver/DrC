@@ -22,6 +22,16 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifndef arrlen
+#define arrlen(arr) (sizeof(arr)/sizeof((arr)[0]))
+#endif
+
+typedef struct IncludePosition IncludePosition;
+struct IncludePosition {
+    size_t array, // which array we are scanning through
+           idx;   // actual index into the array.
+};
+
 typedef struct CPreprocessor CPreprocessor;
 struct CPreprocessor {
     Allocator allocator;
@@ -44,15 +54,41 @@ struct CPreprocessor {
      * 6. Directories specified with -idirafter options are scanned in
      *    left-to-right order.
      */
-    Marray(StringView)  iquote_paths,
-                        Ipaths,
-                        isystem_paths,
-                        istandard_system_paths,
-                        idirafter_paths,
-                        framework_paths;
+    IncludePosition include_position; // where we are in the include lookup, for include_next and related.
+    union {
+        struct {
+            Marray(StringView)  iquote_paths,
+                                Ipaths,
+                                isystem_paths,
+                                istandard_system_paths,
+                                idirafter_paths,
+                                framework_paths;
+        };
+        Marray(StringView) include_paths[5];
+    };
 
 
 };
+static
+_Bool
+cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name){
+    MStringBuilder* sb = fc_path_builder(cpp->fc);
+    for(size_t i = quote?0:1; i < arrlen(cpp->include_paths); i++){
+        Marray(StringView)* dirs = &cpp->include_paths[i];
+        MARRAY_FOR_EACH_VALUE(StringView, d, *dirs){
+            msb_reset(sb);
+            if(!d.length) continue;
+            msb_write_str(sb, d.text, d.length);
+            if(msb_peek(sb) != '/')
+                msb_write_char(sb, '/');
+            msb_write_str(sb, header_name.text, header_name.length);
+            if(fc_is_file(cpp->fc)){
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
