@@ -1984,10 +1984,10 @@ main(int argc, const char*_Null_unspecified*_Null_unspecified argv){
     }
     // Parsing has succeeded at this point.
     // Real program would then do stuff with these values.
-    p->print(p->hout, "somepath = '%s'\n", somepath.text);
+    parser.print(parser.hout, "somepath = '%s'\n", somepath.text);
     if(output.length)
-        p->print(p->hout, "output = '%s'\n", output.text);
-    p->print(p->hout, "n_times = %d\n", n_times);
+        parser.print(parser.hout, "output = '%s'\n", output.text);
+    parser.print(parser.hout, "n_times = %d\n", n_times);
     puts(dry_run? "dry_run = 1": "dry_run = 0");
     return 0;
 }
