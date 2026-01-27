@@ -96,6 +96,10 @@ enum ArgParseFlags {
 
     // Kwargs are allowed to not start with '-'
     ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX = 1 << 3,
+
+    // Kwargs are allowed to not need a separator between the flag and the arg
+    // like -o/foo/bar
+    ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL
 };
 
 typedef struct Args Args;
@@ -441,6 +445,10 @@ struct ArgToParse {
     // For keyword arguments, argument can be invoked multiple times,
     // but each time requires the flag.
     _Bool one_at_a_time;
+
+    // For compat with crappy old unix clis, the space separating this arg
+    // from the argument is optional.
+    _Bool space_sep_is_optional;
 
     //
     // The description of the argument. When printed, the helpstring will be
@@ -1354,6 +1362,24 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                             if(new_kwarg){
                                 arg_after_eq = 1;
                                 s = (StringView){s.text+s.length - eq - 1, eq+1};
+                                goto found_new_kwarg;
+                            }
+                        }
+                    }
+                    if(!new_kwarg && (flags & ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL)){
+                        // could be a space optional arg
+                        // do an inefficient linear search for now.
+                        for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+                            for(size_t i = 0; i < keywords->count; i++){
+                                ArgToParse* kw = &keywords->args[i];
+                                if(!kw->space_sep_is_optional) continue;
+                                if(sv_startswith(s, kw->name)){
+                                    // pick first match
+                                    new_kwarg = kw;
+                                    arg_after_eq = 1; // FIXME: misleading name
+                                    s = (StringView){s.length-kw->name.length, s.text+kw->name.length};
+                                    goto found_new_kwarg;
+                                }
                             }
                         }
                     }
@@ -1404,8 +1430,9 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
             }
             if(kwarg->num_parsed == agp_maxnum(kwarg->max_num))
                 kwarg = NULL;
-            else if(kwarg->one_at_a_time)
+            else if(kwarg->one_at_a_time){
                 kwarg = NULL;
+            }
         }
         else if(pos_arg && pos_arg != past_the_end){
             pos_arg->visited = 1;
@@ -1505,6 +1532,23 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                             if(new_kwarg){
                                 arg_after_eq = 1;
                                 s = (StringView){s.text+s.length - eq - 1, eq+1};
+                            }
+                        }
+                    }
+                    if(!new_kwarg && (flags & ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL)){
+                        // could be a space optional arg
+                        // do an inefficient linear search for now.
+                        for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+                            for(size_t k = 0; k < keywords->count; k++){
+                                ArgToParse* kw = &keywords->args[k];
+                                if(!kw->space_sep_is_optional) continue;
+                                if(sv_startswith(s, kw->name)){
+                                    // pick first match
+                                    new_kwarg = kw;
+                                    arg_after_eq = 1; // FIXME: misleading name
+                                    s = (StringView){s.length-kw->name.length, s.text+kw->name.length};
+                                    goto found_new_kwarg;
+                                }
                             }
                         }
                     }
