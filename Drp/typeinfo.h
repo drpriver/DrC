@@ -77,6 +77,7 @@ enum MemberKind {
     MK_NORMAL = 0,
     MK_BITFIELD = 1,
     MK_ARRAY = 2,
+    MK_FLEXIBLE_ARRAY = 3,
 };
 typedef enum MemberKind MemberKind;
 
@@ -122,8 +123,21 @@ struct MemberInfo {
             #else
             #endif
         } bitfield;
+        struct {
+            size_t offset: 15; // offset to beginning of flexible-array-member
+            size_t kind: 2;
+            size_t noser: 1;
+            size_t nodeser: 1;
+            size_t noprint: 1;
+            size_t length_mi: 6; // Read length from this member.
+            size_t after_mi: 6; // offset is after the end of this member
+            #if SIZE_MAX == UINT64_MAX
+            size_t _pad: 32;
+            #endif
+        } flexible;
     };
 };
+enum {TI_AFTER_MI_NONE=63};
 _Static_assert(sizeof(MemberInfo) == sizeof(size_t)*3, "");
 
 typedef struct TypeInfoStruct TypeInfoStruct;
@@ -133,7 +147,7 @@ struct TypeInfoStruct {
     size_t length: 29; \
     /* Whether the struct doesn't need to handle new or deleted fields */ \
     /* when deserializing. */ \
-    size_t is_closed: 1 \
+    size_t is_dynamically_sized: 1 \
 
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
     // There is no portable way to static initialize flexible array members, so

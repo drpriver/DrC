@@ -28,6 +28,7 @@ struct StringView {
 
 #define SV(x) ((StringView){sizeof(x)-1, x})
 #define SVI(x) {sizeof(x)-1, x}
+#define sv_p(x) (int)(x).length, (x).text
 
 force_inline
 _Bool

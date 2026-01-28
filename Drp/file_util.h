@@ -106,11 +106,28 @@ warn_unused
 FileError
 write_file(const char* filename, const void* data, size_t data_length);
 
+#if defined(USE_C_STDIO)
+typedef FILE* FileUtilHandle;
+#elif defined(__linux__) || defined(__APPLE__)
+typedef int FileUtilHandle;
+#elif defined(_WIN32)
+typedef HANDLE FileUtilHandle;
+#endif
+
+// Read from an open file handle (including stdin, pipes, etc).
+// Does NOT close the handle - caller owns the lifetime.
+// Handles both regular files and streams. Retries on EINTR.
+// For convenience, the result is nul-terminated.
+static inline
+warn_unused
+FileError
+read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr);
+
 #ifdef USE_C_STDIO
 force_inline
 warn_unused
 FileError
-file_size_from_fp(FILE* fp, size_t* size){
+file_size_from_handle(FILE* fp, size_t* size){
     FileError result = {0};
     // sadly, the only way in standard c to do this.
     if(fseek(fp, 0, SEEK_END))
@@ -138,7 +155,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
     if(!fp)
         return (FileError){.errored=FILE_NOT_OPENED, .native_error=errno};
     size_t nbytes;
-    FileError size_e = file_size_from_fp(fp, &nbytes);
+    FileError size_e = file_size_from_handle(fp, &nbytes);
     if(size_e.errored){
         fclose(fp);
         return size_e;
@@ -171,7 +188,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
     if(!fp)
         return (FileError){.errored=FILE_NOT_OPENED, .native_error=errno};
     size_t nbytes;
-    FileError size_e = file_size_from_fp(fp, &nbytes);
+    FileError size_e = file_size_from_handle(fp, &nbytes);
     if(size_e.errored){
         result = size_e;
         goto finally;
@@ -219,7 +236,7 @@ write_file(const char* filename, const void* data, size_t data_length){
 force_inline
 warn_unused
 FileError
-file_size_from_fd(int fd, size_t* length){
+file_size_from_handle(int fd, size_t* length){
     FileError result = {0};
     struct stat s;
     int err = fstat(fd, &s);
@@ -253,7 +270,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
         return result;
     }
     size_t nbytes;
-    FileError size_e = file_size_from_fd(fd, &nbytes);
+    FileError size_e = file_size_from_handle(fd, &nbytes);
     if(size_e.errored){
         result = size_e;
         goto finally;
@@ -291,7 +308,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
         return result;
     }
     size_t nbytes;
-    FileError size_e = file_size_from_fd(fd, &nbytes);
+    FileError size_e = file_size_from_handle(fd, &nbytes);
     if(size_e.errored){
         result = size_e;
         goto finally;
@@ -313,6 +330,87 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
     *outbuff = (ByteBuffer){nbytes, data};
 finally:
     close(fd);
+    return result;
+}
+
+static inline
+warn_unused
+FileError
+read_file_handle(int fd, Allocator a, LongString* outstr){
+    FileError result = {0};
+
+    size_t nbytes;
+    FileError size_e = file_size_from_handle(fd, &nbytes);
+    if(!size_e.errored){
+        // Regular file with known size - use fast path
+        char* text = Allocator_alloc(a, nbytes+1);
+        if(!text){
+            result.errored = FILE_RESULT_ALLOC_FAILURE;
+            return result;
+        }
+
+        size_t total_read = 0;
+        while(total_read < nbytes){
+            ssize_t nread = read(fd, text + total_read, nbytes - total_read);
+            if(nread < 0){
+                if(errno == EINTR) continue; // Retry on interrupt
+                Allocator_free(a, text, nbytes+1);
+                result.errored = FILE_ERROR;
+                result.native_error = errno;
+                return result;
+            }
+            if(nread == 0) break; // EOF
+            total_read += nread;
+        }
+
+        text[total_read] = '\0';
+        *outstr = (LongString){total_read, text};
+        return result;
+    }
+
+    // For streams/pipes/stdin - read in chunks
+    enum {CHUNK_SIZE = 65536}; // 64KB chunks
+    size_t capacity = CHUNK_SIZE;
+    size_t length = 0;
+    char* buffer = Allocator_alloc(a, capacity);
+    if(!buffer){
+        result.errored = FILE_RESULT_ALLOC_FAILURE;
+        return result;
+    }
+
+    for(;;){
+        if(length + CHUNK_SIZE > capacity){
+            size_t new_capacity = capacity * 2;
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            if(!new_buffer){
+                Allocator_free(a, buffer, capacity);
+                result.errored = FILE_RESULT_ALLOC_FAILURE;
+                return result;
+            }
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
+
+        ssize_t nread = read(fd, buffer + length, CHUNK_SIZE);
+        if(nread < 0){
+            if(errno == EINTR) continue; // Retry on interrupt
+            Allocator_free(a, buffer, capacity);
+            result.errored = FILE_ERROR;
+            result.native_error = errno;
+            return result;
+        }
+        if(nread == 0) break; // EOF
+        length += nread;
+    }
+    // shrink to fit
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    if(!new_buffer){
+        Allocator_free(a, buffer, capacity);
+        result.errored = FILE_RESULT_ALLOC_FAILURE;
+        return result;
+    }
+    new_buffer[length] = 0;
+    *outstr = (LongString){length, new_buffer};
     return result;
 }
 
@@ -342,9 +440,6 @@ write_file(const char* filename, const void* data, size_t data_length){
 #pragma clang diagnostic ignored "-Wcast-qual"
 #endif
 
-// NOTE: In windows implementation we cast result of alloc
-//       for C++ compat.
-
 static inline
 warn_unused
 FileError
@@ -372,7 +467,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    char* text = (char*)Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc(a, nbytes+1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
@@ -422,7 +517,7 @@ read_file_w(const wchar_t* filepath, Allocator a, LongString* outstr){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    char* text = (char*)Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc(a, nbytes+1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
@@ -529,6 +624,91 @@ read_bin_file_w(const wchar_t* filepath, Allocator a, ByteBuffer* outbuff){
     *outbuff = (ByteBuffer){nbytes, data};
 finally:
     CloseHandle(handle);
+    return result;
+}
+
+static inline
+warn_unused
+FileError
+read_file_handle(HANDLE handle, Allocator a, LongString* outstr){
+    FileError result = {0};
+
+    LARGE_INTEGER size;
+    BOOL size_success = GetFileSizeEx(handle, &size);
+    if(size_success){
+        // Regular file with known size
+        size_t nbytes = size.QuadPart;
+        char* text = Allocator_alloc(a, nbytes+1);
+        if(!text){
+            result.errored = FILE_RESULT_ALLOC_FAILURE;
+            return result;
+        }
+
+        size_t total_read = 0;
+        while(total_read < nbytes){
+            size_t to_read = nbytes - total_read;
+            if(to_read > (DWORD)-1) to_read = (DWORD)-1; // Clamp to DWORD max
+            DWORD nread;
+            BOOL read_success = ReadFile(handle, text + total_read, (DWORD)to_read, &nread, NULL);
+            if(!read_success){
+                Allocator_free(a, text, nbytes+1);
+                result.errored = FILE_ERROR;
+                result.native_error = GetLastError();
+                return result;
+            }
+            if(nread == 0) break; // EOF
+            total_read += nread;
+        }
+
+        text[total_read] = '\0';
+        *outstr = (LongString){total_read, text};
+        return result;
+    }
+
+    // For streams/pipes/stdin - read in chunks
+    enum {CHUNK_SIZE = 65536}; // 64KB chunks
+    size_t capacity = CHUNK_SIZE;
+    size_t length = 0;
+    char* buffer = Allocator_alloc(a, capacity);
+    if(!buffer){
+        result.errored = FILE_RESULT_ALLOC_FAILURE;
+        return result;
+    }
+
+    for(;;){
+        // Ensure we have room for at least one more chunk
+        if(length + CHUNK_SIZE > capacity){
+            size_t new_capacity = capacity * 2;
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            if(!new_buffer){
+                Allocator_free(a, buffer, capacity);
+                result.errored = FILE_RESULT_ALLOC_FAILURE;
+                return result;
+            }
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
+
+        DWORD nread;
+        BOOL read_success = ReadFile(handle, buffer + length, CHUNK_SIZE, &nread, NULL);
+        if(!read_success){
+            Allocator_free(a, buffer, capacity);
+            result.errored = FILE_ERROR;
+            result.native_error = GetLastError();
+            return result;
+        }
+        if(nread == 0) break; // EOF
+        length += nread;
+    }
+    // shrink to fit
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    if(!new_buffer){
+        Allocator_free(a, buffer, capacity);
+        result.errored = FILE_RESULT_ALLOC_FAILURE;
+        return result;
+    }
+    new_buffer[length] = 0;
+    *outstr = (LongString){length, new_buffer};
     return result;
 }
 

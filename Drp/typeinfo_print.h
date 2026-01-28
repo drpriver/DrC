@@ -136,6 +136,117 @@ ti_print_any(const void* src, const TypeInfo* ti, TiPrinter* printer){
             return;
     }
 }
+
+static
+int
+ti_get_size_t_from_member(const void* src, const MemberInfo* mi, size_t* length){
+    switch((MemberKind)mi->kind){
+        case MK_NORMAL:{
+            const void* field = (const char*)src + mi->offset;
+            switch(mi->type->kind){
+            case TIK_UNSET: return 1;
+            case TIK_INT8:
+                *length = (size_t)*(const int8_t*)field;
+                return 0;
+            case TIK_INT16:
+                *length = (size_t)*(const int16_t*)field;
+                return 0;
+            case TIK_INT32:
+                *length = (size_t)*(const int32_t*)field;
+                return 0;
+            case TIK_INT64:
+                *length = (size_t)*(const int64_t*)field;
+                return 0;
+            case TIK_UINT8:
+                *length = (size_t)*(const uint8_t*)field;
+                return 0;
+            case TIK_UINT16:
+                *length = (size_t)*(const uint16_t*)field;
+                return 0;
+            case TIK_UINT32:
+                *length = (size_t)*(const uint32_t*)field;
+                return 0;
+            case TIK_UINT64:
+                *length = (size_t)*(const uint64_t*)field;
+                return 0;
+            case TIK_FLOAT32:
+            case TIK_FLOAT64:
+                return 1;
+            case TIK_BOOL:
+                *length = (size_t)*(const _Bool*)field;
+                return 0;
+            case TIK_ATOM:
+            case TIK_SV:
+            case TIK_ATOM_SET:
+            case TIK_STRUCT:
+            case TIK_TUPLE:
+            case TIK_ENUM:
+            case TIK_ATOM_ENUM:
+            case TIK_MARRAY:
+            case TIK_FARRAY:
+            case TIK_ATOM_MAP:
+            case TIK_DRJSON_VALUE:
+            case TIK_POINTER:
+            case TIK_CLASS:
+                return 1;
+            }
+        }break;
+        case MK_ARRAY:
+            return 1;
+        case MK_BITFIELD:{
+            uint64_t val = 0;
+            const void* field = (const char*)src + mi->offset;
+            val = read_bitfield(field, mi->type->size, mi->bitfield.bitsize, mi->bitfield.bitoffset, mi->type->kind <= TIK_INT64);
+            *length = (size_t)val;
+            return 0;
+        }break;
+        case MK_FLEXIBLE_ARRAY:
+            return 1;
+    }
+}
+
+static int ti_get_end_of_member(const void* src, const TypeInfoStruct* ti, const MemberInfo* mi, const void** end);
+static
+int
+ti_get_start_of_member(const void* src, const TypeInfoStruct* ti, const MemberInfo* mi, const void** end){
+    const char* base;
+    if(mi->flexible.after_mi != TI_AFTER_MI_NONE){
+        if(mi->flexible.after_mi >= ti->length) return 1;
+        int err = ti_get_end_of_member(src, ti, &ti->members[mi->flexible.after_mi], (const void**)&base);
+        if(err) return err;
+    }
+    else
+        base = (const char*)src + mi->offset;
+    *end = base;
+    return 0;
+}
+static
+int
+ti_get_end_of_member(const void* src, const TypeInfoStruct* ti, const MemberInfo* mi, const void** end){
+    switch(mi->kind){
+        case MK_NORMAL:
+            *end = (const char*)src + mi->offset + mi->type->size;
+            return 0;
+        case MK_ARRAY:
+            *end = (const char*)src + mi->offset + mi->type->size * mi->array.length;
+            return 0;
+        case MK_FLEXIBLE_ARRAY:{
+            const char* base;
+            int err = ti_get_start_of_member(src, ti, mi, (const void**)&base);
+            if(err) return err;
+            if(mi->flexible.length_mi >= ti->length) return 1;
+            size_t length;
+            err = ti_get_size_t_from_member(src, &ti->members[mi->flexible.length_mi], &length);
+            *end = base + length*mi->type->size;
+            return 0;
+        };
+        case MK_BITFIELD:
+            *end = (const char*)src + mi->offset + mi->type->size;
+            return 0;
+    }
+    return 1;
+}
+
 static
 void
 ti_print_struct(const void* src, const TypeInfoStruct* ti, TiPrinter* printer){
@@ -154,11 +265,13 @@ ti_print_struct(const void* src, const TypeInfoStruct* ti, TiPrinter* printer){
             }break;
             case MK_ARRAY:{
                 printer->printer(printer->ctx, "[");
+                printer->indent++;
                 for(size_t j = 0; j < mi->array.length; j++){
                     const void* field = (const char*)src + mi->offset + j * mt->size;
                     ti_print_any(field, mt, printer);
                     printer->printer(printer->ctx, ", ");
                 }
+                printer->indent--;
                 printer->printer(printer->ctx, "]");
             }break;
             case MK_BITFIELD:{
@@ -166,6 +279,25 @@ ti_print_struct(const void* src, const TypeInfoStruct* ti, TiPrinter* printer){
                 const void* field = (const char*)src + mi->offset;
                 val = read_bitfield(field, mt->size, mi->bitfield.bitsize, mi->bitfield.bitoffset, mt->kind <= TIK_INT64);
                 ti_print_any(&val, mt, printer);
+            }break;
+            case MK_FLEXIBLE_ARRAY:{
+                const char* base;
+                int err = ti_get_start_of_member(src, ti, mi, (const void**)&base);
+                size_t length;
+                if(mi->flexible.length_mi < ti->length){
+                    err = ti_get_size_t_from_member(src, &ti->members[mi->flexible.length_mi], &length);
+                    if(!err){
+                        printer->printer(printer->ctx, "[");
+                        printer->indent++;
+                        for(size_t j = 0; j < length; j++){
+                            const void* field = base + j * mt->size;
+                            ti_print_any(field, mt, printer);
+                            printer->printer(printer->ctx, ", ");
+                        }
+                        printer->indent--;
+                        printer->printer(printer->ctx, "]");
+                    }
+                }
             }break;
         }
         printer->printer(printer->ctx, ",\n");

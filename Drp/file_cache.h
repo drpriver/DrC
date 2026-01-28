@@ -38,6 +38,13 @@ static int fc_read_file(FileCache*, StringView* data);
 // Might be cached and so there is a possible race condition, but usually that is ok.
 // Returns 0 on success, errno or GetLastError() on failure.
 static int fc_get_size(FileCache*, size_t* sz);
+// Caches a file into the cache, bypassing the filesystem
+// For virtual files or for overriding what the system thinks is actually
+// in the file.
+// Data is copied.
+// Still need to go through the `fc_write_path` API.
+// Returns 1 if the file is already in the cache (at least for now).
+static int fc_cache_file(FileCache*, StringView data);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

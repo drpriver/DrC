@@ -267,6 +267,9 @@ struct_from_json(void* dst, const TypeInfoStruct* ti, DrJsonContext* jsctx, DrJs
                     if(err) return err;
                 }
             }break;
+            case MK_FLEXIBLE_ARRAY:{
+                return 1; // unimplemented
+            }break;
         }
     }
     return 0;
@@ -307,6 +310,9 @@ tuple_from_json(void* dst, const TypeInfoStruct* ti, DrJsonContext* jsctx, DrJso
                     int err = any_from_json(f, mt, jsctx, aval, al);
                     if(err) return err;
                 }
+            }break;
+            case MK_FLEXIBLE_ARRAY:{
+                return 1; // unimplemented
             }break;
         }
     }
@@ -529,6 +535,9 @@ struct_to_json(const void* src, const TypeInfoStruct* ti, DrJsonContext* jsctx){
                 bits = read_bitfield(field, mt->size, mi->bitfield.bitsize, mi->bitfield.bitoffset, mt->kind <= TIK_INT64);
                 val = any_to_json(&bits, mt, jsctx);
             }break;
+            case MK_FLEXIBLE_ARRAY:{
+                goto fail;
+            }break;
         }
         if(val.kind == DRJSON_ERROR)
             goto fail;
@@ -571,6 +580,9 @@ tuple_to_json(const void* src, const TypeInfoStruct* ti, DrJsonContext* jsctx){
                 uint64_t bits = 0;
                 bits = read_bitfield(field, mt->size, mi->bitfield.bitsize, mi->bitfield.bitoffset, mt->kind <= TIK_INT64);
                 val = any_to_json(&bits, mt, jsctx);
+            }break;
+            case MK_FLEXIBLE_ARRAY:{
+                goto fail;
             }break;
         }
         if(val.kind == DRJSON_ERROR)

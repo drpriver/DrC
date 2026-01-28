@@ -321,6 +321,39 @@ fc_get_size(FileCache* fc, size_t* sz){
     return result;
 }
 
+static
+int
+fc_cache_file(FileCache* fc, StringView data){
+    int result = 0;
+    CachedFile* f = fc_get_entry(fc);
+    if(f && f->valid){
+        result = 1;
+        goto finally;
+    }
+    if(!f) f = fc_create_entry(fc);
+    if(!f){
+        result = 1;
+        goto finally;
+    }
+    void* p = Allocator_dupe(fc->allocator, data.text, data.length);
+    if(!p){
+        f->valid = 0;
+        result = 1;
+        goto finally;
+    }
+    f->data.buff = p;
+    f->data.n_bytes = data.length;
+    f->data_size = data.length;
+    f->exists = 1;
+    f->valid = 1;
+    f->is_file = 1;
+    f->size_cached = 1;
+    f->data_cached = 1;
+    finally:
+    msb_reset(&fc->path_builder);
+    return result;
+}
+
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
