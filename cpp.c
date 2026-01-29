@@ -13,8 +13,8 @@
 #include "Drp/file_cache.h"
 #include "Drp/file_util.h"
 #include "Drp/logger_ti_printer.h"
-#include "c/cpp_tok.h"
-#include "c/cpp_preprocessor.h"
+#include "C/cpp_tok.h"
+#include "C/cpp_preprocessor.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -486,3 +486,4 @@ int main(int argc, char** argv, char** envp){
 #endif
 #include "Drp/Allocators/allocator.c"
 #include "Drp/file_cache.c"
+#include "C/cpp_preprocessor.c"
