@@ -12,7 +12,7 @@
 #endif
 
 // Some of these tokens are internal
-enum CPPTokenType TYPED_ENUM(uint64_t) {
+enum CPPTokenType TYPED_ENUM(uint32_t) {
     CPP_EOF         = 0,
     CPP_HEADER_NAME = 1,
     CPP_IDENTIFIER  = 2,
@@ -25,6 +25,7 @@ enum CPPTokenType TYPED_ENUM(uint64_t) {
     CPP_OTHER       = 9,
     CPP_PLACEMARKER = 10,
 };
+TYPEDEF_ENUM(CPPTokenType, uint32_t);
 static const StringView CPPTokenTypeSV[] = {
     [CPP_EOF        ] = SV("CPP_EOF"),
     [CPP_HEADER_NAME] = SV("CPP_HEADER_NAME"),
@@ -39,27 +40,18 @@ static const StringView CPPTokenTypeSV[] = {
     [CPP_PLACEMARKER] = SV("CPP_PLACEMARKER"),
 };
 
-TYPEDEF_ENUM(CPPTokenType, uint64_t);
 typedef struct SrcLoc SrcLoc;
 struct SrcLoc {
-    union {
-        struct {
-            uint32_t line;
-            uint16_t column;
-            uint16_t file;
-        };
-        uint64_t bits;
-    };
+    uint32_t idx;
 };
 
 typedef struct CPPToken CPPToken;
 struct CPPToken {
     CPPTokenType type;
     SrcLoc loc;
-    SrcLoc expand_loc;
     StringView txt;
 };
-_Static_assert(sizeof(CPPToken) == 5*sizeof(uint64_t), "");
+_Static_assert(sizeof(CPPToken) == 2*sizeof(uint32_t)+2*sizeof(size_t), "");
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
