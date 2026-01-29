@@ -97,6 +97,7 @@ int main(int argc, char** argv, char** envp){
         .at = &at,
         .logger = &logger,
         .env = &env,
+        .scratch_sb.allocator = MALLOCATOR,
     };
     ArgParseUserDefinedType t = {
         .type_name = SV("path"),
@@ -475,7 +476,11 @@ int main(int argc, char** argv, char** envp){
         err = cpp_next_token(&cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_EOF) break;
-        log_printf(&logger, "tok: '%.*s'", sv_p(tok.txt));
+        if(tok.type == CPP_NEWLINE)
+            log_printf(&logger, "%.*s '\\n'", sv_p(CPPTokenTypeSV[tok.type]));
+        else if(tok.type == CPP_WHITESPACE)
+            log_printf(&logger, "%.*s ' '", sv_p(CPPTokenTypeSV[tok.type]));
+        else log_printf(&logger, "%.*s '%.*s'", sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
     }
     return 0;
 }

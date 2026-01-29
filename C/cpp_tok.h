@@ -4,12 +4,14 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include "../Drp/long_string.h"
 #include "../Drp/typed_enum.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
+// Some of these tokens are internal
 enum CPPTokenType TYPED_ENUM(uint64_t) {
     CPP_EOF         = 0,
     CPP_HEADER_NAME = 1,
@@ -20,8 +22,23 @@ enum CPPTokenType TYPED_ENUM(uint64_t) {
     CPP_PUNCTUATOR  = 6,
     CPP_WHITESPACE  = 7,
     CPP_NEWLINE     = 8,
-    CPP_PLACEMARKER = 9,
+    CPP_OTHER       = 9,
+    CPP_PLACEMARKER = 10,
 };
+static const StringView CPPTokenTypeSV[] = {
+    [CPP_EOF        ] = SV("CPP_EOF"),
+    [CPP_HEADER_NAME] = SV("CPP_HEADER_NAME"),
+    [CPP_IDENTIFIER ] = SV("CPP_IDENTIFIER"),
+    [CPP_NUMBER     ] = SV("CPP_NUMBER"),
+    [CPP_CHAR       ] = SV("CPP_CHAR"),
+    [CPP_STRING     ] = SV("CPP_STRING"),
+    [CPP_PUNCTUATOR ] = SV("CPP_PUNCTUATOR"),
+    [CPP_WHITESPACE ] = SV("CPP_WHITESPACE"),
+    [CPP_NEWLINE    ] = SV("CPP_NEWLINE"),
+    [CPP_OTHER      ] = SV("CPP_OTHER"),
+    [CPP_PLACEMARKER] = SV("CPP_PLACEMARKER"),
+};
+
 TYPEDEF_ENUM(CPPTokenType, uint64_t);
 typedef struct SrcLoc SrcLoc;
 struct SrcLoc {

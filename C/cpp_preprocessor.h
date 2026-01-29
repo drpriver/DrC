@@ -11,6 +11,7 @@
 #include "../Drp/atom_table.h"
 #include "../Drp/logger.h"
 #include "../Drp/env.h"
+#include "../Drp/MStringBuilder.h"
 #include "cpp_tok.h"
 
 #ifndef MARRAY_STRING_VIEW
@@ -136,6 +137,7 @@ struct CPreprocessor {
     };
     Marray(CPPFrame) frames;
     Marray(CPPToken) token_buff;
+    MStringBuilder scratch_sb;
 };
 
 static
