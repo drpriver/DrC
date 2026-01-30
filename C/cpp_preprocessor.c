@@ -315,13 +315,13 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 }
             }
             else if(c == 'u'){
-                c = cpp_next_char(f);
+                c = cpp_peek_char(f);
                 if(c == '"' || c == '\''){
                     f->cursor++;
                     f->column++;
                     goto string_or_char;
                 }
-                if(c == '8'){
+                if(cpp_match_char(f, '8')){
                     c = cpp_peek_char(f);
                     if(c == '"' || c == '\''){
                         f->cursor++;

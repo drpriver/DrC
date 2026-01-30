@@ -51,7 +51,7 @@ struct SrcLoc {
             uint64_t is_actually_a_pointer: 1;
         };
         struct {
-            uint64_t bits: 63; // (SrcLoxExp*)(pointer.bits<<1)
+            uint64_t bits: 63; // (SrcLocExp*)(pointer.bits<<1)
             uint64_t is_actually_a_pointer: 1;
         } pointer;
     };
