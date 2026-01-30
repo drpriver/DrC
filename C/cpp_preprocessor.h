@@ -36,7 +36,7 @@
 #endif
 #include "../Drp/Marray.h"
 #ifdef __clang__
-#pragma clang diagnostic push
+#pragma clang diagnostic pop
 #endif
 #endif
 
