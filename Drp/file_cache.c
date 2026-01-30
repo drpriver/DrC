@@ -18,31 +18,6 @@
 #define _Nullable
 #endif
 #endif
-typedef struct CachedFile CachedFile;
-struct CachedFile {
-    LongString path;
-    uint32_t hash;
-
-    uint32_t valid:       1;
-    uint32_t exists:      1;
-    uint32_t unreadable:  1;
-    uint32_t is_file:     1;
-    uint32_t data_cached: 1;
-    uint32_t size_cached: 1;
-    uint32_t _padding:   26;
-    size_t data_size; // from stat
-    ByteBuffer data;
-};
-typedef struct FileCache FileCache;
-struct FileCache {
-    Allocator allocator;
-    MStringBuilder path_builder;
-    struct {
-        CachedFile *data;
-        size_t count;
-        size_t cap;
-    } map;
-};
 
 static
 FileCache*_Nullable

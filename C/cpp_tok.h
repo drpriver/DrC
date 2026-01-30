@@ -42,7 +42,27 @@ static const StringView CPPTokenTypeSV[] = {
 
 typedef struct SrcLoc SrcLoc;
 struct SrcLoc {
-    uint32_t idx;
+    union {
+        uint64_t bits; // 0 is invalid
+        struct {
+            uint64_t file_id: 16;
+            uint64_t column: 16;
+            uint64_t line: 31;
+            uint64_t is_actually_a_pointer: 1;
+        };
+        struct {
+            uint64_t bits: 63; // (SrcLoxExp*)(pointer.bits<<1)
+            uint64_t is_actually_a_pointer: 1;
+        } pointer;
+    };
+};
+// Should be allocated in an arena
+typedef struct SrcLocExp SrcLocExp;
+struct SrcLocExp {
+    uint64_t file_id: 16;
+    uint64_t column: 16;
+    uint64_t line: 32;
+    SrcLocExp*_Nullable parent;
 };
 
 typedef struct CPPToken CPPToken;
@@ -51,7 +71,6 @@ struct CPPToken {
     SrcLoc loc;
     StringView txt;
 };
-_Static_assert(sizeof(CPPToken) == 2*sizeof(uint32_t)+2*sizeof(size_t), "");
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

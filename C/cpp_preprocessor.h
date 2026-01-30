@@ -6,6 +6,7 @@
 
 #include "../Drp/atom_map.h"
 #include "../Drp/Allocators/allocator.h"
+#include "../Drp/Allocators/arena_allocator.h"
 #include "../Drp/long_string.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/atom_table.h"
@@ -84,7 +85,9 @@ _Static_assert(sizeof(CMacro) == 2*sizeof(uint64_t), "");
 
 typedef struct CPPFrame CPPFrame;
 struct CPPFrame {
-    StringView path;
+    uint32_t file_id; // index into fc->map
+    uint32_t line;
+    uint32_t column;
     StringView txt;
     size_t cursor;
     IncludePosition include_position; // where we are in the include lookup, for include_next and related.
@@ -105,6 +108,7 @@ struct CPPFrame {
 typedef struct CPreprocessor CPreprocessor;
 struct CPreprocessor {
     Allocator allocator;
+    ArenaAllocator synth_arena; // For things that need to be synthesized
     AtomMap(CMacro) macros;
     FileCache* fc;
     AtomTable* at;

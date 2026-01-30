@@ -269,9 +269,9 @@ int main(int argc, char** argv, char** envp){
         .length = arrlen(TI_CPPFrame.members),
         .members = {
             {
-                .name = (Atom)AT_atomize(&at, "path", sizeof "path" -1),
-                .type = &TI_SV.type_info,
-                .offset = offsetof(CPPFrame, path),
+                .name = (Atom)AT_atomize(&at, "file_id", sizeof "file_id" -1),
+                .type = &TI_uint32_t.type_info,
+                .offset = offsetof(CPPFrame, file_id),
             },
             {
                 .name = (Atom)AT_atomize(&at, "txt", sizeof "txt" -1),
@@ -465,7 +465,7 @@ int main(int argc, char** argv, char** envp){
     err = fc_read_file(fc, &txt);
     if(err) return err;
     CPPFrame init = {
-        .path = {strlen(filename), filename},
+        .file_id = (uint32_t)fc->map.count-1,
         .txt = txt,
     };
     err = ma_push(CPPFrame)(&cpp.frames, MALLOCATOR, init);

@@ -70,6 +70,10 @@ static void log_logf(Logger* logger, LogLevel level, const char* fmt, ...);
 // functions.
 static void log_logv(Logger* logger, LogLevel level, const char* fmt, va_list va);
 
+LOG_PRINTF(2, 3)
+static void log_sprintf(Logger* logger, const char* fmt, ...);
+static void log_vsprintf(Logger* logger, const char* fmt, va_list va);
+
 
 
 //
@@ -129,6 +133,19 @@ log_logv(Logger* logger, LogLevel level, const char* fmt, va_list va){
         log_flush(logger, level);
     }
     msb_reset(&logger->buff);
+}
+static
+void
+log_sprintf(Logger* logger, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    msb_vsprintf(&logger->buff, fmt, va);
+    va_end(va);
+}
+static
+void
+log_vsprintf(Logger* logger, const char* fmt, va_list va){
+    msb_vsprintf(&logger->buff, fmt, va);
 }
 
 static
