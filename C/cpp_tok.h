@@ -68,8 +68,8 @@ struct SrcLocExp {
 typedef struct CPPToken CPPToken;
 struct CPPToken {
     CPPTokenType type;
-    SrcLoc loc;
     StringView txt;
+    SrcLoc loc;
 };
 
 #ifdef __clang__

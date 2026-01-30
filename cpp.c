@@ -467,20 +467,26 @@ int main(int argc, char** argv, char** envp){
     CPPFrame init = {
         .file_id = (uint32_t)fc->map.count-1,
         .txt = txt,
+        .line = 1,
+        .column = 1,
     };
     err = ma_push(CPPFrame)(&cpp.frames, MALLOCATOR, init);
     if(err) return err;
-    // ti_print_logger(&cpp, &TI_CPreprocessor.type_info, &logger);
     CPPToken tok;
     for(;;){
         err = cpp_next_token(&cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_EOF) break;
+        int line = tok.loc.line;
+        int col = tok.loc.column;
+        LongString file = fc->map.data[tok.loc.file_id].path;
+        if(tok.loc.is_actually_a_pointer)
+            ;
         if(tok.type == CPP_NEWLINE)
-            log_printf(&logger, "%.*s '\\n'", sv_p(CPPTokenTypeSV[tok.type]));
+            log_printf(&logger, "%s:%d:%d %.*s '\\n'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
         else if(tok.type == CPP_WHITESPACE)
-            log_printf(&logger, "%.*s ' '", sv_p(CPPTokenTypeSV[tok.type]));
-        else log_printf(&logger, "%.*s '%.*s'", sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
+            log_printf(&logger, "%s:%d:%d %.*s ' '", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
+        else log_printf(&logger, "%s:%d:%d %.*s '%.*s'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
     }
     return 0;
 }

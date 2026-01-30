@@ -3,6 +3,7 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#include <stdarg.h>
 #include "cpp_preprocessor.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -12,6 +13,7 @@
 // Internal APIs
 static int cpp_next_raw_token(CPreprocessor*, CPPToken*);
 static int cpp_next_pp_token(CPreprocessor*, CPPToken*);
+static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
 
 static
 int
@@ -130,6 +132,8 @@ cpp_skip_(CPPFrame* f){
         }
         if(txt.text[c+1] == '\n'){
             c += 2;
+            f->line++;
+            f->column = 1;
             continue;
         }
         if(txt.text[c+1] == '\r'){
@@ -139,6 +143,8 @@ cpp_skip_(CPPFrame* f){
             }
             if(txt.text[c+2] == '\n'){
                 c += 3;
+                f->line++;
+                f->column = 1;
                 continue;
             }
             c += 2;
@@ -158,8 +164,16 @@ cpp_next_char(CPPFrame* f){
     int result;
     if(f->cursor == txt.length)
         result = -1;
-    else
+    else {
         result = (int)(unsigned char)txt.text[f->cursor++];
+        if(result == '\n'){
+            f->line++;
+            f->column = 1;
+        }
+        else {
+            f->column++;
+        }
+    }
     return result;
 }
 
@@ -183,6 +197,7 @@ _Bool
 cpp_match_char(CPPFrame* f, int ch){
     if(cpp_peek_char(f) == ch){
         f->cursor++;
+        f->column++;
         return 1;
     }
     return 0;
@@ -192,11 +207,11 @@ static
 inline
 _Bool
 cpp_match_2char(CPPFrame* f, int ch1, int ch2){
-    size_t backup = f->cursor;
+    struct CPPFrameLoc loc = f->loc;
     if(cpp_match_char(f, ch1) && cpp_match_char(f, ch2)){
         return 1;
     }
-    f->cursor = backup;
+    f->loc = loc;
     return 0;
 }
 
@@ -208,6 +223,7 @@ cpp_match_oneof(CPPFrame* f, const char* set){
     for(;*set;set++)
         if(ch == *set){
             f->cursor++;
+            f->column++;
             return 1;
         }
     return 0;
@@ -227,25 +243,26 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
         return 0;
     }
     CPPFrame* f = &ma_tail(cpp->frames);
+    SrcLoc loc = {.file_id = f->file_id, .line = f->line, .column = f->column};
     size_t start = f->cursor;
     int c = cpp_next_char(f);
     switch(c){
         default:
             default_:
-            *tok = (CPPToken){.type = CPP_OTHER, .txt = {1, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = CPP_OTHER, .txt = {1, &f->txt.text[start]}, .loc=loc};
             return 0;
         case -1:{
             cpp->frames.count--;
             goto again;
         }
         case '\n':
-            *tok = (CPPToken){.type = CPP_NEWLINE, .txt = {1, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = CPP_NEWLINE, .txt = {1, &f->txt.text[start]}, .loc=loc};
             return 0;
         // Whitespace
         case ' ': case '\t': case '\r': case '\f': case '\v':
             while(cpp_match_oneof(f, " \t\r\f\v"))
                 ;
-            *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
             return 0;
         case 0xEF: { // Check for utf-8 bom
             if(cpp_match_2char(f, 0xBB, 0xBF))
@@ -260,6 +277,7 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 c = cpp_peek_char(f);
                 if(c == '"' || c == '\''){
                     f->cursor++;
+                    f->column++;
                     goto string_or_char;
                 }
             }
@@ -267,12 +285,14 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 c = cpp_next_char(f);
                 if(c == '"' || c == '\''){
                     f->cursor++;
+                    f->column++;
                     goto string_or_char;
                 }
                 if(c == '8'){
                     c = cpp_peek_char(f);
                     if(c == '"' || c == '\''){
                         f->cursor++;
+                        f->column++;
                         goto string_or_char;
                     }
                 }
@@ -285,13 +305,14 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                     case CASE_0_9:
                     case '_':
                         f->cursor++;
+                        f->column++;
                         continue;
                     default:
                         break;
                 }
                 break;
             }
-            *tok = (CPPToken){.type = CPP_IDENTIFIER, .txt = {f->cursor-start, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = CPP_IDENTIFIER, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
             return 0;
         // Number (pp-number)
         case CASE_0_9:
@@ -307,6 +328,7 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                     case '\'':
                     case '.':
                         f->cursor++;
+                        f->column++;
                         if(c == 'e' || c == 'E' || c == 'p' || c == 'P'){
                             cpp_match_oneof(f, "+-");
                             continue;
@@ -319,6 +341,7 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                                 case CASE_A_Z:
                                 case '_':
                                     f->cursor++;
+                                    f->column++;
                                     continue;
                                 default:
                                     goto break_;
@@ -331,19 +354,20 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 break_:
                 break;
             }
-            *tok = (CPPToken){.type = CPP_NUMBER, .txt = {f->cursor-start, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = CPP_NUMBER, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
             return 0;
         case '.':{
             c = cpp_peek_char(f);
             if(c >= '0' && c <= '9'){
                 f->cursor++;
+                f->column++;
                 goto pp_number;
             }
             if(cpp_match_2char(f, '.', '.')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("...")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("..."), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(".")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("."), .loc=loc};
             return 0;
         }
         // String / character literal
@@ -355,11 +379,8 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
             _Bool backslash = 0;
             for(;;){
                 c = cpp_next_char(f);
-                if(c == '\n' || c == -1){
-                    // FIXME: report location
-                    log_error(cpp->logger, "Unterminated %s literal", (terminator == '"')?"string":"character");
-                    return 1;
-                }
+                if(c == '\n' || c == -1)
+                    return cpp_error(cpp, loc, "Unterminated %s literal",  (terminator == '"')?"string":"character");
                 if(c == '\\')
                     backslash = !backslash;
                 else if(c == terminator && !backslash)
@@ -367,7 +388,7 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 else
                     backslash = 0;
             }
-            *tok = (CPPToken){.type = type, .txt = {f->cursor-start, &f->txt.text[start]}};
+            *tok = (CPPToken){.type = type, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
             return 0;
         }
         // Comments
@@ -378,150 +399,162 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                     if(c == -1 || c == '\n')
                         break;
                     f->cursor++;
+                    f->column++;
                 }
-                *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}};
+                *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
                 return 0;
             }
             else if(cpp_match_char(f, '*')){ // C comment
                 for(;;){
                     c = cpp_next_char(f);
-                    if(c == -1){
-                        log_error(cpp->logger, "Unterminated comment");
-                        return 1;
-                    }
+                    if(c == -1)
+                        return cpp_error(cpp, loc, "Unterminated comment");
                     if(c == '*' && cpp_match_char(f, '/')){
-                        *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}};
+                        *tok = (CPPToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}, .loc=loc};
                         return 0;
                     }
                 }
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("/="):SV("/")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("/="):SV("/"), .loc=loc};
             return 0;
         }
         case '#':{
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '#')?SV("##"):SV("#")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '#')?SV("##"):SV("#"), .loc=loc};
             return 0;
         }
         case '*':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("*="):SV("*")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("*="):SV("*"), .loc=loc};
             return 0;
         case '~':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("~")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("~"), .loc=loc};
             return 0;
         case '!':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("!="):SV("!")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("!="):SV("!"), .loc=loc};
             return 0;
         case '%':
             if(cpp_match_char(f, ':')){
                 // %:%:
                 if(cpp_match_2char(f, '%', ':')){
-                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("##")};
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("##"), .loc=loc};
                     return 0;
                 }
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("#")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("#"), .loc=loc};
                 return 0;
             }
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("%="):SV("%")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("%="):SV("%"), .loc=loc};
             return 0;
         case '^':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("^="):SV("^")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("^="):SV("^"), .loc=loc};
             return 0;
         case '=':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("=="):SV("=")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("=="):SV("="), .loc=loc};
             return 0;
         case '-':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("->")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("->"), .loc=loc};
                 return 0;
             }
             if(cpp_match_char(f, '-')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("--")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("--"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("-="):SV("-")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("-="):SV("-"), .loc=loc};
             return 0;
         case '+':
             if(cpp_match_char(f, '+')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("++")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("++"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("+="):SV("+")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("+="):SV("+"), .loc=loc};
             return 0;
         case '<':
             if(cpp_match_char(f, ':')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("[")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .loc=loc};
                 return 0;
             }
             if(cpp_match_char(f, '%')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .loc=loc};
                 return 0;
             }
             if(cpp_match_char(f, '<')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<<="):SV("<<")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<<="):SV("<<"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<="):SV("<")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<="):SV("<"), .loc=loc};
             return 0;
         case '>':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">>="):SV(">>")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">>="):SV(">>"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">="):SV(">")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">="):SV(">"), .loc=loc};
             return 0;
         case '&':
             if(cpp_match_char(f, '&')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&&")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&&"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("&="):SV("&")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("&="):SV("&"), .loc=loc};
             return 0;
         case '|':
             if(cpp_match_char(f, '|')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("|="):SV("|")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("|="):SV("|"), .loc=loc};
             return 0;
         case ':':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]")};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .loc=loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, ':')?SV("::"):SV(":")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, ':')?SV("::"):SV(":"), .loc=loc};
             return 0;
         case '(':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("(")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("("), .loc=loc};
             return 0;
         case ')':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(")")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(")"), .loc=loc};
             return 0;
         case '[':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("[")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .loc=loc};
             return 0;
         case ']':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .loc=loc};
             return 0;
         case '{':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .loc=loc};
             return 0;
         case '}':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .loc=loc};
             return 0;
         case '?':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("?")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("?"), .loc=loc};
             return 0;
         case ';':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(";")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(";"), .loc=loc};
             return 0;
         case ',':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(",")};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(","), .loc=loc};
             return 0;
     }
+}
+
+static
+int
+cpp_error(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
+    // TODO: location chaining
+    LongString path = loc.file_id < cpp->fc->map.count?cpp->fc->map.data[loc.file_id].path:LS("???");
+    log_sprintf(cpp->logger, "%s:%d:%d: error: ", path.text, (int)loc.line, (int)loc.column);
+    va_list va;
+    va_start(va, fmt);
+    log_logv(cpp->logger, LOG_PRINT_ERROR, fmt, va);
+    va_end(va);
+    return 1;
 }
 
 #ifdef __clang__

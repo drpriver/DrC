@@ -32,8 +32,9 @@ enum LogLevel {
     LOG_INFO  = 1,
     LOG_WARN  = 2,
     LOG_ERROR = 3,
-    LOG_PRINT = 4, // Use for messages printed at any log level (except for off)
-    LOG_OFF   = 5, // set logger to this level to disable all logging
+    LOG_PRINT_ERROR = 4, // Use for diagnostic messages printed to stderr (not internal errors)
+    LOG_PRINT = 5, // Use for messages printed at any log level (except for off)
+    LOG_OFF   = 6, // set logger to this level to disable all logging
 };
 typedef enum LogLevel LogLevel;
 typedef struct Logger Logger;

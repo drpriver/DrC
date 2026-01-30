@@ -86,10 +86,19 @@ _Static_assert(sizeof(CMacro) == 2*sizeof(uint64_t), "");
 typedef struct CPPFrame CPPFrame;
 struct CPPFrame {
     uint32_t file_id; // index into fc->map
-    uint32_t line;
-    uint32_t column;
+    union {
+        struct {
+            uint32_t line;
+            uint32_t column;
+            size_t cursor;
+        };
+        struct CPPFrameLoc {
+            uint32_t line;
+            uint32_t column;
+            size_t cursor;
+        } loc;
+    };
     StringView txt;
-    size_t cursor;
     IncludePosition include_position; // where we are in the include lookup, for include_next and related.
 };
 
