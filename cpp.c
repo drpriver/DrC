@@ -75,6 +75,7 @@ cpp_macro_dest(CPreprocessor* cpp){
 }
 
 
+static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
 
 int main(int argc, char** argv, char** envp){
     Logger logger = std_logger();
@@ -97,7 +98,6 @@ int main(int argc, char** argv, char** envp){
         .at = &at,
         .logger = &logger,
         .env = &env,
-        .scratch_sb.allocator = MALLOCATOR,
     };
     ArgParseUserDefinedType t = {
         .type_name = SV("path"),
@@ -231,7 +231,7 @@ int main(int argc, char** argv, char** envp){
     };
     struct {
         union { TypeInfo type_info; struct { STRUCTINFO; }; };
-        MemberInfo members[2];
+        MemberInfo members[4];
     } TI_CPPToken = {
         .name = (Atom)AT_atomize(&at, "CPPToken", sizeof "CPPToken" -1),
         .size = sizeof(CPPToken),
@@ -242,7 +242,32 @@ int main(int argc, char** argv, char** envp){
             {
                 .name = (Atom)AT_atomize(&at, "type", sizeof "type" -1),
                 .type = &TI_uint64_t.type_info,
-                .offset = offsetof(CPPToken, type),
+                .bitfield = {
+                    .kind = MK_BITFIELD,
+                    .offset = offsetof(CPPToken, _bits),
+                    .bitsize = 4,
+                    .bitoffset = 0,
+                },
+            },
+            {
+                .name = (Atom)AT_atomize(&at, "disabled", sizeof "disabled" -1),
+                .type = &TI_uint64_t.type_info,
+                .bitfield = {
+                    .kind = MK_BITFIELD,
+                    .offset = offsetof(CPPToken, _bits),
+                    .bitsize = 1,
+                    .bitoffset = 8,
+                },
+            },
+            {
+                .name = (Atom)AT_atomize(&at, "punct", sizeof "punct" -1),
+                .type = &TI_uint64_t.type_info,
+                .bitfield = {
+                    .kind = MK_BITFIELD,
+                    .offset = offsetof(CPPToken, _bits),
+                    .bitsize = 32,
+                    .bitoffset = 32,
+                },
             },
             {
                 .name = (Atom)AT_atomize(&at, "txt", sizeof "txt" -1),
@@ -341,7 +366,7 @@ int main(int argc, char** argv, char** envp){
                     .offset = offsetof(CMacro, _bits),
                     .kind = MK_BITFIELD,
                     .bitsize = 16,
-                    .bitoffset = 8,
+                    .bitoffset = 16,
                     .noprint=1,
                 },
             },
@@ -436,9 +461,9 @@ int main(int argc, char** argv, char** envp){
                 .offset = offsetof(CPreprocessor, frames),
             },
             {
-                .name = (Atom)AT_atomize(&at, "token_buff", sizeof "token_buff" -1),
+                .name = (Atom)AT_atomize(&at, "pending", sizeof "pending" -1),
                 .type = &TI_ma_CPPToken.type_info,
-                .offset = offsetof(CPreprocessor, token_buff),
+                .offset = offsetof(CPreprocessor, pending),
             },
         },
     };
@@ -473,6 +498,18 @@ int main(int argc, char** argv, char** envp){
     err = ma_push(CPPFrame)(&cpp.frames, MALLOCATOR, init);
     if(err) return err;
     CPPToken tok;
+    if(1){
+        for(;;){
+            err = cpp_next_pp_token(&cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_EOF) break;
+            if(tok.type == CPP_WHITESPACE)
+                log_sprintf(&logger, " ");
+            else log_sprintf(&logger, "%.*s", sv_p(tok.txt));
+        }
+        log_flush(&logger, LOG_PRINT);
+    }
+    else
     for(;;){
         err = cpp_next_token(&cpp, &tok);
         if(err) return err;
@@ -488,6 +525,7 @@ int main(int argc, char** argv, char** envp){
             log_printf(&logger, "%s:%d:%d %.*s ' '", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
         else log_printf(&logger, "%s:%d:%d %.*s '%.*s'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
     }
+    // ti_print_logger(&cpp, &TI_CPreprocessor.type_info, &logger);
     return 0;
 }
 

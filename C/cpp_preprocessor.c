@@ -9,6 +9,11 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmultichar"
+#endif
+
 
 // Internal APIs
 static int cpp_next_raw_token(CPreprocessor*, CPPToken*);
@@ -51,11 +56,11 @@ cpp_undef_macro(CPreprocessor* cpp, StringView name){
 
 static
 int
-cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken* toks, size_t ntoks){
+cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspecified toks, size_t ntoks){
     CMacro* macro;
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
     if(err) return err;
-    if(ntoks) memcpy(pp_cmacro_replacement(macro), toks, ntoks * sizeof *toks);
+    if(ntoks) memcpy(cpp_cmacro_replacement(macro), toks, ntoks * sizeof *toks);
     return 0;
 }
 
@@ -83,14 +88,77 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name){
 static
 int
 cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
-    return cpp_next_pp_token(cpp, tok);
-    return 0;
+    // phase 5
+    for(;;){
+        int err = cpp_next_pp_token(cpp, tok);
+        if(err) return err;
+        if(tok->type == CPP_WHITESPACE || tok->type == CPP_NEWLINE)
+            continue;
+        return 0;
+    }
 }
+static int cpp_handle_directive(CPreprocessor* cpp);
+static int cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro);
 
 static
 int
-cpp_next_pp_token(CPreprocessor* cpp, CPPToken* tok){
-    return cpp_next_raw_token(cpp, tok);
+cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
+    // phase 4
+    for(;;){
+        CPPToken tok;
+        int err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        switch(tok.type){
+            case CPP_NEWLINE:
+                cpp->at_line_start = 1;
+                *ptok = tok;
+                return 0;
+                continue;
+            case CPP_WHITESPACE:
+                *ptok = tok;
+                return 0;
+                continue;
+            case CPP_IDENTIFIER:{
+                if(tok.disabled) goto noexp;
+                Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+                if(!a) goto noexp;
+                CMacro* macro = AM_get(&cpp->macros, a);
+                if(!macro) goto noexp;
+                if(macro->is_disabled) goto noexp;
+                if(macro->is_function_like){
+                    // TODO
+                    goto noexp;
+                }
+                err = cpp_expand_obj_macro(cpp, macro);
+                if(err) return err;
+                continue;
+                noexp:
+                // TODO: macro expansion
+                *ptok = tok;
+                cpp->at_line_start = 0;
+            }return 0;
+            case CPP_PUNCTUATOR:
+                if(cpp->at_line_start && tok.punct == '#'){
+                    cpp->at_line_start = 0;
+                    err = cpp_handle_directive(cpp);
+                    if(err) return err;
+                    continue;
+                }
+                *ptok = tok;
+                cpp->at_line_start = 0;
+                return 0;
+            case CPP_EOF:
+            case CPP_STRING:
+            case CPP_CHAR:
+            case CPP_NUMBER:
+            case CPP_OTHER:
+                *ptok = tok;
+                cpp->at_line_start = 0;
+                return 0;
+            default:
+                return cpp_error(cpp, tok.loc, "%.*s token escaped", sv_p(CPPTokenTypeSV[tok.type]));
+        }
+    }
 }
 
 
@@ -264,11 +332,16 @@ cpp_clean_token(CPreprocessor* cpp, size_t len, const char* txt){
 static
 int
 cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
-    if(cpp->token_buff.count){
-        *tok = cpp->token_buff.data[0];
-        ma_remove_at(CPPToken)(&cpp->token_buff, 0);
+    while(cpp->pending.count){
+        *tok = ma_tail(cpp->pending);
+        cpp->pending.count--;
+        if(tok->type == CPP_REENABLE){
+            ((CMacro*)tok->data1)->is_disabled = 0;
+            continue;
+        }
         return 0;
     }
+    // phase 1-3
     again:;
     if(!cpp->frames.count){
         *tok = (CPPToken){.type = CPP_EOF};
@@ -397,10 +470,10 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                 goto pp_number;
             }
             if(cpp_match_2char(f, '.', '.')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("..."), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("..."), .punct='...', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("."), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("."), .punct='.', .loc = loc};
             return 0;
         }
         // String / character literal
@@ -449,131 +522,179 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
                     }
                 }
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("/="):SV("/"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("/="), .punct='/=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("/"), .punct='/', .loc = loc};
             return 0;
         }
         case '#':{
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '#')?SV("##"):SV("#"), .loc = loc};
+            if(cpp_match_char(f, '#'))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("##"), .punct='##', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("#"), .punct='#', .loc = loc};
             return 0;
         }
         case '*':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("*="):SV("*"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt=SV("*="), .punct='*=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt=SV("*"), .punct='*', .loc = loc};
             return 0;
         case '~':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("~"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("~"), .punct='~', .loc = loc};
             return 0;
         case '!':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("!="):SV("!"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("!="), .punct='!=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("!"), .punct='!', .loc = loc};
             return 0;
         case '%':
             if(cpp_match_char(f, ':')){
                 // %:%:
                 if(cpp_match_2char(f, '%', ':')){
-                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("##"), .loc = loc};
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("##"), .punct='##', .loc = loc};
                     return 0;
                 }
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("#"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("#"), .punct='#', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .punct='}', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("%="):SV("%"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("%="), .punct='%=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("%"), .punct='%', .loc = loc};
             return 0;
         case '^':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("^="):SV("^"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("^="), .punct='^=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("^"), .punct='^', .loc = loc};
             return 0;
         case '=':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("=="):SV("="), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("=="), .punct='==', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("="), .punct='=', .loc = loc};
             return 0;
         case '-':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("->"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("->"), .punct='->', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '-')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("--"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("--"), .punct='--', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("-="):SV("-"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("-="), .punct='-=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("-"), .punct='-', .loc = loc};
             return 0;
         case '+':
             if(cpp_match_char(f, '+')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("++"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("++"), .punct='++', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("+="):SV("+"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("+="), .punct='+=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("+"), .punct='+', .loc = loc};
             return 0;
         case '<':
             if(cpp_match_char(f, ':')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .punct='[', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '%')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .punct='{', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '<')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<<="):SV("<<"), .loc = loc};
+                if(cpp_match_char(f, '='))
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("<<="), .punct='<<=', .loc = loc};
+                else
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("<<"), .punct='<<', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("<="):SV("<"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("<="), .punct='<=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("<"), .punct='<', .loc = loc};
             return 0;
         case '>':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">>="):SV(">>"), .loc = loc};
+                if(cpp_match_char(f, '='))
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(">>="), .punct='>>=', .loc = loc};
+                else
+                    *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(">>"), .punct='>>', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV(">="):SV(">"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(">="), .punct='>=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(">"), .punct='>', .loc = loc};
             return 0;
         case '&':
             if(cpp_match_char(f, '&')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&&"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&&"), .punct='&&', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("&="):SV("&"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&="), .punct='&=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("&"), .punct='&', .loc = loc};
             return 0;
         case '|':
             if(cpp_match_char(f, '|')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||"), .punct='|', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, '=')?SV("|="):SV("|"), .loc = loc};
+            if(cpp_match_char(f, '='))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("|="), .punct='|=', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("|"), .punct='|', .loc = loc};
             return 0;
         case ':':
             if(cpp_match_char(f, '>')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .punct=']', .loc = loc};
                 return 0;
             }
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = cpp_match_char(f, ':')?SV("::"):SV(":"), .loc = loc};
+            if(cpp_match_char(f, ':'))
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("::"), .punct='::', .loc = loc};
+            else
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(":"), .punct=':', .loc = loc};
             return 0;
         case '(':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("("), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("("), .punct='(', .loc = loc};
             return 0;
         case ')':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(")"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(")"), .punct=')', .loc = loc};
             return 0;
         case '[':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .punct='[', .loc = loc};
             return 0;
         case ']':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .punct=']', .loc = loc};
             return 0;
         case '{':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .punct='{', .loc = loc};
             return 0;
         case '}':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .punct='}', .loc = loc};
             return 0;
         case '?':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("?"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("?"), .punct='?', .loc = loc};
             return 0;
         case ';':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(";"), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(";"), .punct=';', .loc = loc};
             return 0;
         case ',':
-            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(","), .loc = loc};
+            *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV(","), .punct=',', .loc = loc};
             return 0;
     }
 }
@@ -614,6 +735,184 @@ cpp_info(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
     log_logv(cpp->logger, LOG_PRINT_ERROR, fmt, va);
     va_end(va);
 }
+
+static
+int
+cpp_handle_directive(CPreprocessor* cpp){
+    int err;
+    CPPToken tok;
+    do {
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+    }while(tok.type == CPP_WHITESPACE);
+    if(tok.type != CPP_IDENTIFIER){
+        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }
+        // push it back so dispatch loop sees newline
+        return ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+    }
+    if(sv_equals(tok.txt, SV("define"))){
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        err = cpp_next_raw_token(cpp, &tok);
+        if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+            // #define foo
+            err = cpp_define_obj_macro(cpp, name, NULL, 0);
+            if(err) return err;
+            // push it back so dispatch loop sees newline
+            return ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+        }
+        else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
+            assert(cpp->scratch_names.count == 0);
+            assert(cpp->scratch.count == 0);
+            _Bool variadic = 0;
+            for(;;){
+                do {
+                    err = cpp_next_raw_token(cpp, &tok);
+                    if(err) return err;
+                }while(tok.type == CPP_WHITESPACE);
+                if(tok.type == CPP_PUNCTUATOR && tok.punct == ')')
+                    break;
+                if(cpp->scratch_names.count){
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ',')
+                        return cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) return err;
+                    }while(tok.type == CPP_WHITESPACE);
+                }
+                if(tok.type == CPP_PUNCTUATOR && tok.punct == '...'){
+                    variadic = 1;
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) return err;
+                    }while(tok.type == CPP_WHITESPACE);
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
+                        return cpp_error(cpp, tok.loc, "... must be last macro param");
+                    break;
+                }
+                if(tok.type != CPP_IDENTIFIER)
+                    return cpp_error(cpp, tok.loc, "expected macro param name");
+                err = ma_push(CPPToken)(&cpp->scratch_names, cpp->allocator, tok);
+                if(err) return err;
+            }
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type != CPP_WHITESPACE && tok.type != CPP_NEWLINE && tok.type != CPP_EOF)
+                return cpp_error(cpp, tok.loc, "Illegal token immediately after ')'");
+            if(tok.type == CPP_WHITESPACE){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) return err;
+            }
+            while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
+                err = ma_push(CPPToken)(&cpp->scratch, cpp->allocator, tok);
+                if(err) return err;
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) return err;
+            }
+            // push it back so dispatch loop sees newline
+            err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+            if(err) return err;
+            while(cpp->scratch.count && ma_tail(cpp->scratch).type == CPP_WHITESPACE)
+                cpp->scratch.count--;
+            CMacro* m;
+            err = cpp_define_macro(cpp, name, cpp->scratch.count, cpp->scratch_names.count, &m);
+            if(err) return err;
+            m->is_variadic = variadic;
+            m->is_function_like = 1;
+            Atom* params = cpp_cmacro_params(m);
+            for(size_t i = 0; i < cpp->scratch_names.count; i++){
+                Atom a = AT_atomize(cpp->at, cpp->scratch_names.data[i].txt.text, cpp->scratch_names.data[i].txt.length);
+                if(!a) return 1;
+                for(size_t j = 0; j < i; j++){
+                    if(params[j] == a)
+                        return cpp_error(cpp, cpp->scratch_names.data[i].loc, "Duplicate macro param name");
+                }
+                params[i] = a;
+            }
+            MARRAY_FOR_EACH(CPPToken, t, cpp->scratch){
+                if(t->type != CPP_IDENTIFIER)
+                    continue;
+                Atom a = AT_get_atom(cpp->at, t->txt.text, t->txt.length);
+                if(!a) continue; // Not already in atom table, thus not in the params list either
+                for(size_t i = 0; i < m->nparams; i++){
+                    if(a == params[i]){
+                        t->param_idx = i+1;
+                        break;
+                    }
+                }
+            }
+            if(cpp->scratch.count)
+                memcpy(cpp_cmacro_replacement(m), cpp->scratch.data, cpp->scratch.count*sizeof cpp->scratch.data[0]);
+            cpp->scratch.count = 0;
+            cpp->scratch_names.count = 0;
+            return 0;
+        }
+        else if(tok.type == CPP_WHITESPACE){
+            assert(cpp->scratch.count == 0);
+            for(;;){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) return err;
+                if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
+                    // push it back so dispatch loop sees newline
+                    err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+                    if(err) return err;
+                    break;
+                }
+                err = ma_push(CPPToken)(&cpp->scratch, cpp->allocator, tok);
+                if(err) return err;
+            }
+            while(cpp->scratch.count && ma_tail(cpp->scratch).type == CPP_WHITESPACE)
+                cpp->scratch.count--;
+            err = cpp_define_obj_macro(cpp, name, cpp->scratch.data, cpp->scratch.count);
+            if(err) return err;
+            cpp->scratch.count = 0;
+            return 0;
+        }
+        else {
+            return cpp_error(cpp, tok.loc, "Unexpected token type in #define");
+        }
+    }
+    return 0;
+}
+static
+int
+cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
+    macro->is_disabled = 1;
+    // Push reenable token FIRST (so it's consumed LAST)
+    CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
+    int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, reenable);
+    if(err) return err;
+
+    // Push replacement tokens in reverse order
+    CPPToken* repl = cpp_cmacro_replacement(macro);
+    for(size_t i = macro->nreplace; i-- > 0;){
+        CPPToken tok = repl[i];
+        // If this token matches a disabled macro, paint it blue
+        if(tok.type == CPP_IDENTIFIER && !tok.disabled){
+            Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+            if(a){
+                CMacro* m = AM_get(&cpp->macros, a);
+                if(m && m->is_disabled)
+                    tok.disabled = 1;
+            }
+        }
+        err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+        if(err) return err;
+    }
+    return 0;
+}
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -63,7 +63,8 @@ struct CMacro {
             uint64_t is_variadic:      1;
             uint64_t is_builtin:       1;
             uint64_t _reserved:        5;
-            uint64_t _padding:         8;
+            uint64_t is_disabled:      1;
+            uint64_t _padding:         7;
             uint64_t nparams:          16;
             uint64_t nreplace:         32;
         };
@@ -73,12 +74,12 @@ struct CMacro {
 };
 static inline
 CPPToken*
-pp_cmacro_replacement(CMacro* macro){
+cpp_cmacro_replacement(CMacro* macro){
     return (CPPToken*)&macro->data[macro->nparams];
 }
 static inline
 Atom _Nonnull*_Nonnull
-pp_cmacro_params(CMacro* macro){
+cpp_cmacro_params(CMacro* macro){
     return (Atom*)macro->data;
 }
 _Static_assert(sizeof(CMacro) == 2*sizeof(uint64_t), "");
@@ -102,12 +103,22 @@ struct CPPFrame {
     IncludePosition include_position; // where we are in the include lookup, for include_next and related.
 };
 
+typedef struct CPPExpansionFrame CPPExpansionFrame;
+struct CPPExpansionFrame {
+    CMacro* macro;
+};
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
 #ifndef MARRAY_CPPFRAME
 #define MARRAY_CPPFRAME
 #define MARRAY_T CPPFrame
+#include "../Drp/Marray.h"
+#endif
+#ifndef MARRAY_CPPEXPANSIONFRAME
+#define MARRAY_CPPEXPANSIONFRAME
+#define MARRAY_T CPPExpansionFrame
 #include "../Drp/Marray.h"
 #endif
 #ifdef __clang__
@@ -149,8 +160,11 @@ struct CPreprocessor {
         Marray(StringView) include_paths[5];
     };
     Marray(CPPFrame) frames;
-    Marray(CPPToken) token_buff;
-    MStringBuilder scratch_sb;
+    Marray(CPPExpansionFrame) expansion_stack;
+    Marray(CPPToken) pending; // push in reverse order so you can pop in LIFO order
+    _Bool at_line_start;
+    Marray(CPPToken) scratch;
+    Marray(CPPToken) scratch_names;
 };
 
 static
@@ -163,7 +177,7 @@ cpp_undef_macro(CPreprocessor* cpp, StringView name);
 
 static
 int
-cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken* toks, size_t ntoks);
+cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspecified toks, size_t ntoks);
 
 static
 _Bool

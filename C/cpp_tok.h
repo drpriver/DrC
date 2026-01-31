@@ -12,7 +12,7 @@
 #endif
 
 // Some of these tokens are internal
-enum CPPTokenType TYPED_ENUM(uint32_t) {
+enum CPPTokenType TYPED_ENUM(uint64_t) {
     CPP_EOF         = 0,
     CPP_HEADER_NAME = 1,
     CPP_IDENTIFIER  = 2,
@@ -24,20 +24,22 @@ enum CPPTokenType TYPED_ENUM(uint32_t) {
     CPP_NEWLINE     = 8,
     CPP_OTHER       = 9,
     CPP_PLACEMARKER = 10,
+    CPP_REENABLE    = 11,
 };
-TYPEDEF_ENUM(CPPTokenType, uint32_t);
+TYPEDEF_ENUM(CPPTokenType, uint64_t);
 static const StringView CPPTokenTypeSV[] = {
-    [CPP_EOF        ] = SV("CPP_EOF"),
-    [CPP_HEADER_NAME] = SV("CPP_HEADER_NAME"),
-    [CPP_IDENTIFIER ] = SV("CPP_IDENTIFIER"),
-    [CPP_NUMBER     ] = SV("CPP_NUMBER"),
-    [CPP_CHAR       ] = SV("CPP_CHAR"),
-    [CPP_STRING     ] = SV("CPP_STRING"),
-    [CPP_PUNCTUATOR ] = SV("CPP_PUNCTUATOR"),
-    [CPP_WHITESPACE ] = SV("CPP_WHITESPACE"),
-    [CPP_NEWLINE    ] = SV("CPP_NEWLINE"),
-    [CPP_OTHER      ] = SV("CPP_OTHER"),
-    [CPP_PLACEMARKER] = SV("CPP_PLACEMARKER"),
+    [CPP_EOF        ] = SV("EOF"),
+    [CPP_HEADER_NAME] = SV("HEADER_NAME"),
+    [CPP_IDENTIFIER ] = SV("IDENTIFIER"),
+    [CPP_NUMBER     ] = SV("NUMBER"),
+    [CPP_CHAR       ] = SV("CHAR"),
+    [CPP_STRING     ] = SV("STRING"),
+    [CPP_PUNCTUATOR ] = SV("PUNCTUATOR"),
+    [CPP_WHITESPACE ] = SV("WHITESPACE"),
+    [CPP_NEWLINE    ] = SV("NEWLINE"),
+    [CPP_OTHER      ] = SV("OTHER"),
+    [CPP_PLACEMARKER] = SV("PLACEMARKER"),
+    [CPP_REENABLE   ] = SV("REENABLE"),
 };
 
 typedef struct SrcLoc SrcLoc;
@@ -67,8 +69,23 @@ struct SrcLocExp {
 
 typedef struct CPPToken CPPToken;
 struct CPPToken {
-    CPPTokenType type;
-    StringView txt;
+    union {
+        uint64_t _bits;
+        struct {
+            CPPTokenType type: 4;
+            uint64_t _pad: 4;
+            uint64_t disabled: 1;
+            uint64_t _pad2: 7;
+            uint64_t param_idx: 16; // 0 means not a param, otherwise 1-based idx
+            uint64_t punct: 32;
+        };
+    };
+    union {
+        StringView txt;
+        struct {
+            void *data1, *data2;
+        };
+    };
     SrcLoc loc;
 };
 
