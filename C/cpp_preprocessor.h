@@ -103,22 +103,12 @@ struct CPPFrame {
     IncludePosition include_position; // where we are in the include lookup, for include_next and related.
 };
 
-typedef struct CPPExpansionFrame CPPExpansionFrame;
-struct CPPExpansionFrame {
-    CMacro* macro;
-};
-
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
 #ifndef MARRAY_CPPFRAME
 #define MARRAY_CPPFRAME
 #define MARRAY_T CPPFrame
-#include "../Drp/Marray.h"
-#endif
-#ifndef MARRAY_CPPEXPANSIONFRAME
-#define MARRAY_CPPEXPANSIONFRAME
-#define MARRAY_T CPPExpansionFrame
 #include "../Drp/Marray.h"
 #endif
 #ifdef __clang__
@@ -160,7 +150,6 @@ struct CPreprocessor {
         Marray(StringView) include_paths[5];
     };
     Marray(CPPFrame) frames;
-    Marray(CPPExpansionFrame) expansion_stack;
     Marray(CPPToken) pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
     Marray(CPPToken) scratch;
