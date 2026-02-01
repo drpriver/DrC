@@ -99,6 +99,7 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
 }
 static int cpp_handle_directive(CPreprocessor* cpp);
 static int cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro);
+static int cpp_expand_func_macro(CPreprocessor* cpp, CMacro* macro);
 
 static
 int
@@ -126,14 +127,27 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                 if(!macro) goto noexp;
                 if(macro->is_disabled) goto noexp;
                 if(macro->is_function_like){
-                    // TODO
-                    goto noexp;
+                    // Need to check for '(' - if not present, not an invocation
+                    CPPToken next;
+                    do {
+                        err = cpp_next_raw_token(cpp, &next);
+                        if(err) return err;
+                    } while(next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE);
+                    if(next.type != CPP_PUNCTUATOR || next.punct != '('){
+                        // not actually an invocation
+                        err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, next);
+                        if(err) return err;
+                        goto noexp;
+                    }
+                    err = cpp_expand_func_macro(cpp, macro);
+                    if(err) return err;
+                    continue;
                 }
                 err = cpp_expand_obj_macro(cpp, macro);
                 if(err) return err;
                 continue;
+
                 noexp:
-                // TODO: macro expansion
                 *ptok = tok;
                 cpp->at_line_start = 0;
             }return 0;
@@ -886,7 +900,7 @@ static
 int
 cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
     macro->is_disabled = 1;
-    // Push reenable token FIRST (so it's consumed LAST)
+    // Push reenable token (so it's consumed last)
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, reenable);
     if(err) return err;
@@ -907,6 +921,18 @@ cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
         err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
         if(err) return err;
     }
+    return 0;
+}
+
+static
+int
+cpp_expand_func_macro(CPreprocessor* cpp, CMacro* macro){
+
+
+    macro->is_disabled = 1;
+    CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
+    int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, reenable);
+    if(err) return err;
     return 0;
 }
 

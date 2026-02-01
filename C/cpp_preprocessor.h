@@ -111,6 +111,11 @@ struct CPPFrame {
 #define MARRAY_T CPPFrame
 #include "../Drp/Marray.h"
 #endif
+#ifndef MARRAY_SIZE_T
+#define MARRAY_SIZE_T
+#define MARRAY_T size_t
+#include "../Drp/Marray.h"
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
