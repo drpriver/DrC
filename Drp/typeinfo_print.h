@@ -203,6 +203,7 @@ ti_get_size_t_from_member(const void* src, const MemberInfo* mi, size_t* length)
         case MK_FLEXIBLE_ARRAY:
             return 1;
     }
+    return 1;
 }
 
 static int ti_get_end_of_member(const void* src, const TypeInfoStruct* ti, const MemberInfo* mi, const void** end);

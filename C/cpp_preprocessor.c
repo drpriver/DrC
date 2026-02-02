@@ -5,6 +5,7 @@
 //
 #include <stdarg.h>
 #include "cpp_preprocessor.h"
+#include "cpp_tok.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -21,6 +22,9 @@ static int cpp_next_pp_token(CPreprocessor*, CPPToken*);
 static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
 static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
 static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
+
+static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
+static void cpp_release_scratch(CPreprocessor*, Marray(CPPToken)*);
 
 static
 int
@@ -97,9 +101,9 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
         return 0;
     }
 }
-static int cpp_handle_directive(CPreprocessor* cpp);
-static int cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro);
-static int cpp_expand_func_macro(CPreprocessor* cpp, CMacro* macro);
+static int cpp_handle_directive(CPreprocessor *cpp);
+static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst);
+static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, Marray(CPPToken) *dst);
 
 static
 int
@@ -139,11 +143,25 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                         if(err) return err;
                         goto noexp;
                     }
-                    err = cpp_expand_func_macro(cpp, macro);
+                    Marray(CPPToken) args = {0};
+                    for(int paren = 1;paren;){
+                        err = cpp_next_raw_token(cpp, &next);
+                        if(err) return err;
+                        if(next.type == CPP_EOF)
+                            return cpp_error(cpp, next.loc, "EOF in function-like macro invocation %s()", a->data);
+                        if(next.type == CPP_PUNCTUATOR){
+                            if(next.punct == ')')
+                                paren--;
+                            else if(next.punct == '(')
+                                paren++;
+                        }
+                    }
+                    err = cpp_expand_func_macro(cpp, macro, &args, &cpp->pending);
                     if(err) return err;
+                    ma_cleanup(CPPToken)(&args, cpp->allocator);
                     continue;
                 }
-                err = cpp_expand_obj_macro(cpp, macro);
+                err = cpp_expand_obj_macro(cpp, macro, &cpp->pending);
                 if(err) return err;
                 continue;
 
@@ -784,8 +802,10 @@ cpp_handle_directive(CPreprocessor* cpp){
             return ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
         }
         else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
-            assert(cpp->scratch_names.count == 0);
-            assert(cpp->scratch.count == 0);
+            Marray(CPPToken) *names = cpp_get_scratch(cpp);
+            if(!names) return 1;
+            Marray(CPPToken) *repl = cpp_get_scratch(cpp);
+            if(!repl) return 1;
             _Bool variadic = 0;
             for(;;){
                 do {
@@ -794,7 +814,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 }while(tok.type == CPP_WHITESPACE);
                 if(tok.type == CPP_PUNCTUATOR && tok.punct == ')')
                     break;
-                if(cpp->scratch_names.count){
+                if(names->count){
                     if(tok.type != CPP_PUNCTUATOR || tok.punct != ',')
                         return cpp_error(cpp, tok.loc, "Expecting ',' between param names");
                     do {
@@ -814,7 +834,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 }
                 if(tok.type != CPP_IDENTIFIER)
                     return cpp_error(cpp, tok.loc, "expected macro param name");
-                err = ma_push(CPPToken)(&cpp->scratch_names, cpp->allocator, tok);
+                err = ma_push(CPPToken)(names, cpp->allocator, tok);
                 if(err) return err;
             }
             err = cpp_next_raw_token(cpp, &tok);
@@ -826,7 +846,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(err) return err;
             }
             while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
-                err = ma_push(CPPToken)(&cpp->scratch, cpp->allocator, tok);
+                err = ma_push(CPPToken)(repl, cpp->allocator, tok);
                 if(err) return err;
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) return err;
@@ -834,24 +854,24 @@ cpp_handle_directive(CPreprocessor* cpp){
             // push it back so dispatch loop sees newline
             err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
             if(err) return err;
-            while(cpp->scratch.count && ma_tail(cpp->scratch).type == CPP_WHITESPACE)
-                cpp->scratch.count--;
+            while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                repl->count--;
             CMacro* m;
-            err = cpp_define_macro(cpp, name, cpp->scratch.count, cpp->scratch_names.count, &m);
+            err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
             if(err) return err;
             m->is_variadic = variadic;
             m->is_function_like = 1;
             Atom* params = cpp_cmacro_params(m);
-            for(size_t i = 0; i < cpp->scratch_names.count; i++){
-                Atom a = AT_atomize(cpp->at, cpp->scratch_names.data[i].txt.text, cpp->scratch_names.data[i].txt.length);
+            for(size_t i = 0; i < names->count; i++){
+                Atom a = AT_atomize(cpp->at, names->data[i].txt.text, names->data[i].txt.length);
                 if(!a) return 1;
                 for(size_t j = 0; j < i; j++){
                     if(params[j] == a)
-                        return cpp_error(cpp, cpp->scratch_names.data[i].loc, "Duplicate macro param name");
+                        return cpp_error(cpp, names->data[i].loc, "Duplicate macro param name");
                 }
                 params[i] = a;
             }
-            MARRAY_FOR_EACH(CPPToken, t, cpp->scratch){
+            MARRAY_FOR_EACH(CPPToken, t, *repl){
                 if(t->type != CPP_IDENTIFIER)
                     continue;
                 Atom a = AT_get_atom(cpp->at, t->txt.text, t->txt.length);
@@ -863,14 +883,15 @@ cpp_handle_directive(CPreprocessor* cpp){
                     }
                 }
             }
-            if(cpp->scratch.count)
-                memcpy(cpp_cmacro_replacement(m), cpp->scratch.data, cpp->scratch.count*sizeof cpp->scratch.data[0]);
-            cpp->scratch.count = 0;
-            cpp->scratch_names.count = 0;
+            if(repl->count)
+                memcpy(cpp_cmacro_replacement(m), repl->data, repl->count*sizeof repl->data[0]);
+            cpp_release_scratch(cpp, repl);
+            cpp_release_scratch(cpp, names);
             return 0;
         }
         else if(tok.type == CPP_WHITESPACE){
-            assert(cpp->scratch.count == 0);
+            Marray(CPPToken) *repl = cpp_get_scratch(cpp);
+            if(!repl) return 1;
             for(;;){
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) return err;
@@ -880,14 +901,14 @@ cpp_handle_directive(CPreprocessor* cpp){
                     if(err) return err;
                     break;
                 }
-                err = ma_push(CPPToken)(&cpp->scratch, cpp->allocator, tok);
+                err = ma_push(CPPToken)(repl, cpp->allocator, tok);
                 if(err) return err;
             }
-            while(cpp->scratch.count && ma_tail(cpp->scratch).type == CPP_WHITESPACE)
-                cpp->scratch.count--;
-            err = cpp_define_obj_macro(cpp, name, cpp->scratch.data, cpp->scratch.count);
+            while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                repl->count--;
+            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
             if(err) return err;
-            cpp->scratch.count = 0;
+            cpp_release_scratch(cpp, repl);
             return 0;
         }
         else {
@@ -898,11 +919,11 @@ cpp_handle_directive(CPreprocessor* cpp){
 }
 static
 int
-cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
+cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
     macro->is_disabled = 1;
     // Push reenable token (so it's consumed last)
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
-    int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, reenable);
+    int err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
     if(err) return err;
 
     // Push replacement tokens in reverse order
@@ -918,7 +939,7 @@ cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
                     tok.disabled = 1;
             }
         }
-        err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+        err = ma_push(CPPToken)(dst, cpp->allocator, tok);
         if(err) return err;
     }
     return 0;
@@ -926,14 +947,29 @@ cpp_expand_obj_macro(CPreprocessor* cpp, CMacro* macro){
 
 static
 int
-cpp_expand_func_macro(CPreprocessor* cpp, CMacro* macro){
-
-
+cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, Marray(CPPToken) *dst){
+    (void)args;
+    int err;
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
-    int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, reenable);
+    err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
     if(err) return err;
     return 0;
+}
+
+static 
+Marray(CPPToken)*_Nullable
+cpp_get_scratch(CPreprocessor *cpp){
+    Marray(CPPToken) *scratch = fl_pop(&cpp->scratch_list);
+    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
+    if(!scratch) return NULL;
+    scratch->count = 0;
+    return scratch;
+}
+static 
+void 
+cpp_release_scratch(CPreprocessor *cpp, Marray(CPPToken) *scratch){
+    fl_push(&cpp->scratch_list, scratch);
 }
 
 #ifdef __GNUC__

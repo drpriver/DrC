@@ -13,6 +13,7 @@
 #include "../Drp/logger.h"
 #include "../Drp/env.h"
 #include "../Drp/MStringBuilder.h"
+#include "../Drp/free_list.h"
 #include "cpp_tok.h"
 
 #ifndef MARRAY_STRING_VIEW
@@ -21,8 +22,8 @@
 #include "../Drp/Marray.h"
 #endif
 
-#ifndef MARRAY_PP_TOK
-#define MARRAY_PP_TOK
+#ifndef MARRAY_CPPTOKEN
+#define MARRAY_CPPTOKEN
 #define MARRAY_T CPPToken
 #include "../Drp/Marray.h"
 #endif
@@ -157,8 +158,7 @@ struct CPreprocessor {
     Marray(CPPFrame) frames;
     Marray(CPPToken) pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
-    Marray(CPPToken) scratch;
-    Marray(CPPToken) scratch_names;
+    FreeList(Marray(CPPToken)) scratch_list; // reusable scratch space for collecting tokens
 };
 
 static

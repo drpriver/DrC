@@ -517,8 +517,8 @@ int main(int argc, char** argv, char** envp){
         int line = tok.loc.line;
         int col = tok.loc.column;
         LongString file = fc->map.data[tok.loc.file_id].path;
-        if(tok.loc.is_actually_a_pointer)
-            ;
+        if(tok.loc.is_actually_a_pointer){
+        }
         if(tok.type == CPP_NEWLINE)
             log_printf(&logger, "%s:%d:%d %.*s '\\n'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
         else if(tok.type == CPP_WHITESPACE)
