@@ -482,7 +482,6 @@ int main(int argc, char** argv, char** envp){
         fc_write_path(fc, filename, strlen(filename));
         err = fc_cache_file(fc, LS_to_SV(txt));
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
-        log_printf(&logger, "%s:%d: err: %d\n", __FILE__,__LINE__,err);
         if(err) return err;
     }
     fc_write_path(fc, filename, strlen(filename));
