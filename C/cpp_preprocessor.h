@@ -159,6 +159,7 @@ struct CPreprocessor {
     Marray(CPPToken) pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
     FreeList(Marray(CPPToken)) scratch_list; // reusable scratch space for collecting tokens
+    FreeList(Marray(size_t)) scratch_idxes;
 };
 
 static

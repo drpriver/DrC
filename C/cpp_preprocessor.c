@@ -24,7 +24,9 @@ static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
 static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
 
 static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
+static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, Marray(CPPToken)*);
+static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
 
 static
 int
@@ -103,7 +105,7 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
 }
 static int cpp_handle_directive(CPreprocessor *cpp);
 static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst);
-static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, Marray(CPPToken) *dst);
+static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *dst);
 
 static
 int
@@ -143,22 +145,41 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                         if(err) return err;
                         goto noexp;
                     }
-                    Marray(CPPToken) args = {0};
-                    for(int paren = 1;paren;){
+                    Marray(CPPToken) *args = cpp_get_scratch(cpp);
+                    Marray(size_t) *arg_seps = cpp_get_scratch_idxes(cpp);
+                    if(!args || !arg_seps) return 1;
+                    for(int paren = 1;;){
                         err = cpp_next_raw_token(cpp, &next);
                         if(err) return err;
                         if(next.type == CPP_EOF)
                             return cpp_error(cpp, next.loc, "EOF in function-like macro invocation %s()", a->data);
                         if(next.type == CPP_PUNCTUATOR){
-                            if(next.punct == ')')
+                            if(next.punct == ')'){
                                 paren--;
+                                if(!paren) break;
+                            }
                             else if(next.punct == '(')
                                 paren++;
+                            else if(next.punct == ',' && paren == 1){
+                                if(macro->is_variadic || (macro->nparams > 1 && arg_seps->count < (size_t)macro->nparams-1)){
+                                    err = ma_push(size_t)(arg_seps, cpp->allocator, args->count);
+                                    if(err) return err;
+                                }
+                                else
+                                    return cpp_error(cpp, next.loc, "Too many arguments to function-like macro");
+                            }
                         }
+                        err = ma_push(CPPToken)(args, cpp->allocator, next);
+                        if(err) return err;
                     }
-                    err = cpp_expand_func_macro(cpp, macro, &args, &cpp->pending);
+                    if(args->count && !macro->nparams && !macro->is_variadic)
+                        return cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro");
+                    if(arg_seps->count+1 < macro->nparams)
+                        return cpp_error(cpp, args->data[0].loc, "Too few arguments to function-like macro");
+                    err = cpp_expand_func_macro(cpp, macro, args, arg_seps, &cpp->pending);
                     if(err) return err;
-                    ma_cleanup(CPPToken)(&args, cpp->allocator);
+                    cpp_release_scratch_idxes(cpp, arg_seps);
+                    cpp_release_scratch(cpp, args);
                     continue;
                 }
                 err = cpp_expand_obj_macro(cpp, macro, &cpp->pending);
@@ -947,7 +968,11 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
 
 static
 int
-cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, Marray(CPPToken) *dst){
+cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *dst){
+    size_t nargs = arg_seps->count+1;
+    if(!macro->nparams && !macro->is_variadic)
+        nargs = 0;
+    (void)nargs;
     (void)args;
     int err;
     macro->is_disabled = 1;
@@ -970,6 +995,21 @@ static
 void 
 cpp_release_scratch(CPreprocessor *cpp, Marray(CPPToken) *scratch){
     fl_push(&cpp->scratch_list, scratch);
+}
+
+static 
+Marray(size_t)*_Nullable
+cpp_get_scratch_idxes(CPreprocessor *cpp){
+    Marray(size_t) *scratch = fl_pop(&cpp->scratch_idxes);
+    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
+    if(!scratch) return NULL;
+    scratch->count = 0;
+    return scratch;
+}
+static 
+void 
+cpp_release_scratch_idxes(CPreprocessor *cpp, Marray(size_t) *scratch){
+    fl_push(&cpp->scratch_idxes, scratch);
 }
 
 #ifdef __GNUC__
