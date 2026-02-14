@@ -7,19 +7,9 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static int prep_targets(BuildCtx*);
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
-    int err = prep_targets(ctx);
-    if(err) return err;
-    return execute_targets(ctx);
-}
-
-
-static
-int
-prep_targets(BuildCtx* ctx){
     BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", OS_NATIVE);
     BuildTarget* all = phony_target(ctx, "all");
     add_deps(ctx, all, cpp);
@@ -41,7 +31,13 @@ prep_targets(BuildCtx* ctx){
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
             target_prog(ctx, cmd, bin);
-            cmd_carg(&cmd->cmd, "--multithreaded");
+            if(!ctx->dash_dash_args.count)
+                cmd_carg(&cmd->cmd, "--multithreaded");
+            else
+                for(size_t j = 0; j < ctx->dash_dash_args.count; j++){
+                    Atom a = ctx->dash_dash_args.data[j];
+                    cmd_arg(&cmd->cmd, (LongString){a->length, a->data});
+                }
             add_dep(ctx, tests, cmd);
         }
     }
@@ -78,7 +74,7 @@ prep_targets(BuildCtx* ctx){
         BuildTarget* cc = get_target(ctx, "compile_commands.json");
         add_dep(ctx, tags, cc);
     }
-    return 0;
+    return execute_targets(ctx);
 }
 
 #ifdef __clang__
