@@ -24,7 +24,6 @@ prep_targets(BuildCtx* ctx){
     BuildTarget* all = phony_target(ctx, "all");
     add_deps(ctx, all, cpp);
 
-#if 0
     BuildTarget* tests = phony_target(ctx, "tests");
     {
         static const struct {
@@ -32,6 +31,7 @@ prep_targets(BuildCtx* ctx){
             const char* name;
             const char* cmd_name;
         } test_files[] = {
+            {"C/cpp_test.c", "cpp_test", "run_cpp_test"},
         };
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
@@ -41,10 +41,10 @@ prep_targets(BuildCtx* ctx){
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
             target_prog(ctx, cmd, bin);
+            cmd_carg(&cmd->cmd, "--multithreaded");
             add_dep(ctx, tests, cmd);
         }
     }
-#endif
 
     {
         BuildTarget* run = exec_target(ctx, "run", cpp);
