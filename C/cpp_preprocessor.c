@@ -1389,7 +1389,8 @@ cpp_get_param_arg(const CMacro *macro, const Marray(CPPToken) *args, const Marra
 // Helper: Parse __VA_OPT__(content) starting after the __VA_OPT__ identifier.
 // Sets *out_content_start to the first token after '(' and *out_close_paren
 // to the index of the matching ')'.
-static int
+static
+int
 cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren){
     size_t k = after_va_opt;
     while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;

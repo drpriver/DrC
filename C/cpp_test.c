@@ -623,7 +623,7 @@ int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
     RegisterTest(test_func_macros);
-    if(0) RegisterTest(test_func_macros_extensions);
+    RegisterTestFlags(test_func_macros_extensions, TEST_CASE_FLAGS_SKIP_UNLESS_NAMED);
     RegisterTest(test_for_each);
     RegisterTest(test_for_each_empty);
     RegisterTest(test_c23);

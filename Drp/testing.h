@@ -1520,13 +1520,14 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
             break;
     }
 
-    const char* text = result.funcs_executed == 1?
+    const char* text = test_funcs_count == 1?
         "test function executed"
         : "test functions executed";
-    TestPrintf("%s%s%s: %s%zu%s %s\n",
+    TestPrintf("%s%s%s: %s%zu%s / %s%zu%s %s\n",
             gray, filename, reset,
-            blue, result.funcs_executed,
-            reset, text);
+            blue, result.funcs_executed, reset,
+            blue, test_funcs_count, reset,
+            text);
 
     text = result.executed == 1? "test statement executed" : "test statements executed";
     TestPrintf("%s%s%s: %s%zu%s %s\n",
