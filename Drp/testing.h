@@ -15,6 +15,8 @@
 #include <unistd.h>
 #endif
 #include "stringview.h"
+#include "dbg_diff.h"
+
 
 #ifndef arrlen
 #define arrlen(arr) (sizeof(arr)/sizeof(arr[0]))
@@ -33,7 +35,19 @@
 #else
 #define _Nonnull
 #define _Nullable
+#define _Null_unspecified
 #endif
+
+static void diff_print(void*_Null_unspecified up, const char* fmt, ...);
+static DbgDiffPrinter TEST_DIFF_PRINTER = {
+    .printer=diff_print,
+    .escape_on    = "\033[4m",
+    .escape_reset = "\033[24m",
+    .deleted      = "\033[94m- ",
+    .matched      = "  ",
+    .added        = "\033[33m+ ",
+    .reset        = "\033[0m",
+};
 
 #ifndef TestDebugBreak
     #if defined(__clang__)
@@ -96,6 +110,7 @@ TestRegisterOutFile(FILE* fp){
 }
 
 
+static void TestPrintfv(const char* fmt, va_list);
 // TestPrintf
 // ----------
 // Provides a printf-style interface. Prints to all of the registered
@@ -107,10 +122,14 @@ static
 void
 TestPrintf(const char* fmt, ...){
     va_list arg_;
-    char buff[10000];
-    // Some C compiler don't support multiple va_starts, but do
-    // support va_copy, so just do that.
     va_start(arg_, fmt);
+    TestPrintfv(fmt, arg_);
+    va_end(arg_);
+}
+static
+void
+TestPrintfv(const char* fmt, va_list arg_){
+    char buff[10000];
     assert(TestOutFileCount < arrlen(TestOutFiles));
     for(size_t i = 0; i < TestOutFileCount; i++){
         va_list arg;
@@ -147,7 +166,14 @@ TestPrintf(const char* fmt, ...){
         }
         va_end(arg);
     }
-    va_end(arg_);
+}
+
+static void diff_print(void*_Null_unspecified up, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    TestPrintfv(fmt, ap);
+    va_end(ap);
+    (void)up;
 }
 
 #ifndef TestPrintValue
@@ -442,6 +468,26 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
       }while(0)
 #endif
 
+static
+_Bool
+test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const char* rhs_, struct TestStats* stats, const char* file, const char* func, int line){
+    stats->executed++;
+    if(!sv_equals(lhs, rhs)){
+        stats->failures++;
+        TestPrintf("%s%s:%d: %s %s" "Test condition failed" "\n",
+            _test_color_gray, file, line, func,
+            _test_color_reset);
+        TestPrintf("%s%s:%d: %s %s" "%s == %s" "\n",
+            _test_color_gray, file, line, func,
+            _test_color_reset, lhs_, rhs_);
+        dbg_diff(&TEST_DIFF_PRINTER, lhs, rhs);
+        if(_test_do_debugbreak_on_fail)
+            TestDebugBreak();
+        return 0;
+    }
+    return 1;
+}
+#define TestExpectEqualsSv(lhs, rhs) test_expect_equals_sv(lhs, rhs, #lhs, #rhs, &TEST_stats, __FILE__, __func__, __LINE__)
   //
   // TestExpectEquals
   // ----------------

@@ -33,7 +33,8 @@ log_posix(void* handle, const void* data, size_t len){
 #endif
 
 static
-Logger std_logger(void){
+Logger 
+std_logger(void){
     Logger l = {
         .buff.allocator = MALLOCATOR,
         #ifdef _WIN32
