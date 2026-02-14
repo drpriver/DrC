@@ -133,6 +133,43 @@ TestFunction(test_func_macros){
         {"variadic_with_named_param_and_args", SV("#define FOO(x, ...) x __VA_ARGS__\nFOO(1, 2, 3)"), SV("\n1 2, 3"), __LINE__},
         {"variadic_with_named_param_va_opt", SV("#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1)"), SV("\n1 "), __LINE__},
         {"variadic_with_named_param_va_opt_nonempty", SV( "#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1, 2, 3)"),SV("\n1 , 2, 3"), __LINE__},
+        // __VA_OPT__ emptiness is determined after expansion (C23 6.10.4.1)
+        {"va_opt_expands_to_empty", SV(
+            "#define EMPTY\n"
+            "#define F(...) __VA_OPT__(yes)no\n"
+            "F(EMPTY)"), SV("\n\nno"), __LINE__},
+        {"va_opt_expands_to_nonempty", SV(
+            "#define ONE 1\n"
+            "#define F(...) __VA_OPT__(yes)no\n"
+            "F(ONE)"), SV("\n\nyesno"), __LINE__},
+        // param used both raw (## adjacent) and expanded in same replacement
+        {"param_raw_and_expanded", SV(
+            "#define X 1\n"
+            "#define F(a) a a ## 2\n"
+            "F(X)"), SV("\n\n1 X2"), __LINE__},
+        // __VA_OPT__ with nested parens in content
+        {"va_opt_nested_parens", SV(
+            "#define F(...) __VA_OPT__((a, b))\n"
+            "F(x)"), SV("\n(a, b)"), __LINE__},
+        // multiple __VA_OPT__ in one replacement list
+        {"va_opt_multiple", SV(
+            "#define F(...) [__VA_OPT__(L)] [__VA_OPT__(R)]\n"
+            "F(x)\n"
+            "F()"), SV("\n[L] [R]\n[] []"), __LINE__},
+        // __VA_OPT__ as left operand of ##
+        {"va_opt_paste_left", SV(
+            "#define F(...) __VA_OPT__(x) ## y\n"
+            "F(1)\n"
+            "F()"), SV("\nxy\ny"), __LINE__},
+        // empty __VA_OPT__ content with non-empty VA_ARGS
+        {"va_opt_empty_content", SV(
+            "#define F(...) a __VA_OPT__() b\n"
+            "F(x)"), SV("\na  b"), __LINE__},
+        // # __VA_OPT__ with ## inside content
+        {"stringify_va_opt_with_paste", SV(
+            "#define F(...) #__VA_OPT__(a ## b)\n"
+            "F(x)\n"
+            "F()"), SV("\n\"ab\"\n\"\""), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;
@@ -142,7 +179,30 @@ TestFunction(test_func_macros){
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
         if(err) continue;
-        if(!test_expect_equals_sv(result, exp, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+TestFunction(test_func_macros_extensions){
+    TESTBEGIN();
+    struct {
+        const char* name; StringView inp, exp; int line;
+    } test_cases[] = {
+        // ## __VA_ARGS
+        {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        StringView inp = test_cases[i].inp;
+        StringView exp = test_cases[i].exp;
+        int line = test_cases[i].line;
+        StringView result;
+        int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
         }
         Allocator_free(MALLOCATOR, result.text, result.length);
@@ -164,6 +224,10 @@ TestFunction(test_obj_macros){
         {"empty_obj_macro", SV("#define Z\nZ"), SV("\n"), __LINE__},
         {"self_ref", SV("#define Y Y\nY"), SV("\nY"), __LINE__},
         {"parens_macro", SV("#define PARENS ()\nPARENS"), SV("\n()"), __LINE__},
+        // ## in object-like macros should paste during expansion
+        {"obj_paste_simple", SV("#define AB a ## b\nAB"), SV("\nab"), __LINE__},
+        {"obj_paste_hash", SV("#define HH # ## #\nHH"), SV("\n##"), __LINE__},
+        {"obj_paste_multi", SV("#define XYZ x ## y ## z\nXYZ"), SV("\nxyz"), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;
@@ -173,7 +237,7 @@ TestFunction(test_obj_macros){
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
         if(err) continue;
-        if(!test_expect_equals_sv(result, exp, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
         Allocator_free(MALLOCATOR, result.text, result.length);
@@ -200,7 +264,7 @@ TestFunction(test_for_each){
         "FOR_EACH(F, a, b, c, 1, 2, 3)"), &result, __FILE__, __func__, __LINE__);
     // 10 newlines from #defines, then the expansion
     TestAssertFalse(err);
-    TestExpectEqualsSv(result, SV("\n\n\n\n\n\n\n\n\n\na*a b*b c*c 1*1 2*2 3*3"));
+    TestExpectEqualsSv(SV("\n\n\n\n\n\n\n\n\n\na*a b*b c*c 1*1 2*2 3*3"), result);
 
     Allocator_free(MALLOCATOR, result.text, result.length);
     TESTEND();
@@ -225,7 +289,7 @@ TestFunction(test_for_each_empty){
         "FOR_EACH(F)x"), &result, __FILE__, __func__, __LINE__);
     TestAssertFalse(err);
     // 10 newlines from #defines, then just "x" (FOR_EACH with no varargs expands to nothing)
-    TestExpectEqualsSv(result, SV("\n\n\n\n\n\n\n\n\n\nx"));
+    TestExpectEqualsSv(SV("\n\n\n\n\n\n\n\n\n\nx"), result);
 
     Allocator_free(MALLOCATOR, result.text, result.length);
     TESTEND();
@@ -545,7 +609,7 @@ TestFunction(test_torture){
             TestPrintf("Error instead");
             continue;
         }
-        if(!test_expect_equals_sv(result, out, "result", "out", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(out, result, "out", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
         Allocator_free(MALLOCATOR, result.text, result.length);
@@ -559,6 +623,7 @@ int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
     RegisterTest(test_func_macros);
+    if(0) RegisterTest(test_func_macros_extensions);
     RegisterTest(test_for_each);
     RegisterTest(test_for_each_empty);
     RegisterTest(test_c23);

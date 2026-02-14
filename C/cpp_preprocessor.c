@@ -30,6 +30,7 @@ static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, Marray(CPPToken)*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
+static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const Marray(CPPToken)*, const Marray(size_t)*, Marray(CPPToken)*_Nullable*_Nullable, Marray(CPPToken)*, _Bool);
 enum {
     CPP_NO_ERROR = 0,
     CPP_OOM_ERROR,
@@ -982,6 +983,23 @@ cpp_handle_directive(CPreprocessor* cpp){
                     }
                 }
             }
+            // Check ## not at start/end of replacement list (C23 6.10.4.3)
+            if(repl->count){
+                size_t first = 0;
+                while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
+                if(first < repl->count && repl->data[first].type == CPP_PUNCTUATOR && repl->data[first].punct == '##'){
+                    cpp_release_scratch(cpp, repl);
+                    cpp_release_scratch(cpp, names);
+                    return cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                }
+                size_t last = repl->count;
+                while(last > 0 && repl->data[last-1].type == CPP_WHITESPACE) last--;
+                if(last > 0 && repl->data[last-1].type == CPP_PUNCTUATOR && repl->data[last-1].punct == '##'){
+                    cpp_release_scratch(cpp, repl);
+                    cpp_release_scratch(cpp, names);
+                    return cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                }
+            }
             if(repl->count)
                 memcpy(cpp_cmacro_replacement(m), repl->data, repl->count*sizeof repl->data[0]);
             finish_func_macro:;
@@ -1019,6 +1037,21 @@ cpp_handle_directive(CPreprocessor* cpp){
             }
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
+            // Check ## not at start/end of replacement list (C23 6.10.4.3)
+            if(repl->count){
+                size_t first = 0;
+                while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
+                if(first < repl->count && repl->data[first].type == CPP_PUNCTUATOR && repl->data[first].punct == '##'){
+                    cpp_release_scratch(cpp, repl);
+                    return cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                }
+                size_t last = repl->count;
+                while(last > 0 && repl->data[last-1].type == CPP_WHITESPACE) last--;
+                if(last > 0 && repl->data[last-1].type == CPP_PUNCTUATOR && repl->data[last-1].punct == '##'){
+                    cpp_release_scratch(cpp, repl);
+                    return cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                }
+            }
             err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
@@ -1081,16 +1114,53 @@ static
 int
 cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
     macro->is_disabled = 1;
-    // Push reenable token (so it's consumed last)
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
     if(err) return err;
 
-    // Push replacement tokens in reverse order
     CPPToken* repl = cpp_cmacro_replacement(macro);
+
+    // Check if replacement list contains ## (needs paste processing)
+    _Bool has_paste = 0;
+    for(size_t i = 0; i < macro->nreplace; i++){
+        if(repl[i].type == CPP_PUNCTUATOR && repl[i].punct == '##'){
+            has_paste = 1;
+            break;
+        }
+    }
+
+    if(has_paste){
+        // Process ## pasting via cpp_substitute_and_paste.
+        // Object-like macros have no params, so args/expanded_args are unused.
+        Marray(CPPToken) empty_args = {0};
+        Marray(size_t) empty_seps = {0};
+        Marray(CPPToken) *result = cpp_get_scratch(cpp);
+        if(!result) return CPP_OOM_ERROR;
+        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace,
+                                       macro, &empty_args, &empty_seps, NULL, result, 0);
+        if(err) goto finally_obj;
+        for(size_t i = result->count; i-- > 0;){
+            CPPToken tok = result->data[i];
+            if(tok.type == CPP_PLACEMARKER) continue;
+            if(tok.type == CPP_IDENTIFIER && !tok.disabled){
+                Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+                if(a){
+                    CMacro* m = AM_get(&cpp->macros, a);
+                    if(m && m->is_disabled)
+                        tok.disabled = 1;
+                }
+            }
+            err = ma_push(CPPToken)(dst, cpp->allocator, tok);
+            if(err) goto finally_obj;
+        }
+    finally_obj:
+        cpp_release_scratch(cpp, result);
+        return err;
+    }
+
+    // Fast path: no ## processing needed
     for(size_t i = macro->nreplace; i-- > 0;){
         CPPToken tok = repl[i];
-        // If this token matches a disabled macro, paint it blue
         if(tok.type == CPP_IDENTIFIER && !tok.disabled){
             Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
             if(a){
@@ -1110,8 +1180,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
 // arg1 = args[arg_seps[0]+1..arg_seps[1]), etc. (skip the comma)
 static
 void
-cpp_get_argument(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps,
-                 size_t arg_idx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_argument(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t arg_idx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
     size_t start, end;
     if(arg_idx == 0){
         start = 0;
@@ -1139,8 +1208,7 @@ cpp_get_argument(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps,
 // Helper: Get variadic arguments (all args from nparams onward, comma-separated)
 static
 void
-cpp_get_va_args(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps,
-                size_t nparams, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_va_args(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t nparams, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
     size_t start;
     if(nparams == 0){
         start = 0;
@@ -1166,34 +1234,35 @@ cpp_get_va_args(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps,
 // Forward declaration
 static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, Marray(CPPToken) *out);
 
-// Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1)
+// Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1).
+// Uses the expanded_args cache so the expansion is done at most once.
 static
 _Bool
-cpp_va_args_nonempty(CPreprocessor *cpp, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t nparams){
+cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *_Nullable*_Nullable expanded_args){
     CPPToken* start;
     size_t count;
-    cpp_get_va_args(args, arg_seps, nparams, &start, &count);
+    cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
     if(!count) return 0;
 
-    // Expand the VA_ARGS and check if result is non-empty
-    Marray(CPPToken) *expanded = cpp_get_scratch(cpp);
-    if(!expanded) return 0; // conservative: treat as empty on error
-    int err = cpp_expand_argument(cpp, start, count, expanded);
-    if(err){
-        cpp_release_scratch(cpp, expanded);
-        return 0;
+    size_t va_idx = macro->nparams; // VA_ARGS slot in expanded_args
+    if(!expanded_args[va_idx]){
+        Marray(CPPToken) *ea = cpp_get_scratch(cpp);
+        if(!ea) return 0; // conservative: treat as empty on OOM
+        int err = cpp_expand_argument(cpp, start, count, ea);
+        if(err){
+            cpp_release_scratch(cpp, ea);
+            return 0;
+        }
+        expanded_args[va_idx] = ea;
     }
-    _Bool nonempty = 0;
+    Marray(CPPToken) *expanded = expanded_args[va_idx];
     for(size_t i = 0; i < expanded->count; i++){
         if(expanded->data[i].type != CPP_WHITESPACE &&
            expanded->data[i].type != CPP_NEWLINE &&
-           expanded->data[i].type != CPP_PLACEMARKER){
-            nonempty = 1;
-            break;
-        }
+           expanded->data[i].type != CPP_PLACEMARKER)
+            return 1;
     }
-    cpp_release_scratch(cpp, expanded);
-    return nonempty;
+    return 0;
 }
 
 // Helper: Stringify argument tokens (C23 6.10.4.2)
@@ -1269,8 +1338,7 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
 
     // Check if we consumed the entire pasted string and got exactly one token
     if(temp_frame.cursor != pasted.length || tok.type == CPP_WHITESPACE || tok.type == CPP_EOF){
-        return cpp_error(cpp, loc, "pasting \"%.*s\" and \"%.*s\" does not give a valid preprocessing token",
-                        sv_p(left.txt), sv_p(right.txt));
+        return cpp_error(cpp, loc, "pasting \"%.*s\" and \"%.*s\" does not give a valid preprocessing token", sv_p(left.txt), sv_p(right.txt));
     }
 
     tok.loc = loc;
@@ -1307,459 +1375,319 @@ cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, M
     return 0;
 }
 
+// Helper: Get raw argument tokens for a parameter index, dispatching
+// between variadic and regular arguments.
+static inline
+void
+cpp_get_param_arg(const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t pidx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+    if(pidx == macro->nparams && macro->is_variadic)
+        cpp_get_va_args(args, arg_seps, macro->nparams, out_start, out_count);
+    else
+        cpp_get_argument(args, arg_seps, pidx, out_start, out_count);
+}
+
+// Helper: Parse __VA_OPT__(content) starting after the __VA_OPT__ identifier.
+// Sets *out_content_start to the first token after '(' and *out_close_paren
+// to the index of the matching ')'.
+static int
+cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren){
+    size_t k = after_va_opt;
+    while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
+    if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '(')
+        return cpp_error(cpp, loc, "__VA_OPT__ must be followed by (content)");
+    k++; // skip '('
+    *out_content_start = k;
+    int paren = 1;
+    while(k < nreplace && paren > 0){
+        if(repl[k].type == CPP_PUNCTUATOR){
+            if(repl[k].punct == '(') paren++;
+            else if(repl[k].punct == ')') paren--;
+        }
+        if(paren > 0) k++;
+    }
+    if(paren != 0)
+        return cpp_error(cpp, loc, "unterminated __VA_OPT__");
+    *out_close_paren = k;
+    return 0;
+}
+
+// Single-pass helper: substitute parameters and resolve ## pasting.
+// Walks repl[0..nreplace) left-to-right, handling:
+//   - # stringification (param and __VA_OPT__)
+//   - __VA_OPT__ (recursive)
+//   - ## token pasting
+//   - parameter substitution (expanded vs raw based on local ## adjacency)
+// If raw_only is set, all params use raw (unexpanded) tokens (for # __VA_OPT__).
+static
+int
+cpp_substitute_and_paste(
+    CPreprocessor *cpp,
+    const CPPToken *repl, size_t nreplace,
+    const CMacro *macro,
+    const Marray(CPPToken) *args,
+    const Marray(size_t) *arg_seps,
+    Marray(CPPToken) *_Nullable*_Nullable expanded_args,
+    Marray(CPPToken) *out,
+    _Bool raw_only)
+{
+    int err;
+    for(size_t i = 0; i < nreplace; i++){
+        CPPToken t = repl[i];
+
+        // # (stringify) — only in function-like macros
+        if(t.type == CPP_PUNCTUATOR && t.punct == '#' && macro->is_function_like){
+            size_t j = i + 1;
+            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
+
+            // # __VA_OPT__(content)
+            if(j < nreplace && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
+                size_t cstart, cparen;
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen);
+                if(err) return err;
+                CPPToken stringified;
+                if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+                    Marray(CPPToken) *temp = cpp_get_scratch(cpp);
+                    if(!temp) return CPP_OOM_ERROR;
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
+                            macro, args, arg_seps, expanded_args, temp, 1);
+                    if(err){ cpp_release_scratch(cpp, temp); return err; }
+                    // Strip placemarkers in-place before stringifying
+                    size_t w = 0;
+                    for(size_t m = 0; m < temp->count; m++)
+                        if(temp->data[m].type != CPP_PLACEMARKER)
+                            temp->data[w++] = temp->data[m];
+                    stringified = cpp_stringify_argument(cpp, temp->data, w, t.loc);
+                    cpp_release_scratch(cpp, temp);
+                }
+                else {
+                    stringified = (CPPToken){.type = CPP_STRING, .txt = SV("\"\""), .loc = t.loc};
+                }
+                err = ma_push(CPPToken)(out, cpp->allocator, stringified);
+                if(err) return err;
+                i = cparen;
+                continue;
+            }
+
+            // # param
+            if(j >= nreplace || repl[j].param_idx == 0)
+                return cpp_error(cpp, t.loc, "'#' is not followed by a macro parameter");
+            size_t pidx = repl[j].param_idx - 1;
+            CPPToken *arg_start; size_t arg_count;
+            cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
+            CPPToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
+            err = ma_push(CPPToken)(out, cpp->allocator, stringified);
+            if(err) return err;
+            i = j;
+            continue;
+        }
+
+        // ## (paste)
+        if(t.type == CPP_PUNCTUATOR && t.punct == '##'){
+            // C23 6.10.4.1p5: if ## has no left operand (empty __VA_OPT__
+            // vanished), delete the ## and its trailing whitespace, letting
+            // the right operand be processed normally by the next iteration.
+            if(out->count == 0){
+                while(i + 1 < nreplace && repl[i + 1].type == CPP_WHITESPACE) i++;
+                continue;
+            }
+            CPPToken left = ma_tail(*out);
+            out->count--;
+
+            size_t j = i + 1;
+            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
+            // Similarly, if ## has no right operand, delete it and keep left.
+            if(j >= nreplace){
+                err = ma_push(CPPToken)(out, cpp->allocator, left);
+                if(err) return err;
+                continue;
+            }
+
+            CPPToken right;
+            size_t skip_to = j;
+
+            if(repl[j].param_idx > 0){
+                // Right operand is a param — use raw tokens
+                size_t pidx = repl[j].param_idx - 1;
+                CPPToken *arg_start; size_t arg_count;
+                cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
+                right = (arg_count == 0)
+                    ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
+                    : arg_start[0];
+                CPPToken pr;
+                err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                if(err) return err;
+                err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                if(err) return err;
+                for(size_t m = 1; m < arg_count; m++){
+                    err = ma_push(CPPToken)(out, cpp->allocator, arg_start[m]);
+                    if(err) return err;
+                }
+                i = skip_to;
+                continue;
+            }
+
+            if(repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
+                // Right operand is __VA_OPT__
+                size_t cstart, cparen;
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen);
+                if(err) return err;
+                if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+                    Marray(CPPToken) *temp = cpp_get_scratch(cpp);
+                    if(!temp) return CPP_OOM_ERROR;
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
+                            macro, args, arg_seps, expanded_args, temp, raw_only);
+                    if(err) goto finally_paste_va_opt;
+                    right = (temp->count == 0)
+                        ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
+                        : temp->data[0];
+                    CPPToken pr;
+                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                    if(err) goto finally_paste_va_opt;
+                    err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                    if(err) goto finally_paste_va_opt;
+                    for(size_t m = 1; m < temp->count; m++){
+                        err = ma_push(CPPToken)(out, cpp->allocator, temp->data[m]);
+                        if(err) goto finally_paste_va_opt;
+                    }
+                finally_paste_va_opt:
+                    cpp_release_scratch(cpp, temp);
+                    if(err) return err;
+                }
+                else {
+                    right = (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc};
+                    CPPToken pr;
+                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                    if(err) return err;
+                    err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                    if(err) return err;
+                }
+                i = cparen;
+                continue;
+            }
+
+            // Regular token as right operand
+            right = repl[j];
+            CPPToken pr;
+            err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+            if(err) return err;
+            err = ma_push(CPPToken)(out, cpp->allocator, pr);
+            if(err) return err;
+            i = skip_to;
+            continue;
+        }
+
+        // __VA_OPT__
+        if(t.type == CPP_IDENTIFIER && sv_equals(t.txt, SV("__VA_OPT__"))){
+            size_t cstart, cparen;
+            err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &cparen);
+            if(err) return err;
+            if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
+                        macro, args, arg_seps, expanded_args, out, raw_only);
+                if(err) return err;
+            }
+            i = cparen;
+            continue;
+        }
+
+        // Parameter substitution
+        if(t.param_idx > 0){
+            size_t pidx = t.param_idx - 1;
+            CPPToken *arg_start; size_t arg_count;
+            cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
+
+            // Check if right-adjacent to ## (next non-WS in repl is ##).
+            // Left-adjacency is handled by the ## case pulling the right operand directly.
+            _Bool use_raw = raw_only;
+            if(!use_raw){
+                for(size_t j = i + 1; j < nreplace; j++){
+                    if(repl[j].type == CPP_WHITESPACE) continue;
+                    if(repl[j].type == CPP_PUNCTUATOR && repl[j].punct == '##') use_raw = 1;
+                    break;
+                }
+            }
+
+            if(arg_count == 0){
+                CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
+                err = ma_push(CPPToken)(out, cpp->allocator, pm);
+                if(err) return err;
+            }
+            else if(use_raw){
+                for(size_t j = 0; j < arg_count; j++){
+                    err = ma_push(CPPToken)(out, cpp->allocator, arg_start[j]);
+                    if(err) return err;
+                }
+            }
+            else {
+                // Expand argument (lazily cached)
+                if(!expanded_args[pidx]){
+                    Marray(CPPToken) *ea = cpp_get_scratch(cpp);
+                    if(!ea) return CPP_OOM_ERROR;
+                    err = cpp_expand_argument(cpp, arg_start, arg_count, ea);
+                    if(err) return err;
+                    expanded_args[pidx] = ea;
+                }
+                Marray(CPPToken) *expanded = expanded_args[pidx];
+                if(expanded->count == 0){
+                    CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
+                    err = ma_push(CPPToken)(out, cpp->allocator, pm);
+                    if(err) return err;
+                }
+                else {
+                    for(size_t j = 0; j < expanded->count; j++){
+                        err = ma_push(CPPToken)(out, cpp->allocator, expanded->data[j]);
+                        if(err) return err;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Skip whitespace before ##
+        if(t.type == CPP_WHITESPACE){
+            size_t j = i + 1;
+            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
+            if(j < nreplace && repl[j].type == CPP_PUNCTUATOR && repl[j].punct == '##')
+                continue;
+        }
+
+        // Regular token
+        err = ma_push(CPPToken)(out, cpp->allocator, t);
+        if(err) return err;
+    }
+    return 0;
+}
+
 static
 int
 cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *dst){
     int err;
-    CPPToken* repl = cpp_cmacro_replacement(macro);
-    size_t nreplace = macro->nreplace;
-
-    // First pass: identify which params are operands of # or ##
-    // We need a bitset for params that need raw (unexpanded) args
-    uint64_t needs_raw = 0; // Bitmask: bit i set if param i needs raw arg
-    for(size_t i = 0; i < nreplace; i++){
-        CPPToken t = repl[i];
-        if(t.type == CPP_PUNCTUATOR && t.punct == '#'){
-            // # stringification - next non-whitespace must be param
-            for(size_t j = i + 1; j < nreplace; j++){
-                if(repl[j].type == CPP_WHITESPACE) continue;
-                if(repl[j].param_idx > 0)
-                    needs_raw |= (1ULL << (repl[j].param_idx - 1));
-                break;
-            }
-        }
-        else if(t.type == CPP_PUNCTUATOR && t.punct == '##'){
-            // ## pasting - params on either side need raw
-            // Look left (skip whitespace)
-            for(size_t j = i; j-- > 0;){
-                if(repl[j].type == CPP_WHITESPACE) continue;
-                if(repl[j].param_idx > 0)
-                    needs_raw |= (1ULL << (repl[j].param_idx - 1));
-                break;
-            }
-            // Look right (skip whitespace)
-            for(size_t j = i + 1; j < nreplace; j++){
-                if(repl[j].type == CPP_WHITESPACE) continue;
-                if(repl[j].param_idx > 0)
-                    needs_raw |= (1ULL << (repl[j].param_idx - 1));
-                break;
-            }
-        }
-    }
-
-    // Pre-expand arguments that are NOT adjacent to # or ##
-    Marray(CPPToken) **expanded_args = NULL;
     size_t total_params = macro->nparams + (macro->is_variadic ? 1 : 0);
+    Marray(CPPToken) **expanded_args = NULL;
+    Marray(CPPToken) *result = NULL;
+
     if(total_params){
         expanded_args = Allocator_zalloc(cpp->allocator, sizeof(Marray(CPPToken)*) * total_params);
-        if(!expanded_args) return 1;
+        if(!expanded_args){ err = CPP_OOM_ERROR; goto finally; }
     }
 
-    // Substitution pass: build result list
-    Marray(CPPToken) *result = cpp_get_scratch(cpp);
-    if(!result) return CPP_OOM_ERROR;
+    result = cpp_get_scratch(cpp);
+    if(!result){ err = CPP_OOM_ERROR; goto finally; }
 
-    for(size_t i = 0; i < nreplace; i++){
-        CPPToken t = repl[i];
+    err = cpp_substitute_and_paste(cpp, cpp_cmacro_replacement(macro), macro->nreplace,
+                                   macro, args, arg_seps, expanded_args, result, 0);
+    if(err) goto finally;
 
-        // Handle # stringification
-        if(t.type == CPP_PUNCTUATOR && t.punct == '#'){
-            // Skip whitespace to find param or __VA_OPT__
-            size_t j = i + 1;
-            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
-
-            // Check for # __VA_OPT__(content)
-            if(j < nreplace && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
-                // Parse __VA_OPT__(content)
-                size_t k = j + 1;
-                while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
-                if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '('){
-                    cpp_release_scratch(cpp, result);
-                    if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                    return cpp_error(cpp, repl[j].loc, "__VA_OPT__ must be followed by (content)");
-                }
-                k++; // skip '('
-                size_t content_start = k;
-                int paren = 1;
-                while(k < nreplace && paren > 0){
-                    if(repl[k].type == CPP_PUNCTUATOR){
-                        if(repl[k].punct == '(') paren++;
-                        else if(repl[k].punct == ')') paren--;
-                    }
-                    if(paren > 0) k++;
-                }
-                if(paren != 0){
-                    cpp_release_scratch(cpp, result);
-                    if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                    return cpp_error(cpp, repl[j].loc, "unterminated __VA_OPT__");
-                }
-                size_t content_end = k; // points to ')'
-
-                CPPToken stringified;
-                if(cpp_va_args_nonempty(cpp, args, arg_seps, macro->nparams)){
-                    // Substitute parameters in content (raw, not expanded)
-                    Marray(CPPToken) *content_tokens = cpp_get_scratch(cpp);
-                    if(!content_tokens) return CPP_OOM_ERROR;
-                    for(size_t m = content_start; m < content_end; m++){
-                        CPPToken ct = repl[m];
-                        if(ct.param_idx > 0){
-                            size_t pidx = ct.param_idx - 1;
-                            CPPToken* arg_start;
-                            size_t arg_count;
-                            if(pidx == macro->nparams && macro->is_variadic){
-                                cpp_get_va_args(args, arg_seps, macro->nparams, &arg_start, &arg_count);
-                            }
-                            else {
-                                cpp_get_argument(args, arg_seps, pidx, &arg_start, &arg_count);
-                            }
-                            if(arg_count == 0){
-                                // Empty arg -> placemarker
-                                CPPToken pm = {.type = CPP_PLACEMARKER, .loc = ct.loc};
-                                err = ma_push(CPPToken)(content_tokens, cpp->allocator, pm);
-                                if(err) return err;
-                            }
-                            else {
-                                for(size_t n = 0; n < arg_count; n++){
-                                    err = ma_push(CPPToken)(content_tokens, cpp->allocator, arg_start[n]);
-                                    if(err) return err;
-                                }
-                            }
-                        }
-                        else {
-                            err = ma_push(CPPToken)(content_tokens, cpp->allocator, ct);
-                            if(err) return err;
-                        }
-                    }
-                    // Process ## operators in the content
-                    Marray(CPPToken) *pasted_content = cpp_get_scratch(cpp);
-                    if(!pasted_content){
-                        cpp_release_scratch(cpp, content_tokens);
-                        return CPP_OOM_ERROR;
-                    }
-                    for(size_t m = 0; m < content_tokens->count; m++){
-                        CPPToken ct = content_tokens->data[m];
-                        if(ct.type == CPP_WHITESPACE){
-                            // Skip whitespace around ##
-                            size_t n = m + 1;
-                            while(n < content_tokens->count && content_tokens->data[n].type == CPP_WHITESPACE) n++;
-                            if(n < content_tokens->count && content_tokens->data[n].type == CPP_PUNCTUATOR && content_tokens->data[n].punct == '##'){
-                                continue; // skip whitespace before ##
-                            }
-                            err = ma_push(CPPToken)(pasted_content, cpp->allocator, ct);
-                            if(err) return err;
-                            continue;
-                        }
-                        if(ct.type == CPP_PUNCTUATOR && ct.punct == '##'){
-                            // Skip whitespace after ##
-                            size_t n = m + 1;
-                            while(n < content_tokens->count && content_tokens->data[n].type == CPP_WHITESPACE) n++;
-                            if(pasted_content->count == 0 || n >= content_tokens->count){
-                                // ## at start or end - error
-                                cpp_release_scratch(cpp, pasted_content);
-                                cpp_release_scratch(cpp, content_tokens);
-                                cpp_release_scratch(cpp, result);
-                                if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                                return cpp_error(cpp, ct.loc, "'##' at invalid position in __VA_OPT__ content");
-                            }
-                            CPPToken left_tok = ma_tail(*pasted_content);
-                            pasted_content->count--;
-                            CPPToken right_tok = content_tokens->data[n];
-                            m = n; // skip to right operand
-                            CPPToken paste_result;
-                            err = cpp_paste_tokens(cpp, left_tok, right_tok, &paste_result, ct.loc);
-                            if(err){
-                                cpp_release_scratch(cpp, pasted_content);
-                                cpp_release_scratch(cpp, content_tokens);
-                                cpp_release_scratch(cpp, result);
-                                if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                                return err;
-                            }
-                            err = ma_push(CPPToken)(pasted_content, cpp->allocator, paste_result);
-                            if(err) return err;
-                            continue;
-                        }
-                        err = ma_push(CPPToken)(pasted_content, cpp->allocator, ct);
-                        if(err) return err;
-                    }
-                    cpp_release_scratch(cpp, content_tokens);
-                    // Remove placemarkers and stringify
-                    Marray(CPPToken) *final_content = cpp_get_scratch(cpp);
-                    if(!final_content){
-                        cpp_release_scratch(cpp, pasted_content);
-                        return CPP_OOM_ERROR;
-                    }
-                    for(size_t m = 0; m < pasted_content->count; m++){
-                        if(pasted_content->data[m].type != CPP_PLACEMARKER){
-                            err = ma_push(CPPToken)(final_content, cpp->allocator, pasted_content->data[m]);
-                            if(err) return err;
-                        }
-                    }
-                    cpp_release_scratch(cpp, pasted_content);
-                    stringified = cpp_stringify_argument(cpp, final_content->data, final_content->count, t.loc);
-                    cpp_release_scratch(cpp, final_content);
-                }
-                else {
-                    // Empty VA_ARGS -> empty string
-                    stringified = (CPPToken){.type = CPP_STRING, .txt = SV("\"\""), .loc = t.loc};
-                }
-                err = ma_push(CPPToken)(result, cpp->allocator, stringified);
-                if(err) return err;
-                i = k; // skip past ')'
-                continue;
-            }
-
-            if(j >= nreplace || repl[j].param_idx == 0){
-                cpp_release_scratch(cpp, result);
-                if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                return cpp_error(cpp, t.loc, "'#' is not followed by a macro parameter");
-            }
-            // Get raw argument
-            size_t param_idx = repl[j].param_idx - 1;
-            CPPToken* arg_start;
-            size_t arg_count;
-            if(param_idx == macro->nparams && macro->is_variadic){
-                cpp_get_va_args(args, arg_seps, macro->nparams, &arg_start, &arg_count);
-            }
-            else {
-                cpp_get_argument(args, arg_seps, param_idx, &arg_start, &arg_count);
-            }
-            CPPToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
-            err = ma_push(CPPToken)(result, cpp->allocator, stringified);
-            if(err) return err;
-            i = j; // skip to after the param
-            continue;
-        }
-
-        // Handle __VA_OPT__
-        if(t.type == CPP_IDENTIFIER && sv_equals(t.txt, SV("__VA_OPT__"))){
-            // Expect ( content )
-            size_t j = i + 1;
-            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
-            if(j >= nreplace || repl[j].type != CPP_PUNCTUATOR || repl[j].punct != '('){
-                cpp_release_scratch(cpp, result);
-                if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                return cpp_error(cpp, t.loc, "__VA_OPT__ must be followed by (content)");
-            }
-            j++; // skip '('
-            size_t content_start = j;
-            int paren = 1;
-            while(j < nreplace && paren > 0){
-                if(repl[j].type == CPP_PUNCTUATOR){
-                    if(repl[j].punct == '(') paren++;
-                    else if(repl[j].punct == ')') paren--;
-                }
-                if(paren > 0) j++;
-            }
-            if(paren != 0){
-                cpp_release_scratch(cpp, result);
-                if(expanded_args) Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-                return cpp_error(cpp, t.loc, "unterminated __VA_OPT__");
-            }
-            size_t content_end = j; // points to ')'
-
-            // Check if VA_ARGS is non-empty
-            if(cpp_va_args_nonempty(cpp, args, arg_seps, macro->nparams)){
-                // Include content tokens (they'll be processed in subsequent iterations)
-                // We need to recursively process the content
-                for(size_t k = content_start; k < content_end; k++){
-                    CPPToken ct = repl[k];
-                    // Process param substitution within __VA_OPT__ content
-                    if(ct.param_idx > 0){
-                        size_t pidx = ct.param_idx - 1;
-                        CPPToken* arg_start;
-                        size_t arg_count;
-                        if(pidx == macro->nparams && macro->is_variadic){
-                            cpp_get_va_args(args, arg_seps, macro->nparams, &arg_start, &arg_count);
-                        }
-                        else {
-                            cpp_get_argument(args, arg_seps, pidx, &arg_start, &arg_count);
-                        }
-                        // Check if adjacent to ##
-                        _Bool adj_paste = 0;
-                        // Look left in content
-                        for(size_t m = k; m-- > content_start;){
-                            if(repl[m].type == CPP_WHITESPACE) continue;
-                            if(repl[m].type == CPP_PUNCTUATOR && repl[m].punct == '##') adj_paste = 1;
-                            break;
-                        }
-                        // Look right in content
-                        for(size_t m = k + 1; m < content_end; m++){
-                            if(repl[m].type == CPP_WHITESPACE) continue;
-                            if(repl[m].type == CPP_PUNCTUATOR && repl[m].punct == '##') adj_paste = 1;
-                            break;
-                        }
-
-                        if(arg_count == 0){
-                            CPPToken pm = {.type = CPP_PLACEMARKER, .loc = ct.loc};
-                            err = ma_push(CPPToken)(result, cpp->allocator, pm);
-                            if(err) return err;
-                        }
-                        else if(adj_paste){
-                            for(size_t m = 0; m < arg_count; m++){
-                                err = ma_push(CPPToken)(result, cpp->allocator, arg_start[m]);
-                                if(err) return err;
-                            }
-                        }
-                        else {
-                            // Expand the argument
-                            if(!expanded_args[pidx]){
-                                expanded_args[pidx] = cpp_get_scratch(cpp);
-                                if(!expanded_args[pidx]) return CPP_OOM_ERROR;
-                                err = cpp_expand_argument(cpp, arg_start, arg_count, expanded_args[pidx]);
-                                if(err) return err;
-                            }
-                            for(size_t m = 0; m < expanded_args[pidx]->count; m++){
-                                err = ma_push(CPPToken)(result, cpp->allocator, expanded_args[pidx]->data[m]);
-                                if(err) return err;
-                            }
-                        }
-                    }
-                    else {
-                        err = ma_push(CPPToken)(result, cpp->allocator, ct);
-                        if(err) return err;
-                    }
-                }
-            }
-            // else: VA_ARGS is empty, skip content entirely
-            i = content_end; // skip past ')'
-            continue;
-        }
-
-        // Handle parameter substitution
-        if(t.param_idx > 0){
-            size_t param_idx = t.param_idx - 1;
-            CPPToken* arg_start;
-            size_t arg_count;
-            if(param_idx == macro->nparams && macro->is_variadic){
-                cpp_get_va_args(args, arg_seps, macro->nparams, &arg_start, &arg_count);
-            }
-            else {
-                cpp_get_argument(args, arg_seps, param_idx, &arg_start, &arg_count);
-            }
-
-            // Check if adjacent to ##
-            _Bool adj_paste = (needs_raw & (1ULL << param_idx)) != 0;
-
-            if(arg_count == 0){
-                // Empty argument -> placemarker
-                CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
-                err = ma_push(CPPToken)(result, cpp->allocator, pm);
-                if(err) return err;
-            }
-            else if(adj_paste){
-                // Use raw (unexpanded) argument
-                for(size_t j = 0; j < arg_count; j++){
-                    err = ma_push(CPPToken)(result, cpp->allocator, arg_start[j]);
-                    if(err) return err;
-                }
-            }
-            else {
-                // Expand the argument
-                if(!expanded_args[param_idx]){
-                    expanded_args[param_idx] = cpp_get_scratch(cpp);
-                    if(!expanded_args[param_idx]) return CPP_OOM_ERROR;
-                    err = cpp_expand_argument(cpp, arg_start, arg_count, expanded_args[param_idx]);
-                    if(err) return err;
-                }
-                if(expanded_args[param_idx]->count == 0){
-                    CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
-                    err = ma_push(CPPToken)(result, cpp->allocator, pm);
-                    if(err) return err;
-                }
-                else {
-                    for(size_t j = 0; j < expanded_args[param_idx]->count; j++){
-                        err = ma_push(CPPToken)(result, cpp->allocator, expanded_args[param_idx]->data[j]);
-                        if(err) return err;
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Regular token (including ## which we preserve for pasting pass)
-        err = ma_push(CPPToken)(result, cpp->allocator, t);
-        if(err) return err;
-    }
-
-    // Free expanded args
-    for(size_t i = 0; i < total_params; i++){
-        if(expanded_args && expanded_args[i])
-            cpp_release_scratch(cpp, expanded_args[i]);
-    }
-    if(expanded_args)
-        Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
-
-    // Pasting pass: process ## operators left-to-right
-    Marray(CPPToken) *pasted = cpp_get_scratch(cpp);
-    if(!pasted){
-        cpp_release_scratch(cpp, result);
-        return CPP_OOM_ERROR;
-    }
-
-    for(size_t i = 0; i < result->count; i++){
-        CPPToken t = result->data[i];
-        if(t.type == CPP_WHITESPACE){
-            // Skip whitespace around ##
-            // Look ahead to see if next non-ws is ##
-            size_t j = i + 1;
-            while(j < result->count && result->data[j].type == CPP_WHITESPACE) j++;
-            if(j < result->count && result->data[j].type == CPP_PUNCTUATOR && result->data[j].punct == '##'){
-                // Skip this whitespace
-                continue;
-            }
-            err = ma_push(CPPToken)(pasted, cpp->allocator, t);
-            if(err) return err;
-            continue;
-        }
-        if(t.type == CPP_PUNCTUATOR && t.punct == '##'){
-            // Token paste operator
-            if(pasted->count == 0){
-                cpp_release_scratch(cpp, result);
-                cpp_release_scratch(cpp, pasted);
-                return cpp_error(cpp, t.loc, "'##' cannot appear at start of macro expansion");
-            }
-            // Skip whitespace after ##
-            size_t j = i + 1;
-            while(j < result->count && result->data[j].type == CPP_WHITESPACE) j++;
-            if(j >= result->count){
-                cpp_release_scratch(cpp, result);
-                cpp_release_scratch(cpp, pasted);
-                return cpp_error(cpp, t.loc, "'##' cannot appear at end of macro expansion");
-            }
-            // Pop left operand
-            CPPToken left = ma_tail(*pasted);
-            pasted->count--;
-            CPPToken right = result->data[j];
-            i = j; // skip to right operand
-
-            CPPToken paste_result;
-            err = cpp_paste_tokens(cpp, left, right, &paste_result, t.loc);
-            if(err){
-                cpp_release_scratch(cpp, result);
-                cpp_release_scratch(cpp, pasted);
-                return err;
-            }
-            err = ma_push(CPPToken)(pasted, cpp->allocator, paste_result);
-            if(err) return err;
-            continue;
-        }
-        err = ma_push(CPPToken)(pasted, cpp->allocator, t);
-        if(err) return err;
-    }
-    cpp_release_scratch(cpp, result);
-
-    // Remove placemarkers and push result in reverse order
+    // Push reenable token and results (reversed, painted blue, placemarkers stripped)
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
-    if(err) return err;
+    if(err) goto finally;
 
-    for(size_t i = pasted->count; i-- > 0;){
-        CPPToken t = pasted->data[i];
-        // Skip placemarkers
+    for(size_t i = result->count; i-- > 0;){
+        CPPToken t = result->data[i];
         if(t.type == CPP_PLACEMARKER)
             continue;
-        // Paint blue any tokens matching disabled macros
         if(t.type == CPP_IDENTIFIER && !t.disabled){
             Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
             if(a){
@@ -1769,11 +1697,18 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) 
             }
         }
         err = ma_push(CPPToken)(dst, cpp->allocator, t);
-        if(err) return err;
+        if(err) goto finally;
     }
 
-    cpp_release_scratch(cpp, pasted);
-    return 0;
+finally:
+    if(result)
+        cpp_release_scratch(cpp, result);
+    for(size_t i = 0; i < total_params; i++)
+        if(expanded_args && expanded_args[i])
+            cpp_release_scratch(cpp, expanded_args[i]);
+    if(expanded_args)
+        Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
+    return err;
 }
 
 static
