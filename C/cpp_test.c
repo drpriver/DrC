@@ -192,7 +192,9 @@ TestFunction(test_func_macros_extensions){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         // ## __VA_ARGS
-        {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu va args comma2",SV("#define F(...) f(1, ## __VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu va args nocomma",SV("#define F(...) f(1 ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;
@@ -623,7 +625,7 @@ int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
     RegisterTest(test_func_macros);
-    RegisterTestFlags(test_func_macros_extensions, TEST_CASE_FLAGS_SKIP_UNLESS_NAMED);
+    RegisterTest(test_func_macros_extensions);
     RegisterTest(test_for_each);
     RegisterTest(test_for_each_empty);
     RegisterTest(test_c23);

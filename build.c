@@ -10,7 +10,7 @@
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
-    BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", OS_NATIVE);
+    BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", ctx->target.os);
     BuildTarget* all = phony_target(ctx, "all");
     add_deps(ctx, all, cpp);
 

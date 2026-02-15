@@ -30,7 +30,7 @@ static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, Marray(CPPToken)*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
-static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const Marray(CPPToken)*, const Marray(size_t)*, Marray(CPPToken)*_Nullable*_Nullable, Marray(CPPToken)*, _Bool);
+static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const Marray(CPPToken)*, const Marray(size_t)*, Marray(CPPToken)*_Nullable*_Null_unspecified, Marray(CPPToken)*, _Bool);
 enum {
     CPP_NO_ERROR = 0,
     CPP_OOM_ERROR,
@@ -1136,8 +1136,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
         Marray(size_t) empty_seps = {0};
         Marray(CPPToken) *result = cpp_get_scratch(cpp);
         if(!result) return CPP_OOM_ERROR;
-        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace,
-                                       macro, &empty_args, &empty_seps, NULL, result, 0);
+        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0);
         if(err) goto finally_obj;
         for(size_t i = result->count; i-- > 0;){
             CPPToken tok = result->data[i];
@@ -1238,7 +1237,7 @@ static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size
 // Uses the expanded_args cache so the expansion is done at most once.
 static
 _Bool
-cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *_Nullable*_Nullable expanded_args){
+cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *_Nullable*_Null_unspecified expanded_args){
     CPPToken* start;
     size_t count;
     cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
@@ -1427,7 +1426,7 @@ cpp_substitute_and_paste(
     const CMacro *macro,
     const Marray(CPPToken) *args,
     const Marray(size_t) *arg_seps,
-    Marray(CPPToken) *_Nullable*_Nullable expanded_args,
+    Marray(CPPToken) *_Nullable*_Null_unspecified expanded_args,
     Marray(CPPToken) *out,
     _Bool raw_only)
 {
@@ -1449,8 +1448,7 @@ cpp_substitute_and_paste(
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     Marray(CPPToken) *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
-                            macro, args, arg_seps, expanded_args, temp, 1);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, 1);
                     if(err){ cpp_release_scratch(cpp, temp); return err; }
                     // Strip placemarkers in-place before stringifying
                     size_t w = 0;
@@ -1511,6 +1509,23 @@ cpp_substitute_and_paste(
                 size_t pidx = repl[j].param_idx - 1;
                 CPPToken *arg_start; size_t arg_count;
                 cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
+                // GNU extension: , ## __VA_ARGS__
+                // When left is comma and right is __VA_ARGS__:
+                //   empty: suppress both comma and args
+                //   non-empty: emit comma then args (no pasting)
+                if(pidx == macro->nparams && macro->is_variadic
+                        && left.type == CPP_PUNCTUATOR && left.punct == ','){
+                    if(arg_count > 0){
+                        err = ma_push(CPPToken)(out, cpp->allocator, left);
+                        if(err) return err;
+                        for(size_t m = 0; m < arg_count; m++){
+                            err = ma_push(CPPToken)(out, cpp->allocator, arg_start[m]);
+                            if(err) return err;
+                        }
+                    }
+                    i = skip_to;
+                    continue;
+                }
                 right = (arg_count == 0)
                     ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
                     : arg_start[0];
@@ -1535,8 +1550,7 @@ cpp_substitute_and_paste(
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     Marray(CPPToken) *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
-                            macro, args, arg_seps, expanded_args, temp, raw_only);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, raw_only);
                     if(err) goto finally_paste_va_opt;
                     right = (temp->count == 0)
                         ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
@@ -1583,8 +1597,7 @@ cpp_substitute_and_paste(
             err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &cparen);
             if(err) return err;
             if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
-                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart,
-                        macro, args, arg_seps, expanded_args, out, raw_only);
+                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, out, raw_only);
                 if(err) return err;
             }
             i = cparen;
@@ -1675,8 +1688,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) 
     result = cpp_get_scratch(cpp);
     if(!result){ err = CPP_OOM_ERROR; goto finally; }
 
-    err = cpp_substitute_and_paste(cpp, cpp_cmacro_replacement(macro), macro->nreplace,
-                                   macro, args, arg_seps, expanded_args, result, 0);
+    err = cpp_substitute_and_paste(cpp, cpp_cmacro_replacement(macro), macro->nreplace, macro, args, arg_seps, expanded_args, result, 0);
     if(err) goto finally;
 
     // Push reenable token and results (reversed, painted blue, placemarkers stripped)
