@@ -19,12 +19,9 @@
 // Internal APIs
 static int cpp_next_raw_token(CPreprocessor*, CPPToken*);
 static int cpp_next_pp_token(CPreprocessor*, CPPToken*);
-LOG_PRINTF(3, 4)
-static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4)
-static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4)
-static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
 
 static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
