@@ -175,6 +175,10 @@ int
 cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspecified toks, size_t ntoks);
 
 static
+int
+cpp_push_tok(CPreprocessor* cpp, Marray(CPPToken)* dst, CPPToken tok);
+
+static
 _Bool
 cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name);
 

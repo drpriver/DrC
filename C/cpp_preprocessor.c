@@ -15,7 +15,6 @@
 #pragma GCC diagnostic ignored "-Wmultichar"
 #endif
 
-
 // Internal APIs
 static int cpp_next_raw_token(CPreprocessor*, CPPToken*);
 static int cpp_next_pp_token(CPreprocessor*, CPPToken*);
@@ -35,6 +34,13 @@ enum {
     CPP_SYNTAX_ERROR,
     CPP_UNREACHABLE_ERROR,
 };
+
+static
+int
+cpp_push_tok(CPreprocessor* cpp, Marray(CPPToken)* dst, CPPToken tok){
+    int err = ma_push (CPPToken)(dst, cpp->allocator, tok);
+    return err;
+}
 
 static
 int
@@ -149,7 +155,7 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                     } while(next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE);
                     if(next.type != CPP_PUNCTUATOR || next.punct != '('){
                         // not actually an invocation
-                        err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, next);
+                        err = cpp_push_tok(cpp, &cpp->pending, next);
                         if(err) return err;
                         goto noexp;
                     }
@@ -177,7 +183,7 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                                     return cpp_error(cpp, next.loc, "Too many arguments to function-like macro");
                             }
                         }
-                        err = ma_push(CPPToken)(args, cpp->allocator, next);
+                        err = cpp_push_tok(cpp, args, next);
                         if(err) return err;
                     }
                     if(args->count && !macro->nparams && !macro->is_variadic)
@@ -826,7 +832,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             if(err) return err;
         }
         // push it back so dispatch loop sees newline
-        return ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+        return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     if(sv_equals(tok.txt, SV("define"))){
         err = cpp_next_raw_token(cpp, &tok);
@@ -852,7 +858,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             }
             if(err) return err;
             // push it back so dispatch loop sees newline
-            return ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+            return cpp_push_tok(cpp, &cpp->pending, tok);
         }
         else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
             Marray(CPPToken) *names = cpp_get_scratch(cpp);
@@ -887,7 +893,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 }
                 if(tok.type != CPP_IDENTIFIER)
                     return cpp_error(cpp, tok.loc, "expected macro param name");
-                err = ma_push(CPPToken)(names, cpp->allocator, tok);
+                err = cpp_push_tok(cpp, names, tok);
                 if(err) return err;
             }
             err = cpp_next_raw_token(cpp, &tok);
@@ -903,14 +909,14 @@ cpp_handle_directive(CPreprocessor* cpp){
                     // coalesce whitespace in #defines
                 }
                 else {
-                    err = ma_push(CPPToken)(repl, cpp->allocator, tok);
+                    err = cpp_push_tok(cpp, repl, tok);
                     if(err) return err;
                 }
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) return err;
             }
             // push it back so dispatch loop sees newline
-            err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+            err = cpp_push_tok(cpp, &cpp->pending, tok);
             if(err) return err;
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
@@ -1010,7 +1016,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(err) return err;
             }
             if(tok.type != CPP_WHITESPACE){
-                err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
             }
             Marray(CPPToken) *repl = cpp_get_scratch(cpp);
@@ -1020,7 +1026,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(err) return err;
                 if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
                     // push it back so dispatch loop sees newline
-                    err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+                    err = cpp_push_tok(cpp, &cpp->pending, tok);
                     if(err) return err;
                     break;
                 }
@@ -1028,7 +1034,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                     // coalesce whitespace in #defines
                 }
                 else {
-                    err = ma_push(CPPToken)(repl, cpp->allocator, tok);
+                    err = cpp_push_tok(cpp, repl, tok);
                     if(err) return err;
                 }
             }
@@ -1094,7 +1100,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
                 // push it back so dispatch loop sees newline
-                err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, tok);
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
             }
@@ -1112,7 +1118,7 @@ int
 cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
-    int err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
+    int err = cpp_push_tok(cpp, dst, reenable);
     if(err) return err;
 
     CPPToken* repl = cpp_cmacro_replacement(macro);
@@ -1146,7 +1152,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
                         tok.disabled = 1;
                 }
             }
-            err = ma_push(CPPToken)(dst, cpp->allocator, tok);
+            err = cpp_push_tok(cpp, dst, tok);
             if(err) goto finally_obj;
         }
     finally_obj:
@@ -1165,7 +1171,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
                     tok.disabled = 1;
             }
         }
-        err = ma_push(CPPToken)(dst, cpp->allocator, tok);
+        err = cpp_push_tok(cpp, dst, tok);
         if(err) return err;
     }
     return 0;
@@ -1350,12 +1356,12 @@ cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, M
 
     // Push EOF marker first (will be at bottom of stack)
     CPPToken end_marker = {.type = CPP_EOF};
-    int err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, end_marker);
+    int err = cpp_push_tok(cpp, &cpp->pending, end_marker);
     if(err) return err;
 
     // Push tokens in reverse order (so they come out in forward order)
     for(size_t i = count; i-- > 0;){
-        err = ma_push(CPPToken)(&cpp->pending, cpp->allocator, toks[i]);
+        err = cpp_push_tok(cpp, &cpp->pending, toks[i]);
         if(err) return err;
     }
 
@@ -1365,7 +1371,7 @@ cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, M
         err = cpp_next_pp_token(cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_EOF) break;
-        err = ma_push(CPPToken)(out, cpp->allocator, tok);
+        err = cpp_push_tok(cpp, out, tok);
         if(err) return err;
     }
     return 0;
@@ -1458,7 +1464,7 @@ cpp_substitute_and_paste(
                 else {
                     stringified = (CPPToken){.type = CPP_STRING, .txt = SV("\"\""), .loc = t.loc};
                 }
-                err = ma_push(CPPToken)(out, cpp->allocator, stringified);
+                err = cpp_push_tok(cpp, out, stringified);
                 if(err) return err;
                 i = cparen;
                 continue;
@@ -1471,7 +1477,7 @@ cpp_substitute_and_paste(
             CPPToken *arg_start; size_t arg_count;
             cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
             CPPToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
-            err = ma_push(CPPToken)(out, cpp->allocator, stringified);
+            err = cpp_push_tok(cpp, out, stringified);
             if(err) return err;
             i = j;
             continue;
@@ -1493,7 +1499,7 @@ cpp_substitute_and_paste(
             while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
             // Similarly, if ## has no right operand, delete it and keep left.
             if(j >= nreplace){
-                err = ma_push(CPPToken)(out, cpp->allocator, left);
+                err = cpp_push_tok(cpp, out, left);
                 if(err) return err;
                 continue;
             }
@@ -1513,10 +1519,10 @@ cpp_substitute_and_paste(
                 if(pidx == macro->nparams && macro->is_variadic
                         && left.type == CPP_PUNCTUATOR && left.punct == ','){
                     if(arg_count > 0){
-                        err = ma_push(CPPToken)(out, cpp->allocator, left);
+                        err = cpp_push_tok(cpp, out, left);
                         if(err) return err;
                         for(size_t m = 0; m < arg_count; m++){
-                            err = ma_push(CPPToken)(out, cpp->allocator, arg_start[m]);
+                            err = cpp_push_tok(cpp, out, arg_start[m]);
                             if(err) return err;
                         }
                     }
@@ -1529,10 +1535,10 @@ cpp_substitute_and_paste(
                 CPPToken pr;
                 err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
                 if(err) return err;
-                err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                err = cpp_push_tok(cpp, out, pr);
                 if(err) return err;
                 for(size_t m = 1; m < arg_count; m++){
-                    err = ma_push(CPPToken)(out, cpp->allocator, arg_start[m]);
+                    err = cpp_push_tok(cpp, out, arg_start[m]);
                     if(err) return err;
                 }
                 i = skip_to;
@@ -1555,10 +1561,10 @@ cpp_substitute_and_paste(
                     CPPToken pr;
                     err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
                     if(err) goto finally_paste_va_opt;
-                    err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                    err = cpp_push_tok(cpp, out, pr);
                     if(err) goto finally_paste_va_opt;
                     for(size_t m = 1; m < temp->count; m++){
-                        err = ma_push(CPPToken)(out, cpp->allocator, temp->data[m]);
+                        err = cpp_push_tok(cpp, out, temp->data[m]);
                         if(err) goto finally_paste_va_opt;
                     }
                 finally_paste_va_opt:
@@ -1570,7 +1576,7 @@ cpp_substitute_and_paste(
                     CPPToken pr;
                     err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
                     if(err) return err;
-                    err = ma_push(CPPToken)(out, cpp->allocator, pr);
+                    err = cpp_push_tok(cpp, out, pr);
                     if(err) return err;
                 }
                 i = cparen;
@@ -1582,7 +1588,7 @@ cpp_substitute_and_paste(
             CPPToken pr;
             err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
             if(err) return err;
-            err = ma_push(CPPToken)(out, cpp->allocator, pr);
+            err = cpp_push_tok(cpp, out, pr);
             if(err) return err;
             i = skip_to;
             continue;
@@ -1620,12 +1626,12 @@ cpp_substitute_and_paste(
 
             if(arg_count == 0){
                 CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
-                err = ma_push(CPPToken)(out, cpp->allocator, pm);
+                err = cpp_push_tok(cpp, out, pm);
                 if(err) return err;
             }
             else if(use_raw){
                 for(size_t j = 0; j < arg_count; j++){
-                    err = ma_push(CPPToken)(out, cpp->allocator, arg_start[j]);
+                    err = cpp_push_tok(cpp, out, arg_start[j]);
                     if(err) return err;
                 }
             }
@@ -1641,12 +1647,12 @@ cpp_substitute_and_paste(
                 Marray(CPPToken) *expanded = expanded_args[pidx];
                 if(expanded->count == 0){
                     CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
-                    err = ma_push(CPPToken)(out, cpp->allocator, pm);
+                    err = cpp_push_tok(cpp, out, pm);
                     if(err) return err;
                 }
                 else {
                     for(size_t j = 0; j < expanded->count; j++){
-                        err = ma_push(CPPToken)(out, cpp->allocator, expanded->data[j]);
+                        err = cpp_push_tok(cpp, out, expanded->data[j]);
                         if(err) return err;
                     }
                 }
@@ -1663,7 +1669,7 @@ cpp_substitute_and_paste(
         }
 
         // Regular token
-        err = ma_push(CPPToken)(out, cpp->allocator, t);
+        err = cpp_push_tok(cpp, out, t);
         if(err) return err;
     }
     return 0;
@@ -1691,7 +1697,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) 
     // Push reenable token and results (reversed, painted blue, placemarkers stripped)
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
-    err = ma_push(CPPToken)(dst, cpp->allocator, reenable);
+    err = cpp_push_tok(cpp, dst, reenable);
     if(err) goto finally;
 
     for(size_t i = result->count; i-- > 0;){
@@ -1706,7 +1712,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) 
                     t.disabled = 1;
             }
         }
-        err = ma_push(CPPToken)(dst, cpp->allocator, t);
+        err = cpp_push_tok(cpp, dst, t);
         if(err) goto finally;
     }
 
