@@ -22,11 +22,11 @@ LOG_PRINTF(3, 4) static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
 
-static Marray(CPPToken)*_Nullable cpp_get_scratch(CPreprocessor*);
+static CPPTokens*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
-static void cpp_release_scratch(CPreprocessor*, Marray(CPPToken)*);
+static void cpp_release_scratch(CPreprocessor*, CPPTokens*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
-static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const Marray(CPPToken)*, const Marray(size_t)*, Marray(CPPToken)*_Nullable*_Null_unspecified, Marray(CPPToken)*, _Bool);
+static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool);
 enum {
     CPP_NO_ERROR = 0,
     CPP_OOM_ERROR,
@@ -37,7 +37,7 @@ enum {
 
 static
 int
-cpp_push_tok(CPreprocessor* cpp, Marray(CPPToken)* dst, CPPToken tok){
+cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok){
     int err = ma_push (CPPToken)(dst, cpp->allocator, tok);
     return err;
 }
@@ -118,8 +118,8 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
     }
 }
 static int cpp_handle_directive(CPreprocessor *cpp);
-static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst);
-static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *dst);
+static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst);
+static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst);
 
 static
 int
@@ -159,7 +159,7 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                         if(err) return err;
                         goto noexp;
                     }
-                    Marray(CPPToken) *args = cpp_get_scratch(cpp);
+                    CPPTokens *args = cpp_get_scratch(cpp);
                     Marray(size_t) *arg_seps = cpp_get_scratch_idxes(cpp);
                     if(!args || !arg_seps) return 1;
                     for(int paren = 1;;){
@@ -861,9 +861,9 @@ cpp_handle_directive(CPreprocessor* cpp){
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
         else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
-            Marray(CPPToken) *names = cpp_get_scratch(cpp);
+            CPPTokens *names = cpp_get_scratch(cpp);
             if(!names) return CPP_OOM_ERROR;
-            Marray(CPPToken) *repl = cpp_get_scratch(cpp);
+            CPPTokens *repl = cpp_get_scratch(cpp);
             if(!repl) return CPP_OOM_ERROR;
             _Bool variadic = 0;
             for(;;){
@@ -1019,7 +1019,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
             }
-            Marray(CPPToken) *repl = cpp_get_scratch(cpp);
+            CPPTokens *repl = cpp_get_scratch(cpp);
             if(!repl) return CPP_OOM_ERROR;
             for(;;){
                 err = cpp_next_raw_token(cpp, &tok);
@@ -1115,7 +1115,7 @@ cpp_handle_directive(CPreprocessor* cpp){
 }
 static
 int
-cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
+cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst){
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = cpp_push_tok(cpp, dst, reenable);
@@ -1135,9 +1135,9 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
     if(has_paste){
         // Process ## pasting via cpp_substitute_and_paste.
         // Object-like macros have no params, so args/expanded_args are unused.
-        Marray(CPPToken) empty_args = {0};
+        CPPTokens empty_args = {0};
         Marray(size_t) empty_seps = {0};
-        Marray(CPPToken) *result = cpp_get_scratch(cpp);
+        CPPTokens *result = cpp_get_scratch(cpp);
         if(!result) return CPP_OOM_ERROR;
         err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0);
         if(err) goto finally_obj;
@@ -1182,7 +1182,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, Marray(CPPToken) *dst){
 // arg1 = args[arg_seps[0]+1..arg_seps[1]), etc. (skip the comma)
 static
 void
-cpp_get_argument(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t arg_idx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_argument(const CPPTokens *args, const Marray(size_t) *arg_seps, size_t arg_idx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
     size_t start, end;
     if(arg_idx == 0){
         start = 0;
@@ -1210,7 +1210,7 @@ cpp_get_argument(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, s
 // Helper: Get variadic arguments (all args from nparams onward, comma-separated)
 static
 void
-cpp_get_va_args(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t nparams, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_va_args(const CPPTokens *args, const Marray(size_t) *arg_seps, size_t nparams, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
     size_t start;
     if(nparams == 0){
         start = 0;
@@ -1234,13 +1234,13 @@ cpp_get_va_args(const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, si
 }
 
 // Forward declaration
-static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, Marray(CPPToken) *out);
+static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, CPPTokens *out);
 
 // Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1).
 // Uses the expanded_args cache so the expansion is done at most once.
 static
 _Bool
-cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *_Nullable*_Null_unspecified expanded_args){
+cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *_Nullable*_Null_unspecified expanded_args){
     CPPToken* start;
     size_t count;
     cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
@@ -1248,7 +1248,7 @@ cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPTo
 
     size_t va_idx = macro->nparams; // VA_ARGS slot in expanded_args
     if(!expanded_args[va_idx]){
-        Marray(CPPToken) *ea = cpp_get_scratch(cpp);
+        CPPTokens *ea = cpp_get_scratch(cpp);
         if(!ea) return 0; // conservative: treat as empty on OOM
         int err = cpp_expand_argument(cpp, start, count, ea);
         if(err){
@@ -1257,7 +1257,7 @@ cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const Marray(CPPTo
         }
         expanded_args[va_idx] = ea;
     }
-    Marray(CPPToken) *expanded = expanded_args[va_idx];
+    CPPTokens *expanded = expanded_args[va_idx];
     for(size_t i = 0; i < expanded->count; i++){
         if(expanded->data[i].type != CPP_WHITESPACE &&
            expanded->data[i].type != CPP_NEWLINE &&
@@ -1351,7 +1351,7 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
 // Helper: Expand argument through prescan
 static
 int
-cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, Marray(CPPToken) *out){
+cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, CPPTokens *out){
     if(!count) return 0;
 
     // Push EOF marker first (will be at bottom of stack)
@@ -1381,7 +1381,7 @@ cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, M
 // between variadic and regular arguments.
 static inline
 void
-cpp_get_param_arg(const CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, size_t pidx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_param_arg(const CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, size_t pidx, CPPToken*_Nullable*_Nonnull out_start, size_t *out_count){
     if(pidx == macro->nparams && macro->is_variadic)
         cpp_get_va_args(args, arg_seps, macro->nparams, out_start, out_count);
     else
@@ -1427,10 +1427,10 @@ cpp_substitute_and_paste(
     CPreprocessor *cpp,
     const CPPToken *repl, size_t nreplace,
     const CMacro *macro,
-    const Marray(CPPToken) *args,
+    const CPPTokens *args,
     const Marray(size_t) *arg_seps,
-    Marray(CPPToken) *_Nullable*_Null_unspecified expanded_args,
-    Marray(CPPToken) *out,
+    CPPTokens *_Nullable*_Null_unspecified expanded_args,
+    CPPTokens *out,
     _Bool raw_only)
 {
     int err;
@@ -1449,7 +1449,7 @@ cpp_substitute_and_paste(
                 if(err) return err;
                 CPPToken stringified;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
-                    Marray(CPPToken) *temp = cpp_get_scratch(cpp);
+                    CPPTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
                     err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, 1);
                     if(err){ cpp_release_scratch(cpp, temp); return err; }
@@ -1551,7 +1551,7 @@ cpp_substitute_and_paste(
                 err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen);
                 if(err) return err;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
-                    Marray(CPPToken) *temp = cpp_get_scratch(cpp);
+                    CPPTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
                     err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, raw_only);
                     if(err) goto finally_paste_va_opt;
@@ -1638,13 +1638,13 @@ cpp_substitute_and_paste(
             else {
                 // Expand argument (lazily cached)
                 if(!expanded_args[pidx]){
-                    Marray(CPPToken) *ea = cpp_get_scratch(cpp);
+                    CPPTokens *ea = cpp_get_scratch(cpp);
                     if(!ea) return CPP_OOM_ERROR;
                     err = cpp_expand_argument(cpp, arg_start, arg_count, ea);
                     if(err) return err;
                     expanded_args[pidx] = ea;
                 }
-                Marray(CPPToken) *expanded = expanded_args[pidx];
+                CPPTokens *expanded = expanded_args[pidx];
                 if(expanded->count == 0){
                     CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
                     err = cpp_push_tok(cpp, out, pm);
@@ -1677,14 +1677,14 @@ cpp_substitute_and_paste(
 
 static
 int
-cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const Marray(CPPToken) *args, const Marray(size_t) *arg_seps, Marray(CPPToken) *dst){
+cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst){
     int err;
     size_t total_params = macro->nparams + (macro->is_variadic ? 1 : 0);
-    Marray(CPPToken) **expanded_args = NULL;
-    Marray(CPPToken) *result = NULL;
+    CPPTokens **expanded_args = NULL;
+    CPPTokens *result = NULL;
 
     if(total_params){
-        expanded_args = Allocator_zalloc(cpp->allocator, sizeof(Marray(CPPToken)*) * total_params);
+        expanded_args = Allocator_zalloc(cpp->allocator, sizeof(CPPTokens*) * total_params);
         if(!expanded_args){ err = CPP_OOM_ERROR; goto finally; }
     }
 
@@ -1723,14 +1723,14 @@ finally:
         if(expanded_args && expanded_args[i])
             cpp_release_scratch(cpp, expanded_args[i]);
     if(expanded_args)
-        Allocator_free(cpp->allocator, expanded_args, sizeof(Marray(CPPToken)*) * total_params);
+        Allocator_free(cpp->allocator, expanded_args, sizeof(CPPTokens*) * total_params);
     return err;
 }
 
 static
-Marray(CPPToken)*_Nullable
+CPPTokens*_Nullable
 cpp_get_scratch(CPreprocessor *cpp){
-    Marray(CPPToken) *scratch = fl_pop(&cpp->scratch_list);
+    CPPTokens *scratch = fl_pop(&cpp->scratch_list);
     if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
     if(!scratch) return NULL;
     scratch->count = 0;
@@ -1738,7 +1738,7 @@ cpp_get_scratch(CPreprocessor *cpp){
 }
 static
 void
-cpp_release_scratch(CPreprocessor *cpp, Marray(CPPToken) *scratch){
+cpp_release_scratch(CPreprocessor *cpp, CPPTokens *scratch){
     fl_push(&cpp->scratch_list, scratch);
 }
 

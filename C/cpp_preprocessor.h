@@ -28,6 +28,8 @@
 #include "../Drp/Marray.h"
 #endif
 
+typedef Marray(CPPToken) CPPTokens;
+
 #ifndef MARRAY_ATOM
 #define MARRAY_ATOM
 #define MARRAY_T Atom
@@ -156,9 +158,9 @@ struct CPreprocessor {
         Marray(StringView) include_paths[5];
     };
     Marray(CPPFrame) frames;
-    Marray(CPPToken) pending; // push in reverse order so you can pop in LIFO order
+    CPPTokens pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
-    FreeList(Marray(CPPToken)) scratch_list; // reusable scratch space for collecting tokens
+    FreeList(CPPTokens) scratch_list; // reusable scratch space for collecting tokens
     FreeList(Marray(size_t)) scratch_idxes;
 };
 
@@ -176,7 +178,7 @@ cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspeci
 
 static
 int
-cpp_push_tok(CPreprocessor* cpp, Marray(CPPToken)* dst, CPPToken tok);
+cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok);
 
 static
 _Bool
