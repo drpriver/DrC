@@ -65,7 +65,8 @@ struct CMacro {
             uint64_t is_function_like: 1;
             uint64_t is_variadic:      1;
             uint64_t is_builtin:       1;
-            uint64_t _reserved:        5;
+            uint64_t no_expand_args:   1;
+            uint64_t _reserved:        4;
             uint64_t is_disabled:      1;
             uint64_t _padding:         7;
             uint64_t nparams:          16;
@@ -162,6 +163,7 @@ struct CPreprocessor {
     _Bool at_line_start;
     FreeList(CPPTokens) scratch_list; // reusable scratch space for collecting tokens
     FreeList(Marray(size_t)) scratch_idxes;
+    uint64_t counter;
 };
 
 static
@@ -187,6 +189,21 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name);
 static
 int
 cpp_next_token(CPreprocessor* cpp, CPPToken* tok);
+
+// Implementation of a builtin object-like macro (that isn't just a predefined constant tokens)
+typedef int CppObjMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CPPTokens* outtoks);
+
+static
+int
+cpp_define_builtin_obj_macro(CPreprocessor* cpp, StringView name, CppObjMacroFn* fn, void*_Null_unspecified ctx);
+
+// Implementation of a builtin function-like macro (that can't be expressed normally)
+typedef int CppFuncMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)* arg_seps);
+static
+int
+cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand);
+
+static int cpp_define_builtin_macros(CPreprocessor* cpp);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

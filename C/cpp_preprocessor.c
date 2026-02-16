@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include "cpp_preprocessor.h"
 #include "cpp_tok.h"
+#include "../Drp/msb_sprintf.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -27,12 +28,15 @@ static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, CPPTokens*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
 static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool);
+LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CPreprocessor*, const char* fmt, ...);
 enum {
     CPP_NO_ERROR = 0,
     CPP_OOM_ERROR,
     CPP_MACRO_ALREADY_EXISTS_ERROR,
+    CPP_REDEFINING_BUILTIN_MACRO_ERROR,
     CPP_SYNTAX_ERROR,
     CPP_UNREACHABLE_ERROR,
+    CPP_UNIMPLEMENTED_ERROR,
 };
 
 static
@@ -48,7 +52,7 @@ cpp_define_macro(CPreprocessor* cpp, StringView name, size_t ntoks, size_t npara
     Atom key = AT_atomize(cpp->at, name.text, name.length);
     if(!key) return CPP_OOM_ERROR;
     CMacro* macro = AM_get(&cpp->macros, key);
-    if(macro) return CPP_MACRO_ALREADY_EXISTS_ERROR;
+    if(macro) return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
     size_t size = sizeof *macro + sizeof(CPPToken)*ntoks + sizeof(Atom)*nparams;
     macro = Allocator_zalloc(cpp->allocator, size);
     if(!macro) return CPP_OOM_ERROR;
@@ -61,14 +65,25 @@ cpp_define_macro(CPreprocessor* cpp, StringView name, size_t ntoks, size_t npara
 }
 
 static
+void
+cpp_free_macro(CPreprocessor* cpp, CMacro * macro){
+    size_t size;
+    if(macro->is_builtin){
+        size = sizeof *macro + sizeof(CPPToken)*2 + sizeof(Atom)*macro->nparams;
+    }
+    else
+        size = sizeof *macro + sizeof(CPPToken)*macro->nreplace + sizeof(Atom)*macro->nparams;
+    Allocator_free(cpp->allocator, macro, size);
+}
+
+static
 int
 cpp_undef_macro(CPreprocessor* cpp, StringView name){
     Atom key = AT_get_atom(cpp->at, name.text, name.length);
     if(!key) return 0;
     CMacro* macro = AM_get(&cpp->macros, key);
     if(!macro) return 0;
-    size_t size = sizeof *macro + sizeof(CPPToken)*macro->nreplace + sizeof(Atom)*macro->nparams;
-    Allocator_free(cpp->allocator, macro, size);
+    cpp_free_macro(cpp, macro);
     int err = AM_put(&cpp->macros, cpp->allocator, key, NULL);
     if(err) return CPP_OOM_ERROR;
     return 0;
@@ -81,6 +96,39 @@ cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspeci
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
     if(err) return err;
     if(ntoks) memcpy(cpp_cmacro_replacement(macro), toks, ntoks * sizeof *toks);
+    return 0;
+}
+
+static
+int
+cpp_define_builtin_obj_macro(CPreprocessor* cpp, StringView name, CppObjMacroFn* fn, void*_Null_unspecified ctx){
+    CMacro* macro;
+    int err = cpp_define_macro(cpp, name, 2, 0, &macro);
+    if(err) return err;
+    macro->is_builtin = 1;
+    macro->nreplace = 0;
+    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "ctx doesn't fit in uint64");
+    macro->data[0] = (uint64_t)fn;
+    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "fn doesn't fit in uint64");
+    macro->data[1] = (uint64_t)ctx;
+    return 0;
+}
+
+static
+int
+cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand){
+    CMacro* macro;
+    int err = cpp_define_macro(cpp, name, 2, nparams, &macro);
+    if(err) return err;
+    macro->is_builtin = 1;
+    macro->is_function_like = 1;
+    macro->is_variadic = variadic;
+    macro->no_expand_args = no_expand;
+    macro->nreplace = 0;
+    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "ctx doesn't fit in uint64");
+    macro->data[0] = (uint64_t)fn;
+    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "fn doesn't fit in uint64");
+    macro->data[1] = (uint64_t)ctx;
     return 0;
 }
 
@@ -846,14 +894,15 @@ cpp_handle_directive(CPreprocessor* cpp){
         if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
             // #define foo
             err = cpp_define_obj_macro(cpp, name, NULL, 0);
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
+                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
                 if(!a) return CPP_UNREACHABLE_ERROR;
                 CMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
-                if(m->nparams || m->is_function_like || m->nreplace){
+                if(m->nparams || m->is_function_like || m->nreplace)
                     return cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions", sv_p(name));
-                }
                 err = 0;
             }
             if(err) return err;
@@ -922,6 +971,8 @@ cpp_handle_directive(CPreprocessor* cpp){
                 repl->count--;
             CMacro* m;
             err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
+                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
                 if(!a) return CPP_UNREACHABLE_ERROR;
@@ -1056,6 +1107,8 @@ cpp_handle_directive(CPreprocessor* cpp){
                 }
             }
             err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
+                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
                 if(!a) return CPP_UNREACHABLE_ERROR;
@@ -1116,6 +1169,13 @@ cpp_handle_directive(CPreprocessor* cpp){
 static
 int
 cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst){
+    if(macro->is_builtin){
+        CppObjMacroFn* fn = (CppObjMacroFn*)macro->data[0];
+        void* ctx = (void*) macro->data[1];
+        if(!fn) return CPP_UNREACHABLE_ERROR;
+        SrcLoc loc = {0}; // TODO thread expansion loc through with chaining
+        return fn(ctx, cpp, loc, dst);
+    }
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = cpp_push_tok(cpp, dst, reenable);
@@ -1233,8 +1293,7 @@ cpp_get_va_args(const CPPTokens *args, const Marray(size_t) *arg_seps, size_t np
     *out_count = end - start;
 }
 
-// Forward declaration
-static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, CPPTokens *out);
+static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out);
 
 // Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1).
 // Uses the expanded_args cache so the expansion is done at most once.
@@ -1351,7 +1410,7 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
 // Helper: Expand argument through prescan
 static
 int
-cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Nullable toks, size_t count, CPPTokens *out){
+cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out){
     if(!count) return 0;
 
     // Push EOF marker first (will be at bottom of stack)
@@ -1678,6 +1737,16 @@ cpp_substitute_and_paste(
 static
 int
 cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst){
+    if(macro->is_builtin){
+        CppFuncMacroFn *fn = (CppFuncMacroFn*)macro->data[0];
+        void* ctx = (void*)macro->data[1];
+        if(!fn) return CPP_UNREACHABLE_ERROR;
+        SrcLoc loc = {0}; // TODO thread expansion loc through with chaining
+        if(macro->no_expand_args)
+            return fn(ctx, cpp, loc, dst, args, arg_seps);
+        else
+            return CPP_UNIMPLEMENTED_ERROR;
+    }
     int err;
     size_t total_params = macro->nparams + (macro->is_variadic ? 1 : 0);
     CPPTokens **expanded_args = NULL;
@@ -1755,6 +1824,94 @@ static
 void
 cpp_release_scratch_idxes(CPreprocessor *cpp, Marray(size_t) *scratch){
     fl_push(&cpp->scratch_idxes, scratch);
+}
+
+
+static CppObjMacroFn cpp_builtin_file,
+                     cpp_builtin_line,
+                     cpp_builtin_counter
+                     ;
+
+static
+int
+cpp_define_builtin_macros(CPreprocessor* cpp){
+    static struct {
+        StringView name; CppObjMacroFn* fn;
+    } obj_builtins[] = {
+        {SV("__FILE__"), cpp_builtin_file},
+        {SV("__LINE__"), cpp_builtin_line},
+        {SV("__COUNTER__"), cpp_builtin_counter},
+    };
+    for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
+        int err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
+        if(err) return err;
+    }
+    return 0;
+}
+static
+int
+cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
+    uint32_t file_id = ma_tail(cpp->frames).file_id;
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    Atom a = cpp_atomizef(cpp, "\"%s\"", path.text);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+
+static
+int
+cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
+    Atom a = cpp_atomizef(cpp, "%u", (unsigned)ma_tail(cpp->frames).line);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+static
+int
+cpp_builtin_counter(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    uint64_t c = cpp->counter++;
+    Atom a = cpp_atomizef(cpp, "%llu", (unsigned long long)c);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+static
+Atom _Nullable
+cpp_atomizef(CPreprocessor* cpp, const char* fmt, ...){
+    Atom a = NULL;
+    MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+    va_list va;
+    va_start(va, fmt);
+    msb_vsprintf(&sb, fmt, va);
+    va_end(va);
+    if(sb.errored)
+        goto finally;
+    StringView sv = msb_borrow_sv(&sb);
+    a = AT_atomize(cpp->at, sv.text, sv.length);
+    finally:
+    msb_destroy(&sb);
+    return a;
 }
 
 #ifdef __GNUC__

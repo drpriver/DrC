@@ -50,6 +50,11 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         result = 1;
         goto finally;
     }
+    err = cpp_define_builtin_macros(&cpp);
+    if(err){
+        result = 1;
+        goto finally;
+    }
 
     CPPFrame frame = {
         .file_id = (uint32_t)fc->map.count - 1,
@@ -621,6 +626,40 @@ TestFunction(test_torture){
     TESTEND();
 }
 
+TestFunction(test_builtin_macros){
+    TESTBEGIN();
+    struct {
+        const char* name; StringView inp, exp; int line; _Bool disabled;
+    } test_cases[] = {
+        {"__FILE__", SV("__FILE__"), SV("\"(test)\""), __LINE__, 0},
+        {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
+        {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 1},
+        {"__COUNTER__", SV("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SV("0\n1\n2\n3 4"), __LINE__, 0},
+        {"counter paste", SV("#define C(x,y) x##y\n"
+                             "#define E(x) x\n"
+                             "#define C2(x,y) E(C(x, y))\n"
+                             "C(__COUNTER__, __COUNTER__)\n"
+                             "C2(__COUNTER__,__COUNTER__)\n"
+                             "E(C(__COUNTER__, __COUNTER__))"), SV("\n\n\n__COUNTER____COUNTER__\n01\n__COUNTER____COUNTER__"), __LINE__, 0},
+        {"multiple", SV("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SV("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        if(test_cases[i].disabled) continue;
+        StringView inp = test_cases[i].inp;
+        StringView exp = test_cases[i].exp;
+        int line = test_cases[i].line;
+        StringView result;
+        int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
@@ -630,6 +669,7 @@ int main(int argc, char** argv){
     RegisterTest(test_for_each_empty);
     RegisterTest(test_c23);
     RegisterTest(test_torture);
+    RegisterTest(test_builtin_macros);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;
