@@ -7,6 +7,7 @@
 #include "cpp_preprocessor.h"
 #include "cpp_tok.h"
 #include "../Drp/msb_sprintf.h"
+#include "../Drp/path_util.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -1863,18 +1864,26 @@ cpp_release_scratch_idxes(CPreprocessor *cpp, Marray(size_t) *scratch){
 
 static CppObjMacroFn cpp_builtin_file,
                      cpp_builtin_line,
-                     cpp_builtin_counter
+                     cpp_builtin_counter,
+                     cpp_builtin_filename,
+                     cpp_builtin_include_level,
+                     cpp_builtin_date,
+                     cpp_builtin_time
                      ;
 
 static
 int
 cpp_define_builtin_macros(CPreprocessor* cpp){
-    static struct {
+    static const struct {
         StringView name; CppObjMacroFn* fn;
     } obj_builtins[] = {
         {SV("__FILE__"), cpp_builtin_file},
         {SV("__LINE__"), cpp_builtin_line},
         {SV("__COUNTER__"), cpp_builtin_counter},
+        {SV("__FILE_NAME__"), cpp_builtin_filename},
+        {SV("__INCLUDE_LEVEL__"), cpp_builtin_include_level},
+        {SV("__DATE__"), cpp_builtin_date},
+        {SV("__TIME__"), cpp_builtin_time},
     };
     for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
         int err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
@@ -1910,6 +1919,63 @@ cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CP
 
 static
 int
+cpp_builtin_filename(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    uint64_t file_id = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        file_id = e->file_id;
+    }
+    else {
+        file_id = loc.file_id;
+    }
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    _Bool windows = 0;
+    #ifdef _WIN32
+    windows = 1;
+    #endif
+    StringView basename = path_basename(LS_to_SV(path), windows);
+    Atom a = cpp_atomizef(cpp, "\"%.*s\"", sv_p(basename));
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+
+static
+int
+cpp_builtin_date(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    CPPToken tok = {
+        .txt = cpp->date?(StringView){cpp->date->length, cpp->date->data}: SV("\"Jan 01 1900\""),
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+
+static
+int
+cpp_builtin_time(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    CPPToken tok = {
+        .txt = cpp->time?(StringView){cpp->time->length, cpp->time->data}: SV("\"01:02:03\""),
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+
+static
+int
 cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
     (void)ctx;
     unsigned line = 0;
@@ -1927,7 +1993,22 @@ cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CP
     CPPToken tok = {
         .txt = {a->length, a->data},
         .loc = loc,
-        .type = CPP_STRING,
+        .type = CPP_NUMBER,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+static
+int
+cpp_builtin_include_level(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
+    Atom a = cpp_atomizef(cpp, "%zu", cpp->frames.count);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_NUMBER,
     };
     int err = cpp_push_tok(cpp, outtoks, tok);
     return err;

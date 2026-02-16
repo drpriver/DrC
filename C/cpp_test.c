@@ -692,6 +692,10 @@ TestFunction(test_builtin_macros){
                              "E(C(__COUNTER__, __COUNTER__))"), SV("\n\n\n__COUNTER____COUNTER__\n01\n__COUNTER____COUNTER__"), __LINE__, 0},
         {"multiple", SV("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SV("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
         {"indirect", SV("#define L1 L2\n#define L2 __LINE__\nL1"), SV("\n\n3"), __LINE__, 0},
+        {"__FILE_NAME__", SV("__FILE_NAME__"), SV("\"(test)\""), __LINE__, 0},
+        {"__INCLUDE_LEVEL__", SV("__INCLUDE_LEVEL__"), SV("1"), __LINE__, 0},
+        {"__DATE__", SV("__DATE__"), SV("\"Jan 01 1900\""), __LINE__, 0},
+        {"__TIME__", SV("__TIME__"), SV("\"01:02:03\""), __LINE__, 0},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;

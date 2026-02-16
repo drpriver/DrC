@@ -164,6 +164,7 @@ struct CPreprocessor {
     FreeList(CPPTokens) scratch_list; // reusable scratch space for collecting tokens
     FreeList(Marray(size_t)) scratch_idxes;
     uint64_t counter;
+    Atom date, time;
 };
 
 static
