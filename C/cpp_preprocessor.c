@@ -27,7 +27,7 @@ static CPPTokens*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, CPPTokens*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
-static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool);
+static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool, SrcLocExp*);
 LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CPreprocessor*, const char* fmt, ...);
 enum {
     CPP_NO_ERROR = 0,
@@ -38,13 +38,8 @@ enum {
     CPP_UNREACHABLE_ERROR,
     CPP_UNIMPLEMENTED_ERROR,
 };
-
-static
-int
-cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok){
-    int err = ma_push (CPPToken)(dst, cpp->allocator, tok);
-    return err;
-}
+static SrcLocExp*_Nullable cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc);
+static SrcLoc cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
 
 static
 int
@@ -166,8 +161,8 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
     }
 }
 static int cpp_handle_directive(CPreprocessor *cpp);
-static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst);
-static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst);
+static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, CPPTokens *dst);
+static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst);
 
 static
 int
@@ -228,23 +223,23 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
                                     if(err) return err;
                                 }
                                 else
-                                    return cpp_error(cpp, next.loc, "Too many arguments to function-like macro");
+                                    return cpp_error(cpp, next.loc, "Too many arguments to function-like macro %s()", a->data);
                             }
                         }
                         err = cpp_push_tok(cpp, args, next);
                         if(err) return err;
                     }
                     if(args->count && !macro->nparams && !macro->is_variadic)
-                        return cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro");
+                        return cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
                     if(arg_seps->count+1 < macro->nparams)
-                        return cpp_error(cpp, args->data[0].loc, "Too few arguments to function-like macro");
-                    err = cpp_expand_func_macro(cpp, macro, args, arg_seps, &cpp->pending);
+                        return cpp_error(cpp, args->data[0].loc, "Too few arguments to function-like macro %s()", a->data);
+                    err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, &cpp->pending);
                     if(err) return err;
                     cpp_release_scratch_idxes(cpp, arg_seps);
                     cpp_release_scratch(cpp, args);
                     continue;
                 }
-                err = cpp_expand_obj_macro(cpp, macro, &cpp->pending);
+                err = cpp_expand_obj_macro(cpp, macro, tok.loc, &cpp->pending);
                 if(err) return err;
                 continue;
 
@@ -829,14 +824,44 @@ cpp_next_raw_token(CPreprocessor* cpp, CPPToken* tok){
 }
 
 static
+void
+cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va){
+    uint64_t line = 0;
+    uint64_t column = 0;
+    uint64_t file_id = 0;
+    SrcLocExp* e = NULL;
+    if(loc.is_actually_a_pointer){
+        e = (SrcLocExp*)(loc.pointer.bits<<1);
+        line = e->line;
+        column = e->column;
+        file_id = e->file_id;
+    }
+    else {
+        line = loc.line;
+        column = loc.column;
+        file_id = loc.file_id;
+    }
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    log_sprintf(cpp->logger, "%s:%d:%d: %s: ", path.text, (int)line, (int)column, prefix);
+    log_logv(cpp->logger, level, fmt, va);
+    if(e){
+        while(e->parent){
+            e = e->parent;
+            line = e->line;
+            column = e->column;
+            file_id = e->file_id;
+            path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+            log_logf(cpp->logger, level, "%s:%d:%d: ... expanded from here", path.text, (int)line, (int)column);
+        }
+    }
+}
+
+static
 int
 cpp_error(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
-    // TODO: location chaining
-    LongString path = loc.file_id < cpp->fc->map.count?cpp->fc->map.data[loc.file_id].path:LS("???");
-    log_sprintf(cpp->logger, "%s:%d:%d: error: ", path.text, (int)loc.line, (int)loc.column);
     va_list va;
     va_start(va, fmt);
-    log_logv(cpp->logger, LOG_PRINT_ERROR, fmt, va);
+    cpp_msg(cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
     va_end(va);
     return CPP_SYNTAX_ERROR;
 }
@@ -844,24 +869,18 @@ cpp_error(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
 static
 void
 cpp_warn(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
-    // TODO: location chaining
-    LongString path = loc.file_id < cpp->fc->map.count?cpp->fc->map.data[loc.file_id].path:LS("???");
-    log_sprintf(cpp->logger, "%s:%d:%d: warning: ", path.text, (int)loc.line, (int)loc.column);
     va_list va;
     va_start(va, fmt);
-    log_logv(cpp->logger, LOG_PRINT_ERROR, fmt, va);
+    cpp_msg(cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
     va_end(va);
 }
 
 static
 void
 cpp_info(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
-    // TODO: location chaining
-    LongString path = loc.file_id < cpp->fc->map.count?cpp->fc->map.data[loc.file_id].path:LS("???");
-    log_sprintf(cpp->logger, "%s:%d:%d: info: ", path.text, (int)loc.line, (int)loc.column);
     va_list va;
     va_start(va, fmt);
-    log_logv(cpp->logger, LOG_PRINT_ERROR, fmt, va);
+    cpp_msg(cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
     va_end(va);
 }
 
@@ -1168,18 +1187,20 @@ cpp_handle_directive(CPreprocessor* cpp){
 }
 static
 int
-cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst){
+cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, CPPTokens *dst){
     if(macro->is_builtin){
         CppObjMacroFn* fn = (CppObjMacroFn*)macro->data[0];
         void* ctx = (void*) macro->data[1];
         if(!fn) return CPP_UNREACHABLE_ERROR;
-        SrcLoc loc = {0}; // TODO thread expansion loc through with chaining
-        return fn(ctx, cpp, loc, dst);
+        return fn(ctx, cpp, expansion_loc, dst);
     }
     macro->is_disabled = 1;
     CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = cpp_push_tok(cpp, dst, reenable);
     if(err) return err;
+
+    SrcLocExp* parent = cpp_srcloc_to_exp(cpp, expansion_loc);
+    if(!parent) return CPP_OOM_ERROR;
 
     CPPToken* repl = cpp_cmacro_replacement(macro);
 
@@ -1199,11 +1220,12 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst){
         Marray(size_t) empty_seps = {0};
         CPPTokens *result = cpp_get_scratch(cpp);
         if(!result) return CPP_OOM_ERROR;
-        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0);
+        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0, parent);
         if(err) goto finally_obj;
         for(size_t i = result->count; i-- > 0;){
             CPPToken tok = result->data[i];
             if(tok.type == CPP_PLACEMARKER) continue;
+            if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
             if(tok.type == CPP_IDENTIFIER && !tok.disabled){
                 Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
                 if(a){
@@ -1223,6 +1245,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, CPPTokens *dst){
     // Fast path: no ## processing needed
     for(size_t i = macro->nreplace; i-- > 0;){
         CPPToken tok = repl[i];
+        if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
         if(tok.type == CPP_IDENTIFIER && !tok.disabled){
             Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
             if(a){
@@ -1368,7 +1391,7 @@ static int cpp_tokenize_from_frame(CPreprocessor *cpp, CPPFrame *f, CPPToken *to
 // Helper: Paste two tokens (C23 6.10.4.3)
 static
 int
-cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *result, SrcLoc loc){
+cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *result, SrcLoc loc, SrcLocExp* expansion_parent){
     // Handle placemarker tokens
     if(left.type == CPP_PLACEMARKER){
         *result = right;
@@ -1399,7 +1422,8 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
 
     // Check if we consumed the entire pasted string and got exactly one token
     if(temp_frame.cursor != pasted.length || tok.type == CPP_WHITESPACE || tok.type == CPP_EOF){
-        return cpp_error(cpp, loc, "pasting \"%.*s\" and \"%.*s\" does not give a valid preprocessing token", sv_p(left.txt), sv_p(right.txt));
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "pasting \"%.*s\" and \"%.*s\" does not give a valid preprocessing token", sv_p(left.txt), sv_p(right.txt));
     }
 
     tok.loc = loc;
@@ -1452,11 +1476,13 @@ cpp_get_param_arg(const CMacro *macro, const CPPTokens *args, const Marray(size_
 // to the index of the matching ')'.
 static
 int
-cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren){
+cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren, SrcLocExp* expansion_parent){
     size_t k = after_va_opt;
     while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
-    if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '(')
-        return cpp_error(cpp, loc, "__VA_OPT__ must be followed by (content)");
+    if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '('){
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "__VA_OPT__ must be followed by (content)");
+    }
     k++; // skip '('
     *out_content_start = k;
     int paren = 1;
@@ -1467,8 +1493,10 @@ cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nrepla
         }
         if(paren > 0) k++;
     }
-    if(paren != 0)
-        return cpp_error(cpp, loc, "unterminated __VA_OPT__");
+    if(paren != 0){
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "unterminated __VA_OPT__");
+    }
     *out_close_paren = k;
     return 0;
 }
@@ -1490,7 +1518,8 @@ cpp_substitute_and_paste(
     const Marray(size_t) *arg_seps,
     CPPTokens *_Nullable*_Null_unspecified expanded_args,
     CPPTokens *out,
-    _Bool raw_only)
+    _Bool raw_only,
+    SrcLocExp* expansion_parent)
 {
     int err;
     for(size_t i = 0; i < nreplace; i++){
@@ -1504,13 +1533,13 @@ cpp_substitute_and_paste(
             // # __VA_OPT__(content)
             if(j < nreplace && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
                 size_t cstart, cparen;
-                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen);
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen, expansion_parent);
                 if(err) return err;
                 CPPToken stringified;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     CPPTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, 1);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, 1, expansion_parent);
                     if(err){ cpp_release_scratch(cpp, temp); return err; }
                     // Strip placemarkers in-place before stringifying
                     size_t w = 0;
@@ -1530,8 +1559,10 @@ cpp_substitute_and_paste(
             }
 
             // # param
-            if(j >= nreplace || repl[j].param_idx == 0)
-                return cpp_error(cpp, t.loc, "'#' is not followed by a macro parameter");
+            if(j >= nreplace || repl[j].param_idx == 0){
+                SrcLoc eloc = cpp_chain_loc(cpp, t.loc, expansion_parent);
+                return cpp_error(cpp, eloc, "'#' is not followed by a macro parameter");
+            }
             size_t pidx = repl[j].param_idx - 1;
             CPPToken *arg_start; size_t arg_count;
             cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
@@ -1592,7 +1623,7 @@ cpp_substitute_and_paste(
                     ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
                     : arg_start[0];
                 CPPToken pr;
-                err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
                 if(err) return err;
                 err = cpp_push_tok(cpp, out, pr);
                 if(err) return err;
@@ -1607,18 +1638,18 @@ cpp_substitute_and_paste(
             if(repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
                 // Right operand is __VA_OPT__
                 size_t cstart, cparen;
-                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen);
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen, expansion_parent);
                 if(err) return err;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     CPPTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, raw_only);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, raw_only, expansion_parent);
                     if(err) goto finally_paste_va_opt;
                     right = (temp->count == 0)
                         ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
                         : temp->data[0];
                     CPPToken pr;
-                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
                     if(err) goto finally_paste_va_opt;
                     err = cpp_push_tok(cpp, out, pr);
                     if(err) goto finally_paste_va_opt;
@@ -1633,7 +1664,7 @@ cpp_substitute_and_paste(
                 else {
                     right = (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc};
                     CPPToken pr;
-                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
                     if(err) return err;
                     err = cpp_push_tok(cpp, out, pr);
                     if(err) return err;
@@ -1645,7 +1676,7 @@ cpp_substitute_and_paste(
             // Regular token as right operand
             right = repl[j];
             CPPToken pr;
-            err = cpp_paste_tokens(cpp, left, right, &pr, t.loc);
+            err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
             if(err) return err;
             err = cpp_push_tok(cpp, out, pr);
             if(err) return err;
@@ -1656,10 +1687,10 @@ cpp_substitute_and_paste(
         // __VA_OPT__
         if(t.type == CPP_IDENTIFIER && sv_equals(t.txt, SV("__VA_OPT__"))){
             size_t cstart, cparen;
-            err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &cparen);
+            err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &cparen, expansion_parent);
             if(err) return err;
             if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
-                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, out, raw_only);
+                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, out, raw_only, expansion_parent);
                 if(err) return err;
             }
             i = cparen;
@@ -1736,14 +1767,13 @@ cpp_substitute_and_paste(
 
 static
 int
-cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst){
+cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst){
     if(macro->is_builtin){
         CppFuncMacroFn *fn = (CppFuncMacroFn*)macro->data[0];
         void* ctx = (void*)macro->data[1];
         if(!fn) return CPP_UNREACHABLE_ERROR;
-        SrcLoc loc = {0}; // TODO thread expansion loc through with chaining
         if(macro->no_expand_args)
-            return fn(ctx, cpp, loc, dst, args, arg_seps);
+            return fn(ctx, cpp, expansion_loc, dst, args, arg_seps);
         else
             return CPP_UNIMPLEMENTED_ERROR;
     }
@@ -1760,7 +1790,10 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, 
     result = cpp_get_scratch(cpp);
     if(!result){ err = CPP_OOM_ERROR; goto finally; }
 
-    err = cpp_substitute_and_paste(cpp, cpp_cmacro_replacement(macro), macro->nreplace, macro, args, arg_seps, expanded_args, result, 0);
+    SrcLocExp* parent = cpp_srcloc_to_exp(cpp, expansion_loc);
+    if(!parent){ err = CPP_OOM_ERROR; goto finally; }
+
+    err = cpp_substitute_and_paste(cpp, cpp_cmacro_replacement(macro), macro->nreplace, macro, args, arg_seps, expanded_args, result, 0, parent);
     if(err) goto finally;
 
     // Push reenable token and results (reversed, painted blue, placemarkers stripped)
@@ -1773,6 +1806,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, const CPPTokens *args, 
         CPPToken t = result->data[i];
         if(t.type == CPP_PLACEMARKER)
             continue;
+        if(parent) t.loc = cpp_chain_loc(cpp, t.loc, parent);
         if(t.type == CPP_IDENTIFIER && !t.disabled){
             Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
             if(a){
@@ -1852,8 +1886,16 @@ static
 int
 cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
     (void)ctx;
-    if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
-    uint32_t file_id = ma_tail(cpp->frames).file_id;
+    uint64_t file_id = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        file_id = e->file_id;
+    }
+    else {
+        file_id = loc.file_id;
+    }
     LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
     Atom a = cpp_atomizef(cpp, "\"%s\"", path.text);
     if(!a) return CPP_OOM_ERROR;
@@ -1870,8 +1912,17 @@ static
 int
 cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
     (void)ctx;
-    if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
-    Atom a = cpp_atomizef(cpp, "%u", (unsigned)ma_tail(cpp->frames).line);
+    unsigned line = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        line = (unsigned)e->line;
+    }
+    else {
+        line = (unsigned)loc.line;
+    }
+    Atom a = cpp_atomizef(cpp, "%u", line);
     if(!a) return CPP_OOM_ERROR;
     CPPToken tok = {
         .txt = {a->length, a->data},
@@ -1913,6 +1964,35 @@ cpp_atomizef(CPreprocessor* cpp, const char* fmt, ...){
     msb_destroy(&sb);
     return a;
 }
+
+static
+int
+cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok){
+    int err = ma_push (CPPToken)(dst, cpp->allocator, tok);
+    return err;
+}
+
+static
+SrcLocExp*_Nullable
+cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc){
+    if(loc.is_actually_a_pointer)
+        return (SrcLocExp*)(loc.pointer.bits << 1);
+    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
+    if(!exp) return NULL;
+    *exp = (SrcLocExp){.file_id = loc.file_id, .column = loc.column, .line = loc.line};
+    return exp;
+}
+
+static
+SrcLoc
+cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
+    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
+    if(!exp) return tok_loc;
+    *exp = (SrcLocExp){.file_id = tok_loc.file_id, .column = tok_loc.column, .line = tok_loc.line, .parent = parent};
+    SrcLoc result = {.pointer = {.bits = (uint64_t)exp >> 1, .is_actually_a_pointer = 1}};
+    return result;
+}
+
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

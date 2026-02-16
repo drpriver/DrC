@@ -55,7 +55,6 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         result = 1;
         goto finally;
     }
-
     CPPFrame frame = {
         .file_id = (uint32_t)fc->map.count - 1,
         .txt = txt,
@@ -67,7 +66,6 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         result = 1;
         goto finally;
     }
-
     MStringBuilder sb = {.allocator = MALLOCATOR};
     CPPToken tok;
     for(;;){
@@ -97,6 +95,57 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
 }
+// Like cpp_expand_string, but expects an error and captures the error log output.
+static
+int
+cpp_expand_string_expect_error(StringView txt, StringView* err_out){
+    ArenaAllocator aa = {0};
+    Allocator a = allocator_from_arena(&aa);
+    FileCache *fc = fc_create(a);
+    MStringBuilder log_sb = {.allocator=a};
+    Logger logger = msb_logger(&log_sb);
+    AtomTable at = {.allocator = a};
+    Environment env = {.allocator = a, .at=&at};
+    CPreprocessor cpp = {
+        .allocator = a,
+        .fc = fc,
+        .at = &at,
+        .logger = &logger,
+        .env = &env,
+    };
+    fc_write_path(fc, "(test)", 6);
+    int err = fc_cache_file(fc, txt);
+    if(err) goto finally;
+    err = cpp_define_builtin_macros(&cpp);
+    if(err) goto finally;
+    CPPFrame frame = {
+        .file_id = (uint32_t)fc->map.count - 1,
+        .txt = txt,
+        .line = 1,
+        .column = 1,
+    };
+    err = ma_push(CPPFrame)(&cpp.frames, cpp.allocator, frame);
+    if(err) goto finally;
+    CPPToken tok;
+    for(;;){
+        err = cpp_next_pp_token(&cpp, &tok);
+        if(err) break;
+        if(tok.type == CPP_EOF) break;
+    }
+
+    finally:;
+    int result = err ? 0 : 1; // 0 = success (error was expected), 1 = failure (no error)
+    if(log_sb.cursor){
+        StringView sv = msb_borrow_sv(&log_sb);
+        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length)};
+    }
+    else
+        *err_out = (StringView){0};
+    ArenaAllocator_free_all(&aa);
+    ArenaAllocator_free_all(&cpp.synth_arena);
+    return result;
+}
+
 TestFunction(test_func_macros){
     TESTBEGIN();
     struct {
@@ -633,7 +682,7 @@ TestFunction(test_builtin_macros){
     } test_cases[] = {
         {"__FILE__", SV("__FILE__"), SV("\"(test)\""), __LINE__, 0},
         {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
-        {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 1},
+        {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 0},
         {"__COUNTER__", SV("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SV("0\n1\n2\n3 4"), __LINE__, 0},
         {"counter paste", SV("#define C(x,y) x##y\n"
                              "#define E(x) x\n"
@@ -642,6 +691,7 @@ TestFunction(test_builtin_macros){
                              "C2(__COUNTER__,__COUNTER__)\n"
                              "E(C(__COUNTER__, __COUNTER__))"), SV("\n\n\n__COUNTER____COUNTER__\n01\n__COUNTER____COUNTER__"), __LINE__, 0},
         {"multiple", SV("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SV("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
+        {"indirect", SV("#define L1 L2\n#define L2 __LINE__\nL1"), SV("\n\n3"), __LINE__, 0},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;
@@ -660,6 +710,64 @@ TestFunction(test_builtin_macros){
     TESTEND();
 }
 
+TestFunction(test_error_locations){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; StringView inp, exp;
+    } test_cases[] = {
+        {"indirect too many args", __LINE__,
+            SV("#define F(x) x\n"
+               "#define M F(1,2)\n"
+               "M"),
+            SV("(test):2:14: error: Too many arguments to function-like macro F()\n"
+               "(test):3:1: ... expanded from here\n")},
+        {"bad token paste", __LINE__,
+            SV("#define P(a,b) a##b\n"
+               "P(+,-)"),
+            SV("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
+               "(test):2:1: ... expanded from here\n")},
+        {"indirect too few args", __LINE__,
+            SV("#define F(x,y) x y\n"
+               "#define M F(1)\n"
+               "M"),
+            SV("(test):2:13: error: Too few arguments to function-like macro F()\n"
+               "(test):3:1: ... expanded from here\n")},
+        {"multi-level bad paste", __LINE__,
+            SV("#define P(a,b) a##b\n"
+               "#define Q(a,b) P(a,b)\n"
+               "#define R(a,b) Q(a,b)\n"
+               "R(+,-)"),
+            SV("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
+               "(test):2:16: ... expanded from here\n"
+               "(test):3:16: ... expanded from here\n"
+               "(test):4:1: ... expanded from here\n")},
+        {"error from pasted macro name", __LINE__,
+            SV("#define FF(x) x\n"
+               "#define C(a,b) a##b\n"
+               "C(F,F)(1,2)"),
+            SV("(test):3:9: error: Too many arguments to function-like macro FF()\n")},
+        {"error from pasted macro name chained", __LINE__,
+            SV("#define FF(x) x\n"
+               "#define C(a,b) a##b\n"
+               "#define M C(F,F)(1,2)\n"
+               "M"),
+            SV("(test):3:19: error: Too many arguments to function-like macro FF()\n"
+               "(test):4:1: ... expanded from here\n")},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        int line = test_cases[i].line;
+        StringView err_msg;
+        int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
@@ -670,6 +778,7 @@ int main(int argc, char** argv){
     RegisterTest(test_c23);
     RegisterTest(test_torture);
     RegisterTest(test_builtin_macros);
+    RegisterTest(test_error_locations);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;
