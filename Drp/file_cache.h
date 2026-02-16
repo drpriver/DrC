@@ -66,6 +66,7 @@ struct CachedFile {
 };
 typedef struct FileCache FileCache;
 struct FileCache {
+    _Bool may_read_real_files: 1;
     Allocator allocator;
     MStringBuilder path_builder;
     struct {

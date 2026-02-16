@@ -42,33 +42,39 @@ cpp_ma_sv_dest(const ArgParseUserDefinedType* t, Marray(StringView)*dst){
 static
 int
 cli_macro(ArgToParse* ap, const void* arg){
-    CPreprocessor* cpp = ap->dest.user_pointer->user_data;
+    MStringBuilder* sb = ap->dest.user_pointer->user_data;
     const StringView* sv = arg;
     const char* eq = memchr(sv->text, '=', sv->length);
     StringView name = eq?(StringView){eq-sv->text, sv->text}:*sv;
-    CPPToken tok = {
-        .type = CPP_IDENTIFIER,
-        .txt = eq?(StringView){sv->text+sv->length-eq-1, eq+1}: SV("1"),
-    };
-    int err = cpp_define_obj_macro(cpp, name, &tok, 1);
-    return err;
+    if(!name.length)
+        return ARGPARSE_CONVERSION_ERROR;
+    msb_write_literal(sb, "#define ");
+    msb_write_str(sb, name.text, name.length);
+    if(eq){
+        msb_write_char(sb, ' ');
+        msb_write_str(sb, eq+1, sv->text+sv->length-eq-1);
+        msb_write_char(sb, '\n');
+    }
+    else
+        msb_write_literal(sb, " 1\n");
+    return sb->errored?ARGPARSE_INTERNAL_ERROR:0;
 }
 
 static
 ArgParseDestination
-cpp_macro_dest(CPreprocessor* cpp){
+cpp_macro_dest(MStringBuilder* sb){
     static _Bool init;
     static ArgParseUserDefinedType t;
     if(!init){
         t = (ArgParseUserDefinedType){
             .type_name = SV("macro_def"),
-            .user_data = cpp,
+            .user_data = sb,
         };
         init = 1;
     }
     ArgParseDestination dest = {
         .type = ARG_USER_DEFINED,
-        .pointer = cpp,
+        .pointer = sb,
         .user_pointer = &t,
     };
     return dest;
@@ -78,6 +84,7 @@ cpp_macro_dest(CPreprocessor* cpp){
 static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
 
 int main(int argc, char** argv, char** envp){
+    MStringBuilder cli_macros = {.allocator=MALLOCATOR};
     Logger logger = std_logger();
     AtomTable at = {.allocator=MALLOCATOR};
     {
@@ -160,7 +167,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-D"),
-            .dest = cpp_macro_dest(&cpp),
+            .dest = cpp_macro_dest(&cli_macros),
             .append_proc = cli_macro,
             .help = "Predefined macros.",
             .max_num=1000,
@@ -484,18 +491,25 @@ int main(int argc, char** argv, char** envp){
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
     }
-    fc_write_path(fc, filename, strlen(filename));
-    StringView txt;
-    err = fc_read_file(fc, &txt);
-    if(err) return err;
-    CPPFrame init = {
-        .file_id = (uint32_t)fc->map.count-1,
-        .txt = txt,
-        .line = 1,
-        .column = 1,
-    };
-    err = ma_push(CPPFrame)(&cpp.frames, MALLOCATOR, init);
-    if(err) return err;
+    if(cli_macros.cursor){
+        fc_write_path(fc, "(command line)", sizeof "(command line)" -1);
+        err = fc_cache_file(fc, msb_borrow_sv(&cli_macros));
+        if(err) return err;
+        err = cpp_include_file_via_file_cache(&cpp, SV("(command line)"));
+        if(err) return err;
+        CPPToken tok;
+        for(;;){
+            err = cpp_next_pp_token(&cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_EOF) break;
+        }
+    }
+    fc->may_read_real_files = 1;
+    err = cpp_include_file_via_file_cache(&cpp, (StringView){strlen(filename), filename});
+    if(err){
+        log_error(&logger, "Unable to read '%s'", filename);
+        return err;
+    }
     CPPToken tok;
     if(1){
         for(;;){

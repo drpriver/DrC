@@ -131,6 +131,7 @@ fc_is_file(FileCache* fc){
         result = f->is_file;
         goto finally;
     }
+    if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
     // TODO
@@ -159,7 +160,7 @@ fc_is_file(FileCache* fc){
 static
 int
 fc_read_file(FileCache* fc, StringView* outdata){
-    int result = 0;
+    int result = ENOENT;
     #ifdef _WIN32
     #else
     int fd = -1;
@@ -172,6 +173,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
             goto finally;
         }
     }
+    if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
     // TODO
@@ -238,6 +240,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
     f->data.buff = data;
     f->data.n_bytes = nread;
     *outdata = (StringView){f->data.n_bytes, f->data.buff};
+    result = 0;
 
     #endif
     finally:
@@ -252,7 +255,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
 static
 int
 fc_get_size(FileCache* fc, size_t* sz){
-    int result = 0;
+    int result = ENOENT;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
         if(f->size_cached){
@@ -261,6 +264,7 @@ fc_get_size(FileCache* fc, size_t* sz){
             goto finally;
         }
     }
+    if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
     // TODO

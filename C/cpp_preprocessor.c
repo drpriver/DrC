@@ -38,6 +38,7 @@ enum {
     CPP_SYNTAX_ERROR,
     CPP_UNREACHABLE_ERROR,
     CPP_UNIMPLEMENTED_ERROR,
+    CPP_FILE_NOT_FOUND_ERROR,
 };
 static SrcLocExp*_Nullable cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
@@ -2023,7 +2024,7 @@ cpp_builtin_counter(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc,
     CPPToken tok = {
         .txt = {a->length, a->data},
         .loc = loc,
-        .type = CPP_STRING,
+        .type = CPP_NUMBER,
     };
     int err = cpp_push_tok(cpp, outtoks, tok);
     return err;
@@ -2072,6 +2073,24 @@ cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
     *exp = (SrcLocExp){.file_id = tok_loc.file_id, .column = tok_loc.column, .line = tok_loc.line, .parent = parent};
     SrcLoc result = {.pointer = {.bits = (uint64_t)exp >> 1, .is_actually_a_pointer = 1}};
     return result;
+}
+
+static
+int
+cpp_include_file_via_file_cache(CPreprocessor* cpp, StringView path){
+    int err;
+    fc_write_path(cpp->fc, path.text, path.length);
+    StringView txt;
+    err = fc_read_file(cpp->fc, &txt);
+    if(err) return CPP_FILE_NOT_FOUND_ERROR;
+    CPPFrame init = {
+        .file_id = (uint32_t)cpp->fc->map.count-1,
+        .txt = txt,
+        .line = 1,
+        .column = 1,
+    };
+    err = ma_push(CPPFrame)(&cpp->frames, cpp->allocator, init);
+    return err?CPP_OOM_ERROR:0;
 }
 
 

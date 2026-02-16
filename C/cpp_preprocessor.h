@@ -191,6 +191,11 @@ static
 int
 cpp_next_token(CPreprocessor* cpp, CPPToken* tok);
 
+// Includes a file without going through the include path machinery.
+static
+int
+cpp_include_file_via_file_cache(CPreprocessor* cpp, StringView path);
+
 // Implementation of a builtin object-like macro (that isn't just a predefined constant tokens)
 typedef int CppObjMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CPPTokens* outtoks);
 
