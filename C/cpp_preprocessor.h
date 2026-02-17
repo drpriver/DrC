@@ -107,6 +107,16 @@ struct CPPFrame {
     IncludePosition include_position; // where we are in the include lookup, for include_next and related.
 };
 
+typedef struct CppPoundIf CppPoundIf;
+struct CppPoundIf {
+    SrcLoc start;
+    _Bool true_taken: 1;
+    _Bool seen_else: 1;
+    _Bool is_active: 1;
+    _Bool is_dummy: 1;
+    // like 60 padding bits, wowee
+};
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
@@ -118,6 +128,11 @@ struct CPPFrame {
 #ifndef MARRAY_SIZE_T
 #define MARRAY_SIZE_T
 #define MARRAY_T size_t
+#include "../Drp/Marray.h"
+#endif
+#ifndef MARRAY_CPPPOUNDIF
+#define MARRAY_CPPPOUNDIF
+#define MARRAY_T CppPoundIf
 #include "../Drp/Marray.h"
 #endif
 #ifdef __clang__
@@ -159,6 +174,7 @@ struct CPreprocessor {
         Marray(StringView) include_paths[5];
     };
     Marray(CPPFrame) frames;
+    Marray(CppPoundIf) if_stack;
     CPPTokens pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
     FreeList(CPPTokens) scratch_list; // reusable scratch space for collecting tokens

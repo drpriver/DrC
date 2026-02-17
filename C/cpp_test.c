@@ -24,6 +24,7 @@
 #endif
 
 static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
+enum {SKIP = 1};
 
 // Helper to run preprocessor on a string and collect output tokens as a string
 static
@@ -771,6 +772,405 @@ TestFunction(test_error_locations){
     }
     TESTEND();
 }
+TestFunction(test_condition){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; _Bool disabled; StringView inp, exp;
+    } test_cases[] = {
+        {"#if", __LINE__, 0,
+            SV("#if 1\n"
+                    "Foo\n"
+                    "#endif"),
+            SV("\nFoo\n")
+        },
+        {"ifdef (defined)", __LINE__, 0,
+            SV("#define FOO\n"
+               "#ifdef FOO\n"
+               "Foo\n"
+               "#endif"),
+            SV("\n\nFoo\n")
+        },
+        {"ifdef (undefined)", __LINE__, 0,
+            SV("#define FOO\n"
+               "#ifdef foo\n"
+               "Foo\n"
+               "#endif"),
+            SV("\n\n\n")
+        },
+        {"ifndef (undefined)", __LINE__, 0,
+            SV("#define FOO\n"
+               "#ifndef foo\n"
+               "Foo\n"
+               "#endif"),
+            SV("\n\nFoo\n")
+        },
+        {"ifndef (defined)", __LINE__, 0,
+            SV("#define FOO\n"
+               "#ifndef FOO\n"
+               "Foo\n"
+               "#endif // ifndef FOO"),
+            SV("\n\n\n")
+        },
+        // #ifdef / #else
+        {"ifdef else (true branch)", __LINE__, 0,
+            SV("#define X\n"
+               "#ifdef X\n"
+               "yes\n"
+               "#else\n"
+               "no\n"
+               "#endif"),
+            SV("\n\nyes\n\n\n")
+        },
+        {"ifdef else (false branch)", __LINE__, 0,
+            SV("#ifdef X\n"
+               "yes\n"
+               "#else\n"
+               "no\n"
+               "#endif"),
+            SV("\n\n\nno\n")
+        },
+        // #ifndef / #else
+        {"ifndef else (true branch)", __LINE__, 0,
+            SV("#ifndef X\n"
+               "yes\n"
+               "#else\n"
+               "no\n"
+               "#endif"),
+            SV("\nyes\n\n\n")
+        },
+        {"ifndef else (false branch)", __LINE__, 0,
+            SV("#define X\n"
+               "#ifndef X\n"
+               "yes\n"
+               "#else\n"
+               "no\n"
+               "#endif"),
+            SV("\n\n\n\nno\n")
+        },
+        // Nested conditionals
+        {"nested ifdef both true", __LINE__, 0,
+            SV("#define A\n"
+               "#define B\n"
+               "#ifdef A\n"
+               "#ifdef B\n"
+               "both\n"
+               "#endif\n"
+               "#endif"),
+            SV("\n\n\n\nboth\n\n")
+        },
+        {"nested ifdef outer false", __LINE__, 0,
+            SV("#define B\n"
+               "#ifdef A\n"
+               "#ifdef B\n"
+               "inner\n"
+               "#endif\n"
+               "#endif"),
+            SV("\n\n\n\n\n")
+        },
+        {"nested ifdef inner false", __LINE__, 0,
+            SV("#define A\n"
+               "#ifdef A\n"
+               "#ifdef B\n"
+               "inner\n"
+               "#else\n"
+               "else_inner\n"
+               "#endif\n"
+               "after_inner\n"
+               "#endif"),
+            SV("\n\n\n\n\nelse_inner\n\nafter_inner\n")
+        },
+        // No macro expansion in false branches
+        {"no expand in false", __LINE__, 0,
+            SV("#define X error_if_expanded\n"
+               "#ifdef NOPE\n"
+               "X\n"
+               "#endif"),
+            SV("\n\n\n")
+        },
+        // #define inside conditional branches
+        {"define in true branch", __LINE__, 0,
+            SV("#ifdef NOPE\n"
+               "#define X bad\n"
+               "#else\n"
+               "#define X good\n"
+               "#endif\n"
+               "X"),
+            SV("\n\n\n\n\ngood")
+        },
+        {"define in false branch ignored", __LINE__, 0,
+            SV("#define A\n"
+               "#ifdef A\n"
+               "#define X yes\n"
+               "#else\n"
+               "#define X no\n"
+               "#endif\n"
+               "X"),
+            SV("\n\n\n\n\n\nyes")
+        },
+        // #undef inside conditional
+        {"undef in true branch", __LINE__, 0,
+            SV("#define X hello\n"
+               "#ifdef X\n"
+               "#undef X\n"
+               "#endif\n"
+               "#ifdef X\n"
+               "still_defined\n"
+               "#else\n"
+               "undefined\n"
+               "#endif"),
+            SV("\n\n\n\n\n\n\nundefined\n")
+        },
+        // #elifdef
+        {"elifdef first true", __LINE__, 0,
+            SV("#define A A\n"
+               "#define B B\n"
+               "#ifdef A\n"
+               "A\n"
+               "#elifdef B\n"
+               "B\n"
+               "#endif"),
+            SV("\n\n\nA\n\n\n")
+        },
+        {"elifdef second true", __LINE__, 0,
+            SV("#define B B\n"
+               "#ifdef A\n"
+               "A\n"
+               "#elifdef B\n"
+               "B\n"
+               "#endif"),
+            SV("\n\n\n\nB\n")
+        },
+        {"elifdef neither", __LINE__, 0,
+            SV("#ifdef A\n"
+               "A\n"
+               "#elifdef B\n"
+               "B\n"
+               "#else\n"
+               "neither\n"
+               "#endif"),
+            SV("\n\n\n\n\nneither\n")
+        },
+        // #elifndef
+        {"elifndef activates", __LINE__, 0,
+            SV("#define A A\n"
+               "#ifdef A\n"
+               "#ifdef NOPE\n"
+               "nope\n"
+               "#elifndef ALSO_NOPE\n"
+               "yes\n"
+               "#endif\n"
+               "#endif"),
+            SV("\n\n\n\n\nyes\n\n")
+        },
+        {"elifndef skipped when true_taken", __LINE__, 0,
+            SV("#define A A\n"
+               "#ifdef A\n"
+               "A\n"
+               "#elifndef WHATEVER\n"
+               "no\n"
+               "#endif"),
+            SV("\n\nA\n\n\n")
+        },
+        // Deeply nested in false branch
+        {"deep nesting in false branch", __LINE__, 0,
+            SV("#ifdef NOPE\n"
+               "#ifdef ALSO_NOPE\n"
+               "#ifdef DEEP\n"
+               "deep\n"
+               "#else\n"
+               "deep_else\n"
+               "#endif\n"
+               "#endif\n"
+               "#else\n"
+               "outer_else\n"
+               "#endif"),
+            SV("\n\n\n\n\n\n\n\n\nouter_else\n")
+        },
+        // Empty branches
+        {"empty true branch", __LINE__, 0,
+            SV("#define X X\n"
+               "#ifdef X\n"
+               "#endif"),
+            SV("\n\n")
+        },
+        {"empty false branch", __LINE__, 0,
+            SV("#ifdef X\n"
+               "#else\n"
+               "#endif"),
+            SV("\n\n")
+        },
+        // Multiple elif chain
+        {"elifdef chain", __LINE__, 0,
+            SV("#define C C\n"
+               "#ifdef A\n"
+               "A\n"
+               "#elifdef B\n"
+               "B\n"
+               "#elifdef C\n"
+               "C\n"
+               "#elifdef D\n"
+               "D\n"
+               "#else\n"
+               "none\n"
+               "#endif"),
+            SV("\n\n\n\n\n\nC\n\n\n\n\n")
+        },
+        // Include guard pattern
+        {"include guard pattern", __LINE__, 0,
+            SV("#ifndef GUARD_H\n"
+               "#define GUARD_H\n"
+               "content\n"
+               "#endif"),
+            SV("\n\ncontent\n")
+        },
+        // Only first matching elifdef activates
+        {"elifdef only first match", __LINE__, 0,
+            SV("#define B B\n"
+               "#define C C\n"
+               "#ifdef A\n"
+               "A\n"
+               "#elifdef B\n"
+               "B\n"
+               "#elifdef C\n"
+               "C\n"
+               "#endif"),
+            SV("\n\n\n\n\nB\n\n\n")
+        },
+        // elifndef direct (not nested)
+        {"elifndef direct", __LINE__, 0,
+            SV("#ifdef NOPE\n"
+               "nope\n"
+               "#elifndef ALSO_NOPE\n"
+               "yes\n"
+               "#endif"),
+            SV("\n\n\nyes\n")
+        },
+        // Macro expansion resumes after #endif
+        {"expansion after endif", __LINE__, 0,
+            SV("#define X hello\n"
+               "#ifdef NOPE\n"
+               "skipped\n"
+               "#endif\n"
+               "X"),
+            SV("\n\n\n\nhello")
+        },
+        // Null directive (# on a line by itself) in false branch
+        {"null directive in false branch", __LINE__, 0,
+            SV("#ifdef NOPE\n"
+               "#\n"
+               "#endif"),
+            SV("\n\n")
+        },
+        // Adjacent independent conditionals
+        {"adjacent conditionals", __LINE__, 0,
+            SV("#define A\n"
+               "#ifdef A\n"
+               "first\n"
+               "#endif\n"
+               "#ifdef B\n"
+               "second\n"
+               "#else\n"
+               "not_second\n"
+               "#endif"),
+            SV("\n\nfirst\n\n\n\n\nnot_second\n")
+        },
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        if(test_cases[i].disabled) continue;
+        StringView inp = test_cases[i].inp;
+        StringView exp = test_cases[i].exp;
+        int line = test_cases[i].line;
+        StringView result;
+        int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+TestFunction(test_erroneous_condition){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; StringView inp, exp;
+    } test_cases[] = {
+        {"endif without if", __LINE__,
+            SV("#endif"), SV("(test):1:2: error: #endif outside of #if (or similar construct)\n")},
+        {"else without if", __LINE__,
+            SV("#else"), SV("(test):1:2: error: #else outside of #if (or similar construct)\n")},
+        {"elif without if", __LINE__,
+            SV("#elif 1"), SV("(test):1:2: error: #elif outside of #if (or similar construct)\n")},
+        {"elifdef without if", __LINE__,
+            SV("#elifdef X"), SV("(test):1:2: error: #elifdef outside of #if (or similar construct)\n")},
+        {"elifndef without if", __LINE__,
+            SV("#elifndef X"), SV("(test):1:2: error: #elifndef outside of #if (or similar construct)\n")},
+        {"duplicate else", __LINE__,
+            SV("#ifdef X\n"
+               "#else\n"
+               "#else\n"
+               "#endif"),
+            SV("(test):3:2: error: another #else\n")},
+        {"elif after else", __LINE__,
+            SV("#ifdef X\n"
+               "#else\n"
+               "#elif 1\n"
+               "#endif"),
+            SV("(test):3:2: error: #elif after #else\n")},
+        {"elifdef after else", __LINE__,
+            SV("#define Y\n"
+               "#ifdef X\n"
+               "#else\n"
+               "#elifdef Y\n"
+               "#endif"),
+            SV("(test):4:2: error: #elifdef after #else\n")},
+        {"elifndef after else", __LINE__,
+            SV("#define Y\n"
+               "#ifdef X\n"
+               "#else\n"
+               "#elifndef Y\n"
+               "#endif"),
+            SV("(test):4:2: error: #elifndef after #else\n")},
+        {"duplicate else (active branch)", __LINE__,
+            SV("#define X\n"
+               "#ifdef X\n"
+               "#else\n"
+               "#else\n"
+               "#endif"),
+            SV("(test):4:2: error: another #else\n")},
+        {"elif after else (active branch)", __LINE__,
+            SV("#define X\n"
+               "#ifndef X\n"
+               "skip\n"
+               "#else\n"
+               "#elif 1\n"
+               "#endif"),
+            SV("(test):5:2: error: #elif after #else\n")},
+        {"unterminated if", __LINE__,
+            SV("#ifdef X\n"
+               "stuff"),
+            SV("(test):1:2: error: Unterminated conditional directive\n")},
+        {"unterminated nested if", __LINE__,
+            SV("#define A\n"
+               "#ifdef A\n"
+               "#ifdef B\n"
+               "stuff"),
+            SV("(test):3:2: error: Unterminated conditional directive\n")},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        int line = test_cases[i].line;
+        StringView err_msg;
+        int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+    }
+    TESTEND();
+}
 
 int main(int argc, char** argv){
     testing_allocator_init();
@@ -783,6 +1183,8 @@ int main(int argc, char** argv){
     RegisterTest(test_torture);
     RegisterTest(test_builtin_macros);
     RegisterTest(test_error_locations);
+    RegisterTest(test_condition);
+    RegisterTest(test_erroneous_condition);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;

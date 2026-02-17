@@ -23,6 +23,7 @@ static int cpp_next_pp_token(CPreprocessor*, CPPToken*);
 LOG_PRINTF(3, 4) static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
+static int cpp_push_if(CPreprocessor* cpp, CppPoundIf s);
 
 static CPPTokens*_Nullable cpp_get_scratch(CPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
@@ -71,6 +72,16 @@ cpp_free_macro(CPreprocessor* cpp, CMacro * macro){
     else
         size = sizeof *macro + sizeof(CPPToken)*macro->nreplace + sizeof(Atom)*macro->nparams;
     Allocator_free(cpp->allocator, macro, size);
+}
+
+static
+int
+cpp_has_macro(CPreprocessor* cpp, StringView name){
+    Atom key = AT_get_atom(cpp->at, name.text, name.length);
+    if(!key) return 0;
+    CMacro* macro = AM_get(&cpp->macros, key);
+    if(!macro) return 0;
+    return 1;
 }
 
 static
@@ -163,6 +174,7 @@ cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
     }
 }
 static int cpp_handle_directive(CPreprocessor *cpp);
+static int cpp_handle_directive_in_inactive_region(CPreprocessor *cpp);
 static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, CPPTokens *dst);
 static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, const CPPTokens *args, const Marray(size_t) *arg_seps, CPPTokens *dst);
 
@@ -174,6 +186,24 @@ cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok){
         CPPToken tok;
         int err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
+        if(cpp->if_stack.count && !ma_tail(cpp->if_stack).is_active){
+            if(tok.type == CPP_NEWLINE){
+                cpp->at_line_start = 1;
+                *ptok = tok;
+                return 0;
+            }
+            if(tok.type == CPP_EOF)
+                return cpp_error(cpp, ma_tail(cpp->if_stack).start, "Unterminated conditional directive");
+            if(tok.type == CPP_PUNCTUATOR && cpp->at_line_start && tok.punct == '#'){
+                cpp->at_line_start = 0;
+                err = cpp_handle_directive_in_inactive_region(cpp);
+                if(err) return err;
+                continue;
+            }
+            if(tok.type != CPP_WHITESPACE)
+                cpp->at_line_start = 0;
+            continue; // swallow all other tokens
+        }
         switch(tok.type){
             case CPP_NEWLINE:
                 cpp->at_line_start = 1;
@@ -747,7 +777,7 @@ cpp_tokenize_from_frame(CPreprocessor* cpp, CPPFrame* f, CPPToken* tok){
             return 0;
         case '|':
             if(cpp_match_char(f, '|')){
-                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||"), .punct='|', .loc = loc};
+                *tok = (CPPToken){.type = CPP_PUNCTUATOR, .txt = SV("||"), .punct='||', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '='))
@@ -1185,7 +1215,362 @@ cpp_handle_directive(CPreprocessor* cpp){
             cpp_info(cpp, tok.loc, "error undefing macro: %d", err);
         }
     }
+    else if(sv_equals(tok.txt, SV("if"))){
+        CppPoundIf s = {
+            .start = tok.loc,
+        };
+        // just scan to eol for now
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        err = cpp_push_tok(cpp, &cpp->pending, tok);
+        if(err) return CPP_OOM_ERROR;
+        s.true_taken = 1; // TODO: eval
+        s.is_active = s.true_taken;
+        err = cpp_push_if(cpp, s);
+        if(err) return CPP_OOM_ERROR;
+    }
+    else if(sv_equals(tok.txt, SV("ifdef"))){
+        CppPoundIf s = {
+            .start = tok.loc,
+        };
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #ifdef");
+        }
+        s.true_taken = cpp_has_macro(cpp, name);
+        s.is_active = s.true_taken;
+        err = cpp_push_if(cpp, s);
+        if(err) return CPP_OOM_ERROR;
+    }
+    else if(sv_equals(tok.txt, SV("ifndef"))){
+        CppPoundIf s = {
+            .start = tok.loc,
+        };
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #ifndef");
+        }
+        s.true_taken = !cpp_has_macro(cpp, name);
+        s.is_active = s.true_taken;
+        err = cpp_push_if(cpp, s);
+        if(err) return CPP_OOM_ERROR;
+    }
+    else if(sv_equals(tok.txt, SV("elif"))){
+        if(!cpp->if_stack.count)
+            return cpp_error(cpp, tok.loc, "#elif outside of #if (or similar construct)");
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elif after #else");
+        // just scan to eol for now
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        err = cpp_push_tok(cpp, &cpp->pending, tok);
+        if(err) return CPP_OOM_ERROR;
+        s->is_active = 0;
+    }
+    else if(sv_equals(tok.txt, SV("else"))){
+        if(!cpp->if_stack.count)
+            return cpp_error(cpp, tok.loc, "#else outside of #if (or similar construct)");
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "another #else");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #else");
+        }
+        s->seen_else = 1;
+        s->is_active = !s->true_taken;
+    }
+    else if(sv_equals(tok.txt, SV("elifdef"))){
+        if(!cpp->if_stack.count)
+            return cpp_error(cpp, tok.loc, "#elifdef outside of #if (or similar construct)");
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elifdef after #else");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #elifdef");
+        }
+        s->is_active = 0;
+    }
+    else if(sv_equals(tok.txt, SV("elifndef"))){
+        if(!cpp->if_stack.count)
+            return cpp_error(cpp, tok.loc, "#elifndef outside of #if (or similar construct)");
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elifndef after #else");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #elifndef");
+        }
+        s->is_active = 0;
+    }
+    else if(sv_equals(tok.txt, SV("endif"))){
+        if(!cpp->if_stack.count)
+            return cpp_error(cpp, tok.loc, "#endif outside of #if (or similar construct)");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
+        }
+        cpp->if_stack.count--;
+    }
+    else {
+        cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
+        // unknown or unhandled directive
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }
+        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        return cpp_push_tok(cpp, &cpp->pending, tok);
+    }
     return 0;
+}
+
+static 
+int 
+cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
+    int err;
+    CPPToken tok;
+    do {
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+    }while(tok.type == CPP_WHITESPACE);
+    if(tok.type != CPP_IDENTIFIER){
+        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }
+        // push it back so dispatch loop sees newline
+        return cpp_push_tok(cpp, &cpp->pending, tok);
+    }
+    else if(sv_equals(tok.txt, SV("if")) || sv_equals(tok.txt, SV("ifdef")) || sv_equals(tok.txt, SV("ifndef"))){
+        CppPoundIf s = {.start = tok.loc, .is_dummy = 1};
+        do{
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        err = cpp_push_tok(cpp, &cpp->pending, tok);
+        if(err) return err;
+        return cpp_push_if(cpp, s);
+    }
+    else if(sv_equals(tok.txt, SV("endif"))){
+        if(!cpp->if_stack.count) return CPP_UNREACHABLE_ERROR;
+            // return cpp_error(cpp, tok.loc, "#endif outside of #if (or similar construct)");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
+        }
+        cpp->if_stack.count--;
+        return 0;
+    }
+    if(!cpp->if_stack.count) return CPP_UNREACHABLE_ERROR;
+    if(ma_tail(cpp->if_stack).is_dummy) {
+        // unknown or unhandled directive
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }
+        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        return cpp_push_tok(cpp, &cpp->pending, tok);
+    }
+    if(sv_equals(tok.txt, SV("elif"))){
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elif after #else");
+        // just scan to eol for now
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        err = cpp_push_tok(cpp, &cpp->pending, tok);
+        if(err) return CPP_OOM_ERROR;
+        s->is_active = 0;
+        if(!s->true_taken){
+            s->true_taken = 1; // TODO eval
+            s->is_active = s->true_taken;
+        }
+    }
+    else if(sv_equals(tok.txt, SV("else"))){
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "another #else");
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #else");
+        }
+        s->seen_else = 1;
+        s->is_active = !s->true_taken;
+        return 0;
+    }
+    else if(sv_equals(tok.txt, SV("elifdef"))){
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elifdef after #else");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #elifdef");
+        }
+        s->is_active = 0;
+        if(!s->true_taken){
+            s->true_taken = cpp_has_macro(cpp, name);
+            s->is_active = s->true_taken;
+        }
+        return 0;
+    }
+    else if(sv_equals(tok.txt, SV("elifndef"))){
+        CppPoundIf* s = &ma_tail(cpp->if_stack);
+        if(s->seen_else)
+            return cpp_error(cpp, tok.loc, "#elifndef after #else");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_WHITESPACE) continue;
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                // push it back so dispatch loop sees newline
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) return err;
+                break;
+            }
+            cpp_warn(cpp, tok.loc, "Trailing tokens after #elifndef");
+        }
+        s->is_active = 0;
+        if(!s->true_taken){
+            s->true_taken = !cpp_has_macro(cpp, name);
+            s->is_active = s->true_taken;
+        }
+        return 0;
+    }
+    // unknown or unhandled directive
+    do {
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+    }
+    while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+    // push it back so dispatch loop sees newline
+    return cpp_push_tok(cpp, &cpp->pending, tok);
 }
 static
 int
@@ -2050,7 +2435,14 @@ cpp_atomizef(CPreprocessor* cpp, const char* fmt, ...){
 static
 int
 cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok){
-    int err = ma_push (CPPToken)(dst, cpp->allocator, tok);
+    int err = ma_push(CPPToken)(dst, cpp->allocator, tok);
+    return err;
+}
+
+static
+int
+cpp_push_if(CPreprocessor* cpp, CppPoundIf s){
+    int err = ma_push(CppPoundIf)(&cpp->if_stack, cpp->allocator, s);
     return err;
 }
 
