@@ -2041,6 +2041,70 @@ cpp_parse_va_opt_content(CPreprocessor *cpp, const CPPToken *repl, size_t nrepla
     return 0;
 }
 
+// Helper: Parse __VA_ARG__(expr), evaluate the index, and retrieve the raw
+// variadic argument tokens. `after` is the position after the __VA_ARG__ ident.
+// On success, *out_start/*out_count point to the raw arg tokens and
+// *out_cparen is the index of the closing ')'.
+static
+int
+cpp_resolve_va_arg(
+    CPreprocessor *cpp,
+    const CPPToken *repl, size_t nreplace, size_t after,
+    const CMacro *macro,
+    const CPPTokens *args, const Marray(size_t) *arg_seps,
+    CPPTokens *_Nullable*_Null_unspecified expanded_args,
+    SrcLoc loc, SrcLocExp *expansion_parent,
+    CPPToken *_Nullable *_Nonnull out_start, size_t *out_count, size_t *out_cparen)
+{
+    size_t k = after;
+    while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
+    if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '('){
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "__VA_ARG__ must be followed by (index)");
+    }
+    k++; // skip '('
+    size_t expr_start = k;
+    int paren = 1;
+    while(k < nreplace){
+        if(repl[k].type == CPP_PUNCTUATOR){
+            if(repl[k].punct == '(') paren++;
+            else if(repl[k].punct == ')'){
+                paren--;
+                if(paren == 0) break;
+            }
+        }
+        k++;
+    }
+    if(paren != 0){
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "unterminated __VA_ARG__");
+    }
+    size_t cparen = k;
+    size_t expr_count = cparen - expr_start;
+
+    // Substitute parameters in the expression, then evaluate
+    CPPTokens *expr_subst = cpp_get_scratch(cpp);
+    if(!expr_subst) return CPP_OOM_ERROR;
+    int err = cpp_substitute_and_paste(cpp, repl + expr_start, expr_count, macro, args, arg_seps, expanded_args, expr_subst, 0, expansion_parent);
+    if(err){ cpp_release_scratch(cpp, expr_subst); return err; }
+
+    int64_t index;
+    err = cpp_eval_tokens(cpp, expr_subst->data, expr_subst->count, &index);
+    cpp_release_scratch(cpp, expr_subst);
+    if(err) return err;
+
+    size_t nargs_total = args->count ? arg_seps->count + 1 : 0;
+    size_t va_count = nargs_total > macro->nparams ? nargs_total - macro->nparams : 0;
+    if(index < 0 || (size_t)index >= va_count){
+        SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
+        return cpp_error(cpp, eloc, "__VA_ARG__ index out of range");
+    }
+
+    cpp_get_argument(args, arg_seps, macro->nparams + (size_t)index, out_start, out_count);
+    *out_cparen = cparen;
+    return 0;
+}
+
 // Single-pass helper: substitute parameters and resolve ## pasting.
 // Walks repl[0..nreplace) left-to-right, handling:
 //   - # stringification (param and __VA_OPT__)
@@ -2092,6 +2156,18 @@ cpp_substitute_and_paste(
                 else {
                     stringified = (CPPToken){.type = CPP_STRING, .txt = SV("\"\""), .loc = t.loc};
                 }
+                err = cpp_push_tok(cpp, out, stringified);
+                if(err) return err;
+                i = cparen;
+                continue;
+            }
+
+            // # __VA_ARG__(expr)
+            if(j < nreplace && macro->is_variadic && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_ARG__"))){
+                CPPToken *arg_start; size_t arg_count; size_t cparen;
+                err = cpp_resolve_va_arg(cpp, repl, nreplace, j+1, macro, args, arg_seps, expanded_args, repl[j].loc, expansion_parent, &arg_start, &arg_count, &cparen);
+                if(err) return err;
+                CPPToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
                 err = cpp_push_tok(cpp, out, stringified);
                 if(err) return err;
                 i = cparen;
@@ -2240,6 +2316,27 @@ cpp_substitute_and_paste(
                 continue;
             }
 
+            // ## __VA_ARG__(expr)
+            if(macro->is_variadic && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_ARG__"))){
+                CPPToken *arg_start; size_t arg_count; size_t cparen;
+                err = cpp_resolve_va_arg(cpp, repl, nreplace, j+1, macro, args, arg_seps, expanded_args, repl[j].loc, expansion_parent, &arg_start, &arg_count, &cparen);
+                if(err) return err;
+                right = (arg_count == 0)
+                    ? (CPPToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
+                    : arg_start[0];
+                CPPToken pr;
+                err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
+                if(err) return err;
+                err = cpp_push_tok(cpp, out, pr);
+                if(err) return err;
+                for(size_t m = 1; m < arg_count; m++){
+                    err = cpp_push_tok(cpp, out, arg_start[m]);
+                    if(err) return err;
+                }
+                i = cparen;
+                continue;
+            }
+
             // Regular token as right operand
             right = repl[j];
             CPPToken pr;
@@ -2248,6 +2345,53 @@ cpp_substitute_and_paste(
             err = cpp_push_tok(cpp, out, pr);
             if(err) return err;
             i = skip_to;
+            continue;
+        }
+
+        // __VA_ARG__(expr)
+        if(macro->is_variadic && t.type == CPP_IDENTIFIER && sv_equals(t.txt, SV("__VA_ARG__"))){
+            CPPToken *arg_start; size_t arg_count; size_t cparen;
+            err = cpp_resolve_va_arg(cpp, repl, nreplace, i+1, macro, args, arg_seps, expanded_args, t.loc, expansion_parent, &arg_start, &arg_count, &cparen);
+            if(err) return err;
+            // Check if right-adjacent to ##
+            _Bool use_raw = raw_only;
+            if(!use_raw){
+                for(size_t j = cparen + 1; j < nreplace; j++){
+                    if(repl[j].type == CPP_WHITESPACE) continue;
+                    if(repl[j].type == CPP_PUNCTUATOR && repl[j].punct == '##') use_raw = 1;
+                    break;
+                }
+            }
+            if(arg_count == 0){
+                CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
+                err = cpp_push_tok(cpp, out, pm);
+                if(err) return err;
+            }
+            else if(use_raw){
+                for(size_t j = 0; j < arg_count; j++){
+                    err = cpp_push_tok(cpp, out, arg_start[j]);
+                    if(err) return err;
+                }
+            }
+            else {
+                CPPTokens *ea = cpp_get_scratch(cpp);
+                if(!ea) return CPP_OOM_ERROR;
+                err = cpp_expand_argument(cpp, arg_start, arg_count, ea);
+                if(err){ cpp_release_scratch(cpp, ea); return err; }
+                if(ea->count == 0){
+                    CPPToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
+                    err = cpp_push_tok(cpp, out, pm);
+                }
+                else {
+                    for(size_t j = 0; j < ea->count; j++){
+                        err = cpp_push_tok(cpp, out, ea->data[j]);
+                        if(err) break;
+                    }
+                }
+                cpp_release_scratch(cpp, ea);
+                if(err) return err;
+            }
+            i = cparen;
             continue;
         }
 
@@ -2350,8 +2494,36 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, c
         CppFuncMacroFn *fn = (CppFuncMacroFn*)macro->data[0];
         void* ctx = (void*)macro->data[1];
         if(!fn) return CPP_UNREACHABLE_ERROR;
-        if(macro->no_expand_args)
-            return fn(ctx, cpp, expansion_loc, dst, args, arg_seps);
+        if(macro->no_expand_args){
+            CPPTokens *result = cpp_get_scratch(cpp);
+            if(!result) return CPP_OOM_ERROR;
+            int err = fn(ctx, cpp, expansion_loc, result, args, arg_seps);
+            if(err){ cpp_release_scratch(cpp, result); return err; }
+            SrcLocExp* parent = cpp_srcloc_to_exp(cpp, expansion_loc);
+            if(!parent){ cpp_release_scratch(cpp, result); return CPP_OOM_ERROR; }
+            macro->is_disabled = 1;
+            CPPToken reenable = {.type = CPP_REENABLE, .data1 = macro};
+            err = cpp_push_tok(cpp, dst, reenable);
+            if(err){ cpp_release_scratch(cpp, result); return err; }
+            for(size_t i = result->count; i-- > 0;){
+                CPPToken t = result->data[i];
+                if(t.type == CPP_PLACEMARKER)
+                    continue;
+                t.loc = cpp_chain_loc(cpp, t.loc, parent);
+                if(t.type == CPP_IDENTIFIER && !t.disabled){
+                    Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
+                    if(a){
+                        CMacro* m = AM_get(&cpp->macros, a);
+                        if(m && m->is_disabled)
+                            t.disabled = 1;
+                    }
+                }
+                err = cpp_push_tok(cpp, dst, t);
+                if(err){ cpp_release_scratch(cpp, result); return err; }
+            }
+            cpp_release_scratch(cpp, result);
+            return 0;
+        }
         else{
             int err;
             CPPTokens *exp_args = cpp_get_scratch(cpp);
@@ -3011,12 +3183,12 @@ cpp_builtin_set(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     Atom key = NULL;
     for(size_t i = 0; i < key_count; i++){
         if(key_toks[i].type == CPP_WHITESPACE || key_toks[i].type == CPP_NEWLINE) continue;
-        if(key_toks[i].type != CPP_IDENTIFIER){
+        if(key_toks[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __set");
-        }
+        if(key)
+            return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __set");
         key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
         if(!key) return CPP_OOM_ERROR;
-        break;
     }
     if(!key) return cpp_error(cpp, loc, "Missing key argument to __set");
     // Get the value tokens (variadic args after the key)
@@ -3063,11 +3235,11 @@ cpp_builtin_get(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     Atom key = NULL;
     for(size_t i = 0; i < args->count; i++){
         if(args->data[i].type == CPP_WHITESPACE || args->data[i].type == CPP_NEWLINE) continue;
-        if(args->data[i].type != CPP_IDENTIFIER){
+        if(args->data[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, args->data[i].loc, "Expected identifier as key to __get");
-        }
+        if(key)
+            return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __get");
         key = AT_get_atom(cpp->at, args->data[i].txt.text, args->data[i].txt.length);
-        break;
     }
     if(!key){
         // Key was never set, expand to nothing
@@ -3095,12 +3267,12 @@ cpp_builtin_append(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, 
     Atom key = NULL;
     for(size_t i = 0; i < key_count; i++){
         if(key_toks[i].type == CPP_WHITESPACE || key_toks[i].type == CPP_NEWLINE) continue;
-        if(key_toks[i].type != CPP_IDENTIFIER){
+        if(key_toks[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __append");
-        }
+        if(key)
+            return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __append");
         key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
         if(!key) return CPP_OOM_ERROR;
-        break;
     }
     if(!key) return cpp_error(cpp, loc, "Missing key argument to __append");
     // Get the value tokens (variadic args after the key)
@@ -3198,12 +3370,12 @@ cpp_builtin_map(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     _Bool found = 0;
     for(size_t i = 0; i < macro_count; i++){
         if(macro_toks[i].type == CPP_WHITESPACE || macro_toks[i].type == CPP_NEWLINE) continue;
-        if(macro_toks[i].type != CPP_IDENTIFIER){
+        if(macro_toks[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, macro_toks[i].loc, "Expected macro name as first argument to __map");
-        }
+        if(found)
+            return cpp_error(cpp, macro_toks[i].loc, "Expected single macro name as first argument to __map");
         macro_ident = macro_toks[i];
         found = 1;
-        break;
     }
     if(!found) return cpp_error(cpp, loc, "Missing macro name argument to __map");
     // Get the variadic portion as a raw token blob
@@ -3213,11 +3385,16 @@ cpp_builtin_map(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     CPPToken lparen = {.type = CPP_PUNCTUATOR, .punct = '(', .loc = loc, .txt = SV("(")};
     CPPToken rparen = {.type = CPP_PUNCTUATOR, .punct = ')', .loc = loc, .txt = SV(")")};
     CPPToken space = {.type = CPP_WHITESPACE, .loc = loc, .txt = SV(" ")};
-    // Iterate over va_toks, splitting on top-level commas
+    // Iterate over va_toks, splitting on top-level commas (respecting parens)
     size_t arg_start = 0;
     size_t arg_idx = 0;
+    int paren_depth = 0;
     for(size_t i = 0; i <= va_count; i++){
-        _Bool is_comma = i < va_count && va_toks[i].type == CPP_PUNCTUATOR && va_toks[i].punct == ',';
+        if(i < va_count && va_toks[i].type == CPP_PUNCTUATOR){
+            if(va_toks[i].punct == '(') paren_depth++;
+            else if(va_toks[i].punct == ')') paren_depth--;
+        }
+        _Bool is_comma = i < va_count && paren_depth == 0 && va_toks[i].type == CPP_PUNCTUATOR && va_toks[i].punct == ',';
         _Bool is_end = i == va_count;
         if(!is_comma && !is_end) continue;
         // We have an argument from arg_start to i (exclusive)
@@ -3355,19 +3532,8 @@ cpp_builtin_let(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
             return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
         if(err) return err;
     }
-    // Expand the body into a scratch buffer, then reverse onto outtoks
-    // (outtoks is pending, which is LIFO, so we must push in reverse)
-    CPPTokens* expanded = cpp_get_scratch(cpp);
-    if(!expanded){ cpp_undef_macro(cpp, macro_name); return CPP_OOM_ERROR; }
-    err = cpp_expand_argument(cpp, body_toks, body_count, expanded);
+    err = cpp_expand_argument(cpp, body_toks, body_count, outtoks);
     cpp_undef_macro(cpp, macro_name);
-    if(!err){
-        for(size_t i = expanded->count; i-- > 0;){
-            err = cpp_push_tok(cpp, outtoks, expanded->data[i]);
-            if(err) break;
-        }
-    }
-    cpp_release_scratch(cpp, expanded);
     return err;
 }
 

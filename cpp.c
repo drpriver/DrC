@@ -267,8 +267,8 @@ int main(int argc, char** argv, char** envp){
             err = cpp_next_pp_token(&cpp, &tok);
             if(err) return err;
             if(tok.type == CPP_EOF) break;
-            if(tok.type == CPP_WHITESPACE)
-                log_sprintf(&logger, " ");
+            // if(tok.type == CPP_WHITESPACE)
+                // log_sprintf(&logger, tok.txt.text, tok.txt.length);
             else log_sprintf(&logger, "%.*s", sv_p(tok.txt));
         }
         log_flush(&logger, LOG_PRINT);

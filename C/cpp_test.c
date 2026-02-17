@@ -239,6 +239,16 @@ TestFunction(test_func_macros){
         {"va_count_stringify", SV("#define F(...) #__VA_COUNT__\nF(a, b)"), SV("\n\"2\""), __LINE__},
         {"va_count_overloading", SV("#define F1() 1\n#define F2() 2\n#define CAT(a, b) CAT2(a, b)\n#define CAT2(a, b) a##b\n#define F(...) CAT(F, __VA_COUNT__)()\nF(a)\nF(a,b)\nF(a,b,c)"),
                                  SV("\n\n\n\n\n1\n2\nF3()"), __LINE__},
+        // __VA_ARG__
+        {"va_arg_basic", SV("#define F(...) __VA_ARG__(0)\nF(a, b, c)"), SV("\na"), __LINE__},
+        {"va_arg_second", SV("#define F(...) __VA_ARG__(1)\nF(a, b, c)"), SV("\nb"), __LINE__},
+        {"va_arg_last", SV("#define F(...) __VA_ARG__(2)\nF(a, b, c)"), SV("\nc"), __LINE__},
+        {"va_arg_named", SV("#define F(x, ...) __VA_ARG__(0)\nF(1, 2, 3)"), SV("\n2"), __LINE__},
+        {"va_arg_named2", SV("#define F(x, ...) __VA_ARG__(1)\nF(1, 2, 3)"), SV("\n3"), __LINE__},
+        {"va_arg_stringify", SV("#define F(...) #__VA_ARG__(1)\nF(a, b, c)"), SV("\n\"b\""), __LINE__},
+        {"va_arg_paste", SV("#define F(...) prefix ## __VA_ARG__(0)\nF(1, 2)"), SV("\nprefix1"), __LINE__},
+        {"va_arg_expr", SV("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SV("\nc"), __LINE__},
+        {"va_arg_expand", SV("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SV("\n\n42"), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;
@@ -842,6 +852,12 @@ TestFunction(test_builtin_macros){
             "__map(PARENS, a + b, c * d)"), SV(
             "\n"
             "(a + b) (c * d)"), __LINE__, 0},
+        {"__map tuple", SV(
+            "#define UNPACK(...) __VA_ARGS__\n"
+            "#define STRIP(x) UNPACK x\n"
+            "__map(STRIP, (a + b), (c * d))"), SV(
+            "\n\n"
+            "a + b c * d"), __LINE__, 0},
         {"__let obj", SV(
             "__let(X, 42, X + X)"), SV(
             "42 + 42"), __LINE__, 0},
