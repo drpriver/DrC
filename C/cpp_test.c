@@ -228,6 +228,17 @@ TestFunction(test_func_macros){
             "#define F(...) #__VA_OPT__(a ## b)\n"
             "F(x)\n"
             "F()"), SV("\n\"ab\"\n\"\""), __LINE__},
+        // extensions
+        // __VA_COUNT__
+        {"va_count_basic", SV("#define F(...) __VA_COUNT__\nF(a, b, c)"), SV("\n3"), __LINE__},
+        {"va_count_one", SV("#define F(...) __VA_COUNT__\nF(a)"), SV("\n1"), __LINE__},
+        {"va_count_empty", SV("#define F(...) __VA_COUNT__\nF()"), SV("\n0"), __LINE__},
+        {"va_count_named", SV("#define F(x, ...) __VA_COUNT__\nF(1, 2, 3)"), SV("\n2"), __LINE__},
+        {"va_count_named_empty", SV("#define F(x, ...) __VA_COUNT__\nF(1)"), SV("\n0"), __LINE__},
+        {"va_count_paste", SV("#define F(...) func ## __VA_COUNT__\nF(a, b)"), SV("\nfunc2"), __LINE__},
+        {"va_count_stringify", SV("#define F(...) #__VA_COUNT__\nF(a, b)"), SV("\n\"2\""), __LINE__},
+        {"va_count_overloading", SV("#define F1() 1\n#define F2() 2\n#define CAT(a, b) CAT2(a, b)\n#define CAT2(a, b) a##b\n#define F(...) CAT(F, __VA_COUNT__)()\nF(a)\nF(a,b)\nF(a,b,c)"),
+                                 SV("\n\n\n\n\n1\n2\nF3()"), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;

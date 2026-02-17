@@ -1095,6 +1095,11 @@ cpp_handle_directive(CPreprocessor* cpp){
                     t->param_idx = m->nparams + 1;
                     continue;
                 }
+                // Tag __VA_COUNT__ in variadic macros
+                if(variadic && sv_equals(t->txt, SV("__VA_COUNT__"))){
+                    t->param_idx = m->nparams + 2;
+                    continue;
+                }
                 Atom a = AT_get_atom(cpp->at, t->txt.text, t->txt.length);
                 if(!a) continue; // Not already in atom table, thus not in the params list either
                 for(size_t i = 0; i < m->nparams; i++){
@@ -2099,6 +2104,18 @@ cpp_substitute_and_paste(
                 return cpp_error(cpp, eloc, "'#' is not followed by a macro parameter");
             }
             size_t pidx = repl[j].param_idx - 1;
+            // # __VA_COUNT__
+            if(pidx == macro->nparams + 1 && macro->is_variadic){
+                size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
+                Atom a = cpp_atomizef(cpp, "\"%zu\"", va_count);
+                if(!a) return CPP_OOM_ERROR;
+                CPPToken stringified = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = t.loc};
+                err = cpp_push_tok(cpp, out, stringified);
+                if(err) return err;
+                i = j;
+                continue;
+            }
             CPPToken *arg_start; size_t arg_count;
             cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
             CPPToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
@@ -2133,8 +2150,23 @@ cpp_substitute_and_paste(
             size_t skip_to = j;
 
             if(repl[j].param_idx > 0){
-                // Right operand is a param — use raw tokens
                 size_t pidx = repl[j].param_idx - 1;
+                // ## __VA_COUNT__
+                if(pidx == macro->nparams + 1 && macro->is_variadic){
+                    size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                    size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
+                    Atom a = cpp_atomizef(cpp, "%zu", va_count);
+                    if(!a) return CPP_OOM_ERROR;
+                    right = (CPPToken){.type = CPP_NUMBER, .txt = {a->length, a->data}, .loc = repl[j].loc};
+                    CPPToken pr;
+                    err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
+                    if(err) return err;
+                    err = cpp_push_tok(cpp, out, pr);
+                    if(err) return err;
+                    i = skip_to;
+                    continue;
+                }
+                // Right operand is a param — use raw tokens
                 CPPToken *arg_start; size_t arg_count;
                 cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
                 // GNU extension: , ## __VA_ARGS__
@@ -2235,6 +2267,17 @@ cpp_substitute_and_paste(
         // Parameter substitution
         if(t.param_idx > 0){
             size_t pidx = t.param_idx - 1;
+            // __VA_COUNT__: emit the number of variadic arguments
+            if(pidx == macro->nparams + 1 && macro->is_variadic){
+                size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
+                Atom a = cpp_atomizef(cpp, "%zu", va_count);
+                if(!a) return CPP_OOM_ERROR;
+                CPPToken tok = {.type = CPP_NUMBER, .txt = {a->length, a->data}, .loc = t.loc};
+                err = cpp_push_tok(cpp, out, tok);
+                if(err) return err;
+                continue;
+            }
             CPPToken *arg_start; size_t arg_count;
             cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
 
@@ -2512,7 +2555,7 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__format"), cpp_builtin_fmt, 1, 1, 0},
         {SV("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
         {SV("__print"), cpp_builtin_print, 0, 1, 0},
-        {SV("__PRINTT__"), cpp_builtin_print, 0, 1, 0},
+        {SV("__PRINT__"), cpp_builtin_print, 0, 1, 0},
         {SV("__set"), cpp_builtin_set, 1, 1, 0},
         {SV("__SET__"), cpp_builtin_set, 1, 1, 0},
         {SV("__get"), cpp_builtin_get, 1, 0, 0},
