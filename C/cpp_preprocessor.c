@@ -2462,7 +2462,8 @@ static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_env,
                       cpp_builtin_if,
                       cpp_builtin_ident,
-                      cpp_builtin_fmt
+                      cpp_builtin_fmt,
+                      cpp_builtin_print
                       ;
 static CppPragmaFn cpp_builtin_pragma_once
                    ;
@@ -2501,6 +2502,8 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__IDENT__"), cpp_builtin_ident, 1, 0, 0},
         {SV("__format"), cpp_builtin_fmt, 1, 1, 0},
         {SV("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
+        {SV("__print"), cpp_builtin_print, 1, 0, 0},
+        {SV("__PRINTT__"), cpp_builtin_print, 1, 0, 0},
     };
     for(size_t i = 0; i < sizeof func_builtins / sizeof func_builtins[0]; i++){
         err = cpp_define_builtin_func_macro(cpp, func_builtins[i].name, func_builtins[i].fn, NULL, func_builtins[i].nparams, func_builtins[i].variadic, func_builtins[i].no_expand);
@@ -2844,6 +2847,38 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     finally:;
     msb_destroy(&sb);
     return err;
+}
+
+static
+int
+cpp_builtin_print(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)outtoks;
+    (void)ctx;
+    (void)arg_seps;
+    MStringBuilder* sb = &cpp->logger->buff;
+    uint64_t line = 0;
+    uint64_t column = 0;
+    uint64_t file_id = 0;
+    SrcLocExp* e = NULL;
+    if(loc.is_actually_a_pointer){
+        e = (SrcLocExp*)(loc.pointer.bits<<1);
+        line = e->line;
+        column = e->column;
+        file_id = e->file_id;
+    }
+    else {
+        line = loc.line;
+        column = loc.column;
+        file_id = loc.file_id;
+    }
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    msb_sprintf(sb, "%s:%d:%d: ", path.text, (int)line, (int)column);
+    for(size_t i = 0; i < args->count; i++){
+        CPPToken tok = args->data[i];
+        msb_write_str(sb, tok.txt.text, tok.txt.length);
+    }
+    log_flush(cpp->logger, LOG_PRINT_ERROR);
+    return 0;
 }
 static
 int
