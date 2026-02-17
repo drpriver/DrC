@@ -14,6 +14,7 @@
 #include "../Drp/env.h"
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/free_list.h"
+#include "../Drp/rng.h"
 #include "cpp_tok.h"
 
 #ifndef MARRAY_STRING_VIEW
@@ -184,6 +185,7 @@ struct CPreprocessor {
     FreeList(Marray(size_t)) scratch_idxes;
     uint64_t counter;
     Atom date, time;
+    RngState rng;
     AtomMap(CPPTokens) kv_store; // for __set/__get
 };
 

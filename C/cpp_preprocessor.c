@@ -2455,7 +2455,8 @@ static CppObjMacroFn cpp_builtin_file,
                      cpp_builtin_filename,
                      cpp_builtin_include_level,
                      cpp_builtin_date,
-                     cpp_builtin_time
+                     cpp_builtin_time,
+                     cpp_builtin_rand
                      ;
 static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_mixin,
@@ -2488,6 +2489,8 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__INCLUDE_LEVEL__"), cpp_builtin_include_level},
         {SV("__DATE__"), cpp_builtin_date},
         {SV("__TIME__"), cpp_builtin_time},
+        {SV("__RAND__"), cpp_builtin_rand},
+        {SV("__RANDOM__"), cpp_builtin_rand},
     };
     for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
@@ -2508,8 +2511,8 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__IDENT__"), cpp_builtin_ident, 1, 0, 0},
         {SV("__format"), cpp_builtin_fmt, 1, 1, 0},
         {SV("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
-        {SV("__print"), cpp_builtin_print, 1, 0, 0},
-        {SV("__PRINTT__"), cpp_builtin_print, 1, 0, 0},
+        {SV("__print"), cpp_builtin_print, 0, 1, 0},
+        {SV("__PRINTT__"), cpp_builtin_print, 0, 1, 0},
         {SV("__set"), cpp_builtin_set, 1, 1, 0},
         {SV("__SET__"), cpp_builtin_set, 1, 1, 0},
         {SV("__get"), cpp_builtin_get, 1, 0, 0},
@@ -2659,6 +2662,23 @@ cpp_builtin_counter(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc,
     (void)ctx;
     uint64_t c = cpp->counter++;
     Atom a = cpp_atomizef(cpp, "%llu", (unsigned long long)c);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_NUMBER,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+static
+int
+cpp_builtin_rand(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    if(!cpp->rng.state && !cpp->rng.inc)
+        seed_rng_auto(&cpp->rng);
+    uint32_t r = rng_random32(&cpp->rng);
+    Atom a = cpp_atomizef(cpp, "%u", (unsigned)r);
     if(!a) return CPP_OOM_ERROR;
     CPPToken tok = {
         .txt = {a->length, a->data},
@@ -4006,4 +4026,5 @@ cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CPPTokens* out)
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+#include "../Drp/rng.c"
 #endif
