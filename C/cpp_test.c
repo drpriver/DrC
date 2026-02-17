@@ -1074,6 +1074,20 @@ TestFunction(test_condition){
                "#endif"),
             SV("\n\nfirst\n\n\n\n\nnot_second\n")
         },
+        {
+            "Weird c23 pseudo macros", __LINE__, 0,
+            SV( "#ifdef __has_include\n"
+                "__has_include\n"
+                "#endif\n"
+                "#ifdef __has_embed\n"
+                "__has_embed\n"
+                "#endif\n"
+                "#ifdef __has_c_attribute\n"
+                "__has_c_attribute\n"
+                "#endif\n"),
+            SV("\n__has_include\n\n\n__has_embed\n\n\n__has_c_attribute\n\n")
+        },
+
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;

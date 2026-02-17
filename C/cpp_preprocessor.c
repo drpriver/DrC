@@ -76,7 +76,7 @@ cpp_free_macro(CPreprocessor* cpp, CMacro * macro){
 }
 
 static
-int
+_Bool
 cpp_has_macro(CPreprocessor* cpp, StringView name){
     Atom key = AT_get_atom(cpp->at, name.text, name.length);
     if(!key) return 0;
@@ -84,6 +84,17 @@ cpp_has_macro(CPreprocessor* cpp, StringView name){
     if(!macro) return 0;
     return 1;
 }
+
+static
+_Bool
+cpp_isdef(CPreprocessor* cpp, StringView name){
+    if(cpp_has_macro(cpp, name)) return 1;
+    if(sv_equals(name, SV("__has_include"))) return 1;
+    if(sv_equals(name, SV("__has_embed"))) return 1;
+    if(sv_equals(name, SV("__has_c_attribute"))) return 1;
+    return 0;
+}
+
 
 static
 int
@@ -1256,7 +1267,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             }
             cpp_warn(cpp, tok.loc, "Trailing tokens after #ifdef");
         }
-        s.true_taken = cpp_has_macro(cpp, name);
+        s.true_taken = cpp_isdef(cpp, name);
         s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
@@ -1284,7 +1295,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             }
             cpp_warn(cpp, tok.loc, "Trailing tokens after #ifndef");
         }
-        s.true_taken = !cpp_has_macro(cpp, name);
+        s.true_taken = !cpp_isdef(cpp, name);
         s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
@@ -1529,7 +1540,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
         }
         s->is_active = 0;
         if(!s->true_taken){
-            s->true_taken = cpp_has_macro(cpp, name);
+            s->true_taken = cpp_isdef(cpp, name);
             s->is_active = s->true_taken;
         }
         return 0;
@@ -1559,7 +1570,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
         }
         s->is_active = 0;
         if(!s->true_taken){
-            s->true_taken = !cpp_has_macro(cpp, name);
+            s->true_taken = !cpp_isdef(cpp, name);
             s->is_active = s->true_taken;
         }
         return 0;
