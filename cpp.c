@@ -101,6 +101,8 @@ int main(int argc, char** argv, char** envp){
         .logger = &logger,
         .env = &env,
     };
+    err = cpp_define_builtin_macros(&cpp);
+    if(err) return err;
     ArgParseUserDefinedType t = {
         .type_name = SV("path"),
         .user_data = &cpp,

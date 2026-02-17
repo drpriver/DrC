@@ -38,6 +38,9 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     Logger logger = msb_logger(&log_sb);
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
+    int err;
+    err = env_setenv4(&env, "wolo", 4, "woo", 3);
+    if(err) goto finally;
     CPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
@@ -46,7 +49,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         .env = &env,
     };
     fc_write_path(fc, "(test)", 6);
-    int err = fc_cache_file(fc, txt);
+    err = fc_cache_file(fc, txt);
     if(err){
         result = 1;
         goto finally;
@@ -697,6 +700,22 @@ TestFunction(test_builtin_macros){
         {"__INCLUDE_LEVEL__", SV("__INCLUDE_LEVEL__"), SV("1"), __LINE__, 0},
         {"__DATE__", SV("__DATE__"), SV("\"Jan 01 1900\""), __LINE__, 0},
         {"__TIME__", SV("__TIME__"), SV("\"01:02:03\""), __LINE__, 0},
+
+        // extensions
+        {"__EVAL__", SV("__EVAL__(1+1)"), SV("2"), __LINE__, 0},
+        {"__EVAL__", SV("__EVAL__(defined __EVAL__)"), SV("1"), __LINE__, 0},
+        {"__eval", SV("__eval(3*4/3)"), SV("4"), __LINE__, 0},
+        {"__MIXIN__", SV("__MIXIN__(\"3\")"), SV("3"), __LINE__, 0},
+        {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
+        {"__mixin", SV("#define S(x) #x\n__mixin(S(1)\"+1\")"), SV("\n1+1"), __LINE__, 0},
+        {"__env", SV("__env(\"wolo\")"), SV("\"woo\""), __LINE__, 0},
+        {"__ENV__", SV("__ENV__(\"foobar\")"), SV("\"\""), __LINE__, 0},
+        {"__if", SV("__if(1, 2, 3)"), SV("2"), __LINE__, 0},
+        {"__if", SV("__if(1, , __eval(1/0))"), SV(""), __LINE__, 0},
+        {"__IF__", SV("#define X 1\n__IF__(X, 3, __eval(1/0))"), SV("\n3"), __LINE__, 0},
+        {"__ident", SV("__ident(\"this is an ident\")"), SV("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
+        {"__FORMAT__", SV("__format(\"%d = %s\", 10, \"hello world\")"), SV("\"10 = hello world\""), __LINE__, 0},
+
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;
@@ -710,7 +729,7 @@ TestFunction(test_builtin_macros){
         if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.length) Allocator_free(MALLOCATOR, result.text, result.length);
     }
     TESTEND();
 }
@@ -1186,6 +1205,311 @@ TestFunction(test_erroneous_condition){
     TESTEND();
 }
 
+TestFunction(test_if_eval){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; _Bool disabled; StringView inp, exp;
+    } test_cases[] = {
+        // Basic constants
+        {"if 0", __LINE__, 0,
+            SV("#if 0\nyes\n#endif"), SV("\n\n")},
+        {"if 1", __LINE__, 0,
+            SV("#if 1\nyes\n#endif"), SV("\nyes\n")},
+        {"if 42", __LINE__, 0,
+            SV("#if 42\nyes\n#endif"), SV("\nyes\n")},
+        // Hex
+        {"hex 0x10", __LINE__, 0,
+            SV("#if 0x10 == 16\nyes\n#endif"), SV("\nyes\n")},
+        {"hex 0xFF", __LINE__, 0,
+            SV("#if 0xFF == 255\nyes\n#endif"), SV("\nyes\n")},
+        {"hex 0XA", __LINE__, 0,
+            SV("#if 0XA == 10\nyes\n#endif"), SV("\nyes\n")},
+        // Octal
+        {"octal 077", __LINE__, 0,
+            SV("#if 077 == 63\nyes\n#endif"), SV("\nyes\n")},
+        {"octal 010", __LINE__, 0,
+            SV("#if 010 == 8\nyes\n#endif"), SV("\nyes\n")},
+        // Binary
+        {"binary 0b101", __LINE__, 0,
+            SV("#if 0b101 == 5\nyes\n#endif"), SV("\nyes\n")},
+        {"binary 0B1111", __LINE__, 0,
+            SV("#if 0B1111 == 15\nyes\n#endif"), SV("\nyes\n")},
+        // Integer suffixes
+        {"suffix U", __LINE__, 0,
+            SV("#if 42U == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix L", __LINE__, 0,
+            SV("#if 42L == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix LL", __LINE__, 0,
+            SV("#if 42LL == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix ULL", __LINE__, 0,
+            SV("#if 42ULL == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix uLL", __LINE__, 0,
+            SV("#if 42uLL == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix LLU", __LINE__, 0,
+            SV("#if 100LLU == 100\nyes\n#endif"), SV("\nyes\n")},
+        // Character constants
+        {"char 'A'", __LINE__, 0,
+            SV("#if 'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+        {"char '0'", __LINE__, 0,
+            SV("#if '0' == 48\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\n'", __LINE__, 0,
+            SV("#if '\\n' == 10\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\t'", __LINE__, 0,
+            SV("#if '\\t' == 9\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\0'", __LINE__, 0,
+            SV("#if '\\0' == 0\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\x41'", __LINE__, 0,
+            SV("#if '\\x41' == 65\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\\\' backslash", __LINE__, 0,
+            SV("#if '\\\\' == 92\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\'' escaped quote", __LINE__, 0,
+            SV("#if '\\'' == 39\nyes\n#endif"), SV("\nyes\n")},
+        // Unary operators
+        {"unary !", __LINE__, 0,
+            SV("#if !0\nyes\n#endif"), SV("\nyes\n")},
+        {"unary ! truthy", __LINE__, 0,
+            SV("#if !1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"unary ! nonzero", __LINE__, 0,
+            SV("#if !42\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"unary ~", __LINE__, 0,
+            SV("#if (~0 & 0xFF) == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+        {"unary +", __LINE__, 0,
+            SV("#if +1 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"unary -", __LINE__, 0,
+            SV("#if -1 < 0\nyes\n#endif"), SV("\nyes\n")},
+        {"unary - value", __LINE__, 0,
+            SV("#if -5 + 5 == 0\nyes\n#endif"), SV("\nyes\n")},
+        // Arithmetic
+        {"add", __LINE__, 0,
+            SV("#if 1 + 2 == 3\nyes\n#endif"), SV("\nyes\n")},
+        {"sub", __LINE__, 0,
+            SV("#if 10 - 3 == 7\nyes\n#endif"), SV("\nyes\n")},
+        {"mul", __LINE__, 0,
+            SV("#if 6 * 7 == 42\nyes\n#endif"), SV("\nyes\n")},
+        {"div", __LINE__, 0,
+            SV("#if 42 / 6 == 7\nyes\n#endif"), SV("\nyes\n")},
+        {"mod", __LINE__, 0,
+            SV("#if 17 % 5 == 2\nyes\n#endif"), SV("\nyes\n")},
+        // Shifts
+        {"left shift", __LINE__, 0,
+            SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+        {"right shift", __LINE__, 0,
+            SV("#if 256 >> 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+        // Relational
+        {"less than true", __LINE__, 0,
+            SV("#if 1 < 2\nyes\n#endif"), SV("\nyes\n")},
+        {"less than false", __LINE__, 0,
+            SV("#if 2 < 1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"greater than", __LINE__, 0,
+            SV("#if 3 > 2\nyes\n#endif"), SV("\nyes\n")},
+        {"less equal", __LINE__, 0,
+            SV("#if 2 <= 2\nyes\n#endif"), SV("\nyes\n")},
+        {"greater equal", __LINE__, 0,
+            SV("#if 3 >= 3\nyes\n#endif"), SV("\nyes\n")},
+        // Equality
+        {"equal true", __LINE__, 0,
+            SV("#if 5 == 5\nyes\n#endif"), SV("\nyes\n")},
+        {"equal false", __LINE__, 0,
+            SV("#if 5 == 6\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"not equal true", __LINE__, 0,
+            SV("#if 5 != 6\nyes\n#endif"), SV("\nyes\n")},
+        {"not equal false", __LINE__, 0,
+            SV("#if 5 != 5\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        // Bitwise
+        {"bitwise and", __LINE__, 0,
+            SV("#if (0xF0 & 0x0F) == 0\nyes\n#endif"), SV("\nyes\n")},
+        {"bitwise and 2", __LINE__, 0,
+            SV("#if (0xFF & 0x0F) == 0x0F\nyes\n#endif"), SV("\nyes\n")},
+        {"bitwise or", __LINE__, 0,
+            SV("#if (0xF0 | 0x0F) == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+        {"bitwise xor", __LINE__, 0,
+            SV("#if (0xFF ^ 0x0F) == 0xF0\nyes\n#endif"), SV("\nyes\n")},
+        // Logical
+        {"logical and tt", __LINE__, 0,
+            SV("#if 1 && 1\nyes\n#endif"), SV("\nyes\n")},
+        {"logical and tf", __LINE__, 0,
+            SV("#if 1 && 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"logical and ft", __LINE__, 0,
+            SV("#if 0 && 1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"logical or ff", __LINE__, 0,
+            SV("#if 0 || 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        {"logical or tf", __LINE__, 0,
+            SV("#if 1 || 0\nyes\n#endif"), SV("\nyes\n")},
+        {"logical or ft", __LINE__, 0,
+            SV("#if 0 || 1\nyes\n#endif"), SV("\nyes\n")},
+        // Ternary
+        {"ternary true", __LINE__, 0,
+            SV("#if (1 ? 2 : 3) == 2\nyes\n#endif"), SV("\nyes\n")},
+        {"ternary false", __LINE__, 0,
+            SV("#if (0 ? 2 : 3) == 3\nyes\n#endif"), SV("\nyes\n")},
+        {"ternary nested", __LINE__, 0,
+            SV("#if (1 ? 1 ? 10 : 20 : 30) == 10\nyes\n#endif"), SV("\nyes\n")},
+        {"ternary nested false", __LINE__, 0,
+            SV("#if (0 ? 10 : 1 ? 20 : 30) == 20\nyes\n#endif"), SV("\nyes\n")},
+        // Parentheses
+        {"parens override prec", __LINE__, 0,
+            SV("#if (1 + 2) * 3 == 9\nyes\n#endif"), SV("\nyes\n")},
+        {"nested parens", __LINE__, 0,
+            SV("#if ((2 + 3) * (4 - 1)) == 15\nyes\n#endif"), SV("\nyes\n")},
+        // defined() combined with expressions
+        {"defined && defined", __LINE__, 0,
+            SV("#define FOO\n#define BAR\n#if defined(FOO) && defined(BAR)\nyes\n#endif"),
+            SV("\n\n\nyes\n")},
+        {"defined && !defined", __LINE__, 0,
+            SV("#define FOO\n#if defined(FOO) && !defined(BAR)\nyes\n#endif"),
+            SV("\n\nyes\n")},
+        {"defined || defined", __LINE__, 0,
+            SV("#define FOO\n#if defined(FOO) || defined(BAR)\nyes\n#endif"),
+            SV("\n\nyes\n")},
+        // Macro expansion in #if
+        {"macro value in if", __LINE__, 0,
+            SV("#define X 42\n#if X == 42\nyes\n#endif"),
+            SV("\n\nyes\n")},
+        {"macro expr in if", __LINE__, 0,
+            SV("#define A 10\n#define B 20\n#if A + B == 30\nyes\n#endif"),
+            SV("\n\n\nyes\n")},
+        // #elif with expressions
+        {"elif expression", __LINE__, 0,
+            SV("#if 0\nno\n#elif 2 + 2 == 4\nyes\n#endif"),
+            SV("\n\n\nyes\n")},
+        {"elif chain", __LINE__, 0,
+            SV("#if 0\na\n#elif 0\nb\n#elif 1\nc\n#elif 1\nd\n#endif"),
+            SV("\n\n\n\n\nc\n\n\n")},
+        // Undefined macro evaluates to 0
+        {"undefined macro is 0", __LINE__, 0,
+            SV("#if UNDEFINED\nyes\n#else\nno\n#endif"),
+            SV("\n\n\nno\n")},
+        {"undefined macro == 0", __LINE__, 0,
+            SV("#if UNDEFINED == 0\nyes\n#endif"),
+            SV("\nyes\n")},
+        // true keyword
+        {"true keyword", __LINE__, 0,
+            SV("#if true\nyes\n#endif"),
+            SV("\nyes\n")},
+
+        // ---- Precedence stress tests ----
+
+        // * binds tighter than +
+        {"prec: + vs *", __LINE__, 0,
+            SV("#if 1 + 2 * 3 == 7\nyes\n#endif"), SV("\nyes\n")},
+        {"prec: * vs + reversed", __LINE__, 0,
+            SV("#if 2 * 3 + 1 == 7\nyes\n#endif"), SV("\nyes\n")},
+        // - and * precedence
+        {"prec: - vs *", __LINE__, 0,
+            SV("#if 10 - 2 * 3 == 4\nyes\n#endif"), SV("\nyes\n")},
+        // / binds tighter than -
+        {"prec: - vs /", __LINE__, 0,
+            SV("#if 10 - 6 / 2 == 7\nyes\n#endif"), SV("\nyes\n")},
+        // % same precedence as *
+        {"prec: % vs +", __LINE__, 0,
+            SV("#if 10 + 7 % 3 == 11\nyes\n#endif"), SV("\nyes\n")},
+        // << binds tighter than ==, looser than +
+        {"prec: << vs +", __LINE__, 0,
+            SV("#if 1 << 2 + 1 == 8\nyes\n#endif"), SV("\nyes\n")},
+        {"prec: << vs ==", __LINE__, 0,
+            SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+        // >> similar
+        {"prec: >> vs +", __LINE__, 0,
+            SV("#if 32 >> 2 + 1 == 4\nyes\n#endif"), SV("\nyes\n")},
+        // < binds tighter than ==
+        {"prec: < vs ==", __LINE__, 0,
+            SV("#if (1 < 2) == 1\nyes\n#endif"), SV("\nyes\n")},
+        // == binds tighter than &
+        {"prec: == vs &", __LINE__, 0,
+            SV("#if 3 & 1 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"prec: == vs & explicit", __LINE__, 0,
+            SV("#if (3 & 1) == 1\nyes\n#endif"), SV("\nyes\n")},
+        // & binds tighter than ^
+        {"prec: & vs ^", __LINE__, 0,
+            SV("#if (0xF & 0x3 ^ 0x1) == 2\nyes\n#endif"), SV("\nyes\n")},
+        // ^ binds tighter than |
+        {"prec: ^ vs |", __LINE__, 0,
+            SV("#if (1 | 2 ^ 3) == 1 | (2 ^ 3)\nyes\n#endif"), SV("\nyes\n")},
+        // | binds tighter than &&
+        {"prec: | vs &&", __LINE__, 0,
+            SV("#if 1 | 0 && 0 | 1\nyes\n#endif"), SV("\nyes\n")},
+        // && binds tighter than ||
+        {"prec: && vs ||", __LINE__, 0,
+            SV("#if 1 || 0 && 0\nyes\n#endif"), SV("\nyes\n")},
+        {"prec: || && classic", __LINE__, 0,
+            SV("#if 0 || 1 && 1\nyes\n#endif"), SV("\nyes\n")},
+        {"prec: && || false path", __LINE__, 0,
+            SV("#if 0 && 0 || 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+        // || binds tighter than ?:
+        {"prec: || vs ?:", __LINE__, 0,
+            SV("#if (1 || 0 ? 10 : 20) == 10\nyes\n#endif"), SV("\nyes\n")},
+        // Ternary is right-associative
+        {"ternary right-assoc", __LINE__, 0,
+            SV("#if (1 ? 2 : 3 ? 4 : 5) == 2\nyes\n#endif"), SV("\nyes\n")},
+        {"ternary right-assoc 2", __LINE__, 0,
+            SV("#if (0 ? 2 : 1 ? 4 : 5) == 4\nyes\n#endif"), SV("\nyes\n")},
+        {"ternary right-assoc 3", __LINE__, 0,
+            SV("#if (0 ? 2 : 0 ? 4 : 5) == 5\nyes\n#endif"), SV("\nyes\n")},
+        // Left-associativity of arithmetic
+        {"left-assoc sub", __LINE__, 0,
+            SV("#if 10 - 3 - 2 == 5\nyes\n#endif"), SV("\nyes\n")},
+        {"left-assoc div", __LINE__, 0,
+            SV("#if 100 / 10 / 2 == 5\nyes\n#endif"), SV("\nyes\n")},
+        {"left-assoc mod", __LINE__, 0,
+            SV("#if 17 % 10 % 4 == 3\nyes\n#endif"), SV("\nyes\n")},
+        {"left-assoc shift", __LINE__, 0,
+            SV("#if 1 << 2 << 3 == 32\nyes\n#endif"), SV("\nyes\n")},
+        // Complex multi-operator expressions
+        {"complex expr 1", __LINE__, 0,
+            SV("#if 2 + 3 * 4 - 6 / 2 == 11\nyes\n#endif"), SV("\nyes\n")},
+        {"complex expr 2", __LINE__, 0,
+            SV("#if (1 << 8) - 1 == 255\nyes\n#endif"), SV("\nyes\n")},
+        {"complex expr 3", __LINE__, 0,
+            SV("#if 0xFF & 0x0F | 0xF0 == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+        {"complex expr 4", __LINE__, 0,
+            SV("#if 1 + 2 > 2 && 3 * 4 == 12\nyes\n#endif"), SV("\nyes\n")},
+        // Unary in complex expressions
+        {"unary in expr", __LINE__, 0,
+            SV("#if -1 + 2 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"double negation", __LINE__, 0,
+            SV("#if !!42 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"not in logical", __LINE__, 0,
+            SV("#if !0 && !0\nyes\n#endif"), SV("\nyes\n")},
+        {"complement and mask", __LINE__, 0,
+            SV("#if (~0xF0 & 0xFF) == 0x0F\nyes\n#endif"), SV("\nyes\n")},
+        // All comparison operators
+        {"cmp chain", __LINE__, 0,
+            SV("#if 1 < 2 && 2 > 1 && 3 <= 3 && 3 >= 3 && 4 == 4 && 4 != 5\nyes\n#endif"),
+            SV("\nyes\n")},
+        // Large ternary chain
+        {"ternary chain", __LINE__, 0,
+            SV("#if (0 ? 1 : 0 ? 2 : 0 ? 3 : 4) == 4\nyes\n#endif"),
+            SV("\nyes\n")},
+        // Shift precedence vs comparison
+        {"shift vs compare", __LINE__, 0,
+            SV("#if 1 << 4 > 10\nyes\n#endif"), SV("\nyes\n")},
+        // Nested defined with complex logic
+        {"complex defined", __LINE__, 0,
+            SV("#define A\n#define B\n#define C\n"
+               "#if defined(A) && (defined(B) || defined(D)) && !defined(E)\nyes\n#endif"),
+            SV("\n\n\n\nyes\n")},
+        // Bitwise ops full chain
+        {"bitwise chain", __LINE__, 0,
+            SV("#if ((0x0F & 0xFF) ^ 0x05 | 0x10) == 0x1A\nyes\n#endif"),
+            SV("\nyes\n")},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        if(test_cases[i].disabled) continue;
+        StringView inp = test_cases[i].inp;
+        StringView exp = test_cases[i].exp;
+        int line = test_cases[i].line;
+        StringView result;
+        int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
@@ -1199,6 +1523,7 @@ int main(int argc, char** argv){
     RegisterTest(test_error_locations);
     RegisterTest(test_condition);
     RegisterTest(test_erroneous_condition);
+    RegisterTest(test_if_eval);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;

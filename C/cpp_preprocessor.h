@@ -117,6 +117,8 @@ struct CppPoundIf {
     // like 60 padding bits, wowee
 };
 
+typedef struct CPragma CPragma;
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
@@ -144,6 +146,7 @@ struct CPreprocessor {
     Allocator allocator;
     ArenaAllocator synth_arena; // For things that need to be synthesized
     AtomMap(CMacro) macros;
+    AtomMap(CPragma) pragmas;
     FileCache* fc;
     AtomTable* at;
     Logger* logger;
@@ -226,6 +229,14 @@ int
 cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand);
 
 static int cpp_define_builtin_macros(CPreprocessor* cpp);
+
+
+typedef int CppPragmaFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks);
+static int cpp_register_pragma(CPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* _Null_unspecified ctx);
+struct CPragma {
+    void* ctx;
+    CppPragmaFn* fn;
+};
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
