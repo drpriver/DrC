@@ -127,6 +127,7 @@ marray_resize_to_some_weird_number(size_t x){
 #define Marray(type) MarrayI(type)
 #define MarrayI(type) ma__##type
 #define ma_push(type) MARRAYIMPL(push, type)
+#define ma_pop(type) MARRAYIMPL(pop, type)
 #define ma_cleanup(type) MARRAYIMPL(cleanup, type)
 #define ma_ensure_total(type) MARRAYIMPL(ensure_total, type)
 #define ma_ensure_additional(type) MARRAYIMPL(ensure_additional, type)
@@ -184,6 +185,7 @@ for(type \
   iter##iter__ != iter##end__?((void)(iter=*iter##iter__), 1):0; \
   ++iter##iter__)
 
+#define ma_pop_(ma) ((ma).data[--(ma).count])
 #define ma_tail(ma) ((ma).data[(ma).count-1])
 #define ma_head(ma) ((ma).data[0])
 
@@ -244,9 +246,15 @@ struct MARRAY {
 //
 // ma_push is mostly for convenience.
 //
-// There is no `ma_pop` as you would need to check the `count` field anyway
-// and it would just turn into `item = marray.data[--marray.count];`
+
+MARRAY_LINKAGE
+warn_unused
+MARRAY_T
+ma_pop(MARRAY_T)(MARRAY*);
+// -----------
+// Pops from the end of the array and decrements count by 1.
 //
+// UB if count is 0.
 
 MARRAY_LINKAGE
 warn_unused
@@ -401,6 +409,13 @@ ma_push(MARRAY_T)(MARRAY* marray, Allocator a, MARRAY_T value){
     #pragma GCC diagnostic pop
     #endif
     return 0;
+}
+
+MARRAY_LINKAGE
+warn_unused
+MARRAY_T
+ma_pop(MARRAY_T)(MARRAY* marray){
+    return marray->data[--marray->count];
 }
 
 MARRAY_LINKAGE

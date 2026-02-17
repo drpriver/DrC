@@ -30,6 +30,7 @@ static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, CPPTokens*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
 static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool, SrcLocExp*);
+static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out);
 LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CPreprocessor*, const char* fmt, ...);
 enum {
     CPP_NO_ERROR = 0,
@@ -1408,8 +1409,8 @@ cpp_handle_directive(CPreprocessor* cpp){
     return 0;
 }
 
-static 
-int 
+static
+int
 cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
     int err;
     CPPToken tok;
@@ -1703,7 +1704,6 @@ cpp_get_va_args(const CPPTokens *args, const Marray(size_t) *arg_seps, size_t np
     *out_count = end - start;
 }
 
-static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out);
 
 // Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1).
 // Uses the expanded_args cache so the expansion is done at most once.
@@ -1818,33 +1818,141 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
     return 0;
 }
 
-// Helper: Expand argument through prescan
+// Expands macros in a slice of tokens. Assumes the tokens doesn't have directives, like for a function-like macro's arguments
 static
 int
 cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out){
     if(!count) return 0;
-
-    // Push EOF marker first (will be at bottom of stack)
-    CPPToken end_marker = {.type = CPP_EOF};
-    int err = cpp_push_tok(cpp, &cpp->pending, end_marker);
-    if(err) return err;
-
-    // Push tokens in reverse order (so they come out in forward order)
-    for(size_t i = count; i-- > 0;){
-        err = cpp_push_tok(cpp, &cpp->pending, toks[i]);
-        if(err) return err;
+    int err = 0;
+    CPPToken tok;
+    CPPTokens* pending = cpp_get_scratch(cpp);
+    CPPTokens* args = NULL;
+    Marray(size_t) *arg_seps = NULL;
+    if(!pending) return CPP_OOM_ERROR;
+    for(size_t i = 0;;){
+        if(pending->count){
+            tok = ma_pop_(*pending);
+            if(tok.type == CPP_REENABLE){
+                ((CMacro*)tok.data1)->is_disabled = 0;
+                continue;
+            }
+        }
+        else if(i < count)
+            tok = toks[i++];
+        else
+            break;
+        if(tok.type != CPP_IDENTIFIER || tok.disabled){
+            err = cpp_push_tok(cpp, out, tok);
+            if(err) goto finally;
+            continue;
+        }
+        Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+        CMacro* macro = NULL;
+        if(a) macro = AM_get(&cpp->macros, a);
+        if(!macro || macro->is_disabled){
+            err = cpp_push_tok(cpp, out, tok);
+            if(err) goto finally;
+            continue;
+        }
+        if(!macro->is_function_like){
+            err = cpp_expand_obj_macro(cpp, macro, tok.loc, pending);
+            if(err) goto finally;
+            continue;
+        }
+        CPPToken next = {.type = CPP_EOF};
+        for(;;){
+            while(pending->count){
+                next = ma_pop_(*pending);
+                if(next.type == CPP_REENABLE){
+                    ((CMacro*)next.data1)->is_disabled = 0;
+                    continue;
+                }
+                goto got_next;
+            }
+            if(i < count)
+                next = toks[i++];
+            else
+                next = (CPPToken){.type=CPP_EOF};
+            got_next:;
+            if(next.type != CPP_WHITESPACE && next.type != CPP_NEWLINE)
+                break;
+        }
+        if(next.type != CPP_PUNCTUATOR || next.punct != '('){
+            // not function invocation
+            if(next.type != CPP_EOF){
+                err = cpp_push_tok(cpp, pending, next);
+                if(err) goto finally;
+            }
+            err = cpp_push_tok(cpp, out, tok);
+            if(err) goto finally;
+            continue;
+        }
+        args = cpp_get_scratch(cpp);
+        arg_seps = cpp_get_scratch_idxes(cpp);
+        if(!args || !arg_seps){
+            err = CPP_OOM_ERROR;
+            goto finally;
+        }
+        for(int paren = 1;;){
+            while(pending->count){
+                next = ma_pop_(*pending);
+                if(next.type == CPP_REENABLE){
+                    ((CMacro*)next.data1)->is_disabled = 0;
+                    continue;
+                }
+                goto got_arg_tok;
+            }
+            if(i < count)
+                next = toks[i++];
+            else
+                next = (CPPToken){.type=CPP_EOF};
+            got_arg_tok:;
+            if(next.type == CPP_EOF){
+                err = cpp_error(cpp, next.loc, "EOF in function-like macro invocation %s()", a->data);
+                goto finally;
+            }
+            if(next.type == CPP_PUNCTUATOR){
+                if(next.punct == ')'){
+                    paren--;
+                    if(!paren) break;
+                }
+                else if(next.punct == '(')
+                    paren++;
+                else if(next.punct == ',' && paren == 1){
+                    if(macro->is_variadic || (macro->nparams > 1 && arg_seps->count < (size_t)macro->nparams-1)){
+                        err = ma_push(size_t)(arg_seps, cpp->allocator, args->count);
+                        if(err) goto finally;
+                    }
+                    else{
+                        err = cpp_error(cpp, next.loc, "Too many arguments to function-like macro %s()", a->data);
+                        goto finally;
+                    }
+                }
+            }
+            err = cpp_push_tok(cpp, args, next);
+            if(err) goto finally;
+        }
+        if(args->count && !macro->nparams && !macro->is_variadic){
+            err = cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
+            goto finally;
+        }
+        size_t nargs = args->count ? arg_seps->count + 1 : 0;
+        if(nargs < macro->nparams){
+            err = cpp_error(cpp, tok.loc, "Too few arguments to function-like macro %s()", a->data);
+            goto finally;
+        }
+        err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, pending);
+        if(err) goto finally;
+        cpp_release_scratch_idxes(cpp, arg_seps);
+        arg_seps = NULL;
+        cpp_release_scratch(cpp, args);
+        args = NULL;
     }
-
-    // Pump through cpp_next_pp_token until we hit the EOF marker
-    for(;;){
-        CPPToken tok;
-        err = cpp_next_pp_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type == CPP_EOF) break;
-        err = cpp_push_tok(cpp, out, tok);
-        if(err) return err;
-    }
-    return 0;
+    finally:
+    if(arg_seps) cpp_release_scratch_idxes(cpp, arg_seps);
+    if(args) cpp_release_scratch(cpp, args);
+    if(pending)cpp_release_scratch(cpp, pending);
+    return err;
 }
 
 // Helper: Get raw argument tokens for a parameter index, dispatching
