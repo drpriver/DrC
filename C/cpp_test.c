@@ -715,6 +715,176 @@ TestFunction(test_builtin_macros){
         {"__IF__", SV("#define X 1\n__IF__(X, 3, __eval(1/0))"), SV("\n3"), __LINE__, 0},
         {"__ident", SV("__ident(\"this is an ident\")"), SV("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
         {"__FORMAT__", SV("__format(\"%d = %s\", 10, \"hello world\")"), SV("\"10 = hello world\""), __LINE__, 0},
+        {"__set/__get basic", SV("__set(x, 42)\n__get(x)"), SV("\n42"), __LINE__, 0},
+        {"__get unset", SV("__get(x)"), SV(""), __LINE__, 0},
+        {"__set overwrite", SV("__set(x, 1)\n__set(x, 2)\n__get(x)"), SV("\n\n2"), __LINE__, 0},
+        {"__set multiple tokens", SV("__set(stuff, a b c)\n__get(stuff)"), SV("\na b c"), __LINE__, 0},
+        {"__set with eval", SV("__set(n, 0)\n__set(n, __eval(__get(n) + 1))\n__get(n)"), SV("\n\n1"), __LINE__, 0},
+        {"__set empty", SV("__set(e)\n__get(e)"), SV("\n"), __LINE__, 0},
+        // __set/__get: counting pattern
+        {"__set count fields", SV(
+            "#define FIELD(type, name) type name; __set(n, __eval(__get(n) + 1))\n"
+            "__set(n, 0)\n"
+            "FIELD(int, x)\n"
+            "FIELD(float, y)\n"
+            "FIELD(char*, name)\n"
+            "__get(n)"), SV(
+            "\n"
+            "\n"
+            "int x; \n"
+            "float y; \n"
+            "char* name; \n"
+            "3"), __LINE__, 0},
+        // __set/__get: accumulation pattern (O(n^2) way)
+        {"__set accumulate", SV(
+            "__set(init_calls, )\n"
+            "#define REG(fn) __set(init_calls, __get(init_calls) fn();)\n"
+            "REG(init_a)\n"
+            "REG(init_b)\n"
+            "REG(init_c)\n"
+            "__get(init_calls)"), SV(
+            "\n"
+            "\n"
+            "\n"
+            "\n"
+            "\n"
+            "init_a(); init_b(); init_c();"), __LINE__, 0},
+        // __append: accumulation pattern (O(n) way)
+        {"__append accumulate", SV(
+            "#define REG2(fn) __append(calls, fn(); )\n"
+            "REG2(init_a)\n"
+            "REG2(init_b)\n"
+            "REG2(init_c)\n"
+            "__get(calls)"), SV(
+            "\n"
+            "\n"
+            "\n"
+            "\n"
+            "init_a();init_b();init_c();"), __LINE__, 0},
+        // __set/__get: use with __if
+        {"__set with __if", SV(
+            "__set(x, 1)\n"
+            "__if(__get(x), yes, no)"), SV(
+            "\n"
+            "yes"), __LINE__, 0},
+        // __set/__get: use with __format
+        {"__set with __format", SV(
+            "__set(count, 3)\n"
+            "__format(\"count=%d\", __get(count))"), SV(
+            "\n"
+            "\"count=3\""), __LINE__, 0},
+        // __set/__get: enum with string table
+        {"__set enum strings", SV(
+            "__set(n, 0)\n"
+            "__set(strs, )\n"
+            "#define EV(name) name = __get(n), __set(strs, __get(strs) [name] = #name,) __set(n, __eval(__get(n) + 1))\n"
+            "enum { EV(RED) EV(GREEN) EV(BLUE) };\n"
+            "const char* names[] = { __get(strs) };"), SV(
+            "\n"
+            "\n"
+            "\n"
+            "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
+            "const char* names[] = { [RED] = \"RED\", [GREEN] = \"GREEN\", [BLUE] = \"BLUE\", };"), __LINE__, 0},
+        // __for: basic
+        {"__for basic", SV(
+            "#define DECL(i) int x##i;\n"
+            "__for(0, 3, DECL)"), SV(
+            "\n"
+            "int x0; int x1; int x2;"), __LINE__, 0},
+        // __for: with expressions
+        {"__for expr", SV(
+            "#define P(i) i\n"
+            "__for(1+1, 5, P)"), SV(
+            "\n"
+            "2 3 4"), __LINE__, 0},
+        // __for: empty range
+        {"__for empty", SV(
+            "#define P(i) i\n"
+            "__for(3, 3, P)"), SV(
+            "\n"
+            ""), __LINE__, 0},
+        // __for: with __set/__append
+        {"__for accumulate", SV(
+            "#define ACC(i) __append(items, i,)\n"
+            "__for(0, 4, ACC)\n"
+            "int arr[] = {__get(items)};"), SV(
+            "\n"
+            "   \n"
+            "int arr[] = {0,1,2,3,};"), __LINE__, 0},
+        // __for: stringification in callback
+        {"__for stringify", SV(
+            "#define ENTRY(i) [i] = #i,\n"
+            "const char* t[] = { __for(0, 3, ENTRY) };"), SV(
+            "\n"
+            "const char* t[] = { [0] = \"0\", [1] = \"1\", [2] = \"2\", };"), __LINE__, 0},
+        // __map: basic
+        {"__map basic", SV(
+            "#define DBL(x) (x*2)\n"
+            "__map(DBL, 1, 2, 3)"), SV(
+            "\n"
+            "(1*2) (2*2) (3*2)"), __LINE__, 0},
+        // __map: stringify
+        {"__map stringify", SV(
+            "#define S(x) #x,\n"
+            "const char* names[] = { __map(S, foo, bar, baz) };"), SV(
+            "\n"
+            "const char* names[] = { \"foo\", \"bar\", \"baz\", };"), __LINE__, 0},
+        // __map: token paste
+        {"__map paste", SV(
+            "#define DECL(name) int name##_val;\n"
+            "__map(DECL, alpha, beta)"), SV(
+            "\n"
+            "int alpha_val; int beta_val;"), __LINE__, 0},
+        // __map: single arg
+        {"__map single", SV(
+            "#define ID(x) x\n"
+            "__map(ID, hello)"), SV(
+            "\n"
+            "hello"), __LINE__, 0},
+        // __map: multi-token args
+        {"__map multi-token", SV(
+            "#define PARENS(x) (x)\n"
+            "__map(PARENS, a + b, c * d)"), SV(
+            "\n"
+            "(a + b) (c * d)"), __LINE__, 0},
+        // __let: object-like
+        {"__let obj", SV(
+            "__let(X, 42, X + X)"), SV(
+            "42 + 42"), __LINE__, 0},
+        // __let: function-like
+        {"__let fn", SV(
+            "__let(DBL(x), x * 2, DBL(5))"), SV(
+            "5 * 2"), __LINE__, 0},
+        // __let: scoped (name not visible after)
+        {"__let scoped", SV(
+            "__let(TMP, hello, TMP)\nTMP"), SV(
+            "hello\nTMP"), __LINE__, 0},
+        // __let: with token paste
+        {"__let paste", SV(
+            "__let(MK(prefix), prefix##_init, MK(foo) MK(bar))"), SV(
+            "foo_init bar_init"), __LINE__, 0},
+        // __let: with stringify
+        {"__let stringify", SV(
+            "__let(S(x), #x, S(hello))"), SV(
+            "\"hello\""), __LINE__, 0},
+        // __let: currying with __map
+        {"__let curry map", SV(
+            "__let(PAIR(x), make_pair(ctx, x), __map(PAIR, a, b, c))"), SV(
+            "make_pair(ctx, a) make_pair(ctx, b) make_pair(ctx, c)"), __LINE__, 0},
+        // __let: multi-param
+        {"__let multi param", SV(
+            "__let(ADD(a, b), a + b, ADD(1, 2))"), SV(
+            "1 + 2"), __LINE__, 0},
+        // __append: enum with string table (O(n))
+        {"__append enum strings", SV(
+            "__set(n2, 0)\n"
+            "#define EV2(name) name = __get(n2), __append(strs2, [name] = #name,) __set(n2, __eval(__get(n2) + 1))\n"
+            "enum { EV2(RED) EV2(GREEN) EV2(BLUE) };\n"
+            "const char* names[] = { __get(strs2) };"), SV(
+            "\n"
+            "\n"
+            "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
+            "const char* names[] = { [RED] = \"RED\",[GREEN] = \"GREEN\",[BLUE] = \"BLUE\", };"), __LINE__, 0},
 
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){

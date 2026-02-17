@@ -184,6 +184,7 @@ struct CPreprocessor {
     FreeList(Marray(size_t)) scratch_idxes;
     uint64_t counter;
     Atom date, time;
+    AtomMap(CPPTokens) kv_store; // for __set/__get
 };
 
 static

@@ -2327,7 +2327,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, c
                 cpp_get_param_arg(macro, args, arg_seps, i, &start, &count);
                 err = cpp_expand_argument(cpp, start, count, exp_args);
                 if(err) goto func_finally;
-                if(i < arg_seps->count){
+                if(i < total_params - 1){
                     err = ma_push(size_t)(idxes, cpp->allocator, exp_args->count);
                     if(err) goto func_finally;
                     err = cpp_push_tok(cpp, exp_args, (CPPToken){.type = CPP_PUNCTUATOR, .punct = ','});
@@ -2463,7 +2463,13 @@ static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_if,
                       cpp_builtin_ident,
                       cpp_builtin_fmt,
-                      cpp_builtin_print
+                      cpp_builtin_print,
+                      cpp_builtin_set,
+                      cpp_builtin_get,
+                      cpp_builtin_append,
+                      cpp_builtin_for,
+                      cpp_builtin_map,
+                      cpp_builtin_let
                       ;
 static CppPragmaFn cpp_builtin_pragma_once
                    ;
@@ -2504,6 +2510,18 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
         {SV("__print"), cpp_builtin_print, 1, 0, 0},
         {SV("__PRINTT__"), cpp_builtin_print, 1, 0, 0},
+        {SV("__set"), cpp_builtin_set, 1, 1, 0},
+        {SV("__SET__"), cpp_builtin_set, 1, 1, 0},
+        {SV("__get"), cpp_builtin_get, 1, 0, 0},
+        {SV("__GET__"), cpp_builtin_get, 1, 0, 0},
+        {SV("__append"), cpp_builtin_append, 1, 1, 0},
+        {SV("__APPEND__"), cpp_builtin_append, 1, 1, 0},
+        {SV("__for"), cpp_builtin_for, 3, 0, 0},
+        {SV("__FOR__"), cpp_builtin_for, 3, 0, 0},
+        {SV("__map"), cpp_builtin_map, 1, 1, 0},
+        {SV("__MAP__"), cpp_builtin_map, 1, 1, 0},
+        {SV("__let"), cpp_builtin_let, 3, 0, 1},
+        {SV("__LET__"), cpp_builtin_let, 3, 0, 1},
     };
     for(size_t i = 0; i < sizeof func_builtins / sizeof func_builtins[0]; i++){
         err = cpp_define_builtin_func_macro(cpp, func_builtins[i].name, func_builtins[i].fn, NULL, func_builtins[i].nparams, func_builtins[i].variadic, func_builtins[i].no_expand);
@@ -2917,6 +2935,379 @@ cpp_builtin_env(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPP
     return err;
 
 }
+
+static
+int
+cpp_builtin_set(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    (void)outtoks;
+    // First arg is the key (an identifier)
+    CPPToken* key_toks; size_t key_count;
+    cpp_get_argument(args, arg_seps, 0, &key_toks, &key_count);
+    // Find the identifier token for the key
+    Atom key = NULL;
+    for(size_t i = 0; i < key_count; i++){
+        if(key_toks[i].type == CPP_WHITESPACE || key_toks[i].type == CPP_NEWLINE) continue;
+        if(key_toks[i].type != CPP_IDENTIFIER){
+            return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __set");
+        }
+        key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
+        if(!key) return CPP_OOM_ERROR;
+        break;
+    }
+    if(!key) return cpp_error(cpp, loc, "Missing key argument to __set");
+    // Get the value tokens (variadic args after the key)
+    CPPToken* val_toks; size_t val_count;
+    cpp_get_va_args(args, arg_seps, 1, &val_toks, &val_count);
+    // Strip leading/trailing whitespace from value tokens
+    while(val_count && (val_toks[0].type == CPP_WHITESPACE || val_toks[0].type == CPP_NEWLINE)){
+        val_toks++; val_count--;
+    }
+    while(val_count && (val_toks[val_count-1].type == CPP_WHITESPACE || val_toks[val_count-1].type == CPP_NEWLINE)){
+        val_count--;
+    }
+    // Check if there's already a stored value for this key
+    CPPTokens* existing = AM_get(&cpp->kv_store, key);
+    if(existing){
+        // Reuse the existing array
+        existing->count = 0;
+        if(val_count){
+            int err = ma_extend(CPPToken)(existing, cpp->allocator, val_toks, val_count);
+            if(err) return CPP_OOM_ERROR;
+        }
+    }
+    else {
+        // Allocate a new CPPTokens
+        CPPTokens* stored = Allocator_zalloc(cpp->allocator, sizeof(CPPTokens));
+        if(!stored) return CPP_OOM_ERROR;
+        if(val_count){
+            int err = ma_extend(CPPToken)(stored, cpp->allocator, val_toks, val_count);
+            if(err) return CPP_OOM_ERROR;
+        }
+        int err = AM_put(&cpp->kv_store, cpp->allocator, key, stored);
+        if(err) return CPP_OOM_ERROR;
+    }
+    // __set expands to nothing
+    return 0;
+}
+
+static
+int
+cpp_builtin_get(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    (void)arg_seps;
+    // The single arg is the key (an identifier)
+    Atom key = NULL;
+    for(size_t i = 0; i < args->count; i++){
+        if(args->data[i].type == CPP_WHITESPACE || args->data[i].type == CPP_NEWLINE) continue;
+        if(args->data[i].type != CPP_IDENTIFIER){
+            return cpp_error(cpp, args->data[i].loc, "Expected identifier as key to __get");
+        }
+        key = AT_get_atom(cpp->at, args->data[i].txt.text, args->data[i].txt.length);
+        break;
+    }
+    if(!key){
+        // Key was never set, expand to nothing
+        return 0;
+    }
+    CPPTokens* stored = AM_get(&cpp->kv_store, key);
+    if(!stored) return 0; // not set, expand to nothing
+    for(size_t i = 0; i < stored->count; i++){
+        CPPToken tok = stored->data[i];
+        tok.loc = loc;
+        int err = cpp_push_tok(cpp, outtoks, tok);
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
+cpp_builtin_append(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    (void)outtoks;
+    // First arg is the key (an identifier)
+    CPPToken* key_toks; size_t key_count;
+    cpp_get_argument(args, arg_seps, 0, &key_toks, &key_count);
+    Atom key = NULL;
+    for(size_t i = 0; i < key_count; i++){
+        if(key_toks[i].type == CPP_WHITESPACE || key_toks[i].type == CPP_NEWLINE) continue;
+        if(key_toks[i].type != CPP_IDENTIFIER){
+            return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __append");
+        }
+        key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
+        if(!key) return CPP_OOM_ERROR;
+        break;
+    }
+    if(!key) return cpp_error(cpp, loc, "Missing key argument to __append");
+    // Get the value tokens (variadic args after the key)
+    CPPToken* val_toks; size_t val_count;
+    cpp_get_va_args(args, arg_seps, 1, &val_toks, &val_count);
+    if(!val_count) return 0; // nothing to append
+    CPPTokens* existing = AM_get(&cpp->kv_store, key);
+    if(existing){
+        int err = ma_extend(CPPToken)(existing, cpp->allocator, val_toks, val_count);
+        if(err) return CPP_OOM_ERROR;
+    }
+    else {
+        CPPTokens* stored = Allocator_zalloc(cpp->allocator, sizeof(CPPTokens));
+        if(!stored) return CPP_OOM_ERROR;
+        int err = ma_extend(CPPToken)(stored, cpp->allocator, val_toks, val_count);
+        if(err) return CPP_OOM_ERROR;
+        err = AM_put(&cpp->kv_store, cpp->allocator, key, stored);
+        if(err) return CPP_OOM_ERROR;
+    }
+    return 0;
+}
+
+static
+int
+cpp_builtin_for(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    int err;
+    // arg 0: start expression
+    // arg 1: end expression
+    // arg 2: macro name (identifier)
+    CPPToken* start_toks; size_t start_count;
+    CPPToken* end_toks; size_t end_count;
+    CPPToken* macro_toks; size_t macro_count;
+    cpp_get_argument(args, arg_seps, 0, &start_toks, &start_count);
+    cpp_get_argument(args, arg_seps, 1, &end_toks, &end_count);
+    cpp_get_argument(args, arg_seps, 2, &macro_toks, &macro_count);
+    int64_t start_val, end_val;
+    err = cpp_eval_tokens(cpp, start_toks, start_count, &start_val);
+    if(err) return err;
+    err = cpp_eval_tokens(cpp, end_toks, end_count, &end_val);
+    if(err) return err;
+    // Find the macro name identifier
+    CPPToken macro_ident = {0};
+    _Bool found = 0;
+    for(size_t i = 0; i < macro_count; i++){
+        if(macro_toks[i].type == CPP_WHITESPACE || macro_toks[i].type == CPP_NEWLINE) continue;
+        if(macro_toks[i].type != CPP_IDENTIFIER){
+            return cpp_error(cpp, macro_toks[i].loc, "Expected macro name as third argument to __for");
+        }
+        macro_ident = macro_toks[i];
+        found = 1;
+        break;
+    }
+    if(!found) return cpp_error(cpp, loc, "Missing macro name argument to __for");
+    // For each value in [start, end), emit MACRO(value) tokens
+    for(int64_t i = start_val; i < end_val; i++){
+        Atom num = cpp_atomizef(cpp, "%lld", (long long)i);
+        if(!num) return CPP_OOM_ERROR;
+        CPPToken num_tok = {
+            .txt = {num->length, num->data},
+            .loc = loc,
+            .type = CPP_NUMBER,
+        };
+        CPPToken lparen = {.type = CPP_PUNCTUATOR, .punct = '(', .loc = loc, .txt = SV("(")};
+        CPPToken rparen = {.type = CPP_PUNCTUATOR, .punct = ')', .loc = loc, .txt = SV(")")};
+        CPPToken space = {.type = CPP_WHITESPACE, .loc = loc, .txt = SV(" ")};
+        if(i > start_val){
+            err = cpp_push_tok(cpp, outtoks, space);
+            if(err) return err;
+        }
+        err = cpp_push_tok(cpp, outtoks, macro_ident);
+        if(err) return err;
+        err = cpp_push_tok(cpp, outtoks, lparen);
+        if(err) return err;
+        err = cpp_push_tok(cpp, outtoks, num_tok);
+        if(err) return err;
+        err = cpp_push_tok(cpp, outtoks, rparen);
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
+cpp_builtin_map(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    int err;
+    // arg 0: macro name (identifier)
+    // variadic: items to map over, comma-separated
+    // The variadic portion arrives as a single token blob with embedded commas,
+    // so we split on comma punctuators ourselves.
+    CPPToken* macro_toks; size_t macro_count;
+    cpp_get_argument(args, arg_seps, 0, &macro_toks, &macro_count);
+    CPPToken macro_ident = {0};
+    _Bool found = 0;
+    for(size_t i = 0; i < macro_count; i++){
+        if(macro_toks[i].type == CPP_WHITESPACE || macro_toks[i].type == CPP_NEWLINE) continue;
+        if(macro_toks[i].type != CPP_IDENTIFIER){
+            return cpp_error(cpp, macro_toks[i].loc, "Expected macro name as first argument to __map");
+        }
+        macro_ident = macro_toks[i];
+        found = 1;
+        break;
+    }
+    if(!found) return cpp_error(cpp, loc, "Missing macro name argument to __map");
+    // Get the variadic portion as a raw token blob
+    CPPToken* va_toks; size_t va_count;
+    cpp_get_va_args(args, arg_seps, 1, &va_toks, &va_count);
+    if(!va_count) return 0;
+    CPPToken lparen = {.type = CPP_PUNCTUATOR, .punct = '(', .loc = loc, .txt = SV("(")};
+    CPPToken rparen = {.type = CPP_PUNCTUATOR, .punct = ')', .loc = loc, .txt = SV(")")};
+    CPPToken space = {.type = CPP_WHITESPACE, .loc = loc, .txt = SV(" ")};
+    // Iterate over va_toks, splitting on top-level commas
+    size_t arg_start = 0;
+    size_t arg_idx = 0;
+    for(size_t i = 0; i <= va_count; i++){
+        _Bool is_comma = i < va_count && va_toks[i].type == CPP_PUNCTUATOR && va_toks[i].punct == ',';
+        _Bool is_end = i == va_count;
+        if(!is_comma && !is_end) continue;
+        // We have an argument from arg_start to i (exclusive)
+        CPPToken* atoks = va_toks + arg_start;
+        size_t acount = i - arg_start;
+        // Strip leading/trailing whitespace
+        while(acount && (atoks[0].type == CPP_WHITESPACE || atoks[0].type == CPP_NEWLINE)){
+            atoks++; acount--;
+        }
+        while(acount && (atoks[acount-1].type == CPP_WHITESPACE || atoks[acount-1].type == CPP_NEWLINE)){
+            acount--;
+        }
+        if(!acount){
+            arg_start = i + 1;
+            continue;
+        }
+        if(arg_idx > 0){
+            err = cpp_push_tok(cpp, outtoks, space);
+            if(err) return err;
+        }
+        err = cpp_push_tok(cpp, outtoks, macro_ident);
+        if(err) return err;
+        err = cpp_push_tok(cpp, outtoks, lparen);
+        if(err) return err;
+        for(size_t t = 0; t < acount; t++){
+            err = cpp_push_tok(cpp, outtoks, atoks[t]);
+            if(err) return err;
+        }
+        err = cpp_push_tok(cpp, outtoks, rparen);
+        if(err) return err;
+        arg_start = i + 1;
+        arg_idx++;
+    }
+    return 0;
+}
+
+static
+int
+cpp_builtin_let(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    int err;
+    // arg 0: NAME or NAME(params...)
+    // arg 1: replacement tokens
+    // arg 2: body to expand
+    CPPToken* sig_toks; size_t sig_count;
+    CPPToken* repl_toks; size_t repl_count;
+    CPPToken* body_toks; size_t body_count;
+    cpp_get_argument(args, arg_seps, 0, &sig_toks, &sig_count);
+    cpp_get_argument(args, arg_seps, 1, &repl_toks, &repl_count);
+    cpp_get_argument(args, arg_seps, 2, &body_toks, &body_count);
+    // Parse signature: find macro name, then optional (params)
+    StringView macro_name = {0};
+    SrcLoc name_loc = loc;
+    size_t sig_pos = 0;
+    // Skip leading whitespace
+    while(sig_pos < sig_count && (sig_toks[sig_pos].type == CPP_WHITESPACE || sig_toks[sig_pos].type == CPP_NEWLINE))
+        sig_pos++;
+    if(sig_pos >= sig_count || sig_toks[sig_pos].type != CPP_IDENTIFIER)
+        return cpp_error(cpp, loc, "Expected macro name in __let");
+    macro_name = sig_toks[sig_pos].txt;
+    name_loc = sig_toks[sig_pos].loc;
+    sig_pos++;
+    // Check for function-like: NAME(params...)
+    _Bool is_function_like = 0;
+    Atom param_names[64];
+    size_t nparams = 0;
+    // Skip whitespace between name and potential (
+    while(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_WHITESPACE)
+        sig_pos++;
+    if(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_PUNCTUATOR && sig_toks[sig_pos].punct == '('){
+        is_function_like = 1;
+        sig_pos++; // skip (
+        for(;;){
+            while(sig_pos < sig_count && (sig_toks[sig_pos].type == CPP_WHITESPACE || sig_toks[sig_pos].type == CPP_NEWLINE))
+                sig_pos++;
+            if(sig_pos >= sig_count)
+                return cpp_error(cpp, loc, "Unterminated parameter list in __let");
+            if(sig_toks[sig_pos].type == CPP_PUNCTUATOR && sig_toks[sig_pos].punct == ')')
+                break;
+            if(nparams > 0){
+                if(sig_toks[sig_pos].type != CPP_PUNCTUATOR || sig_toks[sig_pos].punct != ',')
+                    return cpp_error(cpp, sig_toks[sig_pos].loc, "Expected ',' between params in __let");
+                sig_pos++;
+                while(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_WHITESPACE)
+                    sig_pos++;
+            }
+            if(sig_pos >= sig_count || sig_toks[sig_pos].type != CPP_IDENTIFIER)
+                return cpp_error(cpp, loc, "Expected param name in __let");
+            if(nparams >= 64)
+                return cpp_error(cpp, loc, "Too many params in __let (max 64)");
+            Atom a = AT_atomize(cpp->at, sig_toks[sig_pos].txt.text, sig_toks[sig_pos].txt.length);
+            if(!a) return CPP_OOM_ERROR;
+            param_names[nparams++] = a;
+            sig_pos++;
+        }
+    }
+    // Strip whitespace from replacement tokens
+    while(repl_count && (repl_toks[0].type == CPP_WHITESPACE || repl_toks[0].type == CPP_NEWLINE)){
+        repl_toks++; repl_count--;
+    }
+    while(repl_count && (repl_toks[repl_count-1].type == CPP_WHITESPACE || repl_toks[repl_count-1].type == CPP_NEWLINE)){
+        repl_count--;
+    }
+    // Define the temporary macro
+    if(is_function_like){
+        CMacro* m;
+        err = cpp_define_macro(cpp, macro_name, repl_count, nparams, &m);
+        if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
+            return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
+        if(err) return err;
+        m->is_function_like = 1;
+        Atom* params = cpp_cmacro_params(m);
+        for(size_t i = 0; i < nparams; i++)
+            params[i] = param_names[i];
+        // Copy replacement tokens, tagging param_idx
+        CPPToken* repl = cpp_cmacro_replacement(m);
+        for(size_t i = 0; i < repl_count; i++){
+            repl[i] = repl_toks[i];
+            if(repl[i].type == CPP_IDENTIFIER){
+                Atom a = AT_get_atom(cpp->at, repl[i].txt.text, repl[i].txt.length);
+                if(a){
+                    for(size_t p = 0; p < nparams; p++){
+                        if(a == params[p]){
+                            repl[i].param_idx = p + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else {
+        err = cpp_define_obj_macro(cpp, macro_name, repl_toks, repl_count);
+        if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
+            return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
+        if(err) return err;
+    }
+    // Expand the body into a scratch buffer, then reverse onto outtoks
+    // (outtoks is pending, which is LIFO, so we must push in reverse)
+    CPPTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded){ cpp_undef_macro(cpp, macro_name); return CPP_OOM_ERROR; }
+    err = cpp_expand_argument(cpp, body_toks, body_count, expanded);
+    cpp_undef_macro(cpp, macro_name);
+    if(!err){
+        for(size_t i = expanded->count; i-- > 0;){
+            err = cpp_push_tok(cpp, outtoks, expanded->data[i]);
+            if(err) break;
+        }
+    }
+    cpp_release_scratch(cpp, expanded);
+    return err;
+}
+
 static
 int
 cpp_builtin_pragma_once(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks){
