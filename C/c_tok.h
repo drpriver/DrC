@@ -32,6 +32,10 @@ enum CCConstantType TYPED_ENUM(uint32_t){
     CC_FLOAT,
     CC_DOUBLE,
     CC_LONG_DOUBLE,
+    CC_WCHAR,
+    CC_CHAR16,
+    CC_CHAR32,
+    CC_UCHAR,
 };
 TYPEDEF_ENUM(CCConstantType, uint32_t);
 enum CCStringType TYPED_ENUM(uint32_t){
@@ -102,6 +106,7 @@ enum CCKeyword TYPED_ENUM(uint32_t){
     CC_thread_local,
     CC_static_assert,
     CC_typeof_unqual,
+    CC__Countof,
 };
 TYPEDEF_ENUM(CCKeyword, uint32_t);
 
@@ -150,7 +155,7 @@ enum CCPunct TYPED_ENUM(uint32_t){
     CC_star_assign    = '*=',
     CC_slash_assign   = '/=',
     CC_percent_assign = '%=',
-    CC_plus_assign    = '*=',
+    CC_plus_assign    = '+=',
     CC_minus_assign   = '-=',
     CC_lshift_assign  = '<<=',
     CC_rshift_assign  = '>>=',
