@@ -14,76 +14,12 @@
 #include "Drp/file_util.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
+#include "cpp_args.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
-static
-int
-ma_sv_appender(ArgToParse* ap, const void* arg){
-    CPreprocessor* cpp = ap->dest.user_pointer->user_data;
-    Marray(StringView)* dst = ap->dest.pointer;
-    const StringView* sv = arg;
-    int err = ma_push(StringView)(dst, cpp->allocator, *sv);
-    return err;
-}
-
-static
-ArgParseDestination
-cpp_ma_sv_dest(const ArgParseUserDefinedType* t, Marray(StringView)*dst){
-    ArgParseDestination dest = {
-        .type = ARG_USER_DEFINED,
-        .pointer = dst,
-        .user_pointer = t,
-    };
-    return dest;
-}
-static
-int
-cli_macro(ArgToParse* ap, const void* arg){
-    MStringBuilder* sb = ap->dest.user_pointer->user_data;
-    const StringView* sv = arg;
-    const char* eq = memchr(sv->text, '=', sv->length);
-    StringView name = eq?(StringView){eq-sv->text, sv->text}:*sv;
-    if(!name.length)
-        return ARGPARSE_CONVERSION_ERROR;
-    msb_write_literal(sb, "#define ");
-    msb_write_str(sb, name.text, name.length);
-    if(eq){
-        msb_write_char(sb, ' ');
-        msb_write_str(sb, eq+1, sv->text+sv->length-eq-1);
-        msb_write_char(sb, '\n');
-    }
-    else
-        msb_write_literal(sb, " 1\n");
-    return sb->errored?ARGPARSE_INTERNAL_ERROR:0;
-}
-
-static
-ArgParseDestination
-cpp_macro_dest(MStringBuilder* sb){
-    static _Bool init;
-    static ArgParseUserDefinedType t;
-    if(!init){
-        t = (ArgParseUserDefinedType){
-            .type_name = SV("macro_def"),
-            .user_data = sb,
-        };
-        init = 1;
-    }
-    ArgParseDestination dest = {
-        .type = ARG_USER_DEFINED,
-        .pointer = sb,
-        .user_pointer = &t,
-    };
-    return dest;
-}
-
-
-static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
-
 int main(int argc, char** argv, char** envp){
-    MStringBuilder cli_macros = {.allocator=MALLOCATOR};
     Logger* logger = std_logger();
     if(!logger) return 1;
     AtomTable at = {.allocator=MALLOCATOR};
@@ -104,10 +40,6 @@ int main(int argc, char** argv, char** envp){
     };
     err = cpp_define_builtin_macros(&cpp);
     if(err) return err;
-    ArgParseUserDefinedType t = {
-        .type_name = SV("path"),
-        .user_data = &cpp,
-    };
     const char* filename = NULL;
     ArgToParse pos_args[] = {
         {
@@ -117,61 +49,14 @@ int main(int argc, char** argv, char** envp){
             .min_num = 0, .max_num = 1,
         }
     };
+    StringView output = {0};
     ArgToParse kw_args[] = {
         {
-            .name = SV("-I"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.Ipaths),
-            .append_proc = ma_sv_appender,
-            .help = "Extra include paths.",
-            .max_num = 1000,
-            .one_at_a_time = 1,
-            .space_sep_is_optional = 1,
-        },
-        {
-            .name = SV("-isystem"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.isystem_paths),
-            .append_proc = ma_sv_appender,
-            .help = "Extra system include paths.",
-            .max_num = 1000,
-            .one_at_a_time = 1,
-            .space_sep_is_optional = 1,
-        },
-        {
-            .name = SV("-iquote"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.iquote_paths),
-            .append_proc = ma_sv_appender,
-            .help = "Extra quote include paths.",
-            .max_num = 1000,
-            .one_at_a_time = 1,
-            .space_sep_is_optional = 1,
-        },
-        {
-            .name = SV("-idirafter"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.idirafter_paths),
-            .append_proc = ma_sv_appender,
-            .help = "Extra dirafter include paths.",
-            .max_num = 1000,
-            .one_at_a_time = 1,
-            .space_sep_is_optional = 1,
-        },
-        {
-            .name = SV("-F"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.framework_paths),
-            .append_proc = ma_sv_appender,
-            .help = "Extra framework paths.",
-            .max_num = 1000,
-            .one_at_a_time = 1,
-            .space_sep_is_optional = 1,
-        },
-        {
-            .name = SV("-D"),
-            .dest = cpp_macro_dest(&cli_macros),
-            .append_proc = cli_macro,
-            .help = "Predefined macros.",
-            .max_num=1000,
-            .one_at_a_time=1,
-            .space_sep_is_optional=1,
-        },
+            .name = SV("-o"),
+            .dest = ARGDEST(&output),
+            .help = "Where to output the preprocessed file to",
+            .min_num = 0, .max_num = 1,
+        }
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -198,6 +83,7 @@ int main(int argc, char** argv, char** envp){
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
+        .keyword.next = cpp_kwargs(&cpp),
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal(),
@@ -243,19 +129,8 @@ int main(int argc, char** argv, char** envp){
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
     }
-    if(cli_macros.cursor){
-        fc_write_path(fc, "(command line)", sizeof "(command line)" -1);
-        err = fc_cache_file(fc, msb_borrow_sv(&cli_macros));
-        if(err) return err;
-        err = cpp_include_file_via_file_cache(&cpp, SV("(command line)"));
-        if(err) return err;
-        CPPToken tok;
-        for(;;){
-            err = cpp_next_pp_token(&cpp, &tok);
-            if(err) return err;
-            if(tok.type == CPP_EOF) break;
-        }
-    }
+    err = cpp_cli_defines(&cpp);
+    if(err) return err;
     fc->may_read_real_files = 1;
     err = cpp_include_file_via_file_cache(&cpp, (StringView){strlen(filename), filename});
     if(err){
@@ -272,7 +147,15 @@ int main(int argc, char** argv, char** envp){
             msb_write_char(&sb, ' ');
         else msb_write_str(&sb, tok.txt.text, tok.txt.length);
     }
-    log_log(logger, LOG_PRINT, sb.data, sb.cursor);
+    if(output.length){
+        FileError fe = write_file(output.text, sb.data, sb.cursor);
+        if(fe.errored){
+            log_error(logger, "Failed to write to '%s'", output.text);
+            return fe.errored;
+        }
+    }
+    else
+        log_log(logger, LOG_PRINT, sb.data, sb.cursor);
     msb_destroy(&sb);
     return 0;
 }

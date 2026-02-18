@@ -221,6 +221,8 @@ static
 int
 cpp_next_token(CPreprocessor* cpp, CPPToken* tok);
 
+static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
+
 // Includes a file without going through the include path machinery.
 static
 int
