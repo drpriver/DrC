@@ -111,11 +111,11 @@ struct CPPFrame {
 typedef struct CppPoundIf CppPoundIf;
 struct CppPoundIf {
     SrcLoc start;
+    Atom _Nullable guard_macro; // non-NULL if this is a potential include guard
     _Bool true_taken: 1;
     _Bool seen_else: 1;
     _Bool is_active: 1;
     _Bool is_dummy: 1;
-    // like 60 padding bits, wowee
 };
 
 typedef struct CPragma CPragma;
@@ -193,6 +193,8 @@ struct CPreprocessor {
     RngState rng;
     AtomMap(CPPTokens) kv_store; // for __set/__get
     Marray(uint32_t) pragma_once_files; // sorted list of file_ids with #pragma once
+    Marray(uint32_t) include_guard_files;  // sorted by file_id
+    Marray(Atom)     include_guard_macros; // parallel to above
 };
 
 static

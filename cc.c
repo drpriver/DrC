@@ -14,6 +14,8 @@
 #include "Drp/file_util.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
+#include "C/c_tok.h"
+#include "C/cc_lexer.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -95,18 +97,20 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    CPreprocessor cpp = {
-        .allocator = MALLOCATOR,
-        .fc = fc,
-        .at = &at,
-        .logger = logger,
-        .env = &env,
+    CcLexer lexer = {
+        .cpp = {
+            .allocator = MALLOCATOR,
+            .fc = fc,
+            .at = &at,
+            .logger = logger,
+            .env = &env,
+        },
     };
-    err = cpp_define_builtin_macros(&cpp);
+    err = cpp_define_builtin_macros(&lexer.cpp);
     if(err) return err;
     ArgParseUserDefinedType t = {
         .type_name = SV("path"),
-        .user_data = &cpp,
+        .user_data = &lexer.cpp,
     };
     const char* filename = NULL;
     ArgToParse pos_args[] = {
@@ -120,7 +124,7 @@ int main(int argc, char** argv, char** envp){
     ArgToParse kw_args[] = {
         {
             .name = SV("-I"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.Ipaths),
+            .dest = cpp_ma_sv_dest(&t, &lexer.cpp.Ipaths),
             .append_proc = ma_sv_appender,
             .help = "Extra include paths.",
             .max_num = 1000,
@@ -129,7 +133,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-isystem"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.isystem_paths),
+            .dest = cpp_ma_sv_dest(&t, &lexer.cpp.isystem_paths),
             .append_proc = ma_sv_appender,
             .help = "Extra system include paths.",
             .max_num = 1000,
@@ -138,7 +142,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-iquote"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.iquote_paths),
+            .dest = cpp_ma_sv_dest(&t, &lexer.cpp.iquote_paths),
             .append_proc = ma_sv_appender,
             .help = "Extra quote include paths.",
             .max_num = 1000,
@@ -147,7 +151,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-idirafter"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.idirafter_paths),
+            .dest = cpp_ma_sv_dest(&t, &lexer.cpp.idirafter_paths),
             .append_proc = ma_sv_appender,
             .help = "Extra dirafter include paths.",
             .max_num = 1000,
@@ -156,7 +160,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-F"),
-            .dest = cpp_ma_sv_dest(&t, &cpp.framework_paths),
+            .dest = cpp_ma_sv_dest(&t, &lexer.cpp.framework_paths),
             .append_proc = ma_sv_appender,
             .help = "Extra framework paths.",
             .max_num = 1000,
@@ -192,8 +196,8 @@ int main(int argc, char** argv, char** envp){
         },
     };
     ArgParser parser = {
-        .name = argv[0]?argv[0]:"cpp",
-        .description = "cpp",
+        .name = argv[0]?argv[0]:"cc",
+        .description = "cc",
         .positional.args = pos_args,
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
@@ -247,33 +251,28 @@ int main(int argc, char** argv, char** envp){
         fc_write_path(fc, "(command line)", sizeof "(command line)" -1);
         err = fc_cache_file(fc, msb_borrow_sv(&cli_macros));
         if(err) return err;
-        err = cpp_include_file_via_file_cache(&cpp, SV("(command line)"));
+        err = cpp_include_file_via_file_cache(&lexer.cpp, SV("(command line)"));
         if(err) return err;
         CPPToken tok;
         for(;;){
-            err = cpp_next_pp_token(&cpp, &tok);
+            err = cpp_next_pp_token(&lexer.cpp, &tok);
             if(err) return err;
             if(tok.type == CPP_EOF) break;
         }
     }
     fc->may_read_real_files = 1;
-    err = cpp_include_file_via_file_cache(&cpp, (StringView){strlen(filename), filename});
+    err = cpp_include_file_via_file_cache(&lexer.cpp, (StringView){strlen(filename), filename});
     if(err){
         log_error(logger, "Unable to read '%s'", filename);
         return err;
     }
-    CPPToken tok;
-    MStringBuilder sb = {.allocator = MALLOCATOR};
+    CCToken tok;
     for(;;){
-        err = cpp_next_pp_token(&cpp, &tok);
+        err = cc_lex_next_token(&lexer, &tok);
+        if(err) continue;
         if(err) return err;
-        if(tok.type == CPP_EOF) break;
-        if(tok.type == CPP_WHITESPACE)
-            msb_write_char(&sb, ' ');
-        else msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        if(tok.type == CC_EOF) break;
     }
-    log_log(logger, LOG_PRINT, sb.data, sb.cursor);
-    msb_destroy(&sb);
     return 0;
 }
 
@@ -284,3 +283,4 @@ int main(int argc, char** argv, char** envp){
 #include "Drp/Allocators/allocator.c"
 #include "Drp/file_cache.c"
 #include "C/cpp_preprocessor.c"
+#include "C/cc_lexer.c"

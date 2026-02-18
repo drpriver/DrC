@@ -1796,6 +1796,27 @@ TestFunction(test_include){
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("_Pragma(\"once\")\n#define VAL ok\n"),
             {0}, SV("\n\n\n\nok")},
+        // Include guard optimization tests
+        {"include guard prevents double inclusion", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
+            {0}, SV("\n\n\n\n\nok")},
+        {"include guard with trailing comment", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif // HDR_H\n"),
+            {0}, SV("\n\n\n\n\nok")},
+        {"include guard with #else invalidates guard", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#else\n#endif\n"),
+            {0}, SV("\n\n\n\n\n\n\n\n\n\nok")},
+        {"content after #endif invalidates guard", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\nint x;\n"),
+            {0}, SV("\n\n\n\nint x;\n\n\n\n\nint x;\nok")},
+        {"undef guard allows re-include", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#undef HDR_H\n#undef VAL\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
+            {0}, SV("\n\n\n\n\n\n\n\n\n\nok")},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;

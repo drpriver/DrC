@@ -10,13 +10,17 @@
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
-    BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", ctx->target.os);
     BuildTarget* all = phony_target(ctx, "all");
-    add_deps(ctx, all, cpp);
+
+    BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", ctx->target.os);
+    add_dep(ctx, all, cpp);
+
+    BuildTarget* cc = exe_target(ctx, "cc", "cc.c", ctx->target.os);
+    add_dep(ctx, all, cc);
 
     BuildTarget* tests = phony_target(ctx, "tests");
     BuildTarget* test = phony_target(ctx, "test");
-    add_deps(ctx, test, tests);
+    add_dep(ctx, test, tests);
     {
         static const struct {
             const char* file;
@@ -24,6 +28,7 @@ int main(int argc, char** argv, char** envp){
             const char* cmd_name;
         } test_files[] = {
             {"C/cpp_test.c", "cpp_test", "run_cpp_test"},
+            {"C/cc_test.c", "cc_test", "run_cc_test"},
         };
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
@@ -55,7 +60,7 @@ int main(int argc, char** argv, char** envp){
     }
     {
         BuildTarget* debug = cmd_target(ctx, "debug");
-        add_deps(ctx, debug, cpp);
+        add_dep(ctx, debug, cpp);
         debug->should_exec = 1;
         debug->is_phony = 1;
         cmd_prog(&debug->cmd, LS("lldb"));
@@ -74,8 +79,8 @@ int main(int argc, char** argv, char** envp){
         tags->is_phony = 1;
         cmd_prog(&tags->cmd, BUILD_OS == OS_WINDOWS?LS("py") : LS("python3"));
         cmd_arg(&tags->cmd, LS("Tools/ct.py"));
-        BuildTarget* cc = get_target(ctx, "compile_commands.json");
-        add_dep(ctx, tags, cc);
+        BuildTarget* compile_commands_json = get_target(ctx, "compile_commands.json");
+        add_dep(ctx, tags, compile_commands_json);
     }
     return execute_targets(ctx);
 }

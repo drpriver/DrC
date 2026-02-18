@@ -45,7 +45,7 @@ sv_equals2(StringView a, const char* txt, size_t len){
 }
 
 static inline
-_Bool 
+_Bool
 sv_iequals(StringView a, StringView b){
     if(a.length != b.length) return 0;
     size_t length = a.length;

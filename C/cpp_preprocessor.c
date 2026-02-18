@@ -39,12 +39,12 @@ static int cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CPPT
 enum {
     CPP_NO_ERROR = 0,
     CPP_OOM_ERROR,
-    CPP_MACRO_ALREADY_EXISTS_ERROR,
-    CPP_REDEFINING_BUILTIN_MACRO_ERROR,
     CPP_SYNTAX_ERROR,
     CPP_UNREACHABLE_ERROR,
     CPP_UNIMPLEMENTED_ERROR,
     CPP_FILE_NOT_FOUND_ERROR,
+    CPP_MACRO_ALREADY_EXISTS_ERROR,
+    CPP_REDEFINING_BUILTIN_MACRO_ERROR,
 };
 static SrcLocExp*_Nullable cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
@@ -217,6 +217,90 @@ cpp_add_pragma_once(CPreprocessor* cpp, uint32_t file_id){
     return 0;
 }
 
+// Check if the remaining bytes in a frame (from cursor to end) are only
+// whitespace, newlines, and comments. Returns 1 if so, 0 otherwise.
+static
+_Bool
+cpp_frame_only_whitespace_left(CPPFrame* f){
+    const char* p = f->txt.text + f->cursor;
+    const char* end = f->txt.text + f->txt.length;
+    while(p < end){
+        char c = *p;
+        if(c == ' ' || c == '\t' || c == '\n' || c == '\r'){
+            p++;
+            continue;
+        }
+        if(c == '/' && p + 1 < end){
+            if(p[1] == '/'){
+                // line comment - skip to end of line
+                p += 2;
+                while(p < end && *p != '\n') p++;
+                continue;
+            }
+            if(p[1] == '*'){
+                // block comment - skip to */
+                p += 2;
+                while(p < end){
+                    if(*p == '*' && p + 1 < end && p[1] == '/'){
+                        p += 2;
+                        break;
+                    }
+                    p++;
+                }
+                continue;
+            }
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static
+Atom _Nullable
+cpp_get_include_guard(CPreprocessor* cpp, uint32_t file_id){
+    size_t lo = 0, hi = cpp->include_guard_files.count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if(cpp->include_guard_files.data[mid] < file_id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if(lo < cpp->include_guard_files.count && cpp->include_guard_files.data[lo] == file_id)
+        return cpp->include_guard_macros.data[lo];
+    return NULL;
+}
+
+static
+int
+cpp_add_include_guard(CPreprocessor* cpp, uint32_t file_id, Atom guard){
+    size_t lo = 0, hi = cpp->include_guard_files.count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if(cpp->include_guard_files.data[mid] < file_id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if(lo < cpp->include_guard_files.count && cpp->include_guard_files.data[lo] == file_id)
+        return 0; // already present
+    int err = ma_push(uint32_t)(&cpp->include_guard_files, cpp->allocator, file_id);
+    if(err) return CPP_OOM_ERROR;
+    err = ma_push(Atom)(&cpp->include_guard_macros, cpp->allocator, guard);
+    if(err){
+        cpp->include_guard_files.count--;
+        return CPP_OOM_ERROR;
+    }
+    size_t tail = cpp->include_guard_files.count - 1 - lo;
+    if(tail){
+        memmove(&cpp->include_guard_files.data[lo+1], &cpp->include_guard_files.data[lo], tail * sizeof *cpp->include_guard_files.data);
+        memmove(&cpp->include_guard_macros.data[lo+1], &cpp->include_guard_macros.data[lo], tail * sizeof *cpp->include_guard_macros.data);
+    }
+    cpp->include_guard_files.data[lo] = file_id;
+    cpp->include_guard_macros.data[lo] = guard;
+    return 0;
+}
+
 // Find an include file. Returns 0 on success, with the resolved path left
 // in fc->path_builder (caller must call fc_read_file or msb_reset).
 // out_pos is set to the position in the include path arrays for include_next.
@@ -285,14 +369,117 @@ cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next,
 }
 
 static
+StringView
+cpp_str_prefix(StringView sv){
+    const char* q = memchr(sv.text, '"', sv.length);
+    if(!q) return SV("");
+    return (StringView){q-sv.text, sv.text};
+}
+
+static
+int
+cpp_merge_str_prefix(StringView sv, StringView* prefix){
+    StringView p = cpp_str_prefix(sv);
+    if(!p.length) return 0;
+    if(!prefix->length){
+        *prefix = p;
+        return 0;
+    }
+    if(sv_equals(p, *prefix))
+        return 0;
+    return 1;
+}
+
+static
 int
 cpp_next_token(CPreprocessor* cpp, CPPToken* tok){
-    // phase 5
+    // phase 6, part of 7 (elide phase 5 of character set conversion)
     for(;;){
         int err = cpp_next_pp_token(cpp, tok);
         if(err) return err;
-        if(tok->type == CPP_WHITESPACE || tok->type == CPP_NEWLINE)
-            continue;
+        switch(tok->type){
+            // whitespace no longer significant, remove
+            case CPP_WHITESPACE:
+            case CPP_NEWLINE:
+                continue;
+            case CPP_PLACEMARKER:
+            case CPP_REENABLE:
+            case CPP_HEADER_NAME:
+                return CPP_UNREACHABLE_ERROR;
+            case CPP_PUNCTUATOR:
+            case CPP_EOF:
+            case CPP_OTHER:
+            case CPP_NUMBER:
+            case CPP_IDENTIFIER:
+                return 0;
+            case CPP_CHAR: // TODO: merge adjacent char literals? is that a thing?
+                return 0;
+            case CPP_STRING:{ // concatenate adjacent strings
+                CPPToken next;
+                do {
+                    err = cpp_next_pp_token(cpp, &next);
+                    if(err) return err;
+                }while(next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE);
+                if(next.type != CPP_STRING){
+                    err = cpp_push_tok(cpp, &cpp->pending, next);
+                    if(err) return err;
+                    return 0;
+                }
+                CPPTokens* strings = cpp_get_scratch(cpp);
+                if(!strings) return CPP_OOM_ERROR;
+                err = cpp_push_tok(cpp, strings, *tok);
+                StringView prefix = cpp_str_prefix(tok->txt);
+                if(err) goto string_finally;
+                err = cpp_merge_str_prefix(next.txt, &prefix);
+                if(err){
+                    err = cpp_error(cpp, next.loc, "Invalid string concatenation (different prefixes)");
+                    goto string_finally;
+                }
+                err = cpp_push_tok(cpp, strings, next);
+                if(err) goto string_finally;
+                for(;;){
+                    do {
+                        err = cpp_next_pp_token(cpp, &next);
+                        if(err) goto string_finally;
+                    }while(next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE);
+                    if(next.type != CPP_STRING){
+                        err = cpp_push_tok(cpp, &cpp->pending, next);
+                        if(err) goto string_finally;
+                        break;
+                    }
+                    err = cpp_merge_str_prefix(next.txt, &prefix);
+                    if(err){
+                        err = cpp_error(cpp, next.loc, "Invalid string concatenation (different prefixes)");
+                        goto string_finally;
+                    }
+                    err = cpp_push_tok(cpp, strings, next);
+                    if(err) goto string_finally;
+                }
+                MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+                msb_write_str(&sb, prefix.text, prefix.length);
+                msb_write_char(&sb, '"');
+                for(size_t i = 0; i < strings->count; i++){
+                    StringView s = strings->data[i].txt;
+                    while(s.text[0] != '"'){
+                        s.text++;
+                        s.length--;
+                    }
+                    s.text++;
+                    s.length--;
+                    s.length--;
+                    if(s.length) msb_write_str(&sb, s.text, s.length);
+                }
+                msb_write_char(&sb, '"');
+                if(sb.errored){
+                    msb_destroy(&sb);
+                    goto string_finally;
+                }
+                tok->txt = msb_detach_sv(&sb);
+                string_finally:
+                cpp_release_scratch(cpp, strings);
+                return err;
+            }
+        }
         return 0;
     }
 }
@@ -1437,6 +1624,7 @@ cpp_handle_directive(CPreprocessor* cpp){
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elif outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elif after #else");
         // just scan to eol for now
@@ -1453,6 +1641,7 @@ cpp_handle_directive(CPreprocessor* cpp){
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#else outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "another #else");
         for(;;){
@@ -1474,6 +1663,7 @@ cpp_handle_directive(CPreprocessor* cpp){
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elifdef outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifdef after #else");
         err = cpp_next_raw_token(cpp, &tok);
@@ -1500,6 +1690,7 @@ cpp_handle_directive(CPreprocessor* cpp){
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elifndef outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifndef after #else");
         err = cpp_next_raw_token(cpp, &tok);
@@ -1536,6 +1727,16 @@ cpp_handle_directive(CPreprocessor* cpp){
                 break;
             }
             cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
+        }
+        {
+            CppPoundIf* s = &ma_tail(cpp->if_stack);
+            if(s->guard_macro && cpp->frames.count){
+                CPPFrame* f = &ma_tail(cpp->frames);
+                if(cpp_frame_only_whitespace_left(f)){
+                    err = cpp_add_include_guard(cpp, f->file_id, (Atom)s->guard_macro);
+                    if(err) return err;
+                }
+            }
         }
         cpp->if_stack.count--;
     }
@@ -1768,6 +1969,15 @@ cpp_handle_directive(CPreprocessor* cpp){
             msb_destroy(&header_sb);
             return 0;
         }
+        // Check include guard - skip if guard macro is still defined
+        {
+            Atom guard = cpp_get_include_guard(cpp, file_id);
+            if(guard && AM_get(&cpp->macros, guard)){
+                // cpp_info(cpp, (SrcLoc){0}, "Skipping include: \"%s\"", guard->data);
+                msb_destroy(&header_sb);
+                return 0;
+            }
+        }
         CPPFrame frame = {
             .file_id = file_id,
             .txt = file_txt,
@@ -1778,6 +1988,62 @@ cpp_handle_directive(CPreprocessor* cpp){
         err = ma_push(CPPFrame)(&cpp->frames, cpp->allocator, frame);
         msb_destroy(&header_sb);
         if(err) return CPP_OOM_ERROR;
+        // Scan for #ifndef IDENTIFIER
+        {
+            CPPTokens* scratch = cpp_get_scratch(cpp);
+            if(!scratch) return CPP_OOM_ERROR;
+            do {
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) goto scan_finally;
+                err = cpp_push_tok(cpp, scratch, tok);
+                if(err) goto scan_finally;
+            }while(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE);
+            if(tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
+                do {
+                    err = cpp_next_raw_token(cpp, &tok);
+                    if(err) goto scan_finally;
+                    err = cpp_push_tok(cpp, scratch, tok);
+                    if(err) goto scan_finally;
+                }while(tok.type == CPP_WHITESPACE);
+                if(tok.type == CPP_IDENTIFIER && sv_equals(tok.txt, SV("ifndef"))){
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) goto scan_finally;
+                        err = cpp_push_tok(cpp, scratch, tok);
+                        if(err) goto scan_finally;
+                    }while(tok.type == CPP_WHITESPACE);
+                    if(tok.type == CPP_IDENTIFIER){
+                        if(ma_tail(cpp->frames).file_id != frame.file_id)
+                            goto scan_finally;
+                        cpp_release_scratch(cpp, scratch);
+                        Atom guard = AT_atomize(cpp->at, tok.txt.text, tok.txt.length);
+                        if(!guard) return CPP_OOM_ERROR;
+                        CppPoundIf s = {
+                            .start = tok.loc,
+                            .guard_macro = guard,
+                        };
+                        s.true_taken = !cpp_isdef(cpp, tok.txt);
+                        s.is_active = s.true_taken;
+                        err = cpp_push_if(cpp, s);
+                        if(err) return CPP_OOM_ERROR;
+                        do {
+                            err = cpp_next_raw_token(cpp, &tok);
+                            if(err) return err;
+                        }
+                        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+                        // push it back so dispatch loop sees newline
+                        return cpp_push_tok(cpp, &cpp->pending, tok);
+                    }
+                }
+            }
+            while(scratch->count){
+                err = cpp_push_tok(cpp, &cpp->pending, ma_pop_(*scratch));
+                if(err) goto scan_finally;
+            }
+            scan_finally:;
+            if(scratch) cpp_release_scratch(cpp, scratch);
+            return err;
+        }
     }
     else {
         cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
@@ -1836,6 +2102,16 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
             }
             cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
         }
+        {
+            CppPoundIf* s = &ma_tail(cpp->if_stack);
+            if(s->guard_macro && cpp->frames.count){
+                CPPFrame* f = &ma_tail(cpp->frames);
+                if(cpp_frame_only_whitespace_left(f)){
+                    err = cpp_add_include_guard(cpp, f->file_id, (Atom)s->guard_macro);
+                    if(err) return err;
+                }
+            }
+        }
         cpp->if_stack.count--;
         return 0;
     }
@@ -1852,6 +2128,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
     }
     if(sv_equals(tok.txt, SV("elif"))){
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elif after #else");
         CPPTokens *toks = cpp_get_scratch(cpp);
@@ -1880,6 +2157,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
     }
     else if(sv_equals(tok.txt, SV("else"))){
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "another #else");
         for(;;){
@@ -1900,6 +2178,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
     }
     else if(sv_equals(tok.txt, SV("elifdef"))){
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifdef after #else");
         err = cpp_next_raw_token(cpp, &tok);
@@ -1930,6 +2209,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
     }
     else if(sv_equals(tok.txt, SV("elifndef"))){
         CppPoundIf* s = &ma_tail(cpp->if_stack);
+        s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifndef after #else");
         err = cpp_next_raw_token(cpp, &tok);
