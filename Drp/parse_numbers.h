@@ -264,6 +264,13 @@ struct Uint64Result
 parse_binary(const char* str, size_t length);
 
 //
+// Parses octal notation, such as '0o755' or '0O755'.
+static inline
+warn_unused
+struct Uint64Result
+parse_octal(const char* str, size_t length);
+
+//
 // Parses an unsigned integer, in whatever format is comfortable for a human.
 // Accepts 0x hexes, 0b binary, plain decimals, and also # hexes.
 static inline
@@ -646,6 +653,7 @@ parse_hex(const char* str, size_t length){
 }
 
 static inline warn_unused struct Uint64Result parse_binary_inner(const char*, size_t);
+static inline warn_unused struct Uint64Result parse_octal_inner(const char*, size_t);
 
 static inline
 warn_unused
@@ -695,6 +703,75 @@ parse_binary_inner(const char* str, size_t length){
     return result;
 }
 
+
+static inline
+warn_unused
+struct Uint64Result
+parse_octal(const char* str, size_t length){
+    struct Uint64Result result = {0};
+    if(length < 3){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
+    if(str[0] != '0'){
+        result.errored = PARSENUMBER_INVALID_CHARACTER;
+        return result;
+    }
+    if(str[1] != 'o' && str[1] != 'O'){
+        result.errored = PARSENUMBER_INVALID_CHARACTER;
+        return result;
+    }
+    return parse_octal_inner(str+2, length-2);
+}
+
+static inline
+warn_unused
+struct Uint64Result
+parse_octal_inner(const char* str, size_t length){
+    struct Uint64Result result = {0};
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
+    // UINT64_MAX is 1777777777777777777777 in octal (22 digits)
+    if(length > 22){
+        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
+        return result;
+    }
+    int bad = 0;
+    uint64_t value = 0;
+    for(size_t i = 0; i < length-1; i++){
+        unsigned cval = (unsigned char)str[i];
+        cval -= '0';
+        if(cval > 7u)
+            bad = 1;
+        value <<= 3;
+        value |= cval & 7u;
+    }
+    if(bad){
+        result.errored = PARSENUMBER_INVALID_CHARACTER;
+        return result;
+    }
+    // Handle the last digit with overflow checking.
+    {
+        unsigned cval = (unsigned char)str[length-1];
+        cval -= '0';
+        if(cval > 7u){
+            result.errored = PARSENUMBER_INVALID_CHARACTER;
+            return result;
+        }
+        if(__builtin_mul_overflow(value, (uint64_t)8, &value)){
+            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
+            return result;
+        }
+        if(__builtin_add_overflow(value, (uint64_t)cval, &value)){
+            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
+            return result;
+        }
+    }
+    result.result = value;
+    return result;
+}
 
 static inline
 warn_unused

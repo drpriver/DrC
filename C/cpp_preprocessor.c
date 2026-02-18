@@ -31,7 +31,7 @@ static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
 static void cpp_release_scratch(CPreprocessor*, CPPTokens*);
 static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
 static int cpp_substitute_and_paste(CPreprocessor*, const CPPToken*, size_t, const CMacro*, const CPPTokens*, const Marray(size_t)*, CPPTokens*_Nullable*_Null_unspecified, CPPTokens*, _Bool, SrcLocExp*);
-static int cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out);
+static int cpp_expand_argument(CPreprocessor *cpp, const CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out);
 LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CPreprocessor*, const char* fmt, ...);
 static int cpp_eval_tokens(CPreprocessor*, CPPToken*_Null_unspecified toks, size_t count, int64_t* value);
 // str should exclude outer quotes
@@ -94,6 +94,7 @@ _Bool
 cpp_isdef(CPreprocessor* cpp, StringView name){
     if(cpp_has_macro(cpp, name)) return 1;
     if(sv_equals(name, SV("__has_include"))) return 1;
+    if(sv_equals(name, SV("__has_include_next"))) return 1;
     if(sv_equals(name, SV("__has_embed"))) return 1;
     if(sv_equals(name, SV("__has_c_attribute"))) return 1;
     return 0;
@@ -175,6 +176,112 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name){
         }
     }
     return 0;
+}
+
+static
+_Bool
+cpp_is_pragma_once(CPreprocessor* cpp, uint32_t file_id){
+    // Binary search in sorted list
+    size_t lo = 0, hi = cpp->pragma_once_files.count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if(cpp->pragma_once_files.data[mid] < file_id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < cpp->pragma_once_files.count && cpp->pragma_once_files.data[lo] == file_id;
+}
+
+static
+int
+cpp_add_pragma_once(CPreprocessor* cpp, uint32_t file_id){
+    // Insert into sorted position
+    size_t lo = 0, hi = cpp->pragma_once_files.count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if(cpp->pragma_once_files.data[mid] < file_id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if(lo < cpp->pragma_once_files.count && cpp->pragma_once_files.data[lo] == file_id)
+        return 0; // already present
+    int err = ma_push(uint32_t)(&cpp->pragma_once_files, cpp->allocator, file_id);
+    if(err) return CPP_OOM_ERROR;
+    // Shift elements to maintain sorted order
+    size_t tail = cpp->pragma_once_files.count - 1 - lo;
+    if(tail)
+        memmove(&cpp->pragma_once_files.data[lo+1], &cpp->pragma_once_files.data[lo], tail * sizeof *cpp->pragma_once_files.data);
+    cpp->pragma_once_files.data[lo] = file_id;
+    return 0;
+}
+
+// Find an include file. Returns 0 on success, with the resolved path left
+// in fc->path_builder (caller must call fc_read_file or msb_reset).
+// out_pos is set to the position in the include path arrays for include_next.
+static
+int
+cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next,
+                 StringView header_name, IncludePosition* out_pos){
+    MStringBuilder* sb = fc_path_builder(cpp->fc);
+    // For quoted includes (not include_next), first search the current file's directory
+    if(quote && !is_next){
+        CPPFrame* frame = &ma_tail(cpp->frames);
+        if(frame->file_id < cpp->fc->map.count){
+            LongString file_path = cpp->fc->map.data[frame->file_id].path;
+            StringView dir = path_dirname(LS_to_SV(file_path), 0);
+            msb_reset(sb);
+            if(dir.length){
+                msb_write_str(sb, dir.text, dir.length);
+                if(dir.text[dir.length-1] != '/')
+                    msb_write_char(sb, '/');
+            }
+            msb_write_str(sb, header_name.text, header_name.length);
+            if(fc_is_file(cpp->fc)){
+                // fc_is_file consumed the path, rebuild it
+                if(dir.length){
+                    msb_write_str(sb, dir.text, dir.length);
+                    if(dir.text[dir.length-1] != '/')
+                        msb_write_char(sb, '/');
+                }
+                msb_write_str(sb, header_name.text, header_name.length);
+                *out_pos = (IncludePosition){0, 0};
+                return 0;
+            }
+        }
+    }
+    // Search include path arrays
+    size_t start_array = quote ? 0 : 1;
+    size_t start_idx = 0;
+    if(is_next){
+        CPPFrame* frame = &ma_tail(cpp->frames);
+        start_array = frame->include_position.array;
+        start_idx = frame->include_position.idx + 1;
+    }
+    for(size_t i = start_array; i < arrlen(cpp->include_paths); i++){
+        Marray(StringView)* dirs = &cpp->include_paths[i];
+        size_t j_start = (i == start_array && is_next) ? start_idx : 0;
+        for(size_t j = j_start; j < dirs->count; j++){
+            StringView d = dirs->data[j];
+            msb_reset(sb);
+            if(!d.length) continue;
+            msb_write_str(sb, d.text, d.length);
+            if(msb_peek(sb) != '/')
+                msb_write_char(sb, '/');
+            msb_write_str(sb, header_name.text, header_name.length);
+            if(fc_is_file(cpp->fc)){
+                // fc_is_file consumed the path, rebuild it
+                msb_write_str(sb, d.text, d.length);
+                if(d.text[d.length-1] != '/')
+                    msb_write_char(sb, '/');
+                msb_write_str(sb, header_name.text, header_name.length);
+                *out_pos = (IncludePosition){i, j};
+                return 0;
+            }
+        }
+    }
+    return CPP_FILE_NOT_FOUND_ERROR;
 }
 
 static
@@ -1075,6 +1182,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 goto finish_func_macro;
             }
             if(err) return err;
+            m->def_loc = tok.loc;
             m->is_variadic = variadic;
             m->is_function_like = 1;
             Atom* params = cpp_cmacro_params(m);
@@ -1204,6 +1312,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 err = 0;
             }
             if(err) return err;
+            ((CMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
             cpp_release_scratch(cpp, repl);
             return 0;
         }
@@ -1263,7 +1372,7 @@ cpp_handle_directive(CPreprocessor* cpp){
         err = cpp_eval_tokens(cpp, toks->data, toks->count, &value);
         cpp_release_scratch(cpp, toks);
         if(err) return err;
-        s.true_taken = !!value; // TODO: eval
+        s.true_taken = !!value;
         s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
@@ -1429,6 +1538,246 @@ cpp_handle_directive(CPreprocessor* cpp){
             cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
         }
         cpp->if_stack.count--;
+    }
+    else if(sv_equals(tok.txt, SV("error")) || sv_equals(tok.txt, SV("warning"))){
+        _Bool is_error = tok.txt.text[0] == 'e';
+        SrcLoc directive_loc = tok.loc;
+        // Collect the rest of the line as the message text
+        MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+        _Bool leading = 1;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err){ msb_destroy(&sb); return err; }
+            if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err){ msb_destroy(&sb); return err; }
+                break;
+            }
+            if(leading && tok.type == CPP_WHITESPACE)
+                continue;
+            leading = 0;
+            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        }
+        StringView msg = msb_borrow_sv(&sb);
+        if(is_error){
+            int e = cpp_error(cpp, directive_loc, "#error %.*s", sv_p(msg));
+            msb_destroy(&sb);
+            return e;
+        }
+        cpp_warn(cpp, directive_loc, "#warning %.*s", sv_p(msg));
+        msb_destroy(&sb);
+    }
+    else if(sv_equals(tok.txt, SV("pragma"))){
+        SrcLoc pragma_loc = tok.loc;
+        // Skip whitespace
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        } while(tok.type == CPP_WHITESPACE);
+        if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+            // bare #pragma - just ignore
+            return cpp_push_tok(cpp, &cpp->pending, tok);
+        }
+        if(tok.type != CPP_IDENTIFIER){
+            // skip rest of line
+            do {
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) return err;
+            } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+            return cpp_push_tok(cpp, &cpp->pending, tok);
+        }
+        // Look up registered pragma
+        Atom prag_name = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+        CPragma* prag = prag_name ? AM_get(&cpp->pragmas, prag_name) : NULL;
+        if(!prag){
+            // Unknown pragma - skip rest of line
+            do {
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) return err;
+            } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+            return cpp_push_tok(cpp, &cpp->pending, tok);
+        }
+        // Collect remaining tokens on the line for the pragma handler
+        CPPTokens* prag_toks = cpp_get_scratch(cpp);
+        if(!prag_toks) return CPP_OOM_ERROR;
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+            if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+                break;
+            }
+            if(tok.type == CPP_WHITESPACE && !prag_toks->count)
+                continue; // skip leading whitespace
+            err = cpp_push_tok(cpp, prag_toks, tok);
+            if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+        }
+        // Strip trailing whitespace
+        while(prag_toks->count && ma_tail(*prag_toks).type == CPP_WHITESPACE)
+            prag_toks->count--;
+        err = prag->fn(prag->ctx, cpp, pragma_loc, prag_toks->data, prag_toks->count);
+        cpp_release_scratch(cpp, prag_toks);
+        if(err) return err;
+    }
+    else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next"))){
+        _Bool is_next = tok.txt.length > 7 && tok.txt.text[7] == '_';
+        SrcLoc directive_loc = tok.loc;
+        // Skip whitespace after directive name
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        } while(tok.type == CPP_WHITESPACE);
+        _Bool quote = 0;
+        StringView header_name = {0};
+        MStringBuilder header_sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+        if(tok.type == CPP_STRING){
+            // "header.h" form - strip quotes
+            quote = 1;
+            header_name = (StringView){tok.txt.length - 2, tok.txt.text + 1};
+            // Consume remaining tokens on the #include line
+            for(;;){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err){ msb_destroy(&header_sb); return err; }
+                if(tok.type == CPP_WHITESPACE) continue;
+                if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                    err = cpp_push_tok(cpp, &cpp->pending, tok);
+                    if(err){ msb_destroy(&header_sb); return err; }
+                    break;
+                }
+                cpp_warn(cpp, tok.loc, "Trailing tokens after #include");
+            }
+        }
+        else if(tok.type == CPP_PUNCTUATOR && tok.punct == '<'){
+            // <header.h> form - collect raw tokens until >
+            quote = 0;
+            for(;;){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err){ msb_destroy(&header_sb); return err; }
+                if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
+                    msb_destroy(&header_sb);
+                    return cpp_error(cpp, directive_loc, "Unterminated < in #include");
+                }
+                if(tok.type == CPP_PUNCTUATOR && tok.punct == '>')
+                    break;
+                msb_write_str(&header_sb, tok.txt.text, tok.txt.length);
+            }
+            header_name = msb_borrow_sv(&header_sb);
+            // Consume remaining tokens on the #include line
+            for(;;){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err){ msb_destroy(&header_sb); return err; }
+                if(tok.type == CPP_WHITESPACE) continue;
+                if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                    err = cpp_push_tok(cpp, &cpp->pending, tok);
+                    if(err){ msb_destroy(&header_sb); return err; }
+                    break;
+                }
+                cpp_warn(cpp, tok.loc, "Trailing tokens after #include");
+            }
+        }
+        else {
+            // Macro-expanded include: collect remaining tokens, expand, then parse
+            CPPTokens* line_toks = cpp_get_scratch(cpp);
+            if(!line_toks){ msb_destroy(&header_sb); return CPP_OOM_ERROR; }
+            // Push back current token
+            err = cpp_push_tok(cpp, line_toks, tok);
+            if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+            for(;;){
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+                if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE)
+                    break;
+                err = cpp_push_tok(cpp, line_toks, tok);
+                if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+            }
+            // Push back the newline/eof
+            err = cpp_push_tok(cpp, &cpp->pending, tok);
+            if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+            // Macro-expand the collected tokens
+            CPPTokens* expanded = cpp_get_scratch(cpp);
+            if(!expanded){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return CPP_OOM_ERROR; }
+            err = cpp_expand_argument(cpp, line_toks->data, line_toks->count, expanded);
+            cpp_release_scratch(cpp, line_toks);
+            if(err){ cpp_release_scratch(cpp, expanded); msb_destroy(&header_sb); return err; }
+            // Find the first non-whitespace expanded token
+            size_t ei = 0;
+            while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
+            if(ei >= expanded->count){
+                cpp_release_scratch(cpp, expanded);
+                msb_destroy(&header_sb);
+                return cpp_error(cpp, directive_loc, "Empty #include after macro expansion");
+            }
+            CPPToken etok = expanded->data[ei];
+            if(etok.type == CPP_STRING){
+                quote = 1;
+                header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
+            }
+            else if(etok.type == CPP_PUNCTUATOR && etok.punct == '<'){
+                quote = 0;
+                for(ei++; ei < expanded->count; ei++){
+                    CPPToken t = expanded->data[ei];
+                    if(t.type == CPP_PUNCTUATOR && t.punct == '>')
+                        break;
+                    msb_write_str(&header_sb, t.txt.text, t.txt.length);
+                }
+                if(ei >= expanded->count){
+                    cpp_release_scratch(cpp, expanded);
+                    msb_destroy(&header_sb);
+                    return cpp_error(cpp, directive_loc, "Unterminated < in macro-expanded #include");
+                }
+                header_name = msb_borrow_sv(&header_sb);
+            }
+            else {
+                cpp_release_scratch(cpp, expanded);
+                msb_destroy(&header_sb);
+                return cpp_error(cpp, directive_loc, "Expected header name in #include after macro expansion");
+            }
+            cpp_release_scratch(cpp, expanded);
+        }
+        if(!header_name.length){
+            msb_destroy(&header_sb);
+            return cpp_error(cpp, directive_loc, "Empty header name in #include");
+        }
+        // Find the file
+        IncludePosition inc_pos = {0};
+        err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
+        if(err){
+            int e = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
+            msb_destroy(&header_sb);
+            return e;
+        }
+        // cpp_find_include left the resolved path in fc->path_builder.
+        // Read the file (may be cached) and push a new frame.
+        StringView file_txt;
+        err = fc_read_file(cpp->fc, &file_txt);
+        if(err){
+            msb_destroy(&header_sb);
+            return cpp_error(cpp, directive_loc, "Could not read '%.*s'", (int)header_name.length, header_name.text);
+        }
+        // Find the file_id by matching the data pointer returned by fc_read_file
+        uint32_t file_id = 0;
+        for(size_t i = 0; i < cpp->fc->map.count; i++){
+            if(cpp->fc->map.data[i].data_cached && cpp->fc->map.data[i].data.buff == file_txt.text){
+                file_id = (uint32_t)i;
+                break;
+            }
+        }
+        // Check pragma once - skip if already included with #pragma once
+        if(cpp_is_pragma_once(cpp, file_id)){
+            msb_destroy(&header_sb);
+            return 0;
+        }
+        CPPFrame frame = {
+            .file_id = file_id,
+            .txt = file_txt,
+            .line = 1,
+            .column = 1,
+            .include_position = inc_pos,
+        };
+        err = ma_push(CPPFrame)(&cpp->frames, cpp->allocator, frame);
+        msb_destroy(&header_sb);
+        if(err) return CPP_OOM_ERROR;
     }
     else {
         cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
@@ -1866,7 +2215,7 @@ cpp_paste_tokens(CPreprocessor *cpp, CPPToken left, CPPToken right, CPPToken *re
 // Expands macros in a slice of tokens. Assumes the tokens doesn't have directives, like for a function-like macro's arguments
 static
 int
-cpp_expand_argument(CPreprocessor *cpp, CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out){
+cpp_expand_argument(CPreprocessor *cpp, const CPPToken*_Null_unspecified toks, size_t count, CPPTokens *out){
     if(!count) return 0;
     int err = 0;
     CPPToken tok;
@@ -2685,9 +3034,12 @@ static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_append,
                       cpp_builtin_for,
                       cpp_builtin_map,
-                      cpp_builtin_let
+                      cpp_builtin_let,
+                      cpp_builtin__Pragma,
+                      cpp_builtin_where
                       ;
-static CppPragmaFn cpp_builtin_pragma_once
+static CppPragmaFn cpp_builtin_pragma_once,
+                   cpp_builtin_pragma_message
                    ;
 
 static
@@ -2709,6 +3061,12 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
     };
     for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
+        if(err) return err;
+    }
+    err = cpp_define_obj_macro(cpp, SV("__STDC__"), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
+    if(err) return err;
+    if(0){
+        err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
         if(err) return err;
     }
     static const struct {
@@ -2740,12 +3098,17 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__MAP__"), cpp_builtin_map, 1, 1, 0},
         {SV("__let"), cpp_builtin_let, 3, 0, 1},
         {SV("__LET__"), cpp_builtin_let, 3, 0, 1},
+        {SV("_Pragma"), cpp_builtin__Pragma, 1, 0, 0},
+        {SV("__WHERE__"), cpp_builtin_where, 1, 0, 1},
+        {SV("__where"), cpp_builtin_where, 1, 0, 1},
     };
     for(size_t i = 0; i < sizeof func_builtins / sizeof func_builtins[0]; i++){
         err = cpp_define_builtin_func_macro(cpp, func_builtins[i].name, func_builtins[i].fn, NULL, func_builtins[i].nparams, func_builtins[i].variadic, func_builtins[i].no_expand);
         if(err) return err;
     }
     err = cpp_register_pragma(cpp, SV("once"), cpp_builtin_pragma_once, NULL);
+    if(err) return err;
+    err = cpp_register_pragma(cpp, SV("message"), cpp_builtin_pragma_message, NULL);
     if(err) return err;
     return 0;
 }
@@ -3131,6 +3494,29 @@ cpp_builtin_print(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
         msb_write_str(sb, tok.txt.text, tok.txt.length);
     }
     log_flush(cpp->logger, LOG_PRINT_ERROR);
+    return 0;
+}
+static
+int
+cpp_builtin_where(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx; (void)outtoks; (void)arg_seps;
+    // Find the first non-whitespace token — should be an identifier
+    const CPPToken* name_tok = NULL;
+    for(size_t i = 0; i < args->count; i++){
+        if(args->data[i].type != CPP_WHITESPACE){
+            name_tok = &args->data[i];
+            break;
+        }
+    }
+    if(!name_tok || name_tok->type != CPP_IDENTIFIER)
+        return cpp_error(cpp, loc, "__where__: expected a macro name");
+    Atom a = AT_get_atom(cpp->at, name_tok->txt.text, name_tok->txt.length);
+    CMacro* m = a ? AM_get(&cpp->macros, a) : NULL;
+    if(!m){
+        cpp_warn(cpp, loc, "__where__: '%.*s' is not defined", (int)name_tok->txt.length, name_tok->txt.text);
+        return 0;
+    }
+    cpp_info(cpp, m->def_loc, "%s defined", a->data);
     return 0;
 }
 static
@@ -3544,7 +3930,110 @@ cpp_builtin_pragma_once(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc 
     (void)toks;
     if(ntoks)
         cpp_warn(cpp, loc, "Trailing tokens after #pragma once");
+    if(!cpp->frames.count) return 0;
+    uint32_t file_id = ma_tail(cpp->frames).file_id;
+    return cpp_add_pragma_once(cpp, file_id);
+}
+
+static
+int
+cpp_builtin_pragma_message(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks){
+    (void)ctx;
+    // Macro-expand the tokens
+    CPPTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CPP_OOM_ERROR;
+    int err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err){ cpp_release_scratch(cpp, expanded); return err; }
+    const CPPToken* etoks = expanded->data;
+    size_t en = expanded->count;
+    // Strip outer parens if present: #pragma message("hello") -> "hello"
+    if(en >= 2
+    && etoks[0].type == CPP_PUNCTUATOR && etoks[0].punct == '('
+    && etoks[en-1].type == CPP_PUNCTUATOR && etoks[en-1].punct == ')'){
+        etoks++;
+        en -= 2;
+    }
+    MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+    for(size_t i = 0; i < en; i++){
+        CPPToken tok = etoks[i];
+        if(tok.type == CPP_STRING){
+            // Strip quotes
+            if(tok.txt.length > 2)
+                msb_write_str(&sb, tok.txt.text + 1, tok.txt.length - 2);
+        }
+        else {
+            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        }
+    }
+    StringView msg = msb_borrow_sv(&sb);
+    cpp_info(cpp, loc, "%.*s", sv_p(msg));
+    msb_destroy(&sb);
+    cpp_release_scratch(cpp, expanded);
     return 0;
+}
+
+static
+int
+cpp_builtin__Pragma(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    (void)outtoks;
+    (void)arg_seps;
+    // Find the string literal argument
+    CPPToken strtok = {0};
+    for(size_t i = 0; i < args->count; i++){
+        if(args->data[i].type == CPP_WHITESPACE) continue;
+        if(args->data[i].type != CPP_STRING)
+            return cpp_error(cpp, args->data[i].loc, "_Pragma requires a string literal");
+        strtok = args->data[i];
+        break;
+    }
+    if(!strtok.type)
+        return cpp_error(cpp, loc, "_Pragma requires a string literal");
+    // Destringify: strip quotes, unescape backslash-quote and backslash-backslash
+    StringView str = {strtok.txt.length - 2, strtok.txt.text + 1};
+    MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+    for(size_t i = 0; i < str.length; i++){
+        char c = str.text[i];
+        if(c == '\\' && i + 1 < str.length && (str.text[i+1] == '\\' || str.text[i+1] == '"')){
+            msb_write_char(&sb, str.text[++i]);
+            continue;
+        }
+        msb_write_char(&sb, c);
+    }
+    // Tokenize the destringified content
+    CPPTokens* toks = cpp_get_scratch(cpp);
+    if(!toks){ msb_destroy(&sb); return CPP_OOM_ERROR; }
+    int err = cpp_mixin_string(cpp, loc, msb_borrow_sv(&sb), toks);
+    msb_destroy(&sb);
+    if(err){ cpp_release_scratch(cpp, toks); return err; }
+    // Find pragma name (first non-whitespace identifier)
+    size_t ti = 0;
+    while(ti < toks->count && toks->data[ti].type == CPP_WHITESPACE) ti++;
+    if(ti >= toks->count){
+        cpp_release_scratch(cpp, toks);
+        return 0; // empty _Pragma - do nothing
+    }
+    if(toks->data[ti].type != CPP_IDENTIFIER){
+        cpp_release_scratch(cpp, toks);
+        return cpp_error(cpp, loc, "Expected pragma name in _Pragma");
+    }
+    StringView prag_name_sv = toks->data[ti].txt;
+    Atom prag_name = AT_get_atom(cpp->at, prag_name_sv.text, prag_name_sv.length);
+    CPragma* prag = prag_name ? AM_get(&cpp->pragmas, prag_name) : NULL;
+    if(!prag){
+        // Unknown pragma - silently ignore
+        cpp_release_scratch(cpp, toks);
+        return 0;
+    }
+    // Collect remaining tokens (skip leading whitespace after pragma name)
+    ti++;
+    while(ti < toks->count && toks->data[ti].type == CPP_WHITESPACE) ti++;
+    // Strip trailing whitespace
+    size_t end = toks->count;
+    while(end > ti && toks->data[end-1].type == CPP_WHITESPACE) end--;
+    err = prag->fn(prag->ctx, cpp, loc, toks->data + ti, end - ti);
+    cpp_release_scratch(cpp, toks);
+    return err;
 }
 
 static
@@ -3703,8 +4192,9 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CPPToken *outtok){
             *outtok = (CPPToken){.type=CPP_NUMBER, .txt = SV("1"), .loc = tok.loc};
             return 0;
         }
-        if(sv_equals(name, SV("__has_include")) || sv_equals(name, SV("__has_embed"))){
+        if(sv_equals(name, SV("__has_include")) || sv_equals(name, SV("__has_include_next")) || sv_equals(name, SV("__has_embed"))){
             _Bool is_embed = name.text[6] == 'e';
+            _Bool is_next = name.length > 14 && name.text[14] == '_';
             CPPToken next;
             do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != '(')
@@ -3732,7 +4222,9 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CPPToken *outtok){
                     msb_write_str(&sb, next.txt.text, next.txt.length);
                 }
                 header_name = msb_borrow_sv(&sb);
-                _Bool result = !is_embed && cpp_has_include(cpp, quote, header_name);
+                IncludePosition dummy;
+                _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy) == 0;
+                if(result) msb_reset(fc_path_builder(cpp->fc));
                 msb_destroy(&sb);
                 do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
                 if(next.type != CPP_PUNCTUATOR || next.punct != ')')
@@ -3741,12 +4233,82 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CPPToken *outtok){
                 return 0;
             }
             else {
-                return cpp_error(cpp, next.loc, "Expected header name for %.*s", (int)name.length, name.text);
+                // Macro-expanded form: collect tokens until ), expand, re-parse
+                CPPTokens* raw = cpp_get_scratch(cpp);
+                if(!raw) return CPP_OOM_ERROR;
+                err = cpp_push_tok(cpp, raw, next);
+                if(err){ cpp_release_scratch(cpp, raw); return err; }
+                int paren = 1;
+                for(;;){
+                    next = cpp_ts_next(s);
+                    if(next.type == CPP_EOF){
+                        cpp_release_scratch(cpp, raw);
+                        return cpp_error(cpp, tok.loc, "Unterminated %.*s(", (int)name.length, name.text);
+                    }
+                    if(next.type == CPP_PUNCTUATOR && next.punct == '(') paren++;
+                    else if(next.type == CPP_PUNCTUATOR && next.punct == ')'){
+                        if(--paren == 0) break;
+                    }
+                    err = cpp_push_tok(cpp, raw, next);
+                    if(err){ cpp_release_scratch(cpp, raw); return err; }
+                }
+                CPPTokens* expanded = cpp_get_scratch(cpp);
+                if(!expanded){ cpp_release_scratch(cpp, raw); return CPP_OOM_ERROR; }
+                err = cpp_expand_argument(cpp, raw->data, raw->count, expanded);
+                cpp_release_scratch(cpp, raw);
+                if(err){ cpp_release_scratch(cpp, expanded); return err; }
+                // Find first non-whitespace expanded token
+                size_t ei = 0;
+                while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
+                if(ei >= expanded->count){
+                    cpp_release_scratch(cpp, expanded);
+                    return cpp_error(cpp, tok.loc, "Empty argument to %.*s", (int)name.length, name.text);
+                }
+                CPPToken etok = expanded->data[ei];
+                if(etok.type == CPP_STRING){
+                    quote = 1;
+                    header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
+                    cpp_release_scratch(cpp, expanded);
+                    IncludePosition dummy3;
+                    _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy3) == 0;
+                    if(result) msb_reset(fc_path_builder(cpp->fc));
+                    *outtok = (CPPToken){.type=CPP_NUMBER, .txt = result?SV("1"):SV("0"), .loc = tok.loc};
+                    return 0;
+                }
+                else if(etok.type == CPP_PUNCTUATOR && etok.punct == '<'){
+                    quote = 0;
+                    MStringBuilder hsb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
+                    for(ei++; ei < expanded->count; ei++){
+                        CPPToken t = expanded->data[ei];
+                        if(t.type == CPP_PUNCTUATOR && t.punct == '>')
+                            break;
+                        msb_write_str(&hsb, t.txt.text, t.txt.length);
+                    }
+                    if(ei >= expanded->count){
+                        cpp_release_scratch(cpp, expanded);
+                        msb_destroy(&hsb);
+                        return cpp_error(cpp, tok.loc, "Unterminated < in %.*s after expansion", (int)name.length, name.text);
+                    }
+                    header_name = msb_borrow_sv(&hsb);
+                    IncludePosition dummy3;
+                    _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy3) == 0;
+                    if(result) msb_reset(fc_path_builder(cpp->fc));
+                    cpp_release_scratch(cpp, expanded);
+                    msb_destroy(&hsb);
+                    *outtok = (CPPToken){.type=CPP_NUMBER, .txt = result?SV("1"):SV("0"), .loc = tok.loc};
+                    return 0;
+                }
+                else {
+                    cpp_release_scratch(cpp, expanded);
+                    return cpp_error(cpp, tok.loc, "Expected header name in %.*s after expansion", (int)name.length, name.text);
+                }
             }
             do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != ')')
                 return cpp_error(cpp, tok.loc, "Expected ')' after %.*s", (int)name.length, name.text);
-            _Bool result = !is_embed && cpp_has_include(cpp, quote, header_name);
+            IncludePosition dummy2;
+            _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy2) == 0;
+            if(result) msb_reset(fc_path_builder(cpp->fc));
             *outtok = (CPPToken){.type=CPP_NUMBER, .txt = result?SV("1"):SV("0"), .loc = tok.loc};
             return 0;
         }
@@ -3924,12 +4486,9 @@ cpp_eval_parse_number(CPreprocessor* cpp, CPPToken tok, int64_t* value){
         v = u.result;
     }
     else if(len > 1 && s[0] == '0'){
-        // TODO: overflow handling etc.
-        for(size_t i = 1; i < len; i++){
-            if(s[i] < '0' || s[i] > '7')
-                return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
-            v = (v << 3) | (uint64_t)(s[i] - '0');
-        }
+        Uint64Result u = parse_octal_inner(s+1, len-1);
+        if(u.errored) return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
+        v = u.result;
     }
     else{
         Uint64Result u = parse_uint64(s, len);

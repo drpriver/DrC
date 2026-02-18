@@ -138,6 +138,11 @@ typedef struct CPragma CPragma;
 #define MARRAY_T CppPoundIf
 #include "../Drp/Marray.h"
 #endif
+#ifndef MARRAY_UINT32_T
+#define MARRAY_UINT32_T
+#define MARRAY_T uint32_t
+#include "../Drp/Marray.h"
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -187,6 +192,7 @@ struct CPreprocessor {
     Atom date, time;
     RngState rng;
     AtomMap(CPPTokens) kv_store; // for __set/__get
+    Marray(uint32_t) pragma_once_files; // sorted list of file_ids with #pragma once
 };
 
 static

@@ -43,10 +43,8 @@ struct Logger {
     // You can write to this and either call flush yourself, or call one of the
     // subsequent logging functions to have what you wrote to this pre-pended.
     MStringBuilder buff;
-    // user pointer for `sink`
-    void*_Null_unspecified up;
     // sink returns void as we ignore errors in the logging itself.
-    void (*_Nullable sink)(void*_Null_unspecified, const void*_Nonnull data, size_t length);
+    void (*_Nullable sink)(Logger*, LogLevel, const void*_Nonnull data, size_t length);
 };
 
 
@@ -80,14 +78,10 @@ static void log_vsprintf(Logger* logger, const char* fmt, va_list va);
 //
 // Log a formatted string at a predefined log level.
 //
-LOG_PRINTF(2, 3)
-static void log_debug(Logger* logger, const char* fmt, ...);
-LOG_PRINTF(2, 3)
-static void log_info(Logger* logger, const char* fmt, ...);
-LOG_PRINTF(2, 3)
-static void log_warn(Logger* logger, const char* fmt, ...);
-LOG_PRINTF(2, 3)
-static void log_error(Logger* logger, const char* fmt, ...);
+LOG_PRINTF(2, 3) static void log_debug(Logger* logger, const char* fmt, ...);
+LOG_PRINTF(2, 3) static void log_info(Logger* logger, const char* fmt, ...);
+LOG_PRINTF(2, 3) static void log_warn(Logger* logger, const char* fmt, ...);
+LOG_PRINTF(2, 3) static void log_error(Logger* logger, const char* fmt, ...);
 
 static
 void
@@ -97,7 +91,7 @@ log_flush(Logger* logger, LogLevel level){
             msb_write_char(&logger->buff, '\n');
         if(!logger->buff.errored){
             StringView sv = msb_borrow_sv(&logger->buff);
-            logger->sink(logger->up, sv.text, sv.length);
+            logger->sink(logger, level, sv.text, sv.length);
         }
     }
     msb_reset(&logger->buff);

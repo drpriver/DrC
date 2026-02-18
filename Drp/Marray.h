@@ -35,6 +35,7 @@
 #include <stddef.h> // size_t
 #include <string.h> // memmove, memcpy, memset
 #include <assert.h> // assert
+#include <stdint.h>
 #include "bit_util.h" //
 #include "Allocators/allocator.h" // Allocator
 

@@ -15,6 +15,8 @@ int main(int argc, char** argv, char** envp){
     add_deps(ctx, all, cpp);
 
     BuildTarget* tests = phony_target(ctx, "tests");
+    BuildTarget* test = phony_target(ctx, "test");
+    add_deps(ctx, test, tests);
     {
         static const struct {
             const char* file;
@@ -28,6 +30,7 @@ int main(int argc, char** argv, char** envp){
             const char* name = test_files[i].name;
             const char* cmd_name = test_files[i].cmd_name;
             BuildTarget* bin = exe_target(ctx, name, file, OS_NATIVE);
+            add_dep(ctx, all, bin);
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
             target_prog(ctx, cmd, bin);

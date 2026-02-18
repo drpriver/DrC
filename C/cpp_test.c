@@ -35,7 +35,8 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     Allocator a = allocator_from_arena(&aa);
     FileCache *fc = fc_create(a);
     MStringBuilder log_sb = {.allocator=a};
-    Logger logger = msb_logger(&log_sb);
+    MsbLogger logger_ = {0};
+    Logger* logger = msb_logger(&logger_, &log_sb);
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
@@ -45,7 +46,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         .allocator = a,
         .fc = fc,
         .at = &at,
-        .logger = &logger,
+        .logger = logger,
         .env = &env,
     };
     fc_write_path(fc, "(test)", 6);
@@ -99,6 +100,81 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
 }
+typedef struct { StringView path; StringView content; } IncludeTestFile;
+
+static int
+cpp_expand_with_files(
+        IncludeTestFile* files, size_t nfiles,
+        StringView* Ipaths, size_t nIpaths,
+        StringView* out, const char* file, const char* func, int line){
+    int result = 0;
+    ArenaAllocator aa = {0};
+    Allocator a = allocator_from_arena(&aa);
+    FileCache *fc = fc_create(a);
+    MStringBuilder log_sb = {.allocator=a};
+    MsbLogger logger_ = {0};
+    Logger* logger = msb_logger(&logger_, &log_sb);
+    AtomTable at = {.allocator = a};
+    Environment env = {.allocator = a, .at=&at};
+    int err;
+    CPreprocessor cpp = {
+        .allocator = a,
+        .fc = fc,
+        .at = &at,
+        .logger = logger,
+        .env = &env,
+    };
+    for(size_t i = 0; i < nIpaths; i++){
+        err = ma_push(StringView)(&cpp.Ipaths, a, Ipaths[i]);
+        if(err){ result = 1; goto finally; }
+    }
+    for(size_t i = 0; i < nfiles; i++){
+        fc_write_path(fc, files[i].path.text, files[i].path.length);
+        err = fc_cache_file(fc, files[i].content);
+        if(err){ result = 1; goto finally; }
+    }
+    err = cpp_define_builtin_macros(&cpp);
+    if(err){ result = 1; goto finally; }
+    {
+        CPPFrame frame = {
+            .file_id = 0,
+            .txt = files[0].content,
+            .line = 1,
+            .column = 1,
+        };
+        err = ma_push(CPPFrame)(&cpp.frames, cpp.allocator, frame);
+        if(err){ result = 1; goto finally; }
+    }
+    {
+        MStringBuilder sb = {.allocator = MALLOCATOR};
+        CPPToken tok;
+        for(;;){
+            err = cpp_next_pp_token(&cpp, &tok);
+            if(err){
+                msb_destroy(&sb);
+                result = 1;
+                goto finally;
+            }
+            if(tok.type == CPP_EOF) break;
+            if(tok.type == CPP_WHITESPACE)
+                msb_write_char(&sb, ' ');
+            else if(tok.type == CPP_NEWLINE)
+                msb_write_char(&sb, '\n');
+            else
+                msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        }
+        *out = msb_detach_sv(&sb);
+    }
+    finally:
+    if(log_sb.cursor){
+        StringView sv = msb_borrow_sv(&log_sb);
+        TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
+    }
+    ArenaAllocator_free_all(&aa);
+    ArenaAllocator_free_all(&cpp.synth_arena);
+    return result;
+}
+
 // Like cpp_expand_string, but expects an error and captures the error log output.
 static
 int
@@ -107,14 +183,15 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     Allocator a = allocator_from_arena(&aa);
     FileCache *fc = fc_create(a);
     MStringBuilder log_sb = {.allocator=a};
-    Logger logger = msb_logger(&log_sb);
+    MsbLogger logger_ = {0};
+    Logger* logger = msb_logger(&logger_, &log_sb);
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     CPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,
-        .logger = &logger,
+        .logger = logger,
         .env = &env,
     };
     fc_write_path(fc, "(test)", 6);
@@ -1279,6 +1356,13 @@ TestFunction(test_condition){
                 "#endif\n"),
             SV("\n__has_include\n\n\n__has_embed\n\n\n__has_c_attribute\n\n")
         },
+        {
+            "__has_include", __LINE__, SKIP,
+            SV("#if __has_include(__FILE__)\n"
+               "yes\n"
+               "#endif"),
+            SV("\nyes\n"), 
+        },
 
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
@@ -1683,6 +1767,58 @@ TestFunction(test_if_eval){
     TESTEND();
 }
 
+TestFunction(test_include){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; int disabled;
+        StringView path0; StringView content0;
+        StringView path1; StringView content1;
+        StringView Ipath;
+        StringView expected;
+    } test_cases[] = {
+        {"basic quoted include", __LINE__, 0,
+            SV("test/main.c"),   SV("#include \"header.h\"\nMAIN_BODY"),
+            SV("test/header.h"), SV("#define MAIN_BODY hello\n"),
+            {0}, SV("\n\nhello")},
+        {"angle bracket with -I path", __LINE__, 0,
+            SV("src/main.c"), SV("#include <sys.h>\nVALUE"),
+            SV("inc/sys.h"),  SV("#define VALUE 42\n"),
+            SV("inc"), SV("\n\n42")},
+        {"pragma once prevents double inclusion", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("#pragma once\n#define VAL ok\n"),
+            {0}, SV("\n\n\n\nok")},
+        {"macro-expanded include", __LINE__, 0,
+            SV("test/main.c"),   SV("#define HDR \"header.h\"\n#include HDR\nRESULT"),
+            SV("test/header.h"), SV("#define RESULT yes\n"),
+            {0}, SV("\n\n\nyes")},
+        {"_Pragma once prevents double inclusion", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("_Pragma(\"once\")\n#define VAL ok\n"),
+            {0}, SV("\n\n\n\nok")},
+    };
+    for(size_t i = 0; i < arrlen(test_cases); i++){
+        if(test_cases[i].disabled) continue;
+        IncludeTestFile files[] = {
+            {test_cases[i].path0, test_cases[i].content0},
+            {test_cases[i].path1, test_cases[i].content1},
+        };
+        StringView result;
+        int err = cpp_expand_with_files(
+            files, 2,
+            test_cases[i].Ipath.length ? &test_cases[i].Ipath : NULL,
+            test_cases[i].Ipath.length ? 1 : 0,
+            &result, __FILE__, __func__, test_cases[i].line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_obj_macros);
@@ -1697,6 +1833,7 @@ int main(int argc, char** argv){
     RegisterTest(test_condition);
     RegisterTest(test_erroneous_condition);
     RegisterTest(test_if_eval);
+    RegisterTest(test_include);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;

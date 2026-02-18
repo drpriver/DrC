@@ -84,21 +84,22 @@ static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
 
 int main(int argc, char** argv, char** envp){
     MStringBuilder cli_macros = {.allocator=MALLOCATOR};
-    Logger logger = std_logger();
+    Logger* logger = std_logger();
+    if(!logger) return 1;
     AtomTable at = {.allocator=MALLOCATOR};
     Environment env = {.allocator=MALLOCATOR, .at=&at};
     FileCache* fc = fc_create(MALLOCATOR);
 
     int err = env_parse_posix(&env, envp);
     if(err){
-        log_error(&logger, "Unable to parse environment");
+        log_error(logger, "Unable to parse environment");
         return 1;
     }
     CPreprocessor cpp = {
         .allocator = MALLOCATOR,
         .fc = fc,
         .at = &at,
-        .logger = &logger,
+        .logger = logger,
         .env = &env,
     };
     err = cpp_define_builtin_macros(&cpp);
@@ -258,20 +259,26 @@ int main(int argc, char** argv, char** envp){
     fc->may_read_real_files = 1;
     err = cpp_include_file_via_file_cache(&cpp, (StringView){strlen(filename), filename});
     if(err){
-        log_error(&logger, "Unable to read '%s'", filename);
+        log_error(logger, "Unable to read '%s'", filename);
         return err;
     }
     CPPToken tok;
     if(1){
+        MStringBuilder sb = {.allocator = MALLOCATOR};
         for(;;){
             err = cpp_next_pp_token(&cpp, &tok);
             if(err) return err;
             if(tok.type == CPP_EOF) break;
-            // if(tok.type == CPP_WHITESPACE)
-                // log_sprintf(&logger, tok.txt.text, tok.txt.length);
-            else log_sprintf(&logger, "%.*s", sv_p(tok.txt));
+            if(tok.type == CPP_WHITESPACE)
+                msb_write_char(&sb, ' ');
+            else msb_write_str(&sb, tok.txt.text, tok.txt.length);
+            // logger->buff.cursor = 0;
+            // if(tok.type == CPP_NEWLINE)
+                // log_flush(logger, LOG_PRINT);
         }
-        log_flush(&logger, LOG_PRINT);
+        log_log(logger, LOG_PRINT, sb.data, sb.cursor);
+        msb_destroy(&sb);
+        // log_flush(logger, LOG_PRINT);
     }
     else
     for(;;){
@@ -284,12 +291,12 @@ int main(int argc, char** argv, char** envp){
         if(tok.loc.is_actually_a_pointer){
         }
         if(tok.type == CPP_NEWLINE)
-            log_printf(&logger, "%s:%d:%d %.*s '\\n'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
+            log_printf(logger, "%s:%d:%d %.*s '\\n'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
         else if(tok.type == CPP_WHITESPACE)
-            log_printf(&logger, "%s:%d:%d %.*s ' '", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
-        else log_printf(&logger, "%s:%d:%d %.*s '%.*s'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
+            log_printf(logger, "%s:%d:%d %.*s ' '", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]));
+        else log_printf(logger, "%s:%d:%d %.*s '%.*s'", file.text, line, col, sv_p(CPPTokenTypeSV[tok.type]), sv_p(tok.txt));
     }
-    // ti_print_logger(&cpp, &TI_CPreprocessor.type_info, &logger);
+    // ti_print_logger(&cpp, &TI_CPreprocessor.type_info, logger);
     return 0;
 }
 
