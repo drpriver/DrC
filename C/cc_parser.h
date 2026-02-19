@@ -18,6 +18,11 @@
 #define MARRAY_T CCToken
 #include "../Drp/Marray.h"
 #endif
+#ifndef MARRAY_CCSTATMENT
+#define MARRAY_CCSTATMENT
+#define MARRAY_T CcStatement
+#include "../Drp/Marray.h"
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -64,6 +69,15 @@ ccscope_clear(CcScope* scope){
 
 typedef struct CcParser CcParser;
 struct CcParser {
+    union {
+        uint32_t flags;
+        struct {
+            uint32_t repl:1, // repl mode, allow top level statements
+                     eager_parsing: 1, // Parse function bodies upon definition instead of upon use.
+                    _padding:30;
+        };
+    };
+    Marray(CcStatement) toplevel_statements; // only allowed in repl/script mode.
     CcLexer lexer;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
@@ -74,6 +88,8 @@ struct CcParser {
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CCToken)) scratch_tokens;
 };
+
+static int cc_parse_top_level(CcParser*, _Bool* finished);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
