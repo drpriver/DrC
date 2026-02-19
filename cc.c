@@ -162,3 +162,4 @@ int main(int argc, char** argv, char** envp){
 #include "Drp/file_cache.c"
 #include "C/cpp_preprocessor.c"
 #include "C/cc_lexer.c"
+#include "C/cc_type_cache.c"

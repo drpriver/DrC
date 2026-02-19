@@ -8,6 +8,7 @@
 #include "cc_lexer.h"
 #include "c_tok.h"
 #include "cc_type.h"
+#include "cc_type_cache.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CCToken
@@ -42,7 +43,7 @@ cc_clear_attributes(CcAttributes* attrs){
 typedef struct CcScope CcScope;
 struct CcScope {
     CcScope* parent;
-    AtomMap(CcType) types;
+    AtomMap(CcQualType) typedefs;
     AtomMap(CcVariable) variables;
     AtomMap(CcStruct) structs;
     AtomMap(CcUnion) unions;
@@ -51,7 +52,7 @@ struct CcScope {
 static inline
 void
 ccscope_clear(CcScope* scope){
-    AM_clear(&scope->types);
+    AM_clear(&scope->typedefs);
     AM_clear(&scope->variables);
     AM_clear(&scope->structs);
     AM_clear(&scope->unions);
@@ -60,6 +61,7 @@ ccscope_clear(CcScope* scope){
 typedef struct CcParser CcParser;
 struct CcParser {
     CcLexer lexer;
+    CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
     Marray(CCToken) pending;
     CcAttributes attributes;
