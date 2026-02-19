@@ -46,6 +46,7 @@ struct CcFunc {
         Atom _Nullable*_Null_unspecified data;
     } params;
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
+    void*_Nullable native_call_cache; // opaque, managed by native_call.c
 };
 
 #ifdef __clang__

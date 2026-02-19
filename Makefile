@@ -1,4 +1,4 @@
-BUILDTARGETS:=all cpp debug run tags tests test cpp_test run_cpp_test
+BUILDTARGETS:=all cpp debug run tags tests test cpp_test run_cpp_test cc
 .PHONY: $(BUILDTARGETS)
 $(BUILDTARGETS): | build
 	@./build $@

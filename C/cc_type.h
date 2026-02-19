@@ -152,6 +152,7 @@ struct CcStruct {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Nullable fields;
+    void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
 
 typedef struct CcUnion CcUnion;
@@ -170,6 +171,7 @@ struct CcUnion {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Nullable fields;
+    void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
 
 typedef struct CcEnumerator CcEnumerator;

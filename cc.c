@@ -18,6 +18,9 @@
 #include "C/cc_lexer.h"
 #include "C/cc_parser.h"
 #include "cpp_args.h"
+#include "Drp/get_input.h"
+#include "cc_repl_completion.h"
+#include "C/native_call.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -57,12 +60,18 @@ int main(int argc, char** argv, char** envp){
         }
     };
     StringView output = {0};
+    _Bool repl = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
             .dest = ARGDEST(&output),
             .help = "Where to write to",
             .min_num = 0, .max_num = 1,
+        },
+        {
+            .name = SV("--repl"),
+            .dest = ARGDEST(&repl),
+            .help = "Start an interactive C REPL.",
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -120,6 +129,62 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&parser, parse_err);
         return 1;
     }
+    if(repl){
+        cc_parser.repl = 1;
+        err = cpp_cli_defines(&cc_parser.lexer.cpp);
+        if(err) return err;
+        fc->may_read_real_files = 1;
+        struct ReplCompleterCtx completer_ctx = {.parser = &cc_parser};
+        GetInputCtx gi = {
+            .tab_completion_func = repl_tab_complete,
+            .tab_completion_user_data = &completer_ctx,
+        };
+        MStringBuilder msb = {.allocator=MALLOCATOR};
+        int input_num = 0;
+        for(;;){
+            gi.prompt = msb.cursor ? SV("... ") : SV("cc> ");
+            ssize_t n = gi_get_input(&gi);
+            if(n < 0) break; // ctrl-d
+            if(n == 0){
+                // Empty line = double newline = submit.
+                if(!msb.cursor) continue; // nothing to submit
+                gi_add_line_to_history_len(&gi, msb.data, msb.cursor);
+                msb_write_char(&msb, '\n');
+                StringView src = msb_borrow_sv(&msb);
+                char name[32];
+                int namelen = (snprintf)(name, sizeof name, "(repl:%d)", input_num++);
+                fc_write_path(fc, name, namelen);
+                err = fc_cache_file(fc, src);
+                if(err) return err;
+                err = cpp_include_file_via_file_cache(&cc_parser.lexer.cpp, (StringView){namelen, name});
+                if(err){
+                    log_error(logger, "REPL error");
+                    msb.cursor = 0;
+                    continue;
+                }
+                _Bool finished = 0;
+                while(!finished){
+                    err = cc_parse_top_level(&cc_parser, &finished);
+                    if(err) break;
+                }
+                if(err){
+                    log_error(logger, "Parse error");
+                    cc_parser_discard_input(&cc_parser);
+                }
+                msb.cursor = 0;
+                continue;
+            }
+            // Accumulate line into msb.
+            if(msb.cursor)
+                msb_write_char(&msb, '\n');
+            msb_write_str(&msb, gi.buff, n);
+            gi_add_line_to_history_len(&gi, gi.buff, n);
+        }
+        gi_destroy_ctx(&gi);
+        ma_cleanup(StringView)(&completer_ctx.ordered, MALLOCATOR);
+        msb_destroy(&msb);
+        return 0;
+    }
     if(!filename){
         LongString txt;
         #ifdef _WIN32
@@ -163,3 +228,6 @@ int main(int argc, char** argv, char** envp){
 #include "C/cpp_preprocessor.c"
 #include "C/cc_lexer.c"
 #include "C/cc_type_cache.c"
+#include "C/cc_parser.c"
+#include "Drp/get_input.c"
+#include "C/native_call.c"

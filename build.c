@@ -16,6 +16,7 @@ int main(int argc, char** argv, char** envp){
     add_dep(ctx, all, cpp);
 
     BuildTarget* cc = exe_target(ctx, "cc", "cc.c", ctx->target.os);
+    cmd_cargs(&cc->cmd, "-lffi");
     add_dep(ctx, all, cc);
 
     BuildTarget* tests = phony_target(ctx, "tests");
