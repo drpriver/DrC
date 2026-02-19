@@ -3475,18 +3475,34 @@ ccbt_sizeof(CcTargetConfig t, CcBasicTypeKind kind){
 
 static
 int
+cpp_def_1(CPreprocessor* cpp, StringView name){
+    return cpp_define_obj_macro(cpp, name, (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
+}
+static
+int
+cpp_def_int(CPreprocessor* cpp, StringView name, int val){
+    Atom a = cpp_atomizef(cpp, "%d", val);
+    if(!a) return CPP_OOM_ERROR;
+    return cpp_define_obj_macro(cpp, name, (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+}
+static
+int
+cpp_def_num(CPreprocessor* cpp, StringView name, StringView num){
+    return cpp_define_obj_macro(cpp, name, (CPPToken[]){{.type=CPP_NUMBER, .txt=num}}, 1);
+}
+
+static
+int
 cpp_define_target_macros(CPreprocessor* cpp){
     int err;
     CcTargetConfig t = cpp->target;
 
     #define DEF1(name) do { \
-        err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1); \
+        err = cpp_def_1(cpp, SV(name)); \
         if(err) return err; \
     } while(0)
     #define DEFNUM(name, val) do { \
-        Atom _da = cpp_atomizef(cpp, "%s", val); \
-        if(!_da) return CPP_OOM_ERROR; \
-        err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt={_da->length, _da->data}}}, 1); \
+        err = cpp_def_num(cpp, SV(name), (StringView){strlen(val), val}); \
         if(err) return err; \
     } while(0)
     #define DEFINT(name, val) do { \
@@ -3527,7 +3543,11 @@ cpp_define_target_macros(CPreprocessor* cpp){
     }
 
     // Signedness
-    if(!t.char_is_signed) DEF1("__CHAR_UNSIGNED__");
+    if(!t.char_is_signed) {
+        DEF1("__CHAR_UNSIGNED__");
+        DEF1("_CHAR_UNSIGNED");
+    }
+
     {
         CcBasicTypeKind wk = t.wchar_type;
         if(wk == CCBT_unsigned || wk == CCBT_unsigned_short || wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long)
@@ -3628,14 +3648,12 @@ cpp_define_target_macros(CPreprocessor* cpp){
         DEFNUM("__INT_MAX__",   int_max);
         {
             Atom a = long_max;
-            err = cpp_define_obj_macro(cpp, SV("__LONG_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__LONG_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         {
             Atom a = llong_max;
-            err = cpp_define_obj_macro(cpp, SV("__LONG_LONG_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__LONG_LONG_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
 
@@ -3668,16 +3686,14 @@ cpp_define_target_macros(CPreprocessor* cpp){
         {
             Atom a = cpp_atomizef(cpp, "4294967295%s", u_suffix);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__UINT32_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__UINT32_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         {
             const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
             Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__UINT64_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__UINT64_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
 
@@ -3687,8 +3703,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
         DEFNUM("__INT_LEAST32_MAX__", int_max);
         {
             Atom a = t.sizeof_long == 8 ? long_max : llong_max;
-            err = cpp_define_obj_macro(cpp, SV("__INT_LEAST64_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__INT_LEAST64_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         DEFUMAX("__UINT_LEAST8_MAX__",  "255");
@@ -3704,8 +3719,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
             const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
             Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__UINT_LEAST64_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__UINT_LEAST64_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
 
@@ -3745,8 +3759,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 DEFNUM("__INT_FAST32_MAX__", int_max);
                 {
                     Atom a = t.sizeof_long == 8 ? long_max : llong_max;
-                    err = cpp_define_obj_macro(cpp, SV("__INT_FAST64_MAX__"),
-                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    err = cpp_define_obj_macro(cpp, SV("__INT_FAST64_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                     if(err) return err;
                 }
                 DEFUMAX("__UINT_FAST8_MAX__",  "255");
@@ -3754,16 +3767,14 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 {
                     Atom a = cpp_atomizef(cpp, "4294967295%s", u_suffix);
                     if(!a) return CPP_OOM_ERROR;
-                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST32_MAX__"),
-                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST32_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                     if(err) return err;
                 }
                 {
                     const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
                     Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
                     if(!a) return CPP_OOM_ERROR;
-                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST64_MAX__"),
-                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST64_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                     if(err) return err;
                 }
                 break;
@@ -3775,13 +3786,11 @@ cpp_define_target_macros(CPreprocessor* cpp){
             const char* usuf = ccbt_literal_suffix(ccbt_unsigned_of(t.intptr_type));
             Atom a = cpp_atomizef(cpp, "9223372036854775807%s", isuf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__INTPTR_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__INTPTR_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
             a = cpp_atomizef(cpp, "18446744073709551615%s", usuf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__UINTPTR_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__UINTPTR_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         {
@@ -3789,29 +3798,25 @@ cpp_define_target_macros(CPreprocessor* cpp){
             const char* usuf = ccbt_literal_suffix(ccbt_unsigned_of(t.intmax_type));
             Atom a = cpp_atomizef(cpp, "9223372036854775807%s", isuf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__INTMAX_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__INTMAX_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
             a = cpp_atomizef(cpp, "18446744073709551615%s", usuf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__UINTMAX_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__UINTMAX_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         {
             const char* suf = ccbt_literal_suffix(t.size_type);
             Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__SIZE_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__SIZE_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
         {
             const char* suf = ccbt_literal_suffix(t.ptrdiff_type);
             Atom a = cpp_atomizef(cpp, "9223372036854775807%s", suf);
             if(!a) return CPP_OOM_ERROR;
-            err = cpp_define_obj_macro(cpp, SV("__PTRDIFF_MAX__"),
-                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            err = cpp_define_obj_macro(cpp, SV("__PTRDIFF_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
             if(err) return err;
         }
 
@@ -3829,8 +3834,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 else
                     a = cpp_atomizef(cpp, "65535");
                 if(!a) return CPP_OOM_ERROR;
-                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"),
-                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                 if(err) return err;
                 DEFNUM("__WCHAR_MIN__", "0");
             } else {
@@ -3840,8 +3844,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 else
                     a = cpp_atomizef(cpp, "32767");
                 if(!a) return CPP_OOM_ERROR;
-                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"),
-                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                 if(err) return err;
                 if(wsz == 4)
                     DEFNUM("__WCHAR_MIN__", "(-__WCHAR_MAX__-1)");
@@ -3862,8 +3865,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 else
                     a = cpp_atomizef(cpp, "65535");
                 if(!a) return CPP_OOM_ERROR;
-                err = cpp_define_obj_macro(cpp, SV("__WINT_MAX__"),
-                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                err = cpp_define_obj_macro(cpp, SV("__WINT_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                 if(err) return err;
                 DEFNUM("__WINT_MIN__", "0");
             } else {
@@ -3958,11 +3960,13 @@ cpp_define_target_macros(CPreprocessor* cpp){
     DEFNUM("__FLOAT_WORD_ORDER__", "1234");
 
     // GCC sync builtins
-    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
-    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
-    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
-    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
-    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
+    if(0){ // we don't support these yet
+        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
+    }
 
     // Platform macros
     switch(t.target){
@@ -4009,7 +4013,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
             DEF1("TARGET_CPU_ARM64");
             DEF1("TARGET_OS_MAC");
             DEF1("TARGET_OS_OSX");
-            DEFINT("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", 140000);
+            DEFINT("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", 110000);
             break;
         case CC_TARGET_X86_64_WINDOWS:
             DEF1("_WIN32");
@@ -4069,8 +4073,54 @@ cpp_add_default_include(CPreprocessor* cpp, Marray(StringView)* arr, const char*
 
 static
 int
+cpp_cache_builtin_header(CPreprocessor* cpp, StringView name, StringView content){
+    MStringBuilder* sb = fc_path_builder(cpp->fc);
+    msb_write_str(sb, "<builtin>/", 10);
+    msb_write_str(sb, name.text, name.length);
+    if(fc_cache_file(cpp->fc, content))
+        return CPP_OOM_ERROR;
+    return 0;
+}
+
+static
+int
+cpp_setup_builtin_headers(CPreprocessor* cpp){
+    int err;
+    // Cache virtual built-in headers
+    static const struct { StringView name; StringView content; } headers[] = {
+        {SV("stdarg.h"),   SV("#pragma once\n")},
+        {SV("stddef.h"),   SV("#pragma once\n")},
+        {SV("stdbool.h"),  SV("#pragma once\n"
+                              "#define __bool_true_false_are_defined 1\n"
+                              "#ifndef bool\n"
+                              "#define bool bool\n"
+                              "#endif\n"
+                              "#ifndef true\n"
+                              "#define true true\n"
+                              "#endif\n"
+                              "#ifndef false\n"
+                              "#define false false\n"
+                              "#endif\n"
+                              )},
+        {SV("float.h"),    SV("#pragma once\n")},
+        {SV("limits.h"),   SV("#pragma once\n")},
+    };
+    for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
+        err = cpp_cache_builtin_header(cpp, headers[i].name, headers[i].content);
+        if(err) return err;
+    }
+    // Add <builtin> to isystem_paths so it's searched before platform headers
+    StringView sv = SV("<builtin>");
+    err = ma_push(StringView)(&cpp->isystem_paths, cpp->allocator, sv);
+    if(err) return CPP_OOM_ERROR;
+    return 0;
+}
+
+static
+int
 cpp_setup_default_includes(CPreprocessor* cpp){
-    int err = 0;
+    int err = cpp_setup_builtin_headers(cpp);
+    if(err) return err;
     CcTargetConfig t = cpp->target;
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     if(CC_TARGET_NATIVE != t.target)
