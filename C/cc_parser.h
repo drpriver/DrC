@@ -90,6 +90,7 @@ struct CcParser {
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
+static void cc_parser_discard_input(CcParser*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

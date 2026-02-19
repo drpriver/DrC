@@ -242,6 +242,7 @@ int
 cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand);
 
 static int cpp_define_builtin_macros(CPreprocessor* cpp);
+static void cpp_discard_all_input(CPreprocessor* cpp);
 
 
 typedef int CppPragmaFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks);

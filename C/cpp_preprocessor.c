@@ -3319,7 +3319,8 @@ static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_where
                       ;
 static CppPragmaFn cpp_builtin_pragma_once,
-                   cpp_builtin_pragma_message
+                   cpp_builtin_pragma_message,
+                   cpp_builtin_pragma_include_path
                    ;
 
 static
@@ -3389,6 +3390,8 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
     err = cpp_register_pragma(cpp, SV("once"), cpp_builtin_pragma_once, NULL);
     if(err) return err;
     err = cpp_register_pragma(cpp, SV("message"), cpp_builtin_pragma_message, NULL);
+    if(err) return err;
+    err = cpp_register_pragma(cpp, SV("include_path"), cpp_builtin_pragma_include_path, NULL);
     if(err) return err;
     return 0;
 }
@@ -4254,6 +4257,38 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcL
 
 static
 int
+cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks){
+    (void)ctx;
+    // Macro-expand the tokens
+    CPPTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CPP_OOM_ERROR;
+    int err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err){ cpp_release_scratch(cpp, expanded); return err; }
+    const CPPToken* etoks = expanded->data;
+    size_t en = expanded->count;
+    // Find the string literal
+    size_t i = 0;
+    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    if(i >= en || etoks[i].type != CPP_STRING){
+        cpp_release_scratch(cpp, expanded);
+        return cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
+    }
+    CPPToken strtok = etoks[i];
+    i++;
+    // Warn on trailing tokens
+    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    if(i < en)
+        cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
+    // Extract path from string literal (strip quotes)
+    StringView path = {strtok.txt.length - 2, strtok.txt.text + 1};
+    err = ma_push(StringView)(&cpp->Ipaths, cpp->allocator, path);
+    cpp_release_scratch(cpp, expanded);
+    if(err) return CPP_OOM_ERROR;
+    return 0;
+}
+
+static
+int
 cpp_builtin__Pragma(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)outtoks;
@@ -5070,6 +5105,15 @@ cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CPPTokens* out)
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+
+static
+void
+cpp_discard_all_input(CPreprocessor* cpp){
+    cpp->frames.count = 0;
+    cpp->if_stack.count = 0;
+    cpp->pending.count = 0;
+    cpp->at_line_start = 1;
+}
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

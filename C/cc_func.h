@@ -45,6 +45,7 @@ struct CcFunc {
         size_t count;
         Atom _Nullable*_Null_unspecified data;
     } params;
+    void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
 };
 
 #ifdef __clang__
