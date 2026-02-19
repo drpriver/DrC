@@ -132,6 +132,9 @@ int main(int argc, char** argv, char** envp){
     cc_parser.lexer.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&cc_parser.lexer.cpp);
     if(err) return err;
+    if(!cpp_nostdinc)
+        err = cpp_setup_default_includes(&cc_parser.lexer.cpp);
+    if(err) return err;
     if(repl){
         cc_parser.repl = 1;
         err = cpp_cli_defines(&cc_parser.lexer.cpp);

@@ -244,6 +244,7 @@ int
 cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand);
 
 static int cpp_define_builtin_macros(CPreprocessor* cpp);
+static int cpp_setup_default_includes(CPreprocessor* cpp);
 static void cpp_discard_all_input(CPreprocessor* cpp);
 
 

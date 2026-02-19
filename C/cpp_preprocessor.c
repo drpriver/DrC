@@ -4,6 +4,11 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdarg.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#else
+#include "../Drp/MStringBuilder16.h"
+#endif
 #include "cpp_preprocessor.h"
 #include "cpp_tok.h"
 #include "../Drp/msb_sprintf.h"
@@ -3988,6 +3993,144 @@ cpp_define_target_macros(CPreprocessor* cpp){
     #undef DEFINT
     #undef DEFTYPE
     return 0;
+}
+
+static
+_Bool
+cpp_dir_exists(CPreprocessor* cpp, const char* path){
+    #ifdef _WIN32
+    MStringBuilder16 sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    msb16_write_utf8(&sb, path, strlen(path));
+    msb16_nul_terminate(&sb);
+    if(sb.errored){
+        msb16_destroy(&sb);
+        return 0;
+    }
+    DWORD attrs = GetFileAttributesW((LPCWSTR)sb.data);
+    msb16_destroy(&sb);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+    #else
+    (void)cpp;
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    #endif
+}
+
+static
+int
+cpp_add_default_include(CPreprocessor* cpp, Marray(StringView)* arr, const char* path){
+    if(!cpp_dir_exists(cpp, path))
+        return 0; // silently skip non-existent paths
+    size_t len = strlen(path);
+    // Atomize so the string lives as long as the atom table.
+    Atom a = AT_atomize(cpp->at, path, len);
+    if(!a) return CPP_OOM_ERROR;
+    StringView sv = {a->length, a->data};
+    int err = ma_push(StringView)(arr, cpp->allocator, sv);
+    return err ? CPP_OOM_ERROR : 0;
+}
+
+static
+int
+cpp_setup_default_includes(CPreprocessor* cpp){
+    int err = 0;
+    CcTargetConfig t = cpp->target;
+    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    if(CC_TARGET_NATIVE != t.target)
+        goto finally;
+    switch(t.target){
+        case CC_TARGET_AARCH64_MACOS:
+        case CC_TARGET_X86_64_MACOS: {
+            err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
+            if(err) goto finally;
+            err = cpp_add_default_include(cpp, &cpp->framework_paths, "/Library/Frameworks");
+            if(err) goto finally;
+            // Find SDK path: $SDKROOT > well-known paths
+            const char* sdk = NULL;
+            Atom sdkroot = env_getenv2(cpp->env, "SDKROOT", 7);
+            if(sdkroot && sdkroot->length){
+                sdk = sdkroot->data;
+            }
+            else {
+                static const char* const known_paths[] = {
+                    "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+                    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+                };
+                for(size_t i = 0; i < sizeof known_paths / sizeof known_paths[0]; i++){
+                    if(cpp_dir_exists(cpp, known_paths[i])){
+                        sdk = known_paths[i];
+                        break;
+                    }
+                }
+            }
+            if(sdk){
+                msb_sprintf(&sb, "%s/usr/include", sdk);
+                if(!sb.errored){
+                    LongString path = msb_borrow_ls(&sb);
+                    err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, path.text);
+                    if(err) goto finally;
+                }
+                msb_reset(&sb);
+                msb_sprintf(&sb, "%s/System/Library/Frameworks", sdk);
+                if(!sb.errored){
+                    LongString path = msb_borrow_ls(&sb);
+                    err = cpp_add_default_include(cpp, &cpp->framework_paths, path.text);
+                    if(err) goto finally;
+                }
+            }
+            break;
+        }
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_AARCH64_LINUX:
+            err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
+            if(err) goto finally;
+            err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/include");
+            if(err) goto finally;
+            // arch-specific include path
+            if(t.target == CC_TARGET_X86_64_LINUX){
+                err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/include/x86_64-linux-gnu");
+                if(err) goto finally;
+            }
+            else {
+                err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/include/aarch64-linux-gnu");
+                if(err) goto finally;
+            }
+            break;
+        case CC_TARGET_X86_64_WINDOWS: {
+            // Use the INCLUDE env var (set by vcvarsall.bat / Developer Command Prompt).
+            // It's a semicolon-separated list of include paths.
+            Atom include_env = env_getenv2(cpp->env, "INCLUDE", 7);
+            if(include_env && include_env->length){
+                const char* s = include_env->data;
+                size_t len = include_env->length;
+                while(len){
+                    const char* semi = memchr(s, ';', len);
+                    size_t part = semi ? (size_t)(semi - s) : len;
+                    if(part){
+                        msb_reset(&sb);
+                        msb_write_str(&sb, s, part);
+                        if(!sb.errored){
+                            LongString path = msb_borrow_ls(&sb);
+                            err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, path.text);
+                            if(err) goto finally;
+                        }
+                    }
+                    if(semi){
+                        s = semi + 1;
+                        len -= part + 1;
+                    }
+                    else
+                        break;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    finally:
+    msb_destroy(&sb);
+    return err;
 }
 
 static

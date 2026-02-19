@@ -74,7 +74,8 @@ cpp_macro_dest(MStringBuilder* sb){
     return dest;
 }
 
-static MStringBuilder cli_macros = {.allocator=MALLOCATOR};
+static MStringBuilder cpp_cli_macros = {.allocator=MALLOCATOR};
+static _Bool cpp_nostdinc = 0;
 static CcTarget cc_target_arg = CC_TARGET_NATIVE;
 static const ArgParseEnumType cc_target_argparse_enum = {
     .enum_size  = sizeof(CcTarget),
@@ -146,13 +147,18 @@ cpp_kwargs(CPreprocessor* cpp){
             .help = "Target ABI.",
             .min_num = 0, .max_num = 1,
         },
+        [7] = {
+            .name = SV("-nostdinc"),
+            .dest = ARGDEST(&cpp_nostdinc),
+            .help = "Do not search standard system include paths.",
+        },
     };
     kw_args[0].dest = cpp_ma_sv_dest(&t, &cpp->Ipaths);
     kw_args[1].dest = cpp_ma_sv_dest(&t, &cpp->isystem_paths);
     kw_args[2].dest = cpp_ma_sv_dest(&t, &cpp->iquote_paths);
     kw_args[3].dest = cpp_ma_sv_dest(&t, &cpp->idirafter_paths);
     kw_args[4].dest = cpp_ma_sv_dest(&t, &cpp->framework_paths);
-    kw_args[5].dest = cpp_macro_dest(&cli_macros);
+    kw_args[5].dest = cpp_macro_dest(&cpp_cli_macros);
     static ArgParseKwParams kwargs = {
         .args = kw_args,
         .count = sizeof kw_args / sizeof kw_args[0],
@@ -165,9 +171,9 @@ static
 int
 cpp_cli_defines(CPreprocessor* cpp){
     int err = 0;
-    if(cli_macros.cursor){
+    if(cpp_cli_macros.cursor){
         fc_write_path(cpp->fc, "(command line)", sizeof "(command line)" -1);
-        err = fc_cache_file(cpp->fc, msb_borrow_sv(&cli_macros));
+        err = fc_cache_file(cpp->fc, msb_borrow_sv(&cpp_cli_macros));
         if(err) return err;
         err = cpp_include_file_via_file_cache(cpp, SV("(command line)"));
         if(err) return err;
