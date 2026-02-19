@@ -8,6 +8,7 @@
 //
 #include "Drp/argument_parsing.h"
 #include "C/cpp_preprocessor.h"
+#include "C/cc_target.h"
 #ifndef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -74,6 +75,12 @@ cpp_macro_dest(MStringBuilder* sb){
 }
 
 static MStringBuilder cli_macros = {.allocator=MALLOCATOR};
+static CcTarget cc_target_arg = CC_TARGET_NATIVE;
+static const ArgParseEnumType cc_target_argparse_enum = {
+    .enum_size  = sizeof(CcTarget),
+    .enum_count = CC_TARGET_COUNT,
+    .enum_names = cc_target_names,
+};
 static
 ArgParseKwParams*
 cpp_kwargs(CPreprocessor* cpp){
@@ -132,6 +139,12 @@ cpp_kwargs(CPreprocessor* cpp){
             .max_num=1000,
             .one_at_a_time=1,
             .space_sep_is_optional=1,
+        },
+        [6] = {
+            .name = SV("--target"),
+            .dest = {.type = ARG_ENUM, .pointer = &cc_target_arg, .enum_pointer = &cc_target_argparse_enum},
+            .help = "Target ABI.",
+            .min_num = 0, .max_num = 1,
         },
     };
     kw_args[0].dest = cpp_ma_sv_dest(&t, &cpp->Ipaths);

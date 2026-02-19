@@ -3300,7 +3300,9 @@ static CppObjMacroFn cpp_builtin_file,
                      cpp_builtin_include_level,
                      cpp_builtin_date,
                      cpp_builtin_time,
-                     cpp_builtin_rand
+                     cpp_builtin_rand,
+                     cpp_builtin_base_file,
+                     cpp_builtin_timestamp
                      ;
 static CppFuncMacroFn cpp_builtin_eval,
                       cpp_builtin_mixin,
@@ -3323,6 +3325,671 @@ static CppPragmaFn cpp_builtin_pragma_once,
                    cpp_builtin_pragma_include_path
                    ;
 
+// Define a macro that expands to a type name from a CcBasicTypeKind.
+// E.g. CCBT_unsigned_long -> "long unsigned int" (3 identifier tokens).
+static
+int
+cpp_define_type_name_macro(CPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
+    CPPToken toks[4];
+    size_t ntoks = 0;
+    switch(kind){
+        case CCBT_signed_char:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("signed")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
+            break;
+        case CCBT_unsigned_char:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
+            break;
+        case CCBT_short:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("short")};
+            break;
+        case CCBT_unsigned_short:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("short")};
+            break;
+        case CCBT_int:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        case CCBT_unsigned:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        case CCBT_long:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        case CCBT_unsigned_long:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        case CCBT_long_long:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        case CCBT_unsigned_long_long:
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
+            break;
+        default:
+            return -1;
+    }
+    return cpp_define_obj_macro(cpp, name, toks, ntoks);
+}
+
+// Helper: return the unsigned counterpart of a basic type kind.
+static
+CcBasicTypeKind
+ccbt_unsigned_of(CcBasicTypeKind kind){
+    switch(kind){
+        case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: return CCBT_unsigned_char;
+        case CCBT_short: case CCBT_unsigned_short: return CCBT_unsigned_short;
+        case CCBT_int: case CCBT_unsigned: return CCBT_unsigned;
+        case CCBT_long: case CCBT_unsigned_long: return CCBT_unsigned_long;
+        case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_unsigned_long_long;
+        default: return kind;
+    }
+}
+
+// Helper: return the signed counterpart of a basic type kind.
+static
+CcBasicTypeKind
+ccbt_signed_of(CcBasicTypeKind kind){
+    switch(kind){
+        case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: return CCBT_signed_char;
+        case CCBT_short: case CCBT_unsigned_short: return CCBT_short;
+        case CCBT_int: case CCBT_unsigned: return CCBT_int;
+        case CCBT_long: case CCBT_unsigned_long: return CCBT_long;
+        case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_long_long;
+        default: return kind;
+    }
+}
+
+// Helper: return the integer literal suffix for a basic type kind.
+// E.g. CCBT_long -> "L", CCBT_unsigned_long_long -> "ULL"
+static
+const char*
+ccbt_literal_suffix(CcBasicTypeKind kind){
+    switch(kind){
+        case CCBT_unsigned: return "U";
+        case CCBT_long: return "L";
+        case CCBT_unsigned_long: return "UL";
+        case CCBT_long_long: return "LL";
+        case CCBT_unsigned_long_long: return "ULL";
+        default: return "";
+    }
+}
+
+// Helper: sizeof a basic type given the target config.
+static
+uint8_t
+ccbt_sizeof(CcTargetConfig t, CcBasicTypeKind kind){
+    switch(kind){
+        case CCBT_bool: return 1;
+        case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: return 1;
+        case CCBT_short: case CCBT_unsigned_short: return t.sizeof_short;
+        case CCBT_int: case CCBT_unsigned: return t.sizeof_int;
+        case CCBT_long: case CCBT_unsigned_long: return t.sizeof_long;
+        case CCBT_long_long: case CCBT_unsigned_long_long: return t.sizeof_long_long;
+        default: return 0;
+    }
+}
+
+static
+int
+cpp_define_target_macros(CPreprocessor* cpp){
+    int err;
+    CcTargetConfig t = cpp->target;
+
+    #define DEF1(name) do { \
+        err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1); \
+        if(err) return err; \
+    } while(0)
+    #define DEFNUM(name, val) do { \
+        Atom _da = cpp_atomizef(cpp, "%s", val); \
+        if(!_da) return CPP_OOM_ERROR; \
+        err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt={_da->length, _da->data}}}, 1); \
+        if(err) return err; \
+    } while(0)
+    #define DEFINT(name, val) do { \
+        Atom _da = cpp_atomizef(cpp, "%d", (int)(val)); \
+        if(!_da) return CPP_OOM_ERROR; \
+        err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt={_da->length, _da->data}}}, 1); \
+        if(err) return err; \
+    } while(0)
+    #define DEFTYPE(name, kind) do { \
+        err = cpp_define_type_name_macro(cpp, SV(name), kind); \
+        if(err) return err; \
+    } while(0)
+
+    // __GNUC__ compatibility
+    DEFINT("__GNUC__", 4);
+    DEFINT("__GNUC_MINOR__", 2);
+    DEFINT("__GNUC_PATCHLEVEL__", 1);
+
+    // __SIZEOF_*__
+    DEFINT("__SIZEOF_SHORT__",       t.sizeof_short);
+    DEFINT("__SIZEOF_INT__",         t.sizeof_int);
+    DEFINT("__SIZEOF_LONG__",        t.sizeof_long);
+    DEFINT("__SIZEOF_LONG_LONG__",   t.sizeof_long_long);
+    DEFINT("__SIZEOF_FLOAT__",       t.sizeof_float);
+    DEFINT("__SIZEOF_DOUBLE__",      t.sizeof_double);
+    DEFINT("__SIZEOF_LONG_DOUBLE__", t.sizeof_long_double);
+    DEFINT("__SIZEOF_POINTER__",     t.sizeof_pointer);
+    DEFINT("__SIZEOF_SIZE_T__",      ccbt_sizeof(t, t.size_type));
+    DEFINT("__SIZEOF_PTRDIFF_T__",   ccbt_sizeof(t, t.ptrdiff_type));
+    DEFINT("__SIZEOF_WCHAR_T__",     ccbt_sizeof(t, t.wchar_type));
+    DEFINT("__SIZEOF_WINT_T__",      ccbt_sizeof(t, t.wint_type));
+
+    DEFINT("__CHAR_BIT__", 8);
+
+    if(t.sizeof_pointer == 8){
+        DEF1("__LP64__");
+        DEF1("_LP64");
+    }
+
+    // Signedness
+    if(!t.char_is_signed) DEF1("__CHAR_UNSIGNED__");
+    {
+        CcBasicTypeKind wk = t.wchar_type;
+        if(wk == CCBT_unsigned || wk == CCBT_unsigned_short || wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long)
+            DEF1("__WCHAR_UNSIGNED__");
+    }
+
+    // __USER_LABEL_PREFIX__
+    switch(t.target){
+        case CC_TARGET_X86_64_MACOS:
+        case CC_TARGET_AARCH64_MACOS:
+            err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"),
+                (CPPToken[]){{.type=CPP_IDENTIFIER, .txt=SV("_")}}, 1);
+            if(err) return err;
+            break;
+        default:
+            // Empty replacement list
+            err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"), NULL, 0);
+            if(err) return err;
+            break;
+    }
+
+    // __*_TYPE__ macros
+    DEFTYPE("__SIZE_TYPE__",       t.size_type);
+    DEFTYPE("__PTRDIFF_TYPE__",    t.ptrdiff_type);
+    DEFTYPE("__WCHAR_TYPE__",      t.wchar_type);
+    DEFTYPE("__WINT_TYPE__",       t.wint_type);
+    DEFTYPE("__INTMAX_TYPE__",     t.intmax_type);
+    DEFTYPE("__UINTMAX_TYPE__",    ccbt_unsigned_of(t.intmax_type));
+    DEFTYPE("__SIG_ATOMIC_TYPE__", CCBT_int);
+    DEFTYPE("__INT8_TYPE__",       CCBT_signed_char);
+    DEFTYPE("__INT16_TYPE__",      CCBT_short);
+    DEFTYPE("__INT32_TYPE__",      CCBT_int);
+    DEFTYPE("__INT64_TYPE__",      ccbt_signed_of(t.intmax_type));
+    DEFTYPE("__UINT8_TYPE__",      CCBT_unsigned_char);
+    DEFTYPE("__UINT16_TYPE__",     CCBT_unsigned_short);
+    DEFTYPE("__UINT32_TYPE__",     CCBT_unsigned);
+    DEFTYPE("__UINT64_TYPE__",     ccbt_unsigned_of(t.intmax_type));
+    DEFTYPE("__INT_LEAST8_TYPE__",  CCBT_signed_char);
+    DEFTYPE("__INT_LEAST16_TYPE__", CCBT_short);
+    DEFTYPE("__INT_LEAST32_TYPE__", CCBT_int);
+    DEFTYPE("__INT_LEAST64_TYPE__", ccbt_signed_of(t.intmax_type));
+    DEFTYPE("__UINT_LEAST8_TYPE__",  CCBT_unsigned_char);
+    DEFTYPE("__UINT_LEAST16_TYPE__", CCBT_unsigned_short);
+    DEFTYPE("__UINT_LEAST32_TYPE__", CCBT_unsigned);
+    DEFTYPE("__UINT_LEAST64_TYPE__", ccbt_unsigned_of(t.intmax_type));
+    DEFTYPE("__INTPTR_TYPE__",     t.intptr_type);
+    DEFTYPE("__UINTPTR_TYPE__",    ccbt_unsigned_of(t.intptr_type));
+    // Fast types: on Linux all fast >= 16 use long, on macOS/Windows use the natural size.
+    switch(t.target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_AARCH64_LINUX:
+            DEFTYPE("__INT_FAST8_TYPE__",   CCBT_signed_char);
+            DEFTYPE("__INT_FAST16_TYPE__",  CCBT_long);
+            DEFTYPE("__INT_FAST32_TYPE__",  CCBT_long);
+            DEFTYPE("__INT_FAST64_TYPE__",  CCBT_long);
+            DEFTYPE("__UINT_FAST8_TYPE__",  CCBT_unsigned_char);
+            DEFTYPE("__UINT_FAST16_TYPE__", CCBT_unsigned_long);
+            DEFTYPE("__UINT_FAST32_TYPE__", CCBT_unsigned_long);
+            DEFTYPE("__UINT_FAST64_TYPE__", CCBT_unsigned_long);
+            break;
+        default:
+            DEFTYPE("__INT_FAST8_TYPE__",   CCBT_signed_char);
+            DEFTYPE("__INT_FAST16_TYPE__",  CCBT_short);
+            DEFTYPE("__INT_FAST32_TYPE__",  CCBT_int);
+            DEFTYPE("__INT_FAST64_TYPE__",  ccbt_signed_of(t.intmax_type));
+            DEFTYPE("__UINT_FAST8_TYPE__",  CCBT_unsigned_char);
+            DEFTYPE("__UINT_FAST16_TYPE__", CCBT_unsigned_short);
+            DEFTYPE("__UINT_FAST32_TYPE__", CCBT_unsigned);
+            DEFTYPE("__UINT_FAST64_TYPE__", ccbt_unsigned_of(t.intmax_type));
+            break;
+    }
+
+    // __*_MAX__ macros
+    // Helper: signed max for N-byte type = 2^(N*8-1) - 1
+    // We hardcode the well-known values to avoid 128-bit arithmetic.
+    {
+        const char* schar_max  = "127";
+        const char* shrt_max   = "32767";
+        const char* int_max    = "2147483647";
+        const char* l_suffix   = ccbt_literal_suffix(CCBT_long);
+        const char* ll_suffix  = ccbt_literal_suffix(CCBT_long_long);
+        const char* u_suffix   = "U";
+        const char* ul_suffix  = ccbt_literal_suffix(CCBT_unsigned_long);
+        const char* ull_suffix = ccbt_literal_suffix(CCBT_unsigned_long_long);
+
+        Atom long_max, llong_max;
+        if(t.sizeof_long == 8)
+            long_max = cpp_atomizef(cpp, "9223372036854775807%s", l_suffix);
+        else
+            long_max = cpp_atomizef(cpp, "2147483647%s", l_suffix);
+        if(!long_max) return CPP_OOM_ERROR;
+        llong_max = cpp_atomizef(cpp, "9223372036854775807%s", ll_suffix);
+        if(!llong_max) return CPP_OOM_ERROR;
+
+        // Signed MAX
+        DEFNUM("__SCHAR_MAX__", schar_max);
+        DEFNUM("__SHRT_MAX__",  shrt_max);
+        DEFNUM("__INT_MAX__",   int_max);
+        {
+            Atom a = long_max;
+            err = cpp_define_obj_macro(cpp, SV("__LONG_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            Atom a = llong_max;
+            err = cpp_define_obj_macro(cpp, SV("__LONG_LONG_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+
+        // Fixed-width MAX
+        DEFNUM("__INT8_MAX__",  schar_max);
+        DEFNUM("__INT16_MAX__", shrt_max);
+        DEFNUM("__INT32_MAX__", int_max);
+        // INT64_MAX = same value as intmax max
+        {
+            Atom a;
+            if(t.sizeof_long == 8)
+                a = long_max;
+            else
+                a = llong_max;
+            err = cpp_define_obj_macro(cpp, SV("__INT64_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+
+        // Unsigned MAX
+        #define DEFUMAX(name, val) do { \
+            Atom a = cpp_atomizef(cpp, "%s", val); \
+            if(!a) return CPP_OOM_ERROR; \
+            err = cpp_define_obj_macro(cpp, SV(name), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1); \
+            if(err) return err; \
+        } while(0)
+
+        DEFUMAX("__UINT8_MAX__",  "255");
+        DEFUMAX("__UINT16_MAX__", "65535");
+        {
+            Atom a = cpp_atomizef(cpp, "4294967295%s", u_suffix);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINT32_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
+            Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINT64_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+
+        // LEAST MAX (same as fixed-width)
+        DEFNUM("__INT_LEAST8_MAX__",  schar_max);
+        DEFNUM("__INT_LEAST16_MAX__", shrt_max);
+        DEFNUM("__INT_LEAST32_MAX__", int_max);
+        {
+            Atom a = t.sizeof_long == 8 ? long_max : llong_max;
+            err = cpp_define_obj_macro(cpp, SV("__INT_LEAST64_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        DEFUMAX("__UINT_LEAST8_MAX__",  "255");
+        DEFUMAX("__UINT_LEAST16_MAX__", "65535");
+        {
+            Atom a = cpp_atomizef(cpp, "4294967295%s", u_suffix);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINT_LEAST32_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
+            Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINT_LEAST64_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+
+        // FAST MAX
+        switch(t.target){
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_AARCH64_LINUX:
+                DEFNUM("__INT_FAST8_MAX__", schar_max);
+                {
+                    Atom a = long_max;
+                    #define DEFFAST(name) \
+                        err = cpp_define_obj_macro(cpp, SV(name), \
+                            (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1); \
+                        if(err) return err
+                    DEFFAST("__INT_FAST16_MAX__");
+                    DEFFAST("__INT_FAST32_MAX__");
+                    DEFFAST("__INT_FAST64_MAX__");
+                    #undef DEFFAST
+                }
+                DEFUMAX("__UINT_FAST8_MAX__", "255");
+                {
+                    Atom a = cpp_atomizef(cpp, "18446744073709551615%s", ul_suffix);
+                    if(!a) return CPP_OOM_ERROR;
+                    #define DEFFAST(name) \
+                        err = cpp_define_obj_macro(cpp, SV(name), \
+                            (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1); \
+                        if(err) return err
+                    DEFFAST("__UINT_FAST16_MAX__");
+                    DEFFAST("__UINT_FAST32_MAX__");
+                    DEFFAST("__UINT_FAST64_MAX__");
+                    #undef DEFFAST
+                }
+                break;
+            default:
+                DEFNUM("__INT_FAST8_MAX__",  schar_max);
+                DEFNUM("__INT_FAST16_MAX__", shrt_max);
+                DEFNUM("__INT_FAST32_MAX__", int_max);
+                {
+                    Atom a = t.sizeof_long == 8 ? long_max : llong_max;
+                    err = cpp_define_obj_macro(cpp, SV("__INT_FAST64_MAX__"),
+                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    if(err) return err;
+                }
+                DEFUMAX("__UINT_FAST8_MAX__",  "255");
+                DEFUMAX("__UINT_FAST16_MAX__", "65535");
+                {
+                    Atom a = cpp_atomizef(cpp, "4294967295%s", u_suffix);
+                    if(!a) return CPP_OOM_ERROR;
+                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST32_MAX__"),
+                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    if(err) return err;
+                }
+                {
+                    const char* suf = t.sizeof_long == 8 ? ul_suffix : ull_suffix;
+                    Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
+                    if(!a) return CPP_OOM_ERROR;
+                    err = cpp_define_obj_macro(cpp, SV("__UINT_FAST64_MAX__"),
+                        (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                    if(err) return err;
+                }
+                break;
+        }
+
+        // INTPTR_MAX, UINTPTR_MAX, INTMAX_MAX, UINTMAX_MAX, SIZE_MAX, PTRDIFF_MAX
+        {
+            const char* isuf = ccbt_literal_suffix(t.intptr_type);
+            const char* usuf = ccbt_literal_suffix(ccbt_unsigned_of(t.intptr_type));
+            Atom a = cpp_atomizef(cpp, "9223372036854775807%s", isuf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__INTPTR_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+            a = cpp_atomizef(cpp, "18446744073709551615%s", usuf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINTPTR_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            const char* isuf = ccbt_literal_suffix(t.intmax_type);
+            const char* usuf = ccbt_literal_suffix(ccbt_unsigned_of(t.intmax_type));
+            Atom a = cpp_atomizef(cpp, "9223372036854775807%s", isuf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__INTMAX_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+            a = cpp_atomizef(cpp, "18446744073709551615%s", usuf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__UINTMAX_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            const char* suf = ccbt_literal_suffix(t.size_type);
+            Atom a = cpp_atomizef(cpp, "18446744073709551615%s", suf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__SIZE_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+        {
+            const char* suf = ccbt_literal_suffix(t.ptrdiff_type);
+            Atom a = cpp_atomizef(cpp, "9223372036854775807%s", suf);
+            if(!a) return CPP_OOM_ERROR;
+            err = cpp_define_obj_macro(cpp, SV("__PTRDIFF_MAX__"),
+                (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+            if(err) return err;
+        }
+
+        // WCHAR_MAX, WCHAR_MIN, WINT_MAX, WINT_MIN, SIG_ATOMIC_MAX, SIG_ATOMIC_MIN
+        {
+            CcBasicTypeKind wk = t.wchar_type;
+            uint8_t wsz = ccbt_sizeof(t, wk);
+            _Bool wu = (wk == CCBT_unsigned || wk == CCBT_unsigned_short ||
+                        wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long ||
+                        wk == CCBT_unsigned_char);
+            if(wu){
+                Atom a;
+                if(wsz == 4)
+                    a = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(wk));
+                else
+                    a = cpp_atomizef(cpp, "65535");
+                if(!a) return CPP_OOM_ERROR;
+                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"),
+                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                if(err) return err;
+                DEFNUM("__WCHAR_MIN__", "0");
+            } else {
+                Atom a;
+                if(wsz == 4)
+                    a = cpp_atomizef(cpp, "2147483647");
+                else
+                    a = cpp_atomizef(cpp, "32767");
+                if(!a) return CPP_OOM_ERROR;
+                err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"),
+                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                if(err) return err;
+                if(wsz == 4)
+                    DEFNUM("__WCHAR_MIN__", "(-__WCHAR_MAX__-1)");
+                else
+                    DEFNUM("__WCHAR_MIN__", "(-32767-1)");
+            }
+        }
+        {
+            CcBasicTypeKind wk = t.wint_type;
+            uint8_t wsz = ccbt_sizeof(t, wk);
+            _Bool wu = (wk == CCBT_unsigned || wk == CCBT_unsigned_short ||
+                        wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long ||
+                        wk == CCBT_unsigned_char);
+            if(wu){
+                Atom a;
+                if(wsz == 4)
+                    a = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(wk));
+                else
+                    a = cpp_atomizef(cpp, "65535");
+                if(!a) return CPP_OOM_ERROR;
+                err = cpp_define_obj_macro(cpp, SV("__WINT_MAX__"),
+                    (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+                if(err) return err;
+                DEFNUM("__WINT_MIN__", "0");
+            } else {
+                DEFNUM("__WINT_MAX__", "2147483647");
+                DEFNUM("__WINT_MIN__", "(-__WINT_MAX__-1)");
+            }
+        }
+        DEFNUM("__SIG_ATOMIC_MAX__", "2147483647");
+        DEFNUM("__SIG_ATOMIC_MIN__", "(-__SIG_ATOMIC_MAX__-1)");
+
+        #undef DEFUMAX
+    }
+
+    // __*_WIDTH__ macros
+    DEFINT("__SCHAR_WIDTH__",      8);
+    DEFINT("__SHRT_WIDTH__",       t.sizeof_short * 8);
+    DEFINT("__INT_WIDTH__",        t.sizeof_int * 8);
+    DEFINT("__LONG_WIDTH__",       t.sizeof_long * 8);
+    DEFINT("__LONG_LONG_WIDTH__",  t.sizeof_long_long * 8);
+    DEFINT("__PTRDIFF_WIDTH__",    ccbt_sizeof(t, t.ptrdiff_type) * 8);
+    DEFINT("__SIG_ATOMIC_WIDTH__", t.sizeof_int * 8);
+    DEFINT("__SIZE_WIDTH__",       ccbt_sizeof(t, t.size_type) * 8);
+    DEFINT("__WCHAR_WIDTH__",      ccbt_sizeof(t, t.wchar_type) * 8);
+    DEFINT("__WINT_WIDTH__",       ccbt_sizeof(t, t.wint_type) * 8);
+    DEFINT("__INT_LEAST8_WIDTH__",  8);
+    DEFINT("__INT_LEAST16_WIDTH__", 16);
+    DEFINT("__INT_LEAST32_WIDTH__", 32);
+    DEFINT("__INT_LEAST64_WIDTH__", 64);
+    DEFINT("__INTPTR_WIDTH__",     t.sizeof_pointer * 8);
+    DEFINT("__INTMAX_WIDTH__",     ccbt_sizeof(t, t.intmax_type) * 8);
+    switch(t.target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_AARCH64_LINUX:
+            DEFINT("__INT_FAST8_WIDTH__",  8);
+            DEFINT("__INT_FAST16_WIDTH__", t.sizeof_long * 8);
+            DEFINT("__INT_FAST32_WIDTH__", t.sizeof_long * 8);
+            DEFINT("__INT_FAST64_WIDTH__", t.sizeof_long * 8);
+            break;
+        default:
+            DEFINT("__INT_FAST8_WIDTH__",  8);
+            DEFINT("__INT_FAST16_WIDTH__", 16);
+            DEFINT("__INT_FAST32_WIDTH__", 32);
+            DEFINT("__INT_FAST64_WIDTH__", 64);
+            break;
+    }
+
+    // __*_C function-like macros (token pasting)
+    {
+        // Suffix for 64-bit literal depends on whether long is 64-bit
+        const char* i64_suf = t.sizeof_long == 8 ? "L"  : "LL";
+        const char* u64_suf = t.sizeof_long == 8 ? "UL" : "ULL";
+        // No-suffix: __INT8_C(c) -> c
+        // With-suffix: __INT64_C(c) -> c ## L
+        struct { StringView name; const char*_Nullable suffix; } c_macros[] = {
+            {SV("__INT8_C"),    NULL},
+            {SV("__INT16_C"),   NULL},
+            {SV("__INT32_C"),   NULL},
+            {SV("__INT64_C"),   i64_suf},
+            {SV("__UINT8_C"),   NULL},
+            {SV("__UINT16_C"),  "U"},
+            {SV("__UINT32_C"),  "U"},
+            {SV("__UINT64_C"),  u64_suf},
+            {SV("__INTMAX_C"),  i64_suf},
+            {SV("__UINTMAX_C"), u64_suf},
+        };
+        Atom c_param = AT_atomize(cpp->at, "c", 1);
+        if(!c_param) return CPP_OOM_ERROR;
+        for(size_t i = 0; i < sizeof c_macros / sizeof c_macros[0]; i++){
+            size_t ntoks = c_macros[i].suffix ? 3 : 1;
+            CMacro* macro;
+            err = cpp_define_macro(cpp, c_macros[i].name, ntoks, 1, &macro);
+            if(err) return err;
+            macro->is_function_like = 1;
+            cpp_cmacro_params(macro)[0] = c_param;
+            CPPToken* repl = cpp_cmacro_replacement(macro);
+            repl[0] = (CPPToken){.type=CPP_IDENTIFIER, .param_idx=1};
+            if(c_macros[i].suffix){
+                Atom suf_atom = cpp_atomizef(cpp, "%s", c_macros[i].suffix);
+                if(!suf_atom) return CPP_OOM_ERROR;
+                repl[1] = (CPPToken){.type=CPP_PUNCTUATOR, .txt=SV("##"), .punct='##'};
+                repl[2] = (CPPToken){.type=CPP_IDENTIFIER, .txt={suf_atom->length, suf_atom->data}};
+            }
+        }
+    }
+
+    // Byte order
+    DEFNUM("__ORDER_LITTLE_ENDIAN__", "1234");
+    DEFNUM("__ORDER_BIG_ENDIAN__",    "4321");
+    DEFNUM("__ORDER_PDP_ENDIAN__",    "3412");
+    // All our supported targets are little-endian
+    DEFNUM("__BYTE_ORDER__",       "1234");
+    DEFNUM("__FLOAT_WORD_ORDER__", "1234");
+
+    // GCC sync builtins
+    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+    DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
+
+    // Platform macros
+    switch(t.target){
+        case CC_TARGET_X86_64_LINUX:
+            DEF1("__linux__");
+            DEF1("__linux");
+            DEF1("linux");
+            DEF1("__gnu_linux__");
+            DEF1("__unix__");
+            DEF1("__unix");
+            DEF1("unix");
+            DEF1("__x86_64__");
+            DEF1("__x86_64");
+            DEF1("__amd64__");
+            DEF1("__amd64");
+            break;
+        case CC_TARGET_AARCH64_LINUX:
+            DEF1("__linux__");
+            DEF1("__linux");
+            DEF1("linux");
+            DEF1("__gnu_linux__");
+            DEF1("__unix__");
+            DEF1("__unix");
+            DEF1("unix");
+            DEF1("__aarch64__");
+            break;
+        case CC_TARGET_X86_64_MACOS:
+            DEF1("__APPLE__");
+            DEF1("__MACH__");
+            DEF1("__x86_64__");
+            DEF1("__x86_64");
+            DEF1("__amd64__");
+            DEF1("__amd64");
+            break;
+        case CC_TARGET_AARCH64_MACOS:
+            DEF1("__APPLE__");
+            DEF1("__MACH__");
+            DEF1("__aarch64__");
+            DEF1("__arm64__");
+            break;
+        case CC_TARGET_X86_64_WINDOWS:
+            DEF1("_WIN32");
+            DEF1("_WIN64");
+            DEF1("__x86_64__");
+            DEF1("__x86_64");
+            DEF1("__amd64__");
+            DEF1("__amd64");
+            DEF1("_M_X64");
+            DEF1("_M_AMD64");
+            break;
+        default:
+            break;
+    }
+
+    #undef DEF1
+    #undef DEFNUM
+    #undef DEFINT
+    #undef DEFTYPE
+    return 0;
+}
+
 static
 int
 cpp_define_builtin_macros(CPreprocessor* cpp){
@@ -3339,12 +4006,16 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
         {SV("__TIME__"), cpp_builtin_time},
         {SV("__RAND__"), cpp_builtin_rand},
         {SV("__RANDOM__"), cpp_builtin_rand},
+        {SV("__BASE_FILE__"), cpp_builtin_base_file},
+        {SV("__TIMESTAMP__"), cpp_builtin_timestamp},
     };
     for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
         if(err) return err;
     }
     err = cpp_define_obj_macro(cpp, SV("__STDC__"), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
+    if(err) return err;
+    err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CPPToken[]){{.type=CPP_STRING, .txt=SV("\"dvm cc 0.1\"")}}, 1);
     if(err) return err;
     if(0){
         err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CPPToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
@@ -3393,7 +4064,9 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
     if(err) return err;
     err = cpp_register_pragma(cpp, SV("include_path"), cpp_builtin_pragma_include_path, NULL);
     if(err) return err;
-    return 0;
+
+    err = cpp_define_target_macros(cpp);
+    return err;
 }
 static
 int
@@ -3549,6 +4222,42 @@ cpp_builtin_rand(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CP
     int err = cpp_push_tok(cpp, outtoks, tok);
     return err;
 }
+
+static
+int
+cpp_builtin_base_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    // __BASE_FILE__ is the outermost file (bottom of frame stack).
+    uint64_t file_id = 0;
+    if(cpp->frames.count)
+        file_id = cpp->frames.data[0].file_id;
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    Atom a = cpp_atomizef(cpp, "\"%s\"", path.text);
+    if(!a) return CPP_OOM_ERROR;
+    CPPToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    return cpp_push_tok(cpp, outtoks, tok);
+}
+
+static
+int
+cpp_builtin_timestamp(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks){
+    (void)ctx;
+    // __TIMESTAMP__ is the modification time of the current source file.
+    // For simplicity, use the same as __DATE__ __TIME__ combined.
+    // GCC format: "Sun Sep 16 01:03:52 1973"
+    // We just return a placeholder.
+    CPPToken tok = {
+        .txt = SV("\"??? ??? ?? ??:??:?? ????\""),
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    return cpp_push_tok(cpp, outtoks, tok);
+}
+
 static
 int
 cpp_builtin_eval(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)* arg_seps){

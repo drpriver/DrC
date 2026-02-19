@@ -44,12 +44,11 @@ int main(int argc, char** argv, char** envp){
                 .fc = fc,
                 .at = &at,
                 .logger = logger,
+                .target = cc_target_funcs[CC_TARGET_NATIVE](),
                 .env = &env,
             },
         },
     };
-    err = cpp_define_builtin_macros(&cc_parser.lexer.cpp);
-    if(err) return err;
     const char* filename = NULL;
     ArgToParse pos_args[] = {
         {
@@ -129,6 +128,10 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&parser, parse_err);
         return 1;
     }
+    // Re-apply target in case --target was given (overrides native default)
+    cc_parser.lexer.cpp.target = cc_target_funcs[cc_target_arg]();
+    err = cpp_define_builtin_macros(&cc_parser.lexer.cpp);
+    if(err) return err;
     if(repl){
         cc_parser.repl = 1;
         err = cpp_cli_defines(&cc_parser.lexer.cpp);

@@ -27,7 +27,184 @@ LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* 
 static _Bool cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec);
 static _Bool cc_assign_lookup(CCPunct punct, CcExprKind* kind);
 
+// ---------------------------------------------------------------------------
+// Type computation helpers
+// ---------------------------------------------------------------------------
 
+static inline _Bool
+ccbt_is_integer(CcBasicTypeKind k){
+    return k >= CCBT_bool && k <= CCBT_unsigned_long_long;
+}
+
+static inline _Bool
+ccbt_is_float(CcBasicTypeKind k){
+    return k >= CCBT_float && k <= CCBT_long_double;
+}
+
+static inline _Bool
+ccbt_is_unsigned(CcBasicTypeKind k){
+    switch(k){
+        case CCBT_bool:
+        case CCBT_unsigned_char:
+        case CCBT_unsigned_short:
+        case CCBT_unsigned:
+        case CCBT_unsigned_long:
+        case CCBT_unsigned_long_long:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static inline int
+ccbt_int_rank(CcBasicTypeKind k){
+    switch(k){
+        case CCBT_bool:                                  return 0;
+        case CCBT_char: case CCBT_signed_char:
+        case CCBT_unsigned_char:                         return 1;
+        case CCBT_short: case CCBT_unsigned_short:       return 2;
+        case CCBT_int: case CCBT_unsigned:               return 3;
+        case CCBT_long: case CCBT_unsigned_long:         return 4;
+        case CCBT_long_long:
+        case CCBT_unsigned_long_long:                    return 5;
+        default:                                         return -1;
+    }
+}
+
+static inline CcBasicTypeKind
+ccbt_to_unsigned(CcBasicTypeKind k){
+    switch(k){
+        case CCBT_char: case CCBT_signed_char: return CCBT_unsigned_char;
+        case CCBT_short:                       return CCBT_unsigned_short;
+        case CCBT_int:                         return CCBT_unsigned;
+        case CCBT_long:                        return CCBT_unsigned_long;
+        case CCBT_long_long:                   return CCBT_unsigned_long_long;
+        default:                               return k;
+    }
+}
+
+static inline CcQualType
+ccqt_basic(CcBasicTypeKind k){
+    return (CcQualType){.basic.kind = k};
+}
+
+// Integer promotion: types with rank < int promote to int
+// Returns 0 on success, non-zero if t is not an arithmetic type.
+static int
+cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
+    if(!ccqt_is_basic(t))
+        return cc_parse_error(p, loc, "integer promotion requires arithmetic type");
+    CcBasicTypeKind k = t.basic.kind;
+    if(k == CCBT_void)
+        return cc_parse_error(p, loc, "integer promotion of void");
+    if(ccbt_is_float(k)){
+        *out = t;
+        return 0;
+    }
+    if(!ccbt_is_integer(k))
+        return cc_parse_error(p, loc, "integer promotion requires integer type");
+    if(ccbt_int_rank(k) < ccbt_int_rank(CCBT_int))
+        *out = ccqt_basic(CCBT_int);
+    else
+        *out = t;
+    return 0;
+}
+
+// C 6.3.1.8 usual arithmetic conversions
+// Returns 0 on success, non-zero if operands are not arithmetic types.
+static int
+cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, SrcLoc loc){
+    if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
+        return cc_parse_error(p, loc, "usual arithmetic conversions require arithmetic types");
+    CcBasicTypeKind ak = a.basic.kind, bk = b.basic.kind;
+    if(ak == CCBT_void || bk == CCBT_void)
+        return cc_parse_error(p, loc, "usual arithmetic conversions on void");
+    // long double
+    if(ak == CCBT_long_double || bk == CCBT_long_double){
+        *out = ccqt_basic(CCBT_long_double); return 0;
+    }
+    // double
+    if(ak == CCBT_double || bk == CCBT_double){
+        *out = ccqt_basic(CCBT_double); return 0;
+    }
+    // float
+    if(ak == CCBT_float || bk == CCBT_float){
+        *out = ccqt_basic(CCBT_float); return 0;
+    }
+    // Integer promotions
+    CcQualType ap, bp;
+    int err = cc_integer_promote(p, a, &ap, loc);
+    if(err) return err;
+    err = cc_integer_promote(p, b, &bp, loc);
+    if(err) return err;
+    ak = ap.basic.kind;
+    bk = bp.basic.kind;
+    if(ak == bk){ *out = ap; return 0; }
+    _Bool a_unsigned = ccbt_is_unsigned(ak);
+    _Bool b_unsigned = ccbt_is_unsigned(bk);
+    if(a_unsigned == b_unsigned){
+        *out = ccbt_int_rank(ak) >= ccbt_int_rank(bk) ? ap : bp;
+        return 0;
+    }
+    // Different signedness
+    CcBasicTypeKind u = a_unsigned ? ak : bk;
+    CcBasicTypeKind s = a_unsigned ? bk : ak;
+    if(ccbt_int_rank(u) >= ccbt_int_rank(s)){
+        *out = ccqt_basic(u); return 0;
+    }
+    if(ccbt_int_rank(s) > ccbt_int_rank(u)){
+        *out = ccqt_basic(s); return 0;
+    }
+    *out = ccqt_basic(ccbt_to_unsigned(s));
+    return 0;
+}
+
+// Check if a type is pointer-like (pointer or array) for arithmetic purposes
+static inline _Bool
+ccqt_is_pointer_like(CcQualType t){
+    if(ccqt_is_basic(t)) return 0;
+    CcTypeKind k = ccqt_kind(t);
+    return k == CC_POINTER || k == CC_ARRAY;
+}
+
+// Extract pointee type from pointer or element type from array
+// Returns 0 on success, non-zero if t is not a pointer or array.
+static int
+cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
+    if(!ccqt_is_basic(t)){
+        CcTypeKind kind = ccqt_kind(t);
+        if(kind == CC_POINTER){
+            CcPointer* ptr = (CcPointer*)(t.bits & ~(uintptr_t)7);
+            *out = ptr->pointee;
+            return 0;
+        }
+        if(kind == CC_ARRAY){
+            CcArray* arr = (CcArray*)(t.bits & ~(uintptr_t)7);
+            *out = arr->element;
+            return 0;
+        }
+    }
+    return cc_parse_error(p, loc, "dereferencing non-pointer type");
+}
+
+// Wrap an expression in an implicit cast if types differ.
+// Returns the original expression if types match or target is void.
+static CcExpr* _Nullable
+cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target){
+    if(target.basic.kind == CCBT_void && ccqt_is_basic(target))
+        return e;
+    if(e->type.bits == target.bits)
+        return e;
+    if(e->type.basic.kind == CCBT_void && ccqt_is_basic(e->type))
+        return e;
+    CcExpr* cast = cc_alloc_expr(p, 0);
+    if(!cast) return NULL;
+    cast->kind = CC_EXPR_CAST;
+    cast->loc = e->loc;
+    cast->type = target;
+    cast->value0 = e;
+    return cast;
+}
 
 static
 _Bool
@@ -107,6 +284,7 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->loc = tok.loc;
             node->value0 = left;
             node->values[0] = right;
+            node->type = right->type;
             left = node;
         } else {
             cc_unget(p, &tok);
@@ -134,10 +312,14 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             // right-associative: recurse into assignment_expr
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
+            CcExpr* cright = cc_implicit_cast(p, right, left->type);
+            if(!cright) return CC_LEX_OOM_ERROR;
+            right = cright;
             CcExpr* node = cc_alloc_expr(p, 1);
             if(!node) return CC_LEX_OOM_ERROR;
             node->kind = kind;
             node->loc = tok.loc;
+            node->type = left->type;
             node->value0 = left;
             node->values[0] = right;
             *out = node;
@@ -172,10 +354,20 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         // right-associative: recurse into ternary
         err = cc_parse_ternary_expr(p, &else_expr);
         if(err) return err;
+        CcQualType common;
+        err = cc_usual_arithmetic(p, then_expr->type, else_expr->type, &common, tok.loc);
+        if(err) return err;
+        CcExpr* ct = cc_implicit_cast(p, then_expr, common);
+        if(!ct) return CC_LEX_OOM_ERROR;
+        then_expr = ct;
+        CcExpr* ce = cc_implicit_cast(p, else_expr, common);
+        if(!ce) return CC_LEX_OOM_ERROR;
+        else_expr = ce;
         CcExpr* node = cc_alloc_expr(p, 2);
         if(!node) return CC_LEX_OOM_ERROR;
         node->kind = CC_EXPR_TERNARY;
         node->loc = tok.loc;
+        node->type = common;
         node->value0 = cond;
         node->values[0] = then_expr;
         node->values[1] = else_expr;
@@ -215,10 +407,99 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
         // Look ahead: if next op has higher precedence, recurse
         err = cc_parse_infix(p, right, prec + 1, &right);
         if(err) return err;
+        // Compute result type, insert implicit casts
+        CcQualType result_type = {0};
+        switch(kind){
+            case CC_EXPR_LOGAND: case CC_EXPR_LOGOR:
+                result_type = ccqt_basic(CCBT_int);
+                break;
+            case CC_EXPR_EQ: case CC_EXPR_NE:
+            case CC_EXPR_LT: case CC_EXPR_GT:
+            case CC_EXPR_LE: case CC_EXPR_GE: {
+                if(!ccqt_is_pointer_like(left->type) && !ccqt_is_pointer_like(right->type)){
+                    CcQualType common;
+                    err = cc_usual_arithmetic(p, left->type, right->type, &common, tok.loc);
+                    if(err) return err;
+                    CcExpr* cl = cc_implicit_cast(p, left, common);
+                    if(!cl) return CC_LEX_OOM_ERROR;
+                    left = cl;
+                    CcExpr* cr = cc_implicit_cast(p, right, common);
+                    if(!cr) return CC_LEX_OOM_ERROR;
+                    right = cr;
+                }
+                result_type = ccqt_basic(CCBT_int);
+                break;
+            }
+            case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT: {
+                CcQualType lp, rp;
+                err = cc_integer_promote(p, left->type, &lp, tok.loc);
+                if(err) return err;
+                err = cc_integer_promote(p, right->type, &rp, tok.loc);
+                if(err) return err;
+                CcExpr* cl = cc_implicit_cast(p, left, lp);
+                if(!cl) return CC_LEX_OOM_ERROR;
+                left = cl;
+                CcExpr* cr = cc_implicit_cast(p, right, rp);
+                if(!cr) return CC_LEX_OOM_ERROR;
+                right = cr;
+                result_type = lp;
+                break;
+            }
+            case CC_EXPR_ADD: {
+                _Bool lptr = ccqt_is_pointer_like(left->type);
+                _Bool rptr = ccqt_is_pointer_like(right->type);
+                if(lptr)       result_type = left->type;
+                else if(rptr)  result_type = right->type;
+                else {
+                    err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
+                    if(err) return err;
+                    CcExpr* cl = cc_implicit_cast(p, left, result_type);
+                    if(!cl) return CC_LEX_OOM_ERROR;
+                    left = cl;
+                    CcExpr* cr = cc_implicit_cast(p, right, result_type);
+                    if(!cr) return CC_LEX_OOM_ERROR;
+                    right = cr;
+                }
+                break;
+            }
+            case CC_EXPR_SUB: {
+                _Bool lptr = ccqt_is_pointer_like(left->type);
+                _Bool rptr = ccqt_is_pointer_like(right->type);
+                if(lptr && rptr){
+                    // ptr - ptr = ptrdiff_t
+                    result_type = ccqt_basic(p->lexer.cpp.target.ptrdiff_type);
+                } else if(lptr){
+                    result_type = left->type;
+                } else {
+                    err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
+                    if(err) return err;
+                    CcExpr* cl = cc_implicit_cast(p, left, result_type);
+                    if(!cl) return CC_LEX_OOM_ERROR;
+                    left = cl;
+                    CcExpr* cr = cc_implicit_cast(p, right, result_type);
+                    if(!cr) return CC_LEX_OOM_ERROR;
+                    right = cr;
+                }
+                break;
+            }
+            default: {
+                // arithmetic/bitwise: *,/,%,&,|,^
+                err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
+                if(err) return err;
+                CcExpr* cl = cc_implicit_cast(p, left, result_type);
+                if(!cl) return CC_LEX_OOM_ERROR;
+                left = cl;
+                CcExpr* cr = cc_implicit_cast(p, right, result_type);
+                if(!cr) return CC_LEX_OOM_ERROR;
+                right = cr;
+                break;
+            }
+        }
         CcExpr* node = cc_alloc_expr(p, 1);
         if(!node) return CC_LEX_OOM_ERROR;
         node->kind = kind;
         node->loc = tok.loc;
+        node->type = result_type;
         node->value0 = left;
         node->values[0] = right;
         left = node;
@@ -252,10 +533,39 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             CcExpr* operand;
             err = cc_parse_prefix(p, &operand);
             if(err) return err;
+            // Insert implicit casts and compute type
+            CcQualType result_type;
+            switch(kind){
+                case CC_EXPR_NEG: case CC_EXPR_POS: case CC_EXPR_BITNOT: {
+                    err = cc_integer_promote(p, operand->type, &result_type, tok.loc);
+                    if(err) return err;
+                    CcExpr* co = cc_implicit_cast(p, operand, result_type);
+                    if(!co) return CC_LEX_OOM_ERROR;
+                    operand = co;
+                    break;
+                }
+                case CC_EXPR_LOGNOT:
+                    result_type = ccqt_basic(CCBT_int);
+                    break;
+                case CC_EXPR_DEREF:
+                    err = cc_deref_type(p, operand->type, &result_type, tok.loc);
+                    if(err) return err;
+                    break;
+                case CC_EXPR_ADDR: {
+                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, p->lexer.cpp.allocator, operand->type, 0);
+                    if(!ptr) return CC_LEX_OOM_ERROR;
+                    result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                    break;
+                }
+                default: // PREINC, PREDEC
+                    result_type = operand->type;
+                    break;
+            }
             CcExpr* node = cc_alloc_expr(p, 0);
             if(!node) return CC_LEX_OOM_ERROR;
             node->kind = kind;
             node->loc = tok.loc;
+            node->type = result_type;
             node->value0 = operand;
             *out = node;
             return 0;
@@ -320,19 +630,15 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_WCHAR:
-                    #ifdef _WIN32
-                    node->type.basic.kind = CCBT_short;
-                    #else
-                    node->type.basic.kind = CCBT_int;
-                    #endif
+                    node->type.basic.kind = p->lexer.cpp.target.wchar_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_CHAR16:
-                    node->type.basic.kind = CCBT_unsigned_short;
+                    node->type.basic.kind = p->lexer.cpp.target.char16_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_CHAR32:
-                    node->type.basic.kind = CCBT_unsigned;
+                    node->type.basic.kind = p->lexer.cpp.target.char32_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_UCHAR:
@@ -350,6 +656,10 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->loc = tok.loc;
             node->str.length = tok.str.length;
             node->text = tok.str.text;
+            // Type: char* (pointer to char)
+            CcPointer* sp = cc_intern_pointer(&p->type_cache, p->lexer.cpp.allocator, ccqt_basic(CCBT_char), 0);
+            if(!sp) return CC_LEX_OOM_ERROR;
+            node->type = (CcQualType){.bits = (uintptr_t)sp};
             *out = node;
             return 0;
         }
@@ -413,6 +723,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(!node) return CC_LEX_OOM_ERROR;
                 node->kind = CC_EXPR_POSTINC;
                 node->loc = tok.loc;
+                node->type = operand->type;
                 node->value0 = operand;
                 operand = node;
                 continue;
@@ -422,6 +733,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(!node) return CC_LEX_OOM_ERROR;
                 node->kind = CC_EXPR_POSTDEC;
                 node->loc = tok.loc;
+                node->type = operand->type;
                 node->value0 = operand;
                 operand = node;
                 continue;
@@ -437,6 +749,10 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(!node) return CC_LEX_OOM_ERROR;
                 node->kind = CC_EXPR_SUBSCRIPT;
                 node->loc = tok.loc;
+                CcQualType elem_type;
+                err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
+                if(err) return err;
+                node->type = elem_type;
                 node->value0 = operand;
                 node->values[0] = index;
                 operand = node;
@@ -522,6 +838,69 @@ done:
 }
 
 // ---------------------------------------------------------------------------
+// Type printer
+// ---------------------------------------------------------------------------
+
+static
+void
+cc_print_type(CcQualType t){
+    if(t.is_const) fputs("const ", stdout);
+    if(t.is_volatile) fputs("volatile ", stdout);
+    if(ccqt_is_basic(t)){
+        static const char* basic_names[] = {
+            [CCBT_void]               = "void",
+            [CCBT_bool]               = "_Bool",
+            [CCBT_char]               = "char",
+            [CCBT_signed_char]        = "signed char",
+            [CCBT_unsigned_char]      = "unsigned char",
+            [CCBT_short]              = "short",
+            [CCBT_unsigned_short]     = "unsigned short",
+            [CCBT_int]                = "int",
+            [CCBT_unsigned]           = "unsigned int",
+            [CCBT_long]               = "long",
+            [CCBT_unsigned_long]      = "unsigned long",
+            [CCBT_long_long]          = "long long",
+            [CCBT_unsigned_long_long] = "unsigned long long",
+            [CCBT_float]              = "float",
+            [CCBT_double]             = "double",
+            [CCBT_long_double]        = "long double",
+            [CCBT_float_complex]      = "float _Complex",
+            [CCBT_double_complex]     = "double _Complex",
+            [CCBT_long_double_complex]= "long double _Complex",
+            [CCBT_nullptr_t]          = "nullptr_t",
+        };
+        CcBasicTypeKind k = t.basic.kind;
+        if(k < CCBT_COUNT)
+            fputs(basic_names[k], stdout);
+        else
+            fputs("<bad-basic>", stdout);
+        return;
+    }
+    CcTypeKind kind = ccqt_kind(t);
+    switch(kind){
+        case CC_POINTER: {
+            CcPointer* p = (CcPointer*)(t.bits & ~(uintptr_t)7);
+            cc_print_type(p->pointee);
+            fputs("*", stdout);
+            if(p->restrict_) fputs(" restrict", stdout);
+            return;
+        }
+        case CC_ARRAY: {
+            CcArray* a = (CcArray*)(t.bits & ~(uintptr_t)7);
+            cc_print_type(a->element);
+            if(a->is_incomplete)
+                fputs("[]", stdout);
+            else
+                printf("[%zu]", a->length);
+            return;
+        }
+        default:
+            printf("<type:%d>", (int)kind);
+            return;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Expression printer (S-expression format for REPL feedback)
 // ---------------------------------------------------------------------------
 
@@ -533,9 +912,17 @@ cc_print_expr(CcExpr* e){
             // Check if it looks like a string (str.length set and text non-null)
             if(e->str.length && e->text){
                 printf("\"%.*s\"", e->str.length, e->text);
+            } else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
+                if(e->type.basic.kind == CCBT_float)
+                    printf("%gf", (double)e->float_);
+                else
+                    printf("%g", e->double_);
             } else {
-                // Integer/float value — print as integer for simplicity
                 printf("%llu", (unsigned long long)e->uinteger);
+            }
+            if(e->type.bits){
+                putchar(':');
+                cc_print_type(e->type);
             }
             return;
         case CC_EXPR_IDENTIFIER:
@@ -549,19 +936,21 @@ cc_print_expr(CcExpr* e){
             printf("<unimpl>");
             return;
         // Unary prefix
-        case CC_EXPR_NEG:    printf("(- ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_POS:    printf("(+ ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_BITNOT: printf("(~ ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_LOGNOT: printf("(! ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_DEREF:  printf("(* ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_ADDR:   printf("(& ");     cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_PREINC: printf("(++pre "); cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_PREDEC: printf("(--pre "); cc_print_expr(e->value0); printf(")"); return;
+        #define UNOP(K, S) case K: fputs("(" S, stdout); if(e->type.bits){putchar(':'); cc_print_type(e->type);} putchar(' '); cc_print_expr(e->value0); putchar(')'); return;
+        UNOP(CC_EXPR_NEG,    "-")
+        UNOP(CC_EXPR_POS,    "+")
+        UNOP(CC_EXPR_BITNOT, "~")
+        UNOP(CC_EXPR_LOGNOT, "!")
+        UNOP(CC_EXPR_DEREF,  "*")
+        UNOP(CC_EXPR_ADDR,   "&")
+        UNOP(CC_EXPR_PREINC, "++pre")
+        UNOP(CC_EXPR_PREDEC, "--pre")
         // Unary postfix
-        case CC_EXPR_POSTINC: printf("(post++ "); cc_print_expr(e->value0); printf(")"); return;
-        case CC_EXPR_POSTDEC: printf("(post-- "); cc_print_expr(e->value0); printf(")"); return;
+        UNOP(CC_EXPR_POSTINC, "post++")
+        UNOP(CC_EXPR_POSTDEC, "post--")
+        #undef UNOP
         // Binary ops
-        #define BINOP(K, S) case K: fputs("(" S " ", stdout); cc_print_expr(e->value0); putchar(' '); cc_print_expr(e->values[0]); putchar(')'); return;
+        #define BINOP(K, S) case K: fputs("(" S, stdout); if(e->type.bits){putchar(':'); cc_print_type(e->type);} putchar(' '); cc_print_expr(e->value0); putchar(' '); cc_print_expr(e->values[0]); putchar(')'); return;
         BINOP(CC_EXPR_ADD,    "+")
         BINOP(CC_EXPR_SUB,    "-")
         BINOP(CC_EXPR_MUL,    "*")
@@ -595,18 +984,22 @@ cc_print_expr(CcExpr* e){
         BINOP(CC_EXPR_SUBSCRIPT,    "[]")
         #undef BINOP
         case CC_EXPR_TERNARY:
-            printf("(? ");
+            fputs("(?", stdout);
+            if(e->type.bits){ putchar(':'); cc_print_type(e->type); }
+            putchar(' ');
             cc_print_expr(e->value0);
-            printf(" ");
+            putchar(' ');
             cc_print_expr(e->values[0]);
-            printf(" ");
+            putchar(' ');
             cc_print_expr(e->values[1]);
-            printf(")");
+            putchar(')');
             return;
         case CC_EXPR_CAST:
-            printf("(cast ");
+            fputs("(cast<", stdout);
+            cc_print_type(e->type);
+            fputs("> ", stdout);
             cc_print_expr(e->value0);
-            printf(")");
+            putchar(')');
             return;
         case CC_EXPR_DOT:
             fputs("(. ", stdout);
@@ -695,6 +1088,20 @@ cc_eval_expr(CcExpr* e){
         case CC_EXPR_VALUE:
             if(e->str.length && e->text)
                 return cc_eval_error(); // can't eval strings to a number
+            if(ccqt_is_basic(e->type)){
+                switch(e->type.basic.kind){
+                    case CCBT_float:
+                        return (CcEvalResult){.kind = CC_EVAL_FLOAT, .f = e->float_};
+                    case CCBT_double: case CCBT_long_double:
+                        return (CcEvalResult){.kind = CC_EVAL_DOUBLE, .d = e->double_};
+                    case CCBT_unsigned: case CCBT_unsigned_long:
+                    case CCBT_unsigned_long_long: case CCBT_unsigned_char:
+                    case CCBT_unsigned_short: case CCBT_bool:
+                        return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
+                    default:
+                        return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
+                }
+            }
             return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
         case CC_EXPR_IDENTIFIER:
             return cc_eval_error(); // unresolved identifier
@@ -806,6 +1213,45 @@ cc_eval_expr(CcExpr* e){
             #undef IBINOP
             #undef IINTOP
             #undef ICMPOP
+        }
+        case CC_EXPR_CAST: {
+            CcEvalResult v = cc_eval_expr(e->value0);
+            if(v.kind == CC_EVAL_ERROR) return v;
+            if(!ccqt_is_basic(e->type)) return v;
+            CcBasicTypeKind tk = e->type.basic.kind;
+            if(ccbt_is_float(tk)){
+                double d;
+                switch(v.kind){
+                    case CC_EVAL_INT:    d = (double)v.i; break;
+                    case CC_EVAL_UINT:   d = (double)v.u; break;
+                    case CC_EVAL_FLOAT:  d = (double)v.f; break;
+                    case CC_EVAL_DOUBLE: d = v.d; break;
+                    default: return cc_eval_error();
+                }
+                if(tk == CCBT_float)
+                    return (CcEvalResult){.kind = CC_EVAL_FLOAT, .f = (float)d};
+                return (CcEvalResult){.kind = CC_EVAL_DOUBLE, .d = d};
+            }
+            if(ccbt_is_integer(tk)){
+                if(ccbt_is_unsigned(tk)){
+                    switch(v.kind){
+                        case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.i};
+                        case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_UINT, .u=v.u};
+                        case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.f};
+                        case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.d};
+                        default: return cc_eval_error();
+                    }
+                } else {
+                    switch(v.kind){
+                        case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_INT, .i=v.i};
+                        case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.u};
+                        case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.f};
+                        case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.d};
+                        default: return cc_eval_error();
+                    }
+                }
+            }
+            return v;
         }
         default:
             return cc_eval_error();

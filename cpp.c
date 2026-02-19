@@ -38,8 +38,6 @@ int main(int argc, char** argv, char** envp){
         .logger = logger,
         .env = &env,
     };
-    err = cpp_define_builtin_macros(&cpp);
-    if(err) return err;
     const char* filename = NULL;
     ArgToParse pos_args[] = {
         {
@@ -113,6 +111,9 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&parser, parse_err);
         return 1;
     }
+    cpp.target = cc_target_funcs[cc_target_arg]();
+    err = cpp_define_builtin_macros(&cpp);
+    if(err) return err;
     if(!filename){
         LongString txt;
         #ifdef _WIN32
