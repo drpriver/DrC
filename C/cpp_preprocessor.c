@@ -311,8 +311,7 @@ cpp_add_include_guard(CPreprocessor* cpp, uint32_t file_id, Atom guard){
 // out_pos is set to the position in the include path arrays for include_next.
 static
 int
-cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next,
-                 StringView header_name, IncludePosition* out_pos){
+cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next, StringView header_name, IncludePosition* out_pos){
     MStringBuilder* sb = fc_path_builder(cpp->fc);
     // For quoted includes (not include_next), first search the current file's directory
     if(quote && !is_next){
@@ -367,6 +366,36 @@ cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next,
                 msb_write_str(sb, header_name.text, header_name.length);
                 *out_pos = (IncludePosition){i, j};
                 return 0;
+            }
+        }
+    }
+    // Framework search: #include <Foo/Bar.h> -> {fwk}/Foo.framework/Headers/Bar.h
+    if(cpp->framework_paths.count){
+        const char* slash = memchr(header_name.text, '/', header_name.length);
+        if(slash && !memchr(slash+1, '/', header_name.text+header_name.length-slash-1)){
+            size_t fw_len = (size_t)(slash - header_name.text);
+            const char* remaining = slash + 1;
+            size_t remaining_len = header_name.length - fw_len - 1;
+            for(size_t i = 0; i < cpp->framework_paths.count; i++){
+                StringView d = cpp->framework_paths.data[i];
+                msb_reset(sb);
+                msb_write_str(sb, d.text, d.length);
+                if(d.text[d.length-1] != '/')
+                    msb_write_char(sb, '/');
+                msb_write_str(sb, header_name.text, fw_len);
+                msb_write_str(sb, ".framework/Headers/", 19);
+                msb_write_str(sb, remaining, remaining_len);
+                if(fc_is_file(cpp->fc)){
+                    // fc_is_file consumed the path, rebuild it
+                    msb_write_str(sb, d.text, d.length);
+                    if(d.text[d.length-1] != '/')
+                        msb_write_char(sb, '/');
+                    msb_write_str(sb, header_name.text, fw_len);
+                    msb_write_str(sb, ".framework/Headers/", 19);
+                    msb_write_str(sb, remaining, remaining_len);
+                    *out_pos = (IncludePosition){0, 0};
+                    return 0;
+                }
             }
         }
     }
@@ -3967,12 +3996,20 @@ cpp_define_target_macros(CPreprocessor* cpp){
             DEF1("__x86_64");
             DEF1("__amd64__");
             DEF1("__amd64");
+            DEF1("TARGET_CPU_X86_64");
+            DEF1("TARGET_OS_MAC");
+            DEF1("TARGET_OS_OSX");
+            DEFINT("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", 101400);
             break;
         case CC_TARGET_AARCH64_MACOS:
             DEF1("__APPLE__");
             DEF1("__MACH__");
             DEF1("__aarch64__");
             DEF1("__arm64__");
+            DEF1("TARGET_CPU_ARM64");
+            DEF1("TARGET_OS_MAC");
+            DEF1("TARGET_OS_OSX");
+            DEFINT("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", 140000);
             break;
         case CC_TARGET_X86_64_WINDOWS:
             DEF1("_WIN32");
