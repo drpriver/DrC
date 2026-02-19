@@ -50,6 +50,7 @@ cc_lex_string(StringView txt, CCToken (*out)[MAX_TEST_TOKENS], int* count, const
             .at = &at,
             .logger = logger,
             .env = &env,
+            .target = cc_target_test(),
         },
     };
     fc_write_path(fc, "(test)", 6);
@@ -106,6 +107,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
             .at = &at,
             .logger = logger,
             .env = &env,
+            .target = cc_target_test(),
         },
     };
     fc_write_path(fc, "(test)", 6);

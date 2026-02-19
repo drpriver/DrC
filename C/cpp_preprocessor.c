@@ -4089,7 +4089,14 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
         {SV("stdarg.h"),   SV("#pragma once\n")},
-        {SV("stddef.h"),   SV("#pragma once\n")},
+        {SV("stddef.h"),   SV("#pragma once\n"
+                              "typedef __SIZE_TYPE__ size_t;\n"
+                              "typedef __PTRDIFF_TYPE__ ptrdiff_t;\n"
+                              "typedef __WCHAR_TYPE__ wchar_t;\n"
+                              "typedef typeof(nullptr) nullptr_t;\n"
+                              "#define NULL ((void*)0)\n"
+                              "#define offsetof(type, member) ((__SIZE_TYPE__)&((type*)0)->member)\n"
+                           )},
         {SV("stdbool.h"),  SV("#pragma once\n"
                               "#define __bool_true_false_are_defined 1\n"
                               "#ifndef bool\n"
@@ -4101,9 +4108,35 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
                               "#ifndef false\n"
                               "#define false false\n"
                               "#endif\n"
-                              )},
-        {SV("float.h"),    SV("#pragma once\n")},
-        {SV("limits.h"),   SV("#pragma once\n")},
+                           )},
+        {SV("float.h"),    SV("#pragma once\n"
+                              "#if __has_include_next(<float.h>)\n"
+                              "#include_next <float.h>\n"
+                              "#endif\n"
+                            )},
+        {SV("limits.h"),   SV("#pragma once\n"
+                              "#if __has_include_next(<limits.h>)\n"
+                              "#include_next <limits.h>\n"
+                              "#endif\n"
+                            )},
+        {SV("std.h"),      SV("#pragma once\n"
+                              "#include <stdarg.h>\n"
+                              "#include <stddef.h>\n"
+                              "#include <stdbool.h>\n"
+                              "#include <float.h>\n"
+                              "#include <limits.h>\n"
+                              "#include <stdint.h>\n"
+                              "#include <stdio.h>\n"
+                              "#include <stdlib.h>\n"
+                              "#include <string.h>\n"
+                              "#include <math.h>\n"
+                              "#include <ctype.h>\n"
+                              "#include <errno.h>\n"
+                              "#include <assert.h>\n"
+                              "#include <signal.h>\n"
+                              "#include <time.h>\n"
+                              "#include <inttypes.h>\n"
+                          )},
     };
     for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
         err = cpp_cache_builtin_header(cpp, headers[i].name, headers[i].content);

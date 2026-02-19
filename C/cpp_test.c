@@ -48,6 +48,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         .at = &at,
         .logger = logger,
         .env = &env,
+        .target = cc_target_test(),
     };
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
@@ -123,6 +124,7 @@ cpp_expand_with_files(
         .at = &at,
         .logger = logger,
         .env = &env,
+        .target = cc_target_test(),
     };
     for(size_t i = 0; i < nIpaths; i++){
         err = ma_push(StringView)(&cpp.Ipaths, a, Ipaths[i]);
@@ -193,6 +195,7 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
         .at = &at,
         .logger = logger,
         .env = &env,
+        .target = cc_target_test(),
     };
     fc_write_path(fc, "(test)", 6);
     int err = fc_cache_file(fc, txt);

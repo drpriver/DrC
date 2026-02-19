@@ -17,6 +17,7 @@ enum CcTarget TYPED_ENUM(int) {
     CC_TARGET_X86_64_MACOS,
     CC_TARGET_AARCH64_MACOS,
     CC_TARGET_X86_64_WINDOWS,
+    CC_TARGET_TEST, // stable target for tests, not a real platform
     CC_TARGET_COUNT,
 };
 TYPEDEF_ENUM(CcTarget, int);
@@ -27,6 +28,7 @@ static const StringView cc_target_names[CC_TARGET_COUNT] = {
     [CC_TARGET_X86_64_MACOS]   = SV("x86_64-macos"),
     [CC_TARGET_AARCH64_MACOS]  = SV("aarch64-macos"),
     [CC_TARGET_X86_64_WINDOWS] = SV("x86_64-windows"),
+    [CC_TARGET_TEST]           = SV("test"),
 };
 
 // Target-specific type configuration.
@@ -173,6 +175,30 @@ cc_target_x86_64_windows(void){
     };
 }
 
+static inline CcTargetConfig
+cc_target_test(void){
+    return (CcTargetConfig){
+        .target            = CC_TARGET_TEST,
+        .sizeof_short      = 2,
+        .sizeof_int        = 4,
+        .sizeof_long       = 8,
+        .sizeof_long_long  = 8,
+        .sizeof_float      = 4,
+        .sizeof_double     = 8,
+        .sizeof_long_double= 16,
+        .sizeof_pointer    = 8,
+        .size_type         = CCBT_unsigned_long,
+        .ptrdiff_type      = CCBT_long,
+        .wchar_type        = CCBT_int,
+        .char16_type       = CCBT_unsigned_short,
+        .char32_type       = CCBT_unsigned,
+        .wint_type         = CCBT_int,
+        .intmax_type       = CCBT_long,
+        .intptr_type       = CCBT_long,
+        .char_is_signed    = 1,
+    };
+}
+
 typedef CcTargetConfig (* _Nonnull CcTargetFunc)(void);
 static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
     [CC_TARGET_X86_64_LINUX]   = cc_target_x86_64_linux,
@@ -180,6 +206,7 @@ static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
     [CC_TARGET_X86_64_MACOS]   = cc_target_x86_64_macos,
     [CC_TARGET_AARCH64_MACOS]  = cc_target_aarch64_macos,
     [CC_TARGET_X86_64_WINDOWS] = cc_target_x86_64_windows,
+    [CC_TARGET_TEST]           = cc_target_test,
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)
