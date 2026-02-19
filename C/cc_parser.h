@@ -3,8 +3,11 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#include "../Drp/atom_map.h"
+#include "../Drp/free_list.h"
 #include "cc_lexer.h"
 #include "c_tok.h"
+#include "cc_type.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CCToken
@@ -14,11 +17,55 @@
 #pragma clang assume_nonnull begin
 #endif
 
+typedef struct CcAttributes CcAttributes;
+struct CcAttributes {
+    union {
+        uint64_t bits;
+        struct {
+            uint64_t packed:            1,
+                     transparent_union: 1,
+                     has_aligned:       1,
+                     _padding:          13,
+                     vector_size:       16,
+                     aligned:           16,
+                     _padding2:         16;
+        };
+    };
+};
+
+static inline
+void
+cc_clear_attributes(CcAttributes* attrs){
+    attrs->bits = 0;
+}
+
+typedef struct CcScope CcScope;
+struct CcScope {
+    CcScope* parent;
+    AtomMap(CcType) types;
+    AtomMap(CcVariable) variables;
+    AtomMap(CcStruct) structs;
+    AtomMap(CcUnion) unions;
+};
+
+static inline
+void
+ccscope_clear(CcScope* scope){
+    AM_clear(&scope->types);
+    AM_clear(&scope->variables);
+    AM_clear(&scope->structs);
+    AM_clear(&scope->unions);
+}
+
 typedef struct CcParser CcParser;
 struct CcParser {
     CcLexer lexer;
     // for lookahead/pushback, LIFO
     Marray(CCToken) pending;
+    CcAttributes attributes;
+    CcScope global;
+    CcScope* current;
+    FreeList(CcScope) scratch_scopes;
 };
 
 #ifdef __clang__
