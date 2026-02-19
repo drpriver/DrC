@@ -183,15 +183,15 @@ static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)
-    #define CC_TARGET_NATIVE CC_TARGET_AARCH64_MACOS
+    enum {CC_TARGET_NATIVE = CC_TARGET_AARCH64_MACOS};
 #elif defined(__APPLE__) && defined(__x86_64__)
-    #define CC_TARGET_NATIVE CC_TARGET_X86_64_MACOS
+    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_MACOS};
 #elif defined(__linux__) && defined(__aarch64__)
-    #define CC_TARGET_NATIVE CC_TARGET_AARCH64_LINUX
+    enum {CC_TARGET_NATIVE = CC_TARGET_AARCH64_LINUX};
 #elif defined(__linux__) && defined(__x86_64__)
-    #define CC_TARGET_NATIVE CC_TARGET_X86_64_LINUX
+    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_LINUX};
 #elif defined(_WIN32) && defined(_M_X64)
-    #define CC_TARGET_NATIVE CC_TARGET_X86_64_WINDOWS
+    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_WINDOWS};
 #else
     #error "Unknown native target"
 #endif
