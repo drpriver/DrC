@@ -34,14 +34,12 @@ cctc_hash_array(CcQualType element, size_t length, uint32_t flags){
 
 static inline
 uint32_t
-cctc_hash_function(CcQualType return_type, const CcParam* params, uint32_t param_count, uint32_t flags){
+cctc_hash_function(CcQualType return_type, const CcQualType* params, uint32_t param_count, uint32_t flags){
     uint64_t buf[2] = { return_type.bits, (uint64_t)param_count | ((uint64_t)flags << 32)};
-    uint64_t h = hash_align8(buf, sizeof buf);
-    for(uint32_t i = 0; i < param_count; i++){
-        uint64_t v = params[i].type.bits;
-        h += hash_align8(&v, sizeof v) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    }
-    return (uint32_t)h;
+    uint32_t h = hash_align8(buf, sizeof buf);
+    if(param_count)
+        h = hash_align8(params, sizeof *params * param_count) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    return h;
 }
 
 static inline
@@ -217,16 +215,12 @@ cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t len
 
 static inline
 _Bool
-cctc_function_eq(const CcFunction* a, CcQualType return_type, const CcParam* params, uint32_t param_count, _Bool is_variadic, _Bool no_prototype){
+cctc_function_eq(const CcFunction* a, CcQualType return_type, const CcQualType* params, uint32_t param_count, _Bool is_variadic, _Bool no_prototype){
     if(a->return_type.bits != return_type.bits) return 0;
     if(a->param_count != param_count) return 0;
     if(a->is_variadic != (uint32_t)is_variadic) return 0;
     if(a->no_prototype != (uint32_t)no_prototype) return 0;
-    for(uint32_t i = 0; i < param_count; i++){
-        if(a->params[i].type.bits != params[i].type.bits)
-            return 0;
-    }
-    return 1;
+    return memcmp(a->params, params, sizeof *params * param_count) == 0;
 }
 
 static inline
@@ -250,7 +244,7 @@ cctc_rebuild_functions(CcTypeTable* t){
 warn_unused
 static inline
 CcFunction* _Nullable
-cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, const CcParam* params, uint32_t param_count, _Bool is_variadic, _Bool no_prototype){
+cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, const CcQualType* params, uint32_t param_count, _Bool is_variadic, _Bool no_prototype){
     CcTypeTable* t = &cache->functions;
     uint32_t flags = (uint32_t)is_variadic | ((uint32_t)no_prototype << 1);
     uint32_t hash = cctc_hash_function(return_type, params, param_count, flags);
@@ -273,7 +267,7 @@ cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, con
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_functions(t);
     }
-    size_t sz = sizeof(CcFunction) + sizeof(CcParam) * param_count;
+    size_t sz = sizeof(CcFunction) + sizeof *params * param_count;
     CcFunction* f = Allocator_zalloc(al, sz);
     if(!f) return NULL;
     f->kind = CC_FUNCTION;
@@ -281,7 +275,7 @@ cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, con
     f->no_prototype = no_prototype;
     f->return_type = return_type;
     f->param_count = param_count;
-    memcpy(f->params, params, sizeof(CcParam) * param_count);
+    memcpy(f->params, params, sizeof *params * param_count);
     void** items = t->data;
     uint32_t* idxes = cctc_idxes(t);
     uint32_t slot = t->count++;

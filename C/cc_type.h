@@ -88,7 +88,7 @@ struct CcPointer {
     CcQualType pointee;
 };
 
-typedef struct CcExpression CcExpression;
+typedef struct CcExpr CcExpr;
 
 typedef struct CcArray CcArray;
 struct CcArray {
@@ -105,14 +105,8 @@ struct CcArray {
     CcQualType element;
     union {
         size_t length;
-        CcExpression* _Nullable vla_expr;
+        CcExpr* _Nullable vla_expr;
     };
-};
-
-typedef struct CcParam CcParam;
-struct CcParam {
-    CcQualType type;
-    Atom name;
 };
 
 typedef struct CcFunction CcFunction;
@@ -128,7 +122,7 @@ struct CcFunction {
     };
     CcQualType return_type;
     uint32_t param_count;
-    CcParam params[];
+    CcQualType params[];
 };
 
 typedef struct CcField CcField;

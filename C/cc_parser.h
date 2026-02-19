@@ -9,6 +9,10 @@
 #include "c_tok.h"
 #include "cc_type.h"
 #include "cc_type_cache.h"
+#include "cc_expr.h"
+#include "cc_stmt.h"
+#include "cc_func.h"
+#include "cc_var.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CCToken
@@ -68,6 +72,7 @@ struct CcParser {
     CcScope global;
     CcScope* current;
     FreeList(CcScope) scratch_scopes;
+    FreeList(Marray(CCToken)) scratch_tokens;
 };
 
 #ifdef __clang__
