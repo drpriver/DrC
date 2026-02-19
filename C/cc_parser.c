@@ -10,89 +10,6 @@
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-// TODO: rewrite this myself instead of clanker slop
-
-// ---------------------------------------------------------------------------
-// Parser helpers
-// ---------------------------------------------------------------------------
-
-LOG_PRINTF(3, 4)
-static
-int
-cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
-    va_end(va);
-    return CC_LEX_SYNTAX_ERROR;
-}
-
-static
-int
-cc_next(CcParser* p, CCToken* tok){
-    if(p->pending.count){
-        *tok = ma_pop(CCToken)(&p->pending);
-        return 0;
-    }
-    return cc_lex_next_token(&p->lexer, tok);
-}
-
-static
-int
-cc_unget(CcParser* p, CCToken* tok){
-    return ma_push(CCToken)(&p->pending, p->lexer.cpp.allocator, *tok);
-}
-
-static
-int
-cc_peek(CcParser* p, CCToken* tok){
-    int err = cc_next(p, tok);
-    if(err) return err;
-    return cc_unget(p, tok);
-}
-
-static
-int
-cc_expect_punct(CcParser* p, CCPunct punct){
-    CCToken tok;
-    int err = cc_next(p, &tok);
-    if(err) return err;
-    if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){
-        // Build a readable name for the expected punctuator
-        char buf[4];
-        int len = 0;
-        uint32_t v = (uint32_t)punct;
-        // Multi-char puncts are stored as multi-char constants
-        if(v > 0xFFFF){
-            buf[len++] = (char)(v >> 16);
-            buf[len++] = (char)(v >> 8);
-            buf[len++] = (char)v;
-        } else if(v > 0xFF){
-            buf[len++] = (char)(v >> 8);
-            buf[len++] = (char)v;
-        } else {
-            buf[len++] = (char)v;
-        }
-        buf[len] = 0;
-        return cc_parse_error(p, tok.loc, "Expected '%s'", buf);
-    }
-    return 0;
-}
-
-// ---------------------------------------------------------------------------
-// Expression allocator
-// ---------------------------------------------------------------------------
-
-static
-CcExpr* _Nullable
-cc_alloc_expr(CcParser* p, size_t nvalues){
-    size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
-    return Allocator_zalloc(p->lexer.cpp.allocator, size);
-}
-
-// ---------------------------------------------------------------------------
-// Forward declarations
-// ---------------------------------------------------------------------------
 
 static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
@@ -101,42 +18,45 @@ static int cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Null
 static int cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
+static int cc_next(CcParser* p, CCToken* tok);
+static int cc_unget(CcParser* p, CCToken* tok);
+static int cc_peek(CcParser* p, CCToken* tok);
+static int cc_expect_punct(CcParser* p, CCPunct punct);
+static CcExpr* _Nullable cc_alloc_expr(CcParser* p, size_t nvalues);
+LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...);
+static _Bool cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec);
+static _Bool cc_assign_lookup(CCPunct punct, CcExprKind* kind);
 
-// ---------------------------------------------------------------------------
-// Precedence table for binary infix operators
-// ---------------------------------------------------------------------------
 
-typedef struct {
-    CCPunct punct;
-    CcExprKind kind;
-    int prec;
-} BinopEntry;
-
-// Precedences: higher number = tighter binding
-static const BinopEntry binop_table[] = {
-    {CC_or,      CC_EXPR_LOGOR,  4},
-    {CC_and,     CC_EXPR_LOGAND, 5},
-    {CC_pipe,    CC_EXPR_BITOR,  6},
-    {CC_xor,     CC_EXPR_BITXOR, 7},
-    {CC_amp,     CC_EXPR_BITAND, 8},
-    {CC_eq,      CC_EXPR_EQ,     9},
-    {CC_ne,      CC_EXPR_NE,     9},
-    {CC_lt,      CC_EXPR_LT,     10},
-    {CC_gt,      CC_EXPR_GT,     10},
-    {CC_le,      CC_EXPR_LE,     10},
-    {CC_ge,      CC_EXPR_GE,     10},
-    {CC_lshift,  CC_EXPR_LSHIFT, 11},
-    {CC_rshift,  CC_EXPR_RSHIFT, 11},
-    {CC_plus,    CC_EXPR_ADD,    12},
-    {CC_minus,   CC_EXPR_SUB,    12},
-    {CC_star,    CC_EXPR_MUL,    13},
-    {CC_slash,   CC_EXPR_DIV,    13},
-    {CC_percent, CC_EXPR_MOD,    13},
-};
 
 static
 _Bool
-binop_lookup(CCPunct punct, CcExprKind* kind, int* prec){
+cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec){
+    // Precedences: higher number = tighter binding
+    static const struct {
+        CCPunct punct;
+        CcExprKind kind;
+        int prec;
+    } binop_table[] = {
+        {CC_or,      CC_EXPR_LOGOR,  4},
+        {CC_and,     CC_EXPR_LOGAND, 5},
+        {CC_pipe,    CC_EXPR_BITOR,  6},
+        {CC_xor,     CC_EXPR_BITXOR, 7},
+        {CC_amp,     CC_EXPR_BITAND, 8},
+        {CC_eq,      CC_EXPR_EQ,     9},
+        {CC_ne,      CC_EXPR_NE,     9},
+        {CC_lt,      CC_EXPR_LT,     10},
+        {CC_gt,      CC_EXPR_GT,     10},
+        {CC_le,      CC_EXPR_LE,     10},
+        {CC_ge,      CC_EXPR_GE,     10},
+        {CC_lshift,  CC_EXPR_LSHIFT, 11},
+        {CC_rshift,  CC_EXPR_RSHIFT, 11},
+        {CC_plus,    CC_EXPR_ADD,    12},
+        {CC_minus,   CC_EXPR_SUB,    12},
+        {CC_star,    CC_EXPR_MUL,    13},
+        {CC_slash,   CC_EXPR_DIV,    13},
+        {CC_percent, CC_EXPR_MOD,    13},
+    };
     for(size_t i = 0; i < sizeof binop_table / sizeof binop_table[0]; i++){
         if(binop_table[i].punct == punct){
             *kind = binop_table[i].kind;
@@ -147,13 +67,9 @@ binop_lookup(CCPunct punct, CcExprKind* kind, int* prec){
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Assignment operator lookup
-// ---------------------------------------------------------------------------
-
 static
 _Bool
-assign_lookup(CCPunct punct, CcExprKind* kind){
+cc_assign_lookup(CCPunct punct, CcExprKind* kind){
     switch((uint32_t)punct){
         case CC_assign:         *kind = CC_EXPR_ASSIGN;       return 1;
         case CC_plus_assign:    *kind = CC_EXPR_ADDASSIGN;    return 1;
@@ -169,10 +85,6 @@ assign_lookup(CCPunct punct, CcExprKind* kind){
         default: return 0;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Expression parsing
-// ---------------------------------------------------------------------------
 
 // comma expression (lowest precedence)
 static
@@ -217,7 +129,7 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
-        if(assign_lookup(tok.punct.punct, &kind)){
+        if(cc_assign_lookup(tok.punct.punct, &kind)){
             CcExpr* right;
             // right-associative: recurse into assignment_expr
             err = cc_parse_assignment_expr(p, &right);
@@ -289,7 +201,7 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
         }
         CcExprKind kind;
         int prec;
-        if(!binop_lookup(tok.punct.punct, &kind, &prec)){
+        if(!cc_binop_lookup(tok.punct.punct, &kind, &prec)){
             cc_unget(p, &tok);
             break;
         }
@@ -372,13 +284,59 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->loc = tok.loc;
             switch(tok.constant.ctype){
                 case CC_FLOAT:
+                    node->type.basic.kind = CCBT_float;
                     node->float_ = tok.constant.float_value;
                     break;
                 case CC_DOUBLE:
-                case CC_LONG_DOUBLE:
+                    node->type.basic.kind = CCBT_double;
                     node->double_ = tok.constant.double_value;
                     break;
-                default:
+                case CC_LONG_DOUBLE:
+                    node->type.basic.kind = CCBT_long_double;
+                    node->double_ = tok.constant.double_value;
+                    break;
+                case CC_INT:
+                    node->type.basic.kind = CCBT_int;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_UNSIGNED:
+                    node->type.basic.kind = CCBT_unsigned;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_LONG:
+                    node->type.basic.kind = CCBT_long;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_UNSIGNED_LONG:
+                    node->type.basic.kind = CCBT_unsigned_long;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_LONG_LONG:
+                    node->type.basic.kind = CCBT_long_long;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_UNSIGNED_LONG_LONG:
+                    node->type.basic.kind = CCBT_unsigned_long_long;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_WCHAR:
+                    #ifdef _WIN32
+                    node->type.basic.kind = CCBT_short;
+                    #else
+                    node->type.basic.kind = CCBT_int;
+                    #endif
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_CHAR16:
+                    node->type.basic.kind = CCBT_unsigned_short;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_CHAR32:
+                    node->type.basic.kind = CCBT_unsigned;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
+                case CC_UCHAR:
+                    node->type.basic.kind = CCBT_unsigned_char;
                     node->uinteger = tok.constant.integer_value;
                     break;
             }
@@ -396,6 +354,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             return 0;
         }
         case CC_IDENTIFIER: {
+            return cc_parse_error(p, tok.loc, "Identifier lookup unimplemented");
             CcExpr* node = cc_alloc_expr(p, 0);
             if(!node) return CC_LEX_OOM_ERROR;
             node->kind = CC_EXPR_IDENTIFIER;
@@ -418,15 +377,16 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             return cc_parse_error(p, tok.loc, "Unexpected punctuator in expression");
         case CC_KEYWORD:
             if(tok.kw.kw == CC_sizeof){
-                // For now, sizeof only on unary expression (not on types)
-                // sizeof expr
+                return cc_parse_error(p, tok.loc, "sizeof not yet supported");
                 CcExpr* operand;
                 err = cc_parse_prefix(p, &operand);
                 if(err) return err;
-                // We can't desugar to a value without types, so use a unary node
-                // Reuse CC_EXPR_VALUE with 0 for now — caller can revisit
-                // Actually, let's just not handle sizeof yet
-                return cc_parse_error(p, tok.loc, "sizeof not yet supported");
+            }
+            if(tok.kw.kw == CC__Countof){
+                return cc_parse_error(p, tok.loc, "_Countof not yet supported");
+            }
+            if(tok.kw.kw == CC_alignof){
+                return cc_parse_error(p, tok.loc, "alignof not yet supported");
             }
             return cc_parse_error(p, tok.loc, "Unexpected keyword in expression");
         case CC_EOF:
@@ -910,6 +870,76 @@ void
 cc_parser_discard_input(CcParser* p){
     p->pending.count = 0;
     cpp_discard_all_input(&p->lexer.cpp);
+}
+
+LOG_PRINTF(3, 4)
+static
+int
+cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
+    va_end(va);
+    return CC_LEX_SYNTAX_ERROR;
+}
+
+static
+int
+cc_next(CcParser* p, CCToken* tok){
+    if(p->pending.count){
+        *tok = ma_pop(CCToken)(&p->pending);
+        return 0;
+    }
+    return cc_lex_next_token(&p->lexer, tok);
+}
+
+static
+int
+cc_unget(CcParser* p, CCToken* tok){
+    return ma_push(CCToken)(&p->pending, p->lexer.cpp.allocator, *tok);
+}
+
+static
+int
+cc_peek(CcParser* p, CCToken* tok){
+    int err = cc_next(p, tok);
+    if(err) return err;
+    return cc_unget(p, tok);
+}
+
+static
+int
+cc_expect_punct(CcParser* p, CCPunct punct){
+    CCToken tok;
+    int err = cc_next(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){
+        // Build a readable name for the expected punctuator
+        char buf[4];
+        int len = 0;
+        uint32_t v = (uint32_t)punct;
+        // Multi-char puncts are stored as multi-char constants
+        if(v > 0xFFFF){
+            buf[len++] = (char)(v >> 16);
+            buf[len++] = (char)(v >> 8);
+            buf[len++] = (char)v;
+        } else if(v > 0xFF){
+            buf[len++] = (char)(v >> 8);
+            buf[len++] = (char)v;
+        } else {
+            buf[len++] = (char)v;
+        }
+        buf[len] = 0;
+        return cc_parse_error(p, tok.loc, "Expected '%s'", buf);
+    }
+    return 0;
+}
+
+static
+CcExpr* _Nullable
+cc_alloc_expr(CcParser* p, size_t nvalues){
+    size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
+    return Allocator_zalloc(p->lexer.cpp.allocator, size);
 }
 
 #ifdef __clang__
