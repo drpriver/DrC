@@ -10,6 +10,7 @@
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+// TODO: rewrite this myself instead of clanker slop
 
 // ---------------------------------------------------------------------------
 // Parser helpers
