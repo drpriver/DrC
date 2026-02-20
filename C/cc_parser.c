@@ -33,7 +33,7 @@ cc_push_scope(CcParser* p){
     CcScope* s = fl_pop(&p->scratch_scopes);
     if(s){
         cc_scope_clear(s);
-    } 
+    }
     else {
         s = Allocator_zalloc(p->lexer.cpp.allocator, sizeof *s);
         if(!s) return 1;
@@ -246,7 +246,8 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->values[0] = right;
             node->type = right->type;
             left = node;
-        } else {
+        }
+        else {
             cc_unget(p, &tok);
             break;
         }
@@ -428,9 +429,12 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 if(lptr && rptr){
                     // ptr - ptr = ptrdiff_t
                     result_type = ccqt_basic(p->lexer.cpp.target.ptrdiff_type);
-                } else if(lptr){
+                }
+                else if(lptr){
                     result_type = left->type;
-                } else {
+
+                }
+                else {
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
                     CcExpr* cl = cc_implicit_cast(p, left, result_type);
@@ -1202,7 +1206,8 @@ cc_eval_expr(CcExpr* e){
                         case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.d};
                         default: return cc_eval_error();
                     }
-                } else {
+                }
+                else {
                     switch(v.kind){
                         case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_INT, .i=v.i};
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.u};

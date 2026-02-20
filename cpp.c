@@ -144,13 +144,23 @@ int main(int argc, char** argv, char** envp){
     }
     CPPToken tok;
     MStringBuilder sb = {.allocator = MALLOCATOR};
+    int blank_line = 1;
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_EOF) break;
-        if(tok.type == CPP_WHITESPACE)
+        if(tok.type == CPP_NEWLINE){
+            if(blank_line) continue;
+            blank_line = 1;
+            msb_write_char(&sb, '\n');
+        }
+        else if(tok.type == CPP_WHITESPACE){
             msb_write_char(&sb, ' ');
-        else msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        }
+        else {
+            blank_line = 0;
+            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+        }
     }
     if(output.length){
         FileError fe = write_file(output.text, sb.data, sb.cursor);

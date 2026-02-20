@@ -148,9 +148,9 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
         enum { N_KEYWORDS = sizeof cc_keyword_strs / sizeof cc_keyword_strs[0] };
         enum { N_DIRECTIVES = sizeof cc_directive_strs / sizeof cc_directive_strs[0] };
 
-        if(is_directive){
+        if(is_directive)
             max_candidates = N_DIRECTIVES;
-        } else {
+        else {
             max_candidates += N_KEYWORDS;
             AtomMapItems mi = AM_items(&parser->lexer.cpp.macros);
             max_candidates += mi.count;
@@ -164,9 +164,9 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
         if(!pairs) return 0;
         size_t n = 0;
 
-        if(is_directive){
+        if(is_directive)
             COLLECT_FROM_TABLE(cc_directive_strs, N_DIRECTIVES);
-        } else {
+        else {
             COLLECT_FROM_TABLE(cc_keyword_strs, N_KEYWORDS);
             COLLECT_FROM_ATOMMAP(AM_items(&parser->lexer.cpp.macros));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.typedefs));

@@ -3869,7 +3869,8 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 err = cpp_define_obj_macro(cpp, SV("__WCHAR_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                 if(err) return err;
                 DEFNUM("__WCHAR_MIN__", "0");
-            } else {
+            }
+            else {
                 Atom a;
                 if(wsz == 4)
                     a = cpp_atomizef(cpp, "2147483647");
@@ -3900,7 +3901,8 @@ cpp_define_target_macros(CPreprocessor* cpp){
                 err = cpp_define_obj_macro(cpp, SV("__WINT_MAX__"), (CPPToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
                 if(err) return err;
                 DEFNUM("__WINT_MIN__", "0");
-            } else {
+            }
+            else {
                 DEFNUM("__WINT_MAX__", "2147483647");
                 DEFNUM("__WINT_MIN__", "(-__WINT_MAX__-1)");
             }
