@@ -234,6 +234,7 @@ int main(int argc, char** argv, char** envp){
 #include "C/cpp_preprocessor.c"
 #include "C/cc_lexer.c"
 #include "C/cc_type_cache.c"
+#include "C/cc_scope.c"
 #include "C/cc_parser.c"
 #include "Drp/get_input.c"
 #include "C/native_call.c"

@@ -27,70 +27,34 @@ LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* 
 static _Bool cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec);
 static _Bool cc_assign_lookup(CCPunct punct, CcExprKind* kind);
 
-// ---------------------------------------------------------------------------
-// Type computation helpers
-// ---------------------------------------------------------------------------
-
-static inline _Bool
-ccbt_is_integer(CcBasicTypeKind k){
-    return k >= CCBT_bool && k <= CCBT_unsigned_long_long;
-}
-
-static inline _Bool
-ccbt_is_float(CcBasicTypeKind k){
-    return k >= CCBT_float && k <= CCBT_long_double;
-}
-
-static inline _Bool
-ccbt_is_unsigned(CcBasicTypeKind k){
-    switch(k){
-        case CCBT_bool:
-        case CCBT_unsigned_char:
-        case CCBT_unsigned_short:
-        case CCBT_unsigned:
-        case CCBT_unsigned_long:
-        case CCBT_unsigned_long_long:
-            return 1;
-        default:
-            return 0;
+static
+int
+cc_push_scope(CcParser* p){
+    CcScope* s = fl_pop(&p->scratch_scopes);
+    if(s){
+        cc_scope_clear(s);
+    } 
+    else {
+        s = Allocator_zalloc(p->lexer.cpp.allocator, sizeof *s);
+        if(!s) return 1;
     }
+    s->parent = p->current;
+    p->current = s;
+    return 0;
 }
 
-static inline int
-ccbt_int_rank(CcBasicTypeKind k){
-    switch(k){
-        case CCBT_bool:                                  return 0;
-        case CCBT_char: case CCBT_signed_char:
-        case CCBT_unsigned_char:                         return 1;
-        case CCBT_short: case CCBT_unsigned_short:       return 2;
-        case CCBT_int: case CCBT_unsigned:               return 3;
-        case CCBT_long: case CCBT_unsigned_long:         return 4;
-        case CCBT_long_long:
-        case CCBT_unsigned_long_long:                    return 5;
-        default:                                         return -1;
-    }
-}
-
-static inline CcBasicTypeKind
-ccbt_to_unsigned(CcBasicTypeKind k){
-    switch(k){
-        case CCBT_char: case CCBT_signed_char: return CCBT_unsigned_char;
-        case CCBT_short:                       return CCBT_unsigned_short;
-        case CCBT_int:                         return CCBT_unsigned;
-        case CCBT_long:                        return CCBT_unsigned_long;
-        case CCBT_long_long:                   return CCBT_unsigned_long_long;
-        default:                               return k;
-    }
-}
-
-static inline CcQualType
-ccqt_basic(CcBasicTypeKind k){
-    return (CcQualType){.basic.kind = k};
+static
+void
+cc_pop_scope(CcParser* p){
+    CcScope* s = p->current;
+    p->current = s->parent;
+    fl_push(&p->scratch_scopes, s);
 }
 
 // Integer promotion: types with rank < int promote to int
 // Returns 0 on success, non-zero if t is not an arithmetic type.
-static int
+static
+int
 cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(t))
         return cc_parse_error(p, loc, "integer promotion requires arithmetic type");
@@ -112,7 +76,8 @@ cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
 
 // C 6.3.1.8 usual arithmetic conversions
 // Returns 0 on success, non-zero if operands are not arithmetic types.
-static int
+static
+int
 cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
         return cc_parse_error(p, loc, "usual arithmetic conversions require arithmetic types");
@@ -159,17 +124,11 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     return 0;
 }
 
-// Check if a type is pointer-like (pointer or array) for arithmetic purposes
-static inline _Bool
-ccqt_is_pointer_like(CcQualType t){
-    if(ccqt_is_basic(t)) return 0;
-    CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || k == CC_ARRAY;
-}
 
 // Extract pointee type from pointer or element type from array
 // Returns 0 on success, non-zero if t is not a pointer or array.
-static int
+static
+int
 cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(t)){
         CcTypeKind kind = ccqt_kind(t);
@@ -189,7 +148,8 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
 
 // Wrap an expression in an implicit cast if types differ.
 // Returns the original expression if types match or target is void.
-static CcExpr* _Nullable
+static
+CcExpr* _Nullable
 cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target){
     if(target.basic.kind == CCBT_void && ccqt_is_basic(target))
         return e;
@@ -765,8 +725,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 err = cc_next(p, &member);
                 if(err) return err;
                 if(member.type != CC_IDENTIFIER)
-                    return cc_parse_error(p, member.loc, "Expected identifier after '%s'",
-                        mkind == CC_EXPR_DOT ? "." : "->");
+                    return cc_parse_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
                 // text=member name (in union with value0), values[0]=operand
                 CcExpr* mnode = cc_alloc_expr(p, 1);
                 if(!mnode) return CC_LEX_OOM_ERROR;
@@ -912,12 +871,14 @@ cc_print_expr(CcExpr* e){
             // Check if it looks like a string (str.length set and text non-null)
             if(e->str.length && e->text){
                 printf("\"%.*s\"", e->str.length, e->text);
-            } else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
+            }
+            else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
                 if(e->type.basic.kind == CCBT_float)
                     printf("%gf", (double)e->float_);
                 else
                     printf("%g", e->double_);
-            } else {
+            }
+            else {
                 printf("%llu", (unsigned long long)e->uinteger);
             }
             if(e->type.bits){
@@ -1369,10 +1330,12 @@ cc_expect_punct(CcParser* p, CCPunct punct){
             buf[len++] = (char)(v >> 16);
             buf[len++] = (char)(v >> 8);
             buf[len++] = (char)v;
-        } else if(v > 0xFF){
+        }
+        else if(v > 0xFF){
             buf[len++] = (char)(v >> 8);
             buf[len++] = (char)v;
-        } else {
+        }
+        else {
             buf[len++] = (char)v;
         }
         buf[len] = 0;

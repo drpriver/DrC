@@ -1296,8 +1296,10 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(!a) return CPP_UNREACHABLE_ERROR;
                 CMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
-                if(m->nparams || m->is_function_like || m->nreplace)
-                    return cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions", sv_p(name));
+                if(m->nparams || m->is_function_like || m->nreplace){
+                    cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions", sv_p(name));
+                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                }
                 err = 0;
             }
             if(err) return err;
@@ -1376,15 +1378,21 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(!m->is_function_like){
                     return cpp_error(cpp, tok.loc, "redefinition of an object-like macro (%.*s) as a function-like macro", sv_p(name));
                 }
-                if(!!variadic != !!m->is_variadic)
-                    return cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                if(names->count != m->nparams)
-                    return cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                if(!!variadic != !!m->is_variadic){
+                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                }
+                if(names->count != m->nparams){
+                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                }
                 for(size_t i = 0; i < names->count; i++){
                     CPPToken tname = names->data[i];
                     Atom pname = cpp_cmacro_params(m)[i];
-                    if(AT_get_atom(cpp->at, tname.txt.text, tname.txt.length) != pname)
-                        return cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                    if(AT_get_atom(cpp->at, tname.txt.text, tname.txt.length) != pname){
+                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    }
                 }
                 if(repl->count != m->nreplace){
                     return cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions %zu %zu", __LINE__, sv_p(name), repl->count, (size_t)m->nreplace);
@@ -1394,10 +1402,14 @@ cpp_handle_directive(CPreprocessor* cpp){
                     CPPToken pre = cpp_cmacro_replacement(m)[i];
                     if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
                         continue;
-                    if(r.type != pre.type)
-                        return cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
-                    if(!sv_equals(r.txt, pre.txt))
-                        return cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
+                    if(r.type != pre.type){
+                        cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
+                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    }
+                    if(!sv_equals(r.txt, pre.txt)){
+                        cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
+                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    }
                 }
                 err = 0;
                 goto finish_func_macro;
@@ -1515,19 +1527,27 @@ cpp_handle_directive(CPreprocessor* cpp){
                 if(!a) return CPP_UNREACHABLE_ERROR;
                 CMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
-                if(m->is_function_like)
-                    return cpp_error(cpp, tok.loc, "Redefinition of function-like macro (%.*s) as an object-like macro", sv_p(name));
-                if(m->nreplace != repl->count)
-                    return cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions, %zu != %zu", sv_p(name), repl->count, (size_t)m->nreplace);
+                if(m->is_function_like){
+                    cpp_error(cpp, tok.loc, "Redefinition of function-like macro (%.*s) as an object-like macro", sv_p(name));
+                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                }
+                if(m->nreplace != repl->count){
+                    cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions, %zu != %zu", sv_p(name), repl->count, (size_t)m->nreplace);
+                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                }
                 for(size_t i = 0; i < repl->count; i++){
                     CPPToken r = repl->data[i];
                     CPPToken pre = cpp_cmacro_replacement(m)[i];
                     if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
                         continue;
-                    if(r.type != pre.type)
-                        return cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different type)", sv_p(name), i);
-                    if(!sv_equals(r.txt, pre.txt))
-                        return cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different content)", sv_p(name), i);
+                    if(r.type != pre.type){
+                        cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different type)", sv_p(name), i);
+                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    }
+                    if(!sv_equals(r.txt, pre.txt)){
+                        cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different content)", sv_p(name), i);
+                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    }
                 }
                 // Duplicate macro definition, ok
                 err = 0;
@@ -3364,15 +3384,17 @@ static CppPragmaFn cpp_builtin_pragma_once,
 static
 int
 cpp_define_type_name_macro(CPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
-    CPPToken toks[4];
+    CPPToken toks[7];
     size_t ntoks = 0;
     switch(kind){
         case CCBT_signed_char:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("signed")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
             break;
         case CCBT_unsigned_char:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
             break;
         case CCBT_short:
@@ -3380,6 +3402,7 @@ cpp_define_type_name_macro(CPreprocessor* cpp, StringView name, CcBasicTypeKind 
             break;
         case CCBT_unsigned_short:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("short")};
             break;
         case CCBT_int:
@@ -3387,26 +3410,35 @@ cpp_define_type_name_macro(CPreprocessor* cpp, StringView name, CcBasicTypeKind 
             break;
         case CCBT_unsigned:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
         case CCBT_long:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
         case CCBT_unsigned_long:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
         case CCBT_long_long:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
         case CCBT_unsigned_long_long:
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CPPToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CPPToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
         default:
@@ -3952,6 +3984,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
     }
 
     // Byte order
+    DEFNUM("__LITTLE_ENDIAN__", "1234");
     DEFNUM("__ORDER_LITTLE_ENDIAN__", "1234");
     DEFNUM("__ORDER_BIG_ENDIAN__",    "4321");
     DEFNUM("__ORDER_PDP_ENDIAN__",    "3412");
@@ -4088,13 +4121,21 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
     int err;
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
-        {SV("stdarg.h"),   SV("#pragma once\n")},
+        {SV("stdarg.h"),   SV("#pragma once\n"
+                              "#define va_start __builtin_va_start\n"
+                              "#define va_copy __builtin_va_copy\n"
+                              "#define va_arg __builtin_va_arg\n"
+                              "#define va_end __builtin_va_end\n"
+                              "typedef __builtin_va_list va_list;\n"
+                            )},
         {SV("stddef.h"),   SV("#pragma once\n"
                               "typedef __SIZE_TYPE__ size_t;\n"
                               "typedef __PTRDIFF_TYPE__ ptrdiff_t;\n"
                               "typedef __WCHAR_TYPE__ wchar_t;\n"
                               "typedef typeof(nullptr) nullptr_t;\n"
+                              "#ifndef NULL\n"
                               "#define NULL ((void*)0)\n"
+                              "#endif\n"
                               "#define offsetof(type, member) ((__SIZE_TYPE__)&((type*)0)->member)\n"
                            )},
         {SV("stdbool.h"),  SV("#pragma once\n"

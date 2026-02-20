@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "srcloc.h"
 #include "../Drp/atom.h"
+#include "../Drp/atom_map.h"
 #include "cc_stmt.h"
 #include "c_tok.h"
 #include "cc_type.h"
@@ -45,6 +46,7 @@ struct CcFunc {
         size_t count;
         Atom _Nullable*_Null_unspecified data;
     } params;
+    AtomMap(uint32_t) labels; // label name -> statement index in body
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
     void*_Nullable native_call_cache; // opaque, managed by native_call.c
 };

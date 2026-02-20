@@ -13,6 +13,7 @@
 #include "cc_stmt.h"
 #include "cc_func.h"
 #include "cc_var.h"
+#include "cc_scope.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CCToken
@@ -49,24 +50,6 @@ cc_clear_attributes(CcAttributes* attrs){
     attrs->bits = 0;
 }
 
-typedef struct CcScope CcScope;
-struct CcScope {
-    CcScope* parent;
-    AtomMap(CcQualType) typedefs;
-    AtomMap(CcVariable) variables;
-    AtomMap(CcStruct) structs;
-    AtomMap(CcUnion) unions;
-};
-
-static inline
-void
-ccscope_clear(CcScope* scope){
-    AM_clear(&scope->typedefs);
-    AM_clear(&scope->variables);
-    AM_clear(&scope->structs);
-    AM_clear(&scope->unions);
-}
-
 typedef struct CcParser CcParser;
 struct CcParser {
     union {
@@ -91,6 +74,8 @@ struct CcParser {
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
 static void cc_parser_discard_input(CcParser*);
+static int cc_push_scope(CcParser*);
+static void cc_pop_scope(CcParser*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
