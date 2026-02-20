@@ -4123,6 +4123,7 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
     int err;
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
+        {SV("<no source>"), SV("")},
         {SV("stdarg.h"),   SV("#pragma once\n"
                               "#define va_start __builtin_va_start\n"
                               "#define va_copy __builtin_va_copy\n"

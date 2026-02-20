@@ -24,9 +24,7 @@ static int cpp_number_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_string_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_char_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_punct_to_cc_tok(CcLexer*, CppToken*, CcToken*);
-LOG_PRINTF(3, 4) static int  cc_error(CcLexer*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4) static void cc_warn(CcLexer*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4) static void cc_info(CcLexer*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static int  cc_lex_error(CcLexer*, SrcLoc, const char*, ...);
 static
 int
 cc_lex_next_token(CcLexer* lexer, CcToken* tok){
@@ -53,7 +51,7 @@ cc_lex_next_token(CcLexer* lexer, CcToken* tok){
             case CPP_NEWLINE:
                 continue;
             case CPP_OTHER:
-                return cc_error(lexer, cpp_tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(cpp_tok.txt));
+                return cc_lex_error(lexer, cpp_tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(cpp_tok.txt));
             case CPP_HEADER_NAME:
             case CPP_PLACEMARKER:
             case CPP_REENABLE:
@@ -63,92 +61,112 @@ cc_lex_next_token(CcLexer* lexer, CcToken* tok){
 }
 
 #define CKWS2(X) \
-X(do) \
-X(if) \
+X(do, do) \
+X(if, if) \
 
 #define CKWS3(X) \
-X(for) \
-X(int) \
+X(for, for) \
+X(int, int) \
+X(asm, asm) \
 
 #define CKWS4(X) \
-X(true) \
-X(long) \
-X(char) \
-X(auto) \
-X(bool) \
-X(else) \
-X(enum) \
-X(case) \
-X(goto) \
-X(void) \
+X(true, true) \
+X(long, long) \
+X(char, char) \
+X(auto, auto) \
+X(bool, bool) \
+X(else, else) \
+X(enum, enum) \
+X(case, case) \
+X(goto, goto) \
+X(void, void) \
 
 #define CKWS5(X) \
-X(break) \
-X(false) \
-X(float) \
-X(const) \
-X(short) \
-X(union) \
-X(while) \
+X(__asm, asm) \
+X(break, break) \
+X(false, false) \
+X(float, float) \
+X(const, const) \
+X(short, short) \
+X(union, union) \
+X(while, while) \
+X(_Bool, bool) \
 
 #define CKWS6(X) \
-X(double) \
-X(extern) \
-X(inline) \
-X(return) \
-X(signed) \
-X(sizeof) \
-X(static) \
-X(struct) \
-X(switch) \
-X(typeof) \
+X(double, double) \
+X(extern, extern) \
+X(inline, inline) \
+X(return, return) \
+X(signed, signed) \
+X(sizeof, sizeof) \
+X(static, static) \
+X(struct, struct) \
+X(switch, switch) \
+X(typeof, typeof) \
 
 #define CKWS7(X) \
-X(alignas) \
-X(alignof) \
-X(default) \
-X(typedef) \
-X(nullptr) \
-X(_Atomic) \
-X(_BitInt) \
+X(__asm__, asm) \
+X(alignas, alignas) \
+X(alignof, alignof) \
+X(default, default) \
+X(typedef, typedef) \
+X(nullptr, nullptr) \
+X(_Atomic, _Atomic) \
+X(_BitInt, _BitInt) \
+X(countof, _Countof) \
+X(__const, const) \
 
 #define CKWS8(X) \
-X(_Complex) \
-X(continue) \
-X(register) \
-X(restrict) \
-X(unsigned) \
-X(volatile) \
-X(_Generic) \
-X(_Countof) \
-X(_Float16) \
-X(_Float32) \
-X(_Float64) \
+X(_Complex, _Complex) \
+X(continue, continue) \
+X(register, register) \
+X(restrict, restrict) \
+X(unsigned, unsigned) \
+X(volatile, volatile) \
+X(_Generic, _Generic) \
+X(_Countof, _Countof) \
+X(_Float16, _Float16) \
+X(_Float32, _Float32) \
+X(_Float64, _Float64) \
+X(_Alignas, alignas) \
+X(_Alignof, alignof) \
+X(__inline, inline) \
+X(__signed, signed) \
 
 #define CKWS9(X) \
-X(constexpr) \
-X(_Noreturn) \
-X(_Float128) \
+X(constexpr, constexpr) \
+X(_Noreturn, _Noreturn) \
+X(_Float128, _Float128) \
+X(__const__, const) \
 
 #define CKWS10(X) \
-X(_Imaginary) \
-X(_Decimal32) \
-X(_Decimal64) \
+X(_Imaginary, _Imaginary) \
+X(_Decimal32, _Decimal32) \
+X(_Decimal64, _Decimal64) \
+X(__inline__, inline) \
+X(__volatile, volatile) \
 
 #define CKWS11(X) \
-X(_Decimal128) \
+X(_Decimal128, _Decimal128) \
 
 #define CKWS12(X) \
-X(thread_local) \
+X(thread_local, thread_local) \
 
 #define CKWS13(X) \
-X(static_assert) \
-X(typeof_unqual) \
+X(static_assert, static_assert) \
+X(typeof_unqual, typeof_unqual) \
+X(_Thread_local, thread_local) \
+
+#define CKWS14(X) \
+X(_Static_assert, static_assert) \
+
+#define CKWS17(X) \
+X(__typeof_unqual__, typeof_unqual) \
 
 static
 uint32_t
 cc_lex_str_to_keyword(StringView txt){
-#define X(kw) if(sv_equals(txt, SV(#kw))) return CC_##kw;
+#define X(spelling, kw) if(sv_equals(txt, SV(#spelling))) return CC_##kw;
     switch(txt.length){
         case 2:
             CKWS2(X);
@@ -161,19 +179,15 @@ cc_lex_str_to_keyword(StringView txt){
             return (uint32_t)-1;
         case 5:
             CKWS5(X);
-            if(sv_equals(txt, SV("_Bool"))) return CC_bool;
             return (uint32_t)-1;
         case 6:
             CKWS6(X);
             return (uint32_t)-1;
         case 7:
             CKWS7(X);
-            if(sv_equals(txt, SV("countof"))) return CC__Countof;
             return (uint32_t)-1;
         case 8:
             CKWS8(X);
-            if(sv_equals(txt, SV("_Alignas"))) return CC_alignas;
-            if(sv_equals(txt, SV("_Alignof"))) return CC_alignof;
             return (uint32_t)-1;
         case 9:
             CKWS9(X);
@@ -189,10 +203,12 @@ cc_lex_str_to_keyword(StringView txt){
             return (uint32_t)-1;
         case 13:
             CKWS13(X)
-            if(sv_equals(txt, SV("_Thread_local"))) return CC_thread_local;
             return (uint32_t)-1;
         case 14:
-            if(sv_equals(txt, SV("_Static_assert"))) return CC_static_assert;
+            CKWS14(X)
+            return (uint32_t)-1;
+        case 17:
+            CKWS17(X)
             return (uint32_t)-1;
         default:
             return (uint32_t)-1;
@@ -255,22 +271,22 @@ cpp_number_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
         else break;
     }
     if(!len)
-        return cc_error(lexer, cpptok->loc, "Invalid number literal");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid number literal");
     if(has_f && has_u)
-        return cc_error(lexer, cpptok->loc, "Invalid suffix: 'f' and 'u' are mutually exclusive");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid suffix: 'f' and 'u' are mutually exclusive");
     if(has_f && num_l > 1)
-        return cc_error(lexer, cpptok->loc, "Invalid suffix: 'f' and 'll' are mutually exclusive");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid suffix: 'f' and 'll' are mutually exclusive");
     // Strip digit separators into a stack buffer
     char buf[256];
     size_t buf_len = 0;
     for(size_t i = 0; i < len; i++){
         if(s[i] == '\'') continue;
         if(buf_len >= sizeof buf - 1)
-            return cc_error(lexer, cpptok->loc, "Number literal too long");
+            return cc_lex_error(lexer, cpptok->loc, "Number literal too long");
         buf[buf_len++] = s[i];
     }
     if(!buf_len)
-        return cc_error(lexer, cpptok->loc, "Invalid number literal");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid number literal");
     // Detect float: contains '.', or 'e'/'E' (decimal), or 'p'/'P' (hex)
     _Bool is_float = 0;
     _Bool is_hex = (buf_len > 2 && buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X'));
@@ -290,15 +306,15 @@ cpp_number_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     }
     if(is_float){
         if(has_u)
-            return cc_error(lexer, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
+            return cc_lex_error(lexer, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
         if(is_hex)
-            return cc_error(lexer, cpptok->loc, "Hex floating-point literals not yet supported");
+            return cc_lex_error(lexer, cpptok->loc, "Hex floating-point literals not yet supported");
         CcConstantType ctype;
         if(has_f){
             ctype = CC_FLOAT;
             FloatResult fr = parse_float(buf, buf_len);
             if(fr.errored)
-                return cc_error(lexer, cpptok->loc, "Invalid floating-point literal");
+                return cc_lex_error(lexer, cpptok->loc, "Invalid floating-point literal");
             *cctok = (CcToken){
                 .constant = {
                     .type = CC_CONSTANT,
@@ -311,7 +327,7 @@ cpp_number_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
         else {
             DoubleResult dr = parse_double(buf, buf_len);
             if(dr.errored)
-                return cc_error(lexer, cpptok->loc, "Invalid floating-point literal");
+                return cc_lex_error(lexer, cpptok->loc, "Invalid floating-point literal");
             if(num_l)
                 ctype = CC_LONG_DOUBLE;
             else
@@ -331,22 +347,22 @@ cpp_number_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     uint64_t v = 0;
     if(is_hex){
         Uint64Result u = parse_hex(buf, buf_len);
-        if(u.errored) return cc_error(lexer, cpptok->loc, "Invalid hex digit in number");
+        if(u.errored) return cc_lex_error(lexer, cpptok->loc, "Invalid hex digit in number");
         v = u.result;
     }
     else if(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B')){
         Uint64Result u = parse_binary(buf, buf_len);
-        if(u.errored) return cc_error(lexer, cpptok->loc, "Invalid binary digit in number");
+        if(u.errored) return cc_lex_error(lexer, cpptok->loc, "Invalid binary digit in number");
         v = u.result;
     }
     else if(buf_len > 1 && buf[0] == '0'){
         Uint64Result u = parse_octal_inner(buf+1, buf_len-1);
-        if(u.errored) return cc_error(lexer, cpptok->loc, "Invalid octal digit in number");
+        if(u.errored) return cc_lex_error(lexer, cpptok->loc, "Invalid octal digit in number");
         v = u.result;
     }
     else{
         Uint64Result u = parse_uint64(buf, buf_len);
-        if(u.errored) return cc_error(lexer, cpptok->loc, "Invalid digit in number");
+        if(u.errored) return cc_lex_error(lexer, cpptok->loc, "Invalid digit in number");
         v = u.result;
     }
     CcConstantType ctype;
@@ -375,7 +391,7 @@ cpp_string_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     // Find the opening quote
     const char* q = memchr(s, '"', len);
     if(!q || q == s + len - 1)
-        return cc_error(lexer, cpptok->loc, "Invalid string literal");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid string literal");
     size_t prefix_len = (size_t)(q - s);
     CcStringType stype;
     if(prefix_len == 0)      stype = CC_STRING;
@@ -383,7 +399,7 @@ cpp_string_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     else if(prefix_len == 1 && s[0] == 'u') stype = CC_uSTRING;
     else if(prefix_len == 1 && s[0] == 'U') stype = CC_USTRING;
     else if(prefix_len == 2 && s[0] == 'u' && s[1] == '8') stype = CC_U8STRING;
-    else return cc_error(lexer, cpptok->loc, "Invalid string prefix");
+    else return cc_lex_error(lexer, cpptok->loc, "Invalid string prefix");
     const char* content = q + 1;
     // len - prefix_len - 2: skip prefix, opening quote, closing quote
     uint32_t content_len = (uint32_t)(len - prefix_len - 2);
@@ -412,11 +428,11 @@ cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     else if(p + 1 < end && p[0] == 'u' && p[1] == '8'){ p += 2; ctype = CC_UCHAR; }
     else if(p < end && *p == 'u'){ p++; ctype = CC_CHAR16; }
     if(p >= end || *p != '\'')
-        return cc_error(lexer, cpptok->loc, "Invalid character constant");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid character constant");
     p++; // skip opening quote
     const char* e = end - 1; // closing quote
     if(e <= p || *e != '\'')
-        return cc_error(lexer, cpptok->loc, "Invalid character constant");
+        return cc_lex_error(lexer, cpptok->loc, "Invalid character constant");
     int64_t v = 0;
     int nchars = 0;
     while(p < e){
@@ -425,7 +441,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
         if(*p == '\\'){
             p++;
             if(p == e)
-                return cc_error(lexer, cpptok->loc, "Invalid escape in character constant");
+                return cc_lex_error(lexer, cpptok->loc, "Invalid escape in character constant");
             switch(*p){
                 case 'n':  c = '\n'; p++; break;
                 case 't':  c = '\t'; p++; break;
@@ -461,7 +477,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
                         if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
                         else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
                         else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cc_error(lexer, cpptok->loc, "Invalid \\u escape");
+                        else return cc_lex_error(lexer, cpptok->loc, "Invalid \\u escape");
                     }
                     v = (v << 16) | uval;
                     continue;
@@ -473,7 +489,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
                         if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
                         else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
                         else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cc_error(lexer, cpptok->loc, "Invalid \\U escape");
+                        else return cc_lex_error(lexer, cpptok->loc, "Invalid \\U escape");
                     }
                     v = (v << 32) | uval;
                     continue;
@@ -487,7 +503,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
         v = (v << 8) | c;
     }
     if(ctype != CC_INT && nchars != 1)
-        return cc_error(lexer, cpptok->loc, "Multi-character character constant with prefix is not allowed");
+        return cc_lex_error(lexer, cpptok->loc, "Multi-character character constant with prefix is not allowed");
     *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,
@@ -507,7 +523,7 @@ cpp_punct_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     #pragma GCC diagnostic ignored "-Wmultichar"
     #endif
     if(p == '#' || p == '##')
-        return cc_error(lexer, cpptok->loc, "Stray '%s' in program", p == '#' ? "#" : "##");
+        return cc_lex_error(lexer, cpptok->loc, "Stray '%s' in program", p == '#' ? "#" : "##");
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
     #endif
@@ -525,7 +541,7 @@ cpp_punct_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
 static void cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 static
 int
-cc_error(CcLexer* lexer, SrcLoc loc, const char* fmt, ...){
+cc_lex_error(CcLexer* lexer, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(&lexer->cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
@@ -533,23 +549,7 @@ cc_error(CcLexer* lexer, SrcLoc loc, const char* fmt, ...){
     return CC_LEX_SYNTAX_ERROR;
 }
 
-static
-void
-cc_warn(CcLexer* lexer, SrcLoc loc, const char* fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    cpp_msg(&lexer->cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
-    va_end(va);
-}
 
-static
-void
-cc_info(CcLexer* lexer, SrcLoc loc, const char* fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    cpp_msg(&lexer->cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
-    va_end(va);
-}
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

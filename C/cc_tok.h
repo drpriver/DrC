@@ -52,6 +52,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC_if,
     CC_for,
     CC_int,
+    CC_asm,
     CC_true,
     CC_long,
     CC_char,

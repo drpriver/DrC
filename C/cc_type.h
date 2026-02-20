@@ -51,7 +51,7 @@ TYPEDEF_ENUM(CcBasicTypeKind, uintptr_t);
 typedef struct CcQualType CcQualType;
 struct CcQualType {
     union {
-        uintptr_t bits;
+        uintptr_t bits; // (uintptr_t)-1 == INVALID
         struct {
             uintptr_t is_const:    1,
                       is_volatile: 1,

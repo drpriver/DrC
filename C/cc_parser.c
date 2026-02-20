@@ -18,17 +18,82 @@ static int cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Null
 static int cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
-static int cc_next(CcParser* p, CcToken* tok);
+static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
 static CcExpr* _Nullable cc_alloc_expr(CcParser* p, size_t nvalues);
-LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...);
+LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
+#define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
+#define cc_unimp(p, msg) cc_unimplemented(p, (SrcLoc){0}, msg)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
 static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
 static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
 static Allocator cc_allocator(CcParser*p);
+
+enum {
+    CC_NO_ERROR,
+    CC_OOM_ERROR,
+    CC_SYNTAX_ERROR,
+    CC_UNREACHABLE_ERROR,
+    CC_UNIMPLEMENTED_ERROR,
+    CC_FILE_NOT_FOUND_ERROR,
+};
+
+typedef struct CcSpecifier CcSpecifier;
+struct CcSpecifier {
+    union {
+        uint32_t bits;
+        struct {
+            uint32_t sp_auto:         1,
+                     sp___auto_type:  1,
+                     sp_constexpr:    1,
+                     sp_extern:       1,
+                     sp_register:     1,
+                     sp_static:       1,
+                     sp_thread_local: 1,
+                     sp_typedef:      1,
+                     sp_unsigned:     1,
+                     sp_signed:       1,
+                     sp_long:         2,
+                     sp_short:        1,
+                     sp_int:          1,
+                     sp_char:         1,
+                     sp_typed:        1, // Seen a type like struct, a typedef name, _Bool
+                     sp_inline:       1,
+                     sp_noreturn:     1,
+                     sp_const:        1,
+                     sp_volatile:     1,
+                     sp_atomic:       1,
+                     sp_restrict:     1,
+                     _padding:       32-23;
+        };
+    };
+};
+_Static_assert(sizeof(CcSpecifier) == sizeof(uint32_t), "");
+static int cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type);
+
+typedef struct CcDeclBase CcDeclBase;
+struct CcDeclBase {
+    CcQualType type;
+    uint32_t infer_type: 1,
+             constexpr:  1,
+             extern_:    1,
+             static_:    1,
+             inline_:    1,
+             noreturn_:  1,
+             volatile_:  1,
+             restrict_:  1, // idk if this goes here.
+             _padding:   32 -8;
+};
+
+static int cc_resolve_specifiers(CcParser* p, CcSpecifier spec, CcQualType base, CcDeclBase* declbase);
+static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
+static int cc_parse_statement(CcParser* p);
 
 static
 int
@@ -60,16 +125,16 @@ static
 int
 cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(t))
-        return cc_parse_error(p, loc, "integer promotion requires arithmetic type");
+        return cc_error(p, loc, "integer promotion requires arithmetic type");
     CcBasicTypeKind k = t.basic.kind;
     if(k == CCBT_void)
-        return cc_parse_error(p, loc, "integer promotion of void");
+        return cc_error(p, loc, "integer promotion of void");
     if(ccbt_is_float(k)){
         *out = t;
         return 0;
     }
     if(!ccbt_is_integer(k))
-        return cc_parse_error(p, loc, "integer promotion requires integer type");
+        return cc_error(p, loc, "integer promotion requires integer type");
     if(ccbt_int_rank(k) < ccbt_int_rank(CCBT_int))
         *out = ccqt_basic(CCBT_int);
     else
@@ -83,10 +148,10 @@ static
 int
 cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
-        return cc_parse_error(p, loc, "usual arithmetic conversions require arithmetic types");
+        return cc_error(p, loc, "usual arithmetic conversions require arithmetic types");
     CcBasicTypeKind ak = a.basic.kind, bk = b.basic.kind;
     if(ak == CCBT_void || bk == CCBT_void)
-        return cc_parse_error(p, loc, "usual arithmetic conversions on void");
+        return cc_error(p, loc, "usual arithmetic conversions on void");
     // long double
     if(ak == CCBT_long_double || bk == CCBT_long_double){
         *out = ccqt_basic(CCBT_long_double); return 0;
@@ -146,7 +211,7 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
             return 0;
         }
     }
-    return cc_parse_error(p, loc, "dereferencing non-pointer type");
+    return cc_error(p, loc, "dereferencing non-pointer type");
 }
 
 // Wrap an expression in an implicit cast if types differ.
@@ -235,14 +300,14 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(err) return err;
     for(;;){
         CcToken tok;
-        err = cc_next(p, &tok);
+        err = cc_next_token(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
             CcExpr* right;
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
             CcExpr* node = cc_alloc_expr(p, 1);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_COMMA;
             node->loc = tok.loc;
             node->value0 = left;
@@ -267,7 +332,7 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     int err = cc_parse_ternary_expr(p, &left);
     if(err) return err;
     CcToken tok;
-    err = cc_next(p, &tok);
+    err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
@@ -277,10 +342,10 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
             CcExpr* cright = cc_implicit_cast(p, right, left->type);
-            if(!cright) return CC_LEX_OOM_ERROR;
+            if(!cright) return CC_OOM_ERROR;
             right = cright;
             CcExpr* node = cc_alloc_expr(p, 1);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = kind;
             node->loc = tok.loc;
             node->type = left->type;
@@ -306,7 +371,7 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     err = cc_parse_infix(p, cond, 4, &cond);
     if(err) return err;
     CcToken tok;
-    err = cc_next(p, &tok);
+    err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_question){
         CcExpr* then_expr;
@@ -322,13 +387,13 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         err = cc_usual_arithmetic(p, then_expr->type, else_expr->type, &common, tok.loc);
         if(err) return err;
         CcExpr* ct = cc_implicit_cast(p, then_expr, common);
-        if(!ct) return CC_LEX_OOM_ERROR;
+        if(!ct) return CC_OOM_ERROR;
         then_expr = ct;
         CcExpr* ce = cc_implicit_cast(p, else_expr, common);
-        if(!ce) return CC_LEX_OOM_ERROR;
+        if(!ce) return CC_OOM_ERROR;
         else_expr = ce;
         CcExpr* node = cc_alloc_expr(p, 2);
-        if(!node) return CC_LEX_OOM_ERROR;
+        if(!node) return CC_OOM_ERROR;
         node->kind = CC_EXPR_TERNARY;
         node->loc = tok.loc;
         node->type = common;
@@ -349,7 +414,7 @@ int
 cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonnull out){
     for(;;){
         CcToken tok;
-        int err = cc_next(p, &tok);
+        int err = cc_next_token(p, &tok);
         if(err) return err;
         if(tok.type != CC_PUNCTUATOR){
             cc_unget(p, &tok);
@@ -385,10 +450,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     err = cc_usual_arithmetic(p, left->type, right->type, &common, tok.loc);
                     if(err) return err;
                     CcExpr* cl = cc_implicit_cast(p, left, common);
-                    if(!cl) return CC_LEX_OOM_ERROR;
+                    if(!cl) return CC_OOM_ERROR;
                     left = cl;
                     CcExpr* cr = cc_implicit_cast(p, right, common);
-                    if(!cr) return CC_LEX_OOM_ERROR;
+                    if(!cr) return CC_OOM_ERROR;
                     right = cr;
                 }
                 result_type = ccqt_basic(CCBT_int);
@@ -401,10 +466,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 err = cc_integer_promote(p, right->type, &rp, tok.loc);
                 if(err) return err;
                 CcExpr* cl = cc_implicit_cast(p, left, lp);
-                if(!cl) return CC_LEX_OOM_ERROR;
+                if(!cl) return CC_OOM_ERROR;
                 left = cl;
                 CcExpr* cr = cc_implicit_cast(p, right, rp);
-                if(!cr) return CC_LEX_OOM_ERROR;
+                if(!cr) return CC_OOM_ERROR;
                 right = cr;
                 result_type = lp;
                 break;
@@ -418,10 +483,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
                     CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                    if(!cl) return CC_LEX_OOM_ERROR;
+                    if(!cl) return CC_OOM_ERROR;
                     left = cl;
                     CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                    if(!cr) return CC_LEX_OOM_ERROR;
+                    if(!cr) return CC_OOM_ERROR;
                     right = cr;
                 }
                 break;
@@ -441,10 +506,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
                     CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                    if(!cl) return CC_LEX_OOM_ERROR;
+                    if(!cl) return CC_OOM_ERROR;
                     left = cl;
                     CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                    if(!cr) return CC_LEX_OOM_ERROR;
+                    if(!cr) return CC_OOM_ERROR;
                     right = cr;
                 }
                 break;
@@ -454,16 +519,16 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                 if(err) return err;
                 CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                if(!cl) return CC_LEX_OOM_ERROR;
+                if(!cl) return CC_OOM_ERROR;
                 left = cl;
                 CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                if(!cr) return CC_LEX_OOM_ERROR;
+                if(!cr) return CC_OOM_ERROR;
                 right = cr;
                 break;
             }
         }
         CcExpr* node = cc_alloc_expr(p, 1);
-        if(!node) return CC_LEX_OOM_ERROR;
+        if(!node) return CC_OOM_ERROR;
         node->kind = kind;
         node->loc = tok.loc;
         node->type = result_type;
@@ -480,7 +545,7 @@ static
 int
 cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     CcToken tok;
-    int err = cc_next(p, &tok);
+    int err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind = CC_EXPR_VALUE;
@@ -507,7 +572,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     err = cc_integer_promote(p, operand->type, &result_type, tok.loc);
                     if(err) return err;
                     CcExpr* co = cc_implicit_cast(p, operand, result_type);
-                    if(!co) return CC_LEX_OOM_ERROR;
+                    if(!co) return CC_OOM_ERROR;
                     operand = co;
                     break;
                 }
@@ -520,7 +585,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     break;
                 case CC_EXPR_ADDR: {
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
-                    if(!ptr) return CC_LEX_OOM_ERROR;
+                    if(!ptr) return CC_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
                     break;
                 }
@@ -529,7 +594,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     break;
             }
             CcExpr* node = cc_alloc_expr(p, 0);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = kind;
             node->loc = tok.loc;
             node->type = result_type;
@@ -551,12 +616,12 @@ static
 int
 cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     CcToken tok;
-    int err = cc_next(p, &tok);
+    int err = cc_next_token(p, &tok);
     if(err) return err;
     switch(tok.type){
         case CC_CONSTANT: {
             CcExpr* node = cc_alloc_expr(p, 0);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_VALUE;
             node->loc = tok.loc;
             switch(tok.constant.ctype){
@@ -618,22 +683,22 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         }
         case CC_STRING_LITERAL: {
             CcExpr* node = cc_alloc_expr(p, 0);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_VALUE;
             node->loc = tok.loc;
             node->str.length = tok.str.length;
             node->text = tok.str.text;
             // Type: char* (pointer to char)
             CcPointer* sp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), 0);
-            if(!sp) return CC_LEX_OOM_ERROR;
+            if(!sp) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sp};
             *out = node;
             return 0;
         }
         case CC_IDENTIFIER: {
-            return cc_parse_error(p, tok.loc, "Identifier lookup unimplemented");
+            return cc_error(p, tok.loc, "Identifier lookup unimplemented");
             CcExpr* node = cc_alloc_expr(p, 0);
-            if(!node) return CC_LEX_OOM_ERROR;
+            if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_IDENTIFIER;
             node->loc = tok.loc;
             node->text = tok.ident.ident->data;
@@ -651,25 +716,25 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 *out = inner;
                 return 0;
             }
-            return cc_parse_error(p, tok.loc, "Unexpected punctuator in expression");
+            return cc_error(p, tok.loc, "Unexpected punctuator in expression");
         case CC_KEYWORD:
             if(tok.kw.kw == CC_sizeof){
-                return cc_parse_error(p, tok.loc, "sizeof not yet supported");
+                return cc_error(p, tok.loc, "sizeof not yet supported");
                 CcExpr* operand;
                 err = cc_parse_prefix(p, &operand);
                 if(err) return err;
             }
             if(tok.kw.kw == CC__Countof){
-                return cc_parse_error(p, tok.loc, "_Countof not yet supported");
+                return cc_error(p, tok.loc, "_Countof not yet supported");
             }
             if(tok.kw.kw == CC_alignof){
-                return cc_parse_error(p, tok.loc, "alignof not yet supported");
+                return cc_error(p, tok.loc, "alignof not yet supported");
             }
-            return cc_parse_error(p, tok.loc, "Unexpected keyword in expression");
+            return cc_error(p, tok.loc, "Unexpected keyword in expression");
         case CC_EOF:
-            return cc_parse_error(p, tok.loc, "Unexpected end of input in expression");
+            return cc_error(p, tok.loc, "Unexpected end of input in expression");
     }
-    return cc_parse_error(p, tok.loc, "Unexpected token in expression");
+    return cc_error(p, tok.loc, "Unexpected token in expression");
 }
 
 // Postfix operators
@@ -678,7 +743,7 @@ int
 cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
     for(;;){
         CcToken tok;
-        int err = cc_next(p, &tok);
+        int err = cc_next_token(p, &tok);
         if(err) return err;
         if(tok.type != CC_PUNCTUATOR){
             cc_unget(p, &tok);
@@ -687,7 +752,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
         switch((uint32_t)tok.punct.punct){
             case CC_plusplus: {
                 CcExpr* node = cc_alloc_expr(p, 0);
-                if(!node) return CC_LEX_OOM_ERROR;
+                if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_POSTINC;
                 node->loc = tok.loc;
                 node->type = operand->type;
@@ -697,7 +762,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             }
             case CC_minusminus: {
                 CcExpr* node = cc_alloc_expr(p, 0);
-                if(!node) return CC_LEX_OOM_ERROR;
+                if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_POSTDEC;
                 node->loc = tok.loc;
                 node->type = operand->type;
@@ -713,7 +778,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 err = cc_expect_punct(p, CC_rbracket);
                 if(err) return err;
                 CcExpr* node = cc_alloc_expr(p, 1);
-                if(!node) return CC_LEX_OOM_ERROR;
+                if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_SUBSCRIPT;
                 node->loc = tok.loc;
                 CcQualType elem_type;
@@ -729,13 +794,13 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_arrow: {
                 CcExprKind mkind = tok.punct.punct == CC_dot ? CC_EXPR_DOT : CC_EXPR_ARROW;
                 CcToken member;
-                err = cc_next(p, &member);
+                err = cc_next_token(p, &member);
                 if(err) return err;
                 if(member.type != CC_IDENTIFIER)
-                    return cc_parse_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
+                    return cc_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
                 // text=member name (in union with value0), values[0]=operand
                 CcExpr* mnode = cc_alloc_expr(p, 1);
-                if(!mnode) return CC_LEX_OOM_ERROR;
+                if(!mnode) return CC_OOM_ERROR;
                 mnode->kind = mkind;
                 mnode->loc = tok.loc;
                 mnode->extra = member.ident.ident->length;
@@ -749,12 +814,12 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 // Count args by parsing into a temp buffer
                 // First check for empty arg list
                 CcToken peek;
-                err = cc_next(p, &peek);
+                err = cc_next_token(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen){
                     // No args
                     CcExpr* node = cc_alloc_expr(p, 0);
-                    if(!node) return CC_LEX_OOM_ERROR;
+                    if(!node) return CC_OOM_ERROR;
                     node->kind = CC_EXPR_CALL;
                     node->loc = tok.loc;
                     node->call.nargs = 0;
@@ -768,22 +833,22 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 uint32_t nargs = 0;
                 for(;;){
                     if(nargs >= 64)
-                        return cc_parse_error(p, tok.loc, "Too many function arguments (max 64)");
+                        return cc_error(p, tok.loc, "Too many function arguments (max 64)");
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, &arg);
                     if(err) return err;
                     arg_buf[nargs++] = arg;
                     CcToken sep;
-                    err = cc_next(p, &sep);
+                    err = cc_next_token(p, &sep);
                     if(err) return err;
                     if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
                         break;
                     if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma)
-                        return cc_parse_error(p, sep.loc, "Expected ',' or ')' in function call");
+                        return cc_error(p, sep.loc, "Expected ',' or ')' in function call");
                 }
                 // nargs values + the function expr in value0
                 CcExpr* node = cc_alloc_expr(p, nargs);
-                if(!node) return CC_LEX_OOM_ERROR;
+                if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_CALL;
                 node->loc = tok.loc;
                 node->call.nargs = nargs;
@@ -1242,20 +1307,34 @@ cc_print_eval_result(CcEvalResult r){
 static
 int
 cc_parse_top_level(CcParser* p, _Bool* finished){
-    CcToken tok;
-    int err = cc_next(p, &tok);
+    int err = 0;
+    CcSpecifier spec = {0};
+    CcQualType base = {.bits = -1};
+    err = cc_parse_declaration_specifier(p, &spec, &base);
     if(err) return err;
-    if(tok.type == CC_EOF){
-        *finished = 1;
+    if(spec.bits || base.bits != (uintptr_t)-1){
+        CcDeclBase declbase = {0};
+        err = cc_resolve_specifiers(p, spec, base, &declbase);
+        if(err) return err;
+        err = cc_parse_decls(p, &declbase);
+        if(err) return err;
         return 0;
     }
-    *finished = 0;
-    // Check for empty statement/decl
-    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_semi)
-        return 0;
 
-    // how to start parsing ?
-
+    CcToken tok;
+    err = cc_next_token(p, &tok);
+    if(err) return err;
+    switch(tok.type){
+        case CC_EOF:
+            *finished = 1;
+            return 0;
+        default:
+            err = cc_unget(p, &tok);
+            if(err) return err;
+            break;
+    }
+    return cc_parse_statement(p);
+#if 0
     // Placeholder repl mode, want to unify this
     // In REPL mode, parse expression statements
     if(p->repl){
@@ -1277,7 +1356,8 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
         return 0;
     }
     // Non-REPL: not yet implemented
-    return cc_parse_error(p, tok.loc, "Declarations not yet implemented");
+    return cc_error(p, tok.loc, "Declarations not yet implemented");
+#endif
 }
 
 static
@@ -1287,20 +1367,49 @@ cc_parser_discard_input(CcParser* p){
     cpp_discard_all_input(&p->lexer.cpp);
 }
 
-LOG_PRINTF(3, 4)
+
+static void cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
+
 static
 int
-cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
+cc_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
     va_end(va);
-    return CC_LEX_SYNTAX_ERROR;
+    return CC_SYNTAX_ERROR;
+}
+
+static
+void
+cc_warn(CcParser* p, SrcLoc loc, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
+    va_end(va);
+}
+
+static
+void
+cc_info(CcParser* p, SrcLoc loc, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
+    va_end(va);
+}
+
+static
+void
+cc_debug(CcParser* p, SrcLoc loc, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "debug", fmt, va);
+    va_end(va);
 }
 
 static
 int
-cc_next(CcParser* p, CcToken* tok){
+cc_next_token(CcParser* p, CcToken* tok){
     if(p->pending.count){
         *tok = ma_pop(CcToken)(&p->pending);
         return 0;
@@ -1317,7 +1426,7 @@ cc_unget(CcParser* p, CcToken* tok){
 static
 int
 cc_peek(CcParser* p, CcToken* tok){
-    int err = cc_next(p, tok);
+    int err = cc_next_token(p, tok);
     if(err) return err;
     return cc_unget(p, tok);
 }
@@ -1326,7 +1435,7 @@ static
 int
 cc_expect_punct(CcParser* p, CcPunct punct){
     CcToken tok;
-    int err = cc_next(p, &tok);
+    int err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){
         // Build a readable name for the expected punctuator
@@ -1347,7 +1456,7 @@ cc_expect_punct(CcParser* p, CcPunct punct){
             buf[len++] = (char)v;
         }
         buf[len] = 0;
-        return cc_parse_error(p, tok.loc, "Expected '%s'", buf);
+        return cc_error(p, tok.loc, "Expected '%s'", buf);
     }
     return 0;
 }
@@ -1379,6 +1488,191 @@ Allocator
 cc_allocator(CcParser*p){
     return p->lexer.cpp.allocator;
 }
+
+static
+int
+cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type){
+    if(base_type->bits != (uintptr_t)-1) return CC_UNREACHABLE_ERROR;
+    if(spec->bits != 0) return CC_UNREACHABLE_ERROR;
+    int err = 0;
+    CcToken tok;
+    for(int i = 0; ; i++){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        switch(tok.type){
+            case CC_KEYWORD:
+                switch(tok.kw.kw){
+                    case CC_else:
+                    case CC_asm:
+                    case CC_true:
+                    case CC_do:
+                    case CC_if:
+                    case CC_case:
+                    case CC_goto:
+                    case CC_for:
+                    case CC_false:
+                    case CC_break:
+                    case CC_while:
+                    case CC_return:
+                    case CC_sizeof:
+                    case CC_switch:
+                    case CC_alignof:
+                    case CC_default:
+                    case CC_nullptr:
+                    case CC_continue:
+                    case CC__Generic:
+                    case CC__Countof:
+                    case CC_static_assert:
+                        if(i == 0) return cc_unget(p, &tok);
+                        return cc_error(p, tok.loc, "Unexpected keyword when parsing declaration");
+                    case CC_int:
+                        if(spec->sp_int)
+                            return cc_error(p, tok.loc, "Duplicate int in declaration");
+                        spec->sp_int = 1;
+                        continue;
+                    case CC_long:
+                        if(spec->sp_long > 2)
+                            return cc_error(p, tok.loc, "Duplicate long after long long in declaration");
+                        spec->sp_long++;
+                        continue;
+                    case CC_char:
+                        if(spec->sp_char)
+                            return cc_error(p, tok.loc, "Duplicate char in declaration");
+                        spec->sp_char = 1;
+                        continue;
+                    case CC_auto:
+                        spec->sp_auto = 1;
+                        continue;
+                    case CC_bool:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = (CcQualType){.basic.kind = CCBT_bool};
+                        continue;
+                    case CC_enum:
+                        return cc_unimplemented(p, tok.loc, "enum parsing in declaration");
+                    case CC_void:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = (CcQualType){.basic.kind = CCBT_void};
+                        continue;
+                    case CC_float:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = (CcQualType){.basic.kind = CCBT_float};
+                        continue;
+                    case CC_const:
+                        spec->sp_const = 1;
+                        continue;
+                    case CC_short:
+                        if(spec->sp_short)
+                            return cc_error(p, tok.loc, "Duplicate short in declaration");
+                        spec->sp_short = 1;
+                        continue;
+                    case CC_union:
+                        return cc_unimplemented(p, tok.loc, "union parsing in declaration");
+                    case CC_double:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = (CcQualType){.basic.kind = CCBT_double};
+                        continue;
+                    case CC_extern:
+                        spec->sp_extern = 1;
+                        continue;
+                    case CC_inline:
+                        spec->sp_inline = 1;
+                        continue;
+                    case CC_signed:
+                        spec->sp_signed = 1;
+                        continue;
+                    case CC_static:
+                        spec->sp_static = 1;
+                        continue;
+                    case CC_struct:
+                        return cc_unimplemented(p, tok.loc, "struct parsing in declaration");
+                    case CC_typeof:
+                        return cc_unimplemented(p, tok.loc, "typeof parsing in declaration");
+                    case CC_alignas:
+                        return cc_unimplemented(p, tok.loc, "alignas parsing in declaration");
+                    case CC_typedef:
+                        spec->sp_typedef = 1;
+                        continue;
+                    case CC__Atomic:
+                        return cc_unimplemented(p, tok.loc, "_Atomic parsing in declaration");
+                    case CC__BitInt:
+                        return cc_unimplemented(p, tok.loc, "_BitInt parsing in declaration");
+                    case CC__Complex:
+                        return cc_unimplemented(p, tok.loc, "_Complex parsing in declaration");
+                    case CC_register:
+                        spec->sp_register = 1;
+                        continue;
+                    case CC_restrict:
+                        spec->sp_restrict = 1;
+                        continue;
+                    case CC_unsigned:
+                        spec->sp_unsigned = 1;
+                        continue;
+                    case CC_volatile:
+                        spec->sp_volatile = 1;
+                        continue;
+                    case CC_constexpr:
+                        spec->sp_constexpr = 1;
+                        continue;
+                    case CC__Float16:
+                    case CC__Float32:
+                    case CC__Float64:
+                    case CC__Float128:
+                        return cc_unimplemented(p, tok.loc, "_FloatNN parsing in declaration");
+                    case CC__Imaginary:
+                        return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
+                    case CC__Noreturn:
+                        spec->sp_noreturn = 1;
+                        continue;
+                    case CC__Decimal32:
+                    case CC__Decimal64:
+                    case CC__Decimal128:
+                        return cc_unimplemented(p, tok.loc, "_DecimalNN parsing in declaration");
+                    case CC_thread_local:
+                        spec->sp_thread_local = 1;
+                        continue;
+                    case CC_typeof_unqual:
+                        return cc_unimplemented(p, tok.loc, "typeof_unqual parsing in declaration");
+                }
+            case CC_IDENTIFIER:
+                return cc_unimplemented(p, tok.loc, "Identifier");
+            case CC_EOF:
+            case CC_CONSTANT:
+            case CC_STRING_LITERAL:
+            case CC_PUNCTUATOR:
+                return cc_unget(p, &tok);
+        }
+    }
+    return 0;
+}
+
+static 
+int 
+cc_parse_statement(CcParser* p){
+    (void)p;
+    return cc_unimp(p, "parse statement");
+}
+static
+int
+cc_resolve_specifiers(CcParser* p, CcSpecifier spec, CcQualType base, CcDeclBase* declbase){
+    (void)p;
+    (void)spec;
+    (void)base;
+    (void)declbase;
+    return cc_unimp(p, "resolve specifiers");
+}
+
+static 
+int 
+cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
+    (void)p;
+    (void)declbase;
+    return cc_unimp(p, "parse decls");
+}
+
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
