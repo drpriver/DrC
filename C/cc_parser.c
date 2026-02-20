@@ -26,6 +26,9 @@ static CcExpr* _Nullable cc_alloc_expr(CcParser* p, size_t nvalues);
 LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...);
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
+static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
+static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
+static Allocator cc_allocator(CcParser*p);
 
 static
 int
@@ -35,7 +38,7 @@ cc_push_scope(CcParser* p){
         cc_scope_clear(s);
     }
     else {
-        s = Allocator_zalloc(p->lexer.cpp.allocator, sizeof *s);
+        s = Allocator_zalloc(cc_allocator(p), sizeof *s);
         if(!s) return 1;
     }
     s->parent = p->current;
@@ -516,7 +519,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     break;
                 case CC_EXPR_ADDR: {
-                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, p->lexer.cpp.allocator, operand->type, 0);
+                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                     if(!ptr) return CC_LEX_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
                     break;
@@ -621,7 +624,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->str.length = tok.str.length;
             node->text = tok.str.text;
             // Type: char* (pointer to char)
-            CcPointer* sp = cc_intern_pointer(&p->type_cache, p->lexer.cpp.allocator, ccqt_basic(CCBT_char), 0);
+            CcPointer* sp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), 0);
             if(!sp) return CC_LEX_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sp};
             *out = node;
@@ -1236,10 +1239,6 @@ cc_print_eval_result(CcEvalResult r){
     }
 }
 
-// ---------------------------------------------------------------------------
-// Top-level parsing
-// ---------------------------------------------------------------------------
-
 static
 int
 cc_parse_top_level(CcParser* p, _Bool* finished){
@@ -1251,11 +1250,15 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
         return 0;
     }
     *finished = 0;
+    // Check for empty statement/decl
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_semi)
+        return 0;
+
+    // how to start parsing ?
+
+    // Placeholder repl mode, want to unify this
     // In REPL mode, parse expression statements
     if(p->repl){
-        // Check for empty statement
-        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_semi)
-            return 0;
         // Push back and parse expression
         cc_unget(p, &tok);
         CcExpr* expr;
@@ -1308,7 +1311,7 @@ cc_next(CcParser* p, CcToken* tok){
 static
 int
 cc_unget(CcParser* p, CcToken* tok){
-    return ma_push(CcToken)(&p->pending, p->lexer.cpp.allocator, *tok);
+    return ma_push(CcToken)(&p->pending, cc_allocator(p), *tok);
 }
 
 static
@@ -1353,7 +1356,28 @@ static
 CcExpr* _Nullable
 cc_alloc_expr(CcParser* p, size_t nvalues){
     size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
-    return Allocator_zalloc(p->lexer.cpp.allocator, size);
+    return Allocator_zalloc(cc_allocator(p), size);
+}
+static
+Marray(CcToken)*_Nullable
+cc_get_scratch(CcParser* p){
+    Marray(CcToken)* toks = fl_pop(&p->scratch_tokens);
+    if(!toks) toks = Allocator_zalloc(cc_allocator(p), sizeof *toks);
+    if(!toks) return toks;
+    toks->count = 0;
+    return toks;
+}
+
+static
+void
+cc_release_scratch(CcParser* p, Marray(CcToken)* toks){
+    fl_push(&p->scratch_tokens, toks);
+}
+
+static
+Allocator
+cc_allocator(CcParser*p){
+    return p->lexer.cpp.allocator;
 }
 
 #ifdef __clang__

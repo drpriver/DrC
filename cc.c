@@ -48,6 +48,7 @@ int main(int argc, char** argv, char** envp){
                 .env = &env,
             },
         },
+        .current = &cc_parser.global,
     };
     const char* filename = NULL;
     ArgToParse pos_args[] = {

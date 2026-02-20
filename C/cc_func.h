@@ -28,6 +28,7 @@
 
 typedef struct CcFunc CcFunc;
 struct CcFunc {
+    CcFunc*_Nullable enclosing; // For nested functions
     CcFunction* type;
     Atom name;
     Atom _Nullable mangle;

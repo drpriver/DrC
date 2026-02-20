@@ -68,6 +68,7 @@ struct CcParser {
     CcAttributes attributes;
     CcScope global;
     CcScope* current;
+    CcFunc*_Nullable current_func;
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
 };
