@@ -19,25 +19,25 @@ enum {
     CC_LEX_FILE_NOT_FOUND_ERROR,
 };
 
-static int cpp_ident_to_cc_tok(CcLexer*, CPPToken*, CCToken*);
-static int cpp_number_to_cc_tok(CcLexer*, CPPToken*, CCToken*);
-static int cpp_string_to_cc_tok(CcLexer*, CPPToken*, CCToken*);
-static int cpp_char_to_cc_tok(CcLexer*, CPPToken*, CCToken*);
-static int cpp_punct_to_cc_tok(CcLexer*, CPPToken*, CCToken*);
+static int cpp_ident_to_cc_tok(CcLexer*, CppToken*, CcToken*);
+static int cpp_number_to_cc_tok(CcLexer*, CppToken*, CcToken*);
+static int cpp_string_to_cc_tok(CcLexer*, CppToken*, CcToken*);
+static int cpp_char_to_cc_tok(CcLexer*, CppToken*, CcToken*);
+static int cpp_punct_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 LOG_PRINTF(3, 4) static int  cc_error(CcLexer*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_warn(CcLexer*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_info(CcLexer*, SrcLoc, const char*, ...);
 static
 int
-cc_lex_next_token(CcLexer* lexer, CCToken* tok){
-    CPPToken cpp_tok;
+cc_lex_next_token(CcLexer* lexer, CcToken* tok){
+    CppToken cpp_tok;
     int err;
     for(;;){
         err = cpp_next_token(&lexer->cpp, &cpp_tok);
         if(err) return err;
         switch(cpp_tok.type){
             case CPP_EOF:
-                *tok = (CCToken){.type=CC_EOF};
+                *tok = (CcToken){.type=CC_EOF};
                 return 0;
             case CPP_IDENTIFIER:
                 return cpp_ident_to_cc_tok(lexer, &cpp_tok, tok);
@@ -200,13 +200,13 @@ cc_lex_str_to_keyword(StringView txt){
 }
 static
 int
-cpp_ident_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
+cpp_ident_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     uint32_t kw = cc_lex_str_to_keyword(cpptok->txt);
     if(kw != (uint32_t)-1){
-        *cctok = (CCToken){
+        *cctok = (CcToken){
             .kw = {
                 .type = CC_KEYWORD,
-                .kw = (CCKeyword)kw,
+                .kw = (CcKeyword)kw,
             },
             .loc = cpptok->loc,
         };
@@ -214,7 +214,7 @@ cpp_ident_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
     }
     Atom a = AT_atomize(lexer->cpp.at, cpptok->txt.text, cpptok->txt.length);
     if(!a) return CC_LEX_OOM_ERROR;
-    *cctok = (CCToken){
+    *cctok = (CcToken){
         .ident = {
             .type = CC_IDENTIFIER,
             .ident = a,
@@ -226,7 +226,7 @@ cpp_ident_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
 
 static
 int
-cpp_number_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
+cpp_number_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
     // Detect hex prefix before suffix stripping so we don't eat hex digits
@@ -293,13 +293,13 @@ cpp_number_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
             return cc_error(lexer, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
         if(is_hex)
             return cc_error(lexer, cpptok->loc, "Hex floating-point literals not yet supported");
-        CCConstantType ctype;
+        CcConstantType ctype;
         if(has_f){
             ctype = CC_FLOAT;
             FloatResult fr = parse_float(buf, buf_len);
             if(fr.errored)
                 return cc_error(lexer, cpptok->loc, "Invalid floating-point literal");
-            *cctok = (CCToken){
+            *cctok = (CcToken){
                 .constant = {
                     .type = CC_CONSTANT,
                     .ctype = ctype,
@@ -316,7 +316,7 @@ cpp_number_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
                 ctype = CC_LONG_DOUBLE;
             else
                 ctype = CC_DOUBLE;
-            *cctok = (CCToken){
+            *cctok = (CcToken){
                 .constant = {
                     .type = CC_CONSTANT,
                     .ctype = ctype,
@@ -349,14 +349,14 @@ cpp_number_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
         if(u.errored) return cc_error(lexer, cpptok->loc, "Invalid digit in number");
         v = u.result;
     }
-    CCConstantType ctype;
+    CcConstantType ctype;
     if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;
     else if(num_l >= 2)          ctype = CC_LONG_LONG;
     else if(has_u && num_l == 1) ctype = CC_UNSIGNED_LONG;
     else if(num_l == 1)          ctype = CC_LONG;
     else if(has_u)               ctype = CC_UNSIGNED;
     else                         ctype = CC_INT;
-    *cctok = (CCToken){
+    *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,
             .ctype = ctype,
@@ -368,7 +368,7 @@ cpp_number_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
 }
 static
 int
-cpp_string_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
+cpp_string_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     (void)lexer;
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
@@ -377,7 +377,7 @@ cpp_string_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
     if(!q || q == s + len - 1)
         return cc_error(lexer, cpptok->loc, "Invalid string literal");
     size_t prefix_len = (size_t)(q - s);
-    CCStringType stype;
+    CcStringType stype;
     if(prefix_len == 0)      stype = CC_STRING;
     else if(prefix_len == 1 && s[0] == 'L') stype = CC_LSTRING;
     else if(prefix_len == 1 && s[0] == 'u') stype = CC_uSTRING;
@@ -387,7 +387,7 @@ cpp_string_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
     const char* content = q + 1;
     // len - prefix_len - 2: skip prefix, opening quote, closing quote
     uint32_t content_len = (uint32_t)(len - prefix_len - 2);
-    *cctok = (CCToken){
+    *cctok = (CcToken){
         .str = {
             .type = CC_STRING_LITERAL,
             .stype = stype,
@@ -400,13 +400,13 @@ cpp_string_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
 }
 static
 int
-cpp_char_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
+cpp_char_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
     // Skip prefix (L, u, U, u8) to find opening quote, track type
     const char* p = s;
     const char* end = s + len;
-    CCConstantType ctype = CC_INT;
+    CcConstantType ctype = CC_INT;
     if(p < end && *p == 'L'){ p++; ctype = CC_WCHAR; }
     else if(p < end && *p == 'U'){ p++; ctype = CC_CHAR32; }
     else if(p + 1 < end && p[0] == 'u' && p[1] == '8'){ p += 2; ctype = CC_UCHAR; }
@@ -488,7 +488,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
     }
     if(ctype != CC_INT && nchars != 1)
         return cc_error(lexer, cpptok->loc, "Multi-character character constant with prefix is not allowed");
-    *cctok = (CCToken){
+    *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,
             .ctype = ctype,
@@ -500,7 +500,7 @@ cpp_char_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
 }
 static
 int
-cpp_punct_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
+cpp_punct_to_cc_tok(CcLexer* lexer, CppToken* cpptok, CcToken* cctok){
     uint32_t p = (uint32_t)cpptok->punct;
     #ifdef __GNUC__
     #pragma GCC diagnostic push
@@ -511,10 +511,10 @@ cpp_punct_to_cc_tok(CcLexer* lexer, CPPToken* cpptok, CCToken* cctok){
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
     #endif
-    *cctok = (CCToken){
+    *cctok = (CcToken){
         .punct = {
             .type = CC_PUNCTUATOR,
-            .punct = (CCPunct)p,
+            .punct = (CcPunct)p,
         },
         .loc = cpptok->loc,
     };

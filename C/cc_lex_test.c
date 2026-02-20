@@ -17,7 +17,7 @@
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
 #include "cpp_tok.h"
-#include "c_tok.h"
+#include "cc_tok.h"
 #include "cc_lexer.h"
 
 #include "../Drp/compiler_warnings.h"
@@ -25,14 +25,14 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
+static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
 
 enum { MAX_TEST_TOKENS = 64 };
 
-// Helper: lex a string into an array of CCTokens, return count or -1 on error.
+// Helper: lex a string into an array of CcTokens, return count or -1 on error.
 static
 int
-cc_lex_string(StringView txt, CCToken (*out)[MAX_TEST_TOKENS], int* count, const char* file, const char* func, int line){
+cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, const char* file, const char* func, int line){
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
@@ -66,7 +66,7 @@ cc_lex_string(StringView txt, CCToken (*out)[MAX_TEST_TOKENS], int* count, const
             result = 1;
             goto finally;
         }
-        CCToken tok;
+        CcToken tok;
         err = cc_lex_next_token(&lexer, &tok);
         if(err){
             result = 1;
@@ -118,7 +118,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     err = cpp_include_file_via_file_cache(&lexer.cpp, SV("(test)"));
     if(err) goto finally;
     {
-        CCToken tok;
+        CcToken tok;
         for(;;){
             err = cc_lex_next_token(&lexer, &tok);
             if(err) break;
@@ -139,20 +139,20 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
 }
 
 // Helpers for building expected tokens
-static CCToken cc_int_tok(uint64_t v, CCConstantType ctype){ return (CCToken){.constant={.type=CC_CONSTANT, .ctype=ctype, .integer_value=v}}; }
-static CCToken cc_float_tok(float v){ return (CCToken){.constant={.type=CC_CONSTANT, .ctype=CC_FLOAT, .float_value=v}}; }
-static CCToken cc_double_tok(double v){ return (CCToken){.constant={.type=CC_CONSTANT, .ctype=CC_DOUBLE, .double_value=v}}; }
-static CCToken cc_long_double_tok(double v){ return (CCToken){.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE, .double_value=v}}; }
-static CCToken cc_kw_tok(CCKeyword kw){ return (CCToken){.kw={.type=CC_KEYWORD, .kw=kw}}; }
-static CCToken cc_punct_tok(CCPunct p){ return (CCToken){.punct={.type=CC_PUNCTUATOR, .punct=p}}; }
+static CcToken cc_int_tok(uint64_t v, CcConstantType ctype){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=ctype, .integer_value=v}}; }
+static CcToken cc_float_tok(float v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_FLOAT, .float_value=v}}; }
+static CcToken cc_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_DOUBLE, .double_value=v}}; }
+static CcToken cc_long_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE, .double_value=v}}; }
+static CcToken cc_kw_tok(CcKeyword kw){ return (CcToken){.kw={.type=CC_KEYWORD, .kw=kw}}; }
+static CcToken cc_punct_tok(CcPunct p){ return (CcToken){.punct={.type=CC_PUNCTUATOR, .punct=p}}; }
 // Abuse: stash a const char* in the Atom field. cc_tok_matches knows to
 // compare the real atom's data/length against this C string.
-static CCToken cc_ident_tok(const char* name){ return (CCToken){.ident={.type=CC_IDENTIFIER, .ident=(Atom)name}}; }
-static CCToken cc_str_tok(CCStringType stype, StringView sv){ return (CCToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .text=sv.text, .length=(uint32_t)sv.length}}; }
+static CcToken cc_ident_tok(const char* name){ return (CcToken){.ident={.type=CC_IDENTIFIER, .ident=(Atom)name}}; }
+static CcToken cc_str_tok(CcStringType stype, StringView sv){ return (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .text=sv.text, .length=(uint32_t)sv.length}}; }
 
 static
 const char*
-cc_type_name(CCTokenType t){
+cc_type_name(CcTokenType t){
     switch(t){
         case CC_EOF: return "EOF";
         case CC_KEYWORD: return "KEYWORD";
@@ -168,7 +168,7 @@ cc_type_name(CCTokenType t){
 // Returns 1 if they match, 0 otherwise.
 static
 _Bool
-cc_tok_matches(CCToken got, CCToken exp){
+cc_tok_matches(CcToken got, CcToken exp){
     if(got.type != exp.type) return 0;
     switch(got.type){
         case CC_EOF: return 1;
@@ -204,7 +204,7 @@ cc_tok_matches(CCToken got, CCToken exp){
 TestFunction(test_cc_lex_integers){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; CCToken exp; int line;
+        const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
         {"zero",         SV("0"),          cc_int_tok(0, CC_INT), __LINE__},
         {"decimal",      SV("42"),         cc_int_tok(42, CC_INT), __LINE__},
@@ -239,7 +239,7 @@ TestFunction(test_cc_lex_integers){
         {"zero_ll",      SV("0LL"),        cc_int_tok(0, CC_LONG_LONG), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -286,7 +286,7 @@ TestFunction(test_cc_lex_integers){
 TestFunction(test_cc_lex_floats){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; CCToken exp; int line;
+        const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
         {"float_f",      SV("3.14f"),      cc_float_tok(3.14f), __LINE__},
         {"float_F",      SV("3.14F"),      cc_float_tok(3.14f), __LINE__},
@@ -306,7 +306,7 @@ TestFunction(test_cc_lex_floats){
         {"pos_exp",      SV("1e+10"),      cc_double_tok(1e+10), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -328,7 +328,7 @@ TestFunction(test_cc_lex_floats){
 TestFunction(test_cc_lex_chars){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; uint64_t exp_value; CCConstantType exp_ctype; int line;
+        const char* name; StringView inp; uint64_t exp_value; CcConstantType exp_ctype; int line;
     } test_cases[] = {
         {"simple_a",    SV("'a'"),     'a',              CC_INT,    __LINE__},
         {"simple_z",    SV("'z'"),     'z',              CC_INT,    __LINE__},
@@ -354,7 +354,7 @@ TestFunction(test_cc_lex_chars){
         {"U_hex_esc",   SV("U'\\x41'"),   0x41,             CC_CHAR32, __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -406,7 +406,7 @@ TestFunction(test_cc_lex_chars){
 TestFunction(test_cc_lex_strings){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; CCToken exp; int line;
+        const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
         {"basic",    SV("\"hello\""),     cc_str_tok(CC_STRING,   SV("hello")), __LINE__},
         {"empty",    SV("\"\""),          cc_str_tok(CC_STRING,   SV("")), __LINE__},
@@ -422,7 +422,7 @@ TestFunction(test_cc_lex_strings){
         {"u8_empty", SV("u8\"\""),       cc_str_tok(CC_U8STRING, SV("")), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -448,7 +448,7 @@ TestFunction(test_cc_lex_punctuators){
     #pragma GCC diagnostic ignored "-Wmultichar"
     #endif
     struct {
-        const char* name; StringView inp; CCPunct exp; int line;
+        const char* name; StringView inp; CcPunct exp; int line;
     } test_cases[] = {
         {"plus",     SV("+"),    CC_plus, __LINE__},
         {"minus",    SV("-"),    CC_minus, __LINE__},
@@ -500,7 +500,7 @@ TestFunction(test_cc_lex_punctuators){
     #pragma GCC diagnostic pop
     #endif
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -522,7 +522,7 @@ TestFunction(test_cc_lex_punctuators){
 TestFunction(test_cc_lex_keywords){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; CCKeyword exp; int line;
+        const char* name; StringView inp; CcKeyword exp; int line;
     } test_cases[] = {
         {"do", SV("do"), CC_do, __LINE__},
         {"if", SV("if"), CC_if, __LINE__},
@@ -591,7 +591,7 @@ TestFunction(test_cc_lex_keywords){
         {"countof", SV("countof"), CC__Countof, __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);
@@ -613,7 +613,7 @@ TestFunction(test_cc_lex_keywords){
 TestFunction(test_cc_lex_multi_token){
     TESTBEGIN();
     struct {
-        const char* name; StringView inp; int exp_count; CCToken exp[8]; int line;
+        const char* name; StringView inp; int exp_count; CcToken exp[8]; int line;
     } test_cases[] = {
         {"simple_expr", SV("1 + 2"), 3, {
             cc_int_tok(1, CC_INT),
@@ -666,7 +666,7 @@ TestFunction(test_cc_lex_multi_token){
         }, __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        CCToken toks[MAX_TEST_TOKENS];
+        CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
         TestAssertFalse(err);

@@ -1,5 +1,5 @@
-#ifndef C_C_TOK_H
-#define C_C_TOK_H
+#ifndef C_CC_TOK_H
+#define C_CC_TOK_H
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
@@ -12,7 +12,7 @@
 #pragma clang assume_nonnull begin
 #endif
 
-enum CCTokenType TYPED_ENUM(uint32_t) {
+enum CcTokenType TYPED_ENUM(uint32_t) {
     CC_EOF,
     CC_KEYWORD,
     CC_IDENTIFIER,
@@ -20,9 +20,9 @@ enum CCTokenType TYPED_ENUM(uint32_t) {
     CC_STRING_LITERAL,
     CC_PUNCTUATOR,
 };
-TYPEDEF_ENUM(CCTokenType, uint32_t);
+TYPEDEF_ENUM(CcTokenType, uint32_t);
 
-enum CCConstantType TYPED_ENUM(uint32_t){
+enum CcConstantType TYPED_ENUM(uint32_t){
     CC_INT,
     CC_UNSIGNED,
     CC_LONG,
@@ -37,17 +37,17 @@ enum CCConstantType TYPED_ENUM(uint32_t){
     CC_CHAR32,
     CC_UCHAR,
 };
-TYPEDEF_ENUM(CCConstantType, uint32_t);
-enum CCStringType TYPED_ENUM(uint32_t){
+TYPEDEF_ENUM(CcConstantType, uint32_t);
+enum CcStringType TYPED_ENUM(uint32_t){
     CC_STRING,
     CC_LSTRING,
     CC_uSTRING,
     CC_USTRING,
     CC_U8STRING,
 };
-TYPEDEF_ENUM(CCStringType, uint32_t);
+TYPEDEF_ENUM(CcStringType, uint32_t);
 
-enum CCKeyword TYPED_ENUM(uint32_t){
+enum CcKeyword TYPED_ENUM(uint32_t){
     CC_do,
     CC_if,
     CC_for,
@@ -108,9 +108,9 @@ enum CCKeyword TYPED_ENUM(uint32_t){
     CC_typeof_unqual,
     CC__Countof,
 };
-TYPEDEF_ENUM(CCKeyword, uint32_t);
+TYPEDEF_ENUM(CcKeyword, uint32_t);
 
-enum CCPunct TYPED_ENUM(uint32_t){
+enum CcPunct TYPED_ENUM(uint32_t){
     CC_lbracket = '[',
     CC_rbracket = ']',
     CC_lparen   = '(',
@@ -166,34 +166,34 @@ enum CCPunct TYPED_ENUM(uint32_t){
     #pragma GCC diagnostic pop
     #endif
 };
-TYPEDEF_ENUM(CCPunct, uint32_t);
+TYPEDEF_ENUM(CcPunct, uint32_t);
 
 
-typedef struct CCToken CCToken;
-struct CCToken {
+typedef struct CcToken CcToken;
+struct CcToken {
     union {
         struct {
-            CCTokenType type: 8;
+            CcTokenType type: 8;
             uint32_t _bitpadding: 24;
             uint32_t _pad;
             uint64_t _pad2;
         };
         struct {
-            CCTokenType type: 8;
-            CCKeyword kw: 8;
+            CcTokenType type: 8;
+            CcKeyword kw: 8;
             uint32_t _bitpadding: 16;
             uint32_t _pad;
             uint64_t _pad2;
         } kw;
         struct {
-            CCTokenType type: 8;
+            CcTokenType type: 8;
             uint32_t _bitpadding: 24;
             uint32_t _pad;
             Atom ident;
         } ident;
         struct {
-            CCTokenType type: 8;
-            CCConstantType ctype: 8;
+            CcTokenType type: 8;
+            CcConstantType ctype: 8;
             uint32_t _bitpadding: 16;
             uint32_t _pad;
             union {
@@ -203,15 +203,15 @@ struct CCToken {
             };
         } constant;
         struct {
-            CCTokenType type: 8;
-            CCStringType stype: 8;
+            CcTokenType type: 8;
+            CcStringType stype: 8;
             uint32_t _bitpadding: 16;
             uint32_t length;
             const char* text;
         } str;
         struct {
-            CCTokenType type: 8;
-            CCPunct punct: 24;
+            CcTokenType type: 8;
+            CcPunct punct: 24;
             uint32_t _pad;
             uint64_t _pad2;
         } punct;

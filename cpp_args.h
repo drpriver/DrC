@@ -177,7 +177,7 @@ cpp_cli_defines(CPreprocessor* cpp){
         if(err) return err;
         err = cpp_include_file_via_file_cache(cpp, SV("(command line)"));
         if(err) return err;
-        CPPToken tok;
+        CppToken tok;
         for(;;){
             err = cpp_next_pp_token(cpp, &tok);
             if(err) return err;

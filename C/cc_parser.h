@@ -6,7 +6,7 @@
 #include "../Drp/atom_map.h"
 #include "../Drp/free_list.h"
 #include "cc_lexer.h"
-#include "c_tok.h"
+#include "cc_tok.h"
 #include "cc_type.h"
 #include "cc_type_cache.h"
 #include "cc_expr.h"
@@ -16,7 +16,7 @@
 #include "cc_scope.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
-#define MARRAY_T CCToken
+#define MARRAY_T CcToken
 #include "../Drp/Marray.h"
 #endif
 #ifndef MARRAY_CCSTATMENT
@@ -64,12 +64,12 @@ struct CcParser {
     CcLexer lexer;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
-    Marray(CCToken) pending;
+    Marray(CcToken) pending;
     CcAttributes attributes;
     CcScope global;
     CcScope* current;
     FreeList(CcScope) scratch_scopes;
-    FreeList(Marray(CCToken)) scratch_tokens;
+    FreeList(Marray(CcToken)) scratch_tokens;
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);

@@ -14,7 +14,7 @@
 #include "Drp/file_util.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
-#include "C/c_tok.h"
+#include "C/cc_tok.h"
 #include "C/cc_lexer.h"
 #include "C/cc_parser.h"
 #include "cpp_args.h"
@@ -215,7 +215,7 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to read '%s'", filename);
         return err;
     }
-    CCToken tok;
+    CcToken tok;
     for(;;){
         err = cc_lex_next_token(&cc_parser.lexer, &tok);
         if(err) continue;

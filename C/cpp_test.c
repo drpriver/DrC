@@ -23,7 +23,7 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
+static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
 enum {SKIP = 1};
 
 // Helper to run preprocessor on a string and collect output tokens as a string
@@ -61,19 +61,19 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         result = 1;
         goto finally;
     }
-    CPPFrame frame = {
+    CppFrame frame = {
         .file_id = (uint32_t)fc->map.count - 1,
         .txt = txt,
         .line = 1,
         .column = 1,
     };
-    err = ma_push(CPPFrame)(&cpp.frames, cpp.allocator, frame);
+    err = ma_push(CppFrame)(&cpp.frames, cpp.allocator, frame);
     if(err){
         result = 1;
         goto finally;
     }
     MStringBuilder sb = {.allocator = MALLOCATOR};
-    CPPToken tok;
+    CppToken tok;
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err){
@@ -138,18 +138,18 @@ cpp_expand_with_files(
     err = cpp_define_builtin_macros(&cpp);
     if(err){ result = 1; goto finally; }
     {
-        CPPFrame frame = {
+        CppFrame frame = {
             .file_id = 0,
             .txt = files[0].content,
             .line = 1,
             .column = 1,
         };
-        err = ma_push(CPPFrame)(&cpp.frames, cpp.allocator, frame);
+        err = ma_push(CppFrame)(&cpp.frames, cpp.allocator, frame);
         if(err){ result = 1; goto finally; }
     }
     {
         MStringBuilder sb = {.allocator = MALLOCATOR};
-        CPPToken tok;
+        CppToken tok;
         for(;;){
             err = cpp_next_pp_token(&cpp, &tok);
             if(err){
@@ -202,15 +202,15 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     if(err) goto finally;
     err = cpp_define_builtin_macros(&cpp);
     if(err) goto finally;
-    CPPFrame frame = {
+    CppFrame frame = {
         .file_id = (uint32_t)fc->map.count - 1,
         .txt = txt,
         .line = 1,
         .column = 1,
     };
-    err = ma_push(CPPFrame)(&cpp.frames, cpp.allocator, frame);
+    err = ma_push(CppFrame)(&cpp.frames, cpp.allocator, frame);
     if(err) goto finally;
-    CPPToken tok;
+    CppToken tok;
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err) break;

@@ -8,12 +8,12 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "cc_stmt.h"
-#include "c_tok.h"
+#include "cc_tok.h"
 #include "cc_type.h"
 
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
-#define MARRAY_T CCToken
+#define MARRAY_T CcToken
 #include "../Drp/Marray.h"
 #endif
 #ifndef MARRAY_CCSTATMENT
@@ -39,14 +39,14 @@ struct CcFunc {
              parsed:  1, // If 0, then just an array of tokens instead of array of stmts and needs
                          // to be parsed on first use or codegen.
              _padding: 27;
-    Marray(CCToken)*_Nullable tokens; // If set, the unparsed function body. 
+    Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body. 
                                       // Return to the parser's free list when done.
     Marray(CcStatement) body;
     struct {
         size_t count;
         Atom _Nullable*_Null_unspecified data;
     } params;
-    AtomMap(uint32_t) labels; // label name -> statement index in body
+    AtomMap(uintptr_t) labels; // label name -> statement index in body: NOTE: we're punning the pointers, it's not pointers to uintptr_t
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
     void*_Nullable native_call_cache; // opaque, managed by native_call.c
 };

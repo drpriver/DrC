@@ -3,7 +3,7 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
-#include "c_tok.h"
+#include "cc_tok.h"
 #include "cpp_preprocessor.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -14,7 +14,7 @@ struct CcLexer {
     CPreprocessor cpp;
 };
 
-static int cc_lex_next_token(CcLexer* lexer, CCToken* tok);
+static int cc_lex_next_token(CcLexer* lexer, CcToken* tok);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

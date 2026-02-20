@@ -13,7 +13,7 @@
 #endif
 
 // Some of these tokens are internal
-enum CPPTokenType TYPED_ENUM(uint64_t) {
+enum CppTokenType TYPED_ENUM(uint64_t) {
     CPP_EOF         = 0,
     CPP_HEADER_NAME = 1,
     CPP_IDENTIFIER  = 2,
@@ -27,8 +27,8 @@ enum CPPTokenType TYPED_ENUM(uint64_t) {
     CPP_PLACEMARKER = 10,
     CPP_REENABLE    = 11,
 };
-TYPEDEF_ENUM(CPPTokenType, uint64_t);
-static const StringView CPPTokenTypeSV[] = {
+TYPEDEF_ENUM(CppTokenType, uint64_t);
+static const StringView CppTokenTypeSV[] = {
     [CPP_EOF        ] = SV("EOF"),
     [CPP_HEADER_NAME] = SV("HEADER_NAME"),
     [CPP_IDENTIFIER ] = SV("IDENTIFIER"),
@@ -44,12 +44,12 @@ static const StringView CPPTokenTypeSV[] = {
 };
 
 
-typedef struct CPPToken CPPToken;
-struct CPPToken {
+typedef struct CppToken CppToken;
+struct CppToken {
     union {
         uint64_t _bits;
         struct {
-            CPPTokenType type: 4;
+            CppTokenType type: 4;
             uint64_t _pad: 4;
             uint64_t disabled: 1;
             uint64_t _pad2: 7;

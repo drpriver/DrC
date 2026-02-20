@@ -18,14 +18,14 @@ static int cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Null
 static int cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
-static int cc_next(CcParser* p, CCToken* tok);
-static int cc_unget(CcParser* p, CCToken* tok);
-static int cc_peek(CcParser* p, CCToken* tok);
-static int cc_expect_punct(CcParser* p, CCPunct punct);
+static int cc_next(CcParser* p, CcToken* tok);
+static int cc_unget(CcParser* p, CcToken* tok);
+static int cc_peek(CcParser* p, CcToken* tok);
+static int cc_expect_punct(CcParser* p, CcPunct punct);
 static CcExpr* _Nullable cc_alloc_expr(CcParser* p, size_t nvalues);
 LOG_PRINTF(3, 4) static int cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...);
-static _Bool cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec);
-static _Bool cc_assign_lookup(CCPunct punct, CcExprKind* kind);
+static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
+static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
 
 static
 int
@@ -168,10 +168,10 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target){
 
 static
 _Bool
-cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec){
+cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec){
     // Precedences: higher number = tighter binding
     static const struct {
-        CCPunct punct;
+        CcPunct punct;
         CcExprKind kind;
         int prec;
     } binop_table[] = {
@@ -206,7 +206,7 @@ cc_binop_lookup(CCPunct punct, CcExprKind* kind, int* prec){
 
 static
 _Bool
-cc_assign_lookup(CCPunct punct, CcExprKind* kind){
+cc_assign_lookup(CcPunct punct, CcExprKind* kind){
     switch((uint32_t)punct){
         case CC_assign:         *kind = CC_EXPR_ASSIGN;       return 1;
         case CC_plus_assign:    *kind = CC_EXPR_ADDASSIGN;    return 1;
@@ -231,7 +231,7 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     int err = cc_parse_assignment_expr(p, &left);
     if(err) return err;
     for(;;){
-        CCToken tok;
+        CcToken tok;
         err = cc_next(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
@@ -263,7 +263,7 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     CcExpr* left;
     int err = cc_parse_ternary_expr(p, &left);
     if(err) return err;
-    CCToken tok;
+    CcToken tok;
     err = cc_next(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
@@ -302,7 +302,7 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(err) return err;
     err = cc_parse_infix(p, cond, 4, &cond);
     if(err) return err;
-    CCToken tok;
+    CcToken tok;
     err = cc_next(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_question){
@@ -345,7 +345,7 @@ static
 int
 cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonnull out){
     for(;;){
-        CCToken tok;
+        CcToken tok;
         int err = cc_next(p, &tok);
         if(err) return err;
         if(tok.type != CC_PUNCTUATOR){
@@ -476,7 +476,7 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
 static
 int
 cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
-    CCToken tok;
+    CcToken tok;
     int err = cc_next(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
@@ -547,7 +547,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
 static
 int
 cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
-    CCToken tok;
+    CcToken tok;
     int err = cc_next(p, &tok);
     if(err) return err;
     switch(tok.type){
@@ -674,7 +674,7 @@ static
 int
 cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
     for(;;){
-        CCToken tok;
+        CcToken tok;
         int err = cc_next(p, &tok);
         if(err) return err;
         if(tok.type != CC_PUNCTUATOR){
@@ -725,7 +725,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_dot:
             case CC_arrow: {
                 CcExprKind mkind = tok.punct.punct == CC_dot ? CC_EXPR_DOT : CC_EXPR_ARROW;
-                CCToken member;
+                CcToken member;
                 err = cc_next(p, &member);
                 if(err) return err;
                 if(member.type != CC_IDENTIFIER)
@@ -745,7 +745,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 // Function call: operand(args...)
                 // Count args by parsing into a temp buffer
                 // First check for empty arg list
-                CCToken peek;
+                CcToken peek;
                 err = cc_next(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen){
@@ -770,7 +770,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     err = cc_parse_assignment_expr(p, &arg);
                     if(err) return err;
                     arg_buf[nargs++] = arg;
-                    CCToken sep;
+                    CcToken sep;
                     err = cc_next(p, &sep);
                     if(err) return err;
                     if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
@@ -1243,7 +1243,7 @@ cc_print_eval_result(CcEvalResult r){
 static
 int
 cc_parse_top_level(CcParser* p, _Bool* finished){
-    CCToken tok;
+    CcToken tok;
     int err = cc_next(p, &tok);
     if(err) return err;
     if(tok.type == CC_EOF){
@@ -1297,9 +1297,9 @@ cc_parse_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
 
 static
 int
-cc_next(CcParser* p, CCToken* tok){
+cc_next(CcParser* p, CcToken* tok){
     if(p->pending.count){
-        *tok = ma_pop(CCToken)(&p->pending);
+        *tok = ma_pop(CcToken)(&p->pending);
         return 0;
     }
     return cc_lex_next_token(&p->lexer, tok);
@@ -1307,13 +1307,13 @@ cc_next(CcParser* p, CCToken* tok){
 
 static
 int
-cc_unget(CcParser* p, CCToken* tok){
-    return ma_push(CCToken)(&p->pending, p->lexer.cpp.allocator, *tok);
+cc_unget(CcParser* p, CcToken* tok){
+    return ma_push(CcToken)(&p->pending, p->lexer.cpp.allocator, *tok);
 }
 
 static
 int
-cc_peek(CcParser* p, CCToken* tok){
+cc_peek(CcParser* p, CcToken* tok){
     int err = cc_next(p, tok);
     if(err) return err;
     return cc_unget(p, tok);
@@ -1321,8 +1321,8 @@ cc_peek(CcParser* p, CCToken* tok){
 
 static
 int
-cc_expect_punct(CcParser* p, CCPunct punct){
-    CCToken tok;
+cc_expect_punct(CcParser* p, CcPunct punct){
+    CcToken tok;
     int err = cc_next(p, &tok);
     if(err) return err;
     if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){

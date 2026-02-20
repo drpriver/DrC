@@ -26,11 +26,11 @@
 
 #ifndef MARRAY_CPPTOKEN
 #define MARRAY_CPPTOKEN
-#define MARRAY_T CPPToken
+#define MARRAY_T CppToken
 #include "../Drp/Marray.h"
 #endif
 
-typedef Marray(CPPToken) CPPTokens;
+typedef Marray(CppToken) CppTokens;
 
 #ifndef MARRAY_ATOM
 #define MARRAY_ATOM
@@ -79,9 +79,9 @@ struct CMacro {
     uint64_t data[];
 };
 static inline
-CPPToken*
+CppToken*
 cpp_cmacro_replacement(CMacro* macro){
-    return (CPPToken*)&macro->data[macro->nparams];
+    return (CppToken*)&macro->data[macro->nparams];
 }
 static inline
 Atom _Nonnull*_Nonnull
@@ -90,8 +90,8 @@ cpp_cmacro_params(CMacro* macro){
 }
 _Static_assert(sizeof(CMacro) == 2*sizeof(uint64_t), "");
 
-typedef struct CPPFrame CPPFrame;
-struct CPPFrame {
+typedef struct CppFrame CppFrame;
+struct CppFrame {
     uint32_t file_id; // index into fc->map
     union {
         struct {
@@ -99,7 +99,7 @@ struct CPPFrame {
             uint32_t column;
             size_t cursor;
         };
-        struct CPPFrameLoc {
+        struct CppFrameLoc {
             uint32_t line;
             uint32_t column;
             size_t cursor;
@@ -119,14 +119,14 @@ struct CppPoundIf {
     _Bool is_dummy: 1;
 };
 
-typedef struct CPragma CPragma;
+typedef struct CppPragma CppPragma;
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
 #ifndef MARRAY_CPPFRAME
 #define MARRAY_CPPFRAME
-#define MARRAY_T CPPFrame
+#define MARRAY_T CppFrame
 #include "../Drp/Marray.h"
 #endif
 #ifndef MARRAY_SIZE_T
@@ -153,7 +153,7 @@ struct CPreprocessor {
     Allocator allocator;
     ArenaAllocator synth_arena; // For things that need to be synthesized
     AtomMap(CMacro) macros;
-    AtomMap(CPragma) pragmas;
+    AtomMap(CppPragma) pragmas;
     FileCache* fc;
     AtomTable* at;
     Logger* logger;
@@ -183,16 +183,16 @@ struct CPreprocessor {
         };
         Marray(StringView) include_paths[5];
     };
-    Marray(CPPFrame) frames;
+    Marray(CppFrame) frames;
     Marray(CppPoundIf) if_stack;
-    CPPTokens pending; // push in reverse order so you can pop in LIFO order
+    CppTokens pending; // push in reverse order so you can pop in LIFO order
     _Bool at_line_start;
-    FreeList(CPPTokens) scratch_list; // reusable scratch space for collecting tokens
+    FreeList(CppTokens) scratch_list; // reusable scratch space for collecting tokens
     FreeList(Marray(size_t)) scratch_idxes;
     uint64_t counter;
     Atom date, time;
     RngState rng;
-    AtomMap(CPPTokens) kv_store; // for __set/__get
+    AtomMap(CppTokens) kv_store; // for __set/__get
     Marray(uint32_t) pragma_once_files; // sorted list of file_ids with #pragma once
     Marray(uint32_t) include_guard_files;  // sorted by file_id
     Marray(Atom)     include_guard_macros; // parallel to above
@@ -209,11 +209,11 @@ cpp_undef_macro(CPreprocessor* cpp, StringView name);
 
 static
 int
-cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CPPToken*_Null_unspecified toks, size_t ntoks);
+cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks);
 
 static
 int
-cpp_push_tok(CPreprocessor* cpp, CPPTokens* dst, CPPToken tok);
+cpp_push_tok(CPreprocessor* cpp, CppTokens* dst, CppToken tok);
 
 static
 _Bool
@@ -221,9 +221,9 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name);
 
 static
 int
-cpp_next_token(CPreprocessor* cpp, CPPToken* tok);
+cpp_next_token(CPreprocessor* cpp, CppToken* tok);
 
-static int cpp_next_pp_token(CPreprocessor* cpp, CPPToken* ptok);
+static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
 
 // Includes a file without going through the include path machinery.
 static
@@ -231,14 +231,14 @@ int
 cpp_include_file_via_file_cache(CPreprocessor* cpp, StringView path);
 
 // Implementation of a builtin object-like macro (that isn't just a predefined constant tokens)
-typedef int CppObjMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CPPTokens* outtoks);
+typedef int CppObjMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CppTokens* outtoks);
 
 static
 int
 cpp_define_builtin_obj_macro(CPreprocessor* cpp, StringView name, CppObjMacroFn* fn, void*_Null_unspecified ctx);
 
 // Implementation of a builtin function-like macro (that can't be expressed normally)
-typedef int CppFuncMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CPPTokens* outtoks, const CPPTokens* args, const Marray(size_t)* arg_seps);
+typedef int CppFuncMacroFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
 static
 int
 cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand);
@@ -248,9 +248,9 @@ static int cpp_setup_default_includes(CPreprocessor* cpp);
 static void cpp_discard_all_input(CPreprocessor* cpp);
 
 
-typedef int CppPragmaFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CPPToken*_Null_unspecified toks, size_t ntoks);
+typedef int CppPragmaFn(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks);
 static int cpp_register_pragma(CPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* _Null_unspecified ctx);
-struct CPragma {
+struct CppPragma {
     void* ctx;
     CppPragmaFn* fn;
 };

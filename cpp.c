@@ -142,7 +142,7 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to read '%s'", filename);
         return err;
     }
-    CPPToken tok;
+    CppToken tok;
     MStringBuilder sb = {.allocator = MALLOCATOR};
     int blank_line = 1;
     for(;;){
@@ -152,6 +152,8 @@ int main(int argc, char** argv, char** envp){
         if(tok.type == CPP_NEWLINE){
             if(blank_line) continue;
             blank_line = 1;
+            while(msb_peek(&sb) == ' ')
+                msb_erase(&sb, 1);
             msb_write_char(&sb, '\n');
         }
         else if(tok.type == CPP_WHITESPACE){
