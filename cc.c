@@ -432,7 +432,7 @@ repl_builtin_command(CcParser* parser, StringView input){
             cc_print_type(&l->buff, v->type);
             if(v->extern_) log_sprintf(l, " (extern)");
             if(v->static_) log_sprintf(l, " (static)");
-            log_sprintf(l, "n");
+            log_sprintf(l, "\n");
         }
     }
     if(dump & DUMP_FUNCS){
@@ -487,8 +487,6 @@ repl_builtin_command(CcParser* parser, StringView input){
 #include "Drp/file_cache.c"
 #include "C/cpp_preprocessor.c"
 #include "C/cc_lexer.c"
-#include "C/cc_type_cache.c"
-#include "C/cc_scope.c"
 #include "C/cc_parser.c"
 #include "Drp/get_input.c"
 #include "C/native_call.c"

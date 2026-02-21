@@ -2236,4 +2236,6 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+#include "cc_type_cache.c"
+#include "cc_scope.c"
 #endif

@@ -30,6 +30,7 @@ int main(int argc, char** argv, char** envp){
         } test_files[] = {
             {"C/cpp_test.c", "cpp_test", "run_cpp_test"},
             {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test"},
+            {"C/cc_test.c", "cc_test", "run_cc_test"},
         };
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
