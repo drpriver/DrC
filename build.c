@@ -104,7 +104,10 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
     size_t len = sb.cursor;
     for(size_t i = 0; i < items.count; i++){
         BuildTarget* tgt = items.data[i].p;
-        if(tgt->name->data[0] == '.') continue;
+        StringView name = {tgt->name->length, tgt->name->data};
+        if(name.text[0] == '.') continue;
+        if(sv_startswith(name, (StringView){ctx->build_dir->length, ctx->build_dir->data}))
+            continue;
         if(tgt == _tgt) continue;
         if(len > 80){
             msb_write_literal(&sb, "\\\n    ");
@@ -118,12 +121,27 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
     msb_write_char(&sb, '\n');
     msb_write_literal(&sb,
         ".PHONY: $(BUILDTARGETS)\n"
+        "\n"
+        "ifeq ($(OS),Windows_NT)\n"
+        "ifeq ($(origin CC),default)\n"
+        "CC:=$(firstword $(foreach c,clang gcc cl,$(if $(shell where $(c) 2>nul),$(c))))\n"
+        "endif\n"
+        "$(BUILDTARGETS): | build.exe\n"
+        "\t@build $@\n"
+        "build.exe:\n"
+        "ifeq ($(CC),cl)\n"
+        "\t$(CC) build.c /Fe:$@\n"
+        "else\n"
+        "\t$(CC) build.c -o $@\n"
+        "endif\n"
+        "\t./build -b Bin\n"
+        "else\n"
         "$(BUILDTARGETS): | build\n"
         "\t@./build $@\n"
-        "\n"
         "build:\n"
         "\t$(CC) build.c -o $@\n"
         "\t./build -b Bin\n"
+        "endif\n"
         ".DEFAULT_GOAL:=all\n");
     if(sb.errored) return sb.errored;
     StringView sv = msb_borrow_sv(&sb);
