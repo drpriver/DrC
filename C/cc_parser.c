@@ -1883,7 +1883,6 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
     Marray(CcParam) params = {0};
 
     for(_Bool first = 1;;first=0){
-        first = first? first: first;
         Atom name = NULL;
         (void)name;
         int parens = 0;
@@ -1951,12 +1950,19 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(err) goto finally;
             switch(tok.type){
                 case CC_EOF:
+                    if(parens){
+                        err = cc_error(p, tok.loc, "end of declaration while there are still parens open");
+                        goto finally;
+                    }
+                    err = cc_unget(p, &tok);
+                    if(err) goto finally;
+                    goto unwind;
                 case CC_KEYWORD:
                 case CC_CONSTANT:
                 case CC_STRING_LITERAL:
                 case CC_IDENTIFIER:
                     if(parens){
-                        err = cc_error(p, tok.loc, "bad token in declarator");
+                        err = cc_error(p, tok.loc, "end of declaration while there are still parens open");
                         goto finally;
                     }
                     err = cc_unget(p, &tok);
