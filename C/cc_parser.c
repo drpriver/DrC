@@ -1806,11 +1806,267 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     *declbase = b;
     return 0;
 }
+
+enum CcDeclOpKind TYPED_ENUM(uintptr_t) {
+    CCDECL_POINTER, CCDECL_ARRAY, CCDECL_FUNCTION, CCDECL_PAREN,
+};
+TYPEDEF_ENUM(CcDeclOpKind, uintptr_t);
+typedef struct CcParam CcParam;
+struct CcParam {
+    CcQualType type;
+    Atom _Nullable name;
+};
+typedef struct CcDeclOp CcDeclOp;
+struct CcDeclOp {
+    union {
+        struct {
+            uintptr_t bits[2];
+        };
+        struct {
+            CcDeclOpKind kind: 2;
+            uintptr_t _bitpadding: sizeof(uintptr_t)*8 - 2;
+            uintptr_t _pad;
+        };
+        struct {
+            CcDeclOpKind kind:  2;
+            uintptr_t const_:   1,
+                     restrict_: 1,
+                     atomic_:   1,
+                     volatile_: 1,
+                     _padding:  sizeof(uintptr_t)*8 - 6;
+        } pointer;
+        struct {
+            CcDeclOpKind kind:  2;
+            uintptr_t const_:   1,
+                     restrict_: 1,
+                     static_:   1,
+                     unsized:   1,
+                     vla:       1,
+                     _padding:  sizeof(uintptr_t)*8 -7;
+            union {
+                uintptr_t length;
+                CcExpr*_Nonnull vla_length;
+            };
+        } array;
+        struct {
+            CcDeclOpKind kind: 2;
+            uintptr_t variadic: 1,
+                     count: sizeof(uintptr_t)*8-3;
+            CcParam* params;
+        } function;
+    };
+};
+#ifdef __clang__
+#pragma clang assume_nonnull end
+#endif
+#ifndef MARRAY_CCPARAM
+#define MARRAY_CCPARAM
+#define MARRAY_T CcParam
+#include "../Drp/Marray.h"
+#endif
+#ifndef MARRAY_CCDECLOP
+#define MARRAY_CCDECLOP
+#define MARRAY_T CcDeclOp
+#include "../Drp/Marray.h"
+#endif
+
+#ifdef __clang__
+#pragma clang assume_nonnull begin
+#endif
 static
 int
 cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
-    (void)p; (void)declbase;
-    return cc_unimp(p, "parse decls");
+    int err = 0;
+    CcToken tok;
+    (void)declbase;
+    Marray(CcDeclOp) ops = {0};
+    Marray(CcParam) params = {0};
+
+    for(_Bool first = 1;;first=0){
+        first = first? first: first;
+        Atom name = NULL;
+        (void)name;
+        int parens = 0;
+        for(;;){
+            err = cc_next_token(p, &tok);
+            if(err) goto finally;
+            switch(tok.type){
+                case CC_EOF:
+                case CC_KEYWORD:
+                case CC_CONSTANT:
+                case CC_STRING_LITERAL:
+                    err = cc_unget(p, &tok);
+                    if(err) goto finally;
+                    goto Postfix;
+                case CC_IDENTIFIER:
+                    name = tok.ident.ident;
+                    goto Postfix;
+                case CC_PUNCTUATOR:
+                    if(tok.punct.punct == '*'){// pointer
+                        CcDeclOp op = {.kind = CCDECL_POINTER};
+                        for(;;){
+                            err = cc_next_token(p, &tok);
+                            if(err) goto finally;
+                            if(tok.type == CC_KEYWORD){
+                                switch(tok.kw.kw){
+                                    case CC_restrict:
+                                        op.pointer.restrict_ = 1;
+                                        continue;
+                                    case CC_const:
+                                        op.pointer.const_ = 1;
+                                        continue;
+                                    case CC_volatile:
+                                        op.pointer.volatile_ = 1;
+                                        continue;
+                                    case CC__Atomic:
+                                        op.pointer.atomic_ = 1;
+                                        continue;
+                                    default:
+                                        break;
+                                }
+                            }
+                            err = cc_unget(p, &tok);
+                            if(err) goto finally;
+                            break;
+                        }
+                        err = ma_push(CcDeclOp)(&ops, cc_allocator(p), op);
+                        if(err) goto finally;
+                        continue;
+                    }
+                    if(tok.punct.punct == '('){// recurse
+                        parens++;
+                        CcDeclOp op = {.kind = CCDECL_PAREN};
+                        err = ma_push(CcDeclOp)(&ops, cc_allocator(p), op);
+                        if(err) goto finally;
+                        continue;
+                    }
+                    err = cc_unget(p, &tok);
+                    if(err) goto finally;
+                    goto Postfix;
+            }
+        }
+        Postfix:;
+        for(;;){
+            err = cc_next_token(p, &tok);
+            if(err) goto finally;
+            switch(tok.type){
+                case CC_EOF:
+                case CC_KEYWORD:
+                case CC_CONSTANT:
+                case CC_STRING_LITERAL:
+                case CC_IDENTIFIER:
+                    if(parens){
+                        err = cc_error(p, tok.loc, "bad token in declarator");
+                        goto finally;
+                    }
+                    err = cc_unget(p, &tok);
+                    if(err) goto finally;
+                    goto unwind;
+                case CC_PUNCTUATOR:
+                    if(tok.punct.punct == '['){
+                        err = cc_unimplemented(p, tok.loc, "array length parsing");
+                        goto finally;
+                    }
+                    if(tok.punct.punct == '('){
+                        err = cc_unimplemented(p, tok.loc, "params");
+                        goto finally;
+                    }
+                    if(tok.punct.punct == ')'){
+                        if(!parens){
+                            err = cc_error(p, tok.loc, "Extra paren");
+                            goto finally;
+                        }
+                        parens--;
+                        continue;
+                    }
+                    if(parens){
+                        err = cc_error(p, tok.loc, "bad punct in declarator");
+                        goto finally;
+                    }
+                    err = cc_unget(p, &tok);
+                    if(err) goto finally;
+                    goto unwind;
+            }
+        }
+        unwind:;
+        if(parens){
+            err = cc_unimplemented(p, tok.loc, "unbalanced parens");
+            goto finally;
+        }
+        if(ops.count && declbase->spec.sp_infer_type){
+            err = cc_unimplemented(p, tok.loc, "only plain declarators support type inference right now");
+            goto finally;
+        }
+        for(;ops.count;){
+            CcDeclOp op = ma_pop_(ops);
+            switch(op.kind){
+                case CCDECL_PAREN:
+                    continue;
+                case CCDECL_ARRAY:
+                    err = cc_unimplemented(p, tok.loc, "array");
+                    goto finally;
+                case CCDECL_POINTER:
+                    err = cc_unimplemented(p, tok.loc, "pointer");
+                    goto finally;
+                case CCDECL_FUNCTION:
+                    err = cc_unimplemented(p, tok.loc, "function");
+                    goto finally;
+            }
+        }
+        // postfix processing
+        err = cc_next_token(p, &tok);
+        if(err) goto finally;
+        _Bool stop = 0;
+        for(;;){
+            switch(tok.type){
+                case CC_EOF:
+                    stop = 1;
+                    break;
+                case CC_KEYWORD:
+                    if(tok.kw.kw == CC_asm){
+                        err = cc_unimplemented(p, tok.loc, "asm mangling");
+                        goto finally;
+                        continue;
+                    }
+                    // Clang maintainers are assholes and don't support the comment version and the macro ifdef soup is like 8 lines
+                    goto fallthrough;
+                case CC_CONSTANT:
+                case CC_STRING_LITERAL:
+                case CC_IDENTIFIER:
+                    fallthrough:;
+                    err = cc_error(p, tok.loc, "Expected ',' or ';'");
+                    goto finally;
+                case CC_PUNCTUATOR:
+                    if(tok.punct.punct == ';'){
+                        stop = 1;
+                        break;
+                    }
+                    if(tok.punct.punct == ',')
+                        break;
+                    if(tok.punct.punct == '='){
+                        err = cc_unimplemented(p, tok.loc, "initializer");
+                        goto finally;
+                    }
+                    if(first && tok.punct.punct == '{' && 0 /* XXX check for function, not just function type */){
+                        err = cc_unimplemented(p, tok.loc, "function body");
+                        goto finally;
+                    }
+                    err = cc_error(p, tok.loc, "Expected ',' or ';'");
+                    goto finally;
+            }
+            break;
+        }
+        if(!name){
+            if(stop) break;
+            continue;
+        }
+        err = cc_unimplemented(p, tok.loc, "what to do once we've parsed it");
+        if(stop) break;
+    }
+    finally:
+    ma_cleanup(CcDeclOp)(&ops, cc_allocator(p));
+    ma_cleanup(CcParam)(&params, cc_allocator(p));
+    return err;
 }
 
 #ifdef __clang__

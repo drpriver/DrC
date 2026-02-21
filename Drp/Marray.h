@@ -138,6 +138,7 @@ marray_resize_to_some_weird_number(size_t x){
 #define ma_alloc(type) MARRAYIMPL(alloc, type)
 #define ma_zalloc(type) MARRAYIMPL(zalloc, type)
 #define ma_alloc_index(type) MARRAYIMPL(alloc_index, type)
+#define ma_shrink_to_size(type) MARRAYIMPL(shrink_to_size, type)
 
 //
 // MARRAY_FOR_EACH
@@ -347,6 +348,10 @@ ma_alloc_index(MARRAY_T)(MARRAY*, Allocator, size_t*);
 // Conceptually similar to push.
 //
 // Returns (size_t)-1 on oom.
+MARRAY_LINKAGE
+warn_unused
+int
+ma_shrink_to_size(MARRAY_T)(MARRAY*, Allocator);
 
 #endif
 
@@ -518,6 +523,18 @@ ma_cleanup(MARRAY_T)(MARRAY* marray, Allocator a){
     marray->capacity = 0;
 }
 
+MARRAY_LINKAGE
+warn_unused
+int
+ma_shrink_to_size(MARRAY_T)(MARRAY* marray, Allocator a){
+    if(marray->count == marray->capacity) return 0;
+    void* p = Allocator_realloc(a, marray->data, marray->capacity * sizeof *marray->data, marray->count * sizeof *marray->data);
+    if(!p) return 1;
+    marray->data = p;
+    marray->capacity = marray->count;
+    return 0;
+}
+
 #if defined(__clang__) && defined(MARRAY_USE_OVERLOADS)
 #define MARRAY_OVERLOAD static inline __attribute__((always_inline)) __attribute__((overloadable))
 
@@ -580,6 +597,13 @@ MARRAY_OVERLOAD
 void
 cleanup(MARRAY* marray, Allocator a){
     ma_cleanup(MARRAY_T)(marray, a);
+}
+
+MARRAY_OVERLOAD
+warn_unused
+int
+shrink_to_size(MARRAY* marray, Allocator a){
+    return ma_shrink_to_size(MARRAY_T)(marray, a);
 }
 #endif
 

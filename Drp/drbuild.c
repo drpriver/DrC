@@ -32,14 +32,6 @@
 #include <sys/sendfile.h>
 #endif
 
-#ifndef FALLTHROUGH
-#if defined(__GNUC__) || defined(__clang__)
-#define FALLTHROUGH __attribute__((fallthrough))
-#else
-#define FALLTHROUGH
-#endif
-#endif
-
 #ifndef __builtin_debugtrap
 #if defined(__GNUC__) && ! defined(__clang__)
 #define __builtin_debugtrap() __builtin_trap()
@@ -2145,8 +2137,9 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                 goto delimiter;
             case '\r':
                 if(p[1] == '\n') p++;
-                FALLTHROUGH;
+                goto fallthrough;
             case '\n':
+                fallthrough:;
                 goto delimiter;
             case '\t':
             case ' ':
@@ -2675,8 +2668,9 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
             case COMPILER_GCC:
             case COMPILER_CLANG:
                 cmd_cargs(cmd, "-g");
-                FALLTHROUGH;
+                goto fallthrough;
             case COMPILER_CLANG_CL:
+                fallthrough:;
                 cmd_cargs(cmd, "-o", ctx->exe_path->data);
                 cmd_cargs(cmd, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
                 depfile = b_atomize_f(ctx, "%s.deps", ctx->exe_path->data);
@@ -2947,19 +2941,21 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
         case COMPILER_GCC_MINGW:
             cmd_cargs(cmd, "-std=gnu11");
             cmd_cargs(cmd, "-D__USE_MINGW_ANSI_STDIO=1");
-            FALLTHROUGH;
+            goto fallthrough;
         case COMPILER__MAX:
         case COMPILER_UNKNOWN:
         case COMPILER_GCC:
         case COMPILER_CLANG:
+            fallthrough:;
             if(flavor == COMPILER_CLANG && target_os != BUILD_OS && target_os == OS_WINDOWS){
                 cmd_cargs(cmd,
                     "--target=x86_64-pc-windows-msvc",
                     "-nostdinc");
             }
             if(debug) cmd_cargs(cmd, "-g");
-            FALLTHROUGH;
+            goto fallthrough2;
         case COMPILER_CLANG_CL:
+            fallthrough2:;
             if(native)
                 cmd_cargs(cmd, "-march=native");
             else if(arch == AFAM_x86){
