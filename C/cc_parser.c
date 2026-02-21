@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include "cc_parser.h"
 #include "cpp_preprocessor.h"
+#include "../Drp/bit_util.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -29,6 +30,7 @@ LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
 #define cc_unimp(p, msg) cc_unimplemented(p, (SrcLoc){0}, msg)
+#define cc_unreachable(p, msg) (cc_error(p, (SrcLoc){0}, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
 static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
@@ -49,28 +51,44 @@ struct CcSpecifier {
     union {
         uint32_t bits;
         struct {
-            uint32_t sp_auto:         1,
+            uint32_t sp_typebits: 8,
+                     sp_storagebits: 6,
+                     _sp_typedef: 1,
+                     sp_funcbits: 2,
+                     sp_qualbits: 4,
+
+                     _sp_infer: 1,
+                     _padding1: 32-22;
+        };
+        struct {
+            uint32_t
                      sp___auto_type:  1,
-                     sp_constexpr:    1,
-                     sp_extern:       1,
-                     sp_register:     1,
-                     sp_static:       1,
-                     sp_thread_local: 1,
-                     sp_typedef:      1,
                      sp_unsigned:     1,
                      sp_signed:       1,
                      sp_long:         2,
                      sp_short:        1,
                      sp_int:          1,
                      sp_char:         1,
-                     sp_typed:        1, // Seen a type like struct, a typedef name, _Bool
+
+                     sp_auto:         1,
+                     sp_constexpr:    1,
+                     sp_extern:       1,
+                     sp_register:     1,
+                     sp_static:       1,
+                     sp_thread_local: 1,
+                     sp_typedef:      1,
+
                      sp_inline:       1,
                      sp_noreturn:     1,
+
                      sp_const:        1,
                      sp_volatile:     1,
                      sp_atomic:       1,
                      sp_restrict:     1,
-                     _padding:       32-23;
+
+                     sp_infer_type:    1,
+
+                     _padding2:       32-22;
         };
     };
 };
@@ -80,18 +98,10 @@ static int cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQual
 typedef struct CcDeclBase CcDeclBase;
 struct CcDeclBase {
     CcQualType type;
-    uint32_t infer_type: 1,
-             constexpr:  1,
-             extern_:    1,
-             static_:    1,
-             inline_:    1,
-             noreturn_:  1,
-             volatile_:  1,
-             restrict_:  1, // idk if this goes here.
-             _padding:   32 -8;
+    CcSpecifier spec;
 };
 
-static int cc_resolve_specifiers(CcParser* p, CcSpecifier spec, CcQualType base, CcDeclBase* declbase);
+static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p);
 
@@ -1307,21 +1317,19 @@ cc_print_eval_result(CcEvalResult r){
 static
 int
 cc_parse_top_level(CcParser* p, _Bool* finished){
-    int err = 0;
-    CcSpecifier spec = {0};
-    CcQualType base = {.bits = -1};
-    err = cc_parse_declaration_specifier(p, &spec, &base);
+    int err;
+    CcToken tok;
+    CcDeclBase b = {0};
+    err = cc_parse_declaration_specifier(p, &b.spec, &b.type);
     if(err) return err;
-    if(spec.bits || base.bits != (uintptr_t)-1){
-        CcDeclBase declbase = {0};
-        err = cc_resolve_specifiers(p, spec, base, &declbase);
+    if(b.spec.bits || b.type.bits != (uintptr_t)-1){
+        err = cc_resolve_specifiers(p,  &b);
         if(err) return err;
-        err = cc_parse_decls(p, &declbase);
+        err = cc_parse_decls(p, &b);
         if(err) return err;
         return 0;
     }
 
-    CcToken tok;
     err = cc_next_token(p, &tok);
     if(err) return err;
     switch(tok.type){
@@ -1492,8 +1500,8 @@ cc_allocator(CcParser*p){
 static
 int
 cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type){
-    if(base_type->bits != (uintptr_t)-1) return CC_UNREACHABLE_ERROR;
-    if(spec->bits != 0) return CC_UNREACHABLE_ERROR;
+    if(base_type->bits != (uintptr_t)-1) return cc_unreachable(p, "parsing decl specifier with base type set");
+    if(spec->bits != 0) return cc_unreachable(p, "parssing decl specifier with spec set");
     int err = 0;
     CcToken tok;
     for(int i = 0; ; i++){
@@ -1526,46 +1534,93 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         if(i == 0) return cc_unget(p, &tok);
                         return cc_error(p, tok.loc, "Unexpected keyword when parsing declaration");
                     case CC_int:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_int)
                             return cc_error(p, tok.loc, "Duplicate int in declaration");
+                        if(spec->sp_char)
+                            return cc_error(p, tok.loc, "int after char");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "int after __auto_type");
                         spec->sp_int = 1;
                         continue;
                     case CC_long:
-                        if(spec->sp_long > 2)
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_long > 1)
                             return cc_error(p, tok.loc, "Duplicate long after long long in declaration");
+                        if(spec->sp_char)
+                            return cc_error(p, tok.loc, "long after char");
+                        if(spec->sp_short)
+                            return cc_error(p, tok.loc, "long after short");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "long after __auto_type");
                         spec->sp_long++;
                         continue;
                     case CC_char:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_char)
                             return cc_error(p, tok.loc, "Duplicate char in declaration");
+                        if(spec->sp_long)
+                            return cc_error(p, tok.loc, "char after long");
+                        if(spec->sp_short)
+                            return cc_error(p, tok.loc, "char after short");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "char after __auto_type");
+                        if(spec->sp_int)
+                            return cc_error(p, tok.loc, "char after int");
                         spec->sp_char = 1;
                         continue;
+                    case CC___auto_type:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        spec->sp___auto_type = 1;
+                        continue;
                     case CC_auto:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "auto after typedef");
                         spec->sp_auto = 1;
                         continue;
                     case CC_bool:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = (CcQualType){.basic.kind = CCBT_bool};
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_bool);
                         continue;
                     case CC_enum:
                         return cc_unimplemented(p, tok.loc, "enum parsing in declaration");
                     case CC_void:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = (CcQualType){.basic.kind = CCBT_void};
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_void);
                         continue;
                     case CC_float:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = (CcQualType){.basic.kind = CCBT_float};
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_float);
                         continue;
                     case CC_const:
                         spec->sp_const = 1;
                         continue;
                     case CC_short:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_short)
                             return cc_error(p, tok.loc, "Duplicate short in declaration");
+                        if(spec->sp_long)
+                            return cc_error(p, tok.loc, "short after long");
+                        if(spec->sp_char)
+                            return cc_error(p, tok.loc, "short after char");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "short after __auto_type");
                         spec->sp_short = 1;
                         continue;
                     case CC_union:
@@ -1573,18 +1628,45 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC_double:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = (CcQualType){.basic.kind = CCBT_double};
+                        {
+                            uint32_t count = popcount_32(spec->sp_typebits);
+                            if(count > 1 || (count == 1 && spec->sp_long != 1))
+                                return cc_error(p, tok.loc, "double with other types");
+                        }
+                        *base_type = ccqt_basic(CCBT_double);
                         continue;
                     case CC_extern:
+                        if(spec->sp_static)
+                            return cc_error(p, tok.loc, "extern after static");
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "extern after typedef");
+                        if(spec->sp_register)
+                            return cc_error(p, tok.loc, "extern after register");
+                        if(spec->sp_constexpr)
+                            return cc_error(p, tok.loc, "extern after constexpr");
                         spec->sp_extern = 1;
                         continue;
                     case CC_inline:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "inline after typedef");
                         spec->sp_inline = 1;
                         continue;
                     case CC_signed:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_unsigned)
+                            return cc_error(p, tok.loc, "signed after unsigned");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "signed after __auto_type");
                         spec->sp_signed = 1;
                         continue;
                     case CC_static:
+                        if(spec->sp_extern)
+                            return cc_error(p, tok.loc, "static after extern");
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "static after typedef");
+                        if(spec->sp_register)
+                            return cc_error(p, tok.loc, "static after register");
                         spec->sp_static = 1;
                         continue;
                     case CC_struct:
@@ -1594,6 +1676,10 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC_alignas:
                         return cc_unimplemented(p, tok.loc, "alignas parsing in declaration");
                     case CC_typedef:
+                        if(spec->sp_storagebits)
+                            return cc_error(p, tok.loc, "typedef after storage class");
+                        if(spec->sp_funcbits)
+                            return cc_error(p, tok.loc, "typedef after function specifier");
                         spec->sp_typedef = 1;
                         continue;
                     case CC__Atomic:
@@ -1603,18 +1689,40 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC__Complex:
                         return cc_unimplemented(p, tok.loc, "_Complex parsing in declaration");
                     case CC_register:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "register after typedef");
+                        if(spec->sp_static)
+                            return cc_error(p, tok.loc, "register after static");
+                        if(spec->sp_extern)
+                            return cc_error(p, tok.loc, "register after extern");
+                        if(spec->sp_thread_local)
+                            return cc_error(p, tok.loc, "register after thread_local");
                         spec->sp_register = 1;
                         continue;
                     case CC_restrict:
                         spec->sp_restrict = 1;
                         continue;
                     case CC_unsigned:
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_signed)
+                            return cc_error(p, tok.loc, "unsigned after signed");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "unsigned after __auto_type");
                         spec->sp_unsigned = 1;
                         continue;
                     case CC_volatile:
                         spec->sp_volatile = 1;
                         continue;
                     case CC_constexpr:
+                        if(spec->sp_extern)
+                            return cc_error(p, tok.loc, "constexpr after extern");
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "constexpr after typedef");
+                        if(spec->sp_thread_local)
+                            return cc_error(p, tok.loc, "constexpr after thread_local");
+                        if(spec->sp_atomic)
+                            return cc_error(p, tok.loc, "constexpr after _Atomic");
                         spec->sp_constexpr = 1;
                         continue;
                     case CC__Float16:
@@ -1625,6 +1733,8 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC__Imaginary:
                         return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
                     case CC__Noreturn:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "noreturn after typedef");
                         spec->sp_noreturn = 1;
                         continue;
                     case CC__Decimal32:
@@ -1632,6 +1742,12 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC__Decimal128:
                         return cc_unimplemented(p, tok.loc, "_DecimalNN parsing in declaration");
                     case CC_thread_local:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "thread_local after typedef");
+                        if(spec->sp_register)
+                            return cc_error(p, tok.loc, "thread_local after register");
+                        if(spec->sp_constexpr) // standard says no, but why not?
+                            return cc_error(p, tok.loc, "thread_local after constexpr");
                         spec->sp_thread_local = 1;
                         continue;
                     case CC_typeof_unqual:
@@ -1649,24 +1765,49 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
     return 0;
 }
 
-static 
-int 
+static
+int
 cc_parse_statement(CcParser* p){
     (void)p;
     return cc_unimp(p, "parse statement");
 }
 static
 int
-cc_resolve_specifiers(CcParser* p, CcSpecifier spec, CcQualType base, CcDeclBase* declbase){
-    (void)p;
-    (void)spec;
-    (void)base;
-    (void)declbase;
-    return cc_unimp(p, "resolve specifiers");
+cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
+    CcDeclBase b = *declbase;
+    if(!b.spec.bits && b.type.bits == (uintptr_t)-1) return cc_unreachable(p, "Resolving specifier with no spec and no type");
+    if(!b.spec.sp_typebits && b.type.bits == (uintptr_t)-1)
+        b.spec.sp_infer_type = 1;
+    if(b.spec.sp___auto_type)
+        b.spec.sp_infer_type = 1;
+    if(b.type.bits == (uintptr_t)-1 && !b.spec.sp_infer_type){
+        // construct type from keywords
+        if(b.spec.sp_char){
+            b.type = ccqt_basic(b.spec.sp_signed? CCBT_signed_char: b.spec.sp_unsigned? CCBT_unsigned_char : CCBT_char);
+        }
+        else {
+            CcBasicTypeKind k = CCBT_int;
+            if(b.spec.sp_short)
+                k -= 2;
+            if(b.spec.sp_unsigned)
+                k++;
+            k += b.spec.sp_long * 2;
+            b.type = ccqt_basic(k);
+        }
+    }
+    if(ccqt_is_basic(b.type) && b.type.basic.kind == CCBT_double && b.spec.sp_long)
+        b.type.basic.kind = CCBT_long_double;
+    if(b.spec.sp_constexpr)
+        b.spec.sp_const = 1;
+    if(b.spec.sp_const) b.type.is_const = 1;
+    if(b.spec.sp_volatile) b.type.is_volatile = 1;
+    if(b.spec.sp_atomic) b.type.is_atomic = 1;
+    *declbase = b;
+    return 0;
 }
 
-static 
-int 
+static
+int
 cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
     (void)p;
     (void)declbase;

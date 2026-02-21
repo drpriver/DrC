@@ -132,6 +132,8 @@ X(_Alignas, alignas) \
 X(_Alignof, alignof) \
 X(__inline, inline) \
 X(__signed, signed) \
+X(__thread, thread_local) \
+X(noreturn, _Noreturn)\
 
 #define CKWS9(X) \
 X(constexpr, constexpr) \
@@ -148,6 +150,7 @@ X(__volatile, volatile) \
 
 #define CKWS11(X) \
 X(_Decimal128, _Decimal128) \
+X(__auto_type, __auto_type) \
 
 #define CKWS12(X) \
 X(thread_local, thread_local) \

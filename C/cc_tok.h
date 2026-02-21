@@ -104,6 +104,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC__Decimal32,
     CC__Decimal64,
     CC__Decimal128,
+    CC___auto_type,
     CC_thread_local,
     CC_static_assert,
     CC_typeof_unqual,
