@@ -93,23 +93,29 @@ sv_istartswith(StringView s, StringView head){
 }
 
 static inline
+const char*_Nullable
+sv_sv(StringView haystack, StringView needle){
+    if(!needle.length) return NULL;
+    if(needle.length > haystack.length) return NULL;
+    #if !defined(_WIN32) && !defined(__wasm__)
+        extern void* memmem(const void*, size_t, const void*, size_t);
+        return memmem(haystack.text, haystack.length, needle.text, needle.length);
+    #endif
+    for(;;){
+        const char* p = memchr(haystack.text, needle.text[0], haystack.length);
+        if(!p) return NULL;
+        size_t plen = haystack.text + haystack.length - p;
+        if(plen < needle.length) return NULL;
+        if(memcmp(p, needle.text, needle.length) == 0) return p;
+        haystack = (StringView){plen-1, p+1};
+        if(haystack.length < needle.length) return NULL;
+    }
+}
+
+static inline
 _Bool
 sv_contains(StringView haystack, StringView needle){
-    if(haystack.length < needle.length) return 0;
-    if(!needle.length) return 0; // XXX
-#if !defined(_WIN32) && !defined(__wasm__)
-    extern void* memmem(const void*, size_t, const void*, size_t);
-    return memmem(haystack.text, haystack.length, needle.text, needle.length) != NULL;
-#endif
-    for(;;){
-        const char* c = memchr(haystack.text, needle.text[0], haystack.length);
-        if(!c) return 0;
-        size_t clen = haystack.text + haystack.length - c;
-        if(clen < needle.length) return 0;
-        if(memcmp(c, needle.text, needle.length) == 0) return 1;
-        haystack = (StringView){clen-1, c+1};
-        if(haystack.length < needle.length) return 0;
-    }
+    return sv_sv(haystack, needle) != NULL;
 }
 
 static inline
@@ -186,6 +192,46 @@ stripped2(const char* txt, size_t len){
     lstrip(&sv);
     rstrip(&sv);
     return sv;
+}
+
+static inline
+_Bool
+sv_split1(StringView sv, char c, StringView* head, StringView* tail){
+    const char* p = memchr(sv.text, c, sv.length);
+    if(!p){
+        *head = sv;
+        *tail = (StringView){0};
+        return 0;
+    }
+    *head = (StringView){
+        p - sv.text,
+        sv.text,
+    };
+    *tail = (StringView){
+        sv.text + sv.length - p -1,
+        p+1,
+    };
+    return 1;
+}
+
+static inline
+_Bool
+sv_split(StringView sv, StringView splitter, StringView* head, StringView* tail){
+    const char* p = sv_sv(sv, splitter);
+    if(!p){
+        *head = sv;
+        *tail = (StringView){0};
+        return 0;
+    }
+    *head = (StringView){
+        p - sv.text,
+        sv.text,
+    };
+    *tail = (StringView){
+        sv.text + sv.length - p - splitter.length,
+        p+splitter.length,
+    };
+    return 1;
 }
 
 

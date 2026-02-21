@@ -5,6 +5,7 @@
 //
 #include "../Drp/atom_map.h"
 #include "../Drp/free_list.h"
+#include "../Drp/Allocators/arena_allocator.h"
 #include "cc_lexer.h"
 #include "cc_tok.h"
 #include "cc_type.h"
@@ -71,6 +72,7 @@ struct CcParser {
     CcFunc*_Nullable current_func;
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
+    ArenaAllocator scratch_arena;
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
