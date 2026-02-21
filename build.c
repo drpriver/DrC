@@ -2,15 +2,22 @@
 #include "Drp/compiler_warnings.h"
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"
+#include "Drp/MStringBuilder.h"
+#include "Drp/file_util.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
+static int mkfile(BuildCtx*, BuildTarget*);
+
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
     BuildTarget* all = phony_target(ctx, "all");
+
+    BuildTarget* Makefile = script_target(ctx, "Makefile", mkfile, NULL);
+    Makefile->is_phony = 1;
 
     BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", ctx->target.os);
     add_dep(ctx, all, cpp);
@@ -85,6 +92,45 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, tags, compile_commands_json);
     }
     return execute_targets(ctx);
+}
+
+static
+int
+mkfile(BuildCtx* ctx, BuildTarget* _tgt){
+    (void)_tgt;
+    MStringBuilder sb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
+    AtomMapItems items = AM_items(&ctx->targets);
+    msb_write_literal(&sb, "BUILDTARGETS:=");
+    size_t len = sb.cursor;
+    for(size_t i = 0; i < items.count; i++){
+        BuildTarget* tgt = items.data[i].p;
+        if(tgt->name->data[0] == '.') continue;
+        if(tgt == _tgt) continue;
+        if(len > 80){
+            msb_write_literal(&sb, "\\\n    ");
+            len = 4;
+        }
+        msb_write_str(&sb, tgt->name->data, tgt->name->length);
+        msb_write_char(&sb, ' ');
+        len += tgt->name->length+1;
+    }
+    if(msb_peek(&sb) == ' ') msb_erase(&sb, 1);
+    msb_write_char(&sb, '\n');
+    msb_write_literal(&sb,
+        ".PHONY: $(BUILDTARGETS)\n"
+        "$(BUILDTARGETS): | build\n"
+        "\t@./build $@\n"
+        "\n"
+        "build:\n"
+        "\t$(CC) build.c -o $@\n"
+        "\t./build -b Bin\n"
+        ".DEFAULT_GOAL:=all\n");
+    if(sb.errored) return sb.errored;
+    StringView sv = msb_borrow_sv(&sb);
+    FileError fe = write_file("Makefile", sv.text, sv.length);
+    (void)fe;
+    msb_destroy(&sb);
+    return 0;
 }
 
 #ifdef __clang__
