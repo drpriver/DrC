@@ -1319,7 +1319,7 @@ int
 cc_parse_top_level(CcParser* p, _Bool* finished){
     int err;
     CcToken tok;
-    CcDeclBase b = {0};
+    CcDeclBase b = {.type.bits=-1};
     err = cc_parse_declaration_specifier(p, &b.spec, &b.type);
     if(err) return err;
     if(b.spec.bits || b.type.bits != (uintptr_t)-1){
@@ -1501,7 +1501,7 @@ static
 int
 cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type){
     if(base_type->bits != (uintptr_t)-1) return cc_unreachable(p, "parsing decl specifier with base type set");
-    if(spec->bits != 0) return cc_unreachable(p, "parssing decl specifier with spec set");
+    if(spec->bits != 0) return cc_unreachable(p, "parsing decl specifier with spec set");
     int err = 0;
     CcToken tok;
     for(int i = 0; ; i++){
@@ -1754,6 +1754,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         return cc_unimplemented(p, tok.loc, "typeof_unqual parsing in declaration");
                 }
             case CC_IDENTIFIER:
+                return cc_unget(p, &tok); // TODO typedefs
                 return cc_unimplemented(p, tok.loc, "Identifier");
             case CC_EOF:
             case CC_CONSTANT:
@@ -1805,15 +1806,12 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     *declbase = b;
     return 0;
 }
-
 static
 int
 cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
-    (void)p;
-    (void)declbase;
+    (void)p; (void)declbase;
     return cc_unimp(p, "parse decls");
 }
-
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
