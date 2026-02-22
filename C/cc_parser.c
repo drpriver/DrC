@@ -420,30 +420,11 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
     CcQualType size_type = ccqt_basic(p->lexer.cpp.target.size_type);
     const CcTargetConfig* tgt = &p->lexer.cpp.target;
     if(ccqt_is_basic(t)){
-        int64_t sz;
-        switch(t.basic.kind){
-            case CCBT_void:               sz = 1; break; // GNU extension
-            case CCBT_bool:               sz = 1; break;
-            case CCBT_char: case CCBT_signed_char:
-            case CCBT_unsigned_char:      sz = 1; break;
-            case CCBT_short:
-            case CCBT_unsigned_short:     sz = tgt->sizeof_short; break;
-            case CCBT_int:
-            case CCBT_unsigned:           sz = tgt->sizeof_int; break;
-            case CCBT_long:
-            case CCBT_unsigned_long:      sz = tgt->sizeof_long; break;
-            case CCBT_long_long:
-            case CCBT_unsigned_long_long: sz = tgt->sizeof_long_long; break;
-            case CCBT_float:              sz = tgt->sizeof_float; break;
-            case CCBT_double:             sz = tgt->sizeof_double; break;
-            case CCBT_long_double:        sz = tgt->sizeof_long_double; break;
-            case CCBT_nullptr_t:          sz = tgt->sizeof_pointer; break;
-            default:
-                return cc_error(p, loc, "sizeof applied to unknown basic type");
-        }
+        if(t.basic.kind >= CCBT_COUNT)
+            return cc_error(p, loc, "sizeof applied to invalid kind");
         CcExpr* node = cc_value_expr(p, loc, size_type);
         if(!node) return CC_OOM_ERROR;
-        node->uinteger = (uint64_t)sz;
+        node->uinteger = tgt->sizeof_[t.basic.kind];
         *out = node;
         return 0;
     }
@@ -451,7 +432,7 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
         case CC_POINTER: {
             CcExpr* node = cc_value_expr(p, loc, size_type);
             if(!node) return CC_OOM_ERROR;
-            node->uinteger = tgt->sizeof_pointer;
+            node->uinteger = tgt->sizeof_[CCBT_nullptr_t];
             *out = node;
             return 0;
         }
@@ -526,13 +507,18 @@ int
 cc_alignof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     CcQualType size_type = ccqt_basic(p->lexer.cpp.target.size_type);
     if(ccqt_is_basic(t)){
-        // For basic types, alignment == size
-        return cc_sizeof_expr(p, t, loc, out);
+        if(t.basic.kind >= CCBT_COUNT)
+            return cc_error(p, loc, "alignof applied to invalid kind");
+        CcExpr* node = cc_value_expr(p, loc, size_type);
+        if(!node) return CC_OOM_ERROR;
+        node->uinteger = p->lexer.cpp.target.alignof_[t.basic.kind];
+        *out = node;
+        return 0;
     }
     int64_t align;
     switch(ccqt_kind(t)){
         case CC_POINTER:
-            align = p->lexer.cpp.target.sizeof_pointer;
+            align = p->lexer.cpp.target.alignof_[CCBT_nullptr_t];
             break;
         case CC_ARRAY: {
             CcArray* arr = (CcArray*)(t.bits & ~(uintptr_t)7);
