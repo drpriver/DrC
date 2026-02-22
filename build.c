@@ -60,26 +60,34 @@ int main(int argc, char** argv, char** envp){
     }
 
     {
-        BuildTarget* run = exec_target(ctx, "run", cpp);
-        run->is_phony = 1;
-        for(size_t i = 0; i < ctx->dash_dash_args.count; i++){
-            Atom a = ctx->dash_dash_args.data[i];
-            cmd_arg(&run->cmd, (LongString){a->length, a->data});
-        }
-    }
-    {
-        BuildTarget* debug = cmd_target(ctx, "debug");
-        add_dep(ctx, debug, cpp);
-        debug->should_exec = 1;
-        debug->is_phony = 1;
-        cmd_prog(&debug->cmd, LS("lldb"));
-        cmd_arg(&debug->cmd, (LongString){cpp->name->length, cpp->name->data});
-        cmd_args(&debug->cmd, LS("-o"), LS("run"), LS("--batch"));
-        if(ctx->dash_dash_args.count){
-            cmd_arg(&debug->cmd, LS("--"));
-            for(size_t i = 0; i < ctx->dash_dash_args.count; i++){
-                Atom a = ctx->dash_dash_args.data[i];
-                cmd_arg(&debug->cmd, (LongString){a->length, a->data});
+        BuildTarget* bins[] = {cpp, cc};
+        const char* names[] = {"cpp", "cc"};
+        for(size_t i = 0; i < sizeof bins / sizeof bins[0]; i++){
+            BuildTarget* bin = bins[i];
+            const char* name = names[i];
+
+            Atom run_name = b_atomize_f(ctx, "run_%s", name);
+            BuildTarget* run = exec_target(ctx, run_name->data, bin);
+            run->is_phony = 1;
+            for(size_t j = 0; j < ctx->dash_dash_args.count; j++){
+                Atom a = ctx->dash_dash_args.data[j];
+                cmd_arg(&run->cmd, (LongString){a->length, a->data});
+            }
+
+            Atom debug_name = b_atomize_f(ctx, "debug_%s", name);
+            BuildTarget* debug = cmd_target(ctx, debug_name->data);
+            add_dep(ctx, debug, bin);
+            debug->should_exec = 1;
+            debug->is_phony = 1;
+            cmd_prog(&debug->cmd, LS("lldb"));
+            cmd_arg(&debug->cmd, (LongString){bin->name->length, bin->name->data});
+            cmd_args(&debug->cmd, LS("-o"), LS("run"), LS("--batch"));
+            if(ctx->dash_dash_args.count){
+                cmd_arg(&debug->cmd, LS("--"));
+                for(size_t j = 0; j < ctx->dash_dash_args.count; j++){
+                    Atom a = ctx->dash_dash_args.data[j];
+                    cmd_arg(&debug->cmd, (LongString){a->length, a->data});
+                }
             }
         }
     }
