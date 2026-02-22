@@ -1848,7 +1848,12 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                             *base_type = cc_intern_qualtype(p, head);
                         }
                         else {
-                            return cc_unimplemented(p, tok.loc, "typeof(expression)");
+                            CcExpr* expr = NULL;
+                            err = cc_parse_expr(p, &expr);
+                            if(err) return err;
+                            if(!expr)
+                                return cc_error(p, tok.loc, "Expected expression in typeof");
+                            *base_type = expr->type;
                         }
                         if(unqual){
                             base_type->is_const = 0;

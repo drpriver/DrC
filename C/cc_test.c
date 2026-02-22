@@ -320,6 +320,20 @@ TestFunction(test_parse_decls){
                 { SV("intptr"), SV("int *") },
             },
         },
+        {
+            "typeof expression", __LINE__,
+            SV("typeof(1) a;\n"
+               "typeof(1.0) b;\n"
+               "typeof(1.0f) c;\n"
+               "typeof(1 + 2) d;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int") },
+                { SV("b"), SV("double") },
+                { SV("c"), SV("float") },
+                { SV("d"), SV("int") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
