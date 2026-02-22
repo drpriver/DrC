@@ -92,6 +92,15 @@ int main(int argc, char** argv, char** envp){
         }
     }
     {
+        BuildTarget* repl = exec_target(ctx, "repl", cc);
+        repl->is_phony = 1;
+        cmd_arg(&repl->cmd, LS("--repl"));
+        for(size_t i = 0; i < ctx->dash_dash_args.count; i++){
+            Atom a = ctx->dash_dash_args.data[i];
+            cmd_arg(&repl->cmd, (LongString){a->length, a->data});
+        }
+    }
+    {
         BuildTarget* tags = cmd_target(ctx, "tags");
         tags->is_phony = 1;
         cmd_prog(&tags->cmd, BUILD_OS == OS_WINDOWS?LS("py") : LS("python3"));

@@ -241,9 +241,8 @@ int main(int argc, char** argv, char** envp){
 // REPL builtin commands
 // ---------------------------------------------------------------------------
 
-static
-void
-cc_print_type(MStringBuilder*, CcQualType t);
+static void cc_print_type(MStringBuilder*, CcQualType t);
+
 static
 _Bool
 repl_builtin_command(CcParser* parser, StringView input){
@@ -255,6 +254,10 @@ repl_builtin_command(CcParser* parser, StringView input){
     input = stripped(input);
     if(!input.length)
         input = SV("help");
+    if(sv_iequals(input, SV("quit")) || sv_iequals(input, SV("exit")) || sv_iequals(input, SV("q"))){
+        log_printf(l, "\r\n");
+        exit(0);
+    }
     log_sprintf(l, "\r");
     CcScope* scope = &parser->global;
     enum {
@@ -271,7 +274,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         DUMP_ALL = DUMP_SYMBOLS | DUMP_MACROS,
     } dump = DUMP_NONE;
 
-    if(sv_equals(input, SV("help"))){
+    if(sv_iequals(input, SV("help")) || sv_equals(input, SV("?"))){
         log_printf(l, "[regex] in a command filters the output.\n"
              "The regex matches the entire symbol name, so pad with .* if you need it.\n"
              "REPL commands:\n"
