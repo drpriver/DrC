@@ -1904,10 +1904,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             if(err) return err;
             if(tok.type == CC_KEYWORD){
                 switch(tok.kw.kw){
-                    case CC_restrict:  restrict_ = 1; continue;
-                    case CC_const:     const_ = 1;    continue;
-                    case CC_volatile:  volatile_ = 1;  continue;
-                    case CC__Atomic:   atomic_ = 1;   continue;
+                    case CC_restrict: restrict_ = 1; continue;
+                    case CC_const:    const_    = 1; continue;
+                    case CC_volatile: volatile_ = 1; continue;
+                    case CC__Atomic:  atomic_   = 1; continue;
                     default: break;
                 }
             }
@@ -1931,11 +1931,24 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
         return 0;
     }
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '('){
-        // Grouped declarator: ( declarator )
-        err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
+        // Disambiguate: grouped declarator vs function parameter list.
+        // '(' followed by '*', '(' or identifier -> grouped declarator.
+        // '(' followed by type keyword, ')', '...' -> function params.
+        CcToken peek;
+        err = cc_peek(p, &peek);
         if(err) return err;
-        err = cc_expect_punct(p, CC_rparen);
-        if(err) return err;
+        _Bool grouped = peek.type == CC_IDENTIFIER || (peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '('));
+        if(grouped){
+            err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
+            if(err) return err;
+            err = cc_expect_punct(p, CC_rparen);
+            if(err) return err;
+        }
+        else {
+            // Put back '(' so the postfix loop handles it as function params.
+            err = cc_unget(p, &tok);
+            if(err) return err;
+        }
     }
     else if(tok.type == CC_IDENTIFIER){
         if(out_name)

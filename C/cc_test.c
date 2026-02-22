@@ -158,6 +158,24 @@ TestFunction(test_parse_decls){
                 { SV("a"), SV("int (*[4])(int)") },
             },
         },
+        {
+            "abstract declarators in params", __LINE__,
+            SV("void f(int (int));\n"
+               "void g(int (*)(int));\n"
+               "void h(int [10]);\n"
+               "void k(int (*)[10]);\n"
+               "void m(int *, int **, const int *);\n"
+               "void n(int ());\n"
+              ),
+            .funcs = {
+                { SV("f"), SV("void(int(int))") },
+                { SV("g"), SV("void(int (*)(int))") },
+                { SV("h"), SV("void(int[10])") },
+                { SV("k"), SV("void(int (*)[10])") },
+                { SV("m"), SV("void(int *, int * *, const int *)") },
+                { SV("n"), SV("void(int())") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -210,7 +228,7 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, var->type);
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(c->vars[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(r, c->vars[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
         }
         for(size_t n = 0; n < N; n++){
             StringView name = c->funcs[n].name;
@@ -227,7 +245,7 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, (CcQualType){.bits=(uintptr_t)func->type});
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(c->funcs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(r, c->funcs[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
         }
         for(size_t n = 0; n < N; n++){
             StringView name = c->typedefs[n].name;
@@ -244,7 +262,7 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, t);
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(r, c->typedefs[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
         }
         finally:
         if(log_sb.cursor && ! log_sb.errored){
