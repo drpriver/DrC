@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+_Static_assert(sizeof(uint64_t) == sizeof(uintptr_t), "");
 typedef struct SrcLoc SrcLoc;
 struct SrcLoc {
     union {

@@ -1666,6 +1666,13 @@ drjson_buff_write_escaped(DrJsonBuffered* restrict buffer, const char* restrict 
     const char* prev = data;
     const char* end = data + length;
     const char* p = data;
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#if defined __has_warning && !__has_warning("-Wunterminated-string-initialization")
+#else
+#pragma GCC diagnostic ignored "-Wunterminated-string-initialization"
+#endif
+#endif
     static const char ucodes[32][6] = {
         "\\u0000",
         "\\u0001",
@@ -1700,6 +1707,9 @@ drjson_buff_write_escaped(DrJsonBuffered* restrict buffer, const char* restrict 
         "\\u001e",
         "\\u001f",
     };
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 #define FLUSH() \
     do { \
         if(prev < p) { \

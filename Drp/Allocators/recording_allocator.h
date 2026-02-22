@@ -68,7 +68,7 @@ _rec_free(const void*_Nullable data){
         #pragma GCC diagnostic push
         #pragma GCC diagnostic ignored "-Wcast-qual"
         #if !defined(__clang__)
-            #pragma GCC diagnostic ignored "-Wdiscard-qualifiers"
+            #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
         #endif
     #elif defined(_MSC_VER)
         #pragma warning(push)

@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdarg.h>
+#include <limits.h>
 #ifndef _WIN32
 #include <sys/stat.h>
 #else
@@ -1207,7 +1208,7 @@ cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, cons
     uint64_t file_id = 0;
     SrcLocExp* e = NULL;
     if(loc.is_actually_a_pointer){
-        e = (SrcLocExp*)(loc.pointer.bits<<1);
+        e = (SrcLocExp*)(loc.bits & ~1);
         line = e->line;
         column = e->column;
         file_id = e->file_id;
@@ -2864,7 +2865,7 @@ cpp_substitute_and_paste(
             }
             size_t pidx = repl[j].param_idx - 1;
             // # __VA_COUNT__
-            if(pidx == macro->nparams + 1 && macro->is_variadic){
+            if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
                 size_t nargs = args->count ? arg_seps->count + 1 : 0;
                 size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                 Atom a = cpp_atomizef(cpp, "\"%zu\"", va_count);
@@ -2911,7 +2912,7 @@ cpp_substitute_and_paste(
             if(repl[j].param_idx > 0){
                 size_t pidx = repl[j].param_idx - 1;
                 // ## __VA_COUNT__
-                if(pidx == macro->nparams + 1 && macro->is_variadic){
+                if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
                     size_t nargs = args->count ? arg_seps->count + 1 : 0;
                     size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                     Atom a = cpp_atomizef(cpp, "%zu", va_count);
@@ -2932,8 +2933,7 @@ cpp_substitute_and_paste(
                 // When left is comma and right is __VA_ARGS__:
                 //   empty: suppress both comma and args
                 //   non-empty: emit comma then args (no pasting)
-                if(pidx == macro->nparams && macro->is_variadic
-                        && left.type == CPP_PUNCTUATOR && left.punct == ','){
+                if(pidx == (uint64_t)macro->nparams && macro->is_variadic && left.type == CPP_PUNCTUATOR && left.punct == ','){
                     if(arg_count > 0){
                         err = cpp_push_tok(cpp, out, left);
                         if(err) return err;
@@ -3095,7 +3095,7 @@ cpp_substitute_and_paste(
         if(t.param_idx > 0){
             size_t pidx = t.param_idx - 1;
             // __VA_COUNT__: emit the number of variadic arguments
-            if(pidx == macro->nparams + 1 && macro->is_variadic){
+            if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
                 size_t nargs = args->count ? arg_seps->count + 1 : 0;
                 size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                 Atom a = cpp_atomizef(cpp, "%zu", va_count);
@@ -4200,7 +4200,7 @@ cpp_setup_default_includes(CPreprocessor* cpp){
     if(err) return err;
     CcTargetConfig t = cpp->target;
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-    if(CC_TARGET_NATIVE != t.target)
+    if((CcTarget)CC_TARGET_NATIVE != t.target)
         goto finally;
     switch(t.target){
         case CC_TARGET_AARCH64_MACOS:
@@ -4381,7 +4381,7 @@ cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
     (void)ctx;
     uint64_t file_id = 0;
     if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.bits<<1);
         while(e->parent)
             e = e->parent;
         file_id = e->file_id;
@@ -4407,7 +4407,7 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc
     (void)ctx;
     uint64_t file_id = 0;
     if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
         while(e->parent)
             e = e->parent;
         file_id = e->file_id;
@@ -4464,7 +4464,7 @@ cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
     (void)ctx;
     unsigned line = 0;
     if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)(loc.pointer.bits<<1);
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
         while(e->parent)
             e = e->parent;
         line = (unsigned)e->line;
@@ -4776,7 +4776,7 @@ cpp_builtin_print(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
     uint64_t file_id = 0;
     SrcLocExp* e = NULL;
     if(loc.is_actually_a_pointer){
-        e = (SrcLocExp*)(loc.pointer.bits<<1);
+        e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
         line = e->line;
         column = e->column;
         file_id = e->file_id;
@@ -5403,7 +5403,7 @@ static
 SrcLocExp*_Nullable
 cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc){
     if(loc.is_actually_a_pointer)
-        return (SrcLocExp*)(loc.pointer.bits << 1);
+        return (SrcLocExp*)((uintptr_t)loc.pointer.bits << 1);
     SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
     if(!exp) return NULL;
     *exp = (SrcLocExp){.file_id = loc.file_id, .column = loc.column, .line = loc.line};
@@ -6091,7 +6091,7 @@ cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out)
             case '4': case '5': case '6': case '7':
                 t = 0;
                 for(size_t j = 0; j < 3 && i < str.length; j++){
-                    t = (unsigned char)((t << 3)|(unsigned char)str.text[i++] - '0');
+                    t = (unsigned char)((t << 3)|((unsigned char)str.text[i++] - '0'));
                 }
                 msb_write_char(&sb, t);
                 break;
@@ -6102,9 +6102,9 @@ cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out)
 
     CppFrame frame = {
         .txt = sb.cursor?msb_detach_sv(&sb):SV(""),
-        .file_id = loc.is_actually_a_pointer?((SrcLocExp*)(loc.pointer.bits<<1))->file_id:loc.file_id,
-        .line = loc.is_actually_a_pointer?((SrcLocExp*)(loc.pointer.bits<<1))->line:loc.line,
-        .column = loc.is_actually_a_pointer?((SrcLocExp*)(loc.pointer.bits<<1))->column:loc.column,
+        .file_id = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->file_id:loc.file_id,
+        .line = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->line:loc.line,
+        .column = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->column:loc.column,
     };
     for(;;){
         CppToken tok;

@@ -1865,6 +1865,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         continue;
                     }
                 }
+                break;
             case CC_IDENTIFIER: {
                 if(spec->sp_typebits || base_type->bits != (uintptr_t)-1){
                     // Already have a type — this identifier is not a type name.

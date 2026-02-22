@@ -34,7 +34,12 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #pragma clang diagnostic error "-Wgnu-label-as-value"
 #pragma clang diagnostic ignored "-Wnullability-extension"
+#if __has_warning("-Wfixed-enum-extension")
 #pragma clang diagnostic ignored "-Wfixed-enum-extension"
+#endif
+#if __has_warning("-Wc23-extensions")
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#endif
 #pragma clang diagnostic error "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wlanguage-extension-token"
 #pragma clang diagnostic ignored "-Wgnu-auto-type"

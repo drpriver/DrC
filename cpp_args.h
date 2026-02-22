@@ -9,7 +9,7 @@
 #include "Drp/argument_parsing.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_target.h"
-#ifndef __clang__
+#ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
@@ -187,7 +187,7 @@ cpp_cli_defines(CPreprocessor* cpp){
     return err;
 }
 
-#ifndef __clang__
+#ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
 #endif

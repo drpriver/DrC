@@ -112,6 +112,10 @@ enum CcKeyword TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CcKeyword, uint32_t);
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmultichar"
+#endif
 enum CcPunct TYPED_ENUM(uint32_t){
     CC_lbracket = '[',
     CC_rbracket = ']',
@@ -137,10 +141,6 @@ enum CcPunct TYPED_ENUM(uint32_t){
     CC_semi     = ';',
     CC_assign   = '=',
     CC_comma    = ',',
-    #ifdef __GNUC__
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wmultichar"
-    #endif
     CC_arrow          = '->',
     CC_plusplus       = '++',
     CC_minusminus     = '--',
@@ -164,10 +164,10 @@ enum CcPunct TYPED_ENUM(uint32_t){
     CC_amp_assign     = '&=',
     CC_xor_assign     = '^=',
     CC_pipe_assign    = '|=',
-    #ifdef __GNUC__
-    #pragma GCC diagnostic pop
-    #endif
 };
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 TYPEDEF_ENUM(CcPunct, uint32_t);
 
 

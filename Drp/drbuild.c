@@ -1543,10 +1543,12 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     if(ctx->target.os == OS_NATIVE)
         ctx->target.os = BUILD_OS;
     // TODO: sniff what native means
+#if 0
     if(ctx->target.arch == AFAM_NATIVE)
         ctx->target.arch = AFAM_x86;
     if(ctx->target.bits == ABITS_NATIVE)
         ctx->target.bits = ABITS_64;
+#endif
 
     (void)phony_target(ctx, "clean");
 

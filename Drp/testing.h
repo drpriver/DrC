@@ -1429,7 +1429,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     #ifndef __wasm__
     // Register primary output file
     if(outfile.length){
-        no_colors = true;
+        no_colors = 1;
         FILE* fp = fopen(outfile.text, append?"ab":"wb");
         if(!fp){
             fprintf(stderr, "Unable to open '%s': %s\n", outfile.text, strerror(errno));

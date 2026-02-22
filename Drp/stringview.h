@@ -8,6 +8,10 @@
 #include <stdint.h>
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#else
+#ifndef _Nullable
+#define _Nullable
+#endif
 #endif
 
 #ifndef force_inline

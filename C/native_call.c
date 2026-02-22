@@ -1,7 +1,15 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#ifdef __has_include
+#if __has_include(<ffi/ffi.h>)
 #include <ffi/ffi.h>
+#elif __has_include(<ffi.h>)
+#include <ffi.h>
+#endif
+#else
+#include <ffi.h>
+#endif
 #include "native_call.h"
 #include "cc_func.h"
 
