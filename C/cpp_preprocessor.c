@@ -12,6 +12,7 @@
 #endif
 #include "cpp_preprocessor.h"
 #include "cpp_tok.h"
+#include "cc_errors.h"
 #include "../Drp/msb_sprintf.h"
 #include "../Drp/path_util.h"
 #include "../Drp/parse_numbers.h"
@@ -43,14 +44,14 @@ static int cpp_eval_tokens(CPreprocessor*, CppToken*_Null_unspecified toks, size
 // str should exclude outer quotes
 static int cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
 enum {
-    CPP_NO_ERROR = 0,
-    CPP_OOM_ERROR,
-    CPP_SYNTAX_ERROR,
-    CPP_UNREACHABLE_ERROR,
-    CPP_UNIMPLEMENTED_ERROR,
-    CPP_FILE_NOT_FOUND_ERROR,
-    CPP_MACRO_ALREADY_EXISTS_ERROR,
-    CPP_REDEFINING_BUILTIN_MACRO_ERROR,
+    CPP_NO_ERROR                       = _cc_no_error,
+    CPP_OOM_ERROR                      = _cc_oom_error,
+    CPP_SYNTAX_ERROR                   = _cc_syntax_error,
+    CPP_UNREACHABLE_ERROR              = _cc_unreachable_error,
+    CPP_UNIMPLEMENTED_ERROR            = _cc_unimplemented_error,
+    CPP_FILE_NOT_FOUND_ERROR           = _cc_file_not_found_error,
+    CPP_MACRO_ALREADY_EXISTS_ERROR     = _cc_macro_already_exists_error,
+    CPP_REDEFINING_BUILTIN_MACRO_ERROR = _cc_redefining_builtin_macro_error,
 };
 static SrcLocExp*_Nullable cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);

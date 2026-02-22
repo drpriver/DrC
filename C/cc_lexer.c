@@ -4,20 +4,13 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdarg.h>
+#include "cc_errors.h"
 #include "cc_lexer.h"
 #include "cpp_tok.h"
 #include "../Drp/parse_numbers.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-enum {
-    CC_LEX_NO_ERROR,
-    CC_LEX_OOM_ERROR,
-    CC_LEX_SYNTAX_ERROR,
-    CC_LEX_UNREACHABLE_ERROR,
-    CC_LEX_UNIMPLEMENTED_ERROR,
-    CC_LEX_FILE_NOT_FOUND_ERROR,
-};
 
 static int cpp_ident_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_number_to_cc_tok(CcLexer*, CppToken*, CcToken*);
@@ -25,6 +18,14 @@ static int cpp_string_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_char_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 static int cpp_punct_to_cc_tok(CcLexer*, CppToken*, CcToken*);
 LOG_PRINTF(3, 4) static int  cc_lex_error(CcLexer*, SrcLoc, const char*, ...);
+enum {
+    CC_LEX_NO_ERROR             = _cc_no_error,
+    CC_LEX_OOM_ERROR            = _cc_oom_error,
+    CC_LEX_SYNTAX_ERROR         = _cc_syntax_error,
+    CC_LEX_UNREACHABLE_ERROR    = _cc_unreachable_error,
+    CC_LEX_UNIMPLEMENTED_ERROR  = _cc_unimplemented_error,
+    CC_LEX_FILE_NOT_FOUND_ERROR = _cc_file_not_found_error,
+};
 static
 int
 cc_lex_next_token(CcLexer* lexer, CcToken* tok){

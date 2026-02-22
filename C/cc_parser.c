@@ -4,10 +4,11 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdarg.h>
-#include "cc_parser.h"
-#include "cpp_preprocessor.h"
 #include "../Drp/bit_util.h"
 #include "../Drp/parray.h"
+#include "cc_parser.h"
+#include "cpp_preprocessor.h"
+#include "cc_errors.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -51,12 +52,12 @@ typedef struct CcDeclBase CcDeclBase;
 static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_type, SrcLoc loc);
 
 enum {
-    CC_NO_ERROR,
-    CC_OOM_ERROR,
-    CC_SYNTAX_ERROR,
-    CC_UNREACHABLE_ERROR,
-    CC_UNIMPLEMENTED_ERROR,
-    CC_FILE_NOT_FOUND_ERROR,
+    CC_NO_ERROR             = _cc_no_error,
+    CC_OOM_ERROR            = _cc_oom_error,
+    CC_SYNTAX_ERROR         = _cc_syntax_error,
+    CC_UNREACHABLE_ERROR    = _cc_unreachable_error,
+    CC_UNIMPLEMENTED_ERROR  = _cc_unimplemented_error,
+    CC_FILE_NOT_FOUND_ERROR = _cc_file_not_found_error,
 };
 
 #ifdef __clang__
