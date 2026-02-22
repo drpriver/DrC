@@ -178,7 +178,8 @@ typedef struct CcEnumerator CcEnumerator;
 struct CcEnumerator {
     Atom name;
     int64_t value;
-    CcQualType type; // int for traditional enums, the enum type for fixed underlying type
+    CcQualType type;
+    SrcLoc loc;
 };
 
 typedef struct CcEnum CcEnum;
@@ -193,9 +194,9 @@ struct CcEnum {
     };
     Atom name;
     SrcLoc loc;
-    CcBasicTypeKind underlying;
-    uint32_t enumerator_count;
-    CcEnumerator* _Nullable enumerators;
+    CcQualType underlying;
+    size_t enumerator_count;
+    CcEnumerator*_Nonnull* _Nullable enumerators;
 };
 
 typedef struct CcVector CcVector;

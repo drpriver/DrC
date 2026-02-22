@@ -7,6 +7,7 @@
 #include "cc_parser.h"
 #include "cpp_preprocessor.h"
 #include "../Drp/bit_util.h"
+#include "../Drp/parray.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -58,6 +59,18 @@ enum {
     CC_FILE_NOT_FOUND_ERROR,
 };
 
+#ifdef __clang__
+#pragma clang assume_nonnull end
+#endif
+#ifndef MARRAY_CCQUALTYPE
+#define MARRAY_CCQUALTYPE
+#define MARRAY_T CcQualType
+#include "../Drp/Marray.h"
+#endif
+#ifdef __clang__
+#pragma clang assume_nonnull begin
+#endif
+
 typedef struct CcSpecifier CcSpecifier;
 struct CcSpecifier {
     union {
@@ -106,6 +119,7 @@ struct CcSpecifier {
 };
 _Static_assert(sizeof(CcSpecifier) == sizeof(uint32_t), "");
 static int cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type);
+static int cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type);
 
 typedef struct CcDeclBase CcDeclBase;
 struct CcDeclBase {
@@ -495,7 +509,7 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
         }
         case CC_ENUM: {
             CcEnum* e = (CcEnum*)(t.bits & ~(uintptr_t)7);
-            return cc_sizeof_expr(p, ccqt_basic(e->underlying), loc, out);
+            return cc_sizeof_expr(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
             return cc_error(p, loc, "sizeof applied to function type");
@@ -539,7 +553,7 @@ cc_alignof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnu
         }
         case CC_ENUM: {
             CcEnum* e = (CcEnum*)(t.bits & ~(uintptr_t)7);
-            return cc_alignof_expr(p, ccqt_basic(e->underlying), loc, out);
+            return cc_alignof_expr(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
             return cc_error(p, loc, "alignof applied to function type");
@@ -2026,6 +2040,179 @@ cc_scratch_allocator(CcParser*p){
 
 static
 int
+cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
+    int err = 0;
+    CcToken tok;
+    Atom name = NULL;
+    CcQualType underlying = ccqt_basic(CCBT_int);
+    _Bool has_fixed_underlying = 0;
+    // Optional tag name
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_IDENTIFIER){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        name = tok.ident.ident;
+    }
+    // Optional fixed underlying type: enum name : int { ... }
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
+        err = cc_next_token(p, &tok); // consume ':'
+        if(err) return err;
+        has_fixed_underlying = 1;
+        CcDeclBase ub = {.type.bits = (uintptr_t)-1};
+        err = cc_parse_declaration_specifier(p, &ub.spec, &ub.type);
+        if(err) return err;
+        if(ub.spec.sp_typebits != ub.spec.bits)
+            return cc_error(p, loc, "Underlying type does not allow non-type specifiers");
+        if(ub.spec.sp_infer_type)
+            return cc_error(p, loc, "__auto_type not allowed as underlying type of enum");
+        err = cc_resolve_specifiers(p, &ub);
+        if(err) return err;
+        if(!ccqt_is_basic(ub.type) || !ccbt_is_integer(ub.type.basic.kind))
+            return cc_error(p, loc, "enum underlying type must be an integer type");
+        underlying = ub.type;
+    }
+    // Check for enum body
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
+        err = cc_next_token(p, &tok); // consume '{'
+        if(err) return err;
+        CcEnum* e = NULL;
+        if(name){
+            CcEnum* existing = cc_scope_lookup_enum_tag(p->current, name, CC_SCOPE_NO_WALK);
+            if(existing){
+                if(!existing->is_incomplete)
+                    return cc_error(p, loc, "Redefinition of enum '%s'", name->data);
+                if(existing->underlying.bits != (uintptr_t)-1 && existing->underlying.bits != underlying.bits)
+                    return cc_error(p, loc, "Redefinition of enum '%s' with differing underlying types", name->data);
+                e = existing;
+                e->loc = loc;
+                e->underlying = underlying;
+            }
+        }
+        if(!e){
+            e = Allocator_zalloc(cc_allocator(p), sizeof *e);
+            if(!e) return CC_OOM_ERROR;
+            *e = (CcEnum){
+                .kind = CC_ENUM,
+                .name = name,
+                .loc = loc,
+                .underlying = underlying,
+            };
+            if(name){
+                err = cc_scope_insert_enum_tag(cc_allocator(p), p->current, name, e);
+                if(err)  return CC_OOM_ERROR;
+            }
+        }
+        CcQualType enum_type = {.bits = (uintptr_t)e};
+        // Parse enumerator list
+        Parray enumerators = {0};
+        int64_t next_value = 0;
+        for(;;){
+            err = cc_peek(p, &tok);
+            if(err) goto enum_err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '}')
+                break;
+            err = cc_next_token(p, &tok);
+            if(err) goto enum_err;
+            if(tok.type != CC_IDENTIFIER){
+                err = cc_error(p, tok.loc, "expected enumerator name");
+                goto enum_err;
+            }
+            Atom ename = tok.ident.ident;
+            SrcLoc eloc = tok.loc;
+            if(cc_scope_lookup_enumerator(p->current, ename, CC_SCOPE_NO_WALK)){
+                err = cc_error(p, eloc, "Redefinition of enumerator '%s'", ename->data);
+                goto enum_err;
+            }
+            // Optional = constant-expression
+            err = cc_peek(p, &tok);
+            if(err) goto enum_err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
+                err = cc_next_token(p, &tok); // consume '='
+                if(err) goto enum_err;
+                CcExpr* expr = NULL;
+                err = cc_parse_assignment_expr(p, &expr);
+                if(err) goto enum_err;
+                if(!expr){
+                    err = cc_error(p, tok.loc, "expected constant expression");
+                    goto enum_err;
+                }
+                CcEvalResult val = cc_eval_expr(expr);
+                if(val.kind == CC_EVAL_ERROR){
+                    err = cc_error(p, tok.loc, "enumerator value is not a constant expression");
+                    goto enum_err;
+                }
+                if(val.kind == CC_EVAL_FLOAT || val.kind == CC_EVAL_DOUBLE){
+                    err = cc_error(p, tok.loc, "Enumerator value is a floating point value");
+                    goto enum_err;
+                }
+                next_value = cc_eval_to_int(val);
+            }
+            CcEnumerator* enumerator = Allocator_zalloc(cc_allocator(p), sizeof *enumerator);
+            *enumerator = (CcEnumerator){
+                .name = ename,
+                .value = next_value,
+                .type = has_fixed_underlying? enum_type : underlying,
+                .loc = eloc,
+            };
+            err = cc_scope_insert_enumerator(cc_allocator(p), p->current, ename, enumerator);
+            if(err){ err = CC_OOM_ERROR; goto enum_err; }
+            err = pa_push(&enumerators, cc_allocator(p), enumerator);
+            if(err){ err = CC_OOM_ERROR; goto enum_err; }
+            next_value++;
+            err = cc_peek(p, &tok);
+            if(err) goto enum_err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ','){
+                err = cc_next_token(p, &tok); // consume ','
+                if(err) goto enum_err;
+                continue;
+            }
+            break;
+        }
+        err = cc_expect_punct(p, CC_rbrace);
+        if(err) goto enum_err;
+        // Finalize enumerators
+        err = pa_shrink_to_size(&enumerators, cc_allocator(p));
+        if(err) goto enum_err;
+        e->enumerators = (CcEnumerator**)enumerators.data;
+        e->enumerator_count = enumerators.count;
+        e->is_incomplete = 0;
+        *base_type = enum_type;
+        return 0;
+
+        enum_err:
+        pa_cleanup(&enumerators, cc_allocator(p));
+        return err;
+    }
+
+    // No body — just a reference: enum name
+    if(!name)
+        return cc_error(p, loc, "expected enum name or '{'");
+    CcEnum* e = cc_scope_lookup_enum_tag(p->current, name, CC_SCOPE_WALK_CHAIN);
+    if(!e){
+        // Forward declaration — create incomplete enum
+        e = Allocator_zalloc(cc_allocator(p), sizeof *e);
+        if(!e) return CC_OOM_ERROR;
+        *e = (CcEnum){
+            .kind = CC_ENUM,
+            .name = name,
+            .loc = loc,
+            .underlying = underlying,
+            .is_incomplete = 1,
+        };
+        err = cc_scope_insert_enum_tag(cc_allocator(p), p->current, name, e);
+        if(err) return CC_OOM_ERROR;
+    }
+    *base_type = (CcQualType){.bits = (uintptr_t)e};
+    return 0;
+}
+
+static
+int
 cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type){
     if(base_type->bits != (uintptr_t)-1) return cc_unreachable(p, "parsing decl specifier with base type set");
     if(spec->bits != 0) return cc_unreachable(p, "parsing decl specifier with spec set");
@@ -2118,8 +2305,15 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                             return cc_error(p, tok.loc, "Second type in declaration");
                         *base_type = ccqt_basic(CCBT_bool);
                         continue;
-                    case CC_enum:
-                        return cc_unimplemented(p, tok.loc, "enum parsing in declaration");
+                    case CC_enum: {
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "enum with other type specifiers");
+                        err = cc_parse_enum(p, tok.loc, base_type);
+                        if(err) return err;
+                        continue;
+                    }
                     case CC_void:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -2378,17 +2572,6 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     return 0;
 }
 
-#ifdef __clang__
-#pragma clang assume_nonnull end
-#endif
-#ifndef MARRAY_CCQUALTYPE
-#define MARRAY_CCQUALTYPE
-#define MARRAY_T CcQualType
-#include "../Drp/Marray.h"
-#endif
-#ifdef __clang__
-#pragma clang assume_nonnull begin
-#endif
 
 // Recursive declarator parser using double-pointer technique.
 // out_head/out_tail thread the type chain: after return, set

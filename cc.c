@@ -393,14 +393,10 @@ repl_builtin_command(CcParser* parser, StringView input){
                     log_sprintf(l, "  enum %.*s (incomplete)\n", (int)a->length, a->data);
                     continue;
                 }
-                log_sprintf(l, "  enum %.*s (%u enumerators)\n",
-                    (int)a->length, a->data, e->enumerator_count);
+                log_sprintf(l, "  enum %.*s (%zu enumerators)\n", (int)a->length, a->data, e->enumerator_count);
                 if(detailed){
                     for(uint32_t j = 0; j < e->enumerator_count; j++)
-                        log_sprintf(l, "    %.*s = %lld\n",
-                            (int)e->enumerators[j].name->length,
-                            e->enumerators[j].name->data,
-                            (long long)e->enumerators[j].value);
+                        log_sprintf(l, "    %.*s = %lld\n", (int)e->enumerators[j]->name->length, e->enumerators[j]->name->data, (long long)e->enumerators[j]->value);
                 }
             }
         }

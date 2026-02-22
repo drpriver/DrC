@@ -563,6 +563,81 @@ TestFunction(test_parse_decls){
                 { SV("bar"), SV("int(int)") },
             },
         },
+        {
+            "basic enum", __LINE__,
+            SV("enum Color { RED, GREEN, BLUE };\n"
+               "enum Color c;\n"
+              ),
+            .vars = {
+                { SV("c"), SV("enum Color") },
+            },
+        },
+        {
+            "anonymous enum", __LINE__,
+            SV("enum { A, B, C };\n"
+               "int x;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "enum with explicit values", __LINE__,
+            SV("enum { X = 10, Y = 20, Z };\n"
+               "int a[Z];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[21]") },
+            },
+        },
+        {
+            "enum forward reference", __LINE__,
+            SV("enum Foo;\n"
+               "enum Foo *p;\n"
+              ),
+            .vars = {
+                { SV("p"), SV("enum Foo *") },
+            },
+        },
+        {
+            "typedef enum", __LINE__,
+            SV("typedef enum { LOW, HIGH } Level;\n"
+               "Level l;\n"
+              ),
+            .vars = {
+                { SV("l"), SV("enum <anon>") },
+            },
+            .typedefs = {
+                { SV("Level"), SV("enum <anon>") },
+            },
+        },
+        {
+            "enum in sizeof", __LINE__,
+            SV("enum E { V1, V2 };\n"
+               "int a[sizeof(enum E)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[4]") },
+            },
+        },
+        {
+            "enumerator in expression", __LINE__,
+            SV("enum { TWO = 2, THREE = 3, FIVE = TWO + THREE };\n"
+               "int a[FIVE];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[5]") },
+            },
+        },
+        {
+            "enum trailing comma", __LINE__,
+            SV("enum T { A, B, C, };\n"
+               "enum T t;\n"
+              ),
+            .vars = {
+                { SV("t"), SV("enum T") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
