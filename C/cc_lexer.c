@@ -134,6 +134,7 @@ X(__inline, inline) \
 X(__signed, signed) \
 X(__thread, thread_local) \
 X(noreturn, _Noreturn)\
+X(__typeof, typeof) \
 
 #define CKWS9(X) \
 X(constexpr, constexpr) \
@@ -147,6 +148,7 @@ X(_Decimal32, _Decimal32) \
 X(_Decimal64, _Decimal64) \
 X(__inline__, inline) \
 X(__volatile, volatile) \
+X(__typeof__, typeof) \
 
 #define CKWS11(X) \
 X(_Decimal128, _Decimal128) \

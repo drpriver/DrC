@@ -37,6 +37,7 @@ static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
 static Allocator cc_allocator(CcParser*p);
 static Allocator cc_scratch_allocator(CcParser*p);
 static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, Marray(Atom) *_Nullable out_param_names);
+static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 
 enum {
     CC_NO_ERROR,
@@ -1737,7 +1738,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC_struct:
                         return cc_unimplemented(p, tok.loc, "struct parsing in declaration");
                     case CC_typeof:
-                        return cc_unimplemented(p, tok.loc, "typeof parsing in declaration");
+                        goto do_typeof;
                     case CC_alignas:
                         return cc_unimplemented(p, tok.loc, "alignas parsing in declaration");
                     case CC_typedef:
@@ -1816,19 +1817,60 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_thread_local = 1;
                         continue;
                     case CC_typeof_unqual:
-                        return cc_unimplemented(p, tok.loc, "typeof_unqual parsing in declaration");
+                    do_typeof: {
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "typeof after type");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "typeof after type specifiers");
+                        _Bool unqual = tok.kw.kw == CC_typeof_unqual;
+                        err = cc_expect_punct(p, CC_lparen);
+                        if(err) return err;
+                        // Determine if argument is a type-name or expression.
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) return err;
+                        _Bool is_typename = peek.type == CC_KEYWORD;
+                        if(!is_typename && peek.type == CC_IDENTIFIER){
+                            CcSymbol sym;
+                            is_typename = cc_scope_lookup_symbol(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN, &sym) && sym.kind == CC_SYM_TYPEDEF;
+                        }
+                        if(is_typename){
+                            CcDeclBase typeof_base = {.type.bits = (uintptr_t)-1};
+                            err = cc_parse_declaration_specifier(p, &typeof_base.spec, &typeof_base.type);
+                            if(err) return err;
+                            err = cc_resolve_specifiers(p, &typeof_base);
+                            if(err) return err;
+                            CcQualType head = {0};
+                            CcQualType* tail = &head;
+                            err = cc_parse_declarator(p, &head, &tail, NULL, NULL);
+                            if(err) return err;
+                            *tail = typeof_base.type;
+                            *base_type = cc_intern_qualtype(p, head);
+                        }
+                        else {
+                            return cc_unimplemented(p, tok.loc, "typeof(expression)");
+                        }
+                        if(unqual){
+                            base_type->is_const = 0;
+                            base_type->is_volatile = 0;
+                            base_type->is_atomic = 0;
+                        }
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        continue;
+                    }
                 }
             case CC_IDENTIFIER: {
                 if(spec->sp_typebits || base_type->bits != (uintptr_t)-1){
                     // Already have a type — this identifier is not a type name.
                     return cc_unget(p, &tok);
                 }
-                CcQualType td = cc_scope_lookup_typedef(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN);
-                if(td.bits == (uintptr_t)-1){
-                    // Not a typedef — end of specifiers.
+                CcSymbol sym;
+                if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym) || sym.kind != CC_SYM_TYPEDEF){
+                    // Not a typedef (or shadowed by var/func) — end of specifiers.
                     return cc_unget(p, &tok);
                 }
-                *base_type = td;
+                *base_type = sym.type;
                 continue;
             }
             case CC_EOF:
@@ -1949,9 +1991,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
         if(err) return err;
         _Bool grouped = peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '(');
         if(!grouped && peek.type == CC_IDENTIFIER){
-            // Identifier after '(' — grouped declarator unless it's a typedef.
-            CcQualType td = cc_scope_lookup_typedef(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN);
-            grouped = td.bits == (uintptr_t)-1;
+            // Identifier after '(' — grouped declarator unless it's a typedef
+            // (not shadowed by a var/func in a closer scope).
+            CcSymbol sym;
+            grouped = !cc_scope_lookup_symbol(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN, &sym) || sym.kind != CC_SYM_TYPEDEF;
         }
         if(grouped){
             err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);

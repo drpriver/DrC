@@ -268,6 +268,58 @@ TestFunction(test_parse_decls){
                 { SV("C"), SV("int *") },
             },
         },
+        {
+            "typeof basic", __LINE__,
+            SV("typeof(int) a;\n"
+               "typeof(int *) b;\n"
+               "typeof(int [5]) c;\n"
+               "typeof(int (*)(int)) d;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int") },
+                { SV("b"), SV("int *") },
+                { SV("c"), SV("int[5]") },
+                { SV("d"), SV("int (*)(int)") },
+            },
+        },
+        {
+            "typeof with typedef", __LINE__,
+            SV("typedef const int *cip;\n"
+               "typeof(cip) a;\n"
+               "typeof(cip) *b;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("const int *") },
+                { SV("b"), SV("const int * *") },
+            },
+            .typedefs = {
+                { SV("cip"), SV("const int *") },
+            },
+        },
+        {
+            "typeof_unqual", __LINE__,
+            SV("typeof_unqual(const int) a;\n"
+               "typeof_unqual(const volatile int *) b;\n"
+               "typeof_unqual(int *const) c;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int") },
+                { SV("b"), SV("const volatile int *") },
+                { SV("c"), SV("int *") },
+            },
+        },
+        {
+            "typeof in typedef", __LINE__,
+            SV("typedef typeof(int *) intptr;\n"
+               "intptr a;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int *") },
+            },
+            .typedefs = {
+                { SV("intptr"), SV("int *") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
