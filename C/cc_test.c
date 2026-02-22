@@ -23,7 +23,12 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
+static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 TestFunction(test_parse_decls){
     TESTBEGIN();
     enum {N=8}; // can increase if we need to
@@ -33,6 +38,7 @@ TestFunction(test_parse_decls){
         struct {
             StringView name;
             StringView repr;
+            StringView init; // expected cc_print_expr output, empty = no check
         } vars[N];
         struct {
             StringView name;
@@ -334,6 +340,229 @@ TestFunction(test_parse_decls){
                 { SV("d"), SV("int") },
             },
         },
+        {
+            "sizeof in array dim", __LINE__,
+            SV("int a[sizeof(int)];\n"
+               "int b[sizeof(char)];\n"
+               "int c[sizeof(int*)];\n"
+               "int d[alignof(int)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[4]") },
+                { SV("b"), SV("int[1]") },
+                { SV("c"), SV("int[8]") },
+                { SV("d"), SV("int[4]") },
+            },
+        },
+        {
+            "typeof sizeof", __LINE__,
+            SV("typeof(sizeof(int)) a;\n"),
+            .vars = {
+                { SV("a"), SV("unsigned long") },
+            },
+        },
+        {
+            "typeof cast", __LINE__,
+            SV("typeof((float)1) a;\n"
+               "typeof((double)1) b;\n"
+               "typeof((char)1) c;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("float") },
+                { SV("b"), SV("double") },
+                { SV("c"), SV("char") },
+            },
+        },
+        {
+            "typeof variable", __LINE__,
+            SV("int x;\n"
+               "typeof(x) a;\n"
+               "int *p;\n"
+               "typeof(*p) b;\n"
+               "typeof(&x) c;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int") },
+                { SV("p"), SV("int *") },
+                { SV("b"), SV("int") },
+                { SV("c"), SV("int *") },
+            },
+        },
+        {
+            "typeof true/false", __LINE__,
+            SV("typeof(true) a;\n"
+               "typeof(false) b;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("_Bool") },
+                { SV("b"), SV("_Bool") },
+            },
+        },
+        {
+            "countof in array dim", __LINE__,
+            SV("int a[5];\n"
+               "int b[_Countof(a)];\n"
+               "int c[_Countof(int[3])];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[5]") },
+                { SV("b"), SV("int[5]") },
+                { SV("c"), SV("int[3]") },
+            },
+        },
+        {
+            "int literals", __LINE__,
+            SV("int a = 42;\n"
+               "int b = -1;\n"
+               "unsigned c = 3u;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int"),      SV("42") },
+                { SV("b"), SV("int"),      SV("-1") },
+                { SV("c"), SV("unsigned int"), SV("3") },
+            },
+        },
+        {
+            "float literals", __LINE__,
+            SV("float a = 1.5f;\n"
+               "double b = 2.5;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("float"),  SV("1.5f") },
+                { SV("b"), SV("double"), SV("2.5") },
+            },
+        },
+        {
+            "arithmetic", __LINE__,
+            SV("int a = 1 + 2;\n"
+               "int b = 3 * 4 + 5;\n"
+               "int c = 1 << 2;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int"), SV("(1 + 2)") },
+                { SV("b"), SV("int"), SV("((3 * 4) + 5)") },
+                { SV("c"), SV("int"), SV("(1 << 2)") },
+            },
+        },
+        {
+            "comparisons", __LINE__,
+            SV("int a = 1 < 2;\n"
+               "int b = 3 == 4;\n"
+               "int c = 5 != 6;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int"), SV("(1 < 2)") },
+                { SV("b"), SV("int"), SV("(3 == 4)") },
+                { SV("c"), SV("int"), SV("(5 != 6)") },
+            },
+        },
+        {
+            "logical ops", __LINE__,
+            SV("int a = 1 && 2;\n"
+               "int b = 0 || 1;\n"
+               "int c = !0;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int"), SV("(1 && 2)") },
+                { SV("b"), SV("int"), SV("(0 || 1)") },
+                { SV("c"), SV("int"), SV("!0") },
+            },
+        },
+        {
+            "cast expr", __LINE__,
+            SV("float a = (float)42;\n"
+               "long b = (long)1;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("float"), SV("(float)42") },
+                { SV("b"), SV("long"),  SV("(long)1") },
+            },
+        },
+        {
+            "ternary", __LINE__,
+            SV("int a = 1 ? 2 : 3;\n"),
+            .vars = {
+                { SV("a"), SV("int"), SV("(1 ? 2 : 3)") },
+            },
+        },
+        {
+            "sizeof expr init", __LINE__,
+            SV("unsigned long a = sizeof(int);\n"
+               "unsigned long b = sizeof(char);\n"
+              ),
+            .vars = {
+                { SV("a"), SV("unsigned long"), SV("4") },
+                { SV("b"), SV("unsigned long"), SV("1") },
+            },
+        },
+        {
+            "variable ref", __LINE__,
+            SV("int x = 10;\n"
+               "int y = x;\n"
+               "int z = x + 1;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int"), SV("10") },
+                { SV("y"), SV("int"), SV("x") },
+                { SV("z"), SV("int"), SV("(x + 1)") },
+            },
+        },
+        {
+            "addr and deref", __LINE__,
+            SV("int x = 0;\n"
+               "int *p = &x;\n"
+               "int y = *p;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("p"), SV("int *"),  SV("&x") },
+                { SV("y"), SV("int"),    SV("*p") },
+            },
+        },
+        {
+            "subscript", __LINE__,
+            SV("int a[4];\n"
+               "int b = a[2];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[4]") },
+                { SV("b"), SV("int"),    SV("a[2]") },
+            },
+        },
+        {
+            "comma expr", __LINE__,
+            SV("int a = (1, 2);\n"),
+            .vars = {
+                { SV("a"), SV("int"), SV("(1 , 2)") },
+            },
+        },
+        {
+            "true false nullptr", __LINE__,
+            SV("_Bool a = true;\n"
+               "_Bool b = false;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("_Bool"), SV("1") },
+                { SV("b"), SV("_Bool"), SV("0") },
+            },
+        },
+        {
+            "func def", __LINE__,
+            SV("int foo(int x, int y){ return x + y; }\n"),
+            .funcs = {
+                { SV("foo"), SV("int(int, int)") },
+            },
+        },
+        {
+            "forward decl then def", __LINE__,
+            SV("int bar(int);\n"
+               "int bar(int x){ return x; }\n"
+              ),
+            .funcs = {
+                { SV("bar"), SV("int(int)") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -387,6 +616,17 @@ TestFunction(test_parse_decls){
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(r, c->vars[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
+            if(c->vars[n].init.length){
+                TestExpectTrue(var->initializer);
+                if(var->initializer){
+                    msb_reset(&sb);
+                    CcExpr* init = var->initializer;
+                    cc_print_expr(&sb, init);
+                    if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
+                    StringView ir = msb_borrow_sv(&sb);
+                    test_expect_equals_sv(ir, c->vars[n].init, "actual init", "expected init", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
         }
         for(size_t n = 0; n < N; n++){
             StringView name = c->funcs[n].name;
@@ -445,6 +685,10 @@ int main(int argc, char** argv){
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
+#endif
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
 #endif
 
 #include "../Drp/Allocators/allocator.c"

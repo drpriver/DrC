@@ -237,11 +237,8 @@ int main(int argc, char** argv, char** envp){
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// REPL builtin commands
-// ---------------------------------------------------------------------------
-
 static void cc_print_type(MStringBuilder*, CcQualType t);
+static void cc_print_expr(MStringBuilder*sb, CcExpr* e);
 
 static
 _Bool
@@ -435,6 +432,11 @@ repl_builtin_command(CcParser* parser, StringView input){
             cc_print_type(&l->buff, v->type);
             if(v->extern_) log_sprintf(l, " (extern)");
             if(v->static_) log_sprintf(l, " (static)");
+            if(v->initializer){
+                CcExpr* init = v->initializer;
+                log_sprintf(l, " = ");
+                cc_print_expr(&l->buff, init);
+            }
             log_sprintf(l, "\n");
         }
     }

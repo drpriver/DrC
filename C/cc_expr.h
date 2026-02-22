@@ -74,6 +74,8 @@ enum CcExprKind TYPED_ENUM(uint32_t){
 TYPEDEF_ENUM(CcExprKind, uint32_t);
 
 typedef struct CcStatement CcStatement;
+typedef struct CcVariable CcVariable;
+typedef struct CcFunc CcFunc;
 typedef struct CcExpr CcExpr;
 struct CcExpr {
     union {
@@ -110,6 +112,8 @@ struct CcExpr {
         double double_;
         const char* text;
         CcStatement* stmt;
+        CcVariable* var;
+        CcFunc* func;
     };
     CcExpr*_Nonnull values[];
 };
