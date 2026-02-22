@@ -1818,9 +1818,19 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     case CC_typeof_unqual:
                         return cc_unimplemented(p, tok.loc, "typeof_unqual parsing in declaration");
                 }
-            case CC_IDENTIFIER:
-                return cc_unget(p, &tok); // TODO typedefs
-                return cc_unimplemented(p, tok.loc, "Identifier");
+            case CC_IDENTIFIER: {
+                if(spec->sp_typebits || base_type->bits != (uintptr_t)-1){
+                    // Already have a type — this identifier is not a type name.
+                    return cc_unget(p, &tok);
+                }
+                CcQualType td = cc_scope_lookup_typedef(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN);
+                if(td.bits == (uintptr_t)-1){
+                    // Not a typedef — end of specifiers.
+                    return cc_unget(p, &tok);
+                }
+                *base_type = td;
+                continue;
+            }
             case CC_EOF:
             case CC_CONSTANT:
             case CC_STRING_LITERAL:
@@ -1932,12 +1942,17 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
     }
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '('){
         // Disambiguate: grouped declarator vs function parameter list.
-        // '(' followed by '*', '(' or identifier -> grouped declarator.
-        // '(' followed by type keyword, ')', '...' -> function params.
+        // '(' followed by '*', '(' or non-typedef identifier -> grouped declarator.
+        // '(' followed by type keyword, ')', '...', or typedef name -> function params.
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
-        _Bool grouped = peek.type == CC_IDENTIFIER || (peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '('));
+        _Bool grouped = peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '(');
+        if(!grouped && peek.type == CC_IDENTIFIER){
+            // Identifier after '(' — grouped declarator unless it's a typedef.
+            CcQualType td = cc_scope_lookup_typedef(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN);
+            grouped = td.bits == (uintptr_t)-1;
+        }
         if(grouped){
             err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
             if(err) return err;

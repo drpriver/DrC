@@ -176,6 +176,98 @@ TestFunction(test_parse_decls){
                 { SV("n"), SV("void(int())") },
             },
         },
+        {
+            "typedefs as base types", __LINE__,
+            SV("typedef int myint;\n"
+               "myint a;\n"
+               "myint *b;\n"
+               "myint c[5];\n"
+               "myint (*d)(myint);\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int") },
+                { SV("b"), SV("int *") },
+                { SV("c"), SV("int[5]") },
+                { SV("d"), SV("int (*)(int)") },
+            },
+            .typedefs = {
+                { SV("myint"), SV("int") },
+            },
+        },
+        {
+            "typedef pointer", __LINE__,
+            SV("typedef int *intptr;\n"
+               "intptr a;\n"
+               "intptr *b;\n"
+               "const intptr c;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int *") },
+                { SV("b"), SV("int * *") },
+                { SV("c"), SV("int *const ") },
+            },
+            .typedefs = {
+                { SV("intptr"), SV("int *") },
+            },
+        },
+        {
+            "typedef function type", __LINE__,
+            SV("typedef int fn(int, int);\n"
+               "fn *fp;\n"
+              ),
+            .vars = {
+                { SV("fp"), SV("int (*)(int, int)") },
+            },
+            .typedefs = {
+                { SV("fn"), SV("int(int, int)") },
+            },
+        },
+        {
+            "typedef in function params", __LINE__,
+            SV("typedef int myint;\n"
+               "void f(myint x, myint *y);\n"
+              ),
+            .funcs = {
+                { SV("f"), SV("void(int, int *)") },
+            },
+            .typedefs = {
+                { SV("myint"), SV("int") },
+            },
+        },
+        {
+            "typedef paren disambiguation", __LINE__,
+            SV("typedef int T;\n"
+               "void f(T);\n"
+               "void g(T x);\n"
+               "int (h);\n"
+              ),
+            .vars = {
+                { SV("h"), SV("int") },
+            },
+            .funcs = {
+                { SV("f"), SV("void(int)") },
+                { SV("g"), SV("void(int)") },
+            },
+            .typedefs = {
+                { SV("T"), SV("int") },
+            },
+        },
+        {
+            "chained typedefs", __LINE__,
+            SV("typedef int A;\n"
+               "typedef A B;\n"
+               "typedef B *C;\n"
+               "C x;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int *") },
+            },
+            .typedefs = {
+                { SV("A"), SV("int") },
+                { SV("B"), SV("int") },
+                { SV("C"), SV("int *") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
