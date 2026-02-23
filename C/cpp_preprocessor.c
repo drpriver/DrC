@@ -3567,11 +3567,8 @@ cpp_define_target_macros(CPreprocessor* cpp){
         DEF1("_CHAR_UNSIGNED");
     }
 
-    {
-        CcBasicTypeKind wk = t.wchar_type;
-        if(wk == CCBT_unsigned || wk == CCBT_unsigned_short || wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long)
-            DEF1("__WCHAR_UNSIGNED__");
-    }
+    if(ccbt_is_unsigned(t.wchar_type))
+        DEF1("__WCHAR_UNSIGNED__");
 
     // __USER_LABEL_PREFIX__
     if(t.user_label_prefix){
@@ -3627,26 +3624,31 @@ cpp_define_target_macros(CPreprocessor* cpp){
         Atom smax[CCBT_COUNT] = {0};
         Atom umax[CCBT_COUNT] = {0};
         smax[CCBT_signed_char]         = cpp_atomizef(cpp, "127");
+        if(!smax[CCBT_signed_char]) return CPP_OOM_ERROR;
         smax[CCBT_short]               = cpp_atomizef(cpp, "32767");
+        if(!smax[CCBT_short]) return CPP_OOM_ERROR;
         smax[CCBT_int]                 = cpp_atomizef(cpp, "2147483647");
+        if(!smax[CCBT_int]) return CPP_OOM_ERROR;
         if(t.sizeof_[CCBT_long] == 8)
             smax[CCBT_long]            = cpp_atomizef(cpp, "9223372036854775807%s", ccbt_literal_suffix(CCBT_long));
         else
             smax[CCBT_long]            = cpp_atomizef(cpp, "2147483647%s", ccbt_literal_suffix(CCBT_long));
+        if(!smax[CCBT_long]) return CPP_OOM_ERROR;
         smax[CCBT_long_long]           = cpp_atomizef(cpp, "9223372036854775807%s", ccbt_literal_suffix(CCBT_long_long));
+        if(!smax[CCBT_long_long]) return CPP_OOM_ERROR;
         umax[CCBT_unsigned_char]       = cpp_atomizef(cpp, "255");
+        if(!umax[CCBT_unsigned_char]) return CPP_OOM_ERROR;
         umax[CCBT_unsigned_short]      = cpp_atomizef(cpp, "65535");
+        if(!umax[CCBT_unsigned_short]) return CPP_OOM_ERROR;
         umax[CCBT_unsigned]            = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned));
+        if(!umax[CCBT_unsigned]) return CPP_OOM_ERROR;
         if(t.sizeof_[CCBT_unsigned_long] == 8)
             umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "18446744073709551615%s", ccbt_literal_suffix(CCBT_unsigned_long));
         else
             umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned_long));
+        if(!umax[CCBT_unsigned_long]) return CPP_OOM_ERROR;
         umax[CCBT_unsigned_long_long]  = cpp_atomizef(cpp, "18446744073709551615%s", ccbt_literal_suffix(CCBT_unsigned_long_long));
-        if(!smax[CCBT_signed_char] || !smax[CCBT_short] || !smax[CCBT_int] ||
-           !smax[CCBT_long] || !smax[CCBT_long_long] ||
-           !umax[CCBT_unsigned_char] || !umax[CCBT_unsigned_short] ||
-           !umax[CCBT_unsigned] || !umax[CCBT_unsigned_long] || !umax[CCBT_unsigned_long_long])
-            return CPP_OOM_ERROR;
+        if(!umax[CCBT_unsigned_long_long]) return CPP_OOM_ERROR;
 
         #define DEFSMAX(name, kind) do { \
             Atom _a = smax[kind]; \
@@ -3707,37 +3709,25 @@ cpp_define_target_macros(CPreprocessor* cpp){
         DEFSMAX("__PTRDIFF_MAX__", t.ptrdiff_type);
 
         // WCHAR_MAX, WCHAR_MIN
-        {
-            CcBasicTypeKind wk = t.wchar_type;
-            _Bool wu = (wk == CCBT_unsigned || wk == CCBT_unsigned_short ||
-                        wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long ||
-                        wk == CCBT_unsigned_char);
-            if(wu){
-                DEFUMAX("__WCHAR_MAX__", wk);
-                DEFNUM("__WCHAR_MIN__", "0");
-            }
-            else {
-                DEFSMAX("__WCHAR_MAX__", wk);
-                if(t.sizeof_[wk] == 4)
-                    DEFNUM("__WCHAR_MIN__", "(-__WCHAR_MAX__-1)");
-                else
-                    DEFNUM("__WCHAR_MIN__", "(-32767-1)");
-            }
+        if(ccbt_is_unsigned(t.wchar_type)){
+            DEFUMAX("__WCHAR_MAX__", t.wchar_type);
+            DEFNUM("__WCHAR_MIN__", "0");
+        }
+        else {
+            DEFSMAX("__WCHAR_MAX__", t.wchar_type);
+            if(t.sizeof_[t.wchar_type] == 4)
+                DEFNUM("__WCHAR_MIN__", "(-__WCHAR_MAX__-1)");
+            else
+                DEFNUM("__WCHAR_MIN__", "(-32767-1)");
         }
         // WINT_MAX, WINT_MIN
-        {
-            CcBasicTypeKind wk = t.wint_type;
-            _Bool wu = (wk == CCBT_unsigned || wk == CCBT_unsigned_short ||
-                        wk == CCBT_unsigned_long || wk == CCBT_unsigned_long_long ||
-                        wk == CCBT_unsigned_char);
-            if(wu){
-                DEFUMAX("__WINT_MAX__", wk);
-                DEFNUM("__WINT_MIN__", "0");
-            }
-            else {
-                DEFSMAX("__WINT_MAX__", wk);
-                DEFNUM("__WINT_MIN__", "(-__WINT_MAX__-1)");
-            }
+        if(ccbt_is_unsigned(t.wint_type)){
+            DEFUMAX("__WINT_MAX__", t.wint_type);
+            DEFNUM("__WINT_MIN__", "0");
+        }
+        else {
+            DEFSMAX("__WINT_MAX__", t.wint_type);
+            DEFNUM("__WINT_MIN__", "(-__WINT_MAX__-1)");
         }
         // SIG_ATOMIC_MAX, SIG_ATOMIC_MIN
         DEFSMAX("__SIG_ATOMIC_MAX__", t.sig_atomic_type);
