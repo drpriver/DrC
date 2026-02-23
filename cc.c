@@ -194,6 +194,7 @@ int main(int argc, char** argv, char** envp){
                     continue;
             }
             if(n == 0){
+                log_sprintf(logger, "\r");
                 // Empty line = double newline = submit.
                 if(!msb.cursor) continue; // nothing to submit
                 msb_write_char(&msb, '\n');
@@ -214,10 +215,7 @@ int main(int argc, char** argv, char** envp){
                     err = cc_parse_top_level(&cc_parser, &finished);
                     if(err) break;
                 }
-                if(err){
-                    log_error(logger, "Parse error");
-                    cc_parser_discard_input(&cc_parser);
-                }
+                if(err) cc_parser_discard_input(&cc_parser);
                 msb.cursor = 0;
                 continue;
             }
@@ -253,10 +251,9 @@ repl_builtin_command(CcParser* parser, StringView input){
     if(!input.length)
         input = SV("help");
     if(sv_iequals(input, SV("quit")) || sv_iequals(input, SV("exit")) || sv_iequals(input, SV("q"))){
-        log_printf(l, "\r\n");
+        log_printf(l, "\n");
         exit(0);
     }
-    log_sprintf(l, "\r");
     CcScope* scope = &parser->global;
     enum {
         DUMP_NONE     = 0,
