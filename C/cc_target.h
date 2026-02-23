@@ -47,7 +47,15 @@ struct CcTargetConfig {
     CcBasicTypeKind intmax_type;
     CcBasicTypeKind intptr_type;
     CcBasicTypeKind int64_type;
+    CcBasicTypeKind sig_atomic_type;
+    CcBasicTypeKind int_fast8_type;
+    CcBasicTypeKind int_fast16_type;
+    CcBasicTypeKind int_fast32_type;
+    CcBasicTypeKind int_fast64_type;
+    _Bool is_lp64;
+    _Bool user_label_prefix;
     _Bool char_is_signed;
+    StringView platform_macros; // nul-character terminated macros. use `=` to include an arg. length should include terminating nul
 };
 
 // sizeof(void) = 1 is a GNU extension.
@@ -111,7 +119,27 @@ cc_target_x86_64_linux(void){
         .intmax_type  = CCBT_long,
         .intptr_type  = CCBT_long,
         .int64_type   = CCBT_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_long,
+        .int_fast32_type = CCBT_long,
+        .int_fast64_type = CCBT_long,
+        .is_lp64 = 1,
+        .user_label_prefix = 0,
         .char_is_signed = 1,
+        .platform_macros = SV(
+            "__linux__\0"
+            "__linux\0"
+            "linux\0"
+            "__gnu_linux__\0"
+            "__unix__\0"
+            "__unix\0"
+            "unix\0"
+            "__x86_64__\0"
+            "__x86_64\0"
+            "__amd64__\0"
+            "__amd64\0"
+        ),
     };
 }
 
@@ -172,7 +200,24 @@ cc_target_aarch64_linux(void){
         .intmax_type  = CCBT_long,
         .intptr_type  = CCBT_long,
         .int64_type   = CCBT_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_long,
+        .int_fast32_type = CCBT_long,
+        .int_fast64_type = CCBT_long,
+        .is_lp64 = 1,
+        .user_label_prefix = 0,
         .char_is_signed = 0,
+        .platform_macros = SV(
+            "__linux__\0"
+            "__linux\0"
+            "linux\0"
+            "__gnu_linux__\0"
+            "__unix__\0"
+            "__unix\0"
+            "unix\0"
+            "__aarch64__\0"
+        ),
     };
 }
 
@@ -233,7 +278,26 @@ cc_target_x86_64_macos(void){
         .intmax_type  = CCBT_long,
         .intptr_type  = CCBT_long,
         .int64_type   = CCBT_long_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_short,
+        .int_fast32_type = CCBT_int,
+        .int_fast64_type = CCBT_long_long,
+        .is_lp64 = 1,
+        .user_label_prefix = 1,
         .char_is_signed = 1,
+        .platform_macros = SV(
+            "__APPLE__\0"
+            "__MACH__\0"
+            "__x86_64__\0"
+            "__x86_64\0"
+            "__amd64__\0"
+            "__amd64\0"
+            "TARGET_CPU_X86_64\0"
+            "TARGET_OS_MAC\0"
+            "TARGET_OS_OSX\0"
+            "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__=101400\0"
+        ),
     };
 }
 
@@ -294,7 +358,24 @@ cc_target_aarch64_macos(void){
         .intmax_type  = CCBT_long,
         .intptr_type  = CCBT_long,
         .int64_type   = CCBT_long_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_short,
+        .int_fast32_type = CCBT_int,
+        .int_fast64_type = CCBT_long_long,
+        .is_lp64 = 1,
+        .user_label_prefix = 1,
         .char_is_signed = 0,
+        .platform_macros = SV(
+            "__APPLE__\0"
+            "__MACH__\0"
+            "__aarch64__\0"
+            "__arm64__\0"
+            "TARGET_CPU_ARM64\0"
+            "TARGET_OS_MAC\0"
+            "TARGET_OS_OSX\0"
+            "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__=110000\0"
+        ),
     };
 }
 
@@ -355,7 +436,24 @@ cc_target_x86_64_windows(void){
         .intmax_type  = CCBT_long_long,
         .intptr_type  = CCBT_long_long,
         .int64_type   = CCBT_long_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_short,
+        .int_fast32_type = CCBT_int,
+        .int_fast64_type = CCBT_long_long,
+        .is_lp64 = 0,
+        .user_label_prefix = 0,
         .char_is_signed = 1,
+        .platform_macros = SV(
+            "_WIN32\0"
+            "_WIN64\0"
+            "__x86_64__\0"
+            "__x86_64\0"
+            "__amd64__\0"
+            "__amd64\0"
+            "_M_X64\0"
+            "_M_AMD64\0"
+        ),
     };
 }
 
@@ -416,6 +514,13 @@ cc_target_test(void){
         .intmax_type  = CCBT_long,
         .intptr_type  = CCBT_long,
         .int64_type   = CCBT_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_long,
+        .int_fast32_type = CCBT_long,
+        .int_fast64_type = CCBT_long,
+        .is_lp64 = 1,
+        .user_label_prefix = 0,
         .char_is_signed = 1,
     };
 }
