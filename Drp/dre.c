@@ -76,7 +76,7 @@ dre_isdigit(int c){
 static inline
 _Bool
 dre_isspace(int c){
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v';
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
 }
 
 static inline
@@ -187,7 +187,7 @@ dre_try_matchone(const char *regex, size_t regex_len, char text_c){
 static
 _Bool
 dre_matchquestion(DreContext *context, const char *regex_left, size_t regex_left_len, const char *regex_right, size_t regex_right_len, const char* text_ptr, size_t text_len){
-    DRE_TRACE("matchquestion regex_right='%.*s' text='%.*s'", (int)regex_left_len, regex_right, (int)text_len, text_ptr);
+    DRE_TRACE("matchquestion regex_left='%.*s' text='%.*s'", (int)regex_left_len, regex_left, (int)text_len, text_ptr);
     // Try WITH the optional character first (greedy)
     if(text_len > 0){
         int result = dre_try_matchone(regex_left, regex_left_len, text_ptr[0]);
@@ -197,9 +197,7 @@ dre_matchquestion(DreContext *context, const char *regex_left, size_t regex_left
             return 0;
         }
         if(result){
-            text_ptr++;
-            text_len--;
-            if(dre_match_start_only(context, regex_right, regex_right_len, text_ptr, text_len)){
+            if(dre_match_start_only(context, regex_right, regex_right_len, text_ptr + 1, text_len - 1)){
                 context->match_length++;
                 return 1;
             }

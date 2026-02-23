@@ -17,7 +17,7 @@
  *   +        Plus, match one or more (greedy)
  *   ?        Question, match zero or one (greedy)
  *   [abc]    Character class, match if one of {'a', 'b', 'c'}
- *   [^abc]   Inverted class, match if NOT one of {'a', 'b', 'c'} -- NOTE: feature is currently broken!
+ *   [^abc]   Inverted class, match if NOT one of {'a', 'b', 'c'}
  *   [a-zA-Z] Character ranges, the character set of the ranges { a-z | A-Z }
 
  * Some common "character classes":
@@ -64,13 +64,13 @@ typedef struct DreContext DreContext;
 struct DreContext {
   size_t match_length;
   enum re_error error;
-  const char *error_location;
+  const char *_Nullable error_location;
 };
 
 // returns 1 on match, 0 for no match
 // start of the match is returned in out_match_start
-// check context->error for any regex errros
-DRE_API 
+// check context->error for any regex errors
+DRE_API
 _Bool
 dre_match(DreContext *context, const char *regex, size_t regex_len, const char *text_start, size_t text_len, size_t *out_match_start);
 
@@ -80,7 +80,7 @@ dre_match_sv(DreContext *context, StringView re, StringView text, size_t *out_ma
     return dre_match(context, re.text, re.length, text.text, text.length, out_match_start);
 }
 // returns 1 on match, 0 for no match
-// check context->error for any regex errros
+// check context->error for any regex errors
 DRE_API
 _Bool
 dre_match_start_only(DreContext *context, const char *regex, size_t regex_len, const char *text_start, size_t text_len);
