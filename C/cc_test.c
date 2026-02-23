@@ -638,6 +638,53 @@ TestFunction(test_parse_decls){
                 { SV("t"), SV("enum T") },
             },
         },
+        {
+            "implicit cast int to float", __LINE__,
+            SV("float f = 42;\n"),
+            .vars = {
+                { SV("f"), SV("float"), SV("(float)42") },
+            },
+        },
+        {
+            "type inference __auto_type", __LINE__,
+            SV("__auto_type x = 42;\n"),
+            .vars = {
+                { SV("x"), SV("int"), SV("42") },
+            },
+        },
+        {
+            "const type inference", __LINE__,
+            SV("const __auto_type x = 42;\n"),
+            .vars = {
+                { SV("x"), SV("const int"), SV("42") },
+            },
+        },
+        {
+            "const type inference (without type)", __LINE__,
+            SV("const x = 42;\n"),
+            .vars = {
+                { SV("x"), SV("const int"), SV("42") },
+            },
+        },
+        {
+            "pointer assignment", __LINE__,
+            SV("int x;\n"
+               "int *p = &x;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("p"), SV("int *"), SV("&x") },
+            },
+        },
+        {
+            "enum to int", __LINE__,
+            SV("enum { A };\n"
+               "int x = A;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int"), SV("0") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};

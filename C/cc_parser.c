@@ -222,7 +222,9 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     if(ccbt_int_rank(u) >= ccbt_int_rank(s)){
         *out = ccqt_basic(u); return 0;
     }
-    if(ccbt_int_rank(s) > ccbt_int_rank(u)){
+    // Signed has higher rank. Use it only if it can represent all
+    // values of the unsigned type (i.e. is strictly wider).
+    if(p->lexer.cpp.target.sizeof_[s] > p->lexer.cpp.target.sizeof_[u]){
         *out = ccqt_basic(s); return 0;
     }
     *out = ccqt_basic(ccbt_to_unsigned(s));
@@ -357,19 +359,41 @@ cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr
 static
 int
 cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
-    // Cast to void is always valid
+    // Cast to void is always valid.
     if(ccqt_is_basic(to) && to.basic.kind == CCBT_void) return 0;
     CcTypeKind to_kind = ccqt_kind(to);
     CcTypeKind from_kind = ccqt_kind(from);
+    // Cannot cast to array, function, struct, or union.
     if(to_kind == CC_ARRAY)
         return cc_error(p, loc, "cannot cast to array type");
     if(to_kind == CC_FUNCTION)
         return cc_error(p, loc, "cannot cast to function type");
     if(to_kind == CC_STRUCT || to_kind == CC_UNION)
         return cc_error(p, loc, "cannot cast to struct or union type");
+    // Cannot cast from struct, union, or void.
     if(from_kind == CC_STRUCT || from_kind == CC_UNION)
         return cc_error(p, loc, "cannot cast from struct or union type");
-    return 0;
+    if(from_kind == CC_BASIC && from.basic.kind == CCBT_void)
+        return cc_error(p, loc, "cannot cast from void");
+    // Arithmetic <-> arithmetic is always valid.
+    // (integer, float, complex, bool, enum underlying types)
+    _Bool from_arith = (from_kind == CC_BASIC && from.basic.kind != CCBT_nullptr_t) || from_kind == CC_ENUM;
+    _Bool to_arith = (to_kind == CC_BASIC && to.basic.kind != CCBT_nullptr_t) || to_kind == CC_ENUM;
+    if(from_arith && to_arith)
+        return 0;
+    // Pointer/array/function sources are pointer-like for cast purposes.
+    _Bool from_ptr = from_kind == CC_POINTER || from_kind == CC_ARRAY || from_kind == CC_FUNCTION || (from_kind == CC_BASIC && from.basic.kind == CCBT_nullptr_t);
+    _Bool to_ptr = to_kind == CC_POINTER || (to_kind == CC_BASIC && to.basic.kind == CCBT_nullptr_t);
+    // Pointer <-> pointer.
+    if(from_ptr && to_ptr)
+        return 0;
+    // Pointer <-> integer (includes bool).
+    if(from_ptr && to_arith && ccbt_is_integer(to.basic.kind))
+        return 0;
+    if(from_arith && ccbt_is_integer(from.basic.kind) && to_ptr)
+        return 0;
+    // Pointer <-> float is not allowed.
+    return cc_error(p, loc, "invalid cast");
 }
 
 static
@@ -379,34 +403,28 @@ cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, 
     CcFunction* old_type = existing->type;
     // Check linkage: static must be consistent.
     if(existing->static_ && !declbase->spec.sp_static)
-        return cc_error(p, loc, "non-static declaration of '%.*s' follows static declaration",
-            existing->name->length, existing->name->data);
+        return cc_error(p, loc, "non-static declaration of '%.*s' follows static declaration", existing->name->length, existing->name->data);
     if(!existing->static_ && declbase->spec.sp_static)
-        return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration",
-            existing->name->length, existing->name->data);
+        return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration", existing->name->length, existing->name->data);
     // If either side has no prototype (K&R), skip type checking.
     if(old_type->no_prototype || new_type->no_prototype)
         return 0;
     // Check return type.
     if(old_type->return_type.bits != new_type->return_type.bits)
-        return cc_error(p, loc, "conflicting return type for '%.*s'",
-            existing->name->length, existing->name->data);
+        return cc_error(p, loc, "conflicting return type for '%.*s'", existing->name->length, existing->name->data);
     // Check variadic.
     if(old_type->is_variadic != new_type->is_variadic)
-        return cc_error(p, loc, "conflicting variadic specifier for '%.*s'",
-            existing->name->length, existing->name->data);
+        return cc_error(p, loc, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
     // Check parameter count.
     if(old_type->param_count != new_type->param_count)
-        return cc_error(p, loc, "conflicting number of parameters for '%.*s'",
-            existing->name->length, existing->name->data);
+        return cc_error(p, loc, "conflicting number of parameters for '%.*s'", existing->name->length, existing->name->data);
     // Check parameter types.
     for(uint32_t i = 0; i < old_type->param_count; i++){
         // Compare ignoring top-level qualifiers on params (C permits that).
         uintptr_t old_bits = old_type->params[i].bits & ~(uintptr_t)7;
         uintptr_t new_bits = new_type->params[i].bits & ~(uintptr_t)7;
         if(old_bits != new_bits)
-            return cc_error(p, loc, "conflicting type for parameter %u of '%.*s'",
-                i + 1, existing->name->length, existing->name->data);
+            return cc_error(p, loc, "conflicting type for parameter %u of '%.*s'", i + 1, existing->name->length, existing->name->data);
     }
     return 0;
 }
@@ -2910,6 +2928,30 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(!initializer) return cc_error(p, tok.loc, "Expected expression after '='");
             err = cc_next_token(p, &tok);
             if(err) return err;
+        }
+        if(initializer){
+            if(declbase->spec.sp_infer_type){
+                // Infer type from initializer
+                type = initializer->type;
+                // Apply qualifiers from specifier
+                if(declbase->spec.sp_const) type.is_const = 1;
+                if(declbase->spec.sp_volatile) type.is_volatile = 1;
+                if(declbase->spec.sp_atomic) type.is_atomic = 1;
+            }
+            else {
+                // Check compatibility and insert implicit cast
+                CcQualType target = type;
+                target.is_const = 0;
+                target.is_volatile = 0;
+                target.is_atomic = 0;
+                err = cc_check_cast(p, initializer->type, target, tok.loc);
+                if(err) return err;
+                initializer = cc_implicit_cast(p, initializer, target);
+                if(!initializer) return CC_OOM_ERROR;
+            }
+        }
+        else if(declbase->spec.sp_infer_type){
+            return cc_error(p, tok.loc, "type-inferred declaration requires initializer");
         }
         if(tok.type == CC_EOF)
             stop = 1;
