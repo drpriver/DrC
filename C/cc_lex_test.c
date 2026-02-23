@@ -32,7 +32,7 @@ enum { MAX_TEST_TOKENS = 64 };
 // Helper: lex a string into an array of CcTokens, return count or -1 on error.
 static
 int
-cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, const char* file, const char* func, int line){
+cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, ArenaAllocator* out_aa, ArenaAllocator* out_synth, const char* file, const char* func, int line){
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
@@ -80,11 +80,11 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, const
         StringView sv = msb_borrow_sv(&log_sb);
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
-    ArenaAllocator_free_all(&aa);
-    ArenaAllocator_free_all(&lexer.cpp.synth_arena);
+    *out_aa = aa;
+    *out_synth = lexer.cpp.synth_arena;
     return result;
 }
-#define CC_LEX_STRING(txt, out, count) cc_lex_string(txt, &out, count, __FILE__, __func__, __LINE__)
+#define CC_LEX_STRING(txt, out, count, aa, synth) cc_lex_string(txt, &out, count, aa, synth, __FILE__, __func__, __LINE__)
 
 // Like cc_lex_string, but expects an error and captures the error message.
 // Returns 0 if an error occurred (success), 1 if no error (failure).
@@ -241,12 +241,15 @@ TestFunction(test_cc_lex_integers){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -256,6 +259,8 @@ TestFunction(test_cc_lex_integers){
             TestReport("  got type=%s ctype=%d value=%llu", cc_type_name(toks[0].type), toks[0].constant.ctype, (unsigned long long)toks[0].constant.integer_value);
             TestReport("  exp type=%s ctype=%d value=%llu", cc_type_name(test_cases[i].exp.type), test_cases[i].exp.constant.ctype, (unsigned long long)test_cases[i].exp.constant.integer_value);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     // Invalid suffix errors
     {
@@ -308,12 +313,15 @@ TestFunction(test_cc_lex_floats){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -321,6 +329,8 @@ TestFunction(test_cc_lex_floats){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): token mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     TESTEND();
 }
@@ -356,12 +366,15 @@ TestFunction(test_cc_lex_chars){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -373,6 +386,8 @@ TestFunction(test_cc_lex_chars){
                 cc_type_name(toks[0].type), toks[0].constant.ctype,
                 (unsigned long long)toks[0].constant.integer_value);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     // Prefixed multi-character constants must be errors
     {
@@ -424,12 +439,15 @@ TestFunction(test_cc_lex_strings){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -437,6 +455,8 @@ TestFunction(test_cc_lex_strings){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): string mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     TESTEND();
 }
@@ -502,12 +522,15 @@ TestFunction(test_cc_lex_punctuators){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -515,6 +538,8 @@ TestFunction(test_cc_lex_punctuators){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): punct mismatch: got %u, expected %u", test_cases[i].name, test_cases[i].line, (unsigned)toks[0].punct.punct, (unsigned)test_cases[i].exp);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     TESTEND();
 }
@@ -593,12 +618,15 @@ TestFunction(test_cc_lex_keywords){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         TEST_stats.executed++;
@@ -606,6 +634,8 @@ TestFunction(test_cc_lex_keywords){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): keyword mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     TESTEND();
 }
@@ -668,12 +698,15 @@ TestFunction(test_cc_lex_multi_token){
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count);
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         TEST_stats.executed++;
         if(count != test_cases[i].exp_count){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): expected %d tokens, got %d", test_cases[i].name, test_cases[i].line, test_cases[i].exp_count, count);
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
             continue;
         }
         for(int j = 0; j < count; j++){
@@ -683,6 +716,8 @@ TestFunction(test_cc_lex_multi_token){
                 TestReport("test '%s' (line %d): token %d mismatch: got type=%s, expected type=%s", test_cases[i].name, test_cases[i].line, j, cc_type_name(toks[j].type), cc_type_name(test_cases[i].exp[j].type));
             }
         }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
     }
     TESTEND();
 }
