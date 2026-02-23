@@ -188,19 +188,17 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
         free(pairs);
     }
 
-    if(!rctx->ordered.count) return 0;
-
-    if(ctx->tab_completion_cookie >= rctx->ordered.count){
-        // Wrap around: restore original text.
+    if(n_tabs <= 0 || !rctx->ordered.count){
+        // Restore original text.
         memcpy(ctx->buff, ctx->altbuff, orig_len);
         ctx->buff[orig_len] = 0;
         ctx->buff_count = orig_len;
         ctx->buff_cursor = orig_cursor;
-        ctx->tab_completion_cookie = 0;
         return 0;
     }
 
-    StringView match = rctx->ordered.data[ctx->tab_completion_cookie++];
+    size_t idx = (size_t)(n_tabs - 1) % rctx->ordered.count;
+    StringView match = rctx->ordered.data[idx];
     size_t word_start = rctx->word_start;
     size_t tail_len = orig_len - orig_cursor;
     size_t new_len = word_start + match.length + tail_len;

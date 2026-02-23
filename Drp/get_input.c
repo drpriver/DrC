@@ -398,9 +398,10 @@ get_line_internal_loop(GetInputCtx* ctx){
             ctx->tab_completion_cookie = 0;
             n_tabs = 0;
         }
-        if(c == TAB || (c == SHIFT_TAB && n_tabs > 0)){
-            if(c == SHIFT_TAB)
-                n_tabs--;
+        if(c == TAB || (c == SHIFT_TAB && in_tab)){
+            if(c == SHIFT_TAB){
+                if(n_tabs > 0) n_tabs--;
+            }
             else
                 n_tabs++;
             // ignore tabs if no completion function
