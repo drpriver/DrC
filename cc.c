@@ -179,6 +179,7 @@ int main(int argc, char** argv, char** envp){
         GetInputCtx gi = {
             .tab_completion_func = repl_tab_complete,
             .tab_completion_user_data = &completer_ctx,
+            .tab_indent_width = 4,
         };
         MStringBuilder msb = {.allocator=MALLOCATOR};
         int input_num = 0;

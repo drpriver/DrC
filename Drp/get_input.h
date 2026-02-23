@@ -78,6 +78,7 @@ struct GetInputCtx {
     // Do not store resources that need to be freed
     // here.
     uintptr_t tab_completion_cookie;
+    int tab_indent_width; // If > 0, tab inserts spaces to align when line is all whitespace.
 };
 // -----------
 //

@@ -398,6 +398,28 @@ get_line_internal_loop(GetInputCtx* ctx){
             ctx->tab_completion_cookie = 0;
             n_tabs = 0;
         }
+        if(c == TAB && !in_tab && ctx->tab_indent_width > 0){
+            // Check if line is all whitespace — if so, indent.
+            _Bool all_space = 1;
+            for(size_t i = 0; i < ctx->buff_count; i++){
+                if(ctx->buff[i] != ' '){
+                    all_space = 0;
+                    break;
+                }
+            }
+            if(all_space){
+                int w = ctx->tab_indent_width;
+                size_t align = (size_t)(w - (int)(ctx->buff_count % (size_t)w));
+                if(ctx->buff_count + align < GI_BUFF_SIZE - 1){
+                    for(size_t i = 0; i < align; i++)
+                        ctx->buff[ctx->buff_count++] = ' ';
+                    ctx->buff[ctx->buff_count] = 0;
+                    ctx->buff_cursor = ctx->buff_count;
+                    redisplay(ctx);
+                }
+                continue;
+            }
+        }
         if(c == TAB || (c == SHIFT_TAB && in_tab)){
             if(c == SHIFT_TAB){
                 if(n_tabs > 0) n_tabs--;
@@ -435,7 +457,22 @@ get_line_internal_loop(GetInputCtx* ctx){
                 DBG("BACKSPACE\n");
                 if(ctx->buff_cursor > 0 && ctx->buff_count > 0){
                     size_t n = 1;
-                    if(ctx->buff_cursor >= 2 && !(ctx->buff_cursor & 1)){
+                    if(ctx->tab_indent_width > 0 && ctx->buff_cursor == ctx->buff_count){
+                        _Bool all_space = 1;
+                        for(size_t i = 0; i < ctx->buff_count; i++){
+                            if(ctx->buff[i] != ' '){
+                                all_space = 0;
+                                break;
+                            }
+                        }
+                        if(all_space){
+                            int w = ctx->tab_indent_width;
+                            size_t rem = ctx->buff_count % (size_t)w;
+                            n = rem ? rem : (size_t)w;
+                            if(n > ctx->buff_cursor) n = ctx->buff_cursor;
+                        }
+                    }
+                    else if(ctx->buff_cursor >= 2 && !(ctx->buff_cursor & 1)){
                         if(ctx->buff[ctx->buff_cursor-1] == ' ' && ctx->buff[ctx->buff_cursor-2] == ' '){
                             n = 2;
                         }
