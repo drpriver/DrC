@@ -4136,6 +4136,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
         }
+        // trailing __attribute__
+        cc_clear_attributes(&p->attributes);
+        err = cc_parse_attributes(p, &p->attributes);
+        if(err) return err;
+        cc_clear_attributes(&p->attributes);
         // postfix processing
         _Bool stop = 0;
         err = cc_next_token(p, &tok);
