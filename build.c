@@ -125,6 +125,8 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         if(name.text[0] == '.') continue;
         if(sv_startswith(name, (StringView){ctx->build_dir->length, ctx->build_dir->data}))
             continue;
+        if(sv_equals(name, (SV("fish-completions"))))
+            continue;
         if(tgt == _tgt) continue;
         if(len > 80){
             msb_write_literal(&sb, "\\\n    ");

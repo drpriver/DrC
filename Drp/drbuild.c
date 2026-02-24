@@ -570,6 +570,7 @@ static int maybe_recompile_this(BuildCtx*, int, char*_Null_unspecified*_Nonnull)
 static int list_targets(BuildCtx* ctx, BuildTarget* tgt);
 static int print_ctx(BuildCtx* ctx, BuildTarget* tgt);
 static int compile_commands(BuildCtx* ctx, BuildTarget* tgt);
+static int fish_completions(BuildCtx* ctx, BuildTarget* tgt);
 
 static int write_to_json_file(BuildCtx* ctx, const void* src, const TypeInfo* ti, Atom path);
 static int read_from_json_file(BuildCtx* ctx, void* dst, const TypeInfo* ti, Atom path);
@@ -1218,6 +1219,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     _Bool no_sanitize = 0;
     _Bool no_native_sanitize = 0;
     _Bool debug_symbols = 0;
+    _Bool no_rebuild = 0;
     TargetSettings before_ap = ctx->target;
     #define BARGDEST(x) _Generic(x, \
         int64_t*: ARGDEST((int64_t*)x), \
@@ -1380,6 +1382,12 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             .max_num = 100,
             .append_proc = &ap_ma_atom_append,
             .hidden = 1,
+        },
+        {
+            .name = SV("--no-rebuild"),
+            .dest = BARGDEST(&no_rebuild),
+            .help = "Don't rebuild the build program.",
+            .hidden = 1,
         }
         #undef BARGDEST
     };
@@ -1517,8 +1525,10 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         ctx->target.compiler_flavor = guess_compiler_flavor(ctx->target.cc);
     if(!ctx->build_compiler_flavor)
         ctx->build_compiler_flavor = guess_compiler_flavor(ctx->build_cc);
-    err = maybe_recompile_this(ctx, argc, argv);
-    if(err) goto fail;
+    if(!no_rebuild){
+        err = maybe_recompile_this(ctx, argc, argv);
+        if(err) goto fail;
+    }
 
     _Bool j_no_arg = kw_args[JOBS_IDX].visited && kw_args[JOBS_IDX].num_parsed == 0;
     if(j_no_arg) ctx->njobs = -1;
@@ -1564,6 +1574,10 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         BuildTarget* ccjs = script_target(ctx, "compile_commands.json", compile_commands, NULL);
         ccjs->is_phony = 1;
     }
+    {
+        BuildTarget* fc = script_target(ctx, "fish-completions", fish_completions, NULL);
+        fc->is_phony = 1;
+    }
     return ctx;
 }
 
@@ -1579,6 +1593,26 @@ list_targets(BuildCtx* ctx, BuildTarget* tgt){
         StringView sv = {item.atom->length, item.atom->data};
         if(sv_startswith(sv, SV("./"))) continue;
         b_printf(ctx, "  %s\n", item.atom->data);
+    }
+    return 0;
+}
+
+static
+int
+fish_completions(BuildCtx* ctx, BuildTarget* tgt){
+    (void)tgt;
+    StringView exe = {ctx->exe_path->length, ctx->exe_path->data};
+    StringView name = path_basename(exe, 0);
+    AtomMapItems items = AM_items(&ctx->targets);
+    MARRAY_FOR_EACH_VALUE(AtomMapItem, item, items){
+        BuildTarget* t = item.p;
+        if(t->is_src) continue;
+        StringView sv = {item.atom->length, item.atom->data};
+        if(sv_startswith(sv, SV("./"))) continue;
+        if(sv_startswith(sv, (StringView){ctx->build_dir->length, ctx->build_dir->data}))
+            continue;
+        if(t == tgt) continue;
+        b_printf(ctx, "complete -c %.*s -f -a %s\n", (int)name.length, name.text, item.atom->data);
     }
     return 0;
 }
