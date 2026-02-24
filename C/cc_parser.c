@@ -535,6 +535,9 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             return 0;
         }
     }
+    #ifdef __GNUC__
+    __builtin_unreachable();
+    #endif
 }
 
 // Build an expression for alignof(type).
@@ -650,6 +653,9 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             return 0;
         }
     }
+    #ifdef __GNUC__
+    __builtin_unreachable();
+    #endif
 }
 
 // Get the alignof a type without creating an expression node.
@@ -696,6 +702,9 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             return 0;
         }
     }
+    #ifdef __GNUC__
+    __builtin_unreachable();
+    #endif
 }
 
 static
