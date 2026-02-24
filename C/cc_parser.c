@@ -318,10 +318,10 @@ cc_is_type_start(CcParser* p, CcToken* tok){
 static
 int
 cc_parse_type_name(CcParser* p, CcQualType* out){
-    CcDeclBase base = {.type.bits = (uintptr_t)-1};
+    CcDeclBase base = {0};
     int err = cc_parse_declaration_specifier(p, &base.spec, &base.type);
     if(err) return err;
-    if(!base.spec.bits && base.type.bits == (uintptr_t)-1){
+    if(!base.spec.bits && !base.type.bits){
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
@@ -1465,7 +1465,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     CcPointer* ptr = ccqt_as_ptr(agg_type);
                     agg_type = ptr->pointee;
                 }
-                CcQualType member_type = {.bits = (uintptr_t)-1};
+                CcQualType member_type = {0};
                 if(!ccqt_is_basic(agg_type)){
                     CcTypeKind tk = ccqt_kind(agg_type);
                     if(tk == CC_STRUCT){
@@ -1479,7 +1479,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         if(f) member_type = f->type;
                     }
                 }
-                if(member_type.bits == (uintptr_t)-1)
+                if(!member_type.bits)
                     return cc_error(p, member.loc, "no member named '%s'", member_name->data);
                 CcExpr* mnode = cc_alloc_expr(p, 1);
                 if(!mnode) return CC_OOM_ERROR;
@@ -1556,6 +1556,7 @@ done:
 // ---------------------------------------------------------------------------
 
 static const char* _Null_unspecified cc_basic_names[] = {
+    [CCBT_INVALID]            = "<invalid>",
     [CCBT_void]               = "void",
     [CCBT_bool]               = "_Bool",
     [CCBT_char]               = "char",
@@ -2074,10 +2075,10 @@ int
 cc_parse_top_level(CcParser* p, _Bool* finished){
     int err;
     CcToken tok;
-    CcDeclBase b = {.type.bits=-1};
+    CcDeclBase b = {0};
     err = cc_parse_declaration_specifier(p, &b.spec, &b.type);
     if(err) return err;
-    if(b.spec.bits || b.type.bits != (uintptr_t)-1){
+    if(b.spec.bits || b.type.bits){
         err = cc_resolve_specifiers(p,  &b);
         if(err) return err;
         err = cc_parse_decls(p, &b);
@@ -2852,7 +2853,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
             }
             CcAttributes member_attrs = {0};
             cc_clear_attributes(&p->attributes);
-            CcDeclBase member_base = {.type.bits = (uintptr_t)-1};
+            CcDeclBase member_base = {0};
             err = cc_parse_declaration_specifier(p, &member_base.spec, &member_base.type);
             if(err) goto struct_err;
             member_attrs = p->attributes;
@@ -2861,7 +2862,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                 err = cc_error(p, loc, "Storage class specifiers not allowed in struct/union members");
                 goto struct_err;
             }
-            if(!member_base.spec.bits && member_base.type.bits == (uintptr_t)-1){
+            if(!member_base.spec.bits && !member_base.type.bits){
                 err = cc_error(p, tok.loc, "Expected type specifier in struct/union member");
                 goto struct_err;
             }
@@ -3227,14 +3228,14 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
         err = cc_next_token(p, &tok); // consume ':'
         if(err) return err;
         has_fixed_underlying = 1;
-        CcDeclBase ub = {.type.bits = (uintptr_t)-1};
+        CcDeclBase ub = {0};
         err = cc_parse_declaration_specifier(p, &ub.spec, &ub.type);
         if(err) return err;
         if(ub.spec.sp_typebits != ub.spec.bits)
             return cc_error(p, loc, "Underlying type does not allow non-type specifiers");
         if(ub.spec.sp_infer_type)
             return cc_error(p, loc, "__auto_type not allowed as underlying type of enum");
-        if(!ub.spec.bits && ub.type.bits == (uintptr_t)-1)
+        if(!ub.spec.bits && !ub.type.bits)
             return cc_error(p, loc, "Expected type specifier for enum underlying type");
         err = cc_resolve_specifiers(p, &ub);
         if(err) return err;
@@ -3254,7 +3255,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
             if(existing){
                 if(!existing->is_incomplete)
                     return cc_error(p, loc, "Redefinition of enum '%s'", name->data);
-                if(existing->underlying.bits != (uintptr_t)-1 && existing->underlying.bits != underlying.bits)
+                if(existing->underlying.bits && existing->underlying.bits != underlying.bits)
                     return cc_error(p, loc, "Redefinition of enum '%s' with differing underlying types", name->data);
                 e = existing;
                 e->loc = loc;
@@ -3382,8 +3383,8 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
 static
 int
 cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_type){
-    if(base_type->bits != (uintptr_t)-1) return cc_unreachable(p, "parsing decl specifier with base type set");
-    if(spec->bits != 0) return cc_unreachable(p, "parsing decl specifier with spec set");
+    if(base_type->bits) return cc_unreachable(p, "parsing decl specifier with base type set");
+    if(spec->bits) return cc_unreachable(p, "parsing decl specifier with spec set");
     int err = 0;
     CcToken tok;
     for(int i = 0; ; i++){
@@ -3416,7 +3417,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         if(i == 0) return cc_unget(p, &tok);
                         return cc_error(p, tok.loc, "Unexpected keyword when parsing declaration");
                     case CC_int:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_int)
                             return cc_error(p, tok.loc, "Duplicate int in declaration");
@@ -3427,7 +3428,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_int = 1;
                         continue;
                     case CC_long:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_long > 1)
                             return cc_error(p, tok.loc, "Duplicate long after long long in declaration");
@@ -3440,7 +3441,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_long++;
                         continue;
                     case CC_char:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_char)
                             return cc_error(p, tok.loc, "Duplicate char in declaration");
@@ -3455,7 +3456,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_char = 1;
                         continue;
                     case CC___auto_type:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -3467,14 +3468,14 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_auto = 1;
                         continue;
                     case CC_bool:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         *base_type = ccqt_basic(CCBT_bool);
                         continue;
                     case CC_enum: {
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "enum with other type specifiers");
@@ -3483,14 +3484,14 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         continue;
                     }
                     case CC_void:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         *base_type = ccqt_basic(CCBT_void);
                         continue;
                     case CC_float:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -3500,7 +3501,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_const = 1;
                         continue;
                     case CC_short:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_short)
                             return cc_error(p, tok.loc, "Duplicate short in declaration");
@@ -3513,7 +3514,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_short = 1;
                         continue;
                     case CC_union: {
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "union with other type specifiers");
@@ -3522,7 +3523,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         continue;
                     }
                     case CC_double:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         {
                             uint32_t count = popcount_32(spec->sp_typebits);
@@ -3548,7 +3549,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_inline = 1;
                         continue;
                     case CC_signed:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_unsigned)
                             return cc_error(p, tok.loc, "signed after unsigned");
@@ -3566,7 +3567,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_static = 1;
                         continue;
                     case CC_struct: {
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "struct with other type specifiers");
@@ -3675,7 +3676,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                         spec->sp_restrict = 1;
                         continue;
                     case CC_unsigned:
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_signed)
                             return cc_error(p, tok.loc, "unsigned after signed");
@@ -3731,7 +3732,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                     }
                     case CC_typeof_unqual:
                     do_typeof: {
-                        if(base_type->bits != (uintptr_t)-1)
+                        if(base_type->bits)
                             return cc_error(p, tok.loc, "typeof after type");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "typeof after type specifiers");
@@ -3767,7 +3768,7 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                 }
                 break;
             case CC_IDENTIFIER: {
-                if(spec->sp_typebits || base_type->bits != (uintptr_t)-1){
+                if(spec->sp_typebits || base_type->bits){
                     // Already have a type — this identifier is not a type name.
                     return cc_unget(p, &tok);
                 }
@@ -3799,12 +3800,12 @@ static
 int
 cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     CcDeclBase b = *declbase;
-    if(!b.spec.bits && b.type.bits == (uintptr_t)-1) return cc_unreachable(p, "Resolving specifier with no spec and no type");
-    if(!b.spec.sp_typebits && b.type.bits == (uintptr_t)-1)
+    if(!b.spec.bits && !b.type.bits) return cc_unreachable(p, "Resolving specifier with no spec and no type");
+    if(!b.spec.sp_typebits && !b.type.bits)
         b.spec.sp_infer_type = 1;
     if(b.spec.sp___auto_type)
         b.spec.sp_infer_type = 1;
-    if(b.type.bits == (uintptr_t)-1 && !b.spec.sp_infer_type){
+    if(!b.type.bits && !b.spec.sp_infer_type){
         // construct type from keywords
         if(b.spec.sp_char){
             b.type = ccqt_basic(b.spec.sp_signed? CCBT_signed_char: b.spec.sp_unsigned? CCBT_unsigned_char : CCBT_char);
@@ -3985,10 +3986,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     break;
                 }
                 // Parse parameter: declaration-specifiers [declarator]
-                CcDeclBase param_base = {.type.bits = (uintptr_t)-1};
+                CcDeclBase param_base = {0};
                 err = cc_parse_declaration_specifier(p, &param_base.spec, &param_base.type);
                 if(err) goto param_err;
-                if(!param_base.spec.bits && param_base.type.bits == (uintptr_t)-1){
+                if(!param_base.spec.bits && !param_base.type.bits){
                     err = cc_error(p, peek.loc, "Expected type specifier in function parameter");
                     goto param_err;
                 }

@@ -71,6 +71,7 @@ cctype_to_ffi_type(CcQualType t){
                 case CCBT_double_complex:     return &ffi_type_complex_double;
                 case CCBT_long_double_complex:return &ffi_type_complex_longdouble;
                 case CCBT_nullptr_t:          return &ffi_type_pointer;
+                case CCBT_INVALID:            return &ffi_type_void;
                 case CCBT_COUNT:              return &ffi_type_void;
             }
             break;

@@ -183,6 +183,20 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "typedef void", __LINE__,
+            SV("typedef void myvoid;\n"
+               "myvoid *p;\n"
+               "myvoid (*fn)(int);\n"
+              ),
+            .vars = {
+                { SV("p"), SV("void *") },
+                { SV("fn"), SV("void (*)(int)") },
+            },
+            .typedefs = {
+                { SV("myvoid"), SV("void") },
+            },
+        },
+        {
             "typedefs as base types", __LINE__,
             SV("typedef int myint;\n"
                "myint a;\n"
@@ -1027,8 +1041,8 @@ TestFunction(test_parse_decls){
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
             CcQualType t = cc_scope_lookup_typedef(&cc.global, a, CC_SCOPE_NO_WALK);
-            TestExpectNotEquals(t.bits, (uintptr_t)-1);
-            if(t.bits == (uintptr_t)-1){
+            TestExpectNotEquals(t.bits, (uintptr_t)0);
+            if(!t.bits){
                 TestPrintf("%s:%d: %s %.*s is undefined\n", __FILE__, c->line, c->test, sv_p(name));
                 continue;
             }

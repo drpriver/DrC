@@ -38,7 +38,7 @@ cc_scope_lookup_typedef(CcScope* scope, Atom name, int walk){
         }
         if(walk == CC_SCOPE_NO_WALK) break;
     }
-    return (CcQualType){.bits=(uintptr_t)-1};
+    return (CcQualType){0};
 }
 
 static

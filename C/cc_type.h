@@ -24,6 +24,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
+    CCBT_INVALID,
     CCBT_void,
     CCBT_bool,
     CCBT_char,
@@ -51,7 +52,7 @@ TYPEDEF_ENUM(CcBasicTypeKind, uintptr_t);
 typedef struct CcQualType CcQualType;
 struct CcQualType {
     union {
-        uintptr_t bits; // (uintptr_t)-1 == INVALID
+        uintptr_t bits; // 0 == INVALID/no type
         struct {
             uintptr_t is_const:    1,
                       is_volatile: 1,
@@ -68,7 +69,7 @@ struct CcQualType {
 static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
 
 // Basic types are small values real pointers are large.
-static inline _Bool ccqt_is_basic(CcQualType t) { return t.ptr < CCBT_COUNT; }
+static inline _Bool ccqt_is_basic(CcQualType t) { return t.ptr && t.ptr < CCBT_COUNT; }
 
 static
 inline
