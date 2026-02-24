@@ -1176,9 +1176,29 @@ TestFunction(test_parse_errors){
             SV("(test):2:21: error: cannot define method with typedef function type\n"),
         },
         {
+            "typedef without type", __LINE__,
+            SV("typedef foo bar;\n"),
+            SV("(test):1:9: error: typedef requires a type\n"),
+        },
+        {
+            "typedef in struct member", __LINE__,
+            SV("struct S { typedef int x; };\n"),
+            SV("(test):1:1: error: Storage class specifiers not allowed in struct/union members\n"),
+        },
+        {
+            "typedef without type in struct", __LINE__,
+            SV("struct S { typedef foo; };\n"),
+            SV("(test):1:1: error: Storage class specifiers not allowed in struct/union members\n"),
+        },
+        {
             "missing type in struct member", __LINE__,
             SV("struct S { 123; };\n"),
             SV("(test):1:12: error: Expected type specifier in struct/union member\n"),
+        },
+        {
+            "typedef in function parameter", __LINE__,
+            SV("void f(typedef int x);\n"),
+            SV("(test):1:8: error: typedef not allowed in function parameter\n"),
         },
         {
             "missing type in function parameter", __LINE__,

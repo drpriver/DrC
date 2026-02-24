@@ -2079,6 +2079,12 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
     err = cc_parse_declaration_specifier(p, &b.spec, &b.type);
     if(err) return err;
     if(b.spec.bits || b.type.bits){
+        if(b.spec.sp_typedef && !b.spec.sp_typebits && !b.type.bits){
+            CcToken peek;
+            err = cc_peek(p, &peek);
+            if(err) return err;
+            return cc_error(p, peek.loc, "typedef requires a type");
+        }
         err = cc_resolve_specifiers(p,  &b);
         if(err) return err;
         err = cc_parse_decls(p, &b);
@@ -2858,7 +2864,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
             if(err) goto struct_err;
             member_attrs = p->attributes;
             cc_clear_attributes(&p->attributes);
-            if(member_base.spec.sp_storagebits){
+            if(member_base.spec.sp_storagebits || member_base.spec.sp_typedef){
                 err = cc_error(p, loc, "Storage class specifiers not allowed in struct/union members");
                 goto struct_err;
             }
@@ -3801,6 +3807,8 @@ int
 cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     CcDeclBase b = *declbase;
     if(!b.spec.bits && !b.type.bits) return cc_unreachable(p, "Resolving specifier with no spec and no type");
+    if(!b.spec.sp_typebits && !b.type.bits && b.spec.sp_typedef)
+        return cc_unreachable(p, "typedef with no type in resolve_specifiers");
     if(!b.spec.sp_typebits && !b.type.bits)
         b.spec.sp_infer_type = 1;
     if(b.spec.sp___auto_type)
@@ -3991,6 +3999,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 if(err) goto param_err;
                 if(!param_base.spec.bits && !param_base.type.bits){
                     err = cc_error(p, peek.loc, "Expected type specifier in function parameter");
+                    goto param_err;
+                }
+                if(param_base.spec.sp_typedef){
+                    err = cc_error(p, peek.loc, "typedef not allowed in function parameter");
                     goto param_err;
                 }
                 err = cc_resolve_specifiers(p, &param_base);
