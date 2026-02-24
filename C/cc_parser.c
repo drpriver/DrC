@@ -321,6 +321,12 @@ cc_parse_type_name(CcParser* p, CcQualType* out){
     CcDeclBase base = {.type.bits = (uintptr_t)-1};
     int err = cc_parse_declaration_specifier(p, &base.spec, &base.type);
     if(err) return err;
+    if(!base.spec.bits && base.type.bits == (uintptr_t)-1){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        return cc_error(p, peek.loc, "Expected type name");
+    }
     err = cc_resolve_specifiers(p, &base);
     if(err) return err;
     CcQualType head = {0};
@@ -2855,6 +2861,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                 err = cc_error(p, loc, "Storage class specifiers not allowed in struct/union members");
                 goto struct_err;
             }
+            if(!member_base.spec.bits && member_base.type.bits == (uintptr_t)-1){
+                err = cc_error(p, tok.loc, "Expected type specifier in struct/union member");
+                goto struct_err;
+            }
             err = cc_resolve_specifiers(p, &member_base);
             if(err) goto struct_err;
             err = cc_peek(p, &tok);
@@ -3224,6 +3234,8 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
             return cc_error(p, loc, "Underlying type does not allow non-type specifiers");
         if(ub.spec.sp_infer_type)
             return cc_error(p, loc, "__auto_type not allowed as underlying type of enum");
+        if(!ub.spec.bits && ub.type.bits == (uintptr_t)-1)
+            return cc_error(p, loc, "Expected type specifier for enum underlying type");
         err = cc_resolve_specifiers(p, &ub);
         if(err) return err;
         if(!ccqt_is_basic(ub.type) || !ccbt_is_integer(ub.type.basic.kind))
@@ -3976,6 +3988,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 CcDeclBase param_base = {.type.bits = (uintptr_t)-1};
                 err = cc_parse_declaration_specifier(p, &param_base.spec, &param_base.type);
                 if(err) goto param_err;
+                if(!param_base.spec.bits && param_base.type.bits == (uintptr_t)-1){
+                    err = cc_error(p, peek.loc, "Expected type specifier in function parameter");
+                    goto param_err;
+                }
                 err = cc_resolve_specifiers(p, &param_base);
                 if(err) goto param_err;
 

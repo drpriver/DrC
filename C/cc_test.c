@@ -1161,6 +1161,21 @@ TestFunction(test_parse_errors){
                "struct S { fn_t foo { return 1; } };\n"),
             SV("(test):2:21: error: cannot define method with typedef function type\n"),
         },
+        {
+            "missing type in struct member", __LINE__,
+            SV("struct S { 123; };\n"),
+            SV("(test):1:12: error: Expected type specifier in struct/union member\n"),
+        },
+        {
+            "missing type in function parameter", __LINE__,
+            SV("void f(123);\n"),
+            SV("(test):1:8: error: Expected type specifier in function parameter\n"),
+        },
+        {
+            "missing type in enum underlying type", __LINE__,
+            SV("enum E : { A };\n"),
+            SV("(test):1:1: error: Expected type specifier for enum underlying type\n"),
+        },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         ArenaAllocator aa = {0};
