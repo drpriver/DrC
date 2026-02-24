@@ -34,7 +34,7 @@ TestFunction(test_parse_decls){
     enum {N=8}; // can increase if we need to
     struct Case {
         const char* test; int line;
-        StringView input; 
+        StringView input;
         struct {
             StringView name;
             StringView repr;
@@ -352,6 +352,24 @@ TestFunction(test_parse_decls){
                 { SV("b"), SV("int[1]") },
                 { SV("c"), SV("int[8]") },
                 { SV("d"), SV("int[4]") },
+            },
+        },
+        {
+            "alignof expr", __LINE__,
+            SV("int x;\n"
+               "int a[_Alignof x];\n"
+               "int *p;\n"
+               "int b[_Alignof p];\n"
+               "double d;\n"
+               "int c[_Alignof d];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int[4]") },
+                { SV("p"), SV("int *") },
+                { SV("b"), SV("int[8]") },
+                { SV("d"), SV("double") },
+                { SV("c"), SV("int[8]") },
             },
         },
         {
@@ -685,6 +703,241 @@ TestFunction(test_parse_decls){
                 { SV("x"), SV("int"), SV("0") },
             },
         },
+        {
+            "basic struct", __LINE__,
+            SV("struct Foo { int x; char y; };\n"
+               "struct Foo f;\n"
+              ),
+            .vars = {
+                { SV("f"), SV("struct Foo") },
+            },
+        },
+        {
+            "struct forward ref", __LINE__,
+            SV("struct Bar;\n"
+               "struct Bar *p;\n"
+              ),
+            .vars = {
+                { SV("p"), SV("struct Bar *") },
+            },
+        },
+        {
+            "struct forward then define", __LINE__,
+            SV("struct S;\n"
+               "struct S { int a; };\n"
+               "struct S s;\n"
+              ),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "struct in sizeof", __LINE__,
+            SV("struct P { int x; char y; };\n"
+               "int a[sizeof(struct P)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[8]") },
+            },
+        },
+        {
+            "typedef struct", __LINE__,
+            SV("typedef struct { int x; int y; } Point;\n"
+               "Point p;\n"
+              ),
+            .vars = {
+                { SV("p"), SV("struct <anon>") },
+            },
+            .typedefs = {
+                { SV("Point"), SV("struct <anon>") },
+            },
+        },
+        {
+            "basic union", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "union U u;\n"
+              ),
+            .vars = {
+                { SV("u"), SV("union U") },
+            },
+        },
+        {
+            "union in sizeof", __LINE__,
+            SV("union V { int i; double d; };\n"
+               "int a[sizeof(union V)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[8]") },
+            },
+        },
+        {
+            "nested struct", __LINE__,
+            SV("struct Outer { struct Inner { int a; } inner; int b; };\n"
+               "struct Outer o;\n"
+              ),
+            .vars = {
+                { SV("o"), SV("struct Outer") },
+            },
+        },
+        {
+            "anonymous struct member", __LINE__,
+            SV("struct A { struct { int x; int y; }; int z; };\n"
+               "struct A a;\n"
+              ),
+            .vars = {
+                { SV("a"), SV("struct A") },
+            },
+        },
+        {
+            "packed struct", __LINE__,
+            SV("struct __attribute__((packed)) Packed { int x; char y; };\n"
+               "int a[sizeof(struct Packed)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[5]") },
+            },
+        },
+        {
+            "struct pointer member", __LINE__,
+            SV("struct Node { int val; struct Node *next; };\n"
+               "struct Node n;\n"
+              ),
+            .vars = {
+                { SV("n"), SV("struct Node") },
+            },
+        },
+        {
+            "type defined in struct body is visible outside", __LINE__,
+            SV("struct S { enum Color { RED, GREEN, BLUE }; enum Color c; };\n"
+               "enum Color x;\n"
+              ),
+            .vars = {
+                { SV("x"), SV("enum Color") },
+            },
+        },
+        {
+            "plan9", __LINE__,
+            SV("struct Foo {int x;};\n"
+               "struct Bar {struct Foo; int y;};\n"
+               "int a[sizeof(struct Bar)];\n"
+               "struct Bar b;\n"
+               "int x[sizeof b.x]\n"),
+            .vars = {
+                {SV("a"), SV("int[8]")},
+                {SV("b"), SV("struct Bar")},
+                {SV("x"), SV("int[4]")},
+            },
+        },
+        {
+            "struct with bitfield", __LINE__,
+            SV("struct Bits { int a : 3; int b : 5; };\n"
+               "int a[sizeof(struct Bits)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[4]") },
+            },
+        },
+        {
+            "struct with bitfield", __LINE__,
+            SV("struct Bits { int a : 3; int b : 5; struct {int: 3;};};\n"
+               "int a[sizeof(struct Bits)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[8]") },
+            },
+        },
+        {
+            "enum bitfield", __LINE__,
+            SV("enum E { A, B, C };\n"
+               "struct S { enum E x : 3; int y : 5; };\n"
+               "int a[sizeof(struct S)];\n"
+              ),
+            .vars = {
+                { SV("a"), SV("int[4]") },
+            },
+        },
+        {
+            "static_assert pass", __LINE__,
+            SV("static_assert(1, \"ok\");\n"
+               "int x;\n"),
+            .vars = { { SV("x"), SV("int") } },
+        },
+        {
+            "static_assert no message (C23)", __LINE__,
+            SV("static_assert(1);\n"
+               "int x;\n"),
+            .vars = { { SV("x"), SV("int") } },
+        },
+        {
+            "static_assert with expression", __LINE__,
+            SV("static_assert(sizeof(int) == 4, \"int must be 4 bytes\");\n"
+               "int x;\n"),
+            .vars = { { SV("x"), SV("int") } },
+        },
+        {
+            "static_assert in struct", __LINE__,
+            SV("struct S { int a; static_assert(sizeof(int) == 4, \"bad\"); char b; };\n"
+               "struct S s;\n"),
+            .vars = { { SV("s"), SV("struct S") } },
+        },
+        {
+            "struct method declaration", __LINE__,
+            SV("struct Foo { int x; int get_x(struct Foo* self); };\n"
+               "int a[sizeof(struct Foo)];\n"),
+            .vars = { { SV("a"), SV("int[4]") } },
+        },
+        {
+            "struct method definition", __LINE__,
+            SV("struct Foo { int x; int get_x(struct Foo* self){ return self->x; } };\n"
+               "int a[sizeof(struct Foo)];\n"),
+            .vars = { { SV("a"), SV("int[4]") } },
+        },
+        {
+            "struct multiple methods", __LINE__,
+            SV("struct V { int x; int y;\n"
+               "  int get_x(struct V* self){ return self->x; }\n"
+               "  int get_y(struct V* self){ return self->y; }\n"
+               "};\n"
+               "int a[sizeof(struct V)];\n"),
+            .vars = { { SV("a"), SV("int[8]") } },
+        },
+        {
+            "flexible array member", __LINE__,
+            SV("struct Buf { int len; char data[]; };\n"
+               "int a[sizeof(struct Buf)];\n"),
+            .vars = { { SV("a"), SV("int[4]") } },
+        },
+        {
+            "FAM with padding", __LINE__,
+            SV("struct Buf { double d; int data[]; };\n"
+               "int a[sizeof(struct Buf)];\n"),
+            .vars = { { SV("a"), SV("int[8]") } },
+        },
+        {
+            "FAM in union", __LINE__,
+            SV("union U { int tag; char data[]; };\n"
+               "int a[sizeof(union U)];\n"),
+            .vars = { { SV("a"), SV("int[4]") } },
+        },
+        {
+            "FAM in anonymous struct", __LINE__,
+            SV("struct S { int n; struct { int len; char data[]; }; };\n"
+               "int a[sizeof(struct S)];\n"),
+            .vars = { { SV("a"), SV("int[8]") } },
+        },
+        {
+            "incomplete type in struct", __LINE__,
+            SV("struct Foo {\n"
+               "    struct Bar;\n"
+               "    int x;\n"
+               "};\n"
+               "struct Foo f;\n"
+               "int a[sizeof(struct Foo)]\n"),
+            .vars = {
+                {SV("f"), SV("struct Foo")},
+                {SV("a"), SV("int[4]")},
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -713,14 +966,14 @@ TestFunction(test_parse_decls){
         struct Case* c = &testcases[i];
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
-        if(err) {TestReport("failed to cache"); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto finally;}
         err = cpp_define_builtin_macros(&cc.lexer.cpp);
-        if(err) {TestReport("failed to define"); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto finally;}
         err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
-        if(err) {TestReport("failed to include"); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto finally;}
         for(_Bool finished = 0; !finished;){
             err = cc_parse_top_level(&cc, &finished);
-            if(err) {TestReport("failed to parse"); goto finally;}
+            if(err) {TestPrintf("%s:%d: failed to parse", __FILE__, c->line); goto finally;}
         }
         for(size_t n = 0; n < N; n++){
             StringView name = c->vars[n].name;
@@ -728,14 +981,15 @@ TestFunction(test_parse_decls){
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
             CcVariable* var = cc_scope_lookup_var(&cc.global, a, CC_SCOPE_NO_WALK);
-            TestExpectTrue(var);
+            TEST_stats.executed++;
             if(!var){
+                TEST_stats.failures++;
                 TestPrintf("%s:%d: %s %.*s is undefined\n", __FILE__, c->line, c->test, sv_p(name));
                 continue;
             }
             msb_reset(&sb);
             cc_print_type(&sb, var->type);
-            if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
+            if(sb.errored) { err = 1; TestPrintf("%s:%d: allocation failure", __FILE__, c->line); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(r, c->vars[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
             if(c->vars[n].init.length){
@@ -797,9 +1051,928 @@ TestFunction(test_parse_decls){
     TESTEND();
 }
 
+TestFunction(test_parse_errors){
+    TESTBEGIN();
+    struct ErrorCase {
+        const char* test; int line;
+        StringView input;
+        StringView expected_msg;
+    } cases[] = {
+        {
+            "static_assert(0) fails", __LINE__,
+            SV("static_assert(0);\n"),
+            SV("(test):1:1: error: static assertion failed: 0\n"),
+        },
+        {
+            "static_assert(0, msg) fails", __LINE__,
+            SV("static_assert(0, \"this should fail\");\n"),
+            SV("(test):1:1: error: static assertion failed: 0: \"this should fail\"\n"),
+        },
+        {
+            "static_assert(1-1) fails", __LINE__,
+            SV("static_assert(1-1, \"zero\");\n"),
+            SV("(test):1:1: error: static assertion failed: (1 - 1): \"zero\"\n"),
+        },
+        {
+            "static_assert(sizeof(int)==8) fails", __LINE__,
+            SV("static_assert(sizeof(int) == 8, \"int is not 8\");\n"),
+            SV("(test):1:1: error: static assertion failed: (4 == (unsigned long)8): \"int is not 8\"\n"),
+        },
+        {
+            "FAM in middle of struct", __LINE__,
+            SV("struct Bad { int data[]; int x; };\n"),
+            SV("(test):1:24: error: flexible array member must be last field\n"),
+        },
+        {
+            "FAM embedded in struct", __LINE__,
+            SV("struct Inner { int n; char data[]; };\n"
+               "struct Outer { struct Inner i; int x; };\n"),
+            SV("(test):2:30: error: struct with flexible array member cannot be embedded\n"),
+        },
+        {
+            "FAM anon struct not at end", __LINE__,
+            SV("struct S { struct { int data[]; }; int x; };\n"),
+            SV("(test):1:34: error: struct with flexible array member cannot be embedded\n"),
+        },
+        {
+            "FAM named struct at end", __LINE__,
+            SV("struct Inner { int n; char data[]; };\n"
+               "struct Outer { int x; struct Inner i; };\n"),
+            SV("(test):2:37: error: struct with flexible array member cannot be embedded\n"),
+        },
+        {
+            "Duplicate field", __LINE__,
+            SV("struct S { int x; int x;};\n"),
+            SV("(test):1:24: error: duplicate member 'x'\n"),
+        },
+        {
+            "Duplicate field inside anon", __LINE__,
+            SV("struct S { int x; struct {int x;}; };\n"),
+            SV("(test):1:34: error: duplicate member 'x'\n"),
+        },
+        {
+            "Duplicate field inside nested anon", __LINE__,
+            SV("struct S { int x; struct { struct {int x;}; int y; }; };\n"),
+            SV("(test):1:53: error: duplicate member 'x'\n"),
+        },
+        {
+            "Duplicate field inside separate nested anon", __LINE__,
+            SV("struct S { struct {int x;}; struct { struct {int x;}; int y; }; };\n"),
+            SV("(test):1:63: error: duplicate member 'x'\n"),
+        },
+        {
+            "bitfield width exceeds type (int)", __LINE__,
+            SV("struct S { int x : 33; };\n"),
+            SV("(test):1:18: error: bitfield width (33) exceeds size of type (32 bits)\n"),
+        },
+        {
+            "bitfield width exceeds type (char)", __LINE__,
+            SV("struct S { char x : 9; };\n"),
+            SV("(test):1:19: error: bitfield width (9) exceeds size of type (8 bits)\n"),
+        },
+        {
+            "named bitfield zero width", __LINE__,
+            SV("struct S { int x : 0; };\n"),
+            SV("(test):1:18: error: named bitfield 'x' cannot have zero width\n"),
+        },
+        {
+            "anonymous bitfield width exceeds type", __LINE__,
+            SV("struct S { int : 33; };\n"),
+            SV("(test):1:16: error: bitfield width (33) exceeds size of type (32 bits)\n"),
+        },
+        {
+            "float bitfield", __LINE__,
+            SV("struct S { float x : 3; };\n"),
+            SV("(test):1:20: error: bitfield must have integer or enum type\n"),
+        },
+        {
+            "struct bitfield", __LINE__,
+            SV("struct A { int x; };\nstruct S { struct A a : 3; };\n"),
+            SV("(test):2:23: error: bitfield must have integer or enum type\n"),
+        },
+        {
+            "anonymous float bitfield", __LINE__,
+            SV("struct S { float : 3; };\n"),
+            SV("(test):1:18: error: bitfield must have integer or enum type\n"),
+        },
+        {
+            "typedef method body", __LINE__,
+            SV("typedef int fn_t(int);\n"
+               "struct S { fn_t foo { return 1; } };\n"),
+            SV("(test):2:21: error: cannot define method with typedef function type\n"),
+        },
+    };
+    for(size_t i = 0; i < arrlen(cases); i++){
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        FileCache* fc = fc_create(al);
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CcParser cc = {
+            .lexer = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_test(),
+                },
+            },
+            .current = &cc.global,
+        };
+        struct ErrorCase* c = &cases[i];
+        fc_write_path(fc, "(test)", 6);
+        int err = fc_cache_file(fc, c->input);
+        if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto fin;}
+        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto fin;}
+        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto fin;}
+        for(_Bool finished = 0; !finished;){
+            err = cc_parse_top_level(&cc, &finished);
+            if(err) break;
+        }
+        TEST_stats.executed++;
+        if(!err){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: %s: expected error but parsing succeeded\n", __FILE__, c->line, c->test);
+        }
+        if(c->expected_msg.length){
+            StringView log = msb_borrow_sv(&log_sb);
+            test_expect_equals_sv(log, c->expected_msg, "actual error", "expected error", &TEST_stats, __FILE__, __func__, c->line);
+        }
+        fin:
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.scratch_arena);
+    }
+    TESTEND();
+}
+
+TestFunction(test_struct_layout){
+    TESTBEGIN();
+    enum { MAXFIELDS = 16 };
+    struct FieldExpect {
+        StringView name; // empty = end sentinel
+        uint32_t offset;
+        uint32_t bitwidth;  // 0 = not a bitfield
+        uint32_t bitoffset;
+        StringView type_repr; // empty = don't check
+    };
+    struct StructCase {
+        const char* test; int line;
+        StringView input;
+        StringView tag; // struct/union tag to look up
+        _Bool is_union;
+        uint32_t size;
+        uint32_t alignment;
+        struct FieldExpect fields[MAXFIELDS];
+    } cases[] = {
+        {
+            "simple struct layout", __LINE__,
+            SV("struct S { int x; char y; };\n"),
+            SV("S"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("x"), .offset = 0 },
+                { SV("y"), .offset = 4 },
+            },
+        },
+        {
+            "struct with padding", __LINE__,
+            SV("struct P { char a; int b; char c; };\n"),
+            SV("P"), 0,
+            .size = 12, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+                { SV("c"), .offset = 8 },
+            },
+        },
+        {
+            "struct double alignment", __LINE__,
+            SV("struct D { char a; double b; };\n"),
+            SV("D"), 0,
+            .size = 16, .alignment = 8,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 8 },
+            },
+        },
+        {
+            "packed struct", __LINE__,
+            SV("struct __attribute__((packed)) Pk { char a; int b; char c; };\n"),
+            SV("Pk"), 0,
+            .size = 6, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+                { SV("c"), .offset = 5 },
+            },
+        },
+        {
+            "packed struct double", __LINE__,
+            SV("struct __attribute__((packed)) PkD { char a; double b; };\n"),
+            SV("PkD"), 0,
+            .size = 9, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+            },
+        },
+        {
+            "aligned struct", __LINE__,
+            SV("struct __attribute__((aligned(16))) Al { int x; };\n"),
+            SV("Al"), 0,
+            .size = 16, .alignment = 16,
+            .fields = {
+                { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "bitfield packing", __LINE__,
+            SV("struct BF { int a : 3; int b : 5; int c : 8; };\n"),
+            SV("BF"), 0,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
+                { SV("c"), .offset = 0, .bitwidth = 8, .bitoffset = 8 },
+            },
+        },
+        {
+            "bitfield overflow to next unit", __LINE__,
+            SV("struct BF2 { int a : 30; int b : 5; };\n"),
+            SV("BF2"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 30, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "bitfield mixed with regular", __LINE__,
+            SV("struct BF3 { int a : 3; int x; int b : 5; };\n"),
+            SV("BF3"), 0,
+            .size = 12, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("x"), .offset = 4 },
+                { SV("b"), .offset = 8, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "simple union", __LINE__,
+            SV("union U { int i; double d; char c; };\n"),
+            SV("U"), 1,
+            .size = 8, .alignment = 8,
+            .fields = {
+                { SV("i"), .offset = 0 },
+                { SV("d"), .offset = 0 },
+                { SV("c"), .offset = 0 },
+            },
+        },
+        {
+            "union size is max", __LINE__,
+            SV("union U2 { char a; short b; int c; long d; };\n"),
+            SV("U2"), 1,
+            .size = 8, .alignment = 8,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 0 },
+                { SV("c"), .offset = 0 },
+                { SV("d"), .offset = 0 },
+            },
+        },
+        {
+            "nested struct offsets", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { char c; struct Inner s; int d; };\n"),
+            SV("Outer"), 0,
+            .size = 16, .alignment = 4,
+            .fields = {
+                { SV("c"), .offset = 0 },
+                { SV("s"), .offset = 4, .type_repr = SV("struct Inner") },
+                { SV("d"), .offset = 12 },
+            },
+        },
+        {
+            "all chars no padding", __LINE__,
+            SV("struct Chars { char a; char b; char c; };\n"),
+            SV("Chars"), 0,
+            .size = 3, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+                { SV("c"), .offset = 2 },
+            },
+        },
+        {
+            "empty struct", __LINE__,
+            SV("struct Empty {};\n"),
+            SV("Empty"), 0,
+            .size = 0, .alignment = 1,
+        },
+        {
+            "struct with pointer", __LINE__,
+            SV("struct WP { char a; void *p; };\n"),
+            SV("WP"), 0,
+            .size = 16, .alignment = 8,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("p"), .offset = 8 },
+            },
+        },
+        {
+            "struct with array", __LINE__,
+            SV("struct WA { int x; char buf[7]; int y; };\n"),
+            SV("WA"), 0,
+            .size = 16, .alignment = 4,
+            .fields = {
+                { SV("x"), .offset = 0 },
+                { SV("buf"), .offset = 4 },
+                { SV("y"), .offset = 12 },
+            },
+        },
+        {
+            "char short int alignment", __LINE__,
+            SV("struct CSI { char a; short b; int c; };\n"),
+            SV("CSI"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 2 },
+                { SV("c"), .offset = 4 },
+            },
+        },
+        {
+            "trailing padding", __LINE__,
+            SV("struct TP { int a; char b; };\n"),
+            SV("TP"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "alignas on struct", __LINE__,
+            SV("_Alignas(32) struct AS { int x; };\n"
+               "struct AS as;\n"),
+            SV("AS"), 0,
+            .size = 32, .alignment = 32,
+            .fields = {
+                { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "pragma pack(1)", __LINE__,
+            SV("#pragma pack(1)\n"
+               "struct PP1 { char a; int b; char c; };\n"
+               "#pragma pack()\n"),
+            SV("PP1"), 0,
+            .size = 6, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+                { SV("c"), .offset = 5 },
+            },
+        },
+        {
+            "pragma pack(2)", __LINE__,
+            SV("#pragma pack(2)\n"
+               "struct PP2 { char a; int b; double c; };\n"
+               "#pragma pack()\n"),
+            SV("PP2"), 0,
+            .size = 14, .alignment = 2,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 2 },
+                { SV("c"), .offset = 6 },
+            },
+        },
+        {
+            "pragma pack push/pop", __LINE__,
+            SV("#pragma pack(push, 1)\n"
+               "struct PPush { char a; int b; };\n"
+               "#pragma pack(pop)\n"
+               "struct PAfter { char a; int b; };\n"),
+            SV("PPush"), 0,
+            .size = 5, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+            },
+        },
+        {
+            "pragma pack pop restores", __LINE__,
+            SV("#pragma pack(push, 1)\n"
+               "struct Ignore { char a; int b; };\n"
+               "#pragma pack(pop)\n"
+               "struct Restored { char a; int b; };\n"),
+            SV("Restored"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "pragma pack(4) limits alignment", __LINE__,
+            SV("#pragma pack(4)\n"
+               "struct PP4 { char a; double b; };\n"
+               "#pragma pack()\n"),
+            SV("PP4"), 0,
+            .size = 12, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "pragma pack macro expansion", __LINE__,
+            SV("#define MYPACK 1\n"
+               "#pragma pack(MYPACK)\n"
+               "struct PPM { int a; char b; };\n"
+               "#pragma pack()\n"),
+            SV("PPM"), 0,
+            .size = 5, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "pragma pack(push) macro expansion", __LINE__,
+            SV("#define P 1\n"
+               "#pragma pack(push, P)\n"
+               "struct PPPM { int a; char b; };\n"
+               "#pragma pack(pop)\n"),
+            SV("PPPM"), 0,
+            .size = 5, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "pragma pack(push, ident)", __LINE__,
+            SV("#pragma pack(1)\n"
+               "#pragma pack(push, A, 4)\n"
+               "#pragma pack(push, 8)\n"
+               "#pragma pack(pop)\n"
+               "struct S { int a; char b; };\n"),
+            SV("S"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "pragma pack(pop, ident)", __LINE__,
+            SV("#pragma pack(1)\n"
+               "#pragma pack(push, A, 4)\n"
+               "#pragma pack(push, 8)\n"
+               "#pragma pack(pop, A)\n"
+               "struct S { int a; char b; };\n"),
+            SV("S"), 0,
+            .size = 5, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 4 },
+            },
+        },
+        {
+            "zero-width bitfield forces alignment", __LINE__,
+            SV("struct Z { int a : 3; int : 0; int b : 5; };\n"),
+            SV("Z"), 0,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { {0}, .offset = 4 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "FAM at end", __LINE__,
+            SV("struct F { int len; char data[]; };\n"),
+            SV("F"), 0,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("len"), .offset = 0 },
+                { SV("data"), .offset = 4 },
+            },
+        },
+        {
+            "FAM alignment", __LINE__,
+            SV("struct F { char c; int data[]; };\n"),
+            SV("F"), 0,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("c"), .offset = 0 },
+                { SV("data"), .offset = 4 },
+            },
+        },
+        {
+            "FAM double alignment", __LINE__,
+            SV("struct F { int n; double data[]; };\n"),
+            SV("F"), 0,
+            .size = 8, .alignment = 8,
+            .fields = {
+                { SV("n"), .offset = 0 },
+                { SV("data"), .offset = 8 },
+            },
+        },
+        {
+            "FAM only member", __LINE__,
+            SV("struct F { int data[]; };\n"),
+            SV("F"), 0,
+            .size = 0, .alignment = 4,
+            .fields = {
+                { SV("data"), .offset = 0 },
+            },
+        },
+    };
+    MStringBuilder sb = {0};
+    for(size_t i = 0; i < arrlen(cases); i++){
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        sb.allocator = al;
+        msb_reset(&sb);
+        FileCache* fc = fc_create(al);
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        int err = 0;
+        CcParser cc = {
+            .lexer = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_test(),
+                },
+            },
+            .current = &cc.global,
+        };
+        struct StructCase* c = &cases[i];
+        fc_write_path(fc, "(test)", 6);
+        err = fc_cache_file(fc, c->input);
+        if(err) {TestReport("failed to cache"); goto fin;}
+        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        if(err) {TestReport("failed to define builtins"); goto fin;}
+        err = cc_register_pragmas(&cc);
+        if(err) {TestReport("failed to register pragmas"); goto fin;}
+        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        if(err) {TestReport("failed to include"); goto fin;}
+        for(_Bool finished = 0; !finished;){
+            err = cc_parse_top_level(&cc, &finished);
+            if(err) {TestReport("failed to parse"); goto fin;}
+        }
+        {
+            Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
+            if(!tag){
+                TestReport("tag atom not found");
+                err = 1; goto fin;
+            }
+            uint32_t actual_size, actual_align, actual_field_count;
+            CcField* _Nullable actual_fields;
+            if(c->is_union){
+                CcUnion* u = cc_scope_lookup_union_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+                TestExpectTrue(u);
+                if(!u){ err = 1; goto fin; }
+                actual_size = u->size;
+                actual_align = u->alignment;
+                actual_field_count = u->field_count;
+                actual_fields = u->fields;
+            }
+            else {
+                CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+                TestExpectTrue(s);
+                if(!s){ err = 1; goto fin; }
+                actual_size = s->size;
+                actual_align = s->alignment;
+                actual_field_count = s->field_count;
+                actual_fields = s->fields;
+            }
+            TEST_stats.executed++;
+            if(actual_size != c->size){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: size mismatch: got %u, expected %u\n", __FILE__, c->line, actual_size, c->size);
+            }
+            TEST_stats.executed++;
+            if(actual_align != c->alignment){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: alignment mismatch: got %u, expected %u\n", __FILE__, c->line, actual_align, c->alignment);
+            }
+            // Check fields
+            for(size_t n = 0; n < MAXFIELDS; n++){
+                struct FieldExpect* fe = &c->fields[n];
+                if(!fe->name.length) break;
+                TEST_stats.executed++;
+                if(n >= actual_field_count){
+                    TEST_stats.failures++;
+                    TestPrintf("%s:%d: field %zu '%.*s' missing (only %u fields)\n", __FILE__, c->line, n, sv_p(fe->name), actual_field_count);
+                    break;
+                }
+                CcField* af = &actual_fields[n];
+                // Check name
+                TEST_stats.executed++;
+                if(af->name){
+                    StringView actual_name = {.text = af->name->data, .length = af->name->length};
+                    test_expect_equals_sv(actual_name, fe->name, "field name", "expected", &TEST_stats, __FILE__, __func__, c->line);
+                }
+                else if(fe->name.length){
+                    TEST_stats.failures++;
+                    TestPrintf("%s:%d: field %zu: expected name '%.*s' but got anonymous\n", __FILE__, c->line, n, sv_p(fe->name));
+                }
+                // Check offset
+                TEST_stats.executed++;
+                if(af->offset != fe->offset){
+                    TEST_stats.failures++;
+                    TestPrintf("%s:%d: field '%.*s' offset: got %u, expected %u\n", __FILE__, c->line, sv_p(fe->name), af->offset, fe->offset);
+                }
+                // Check bitfield
+                if(fe->bitwidth){
+                    TEST_stats.executed++;
+                    if(af->bitwidth != fe->bitwidth){
+                        TEST_stats.failures++;
+                        TestPrintf("%s:%d: field '%.*s' bitwidth: got %u, expected %u\n", __FILE__, c->line, sv_p(fe->name), af->bitwidth, fe->bitwidth);
+                    }
+                    TEST_stats.executed++;
+                    if(af->bitoffset != fe->bitoffset){
+                        TEST_stats.failures++;
+                        TestPrintf("%s:%d: field '%.*s' bitoffset: got %u, expected %u\n", __FILE__, c->line, sv_p(fe->name), af->bitoffset, fe->bitoffset);
+                    }
+                }
+                // Check type repr
+                if(fe->type_repr.length){
+                    msb_reset(&sb);
+                    cc_print_type(&sb, af->type);
+                    StringView r = msb_borrow_sv(&sb);
+                    test_expect_equals_sv(r, fe->type_repr, "field type", "expected type", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
+        }
+        fin:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
+        }
+        TestExpectFalse(err);
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.scratch_arena);
+    }
+    TESTEND();
+}
+
+TestFunction(test_bitfield_abi){
+    TESTBEGIN();
+    enum { MAXFIELDS = 16 };
+    struct FieldExpect {
+        StringView name;
+        uint32_t offset;
+        uint32_t bitwidth;
+        uint32_t bitoffset;
+    };
+    struct BFCase {
+        const char* test; int line;
+        StringView input;
+        StringView tag;
+        CcBitfieldABI abi;
+        uint32_t size;
+        uint32_t alignment;
+        struct FieldExpect fields[MAXFIELDS];
+    } cases[] = {
+        {
+            "sysv: same-size different types share", __LINE__,
+            SV("struct S { int a : 3; unsigned b : 5; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
+            },
+        },
+        {
+            "msvc: different types don't share", __LINE__,
+            SV("struct S { int a : 3; unsigned b : 5; };\n"),
+            SV("S"), CC_BITFIELD_MSVC,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "msvc: same type shares", __LINE__,
+            SV("struct S { int a : 3; int b : 5; };\n"),
+            SV("S"), CC_BITFIELD_MSVC,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
+            },
+        },
+        {
+            "sysv: different sizes don't share", __LINE__,
+            SV("struct S { int a : 3; short b : 5; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "msvc: different sizes don't share", __LINE__,
+            SV("struct S { int a : 3; short b : 5; };\n"),
+            SV("S"), CC_BITFIELD_MSVC,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "msvc: three fields, type changes", __LINE__,
+            SV("struct S { int a : 3; int b : 5; unsigned c : 8; };\n"),
+            SV("S"), CC_BITFIELD_MSVC,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
+                { SV("c"), .offset = 4, .bitwidth = 8, .bitoffset = 0 },
+            },
+        },
+        {
+            "sysv: three fields, same size", __LINE__,
+            SV("struct S { int a : 3; int b : 5; unsigned c : 8; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 4, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
+                { SV("c"), .offset = 0, .bitwidth = 8, .bitoffset = 8 },
+            },
+        },
+        {
+            "sysv: zero-width ends run", __LINE__,
+            SV("struct S { int a : 3; int : 0; int b : 5; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
+                { {0} },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "sysv: zero-width when no run is noop", __LINE__,
+            SV("struct S { int x; int : 0; int a : 5; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("x"), .offset = 0 },
+                { {0} },
+                { SV("a"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "sysv: overflow to next storage unit", __LINE__,
+            SV("struct S { int a : 30; int b : 5; };\n"),
+            SV("S"), CC_BITFIELD_SYSV,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 30, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+        {
+            "msvc: overflow to next storage unit", __LINE__,
+            SV("struct S { int a : 30; int b : 5; };\n"),
+            SV("S"), CC_BITFIELD_MSVC,
+            .size = 8, .alignment = 4,
+            .fields = {
+                { SV("a"), .offset = 0, .bitwidth = 30, .bitoffset = 0 },
+                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+            },
+        },
+    };
+    MStringBuilder sb = {0};
+    for(size_t i = 0; i < arrlen(cases); i++){
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        sb.allocator = al;
+        msb_reset(&sb);
+        FileCache* fc = fc_create(al);
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        int err = 0;
+        CcTargetConfig tgt = cc_target_test();
+        tgt.bitfield_abi = cases[i].abi;
+        CcParser cc = {
+            .lexer = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = tgt,
+                },
+            },
+            .current = &cc.global,
+        };
+        struct BFCase* c = &cases[i];
+        fc_write_path(fc, "(test)", 6);
+        err = fc_cache_file(fc, c->input);
+        if(err) {TestReport("failed to cache"); goto bffin;}
+        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        if(err) {TestReport("failed to define builtins"); goto bffin;}
+        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        if(err) {TestReport("failed to include"); goto bffin;}
+        for(_Bool finished = 0; !finished;){
+            err = cc_parse_top_level(&cc, &finished);
+            if(err) {TestReport("failed to parse"); goto bffin;}
+        }
+        {
+            Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
+            if(!tag){ TestReport("tag atom not found"); err = 1; goto bffin; }
+            CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+            TestExpectTrue(s);
+            if(!s){ err = 1; goto bffin; }
+            TEST_stats.executed++;
+            if(s->size != c->size){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: %s: size mismatch: got %u, expected %u\n", __FILE__, c->line, c->test, s->size, c->size);
+            }
+            TEST_stats.executed++;
+            if(s->alignment != c->alignment){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: %s: alignment mismatch: got %u, expected %u\n", __FILE__, c->line, c->test, s->alignment, c->alignment);
+            }
+            for(size_t n = 0; n < MAXFIELDS; n++){
+                struct FieldExpect* fe = &c->fields[n];
+                if(!fe->name.length) break;
+                TEST_stats.executed++;
+                if(n >= s->field_count){
+                    TEST_stats.failures++;
+                    TestPrintf("%s:%d: %s: field %zu missing\n", __FILE__, c->line, c->test, n);
+                    break;
+                }
+                CcField* af = &s->fields[n];
+                TEST_stats.executed++;
+                if(af->offset != fe->offset){
+                    TEST_stats.failures++;
+                    TestPrintf("%s:%d: %s: field '%.*s' offset: got %u, expected %u\n", __FILE__, c->line, c->test, sv_p(fe->name), af->offset, fe->offset);
+                }
+                if(fe->bitwidth){
+                    TEST_stats.executed++;
+                    if(af->bitwidth != fe->bitwidth){
+                        TEST_stats.failures++;
+                        TestPrintf("%s:%d: %s: field '%.*s' bitwidth: got %u, expected %u\n", __FILE__, c->line, c->test, sv_p(fe->name), af->bitwidth, fe->bitwidth);
+                    }
+                    TEST_stats.executed++;
+                    if(af->bitoffset != fe->bitoffset){
+                        TEST_stats.failures++;
+                        TestPrintf("%s:%d: %s: field '%.*s' bitoffset: got %u, expected %u\n", __FILE__, c->line, c->test, sv_p(fe->name), af->bitoffset, fe->bitoffset);
+                    }
+                }
+            }
+        }
+        bffin:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
+        }
+        TestExpectFalse(err);
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.scratch_arena);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     testing_allocator_init();
     RegisterTest(test_parse_decls);
+    RegisterTest(test_parse_errors);
+    RegisterTest(test_struct_layout);
+    RegisterTest(test_bitfield_abi);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;

@@ -255,6 +255,14 @@ struct CppPragma {
     CppPragmaFn* fn;
 };
 
+// Scratch token buffers for use by pragma handlers.
+static CppTokens*_Nullable cpp_get_scratch(CPreprocessor*);
+static void cpp_release_scratch(CPreprocessor*, CppTokens*);
+
+// Macro-expand a token sequence into out.
+static int cpp_expand_argument(CPreprocessor*, const CppToken*_Null_unspecified toks, size_t count, CppTokens* out);
+
+static int cpp_eval_parse_number(CPreprocessor* cpp, CppToken tok, int64_t* value);
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

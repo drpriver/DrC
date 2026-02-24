@@ -65,6 +65,8 @@ struct CcQualType {
     };
 };
 
+static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
+
 // Basic types are small values real pointers are large.
 static inline _Bool ccqt_is_basic(CcQualType t) { return t.ptr < CCBT_COUNT; }
 
@@ -72,7 +74,7 @@ static
 inline
 CcTypeKind ccqt_kind(CcQualType t) {
     if (ccqt_is_basic(t)) return CC_BASIC;
-    return (CcTypeKind)(*(uint32_t*)(t.bits & ~(uintptr_t)7) & 0xf);
+    return (CcTypeKind)(*(uint32_t*)_ccqt_to_type_ptr(t) & 0xf);
 }
 
 typedef struct CcPointer CcPointer;
@@ -125,14 +127,21 @@ struct CcFunction {
     CcQualType params[];
 };
 
+typedef struct CcFunc CcFunc;
 typedef struct CcField CcField;
 struct CcField {
     CcQualType type;
-    Atom name;          // 0 for anonymous fields
+    union {
+        Atom name;          // 0 for anonymous fields
+        CcFunc * method;
+    };
     uint32_t offset;
-    uint32_t bitwidth:  7, // 0 = not a bitfield, max 64
+    uint32_t bitwidth:  7,
              bitoffset: 6, // bit offset within storage unit
-             _padding: 19;
+             is_method: 1,
+             is_bitfield: 1,
+             _padding: 17;
+    SrcLoc loc;
 };
 
 typedef struct CcStruct CcStruct;
@@ -141,9 +150,10 @@ struct CcStruct {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1;
-            uint32_t packed:        1;
-            uint32_t _padding:      26;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     has_fam:       1,
+                     _padding:     25;
         };
     };
     Atom name;
@@ -283,6 +293,15 @@ ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
     return k == CC_POINTER || k == CC_ARRAY;
 }
+
+static inline CcEnum*     ccqt_as_enum    (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcPointer*  ccqt_as_ptr     (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcVector*   ccqt_as_vector  (CcQualType t){ return _ccqt_to_type_ptr(t); }
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

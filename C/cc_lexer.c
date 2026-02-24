@@ -154,6 +154,7 @@ X(__typeof__, typeof) \
 #define CKWS11(X) \
 X(_Decimal128, _Decimal128) \
 X(__auto_type, __auto_type) \
+X(__attribute, __attribute__) \
 
 #define CKWS12(X) \
 X(thread_local, thread_local) \
@@ -162,6 +163,7 @@ X(thread_local, thread_local) \
 X(static_assert, static_assert) \
 X(typeof_unqual, typeof_unqual) \
 X(_Thread_local, thread_local) \
+X(__attribute__, __attribute__) \
 
 #define CKWS14(X) \
 X(_Static_assert, static_assert) \

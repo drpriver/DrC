@@ -5,6 +5,7 @@
 //
 #include <stddef.h>
 #include "long_string.h"
+#include "MStringBuilder.h"
 #include "Allocators/allocator.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin

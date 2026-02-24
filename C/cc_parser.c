@@ -42,22 +42,32 @@ static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_No
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_type_name(CcParser* p, CcQualType* out);
-static int cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
-static int cc_alignof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
+static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
+static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
+static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc);
 static CcExpr* _Nullable cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type);
 static CcExpr* _Nullable cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* operand);
 static CcExpr* _Nullable cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* left, CcExpr* right);
 typedef struct CcDeclBase CcDeclBase;
 static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_type, SrcLoc loc);
+static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
+static int cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type);
+static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
+static CcField* _Nullable cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name);
+static int cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value);
+static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value);
+static const CcTargetConfig* cc_target(const CcParser*);
+static int cc_handle_static_asssert(CcParser*);
 
 enum {
-    CC_NO_ERROR             = _cc_no_error,
-    CC_OOM_ERROR            = _cc_oom_error,
-    CC_SYNTAX_ERROR         = _cc_syntax_error,
-    CC_UNREACHABLE_ERROR    = _cc_unreachable_error,
-    CC_UNIMPLEMENTED_ERROR  = _cc_unimplemented_error,
-    CC_FILE_NOT_FOUND_ERROR = _cc_file_not_found_error,
+    CC_NO_ERROR                 = _cc_no_error,
+    CC_OOM_ERROR                = _cc_oom_error,
+    CC_SYNTAX_ERROR             = _cc_syntax_error,
+    CC_UNREACHABLE_ERROR        = _cc_unreachable_error,
+    CC_UNIMPLEMENTED_ERROR      = _cc_unimplemented_error,
+    CC_FILE_NOT_FOUND_ERROR     = _cc_file_not_found_error,
 };
 
 #ifdef __clang__
@@ -66,6 +76,11 @@ enum {
 #ifndef MARRAY_CCQUALTYPE
 #define MARRAY_CCQUALTYPE
 #define MARRAY_T CcQualType
+#include "../Drp/Marray.h"
+#endif
+#ifndef MARRAY_CCFIELD
+#define MARRAY_CCFIELD
+#define MARRAY_T CcField
 #include "../Drp/Marray.h"
 #endif
 #ifdef __clang__
@@ -224,7 +239,7 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     }
     // Signed has higher rank. Use it only if it can represent all
     // values of the unsigned type (i.e. is strictly wider).
-    if(p->lexer.cpp.target.sizeof_[s] > p->lexer.cpp.target.sizeof_[u]){
+    if(cc_target(p)->sizeof_[s] > cc_target(p)->sizeof_[u]){
         *out = ccqt_basic(s); return 0;
     }
     *out = ccqt_basic(ccbt_to_unsigned(s));
@@ -240,13 +255,11 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(t)){
         CcTypeKind kind = ccqt_kind(t);
         if(kind == CC_POINTER){
-            CcPointer* ptr = (CcPointer*)(t.bits & ~(uintptr_t)7);
-            *out = ptr->pointee;
+            *out = ccqt_as_ptr(t)->pointee;
             return 0;
         }
         if(kind == CC_ARRAY){
-            CcArray* arr = (CcArray*)(t.bits & ~(uintptr_t)7);
-            *out = arr->element;
+            *out = ccqt_as_array(t)->element;
             return 0;
         }
     }
@@ -399,7 +412,7 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
 static
 int
 cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_ftype, SrcLoc loc){
-    CcFunction* new_type = (CcFunction*)(new_ftype.bits & ~(uintptr_t)7);
+    CcFunction* new_type = ccqt_as_function(new_ftype);
     CcFunction* old_type = existing->type;
     // Check linkage: static must be consistent.
     if(existing->static_ && !declbase->spec.sp_static)
@@ -434,19 +447,19 @@ cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, 
 // For VLA types, produces an arithmetic expression tree.
 static
 int
-cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
-    CcQualType size_type = ccqt_basic(p->lexer.cpp.target.size_type);
-    const CcTargetConfig* tgt = &p->lexer.cpp.target;
-    if(ccqt_is_basic(t)){
-        if(t.basic.kind >= CCBT_COUNT)
-            return cc_error(p, loc, "sizeof applied to invalid kind");
-        CcExpr* node = cc_value_expr(p, loc, size_type);
-        if(!node) return CC_OOM_ERROR;
-        node->uinteger = tgt->sizeof_[t.basic.kind];
-        *out = node;
-        return 0;
-    }
+cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    const CcTargetConfig* tgt = cc_target(p);
+    CcQualType size_type = ccqt_basic(tgt->size_type);
     switch(ccqt_kind(t)){
+        case CC_BASIC:{
+            if(t.basic.kind >= CCBT_COUNT)
+                return cc_error(p, loc, "sizeof applied to invalid kind");
+            CcExpr* node = cc_value_expr(p, loc, size_type);
+            if(!node) return CC_OOM_ERROR;
+            node->uinteger = tgt->sizeof_[t.basic.kind];
+            *out = node;
+            return 0;
+        }
         case CC_POINTER: {
             CcExpr* node = cc_value_expr(p, loc, size_type);
             if(!node) return CC_OOM_ERROR;
@@ -455,11 +468,11 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
             return 0;
         }
         case CC_ARRAY: {
-            CcArray* arr = (CcArray*)(t.bits & ~(uintptr_t)7);
+            CcArray* arr = ccqt_as_array(t);
             if(arr->is_incomplete)
                 return cc_error(p, loc, "sizeof applied to incomplete array type");
             CcExpr* elem_size;
-            int err = cc_sizeof_expr(p, arr->element, loc, &elem_size);
+            int err = cc_sizeof_as_expr(p, arr->element, loc, &elem_size);
             if(err) return err;
             if(arr->is_vla){
                 // Runtime: vla_expr * sizeof(element)
@@ -488,7 +501,7 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
             return 0;
         }
         case CC_STRUCT: {
-            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7);
+            CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
                 return cc_error(p, loc, "sizeof applied to incomplete struct type");
             CcExpr* node = cc_value_expr(p, loc, size_type);
@@ -498,7 +511,7 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
             return 0;
         }
         case CC_UNION: {
-            CcUnion* u = (CcUnion*)(t.bits & ~(uintptr_t)7);
+            CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
                 return cc_error(p, loc, "sizeof applied to incomplete union type");
             CcExpr* node = cc_value_expr(p, loc, size_type);
@@ -508,13 +521,19 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
             return 0;
         }
         case CC_ENUM: {
-            CcEnum* e = (CcEnum*)(t.bits & ~(uintptr_t)7);
-            return cc_sizeof_expr(p, e->underlying, loc, out);
+            CcEnum* e = ccqt_as_enum(t);
+            return cc_sizeof_as_expr(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
             return cc_error(p, loc, "sizeof applied to function type");
-        default:
-            return cc_error(p, loc, "sizeof applied to unsupported type");
+        case CC_VECTOR:{
+            CcVector* v = ccqt_as_vector(t);
+            CcExpr* node = cc_value_expr(p, loc, size_type);
+            if(!node) return CC_OOM_ERROR;
+            node->uinteger = v->vector_size;
+            *out = node;
+            return 0;
+        }
     }
 }
 
@@ -522,54 +541,161 @@ cc_sizeof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnul
 // Alignment is always a compile-time constant.
 static
 int
-cc_alignof_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
-    CcQualType size_type = ccqt_basic(p->lexer.cpp.target.size_type);
-    if(ccqt_is_basic(t)){
-        if(t.basic.kind >= CCBT_COUNT)
-            return cc_error(p, loc, "alignof applied to invalid kind");
-        CcExpr* node = cc_value_expr(p, loc, size_type);
-        if(!node) return CC_OOM_ERROR;
-        node->uinteger = p->lexer.cpp.target.alignof_[t.basic.kind];
-        *out = node;
-        return 0;
-    }
-    int64_t align;
+cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    const CcTargetConfig* cfg = cc_target(p);
+    CcQualType size_type = ccqt_basic(cfg->size_type);
+    uint64_t align;
     switch(ccqt_kind(t)){
+        case CC_BASIC:{
+            if(t.basic.kind >= CCBT_COUNT)
+                return cc_error(p, loc, "alignof applied to invalid kind");
+            CcExpr* node = cc_value_expr(p, loc, size_type);
+            if(!node) return CC_OOM_ERROR;
+            node->uinteger = cfg->alignof_[t.basic.kind];
+            *out = node;
+            return 0;
+        }
         case CC_POINTER:
-            align = p->lexer.cpp.target.alignof_[CCBT_nullptr_t];
+            align = cfg->alignof_[CCBT_nullptr_t];
             break;
         case CC_ARRAY: {
-            CcArray* arr = (CcArray*)(t.bits & ~(uintptr_t)7);
-            return cc_alignof_expr(p, arr->element, loc, out);
+            CcArray* arr = ccqt_as_array(t);
+            return cc_alignof_as_expr(p, arr->element, loc, out);
         }
         case CC_STRUCT: {
-            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7);
+            CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
                 return cc_error(p, loc, "alignof applied to incomplete struct type");
             align = s->alignment;
             break;
         }
         case CC_UNION: {
-            CcUnion* u = (CcUnion*)(t.bits & ~(uintptr_t)7);
+            CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
                 return cc_error(p, loc, "alignof applied to incomplete union type");
             align = u->alignment;
             break;
         }
         case CC_ENUM: {
-            CcEnum* e = (CcEnum*)(t.bits & ~(uintptr_t)7);
-            return cc_alignof_expr(p, e->underlying, loc, out);
+            CcEnum* e = ccqt_as_enum(t);
+            return cc_alignof_as_expr(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
             return cc_error(p, loc, "alignof applied to function type");
-        default:
-            return cc_error(p, loc, "alignof applied to unsupported type");
+        case CC_VECTOR:{
+            CcVector* v = ccqt_as_vector(t);
+            align = v->vector_size > cfg->max_align ? cfg->max_align:v->vector_size;
+            break;
+        }
     }
     CcExpr* node = cc_value_expr(p, loc, size_type);
     if(!node) return CC_OOM_ERROR;
-    node->uinteger = (uint64_t)align;
+    node->uinteger = align;
     *out = node;
     return 0;
+}
+
+// Get the sizeof a type without creating an expression node.
+// Returns 0 for incomplete types.
+static
+int
+cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
+    const CcTargetConfig* tgt = cc_target(p);
+    switch(ccqt_kind(t)){
+        case CC_BASIC:{
+            if(t.basic.kind >= CCBT_COUNT)
+                return ((void)cc_error(p, loc, "basic kind out of bounds"), CC_UNREACHABLE_ERROR);
+            *out = tgt->sizeof_[t.basic.kind];
+            return 0;
+        }
+        case CC_POINTER: {
+            *out = tgt->sizeof_[CCBT_nullptr_t];
+            return 0;
+        }
+        case CC_ARRAY: {
+            CcArray* arr = ccqt_as_array(t);
+            if(arr->is_incomplete)
+                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+            if(arr->is_vla)
+                return ((void)cc_error(p, loc, "Taking sizeof of a VLA when needing it as a constant"), CC_UNREACHABLE_ERROR);
+            uint32_t elem_size;
+            int err = cc_sizeof_as_uint(p, arr->element, loc, &elem_size);
+            if(err) return err;
+            *out = (uint32_t)arr->length * elem_size;
+            return 0;
+        }
+        case CC_STRUCT: {
+            CcStruct* s = ccqt_as_struct(t);
+            if(s->is_incomplete)
+                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+            *out = s->size;
+            return 0;
+        }
+        case CC_UNION: {
+            CcUnion* u = ccqt_as_union(t);
+            if(u->is_incomplete)
+                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+            *out = u->size;
+            return 0;
+        }
+        case CC_ENUM: {
+            CcEnum* e = ccqt_as_enum(t);
+            return cc_sizeof_as_uint(p, e->underlying, loc, out);
+        }
+        case CC_FUNCTION:
+            return ((void)cc_error(p, loc, "Taking sizeof of a function type (not function pointer type)"), CC_UNREACHABLE_ERROR);
+        case CC_VECTOR:{
+            CcVector* v = ccqt_as_vector(t);
+            *out = v->vector_size;
+            return 0;
+        }
+    }
+}
+
+// Get the alignof a type without creating an expression node.
+static
+int
+cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
+    const CcTargetConfig* tgt = cc_target(p);
+    switch(ccqt_kind(t)){
+        case CC_BASIC:
+            if(t.basic.kind >= CCBT_COUNT)
+                return ((void)cc_error(p, loc, "basic kind out of bounds"), CC_UNREACHABLE_ERROR);
+            *out = tgt->alignof_[t.basic.kind];
+            return 0;
+        case CC_POINTER:
+            *out = tgt->alignof_[CCBT_nullptr_t];
+            return 0;
+        case CC_ARRAY: {
+            CcArray* arr = ccqt_as_array(t);
+            return cc_alignof_as_uint(p, arr->element, loc, out);
+        }
+        case CC_STRUCT: {
+            CcStruct* s = ccqt_as_struct(t);
+            if(s->is_incomplete)
+                return ((void)cc_error(p, loc, "taking alignof an incomplete type"), CC_UNREACHABLE_ERROR);
+            *out = s->alignment;
+            return 0;
+        }
+        case CC_UNION: {
+            CcUnion* u = ccqt_as_union(t);
+            if(u->is_incomplete)
+                return ((void)cc_error(p, loc, "taking alignof an incomplete type"), CC_UNREACHABLE_ERROR);
+            *out = u->alignment;
+            return 0;
+        }
+        case CC_ENUM: {
+            CcEnum* e = ccqt_as_enum(t);
+            return cc_alignof_as_uint(p, e->underlying, loc, out);
+        }
+        case CC_FUNCTION:
+            return ((void)cc_error(p, loc, "Taking alignof of a function type (not function pointer type)"), CC_UNREACHABLE_ERROR);
+        case CC_VECTOR:{
+            CcVector* v = ccqt_as_vector(t);
+            *out = v->vector_size > tgt->max_align ? tgt->max_align:v->vector_size;
+            return 0;
+        }
+    }
 }
 
 static
@@ -834,7 +960,7 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 _Bool rptr = ccqt_is_pointer_like(right->type);
                 if(lptr && rptr){
                     // ptr - ptr = ptrdiff_t
-                    result_type = ccqt_basic(p->lexer.cpp.target.ptrdiff_type);
+                    result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
                     result_type = left->type;
@@ -1031,15 +1157,15 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_WCHAR:
-                    node->type.basic.kind = p->lexer.cpp.target.wchar_type;
+                    node->type.basic.kind = cc_target(p)->wchar_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_CHAR16:
-                    node->type.basic.kind = p->lexer.cpp.target.char16_type;
+                    node->type.basic.kind = cc_target(p)->char16_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_CHAR32:
-                    node->type.basic.kind = p->lexer.cpp.target.char32_type;
+                    node->type.basic.kind = cc_target(p)->char32_type;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_UCHAR:
@@ -1137,7 +1263,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         CcExpr* sz;
-                        err = cc_sizeof_expr(p, type, tok.loc, &sz);
+                        err = cc_sizeof_as_expr(p, type, tok.loc, &sz);
                         if(err) return err;
                         *out = sz;
                         return 0;
@@ -1151,21 +1277,44 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_prefix(p, &operand);
                 if(err) return err;
                 CcExpr* sz;
-                err = cc_sizeof_expr(p, operand->type, tok.loc, &sz);
+                err = cc_sizeof_as_expr(p, operand->type, tok.loc, &sz);
                 if(err) return err;
                 *out = sz;
                 return 0;
             }
             if(tok.kw.kw == CC_alignof){
-                err = cc_expect_punct(p, CC_lparen);
+                CcToken peek;
+                err = cc_peek(p, &peek);
                 if(err) return err;
-                CcQualType type;
-                err = cc_parse_type_name(p, &type);
-                if(err) return err;
-                err = cc_expect_punct(p, CC_rparen);
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
+                    // Could be alignof(type) or alignof(expr)
+                    err = cc_next_token(p, &peek); // consume '('
+                    if(err) return err;
+                    CcToken peek2;
+                    err = cc_peek(p, &peek2);
+                    if(err) return err;
+                    if(cc_is_type_start(p, &peek2)){
+                        CcQualType type;
+                        err = cc_parse_type_name(p, &type);
+                        if(err) return err;
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        CcExpr* al;
+                        err = cc_alignof_as_expr(p, type, tok.loc, &al);
+                        if(err) return err;
+                        *out = al;
+                        return 0;
+                    }
+                    // alignof(expr) — put '(' back, parse as unary
+                    err = cc_unget(p, &peek);
+                    if(err) return err;
+                }
+                // alignof unary-expression (extension)
+                CcExpr* operand;
+                err = cc_parse_prefix(p, &operand);
                 if(err) return err;
                 CcExpr* al;
-                err = cc_alignof_expr(p, type, tok.loc, &al);
+                err = cc_alignof_as_expr(p, operand->type, tok.loc, &al);
                 if(err) return err;
                 *out = al;
                 return 0;
@@ -1191,10 +1340,10 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 if(ccqt_kind(arr_type) != CC_ARRAY)
                     return cc_error(p, tok.loc, "_Countof requires an array type");
-                CcArray* arr = (CcArray*)(arr_type.bits & ~(uintptr_t)7);
+                CcArray* arr = ccqt_as_array(arr_type);
                 if(arr->is_incomplete)
                     return cc_error(p, tok.loc, "_Countof applied to incomplete array type");
-                CcQualType size_type = ccqt_basic(p->lexer.cpp.target.size_type);
+                CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                 if(arr->is_vla){
                     CcExpr* dim = arr->vla_expr;
                     if(!dim) return cc_error(p, tok.loc, "_Countof: VLA has no dimension expression");
@@ -1291,13 +1440,39 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 if(member.type != CC_IDENTIFIER)
                     return cc_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
-                // text=member name (in union with value0), values[0]=operand
+                Atom member_name = member.ident.ident;
+                // Resolve the aggregate type
+                CcQualType agg_type = operand->type;
+                if(mkind == CC_EXPR_ARROW){
+                    // -> requires pointer to struct/union
+                    if(ccqt_is_basic(agg_type) || ccqt_kind(agg_type) != CC_POINTER)
+                        return cc_error(p, tok.loc, "member reference with '->' requires a pointer type");
+                    CcPointer* ptr = ccqt_as_ptr(agg_type);
+                    agg_type = ptr->pointee;
+                }
+                CcQualType member_type = {.bits = (uintptr_t)-1};
+                if(!ccqt_is_basic(agg_type)){
+                    CcTypeKind tk = ccqt_kind(agg_type);
+                    if(tk == CC_STRUCT){
+                        CcStruct* s = ccqt_as_struct(agg_type);
+                        CcField* f = cc_lookup_field(s->fields, s->field_count, member_name);
+                        if(f) member_type = f->type;
+                    }
+                    else if(tk == CC_UNION){
+                        CcUnion* u = ccqt_as_union(agg_type);
+                        CcField* f = cc_lookup_field(u->fields, u->field_count, member_name);
+                        if(f) member_type = f->type;
+                    }
+                }
+                if(member_type.bits == (uintptr_t)-1)
+                    return cc_error(p, member.loc, "no member named '%s'", member_name->data);
                 CcExpr* mnode = cc_alloc_expr(p, 1);
                 if(!mnode) return CC_OOM_ERROR;
                 mnode->kind = mkind;
                 mnode->loc = tok.loc;
-                mnode->extra = member.ident.ident->length;
-                mnode->text = member.ident.ident->data;
+                mnode->type = member_type;
+                mnode->extra = member_name->length;
+                mnode->text = member_name->data;
                 mnode->values[0] = operand;
                 operand = mnode;
                 continue;
@@ -1415,7 +1590,7 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
     CcTypeKind kind = ccqt_kind(t);
     switch(kind){
         case CC_POINTER: {
-            CcPointer* p = (CcPointer*)(t.bits & ~(uintptr_t)7);
+            CcPointer* p = ccqt_as_ptr(t);
             cc_print_type_pre(sb, p->pointee);
             if(cc_type_needs_parens(p->pointee))
                 msb_write_literal(sb, " (*");
@@ -1428,29 +1603,29 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
             return;
         }
         case CC_ARRAY: {
-            CcArray* a = (CcArray*)(t.bits & ~(uintptr_t)7);
+            CcArray* a = ccqt_as_array(t);
             cc_print_type_pre(sb, a->element);
             return;
         }
         case CC_FUNCTION: {
-            CcFunction* f = (CcFunction*)(t.bits & ~(uintptr_t)7);
+            CcFunction* f = ccqt_as_function(t);
             cc_print_type_pre(sb, f->return_type);
             return;
         }
         case CC_STRUCT: {
-            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7);
+            CcStruct* s = ccqt_as_struct(t);
             if(s->name) msb_sprintf(sb, "struct %.*s", s->name->length, s->name->data);
             else msb_write_literal(sb, "struct <anon>");
             return;
         }
         case CC_UNION: {
-            CcUnion* u = (CcUnion*)(t.bits & ~(uintptr_t)7);
+            CcUnion* u = ccqt_as_union(t);
             if(u->name) msb_sprintf(sb, "union %.*s", u->name->length, u->name->data);
             else msb_write_literal(sb, "union <anon>");
             return;
         }
         case CC_ENUM: {
-            CcEnum* e = (CcEnum*)(t.bits & ~(uintptr_t)7);
+            CcEnum* e = ccqt_as_enum(t);
             if(e->name) msb_sprintf(sb, "enum %.*s", e->name->length, e->name->data);
             else msb_write_literal(sb, "enum <anon>");
             return;
@@ -1468,14 +1643,14 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
     CcTypeKind kind = ccqt_kind(t);
     switch(kind){
         case CC_POINTER: {
-            CcPointer* p = (CcPointer*)(t.bits & ~(uintptr_t)7);
+            CcPointer* p = ccqt_as_ptr(t);
             if(cc_type_needs_parens(p->pointee))
                 msb_write_char(sb, ')');
             cc_print_type_post(sb, p->pointee);
             return;
         }
         case CC_ARRAY: {
-            CcArray* a = (CcArray*)(t.bits & ~(uintptr_t)7);
+            CcArray* a = ccqt_as_array(t);
             if(a->is_incomplete)
                 msb_write_literal(sb, "[]");
             else
@@ -1484,7 +1659,7 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
             return;
         }
         case CC_FUNCTION: {
-            CcFunction* f = (CcFunction*)(t.bits & ~(uintptr_t)7);
+            CcFunction* f = ccqt_as_function(t);
             msb_write_char(sb, '(');
             for(uint32_t i = 0; i < f->param_count; i++){
                 if(i) msb_write_literal(sb, ", ");
@@ -1901,7 +2076,15 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
         case CC_EOF:
             *finished = 1;
             return 0;
+        case CC_KEYWORD:
+            if(tok.kw.kw == CC_static_assert){
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                return cc_handle_static_asssert(p);
+            }
+            goto Ldefault;
         default:
+            Ldefault:;
             err = cc_unget(p, &tok);
             if(err) return err;
             break;
@@ -2041,6 +2224,965 @@ static
 Allocator
 cc_scratch_allocator(CcParser*p){
     return allocator_from_arena(&p->scratch_arena);
+}
+
+// Parse __attribute__((attr-list))
+// Can be called multiple times; attributes accumulate into *attrs.
+// If the next token is not __attribute__, this is a no-op.
+static
+int
+cc_parse_attributes(CcParser* p, CcAttributes* attrs){
+    int err = 0;
+    CcToken tok;
+    for(;;){
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type != CC_KEYWORD || tok.kw.kw != CC___attribute__)
+            return 0;
+        err = cc_next_token(p, &tok); // consume __attribute__
+        if(err) return err;
+        SrcLoc attr_loc = tok.loc;
+        // Expect ((
+        err = cc_expect_punct(p, CC_lparen);
+        if(err) return err;
+        err = cc_expect_punct(p, CC_lparen);
+        if(err) return err;
+        // Parse attribute list: attr [, attr]*
+        // Empty attribute list is allowed: __attribute__(())
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_rparen)
+            goto close_parens;
+        for(;;){
+            err = cc_next_token(p, &tok);
+            if(err) return err;
+            if(tok.type != CC_IDENTIFIER && tok.type != CC_KEYWORD)
+                return cc_error(p, tok.loc, "expected attribute name");
+            // Get the attribute name as a string
+            StringView attr_name;
+            if(tok.type == CC_IDENTIFIER)
+                attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
+            else {
+                // Attribute name that is also a keyword.
+                // Just ignore it for now, in the future we can parse const I guess.
+                attr_name = SV("");
+            }
+            // Strip leading/trailing underscores for canonical matching
+            if(sv_startswith(attr_name, SV("__")))
+                attr_name = sv_slice(attr_name, 2, attr_name.length);
+            if(sv_endswith(attr_name, SV("__")))
+                attr_name = sv_slice(attr_name, 0, attr_name.length-2);
+            if(sv_equals(attr_name, SV("packed"))){
+                attrs->packed = 1;
+            }
+            else if(sv_equals(attr_name, SV("transparent_union"))){
+                attrs->transparent_union = 1;
+            }
+            else if(sv_equals(attr_name, SV("aligned"))){
+                // Check for optional (N) argument
+                err = cc_peek(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+                    err = cc_next_token(p, &tok); // consume '('
+                    if(err) return err;
+                    CcExpr* expr = NULL;
+                    err = cc_parse_assignment_expr(p, &expr);
+                    if(err) return err;
+                    if(!expr)
+                        return cc_error(p, tok.loc, "expected constant expression for aligned attribute");
+                    CcEvalResult val = cc_eval_expr(expr);
+                    if(val.kind == CC_EVAL_ERROR)
+                        return cc_error(p, tok.loc, "aligned attribute requires a constant expression");
+                    if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
+                        return cc_error(p, tok.loc, "aligned attribute requires a constant integral expression");
+                    uint64_t align = val.u;
+                    if(align == 0 || (align & (align - 1)) != 0)
+                        return cc_error(p, tok.loc, "alignment must be a positive power of 2");
+                    attrs->aligned = (uint16_t)align;
+                    attrs->has_aligned = 1;
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                }
+                else {
+                    // aligned without argument means maximum alignment for the target
+                    attrs->aligned = cc_target(p)->max_align;
+                    attrs->has_aligned = 1;
+                }
+            }
+            else if(sv_equals(attr_name, SV("vector_size"))){
+                err = cc_expect_punct(p, CC_lparen);
+                if(err) return err;
+                CcExpr* expr = NULL;
+                err = cc_parse_assignment_expr(p, &expr);
+                if(err) return err;
+                if(!expr)
+                    return cc_error(p, tok.loc, "expected constant expression for vector_size attribute");
+                CcEvalResult val = cc_eval_expr(expr);
+                if(val.kind == CC_EVAL_ERROR)
+                    return cc_error(p, tok.loc, "vector_size attribute requires a constant expression");
+                if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
+                    return cc_error(p, tok.loc, "vector_size attribute requires a constant integral expression");
+                attrs->vector_size = (uint16_t)val.u; // TODO: value validation
+                err = cc_expect_punct(p, CC_rparen);
+                if(err) return err;
+            }
+            else {
+                // Unknown attribute — skip any argument list
+                if(0) cc_warn(p, tok.loc, "ignoring unknown attribute '%.*s'", (int)attr_name.length, attr_name.text);
+                err = cc_peek(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+                    err = cc_next_token(p, &tok); // consume '('
+                    if(err) return err;
+                    int depth = 1;
+                    while(depth > 0){
+                        err = cc_next_token(p, &tok);
+                        if(err) return err;
+                        if(tok.type == CC_EOF)
+                            return cc_error(p, attr_loc, "unterminated attribute argument list");
+                        if(tok.type == CC_PUNCTUATOR){
+                            if(tok.punct.punct == CC_lparen) depth++;
+                            else if(tok.punct.punct == CC_rparen) depth--;
+                        }
+                    }
+                }
+            }
+            // Check for comma or end
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
+                err = cc_next_token(p, &tok); // consume ','
+                if(err) return err;
+                continue;
+            }
+            break;
+        }
+        close_parens:
+        // Expect ))
+        err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+        err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+    }
+}
+
+
+static inline
+uint32_t
+cc_align_to(uint32_t offset, uint32_t alignment){
+    return (offset + alignment - 1) & ~(alignment - 1);
+}
+
+static
+int
+cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
+    int err = 0;
+    uint32_t offset = 0;
+    uint32_t max_align = 1;
+    uint32_t bitfield_offset = 0; // bit offset within current storage unit
+    uint32_t bitfield_storage_end = 0; // byte offset of end of current storage unit
+    uint32_t bitfield_storage_start = 0; // byte offset of start of current storage unit
+    uint32_t bitfield_storage_size = 0; // size of current storage unit in bytes
+    CcQualType bitfield_type = {0}; // type of current bitfield run (for MSVC ABI)
+    CcBitfieldABI bf_abi = cc_target(p)->bitfield_abi;
+    for(uint32_t i = 0; i < s->field_count; i++){
+        CcField* f = &s->fields[i];
+        if(f->is_method) continue;
+        // Flexible array member: incomplete array as the last field.
+        if(ccqt_kind(f->type) == CC_ARRAY){
+            CcArray* arr = ccqt_as_array(f->type);
+            if(arr->is_incomplete){
+                if(i + 1 < s->field_count){
+                    // Check that no non-method fields follow.
+                    _Bool has_later = 0;
+                    for(uint32_t j = i + 1; j < s->field_count; j++){
+                        if(!s->fields[j].is_method){ has_later = 1; break; }
+                    }
+                    if(has_later)
+                        return cc_error(p, f->loc, "flexible array member must be last field");
+                }
+                // End any bitfield run.
+                if(bitfield_offset > 0){
+                    offset = bitfield_storage_end;
+                    bitfield_offset = 0;
+                }
+                uint32_t field_align;
+                err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+                if(err) return err;
+                if(s->packed) field_align = 1;
+                else if(pack_value > 0 && field_align > pack_value) field_align = pack_value;
+                offset = cc_align_to(offset, field_align);
+                f->offset = offset;
+                if(field_align > max_align) max_align = field_align;
+                s->has_fam = 1;
+                continue;
+            }
+        }
+        // Reject embedded struct with FAM, unless it's an anonymous
+        // member at the end (GCC extension: FAM in anonymous struct).
+        if(ccqt_kind(f->type) == CC_STRUCT){
+            CcStruct* inner = ccqt_as_struct(f->type);
+            if(inner->has_fam){
+                _Bool is_last = 1;
+                for(uint32_t j = i + 1; j < s->field_count; j++){
+                    if(!s->fields[j].is_method){ is_last = 0; break; }
+                }
+                if(!f->name && is_last){
+                    // Anonymous struct with FAM at end: propagate FAM
+                    s->has_fam = 1;
+                }
+                else {
+                    return cc_error(p, f->loc, "struct with flexible array member cannot be embedded");
+                }
+            }
+        }
+        uint32_t field_size, field_align;
+        err = cc_sizeof_as_uint(p, f->type, f->loc, &field_size);
+        if(err) return err;
+        err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+        if(err) return err;
+        if(s->packed)
+            field_align = 1;
+        else if(pack_value > 0 && field_align > pack_value)
+            field_align = pack_value;
+        if(f->is_bitfield){
+            // Bitfield layout
+            uint32_t bw = f->bitwidth;
+            uint32_t storage_bits = field_size * 8;
+            if(bw == 0){
+                // Zero-width bitfield: force alignment to next storage unit boundary
+                if(bitfield_offset > 0){
+                    offset = bitfield_storage_end;
+                    bitfield_offset = 0;
+                    bitfield_storage_end = 0;
+                    bitfield_storage_size = 0;
+                    bitfield_type = (CcQualType){0};
+                }
+                f->offset = offset;
+                f->bitoffset = 0;
+                continue;
+            }
+            // Can we pack into the current storage unit?
+            _Bool fits;
+            if(bf_abi == CC_BITFIELD_MSVC)
+                fits = bitfield_type.bits == f->type.bits && bitfield_offset + bw <= storage_bits;
+            else
+                fits = bitfield_storage_size == field_size && bitfield_offset + bw <= storage_bits;
+            if(fits){
+                // Fits in current storage unit
+                f->offset = bitfield_storage_start;
+                f->bitoffset = bitfield_offset;
+                bitfield_offset += bw;
+            }
+            else {
+                // Start new storage unit
+                if(bitfield_offset > 0)
+                    offset = bitfield_storage_end;
+                offset = cc_align_to(offset, field_align);
+                f->offset = offset;
+                f->bitoffset = 0;
+                bitfield_offset = bw;
+                bitfield_storage_start = offset;
+                bitfield_storage_end = offset + field_size;
+                bitfield_storage_size = field_size;
+                bitfield_type = f->type;
+            }
+            if(field_align > max_align)
+                max_align = field_align;
+            continue;
+        }
+        // Regular field: end any bitfield run
+        if(bitfield_offset > 0){
+            offset = bitfield_storage_end;
+            bitfield_offset = 0;
+            bitfield_storage_end = 0;
+            bitfield_storage_size = 0;
+            bitfield_type = (CcQualType){0};
+        }
+        offset = cc_align_to(offset, field_align);
+        f->offset = offset;
+        offset += field_size;
+        if(field_align > max_align)
+            max_align = field_align;
+    }
+    // End any trailing bitfield run
+    if(bitfield_offset > 0)
+        offset = bitfield_storage_end;
+    // Apply explicit struct-level alignment from __attribute__((aligned(N)))
+    // This is already stored in s->alignment if set before calling this function.
+    if(s->alignment > max_align)
+        max_align = s->alignment;
+    s->alignment = max_align;
+    s->size = cc_align_to(offset, max_align);
+    return 0;
+}
+
+// Compute union layout: size = max field size, alignment = max field alignment.
+static
+int
+cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
+    uint32_t max_size = 0;
+    uint32_t max_align = 1;
+    int err = 0;
+    for(uint32_t i = 0; i < u->field_count; i++){
+        CcField* f = &u->fields[i];
+        if(f->is_method) continue;
+        // FAM in union: zero-size, just contributes alignment
+        if(ccqt_kind(f->type) == CC_ARRAY && ccqt_as_array(f->type)->is_incomplete){
+            uint32_t field_align;
+            err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+            if(err) return err;
+            if(pack_value > 0 && field_align > pack_value)
+                field_align = pack_value;
+            f->offset = 0;
+            if(field_align > max_align) max_align = field_align;
+            continue;
+        }
+        uint32_t field_size;
+        err = cc_sizeof_as_uint(p, f->type, f->loc, &field_size);
+        if(err) return err;
+        uint32_t field_align;
+        err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+        if(err) return err;
+        if(pack_value > 0 && field_align > pack_value)
+            field_align = pack_value;
+        f->offset = 0; // all union fields start at offset 0
+        if(f->is_bitfield){
+            f->bitoffset = 0;
+            // For bitfields in unions, size is the storage unit size
+            if(field_size > max_size) max_size = field_size;
+        }
+        else {
+            if(field_size > max_size) max_size = field_size;
+        }
+        if(field_align > max_align) max_align = field_align;
+    }
+    if(u->alignment > max_align)
+        max_align = u->alignment;
+    u->alignment = max_align;
+    u->size = cc_align_to(max_size, max_align);
+    return 0;
+}
+
+// #pragma pack handler.
+// Supports: pack(N), pack(), pack(push, N), pack(pop)
+static
+int
+cc_pragma_pack(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CcParser* p = (CcParser*)ctx;
+    if(!ntoks || toks[0].type != CPP_PUNCTUATOR || toks[0].punct != '(')
+        return (cc_warn(p, loc, "#pragma pack expects '('"), 0);
+    if(ntoks < 2)
+        return (cc_warn(p, loc, "#pragma pack expects at least ()"), 0);
+
+    // Find the closing paren.
+    const CppToken* end = toks+ntoks;
+    for(const CppToken* t = end; --t != toks;){
+        if(t->type == CPP_PUNCTUATOR && t->punct == ')'){
+            end = t+1;
+            break;
+        }
+    }
+    int err = 0;
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(end - toks > 2){
+        err = cpp_expand_argument(cpp, toks+1, end-toks-2, expanded);
+        if(err) goto finally;
+        // __builtin_debugtrap();
+        toks = expanded->data;
+        end = toks + expanded->count;
+    }
+    else {
+        toks = toks+1;
+        end = end-1;
+    }
+    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+    while(toks < end && end[-1].type == CPP_WHITESPACE) end--;
+    if(toks == end){ // pack()
+        p->pragma_pack = 8; // Apparently /Zp: can change this?
+        goto finally;
+    }
+    const CppToken* number = NULL;
+    if(toks->type == CPP_NUMBER){
+        number = toks++;
+        while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+    }
+    else if(toks->type == CPP_IDENTIFIER){
+        StringView word = toks->txt;
+        toks++;
+        while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+        if(sv_equals(word, SV("show"))){
+            cc_info(p, loc, "#pragma pack(show): %d", (int)p->pragma_pack);
+            if(toks != end) cc_warn(p, toks->loc, "Extra tokens after show");
+            goto finally;
+        }
+        else if(sv_equals(word, SV("push"))){
+            // #pragma pack( push [ , identifier ] [ , n ] )
+            const CppToken* ident = NULL;
+            if(toks != end && toks->type == CPP_PUNCTUATOR && toks->punct == ','){
+                toks++;
+                while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                if(toks->type == CPP_IDENTIFIER){
+                    ident = toks++;
+                    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                    if(toks != end && toks->type == CPP_PUNCTUATOR && toks->punct == ','){
+                        toks++;
+                        while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                    }
+                }
+                // technically this allows [,identifer] [n] instead of [, identifer] [, n] but whatever
+                if(toks->type == CPP_NUMBER){
+                    number = toks++;
+                    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                }
+            }
+            CcPackRecord r = {
+                .ident = ident?ident->txt:(StringView){0},
+                .pack = p->pragma_pack,
+            };
+            err = ma_push(CcPackRecord)(&p->pack_stack, cc_allocator(p), r);
+            if(err) goto finally;
+        }
+        else if(sv_equals(word, SV("pop"))){
+            // #pragma pack( pop [ , { identifier | n } ] )
+            const CppToken* ident = NULL;
+            if(toks != end && toks->type == CPP_PUNCTUATOR && toks->punct == ','){
+                toks++;
+                while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                if(toks->type == CPP_IDENTIFIER){
+                    ident = toks++;
+                    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                }
+                else if(toks->type == CPP_NUMBER){
+                    number = toks++;
+                    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+                }
+            }
+            if(!p->pack_stack.count){
+                cc_warn(p, loc, "pack stack empty");
+            }
+            else {
+                if(ident){
+                    for(size_t i = p->pack_stack.count; i--; ){
+                        if(sv_equals(p->pack_stack.data[i].ident, ident->txt)){
+                            p->pragma_pack = p->pack_stack.data[i].pack;
+                            p->pack_stack.count = i;
+                            break;
+                        }
+                        if(i == 0){
+                            cc_warn(p, ident->loc, "'%.*s' not found in pack stack", sv_p(ident->txt));
+                        }
+                    }
+                }
+                else {
+                    p->pragma_pack = ma_tail(p->pack_stack).pack;
+                    p->pack_stack.count--;
+                }
+            }
+        }
+        else {
+            cc_warn(p, loc, "Unrecognized pragma pack() command");
+            goto finally;
+        }
+    }
+    if(number){
+        int64_t pack = 8;
+        err = cpp_eval_parse_number(cpp, *number, &pack);
+        if(err) goto finally;
+        if(pack < 0 || pack > UINT16_MAX){
+            cc_warn(p, number->loc, "pack value too big, treating as 8");
+            pack = 8;
+        }
+        if(pack != 1 && pack != 2 && pack != 4 && pack != 8 && pack != 16){
+            cc_warn(p, number->loc, "value %lld invalid, treating as 8", (long long)pack);
+            pack = 8;
+        }
+        p->pragma_pack = (uint16_t)pack;
+    }
+    if(toks != end){
+        cc_warn(p, toks->loc, "Extra tokens in pack()");
+    }
+    finally:
+    if(expanded)
+        cpp_release_scratch(cpp, expanded);
+    return err;
+}
+
+// Register parser-level pragmas. Call after cpp_define_builtin_macros.
+static
+int
+cc_register_pragmas(CcParser* p){
+    return cpp_register_pragma(&p->lexer.cpp, SV("pack"), cc_pragma_pack, p);
+}
+
+// Look up a field by name in a struct or union.
+// For anonymous members, recursively searches inner struct/union fields.
+// Returns the field pointer or NULL if not found.
+static
+CcField* _Nullable
+cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name){
+    for(uint32_t i = 0; i < field_count; i++){
+        CcField* f = &fields[i];
+        if(f->is_method){
+            if(f->method->name == name) return f;
+            continue;
+        }
+        if(f->name == name) return f;
+        if(!f->name){
+            // Anonymous member — search recursively
+            CcTypeKind tk = ccqt_kind(f->type);
+            if(tk == CC_STRUCT){
+                CcStruct* inner = ccqt_as_struct(f->type);
+                CcField* found = cc_lookup_field(inner->fields, inner->field_count, name);
+                if(found) return found;
+            }
+            else if(tk == CC_UNION){
+                CcUnion* inner = ccqt_as_union(f->type);
+                CcField* found = cc_lookup_field(inner->fields, inner->field_count, name);
+                if(found) return found;
+            }
+        }
+    }
+    return NULL;
+}
+
+// Check that fields introduced by an anonymous struct/union member don't
+// collide with existing fields.
+static
+int
+cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc){
+    CcField* inner_fields;
+    uint32_t inner_count;
+    CcTypeKind tk = ccqt_kind(anon_type);
+    if(tk == CC_STRUCT){
+        CcStruct* s = ccqt_as_struct(anon_type);
+        inner_fields = s->fields;
+        inner_count = s->field_count;
+    }
+    else if(tk == CC_UNION){
+        CcUnion* u = ccqt_as_union(anon_type);
+        inner_fields = u->fields;
+        inner_count = u->field_count;
+    }
+    else {
+        return ((void)cc_error(p, loc, "ICE: bad assumption about anonymous field"), CC_UNREACHABLE_ERROR);
+    }
+    for(uint32_t i = 0; i < inner_count; i++){
+        CcField* f = &inner_fields[i];
+        if(f->is_method){
+            if(cc_lookup_field(existing, existing_count, f->method->name))
+                return cc_error(p, loc, "duplicate member '%s'", f->method->name->data);
+        }
+        else if(f->name){
+            if(cc_lookup_field(existing, existing_count, f->name))
+                return cc_error(p, loc, "duplicate member '%s'", f->name->data);
+        }
+        else {
+            CcTypeKind ftk = ccqt_kind(f->type);
+            if(ftk == CC_STRUCT || ftk == CC_UNION){
+                int err = cc_check_anon_member_duplicates(p, existing, existing_count, f->type, loc);
+                if(err) return err;
+            }
+        }
+    }
+    return 0;
+}
+
+// Parse a struct or union specifier.
+// kind is CC_STRUCT or CC_UNION.
+// On success, *base_type is set to the struct/union type.
+static
+int
+cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type){
+    int err = 0;
+    CcToken tok;
+    CcAttributes attrs = p->attributes;
+    cc_clear_attributes(&p->attributes);
+    err = cc_parse_attributes(p, &attrs);
+    if(err) return err;
+    Atom name = NULL;
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_IDENTIFIER){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        name = tok.ident.ident;
+    }
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
+        err = cc_next_token(p, &tok); // consume '{'
+        if(err) return err;
+        void* existing = NULL;
+        if(name){
+            if(is_union){
+                CcUnion* u = existing = cc_scope_lookup_union_tag(p->current, name, CC_SCOPE_NO_WALK);
+                if(u && !u->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+            }
+            else {
+                CcStruct* s = existing = cc_scope_lookup_struct_tag(p->current, name, CC_SCOPE_NO_WALK);
+                if(s && !s->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+            }
+        }
+        Marray(CcField) fields_arr = {0};
+        for(;;){
+            err = cc_peek(p, &tok);
+            if(err) goto struct_err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '}')
+                break;
+            if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static_assert){
+                err = cc_handle_static_asssert(p);
+                if(err) goto struct_err;
+                continue;
+            }
+            CcAttributes member_attrs = {0};
+            cc_clear_attributes(&p->attributes);
+            CcDeclBase member_base = {.type.bits = (uintptr_t)-1};
+            err = cc_parse_declaration_specifier(p, &member_base.spec, &member_base.type);
+            if(err) goto struct_err;
+            member_attrs = p->attributes;
+            cc_clear_attributes(&p->attributes);
+            if(member_base.spec.sp_storagebits){
+                err = cc_error(p, loc, "Storage class specifiers not allowed in struct/union members");
+                goto struct_err;
+            }
+            err = cc_resolve_specifiers(p, &member_base);
+            if(err) goto struct_err;
+            err = cc_peek(p, &tok);
+            if(err) goto struct_err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
+                err = cc_next_token(p, &tok); // consume ';'
+                if(err) goto struct_err;
+                // This is either an anonymous struct/union or a Plan9 extension
+                // (or just a forward decl).
+                CcTypeKind member_tk = ccqt_kind(member_base.type);
+                if(member_tk == CC_STRUCT || member_tk == CC_UNION){
+                    if(member_tk == CC_STRUCT && ccqt_as_struct(member_base.type)->is_incomplete)
+                        continue;
+                    if(member_tk == CC_UNION && ccqt_as_union(member_base.type)->is_incomplete)
+                        continue;
+                    err = cc_check_anon_member_duplicates(p, fields_arr.data, (uint32_t)fields_arr.count, member_base.type, tok.loc);
+                    if(err) goto struct_err;
+                    err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
+                        .type = member_base.type,
+                        .name = NULL, // anonymous
+                        .loc = tok.loc,
+                    }));
+                    if(err){ err = CC_OOM_ERROR; goto struct_err; }
+                    continue;
+                }
+                if(member_tk == CC_ENUM) // enum decl, it's fine
+                    continue;
+                cc_warn(p, tok.loc, "Declaration does not declare anything");
+                continue;
+            }
+            // Parse member declarators: name [: bitwidth] [, name [: bitwidth]]* ;
+            for(;;){
+                Atom member_name = NULL;
+                CcQualType member_type;
+                uint64_t bitwidth = 0;
+                _Bool is_bitfield = 0;
+                // Check for anonymous bitfield: `: bitwidth`
+                err = cc_peek(p, &tok);
+                if(err) goto struct_err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
+                    // Anonymous bitfield
+                    err = cc_next_token(p, &tok); // consume ':'
+                    if(err) goto struct_err;
+                    CcExpr* bw_expr = NULL;
+                    err = cc_parse_assignment_expr(p, &bw_expr);
+                    if(err) goto struct_err;
+                    if(!bw_expr){
+                        err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
+                        goto struct_err;
+                    }
+                    CcEvalResult bw_val = cc_eval_expr(bw_expr);
+                    if(bw_val.kind == CC_EVAL_ERROR){
+                        err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
+                        goto struct_err;
+                    }
+                    if(bw_val.kind != CC_EVAL_INT && bw_val.kind != CC_EVAL_UINT){
+                        err = cc_error(p, tok.loc, "bitfield width must be an integral constant expression");
+                        goto struct_err;
+                    }
+                    bitwidth = bw_val.u;
+                    member_type = member_base.type;
+                    is_bitfield = 1;
+                    if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
+                       && ccqt_kind(member_type) != CC_ENUM){
+                        err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
+                        goto struct_err;
+                    }
+                    uint32_t type_size;
+                    err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
+                    if(err) goto struct_err;
+                    if(bitwidth > type_size * 8){
+                        err = cc_error(p, tok.loc, "bitfield width (%llu) exceeds size of type (%u bits)", (unsigned long long)bitwidth, type_size * 8);
+                        goto struct_err;
+                    }
+                }
+                else {
+                    // Parse declarator
+                    CcQualType head = {0};
+                    CcQualType* tail = &head;
+                    Marray(Atom) param_names = {0};
+                    err = cc_parse_declarator(p, &head, &tail, &member_name, &param_names);
+                    if(err){
+                        ma_cleanup(Atom)(&param_names, cc_allocator(p));
+                        goto struct_err;
+                    }
+                    *tail = member_base.type;
+                    member_type = cc_intern_qualtype(p, head);
+                    // Method: member type is a function type (not pointer to function)
+                    if(ccqt_kind(member_type) == CC_FUNCTION){
+                        CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                        if(!func){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); err = CC_OOM_ERROR; goto struct_err; }
+                        func->name = member_name;
+                        func->type = ccqt_as_function(member_type);
+                        func->loc = tok.loc;
+                        func->params.count = param_names.count;
+                        func->params.data = param_names.data;
+                        // Check for method body
+                        // If tail == &head, the function type came from the
+                        // base type (e.g. a typedef), not the declarator.
+                        // In that case, a body is not allowed.
+                        err = cc_peek(p, &tok);
+                        if(err) goto struct_err;
+                        if(tail == &head && tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
+                            err = cc_error(p, tok.loc, "cannot define method with typedef function type");
+                            goto struct_err;
+                        }
+                        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
+                            err = cc_next_token(p, &tok); // consume '{'
+                            if(err) goto struct_err;
+                            Marray(CcToken)* body_tokens = cc_get_scratch(p);
+                            if(!body_tokens){ err = CC_OOM_ERROR; goto struct_err; }
+                            int depth = 1;
+                            while(depth > 0){
+                                CcToken t;
+                                err = cc_next_token(p, &t);
+                                if(err) goto struct_err;
+                                if(t.type == CC_EOF){
+                                    err = cc_error(p, tok.loc, "Unexpected EOF in method body");
+                                    goto struct_err;
+                                }
+                                if(t.type == CC_PUNCTUATOR){
+                                    if(t.punct.punct == '{') depth++;
+                                    else if(t.punct.punct == '}') depth--;
+                                }
+                                if(depth > 0){
+                                    err = ma_push(CcToken)(body_tokens, cc_allocator(p), t);
+                                    if(err) goto struct_err;
+                                }
+                            }
+                            func->tokens = body_tokens;
+                            func->defined = 1;
+                        }
+                        // Parse optional attributes after method
+                        err = cc_parse_attributes(p, &member_attrs);
+                        if(err) goto struct_err;
+                        cc_clear_attributes(&p->attributes);
+                        if(cc_lookup_field(fields_arr.data, (uint32_t)fields_arr.count, func->name)){
+                            err = cc_error(p, tok.loc, "duplicate member '%s'", func->name->data);
+                            goto struct_err;
+                        }
+                        err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
+                            .type = member_type,
+                            .method = func,
+                            .is_method = 1,
+                            .loc = tok.loc,
+                        }));
+                        if(err){ err = CC_OOM_ERROR; goto struct_err; }
+                        // Method definitions with body don't need ';'
+                        if(func->defined){
+                            err = cc_peek(p, &tok);
+                            if(err) goto struct_err;
+                            // Allow optional ';' after method body
+                            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
+                                err = cc_next_token(p, &tok);
+                                if(err) goto struct_err;
+                            }
+                            goto next_member;
+                        }
+                        break; // fall through to ';' expect
+                    }
+                    ma_cleanup(Atom)(&param_names, cc_allocator(p));
+
+                    // Check for bitfield
+                    err = cc_peek(p, &tok);
+                    if(err) goto struct_err;
+                    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
+                        err = cc_next_token(p, &tok); // consume ':'
+                        if(err) goto struct_err;
+                        CcExpr* bw_expr = NULL;
+                        err = cc_parse_assignment_expr(p, &bw_expr);
+                        if(err) goto struct_err;
+                        if(!bw_expr){
+                            err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
+                            goto struct_err;
+                        }
+                        CcEvalResult bw_val = cc_eval_expr(bw_expr);
+                        if(bw_val.kind == CC_EVAL_ERROR){
+                            err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
+                            goto struct_err;
+                        }
+                        if(bw_val.kind != CC_EVAL_INT && bw_val.kind != CC_EVAL_UINT){
+                            err = cc_error(p, tok.loc, "bitfield width must be an integral constant expression");
+                            goto struct_err;
+                        }
+                        bitwidth = bw_val.u;
+                        is_bitfield = 1;
+                        if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
+                           && ccqt_kind(member_type) != CC_ENUM){
+                            err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
+                            goto struct_err;
+                        }
+                        uint32_t type_size;
+                        err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
+                        if(err) goto struct_err;
+                        if(bitwidth == 0){
+                            err = cc_error(p, tok.loc, "named bitfield '%s' cannot have zero width", member_name->data);
+                            goto struct_err;
+                        }
+                        if(bitwidth > type_size * 8){
+                            err = cc_error(p, tok.loc, "bitfield width (%llu) exceeds size of type (%u bits)", (unsigned long long)bitwidth, type_size * 8);
+                            goto struct_err;
+                        }
+                    }
+                }
+                // Parse optional attributes after the declarator
+                err = cc_parse_attributes(p, &member_attrs);
+                if(err) goto struct_err;
+                cc_clear_attributes(&p->attributes);
+                // Create field
+                if(member_name && cc_lookup_field(fields_arr.data, (uint32_t)fields_arr.count, member_name)){
+                    err = cc_error(p, tok.loc, "duplicate member '%s'", member_name->data);
+                    goto struct_err;
+                }
+                err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
+                    .type = member_type,
+                    .name = member_name,
+                    .bitwidth = (uint32_t)bitwidth,
+                    .is_bitfield = is_bitfield,
+                    .loc = tok.loc,
+                }));
+                if(err){ err = CC_OOM_ERROR; goto struct_err; }
+                // Check for comma or semicolon
+                err = cc_peek(p, &tok);
+                if(err) goto struct_err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ','){
+                    err = cc_next_token(p, &tok); // consume ','
+                    if(err) goto struct_err;
+                    continue;
+                }
+                break;
+            }
+            err = cc_expect_punct(p, CC_semi);
+            if(err) goto struct_err;
+            next_member:;
+        }
+        err = cc_expect_punct(p, CC_rbrace);
+        if(err) goto struct_err;
+        // Parse optional trailing attributes
+        err = cc_parse_attributes(p, &attrs);
+        if(err) goto struct_err;
+        // Finalize
+        err = ma_shrink_to_size(CcField)(&fields_arr, cc_allocator(p));
+        if(err) return err;
+        uint32_t field_count = (uint32_t)fields_arr.count;
+        CcField* flat_fields = fields_arr.data;
+        if(!is_union){
+            CcStruct* s = (CcStruct*)existing;
+            if(!s){
+                s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                if(!s) return CC_OOM_ERROR;
+            }
+            *s = (CcStruct){
+                .kind = CC_STRUCT,
+                .name = name,
+                .loc = loc,
+                .field_count = field_count,
+                .fields = flat_fields,
+                .packed = attrs.packed,
+            };
+            if(attrs.has_aligned)
+                s->alignment = attrs.aligned;
+            err = cc_compute_struct_layout(p, s, p->pragma_pack);
+            if(err) return err;
+            if(name && !existing){
+                err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+                if(err) return CC_OOM_ERROR;
+            }
+            *base_type = (CcQualType){.bits = (uintptr_t)s};
+        }
+        else {
+            CcUnion* u = (CcUnion*)existing;
+            if(!u){
+                u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                if(!u) return CC_OOM_ERROR;
+            }
+            *u = (CcUnion){
+                .kind = CC_UNION,
+                .name = name,
+                .loc = loc,
+                .field_count = field_count,
+                .fields = flat_fields,
+            };
+            if(attrs.has_aligned)
+                u->alignment = attrs.aligned;
+            err = cc_compute_union_layout(p, u, p->pragma_pack);
+            if(err) return err;
+            if(name && !existing){
+                err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+                if(err) return CC_OOM_ERROR;
+            }
+            *base_type = (CcQualType){.bits = (uintptr_t)u};
+        }
+        return 0;
+
+        struct_err:
+        ma_cleanup(CcField)(&fields_arr, cc_allocator(p));
+        return err;
+    }
+
+    // No body — just a reference: struct/union name
+    if(!name)
+        return cc_error(p, loc, "expected %s name or '{'", !is_union ? "struct" : "union");
+
+    if(!is_union){
+        CcStruct* s = cc_scope_lookup_struct_tag(p->current, name, CC_SCOPE_WALK_CHAIN);
+        if(!s){
+            // Forward declaration — create incomplete struct
+            s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+            if(!s) return CC_OOM_ERROR;
+            *s = (CcStruct){
+                .kind = CC_STRUCT,
+                .name = name,
+                .loc = loc,
+                .is_incomplete = 1,
+            };
+            err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+            if(err) return CC_OOM_ERROR;
+        }
+        *base_type = (CcQualType){.bits = (uintptr_t)s};
+    }
+    else {
+        CcUnion* u = cc_scope_lookup_union_tag(p->current, name, CC_SCOPE_WALK_CHAIN);
+        if(!u){
+            u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+            if(!u) return CC_OOM_ERROR;
+            *u = (CcUnion){
+                .kind = CC_UNION,
+                .name = name,
+                .loc = loc,
+                .is_incomplete = 1,
+            };
+            err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+            if(err) return CC_OOM_ERROR;
+        }
+        *base_type = (CcQualType){.bits = (uintptr_t)u};
+    }
+    return 0;
 }
 
 static
@@ -2349,8 +3491,15 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                             return cc_error(p, tok.loc, "short after __auto_type");
                         spec->sp_short = 1;
                         continue;
-                    case CC_union:
-                        return cc_unimplemented(p, tok.loc, "union parsing in declaration");
+                    case CC_union: {
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "union with other type specifiers");
+                        err = cc_parse_struct_or_union(p, tok.loc, 1, base_type);
+                        if(err) return err;
+                        continue;
+                    }
                     case CC_double:
                         if(base_type->bits != (uintptr_t)-1)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -2395,12 +3544,88 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                             return cc_error(p, tok.loc, "static after register");
                         spec->sp_static = 1;
                         continue;
-                    case CC_struct:
-                        return cc_unimplemented(p, tok.loc, "struct parsing in declaration");
+                    case CC_struct: {
+                        if(base_type->bits != (uintptr_t)-1)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "struct with other type specifiers");
+                        err = cc_parse_struct_or_union(p, tok.loc, 0, base_type);
+                        if(err) return err;
+                        continue;
+                    }
                     case CC_typeof:
                         goto do_typeof;
-                    case CC_alignas:
-                        return cc_unimplemented(p, tok.loc, "alignas parsing in declaration");
+                    case CC_alignas: {
+                        err = cc_expect_punct(p, CC_lparen);
+                        if(err) return err;
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) return err;
+                        uint32_t align_val;
+                        if(cc_is_type_start(p, &peek)){
+                            CcQualType align_type;
+                            err = cc_parse_type_name(p, &align_type);
+                            if(err) return err;
+                            switch(ccqt_kind(align_type)){
+                                case CC_BASIC:
+                                    align_val = cc_target(p)->alignof_[align_type.basic.kind];
+                                    break;
+                                case CC_STRUCT: {
+                                    CcStruct* s = ccqt_as_struct(align_type);
+                                    if(s->is_incomplete)
+                                        return cc_error(p, tok.loc, "_Alignas applied to incomplete struct type");
+                                    align_val = s->alignment;
+                                    break;
+                                }
+                                case CC_UNION: {
+                                    CcUnion* u = ccqt_as_union(align_type);
+                                    if(u->is_incomplete)
+                                        return cc_error(p, tok.loc, "_Alignas applied to incomplete union type");
+                                    align_val = u->alignment;
+                                    break;
+                                }
+                                case CC_ARRAY: {
+                                    CcArray* arr = ccqt_as_array(align_type);
+                                    CcQualType elem = arr->element;
+                                    if(ccqt_is_basic(elem))
+                                        align_val = cc_target(p)->alignof_[elem.basic.kind];
+                                    else
+                                        return cc_error(p, tok.loc, "_Alignas with complex array element type not yet supported");
+                                    break;
+                                }
+                                case CC_POINTER:
+                                    align_val = cc_target(p)->alignof_[CCBT_nullptr_t];
+                                    break;
+                                default:
+                                    return cc_error(p, tok.loc, "_Alignas with this type not yet supported");
+                            }
+                        }
+                        else {
+                            CcExpr* expr = NULL;
+                            err = cc_parse_assignment_expr(p, &expr);
+                            if(err) return err;
+                            if(!expr)
+                                return cc_error(p, tok.loc, "expected expression in _Alignas");
+                            CcEvalResult val = cc_eval_expr(expr);
+                            if(val.kind == CC_EVAL_ERROR)
+                                return cc_error(p, tok.loc, "_Alignas requires a constant expression");
+                            int64_t av = cc_eval_to_int(val);
+                            if(av < 0)
+                                return cc_error(p, tok.loc, "_Alignas value must be non-negative");
+                            if(av != 0 && (av & (av - 1)) != 0)
+                                return cc_error(p, tok.loc, "_Alignas value must be zero or a power of 2");
+                            align_val = (uint32_t)av;
+                        }
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        if(align_val > 0){
+                            if(!p->attributes.has_aligned || align_val > p->attributes.aligned){
+                                p->attributes.aligned = (uint16_t)align_val;
+                                p->attributes.has_aligned = 1;
+                            }
+                        }
+                        continue;
+                    }
                     case CC_typedef:
                         if(spec->sp_storagebits)
                             return cc_error(p, tok.loc, "typedef after storage class");
@@ -2476,6 +3701,13 @@ cc_parse_declaration_specifier(CcParser* p, CcSpecifier* spec, CcQualType* base_
                             return cc_error(p, tok.loc, "thread_local after constexpr");
                         spec->sp_thread_local = 1;
                         continue;
+                    case CC___attribute__: {
+                        err = cc_unget(p, &tok);
+                        if(err) return err;
+                        err = cc_parse_attributes(p, &p->attributes);
+                        if(err) return err;
+                        continue;
+                    }
                     case CC_typeof_unqual:
                     do_typeof: {
                         if(base_type->bits != (uintptr_t)-1)
@@ -2799,25 +4031,26 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
 // type nodes so pointer equality works for type comparison.
 static CcQualType
 cc_intern_qualtype(CcParser* p, CcQualType t){
-    if(ccqt_is_basic(t)) return t;
     uintptr_t quals = t.bits & 7;
     switch(ccqt_kind(t)){
+        case CC_BASIC:
+            return t;
         case CC_POINTER: {
-            CcPointer* old = (CcPointer*)(t.bits & ~(uintptr_t)7);
+            CcPointer* old = ccqt_as_ptr(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
             CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, old->restrict_);
             if(!ptr) return t;
             return (CcQualType){.bits = (uintptr_t)ptr | quals};
         }
         case CC_ARRAY: {
-            CcArray* old = (CcArray*)(t.bits & ~(uintptr_t)7);
+            CcArray* old = ccqt_as_array(t);
             CcQualType elem = cc_intern_qualtype(p, old->element);
             CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete);
             if(!arr) return t;
             return (CcQualType){.bits = (uintptr_t)arr | quals};
         }
         case CC_FUNCTION: {
-            CcFunction* old = (CcFunction*)(t.bits & ~(uintptr_t)7);
+            CcFunction* old = ccqt_as_function(t);
             // Intern param types in-place — the old node is throwaway.
             for(uint32_t i = 0; i < old->param_count; i++)
                 old->params[i] = cc_intern_qualtype(p, old->params[i]);
@@ -2861,9 +4094,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             // tail != &head means the declarator itself built derived types.
             // Only allow function bodies when the declarator introduced the
             // function type, not when it came from a typedef.
-            is_fndef = tail != &head
-                    && !ccqt_is_basic(head)
-                    && ccqt_kind(head) == CC_FUNCTION;
+            is_fndef = tail != &head && ccqt_kind(head) == CC_FUNCTION;
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
         }
@@ -2908,7 +4139,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
                 if(err) return err;
             }
-            func->type = (CcFunction*)(type.bits & ~(uintptr_t)7);
+            func->type = ccqt_as_function(type);
             func->loc = tok.loc;
             func->defined = 1;
             func->extern_ = declbase->spec.sp_extern;
@@ -2983,7 +4214,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
                 if(err) return err;
             }
-            func->type = (CcFunction*)(type.bits & ~(uintptr_t)7);
+            func->type = ccqt_as_function(type);
             func->extern_ = declbase->spec.sp_extern;
             func->static_ = declbase->spec.sp_static;
             func->inline_ = declbase->spec.sp_inline;
@@ -2995,6 +4226,12 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
             if(declbase->spec.sp_noreturn)
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
+            // Reject incomplete array types without initializer in local scope.
+            if(!initializer && !declbase->spec.sp_extern && p->current_func && ccqt_kind(type) == CC_ARRAY){
+                CcArray* arr = ccqt_as_array(type);
+                if(arr->is_incomplete)
+                    return cc_error(p, tok.loc, "variable '%.*s' has incomplete array type", name->length, name->data);
+            }
             CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
             if(!var) return CC_OOM_ERROR;
             *var = (CcVariable){
@@ -3011,6 +4248,66 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         if(stop) break;
     }
     return err;
+}
+static
+const CcTargetConfig*
+cc_target(const CcParser* p){
+    return &p->lexer.cpp.target;
+}
+
+static
+int
+cc_handle_static_asssert(CcParser* p){
+    CcToken tok;
+    int err;
+    err = cc_next_token(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_KEYWORD || tok.kw.kw != CC_static_assert)
+        return ((void)cc_error(p, tok.loc, "ICE, handling static assert, but not on a static assert token"), CC_UNREACHABLE_ERROR);
+    SrcLoc assert_loc = tok.loc;
+    err = cc_expect_punct(p, CC_lparen);
+    if(err) return err;
+    CcExpr* expr = NULL;
+    err = cc_parse_assignment_expr(p, &expr);
+    if(err) return err;
+    if(!expr)
+        return cc_error(p, assert_loc, "expected expression in static_assert");
+    CcEvalResult val = cc_eval_expr(expr);
+    if(val.kind == CC_EVAL_ERROR)
+        return cc_error(p, assert_loc, "static_assert expression is not a constant expression");
+    // Check for optional message.
+    const char* msg = NULL;
+    size_t msg_len = 0;
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
+        cc_next_token(p, &tok); // consume comma
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type != CC_STRING_LITERAL)
+            return cc_error(p, tok.loc, "expected string literal in static_assert");
+        msg = tok.str.text;
+        msg_len = tok.str.length;
+    }
+    err = cc_expect_punct(p, CC_rparen);
+    if(err) return err;
+    err = cc_expect_punct(p, CC_semi);
+    if(err) return err;
+    int64_t ival = cc_eval_to_int(val);
+    if(!ival){
+        MStringBuilder tmp = {.allocator = allocator_from_arena(&p->scratch_arena)};
+        msb_write_literal(&tmp, "static assertion failed: ");
+        cc_print_expr(&tmp, expr);
+        if(msg){
+            msb_write_literal(&tmp, ": \"");
+            msb_write_str(&tmp, msg, msg_len);
+            msb_write_literal(&tmp, "\"");
+        }
+        StringView sv = msb_borrow_sv(&tmp);
+        cc_error(p, assert_loc, "%.*s", sv_p(sv));
+        return CC_SYNTAX_ERROR;
+    }
+    return 0;
 }
 
 #ifdef __clang__

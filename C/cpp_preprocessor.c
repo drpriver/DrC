@@ -2035,6 +2035,9 @@ cpp_handle_directive(CPreprocessor* cpp){
                 return 0;
             }
         }
+        if(cpp->frames.count > 512){
+            return cpp_error(cpp, tok.loc, "#include level over 512");
+        }
         CppFrame frame = {
             .file_id = file_id,
             .txt = file_txt,
@@ -3895,6 +3898,7 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
                               "#define va_copy __builtin_va_copy\n"
                               "#define va_arg __builtin_va_arg\n"
                               "#define va_end __builtin_va_end\n"
+                              "typedef void* __builtin_va_list;\n"
                               "typedef __builtin_va_list va_list;\n"
                             )},
         {SV("stddef.h"),   SV("#pragma once\n"

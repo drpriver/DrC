@@ -25,6 +25,16 @@
 #define MARRAY_T CcStatement
 #include "../Drp/Marray.h"
 #endif
+typedef struct CcPackRecord CcPackRecord;
+struct CcPackRecord {
+    StringView ident;
+    uint16_t pack;
+};
+#ifndef MARRAY_CCPACKRECORD
+#define MARRAY_CCPACKRECORD
+#define MARRAY_T CcPackRecord
+#include "../Drp/Marray.h"
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -67,6 +77,8 @@ struct CcParser {
     // for lookahead/pushback, LIFO
     Marray(CcToken) pending;
     CcAttributes attributes;
+    Marray(CcPackRecord) pack_stack;
+    uint16_t pragma_pack; // 0 = default (no pack), otherwise pack(N) value
     CcScope global;
     CcScope* current;
     CcFunc*_Nullable current_func;
@@ -79,6 +91,7 @@ static int cc_parse_top_level(CcParser*, _Bool* finished);
 static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);
+static int cc_register_pragmas(CcParser*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

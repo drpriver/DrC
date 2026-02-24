@@ -31,6 +31,12 @@ static const StringView cc_target_names[CC_TARGET_COUNT] = {
     [CC_TARGET_TEST]           = SV("test"),
 };
 
+enum CcBitfieldABI TYPED_ENUM(uint8_t) {
+    CC_BITFIELD_SYSV,  // SysV/Itanium: same-sized types share storage units
+    CC_BITFIELD_MSVC,  // MSVC: different types never share storage units
+};
+TYPEDEF_ENUM(CcBitfieldABI, uint8_t);
+
 // Target-specific type configuration.
 // Sizes are in bytes. Type fields use CcBasicTypeKind.
 typedef struct CcTargetConfig CcTargetConfig;
@@ -38,6 +44,7 @@ struct CcTargetConfig {
     CcTarget target;
     uint8_t sizeof_[CCBT_COUNT];
     uint8_t alignof_[CCBT_COUNT];
+    CcBitfieldABI bitfield_abi;
     CcBasicTypeKind size_type;
     CcBasicTypeKind ptrdiff_type;
     CcBasicTypeKind wchar_type;
@@ -52,6 +59,7 @@ struct CcTargetConfig {
     CcBasicTypeKind int_fast16_type;
     CcBasicTypeKind int_fast32_type;
     CcBasicTypeKind int_fast64_type;
+    uint8_t max_align;
     _Bool is_lp64;
     _Bool user_label_prefix;
     _Bool char_is_signed;
@@ -124,6 +132,7 @@ cc_target_x86_64_linux(void){
         .int_fast16_type = CCBT_long,
         .int_fast32_type = CCBT_long,
         .int_fast64_type = CCBT_long,
+        .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 1,
@@ -205,6 +214,7 @@ cc_target_aarch64_linux(void){
         .int_fast16_type = CCBT_long,
         .int_fast32_type = CCBT_long,
         .int_fast64_type = CCBT_long,
+        .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 0,
@@ -283,6 +293,7 @@ cc_target_x86_64_macos(void){
         .int_fast16_type = CCBT_short,
         .int_fast32_type = CCBT_int,
         .int_fast64_type = CCBT_long_long,
+        .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 1,
         .char_is_signed = 1,
@@ -363,6 +374,7 @@ cc_target_aarch64_macos(void){
         .int_fast16_type = CCBT_short,
         .int_fast32_type = CCBT_int,
         .int_fast64_type = CCBT_long_long,
+        .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 1,
         .char_is_signed = 0,
@@ -383,6 +395,7 @@ static inline CcTargetConfig
 cc_target_x86_64_windows(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_WINDOWS,
+        .bitfield_abi = CC_BITFIELD_MSVC,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,
@@ -441,6 +454,7 @@ cc_target_x86_64_windows(void){
         .int_fast16_type = CCBT_short,
         .int_fast32_type = CCBT_int,
         .int_fast64_type = CCBT_long_long,
+        .max_align = 8,
         .is_lp64 = 0,
         .user_label_prefix = 0,
         .char_is_signed = 1,
@@ -519,6 +533,7 @@ cc_target_test(void){
         .int_fast16_type = CCBT_long,
         .int_fast32_type = CCBT_long,
         .int_fast64_type = CCBT_long,
+        .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 1,

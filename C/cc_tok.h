@@ -109,6 +109,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC_static_assert,
     CC_typeof_unqual,
     CC__Countof,
+    CC___attribute__,
 };
 TYPEDEF_ENUM(CcKeyword, uint32_t);
 
