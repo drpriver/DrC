@@ -1668,7 +1668,10 @@ drjson_buff_write_escaped(DrJsonBuffered* restrict buffer, const char* restrict 
     const char* p = data;
 #ifdef __GNUC__
 #pragma GCC diagnostic push
-#if defined __has_warning && !__has_warning("-Wunterminated-string-initialization")
+#if defined __has_warning
+#if __has_warning("-Wunterminated-string-initialization")
+#pragma GCC diagnostic ignored "-Wunterminated-string-initialization"
+#endif
 #else
 #pragma GCC diagnostic ignored "-Wunterminated-string-initialization"
 #endif
