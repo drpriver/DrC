@@ -13,6 +13,9 @@
 #ifndef _Nonnull
 #define _Nonnull
 #endif
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
 #endif
 
 enum CcExprKind TYPED_ENUM(uint32_t){
@@ -22,6 +25,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_FUNCTION, // Reference to a function, eagerly resolved
     CC_EXPR_IDENTIFIER, // maybe unneeded?
     CC_EXPR_COMPOUND_LITERAL,
+    CC_EXPR_INIT_LIST,
     CC_EXPR_NEG,
     CC_EXPR_POS,
     CC_EXPR_BITNOT,
@@ -77,6 +81,28 @@ typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
 typedef struct CcExpr CcExpr;
+
+typedef struct CcFieldLoc CcFieldLoc;
+struct CcFieldLoc {
+    uint64_t byte_offset: 48;
+    uint64_t bit_offset: 8; // bit offset within storage unit (bitfields)
+    uint64_t bit_width: 8;  // 0 = not a bitfield
+};
+
+// Each entry is a scalar store at a byte offset into the aggregate.
+typedef struct CcInitEntry CcInitEntry;
+struct CcInitEntry {
+    CcFieldLoc field_loc;
+    CcExpr*_Null_unspecified value;
+};
+
+typedef struct CcInitList CcInitList;
+struct CcInitList {
+    SrcLoc loc;
+    uint32_t count;
+    CcInitEntry entries[];
+};
+
 struct CcExpr {
     union {
         uint32_t bits;
@@ -93,7 +119,7 @@ struct CcExpr {
         struct {
             CcExprKind kind: 6;
             uint32_t _pad: 26;
-            uint32_t length; // 
+            uint32_t length; //
         } str;
     };
     SrcLoc loc;
@@ -101,7 +127,7 @@ struct CcExpr {
     // `values` is interpreted based on `kind`.
     // For most nodes, it is just the referenced exprs, like the rhs and lhs of CC_EXPR_ADD
     // the lhs will be in value0;
-    // For CC_EXPR_VALUE, it actually should be reinterpreted based on type. 
+    // For CC_EXPR_VALUE, it actually should be reinterpreted based on type.
     union {
         CcExpr* value0;
         _Bool boolean;
@@ -114,6 +140,7 @@ struct CcExpr {
         CcStatement* stmt;
         CcVariable* var;
         CcFunc* func;
+        CcInitList* init_list;
     };
     CcExpr*_Nonnull values[];
 };

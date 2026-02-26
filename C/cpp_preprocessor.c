@@ -4151,7 +4151,7 @@ cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
     (void)ctx;
     uint64_t file_id = 0;
     if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.bits<<1);
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
         while(e->parent)
             e = e->parent;
         file_id = e->file_id;
@@ -5185,7 +5185,18 @@ SrcLoc
 cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
     SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
     if(!exp) return tok_loc;
-    *exp = (SrcLocExp){.file_id = tok_loc.file_id, .column = tok_loc.column, .line = tok_loc.line, .parent = parent};
+    uint64_t file_id, column, line;
+    if(tok_loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)(tok_loc.bits & ~(uint64_t)1);
+        file_id = e->file_id;
+        column = e->column;
+        line = e->line;
+    } else {
+        file_id = tok_loc.file_id;
+        column = tok_loc.column;
+        line = tok_loc.line;
+    }
+    *exp = (SrcLocExp){.file_id = file_id, .column = column, .line = line, .parent = parent};
     SrcLoc result = {.pointer = {.bits = (uint64_t)exp >> 1, .is_actually_a_pointer = 1}};
     return result;
 }

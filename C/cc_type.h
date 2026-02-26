@@ -162,7 +162,7 @@ struct CcStruct {
     uint32_t size;
     uint32_t alignment;
     uint32_t field_count;
-    CcField* _Nullable fields;
+    CcField* _Null_unspecified fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
 
@@ -255,15 +255,26 @@ static inline
 int
 ccbt_int_rank(CcBasicTypeKind k){
     switch(k){
-        case CCBT_bool:                                  return 0;
-        case CCBT_char: case CCBT_signed_char:
-        case CCBT_unsigned_char:                         return 1;
-        case CCBT_short: case CCBT_unsigned_short:       return 2;
-        case CCBT_int: case CCBT_unsigned:               return 3;
-        case CCBT_long: case CCBT_unsigned_long:         return 4;
+        case CCBT_bool:
+            return 0;
+        case CCBT_char:
+        case CCBT_signed_char:
+        case CCBT_unsigned_char:
+            return 1;
+        case CCBT_short:
+        case CCBT_unsigned_short:
+            return 2;
+        case CCBT_int:
+        case CCBT_unsigned:
+            return 3;
+        case CCBT_long:
+        case CCBT_unsigned_long:
+            return 4;
         case CCBT_long_long:
-        case CCBT_unsigned_long_long:                    return 5;
-        default:                                         return -1;
+        case CCBT_unsigned_long_long:
+            return 5;
+        default:
+            return -1;
     }
 }
 
@@ -271,12 +282,19 @@ static inline
 CcBasicTypeKind
 ccbt_to_unsigned(CcBasicTypeKind k){
     switch(k){
-        case CCBT_char: case CCBT_signed_char: return CCBT_unsigned_char;
-        case CCBT_short:                       return CCBT_unsigned_short;
-        case CCBT_int:                         return CCBT_unsigned;
-        case CCBT_long:                        return CCBT_unsigned_long;
-        case CCBT_long_long:                   return CCBT_unsigned_long_long;
-        default:                               return k;
+        case CCBT_char:
+        case CCBT_signed_char:
+            return CCBT_unsigned_char;
+        case CCBT_short:
+            return CCBT_unsigned_short;
+        case CCBT_int:
+            return CCBT_unsigned;
+        case CCBT_long:
+            return CCBT_unsigned_long;
+        case CCBT_long_long:
+            return CCBT_unsigned_long_long;
+        default:
+            return k;
     }
 }
 
@@ -290,7 +308,6 @@ ccqt_basic(CcBasicTypeKind k){
 static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
-    if(ccqt_is_basic(t)) return 0;
     CcTypeKind k = ccqt_kind(t);
     return k == CC_POINTER || k == CC_ARRAY;
 }

@@ -424,6 +424,7 @@ repl_builtin_command(CcParser* parser, StringView input){
             CcVariable* v = mi.data[i].p;
             log_sprintf(l, "  %.*s: ", (int)a->length, a->data);
             cc_print_type(&l->buff, v->type);
+            if(v->mangle) log_sprintf(l, " asm(\"%.*s\")", (int)v->mangle->length, v->mangle->data);
             if(v->extern_) log_sprintf(l, " (extern)");
             if(v->static_) log_sprintf(l, " (static)");
             if(v->initializer){
@@ -457,6 +458,7 @@ repl_builtin_command(CcParser* parser, StringView input){
             }
             log_sprintf(l, ") -> ");
             cc_print_type(&l->buff, ft->return_type);
+            if(fn->mangle) log_sprintf(l, " asm(\"%.*s\")", (int)fn->mangle->length, fn->mangle->data);
             if(fn->defined) log_sprintf(l, " [defined]");
             log_sprintf(l, "\n");
         }

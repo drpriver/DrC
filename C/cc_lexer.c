@@ -150,6 +150,7 @@ X(_Decimal64, _Decimal64) \
 X(__inline__, inline) \
 X(__volatile, volatile) \
 X(__typeof__, typeof) \
+X(__restrict, restrict) \
 
 #define CKWS11(X) \
 X(_Decimal128, _Decimal128) \
@@ -158,6 +159,7 @@ X(__attribute, __attribute__) \
 
 #define CKWS12(X) \
 X(thread_local, thread_local) \
+X(__restrict__, restrict) \
 
 #define CKWS13(X) \
 X(static_assert, static_assert) \

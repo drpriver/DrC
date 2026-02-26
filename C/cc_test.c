@@ -39,10 +39,12 @@ TestFunction(test_parse_decls){
             StringView name;
             StringView repr;
             StringView init; // expected cc_print_expr output, empty = no check
+            StringView mangle; // expected asm label, empty = no check
         } vars[N];
         struct {
             StringView name;
             StringView repr;
+            StringView mangle; // expected asm label, empty = no check
         } funcs[N];
         struct {
             StringView name;
@@ -212,6 +214,24 @@ TestFunction(test_parse_decls){
             },
             .typedefs = {
                 { SV("myint"), SV("int") },
+            },
+        },
+        {
+            "typedef typedef", __LINE__,
+            SV("typedef int x;\n"
+                "typedef x y;"),
+            .typedefs = {
+                {SV("x"), SV("int")},
+                {SV("y"), SV("int")},
+            },
+        },
+        {
+            "typedef typedef pointer", __LINE__,
+            SV("typedef void* list;\n"
+                "typedef list list2;"),
+            .typedefs = {
+                {SV("list"), SV("void *")},
+                {SV("list2"), SV("void *")},
             },
         },
         {
@@ -952,6 +972,1010 @@ TestFunction(test_parse_decls){
                 {SV("a"), SV("int[4]")},
             },
         },
+        // --- Brace initialization and designated initializer tests ---
+        {
+            "struct brace init", __LINE__,
+            SV("struct S { int a; int b; };\n"
+               "struct S s = {1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "struct designated init", __LINE__,
+            SV("struct S { int a; int b; };\n"
+               "struct S s = {.b = 2, .a = 1};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@4 = 2, @0 = 1}") },
+            },
+        },
+        {
+            "array init", __LINE__,
+            SV("int arr[3] = {1, 2, 3};\n"),
+            .vars = {
+                { SV("arr"), SV("int[3]"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "array designated init", __LINE__,
+            SV("int arr[5] = {[2] = 10, [4] = 20};\n"),
+            .vars = {
+                { SV("arr"), SV("int[5]"), SV("{@8 = 10, @16 = 20}") },
+            },
+        },
+        {
+            "incomplete array sizing", __LINE__,
+            SV("int arr[] = {1, 2, 3};\n"),
+            .vars = {
+                { SV("arr"), SV("int[3]"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "nested struct init", __LINE__,
+            SV("struct S { int a[2]; int b; };\n"
+               "struct S s = {{1, 2}, 3};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "union init", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "union U u = {.f = 1.5f};\n"),
+            .vars = {
+                { SV("u"), SV("union U"), SV("{1.5f}") },
+            },
+        },
+        {
+            "positional continuation after designation", __LINE__,
+            SV("struct S { int a; int b; int c; };\n"
+               "struct S s = {.b = 2, 3};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "scalar brace init", __LINE__,
+            SV("int x = {42};\n"),
+            .vars = {
+                { SV("x"), SV("int"), SV("{42}") },
+            },
+        },
+        {
+            "empty brace init", __LINE__,
+            SV("struct S { int a; int b; };\n"
+               "struct S s = {};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{}") },
+            },
+        },
+        {
+            "chained designator", __LINE__,
+            SV("struct Inner { int x; int y; };\n"
+               "struct Outer { struct Inner p; };\n"
+               "struct Outer s = {.p.x = 1, .p.y = 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct Outer"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "implicit cast in init list", __LINE__,
+            SV("struct S { float f; };\n"
+               "struct S s = {42};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{(float)42}") },
+            },
+        },
+        {
+            "brace elision: array of structs", __LINE__,
+            SV("struct S { int x; };\n"
+               "struct S foo[] = {1, {2}, 3};\n"),
+            .vars = {
+                { SV("foo"), SV("struct S[3]"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "extra nested braces on scalar", __LINE__,
+            SV("int x[2] = {1, {{2}}};\n"),
+            .vars = {
+                { SV("x"), SV("int[2]"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "brace elision: multi-field struct", __LINE__,
+            SV("struct P { int a; int b; };\n"
+               "struct P arr[] = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("arr"), SV("struct P[2]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "brace elision: nested structs", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { struct Inner s; int c; };\n"
+               "struct Outer o = {1, 2, 3};\n"),
+            .vars = {
+                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        // --- Torture tests ---
+        {
+            "trailing comma in init list", __LINE__,
+            SV("int arr[3] = {1, 2, 3,};\n"),
+            .vars = {
+                { SV("arr"), SV("int[3]"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "empty init for array", __LINE__,
+            SV("int arr[3] = {};\n"),
+            .vars = {
+                { SV("arr"), SV("int[3]"), SV("{}") },
+            },
+        },
+        {
+            "empty init for union", __LINE__,
+            SV("union U { int a; float b; };\n"
+               "union U u = {};\n"),
+            .vars = {
+                { SV("u"), SV("union U"), SV("{}") },
+            },
+        },
+        {
+            "scalar with extra braces", __LINE__,
+            SV("int x = {{{42}}};\n"),
+            .vars = {
+                { SV("x"), SV("int"), SV("{42}") },
+            },
+        },
+        {
+            "array of arrays", __LINE__,
+            SV("int a[2][3] = {{1, 2, 3}, {4, 5, 6}};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "array of arrays: brace elision", __LINE__,
+            SV("int a[2][3] = {1, 2, 3, 4, 5, 6};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "array of arrays: incomplete outer", __LINE__,
+            SV("int a[][3] = {{1, 2, 3}, {4, 5, 6}};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "array of arrays: incomplete outer + brace elision", __LINE__,
+            SV("int a[][3] = {1, 2, 3, 4, 5, 6};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "designator then positional in array", __LINE__,
+            SV("int a[5] = {[3] = 30, 40};\n"),
+            .vars = {
+                { SV("a"), SV("int[5]"), SV("{@12 = 30, @16 = 40}") },
+            },
+        },
+        {
+            "last-write-wins in array", __LINE__,
+            SV("int a[3] = {1, 2, 3, [0] = 10};\n"),
+            .vars = {
+                { SV("a"), SV("int[3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @0 = 10}") },
+            },
+        },
+        {
+            "last-write-wins in struct", __LINE__,
+            SV("struct S { int a; int b; };\n"
+               "struct S s = {1, 2, .a = 99};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2, @0 = 99}") },
+            },
+        },
+        {
+            "struct with array member: brace elision", __LINE__,
+            SV("struct S { int a[3]; int b; };\n"
+               "struct S s = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "struct with array member: explicit braces", __LINE__,
+            SV("struct S { int a[3]; int b; };\n"
+               "struct S s = {{1, 2, 3}, 4};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "nested struct array brace elision", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct Line { struct P start; struct P end; };\n"
+               "struct Line l = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("l"), SV("struct Line"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "array of structs with designated + positional", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[3] = {[1] = {10, 20}, {30, 40}};\n"),
+            .vars = {
+                { SV("arr"), SV("struct P[3]"), SV("{@8 = 10, @12 = 20, @16 = 30, @20 = 40}") },
+            },
+        },
+        {
+            "struct designated init: out of order", __LINE__,
+            SV("struct S { int a; int b; int c; int d; };\n"
+               "struct S s = {.d = 4, .b = 2, .c = 3, .a = 1};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@12 = 4, @4 = 2, @8 = 3, @0 = 1}") },
+            },
+        },
+        {
+            "union designated second member", __LINE__,
+            SV("union U { int i; float f; double d; };\n"
+               "union U u = {.d = 3.14};\n"),
+            .vars = {
+                { SV("u"), SV("union U"), SV("{3.14}") },
+            },
+        },
+        {
+            "union first member implicit", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "union U u = {42};\n"),
+            .vars = {
+                { SV("u"), SV("union U"), SV("{42}") },
+            },
+        },
+        {
+            "incomplete array of structs: brace elision", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[] = {1, 2, 3, 4, 5, 6};\n"),
+            .vars = {
+                { SV("arr"), SV("struct P[3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "chained designator: array in struct", __LINE__,
+            SV("struct S { int a[3]; };\n"
+               "struct S s = {.a[1] = 42};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@4 = 42}") },
+            },
+        },
+        {
+            "chained designator: struct in array", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[2] = {[0].y = 5, [1].x = 10};\n"),
+            .vars = {
+                { SV("arr"), SV("struct P[2]"), SV("{@4 = 5, @8 = 10}") },
+            },
+        },
+        {
+            "chained designator: deep nesting", __LINE__,
+            SV("struct A { int v; };\n"
+               "struct B { struct A a; };\n"
+               "struct C { struct B b; };\n"
+               "struct C c = {.b.a.v = 99};\n"),
+            .vars = {
+                { SV("c"), SV("struct C"), SV("{99}") },
+            },
+        },
+        {
+            "partial struct init: fewer inits than fields", __LINE__,
+            SV("struct S { int a; int b; int c; int d; };\n"
+               "struct S s = {1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "partial array init: fewer inits than size", __LINE__,
+            SV("int a[10] = {1};\n"),
+            .vars = {
+                { SV("a"), SV("int[10]"), SV("{1}") },
+            },
+        },
+        {
+            "mixed designated and positional struct init", __LINE__,
+            SV("struct S { int a; int b; int c; int d; };\n"
+               "struct S s = {.c = 30, 40, .a = 10};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@8 = 30, @12 = 40, @0 = 10}") },
+            },
+        },
+        {
+            "single element incomplete array", __LINE__,
+            SV("int a[] = {42};\n"),
+            .vars = {
+                { SV("a"), SV("int[1]"), SV("{42}") },
+            },
+        },
+        {
+            "array of arrays: partial inner", __LINE__,
+            SV("int a[2][3] = {{1}, {4, 5}};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][3]"), SV("{@0 = 1, @12 = 4, @16 = 5}") },
+            },
+        },
+        {
+            "struct with nested struct: designated inner", __LINE__,
+            SV("struct Inner { int x; int y; };\n"
+               "struct Outer { struct Inner p; int z; };\n"
+               "struct Outer o = {.p = {.y = 2, .x = 1}, .z = 3};\n"),
+            .vars = {
+                { SV("o"), SV("struct Outer"), SV("{@4 = 2, @0 = 1, @8 = 3}") },
+            },
+        },
+        {
+            "struct with union member", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "struct S { union U u; int x; };\n"
+               "struct S s = {{42}, 7};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 42, @4 = 7}") },
+            },
+        },
+        {
+            "struct with union: designated", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "struct S { union U u; int x; };\n"
+               "struct S s = {.u = {.f = 1.5f}, .x = 7};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 1.5f, @4 = 7}") },
+            },
+        },
+        {
+            "brace elision with union in struct", __LINE__,
+            SV("union U { int i; };\n"
+               "struct S { union U u; int x; };\n"
+               "struct S s = {42, 7};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 42, @4 = 7}") },
+            },
+        },
+        {
+            "array: designator at end", __LINE__,
+            SV("int a[5] = {1, 2, [4] = 5};\n"),
+            .vars = {
+                { SV("a"), SV("int[5]"), SV("{@0 = 1, @4 = 2, @16 = 5}") },
+            },
+        },
+        {
+            "array: designator jump backwards", __LINE__,
+            SV("int a[5] = {[4] = 50, [1] = 10};\n"),
+            .vars = {
+                { SV("a"), SV("int[5]"), SV("{@16 = 50, @4 = 10}") },
+            },
+        },
+        {
+            "incomplete array: designated max index", __LINE__,
+            SV("int a[] = {[9] = 99};\n"),
+            .vars = {
+                { SV("a"), SV("int[10]"), SV("{@36 = 99}") },
+            },
+        },
+        {
+            "3d array", __LINE__,
+            SV("int a[2][2][2] = {{{1,2},{3,4}},{{5,6},{7,8}}};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][2][2]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6, @24 = 7, @28 = 8}") },
+            },
+        },
+        {
+            "3d array: brace elision", __LINE__,
+            SV("int a[2][2][2] = {1,2,3,4,5,6,7,8};\n"),
+            .vars = {
+                { SV("a"), SV("int[2][2][2]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6, @24 = 7, @28 = 8}") },
+            },
+        },
+        {
+            "array of structs: mixed braces", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[] = {{1, 2}, 3, 4, {5, 6}};\n"),
+            .vars = {
+                { SV("arr"), SV("struct P[3]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+            },
+        },
+        {
+            "struct with char array", __LINE__,
+            SV("struct S { int n; char name[4]; };\n"
+               "struct S s = {42, {'a', 'b', 'c', 0}};\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = 42, @4 = (char)97, @5 = (char)98, @6 = (char)99, @7 = (char)0}") },
+            },
+        },
+        // --- C standard examples (6.7.9 / 6.7.10) ---
+        // EXAMPLE 2
+        {
+            "std ex2: incomplete array", __LINE__,
+            SV("int x[] = { 1, 3, 5 };\n"),
+            .vars = {
+                { SV("x"), SV("int[3]"), SV("{@0 = 1, @4 = 3, @8 = 5}") },
+            },
+        },
+        // EXAMPLE 3: 2D array, braced and flat forms
+        {
+            "std ex3: 2D array braced", __LINE__,
+            SV("int y[4][3] = {\n"
+               "  { 1, 3, 5 },\n"
+               "  { 2, 4, 6 },\n"
+               "  { 3, 5, 7 },\n"
+               "};\n"),
+            .vars = {
+                { SV("y"), SV("int[4][3]"), SV("{@0 = 1, @4 = 3, @8 = 5, @12 = 2, @16 = 4, @20 = 6, @24 = 3, @28 = 5, @32 = 7}") },
+            },
+        },
+        {
+            "std ex3: 2D array flat (brace elision)", __LINE__,
+            SV("int y[4][3] = {\n"
+               "  1, 3, 5, 2, 4, 6, 3, 5, 7\n"
+               "};\n"),
+            .vars = {
+                { SV("y"), SV("int[4][3]"), SV("{@0 = 1, @4 = 3, @8 = 5, @12 = 2, @16 = 4, @20 = 6, @24 = 3, @28 = 5, @32 = 7}") },
+            },
+        },
+        // EXAMPLE 4: partial inner init
+        {
+            "std ex4: 2D array partial inner", __LINE__,
+            SV("int z[4][3] = {\n"
+               "  { 1 }, { 2 }, { 3 }, { 4 }\n"
+               "};\n"),
+            .vars = {
+                { SV("z"), SV("int[4][3]"), SV("{@0 = 1, @12 = 2, @24 = 3, @36 = 4}") },
+            },
+        },
+        // EXAMPLE 5: struct with array member, brace elision across elements
+        {
+            "std ex5: struct array member elision", __LINE__,
+            SV("struct W { int a[3]; int b; };\n"
+               "struct W w[] = { { 1 }, 2 };\n"),
+            .vars = {
+                { SV("w"), SV("struct W[2]"), SV("{@0 = 1, @16 = 2}") },
+            },
+        },
+        // EXAMPLE 6: 3D array, three equivalent forms
+        {
+            "std ex6: 3D array partially braced", __LINE__,
+            SV("int q[4][3][2] = {\n"
+               "  { 1 },\n"
+               "  { 2, 3 },\n"
+               "  { 4, 5, 6 }\n"
+               "};\n"),
+            .vars = {
+                { SV("q"), SV("int[4][3][2]"), SV("{@0 = 1, @24 = 2, @28 = 3, @48 = 4, @52 = 5, @56 = 6}") },
+            },
+        },
+        {
+            "std ex6: 3D array flat (brace elision)", __LINE__,
+            SV("int q[4][3][2] = {\n"
+               "  1, 0, 0, 0, 0, 0,\n"
+               "  2, 3, 0, 0, 0, 0,\n"
+               "  4, 5, 6\n"
+               "};\n"),
+            .vars = {
+                { SV("q"), SV("int[4][3][2]"), SV("{@0 = 1, @4 = 0, @8 = 0, @12 = 0, @16 = 0, @20 = 0, @24 = 2, @28 = 3, @32 = 0, @36 = 0, @40 = 0, @44 = 0, @48 = 4, @52 = 5, @56 = 6}") },
+            },
+        },
+        {
+            "std ex6: 3D array fully braced", __LINE__,
+            SV("int q[4][3][2] = {\n"
+               "  {\n"
+               "    { 1 },\n"
+               "  },\n"
+               "  {\n"
+               "    { 2, 3 },\n"
+               "  },\n"
+               "  {\n"
+               "    { 4, 5 },\n"
+               "    { 6 },\n"
+               "  }\n"
+               "};\n"),
+            .vars = {
+                { SV("q"), SV("int[4][3][2]"), SV("{@0 = 1, @24 = 2, @28 = 3, @48 = 4, @52 = 5, @56 = 6}") },
+            },
+        },
+        // EXAMPLE 9: enum constants as designator indices
+        {
+            "std ex9: enum constant designators", __LINE__,
+            SV("enum { member_one, member_two };\n"
+               "int nm[2] = {\n"
+               "  [member_two] = 20,\n"
+               "  [member_one] = 10,\n"
+               "};\n"),
+            .vars = {
+                { SV("nm"), SV("int[2]"), SV("{@4 = 20, @0 = 10}") },
+            },
+        },
+        // EXAMPLE 10: designated struct init (like div_t)
+        {
+            "std ex10: designated struct", __LINE__,
+            SV("struct DT { int quot; int rem; };\n"
+               "struct DT answer = {.quot = 2, .rem = -1};\n"),
+            .vars = {
+                { SV("answer"), SV("struct DT"), SV("{@0 = 2, @4 = -1}") },
+            },
+        },
+        // EXAMPLE 11: chained array+field designators
+        {
+            "std ex11: mixed chained designators", __LINE__,
+            SV("struct W { int a[3]; int b; };\n"
+               "struct W w[] = { [0].a = {1}, [1].a[0] = 2 };\n"),
+            .vars = {
+                { SV("w"), SV("struct W[2]"), SV("{@0 = 1, @16 = 2}") },
+            },
+        },
+        // EXAMPLE 13: designator in middle of positional sequence
+        {
+            "std ex13: designator mid-sequence", __LINE__,
+            SV("int a[10] = {\n"
+               "  1, 3, 5, 7, 9, [5] = 8, 6, 4, 2, 0\n"
+               "};\n"),
+            .vars = {
+                { SV("a"), SV("int[10]"), SV("{@0 = 1, @4 = 3, @8 = 5, @12 = 7, @16 = 9, @20 = 8, @24 = 6, @28 = 4, @32 = 2, @36 = 0}") },
+            },
+        },
+        // EXAMPLE 15: bitfields
+        {
+            "std ex15: bitfield init", __LINE__,
+            SV("struct BF {\n"
+               "  int a:10;\n"
+               "  int :12;\n"
+               "  long b;\n"
+               "};\n"
+               "struct BF s = {1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:10 = 1, @8 = (long)2}") },
+            },
+        },
+        {
+            "bitfield: designated init", __LINE__,
+            SV("struct BF { int a:10; int b:6; long c; };\n"
+               "struct BF s = {.b = 3, .a = 1};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:10:6 = 3, @0:0:10 = 1}") },
+            },
+        },
+        {
+            "bitfield: multiple in same storage unit", __LINE__,
+            SV("struct BF { int a:3; int b:5; int c:8; int d:16; };\n"
+               "struct BF s = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:3 = 1, @0:3:5 = 2, @0:8:8 = 3, @0:16:16 = 4}") },
+            },
+        },
+        {
+            "bitfield: spanning storage units", __LINE__,
+            SV("struct BF { int a:20; int b:20; };\n"
+               "struct BF s = {1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:20 = 1, @4:0:20 = 2}") },
+            },
+        },
+        {
+            "bitfield: mixed with regular fields", __LINE__,
+            SV("struct BF { int x; int a:3; int b:5; int y; };\n"
+               "struct BF s = {10, 1, 2, 20};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0 = 10, @4:0:3 = 1, @4:3:5 = 2, @8 = 20}") },
+            },
+        },
+        {
+            "bitfield: skip anonymous padding", __LINE__,
+            SV("struct BF { int a:4; int :4; int b:8; };\n"
+               "struct BF s = {3, 7};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:4 = 3, @0:8:8 = 7}") },
+            },
+        },
+        {
+            "bitfield: zero-width forces new unit", __LINE__,
+            SV("struct BF { int a:4; int :0; int b:4; };\n"
+               "struct BF s = {1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:4 = 1, @4:0:4 = 2}") },
+            },
+        },
+        {
+            "bitfield: nested struct with bitfields", __LINE__,
+            SV("struct Inner { int x:3; int y:5; };\n"
+               "struct Outer { int a; struct Inner b; int c; };\n"
+               "struct Outer s = {1, {2, 3}, 4};\n"),
+            .vars = {
+                { SV("s"), SV("struct Outer"), SV("{@0 = 1, @4:0:3 = 2, @4:3:5 = 3, @8 = 4}") },
+            },
+        },
+        {
+            "bitfield: designated into nested bitfield", __LINE__,
+            SV("struct Inner { int x:3; int y:5; };\n"
+               "struct Outer { int a; struct Inner b; };\n"
+               "struct Outer s = {.b.y = 7};\n"),
+            .vars = {
+                { SV("s"), SV("struct Outer"), SV("{@4:3:5 = 7}") },
+            },
+        },
+        {
+            "bitfield: single bit", __LINE__,
+            SV("struct BF { int flag:1; int value:31; };\n"
+               "struct BF s = {1, 100};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:1 = 1, @0:1:31 = 100}") },
+            },
+        },
+        {
+            "bitfield: unsigned", __LINE__,
+            SV("struct BF { unsigned a:4; unsigned b:4; };\n"
+               "struct BF s = {15, 10};\n"),
+            .vars = {
+                { SV("s"), SV("struct BF"), SV("{@0:0:4 = (unsigned int)15, @0:4:4 = (unsigned int)10}") },
+            },
+        },
+        // EXAMPLE 16: anonymous union in struct (braced form)
+        {
+            "std ex16: anon union braced", __LINE__,
+            SV("struct AU {\n"
+               "  union {\n"
+               "    float a;\n"
+               "    int b;\n"
+               "    void *p;\n"
+               "  };\n"
+               "  char c;\n"
+               "};\n"
+               "struct AU s = {{.b = 1}, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct AU"), SV("{@0 = 1, @8 = (char)2}") },
+            },
+        },
+        // EXAMPLE 16: anonymous union in struct (designated form)
+        {
+            "std ex16: anon union designated", __LINE__,
+            SV("struct AU {\n"
+               "  union {\n"
+               "    float a;\n"
+               "    int b;\n"
+               "    void *p;\n"
+               "  };\n"
+               "  char c;\n"
+               "};\n"
+               "struct AU s = {.b = 1, 2};\n"),
+            .vars = {
+                { SV("s"), SV("struct AU"), SV("{@0 = 1, @8 = (char)2}") },
+            },
+        },
+        // EXAMPLE 7: typedef incomplete array + multiple declarators
+        {
+            "std ex7: typedef incomplete array", __LINE__,
+            SV("typedef int A[];\n"
+               "A a = { 1, 2 }, b = { 3, 4, 5 };\n"),
+            .vars = {
+                { SV("a"), SV("int[2]"), SV("{@0 = 1, @4 = 2}") },
+                { SV("b"), SV("int[3]"), SV("{@0 = 3, @4 = 4, @8 = 5}") },
+            },
+        },
+        {
+            "std ex7: multiple incomplete array decls", __LINE__,
+            SV("int a[] = { 1, 2 }, b[] = { 3, 4, 5 };\n"),
+            .vars = {
+                { SV("a"), SV("int[2]"), SV("{@0 = 1, @4 = 2}") },
+                { SV("b"), SV("int[3]"), SV("{@0 = 3, @4 = 4, @8 = 5}") },
+            },
+        },
+        // EXAMPLE 8: char array init (non-string-literal forms)
+        {
+            "std ex8: char array brace init", __LINE__,
+            SV("char s[] = { 'a', 'b', 'c', '\\0' },\n"
+               "     t[] = { 'a', 'b', 'c' };\n"),
+            .vars = {
+                { SV("s"), SV("char[4]"), SV("{@0 = (char)97, @1 = (char)98, @2 = (char)99, @3 = (char)0}") },
+                { SV("t"), SV("char[3]"), SV("{@0 = (char)97, @1 = (char)98, @2 = (char)99}") },
+            },
+        },
+        {
+            "std ex8: char pointer from string", __LINE__,
+            SV("char *p = \"abc\";\n"),
+            .vars = {
+                { SV("p"), SV("char *"), SV("(char *)\"abc\"") },
+            },
+        },
+        {
+            "std ex8: string literal array init", __LINE__,
+            SV("char s[] = \"abc\";\n"),
+            .vars = {
+                { SV("s"), SV("char[4]"), SV("\"abc\"") },
+            },
+        },
+        {
+            "std ex8: string literal sized array", __LINE__,
+            SV("char t[3] = \"abc\";\n"),
+            .vars = {
+                { SV("t"), SV("char[3]"), SV("\"abc\"") },
+            },
+        },
+        {
+            "std ex8: string literal multiple decls", __LINE__,
+            SV("char s[] = \"abc\", t[3] = \"abc\";\n"),
+            .vars = {
+                { SV("s"), SV("char[4]"), SV("\"abc\"") },
+                { SV("t"), SV("char[3]"), SV("\"abc\"") },
+            },
+        },
+        // EXAMPLE 12: variable reference in initializer + last-write-wins
+        {
+            "std ex12: struct init with designated", __LINE__,
+            SV("struct T { int k; int l; };\n"
+               "struct T x = {.l = 43, .k = 42};\n"),
+            .vars = {
+                { SV("x"), SV("struct T"), SV("{@4 = 43, @0 = 42}") },
+            },
+        },
+        {
+            "std ex12: nested struct init with var ref", __LINE__,
+            SV("struct T { int k; int l; };\n"
+               "struct S { int i; struct T t; };\n"
+               "struct T x = {.l = 43, .k = 42};\n"
+               "struct S l = { 1, .t = x, .t.l = 41};\n"),
+            .vars = {
+                { SV("x"), SV("struct T"), SV("{@4 = 43, @0 = 42}") },
+                { SV("l"), SV("struct S"), SV("{@0 = 1, @4 = x, @8 = 41}") },
+            },
+        },
+        // EXAMPLE 14: union designated init
+        {
+            "std ex14: union designated", __LINE__,
+            SV("union U { int x; float y; };\n"
+               "union U u = {.x = 42};\n"),
+            .vars = {
+                { SV("u"), SV("union U"), SV("{42}") },
+            },
+        },
+            // --- Method slot skipping tests ---
+        {
+            "method skipping: positional init", __LINE__,
+            SV("struct Foo {\n"
+               "  int x;\n"
+               "  int get_x(struct Foo* self){ return self->x; }\n"
+               "  int y;\n"
+               "};\n"
+               "struct Foo f = {1, 2};\n"),
+            .vars = {
+                { SV("f"), SV("struct Foo"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "method skipping: designated init", __LINE__,
+            SV("struct Foo {\n"
+               "  int x;\n"
+               "  int get_x(struct Foo* self){ return self->x; }\n"
+               "  int y;\n"
+               "};\n"
+               "struct Foo f = {.y = 10, .x = 20};\n"),
+            .vars = {
+                { SV("f"), SV("struct Foo"), SV("{@4 = 10, @0 = 20}") },
+            },
+        },
+        {
+            "method skipping: brace elision in array", __LINE__,
+            SV("struct Foo {\n"
+               "  int x;\n"
+               "  int get_x(struct Foo* self){ return self->x; }\n"
+               "  int y;\n"
+               "};\n"
+               "struct Foo arr[] = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("arr"), SV("struct Foo[2]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "methods at start and end", __LINE__,
+            SV("struct Bar {\n"
+               "  void init(struct Bar* self){}\n"
+               "  int a;\n"
+               "  int b;\n"
+               "  void deinit(struct Bar* self){}\n"
+               "};\n"
+               "struct Bar b = {10, 20};\n"),
+            .vars = {
+                { SV("b"), SV("struct Bar"), SV("{@0 = 10, @4 = 20}") },
+            },
+        },
+        // --- Plan9 struct tests ---
+        {
+            "plan9: positional init", __LINE__,
+            SV("struct Base { int x; int y; };\n"
+               "struct Derived { struct Base; int z; };\n"
+               "struct Derived d = {{1, 2}, 3};\n"),
+            .vars = {
+                { SV("d"), SV("struct Derived"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "plan9: brace elision", __LINE__,
+            SV("struct Base { int x; int y; };\n"
+               "struct Derived { struct Base; int z; };\n"
+               "struct Derived d = {1, 2, 3};\n"),
+            .vars = {
+                { SV("d"), SV("struct Derived"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "plan9: designated through embed", __LINE__,
+            SV("struct Base { int x; int y; };\n"
+               "struct Derived { struct Base; int z; };\n"
+               "struct Derived d = {.x = 1, .y = 2, .z = 3};\n"),
+            .vars = {
+                { SV("d"), SV("struct Derived"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "plan9: designated embed as whole", __LINE__,
+            SV("struct Base { int x; int y; };\n"
+               "struct Derived { struct Base; int z; };\n"
+               "struct Derived d = {{.y = 9, .x = 8}, 7};\n"),
+            .vars = {
+                { SV("d"), SV("struct Derived"), SV("{@4 = 9, @0 = 8, @8 = 7}") },
+            },
+        },
+        {
+            "plan9: array of derived with brace elision", __LINE__,
+            SV("struct Base { int x; };\n"
+               "struct Derived { struct Base; int y; };\n"
+               "struct Derived arr[] = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("arr"), SV("struct Derived[2]"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "plan9: nested embeds", __LINE__,
+            SV("struct A { int a; };\n"
+               "struct B { struct A; int b; };\n"
+               "struct C { struct B; int c; };\n"
+               "struct C val = {1, 2, 3};\n"),
+            .vars = {
+                { SV("val"), SV("struct C"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "plan9: designated through nested embed", __LINE__,
+            SV("struct A { int a; };\n"
+               "struct B { struct A; int b; };\n"
+               "struct C { struct B; int c; };\n"
+               "struct C val = {.a = 1, .b = 2, .c = 3};\n"),
+            .vars = {
+                { SV("val"), SV("struct C"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "plan9 + methods combined", __LINE__,
+            SV("struct Base {\n"
+               "  int x;\n"
+               "  int get(struct Base* self){ return self->x; }\n"
+               "};\n"
+               "struct Derived { struct Base; int y; };\n"
+               "struct Derived d = {1, 2};\n"),
+            .vars = {
+                { SV("d"), SV("struct Derived"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        // EXAMPLE 15 union: anonymous bitfield padding in union
+        {
+            "std ex15: union with anon bitfield", __LINE__,
+            SV("union UB {\n"
+               "  int :16;\n"
+               "  char c;\n"
+               "};\n"
+               "union UB u = {3};\n"),
+            .vars = {
+                { SV("u"), SV("union UB"), SV("{(char)3}") },
+            },
+        },
+        // --- Vector type tests ---
+        {
+            "vector init: full", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "v4si v = {1, 2, 3, 4};\n"),
+            .vars = {
+                { SV("v"), SV("int __attribute__((vector_size(16)))"), SV("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+            },
+        },
+        {
+            "vector init: partial", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "v4si v = {1, 2};\n"),
+            .vars = {
+                { SV("v"), SV("int __attribute__((vector_size(16)))"), SV("{@0 = 1, @4 = 2}") },
+            },
+        },
+        {
+            "vector init: empty", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "v4si v = {};\n"),
+            .vars = {
+                { SV("v"), SV("int __attribute__((vector_size(16)))"), SV("{}") },
+            },
+        },
+        {
+            "vector init: float elements", __LINE__,
+            SV("typedef float v2f __attribute__((vector_size(8)));\n"
+               "v2f v = {1.0f, 2.0f};\n"),
+            .vars = {
+                { SV("v"), SV("float __attribute__((vector_size(8)))"), SV("{@0 = 1f, @4 = 2f}") },
+            },
+        },
+        {
+            "vector: attribute in specifier position", __LINE__,
+            SV("__attribute__((vector_size(16))) int v = {10, 20, 30, 40};\n"),
+            .vars = {
+                { SV("v"), SV("int __attribute__((vector_size(16)))"), SV("{@0 = 10, @4 = 20, @8 = 30, @12 = 40}") },
+            },
+        },
+        {
+            "vector: trailing attribute position", __LINE__,
+            SV("int v __attribute__((vector_size(16))) = {10, 20, 30, 40};\n"),
+            .vars = {
+                { SV("v"), SV("int __attribute__((vector_size(16)))"), SV("{@0 = 10, @4 = 20, @8 = 30, @12 = 40}") },
+            },
+        },
+        {
+            "vector: sizeof", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "int a[sizeof(v4si)];\n"),
+            .vars = {
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
+            "vector: alignof", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "int a[_Alignof(v4si)];\n"),
+            .vars = {
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
+            "vector: sizeof float", __LINE__,
+            SV("typedef float v2f __attribute__((vector_size(8)));\n"
+               "int a[sizeof(v2f)];\n"),
+            .vars = {
+                { SV("a"), SV("int[8]") },
+            },
+        },
+        {
+            "vector: alignof capped at max_align", __LINE__,
+            SV("typedef int v8si __attribute__((vector_size(32)));\n"
+               "int a[_Alignof(v8si)];\n"),
+            .vars = {
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
+            "asm label on function", __LINE__,
+            SV("int foo(void) __asm(\"_foo_mangled\");\n"),
+            .funcs = {
+                { SV("foo"), SV("int(void)"), .mangle = SV("_foo_mangled") },
+            },
+        },
+        {
+            "asm label on variable", __LINE__,
+            SV("extern int x __asm__(\"_x_mangled\");\n"),
+            .vars = {
+                { SV("x"), SV("int"), .mangle = SV("_x_mangled") },
+            },
+        },
+        {
+            "asm label with asm keyword", __LINE__,
+            SV("void bar(int a) asm(\"_bar\");\n"),
+            .funcs = {
+                { SV("bar"), SV("void(int)"), .mangle = SV("_bar") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -1005,7 +2029,7 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, var->type);
             if(sb.errored) { err = 1; TestPrintf("%s:%d: allocation failure", __FILE__, c->line); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(r, c->vars[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(c->vars[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
             if(c->vars[n].init.length){
                 TestExpectTrue(var->initializer);
                 if(var->initializer){
@@ -1014,7 +2038,14 @@ TestFunction(test_parse_decls){
                     cc_print_expr(&sb, init);
                     if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
                     StringView ir = msb_borrow_sv(&sb);
-                    test_expect_equals_sv(ir, c->vars[n].init, "actual init", "expected init", &TEST_stats, __FILE__, __func__, c->line);
+                    test_expect_equals_sv(c->vars[n].init, ir, "expected init", "actual init", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
+            if(c->vars[n].mangle.length){
+                TestExpectTrue(var->mangle);
+                if(var->mangle){
+                    StringView mr = {var->mangle->length, var->mangle->data};
+                    test_expect_equals_sv(c->vars[n].mangle, mr, "expected mangle", "actual mangle", &TEST_stats, __FILE__, __func__, c->line);
                 }
             }
         }
@@ -1033,7 +2064,14 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, (CcQualType){.bits=(uintptr_t)func->type});
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(r, c->funcs[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(c->funcs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            if(c->funcs[n].mangle.length){
+                TestExpectTrue(func->mangle);
+                if(func->mangle){
+                    StringView mr = {func->mangle->length, func->mangle->data};
+                    test_expect_equals_sv(c->funcs[n].mangle, mr, "expected mangle", "actual mangle", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
         }
         for(size_t n = 0; n < N; n++){
             StringView name = c->typedefs[n].name;
@@ -1050,7 +2088,7 @@ TestFunction(test_parse_decls){
             cc_print_type(&sb, t);
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
-            test_expect_equals_sv(r, c->typedefs[n].repr, "actual", "expected", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
         }
         finally:
         if(log_sb.cursor && ! log_sb.errored){
@@ -1210,6 +2248,183 @@ TestFunction(test_parse_errors){
             SV("enum E : { A };\n"),
             SV("(test):1:1: error: Expected type specifier for enum underlying type\n"),
         },
+        // --- Init list error tests ---
+        {
+            "excess elements in scalar init", __LINE__,
+            SV("int x = {1, 2};\n"),
+            SV("(test):1:13: error: excess elements in scalar initializer\n"),
+        },
+        {
+            "designator in scalar init", __LINE__,
+            SV("int x = {.a = 1};\n"),
+            SV("(test):1:10: error: designators not allowed in scalar initializer\n"),
+        },
+        {
+            "excess elements in struct init", __LINE__,
+            SV("struct S { int a; };\n"
+               "struct S s = {1, 2};\n"),
+            SV("(test):2:18: error: excess elements in struct initializer\n"),
+        },
+        {
+            "unknown field in designated init", __LINE__,
+            SV("struct S { int a; };\n"
+               "struct S s = {.z = 1};\n"),
+            SV("(test):2:15: error: no member named 'z'\n"),
+        },
+        {
+            "array designator in struct init", __LINE__,
+            SV("struct S { int a; };\n"
+               "struct S s = {[0] = 1};\n"),
+            SV("(test):2:15: error: array designator in struct initializer\n"),
+        },
+        {
+            "field designator in array init", __LINE__,
+            SV("int arr[3] = {.x = 1};\n"),
+            SV("(test):1:15: error: field designator in array initializer\n"),
+        },
+        {
+            "array index out of bounds", __LINE__,
+            SV("int arr[3] = {[5] = 1};\n"),
+            SV("(test):1:15: error: array index 5 out of bounds (size 3)\n"),
+        },
+        // --- More init list error torture tests ---
+        {
+            "excess elements in array init", __LINE__,
+            SV("int arr[2] = {1, 2, 3};\n"),
+            SV("(test):1:21: error: excess elements in array initializer\n"),
+        },
+        {
+            "excess via brace elision: array of structs", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[1] = {1, 2, 3};\n"),
+            SV("(test):2:26: error: excess elements in array initializer\n"),
+        },
+        {
+            "excess via brace elision: struct", __LINE__,
+            SV("struct Inner { int a; };\n"
+               "struct Outer { struct Inner s; };\n"
+               "struct Outer o = {1, 2};\n"),
+            SV("(test):3:22: error: excess elements in struct initializer\n"),
+        },
+        {
+            "field designator in union: unknown", __LINE__,
+            SV("union U { int a; float b; };\n"
+               "union U u = {.c = 1};\n"),
+            SV("(test):2:14: error: no member named 'c'\n"),
+        },
+        {
+            "chained designator: field into scalar", __LINE__,
+            SV("struct S { int a; };\n"
+               "struct S s = {.a.b = 1};\n"),
+            SV("(test):2:17: error: member designator into non-struct/union type\n"),
+        },
+        {
+            "chained designator: index into non-array", __LINE__,
+            SV("struct S { int a; };\n"
+               "struct S s = {.a[0] = 1};\n"),
+            SV("(test):2:17: error: index designator into non-array type\n"),
+        },
+        {
+            "chained designator: unknown nested field", __LINE__,
+            SV("struct Inner { int x; };\n"
+               "struct Outer { struct Inner p; };\n"
+               "struct Outer o = {.p.z = 1};\n"),
+            SV("(test):3:21: error: no member named 'z'\n"),
+        },
+        {
+            "incomplete struct init", __LINE__,
+            SV("struct S;\n"
+               "struct S s = {1};\n"),
+            SV("(test):2:14: error: initializer for incomplete struct type\n"),
+        },
+        {
+            "incomplete union init", __LINE__,
+            SV("union U;\n"
+               "union U u = {1};\n"),
+            SV("(test):2:13: error: initializer for incomplete union type\n"),
+        },
+        {
+            "init list for function type", __LINE__,
+            SV("typedef void fn(void);\n"
+               "fn f = {1};\n"),
+            SV("(test):2:8: error: cannot initialize type with initializer list\n"),
+        },
+        {
+            "unterminated union init", __LINE__,
+            SV("union U { int a; float b; };\n"
+               "union U u = {\n"),
+            SV("(test):2:13: error: unterminated initializer list\n"),
+        },
+        {
+            "excess elements in braced scalar", __LINE__,
+            SV("int x = {{1, 2}};\n"),
+            SV("(test):1:14: error: excess elements in scalar initializer\n"),
+        },
+        {
+            "chained designator: array index out of bounds", __LINE__,
+            SV("struct S { int arr[3]; };\n"
+               "struct S s = {.arr[5] = 1};\n"),
+            SV("(test):2:19: error: array index 5 out of bounds (size 3)\n"),
+        },
+        {
+            "negative array designator", __LINE__,
+            SV("int arr[3] = {[-1] = 1};\n"),
+            SV("(test):1:15: error: array designator value out of range\n"),
+        },
+        {
+            "negative chained array designator", __LINE__,
+            SV("struct S { int arr[3]; };\n"
+               "struct S s = {.arr[-1] = 1};\n"),
+            SV("(test):2:19: error: array designator value out of range\n"),
+        },
+        {
+            "vector_size on non-scalar type", __LINE__,
+            SV("struct S { int a; };\n"
+               "typedef struct S v4s __attribute__((vector_size(16)));\n"),
+            SV("(test):2:1: error: vector_size attribute requires a scalar type\n"),
+        },
+        {
+            "vector_size not power of 2", __LINE__,
+            SV("typedef int v __attribute__((vector_size(7)));\n"),
+            SV("(test):1:30: error: vector_size must be a power of 2\n"),
+        },
+        {
+            "vector_size zero", __LINE__,
+            SV("typedef int v __attribute__((vector_size(0)));\n"),
+            SV("(test):1:30: error: vector_size must be a power of 2\n"),
+        },
+        {
+            "vector_size smaller than element", __LINE__,
+            SV("typedef int v __attribute__((vector_size(2)));\n"),
+            SV("(test):1:1: error: vector_size is smaller than the element type\n"),
+        },
+        {
+            "aligned on typedef", __LINE__,
+            SV("typedef int aligned_int __attribute__((aligned(16)));\n"),
+            SV("(test):1:1: error: aligned attribute on non-struct/union type is not supported\n"),
+        },
+        {
+            "vector init: excess elements", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "v4si v = {1, 2, 3, 4, 5};\n"),
+            SV("(test):2:23: error: excess elements in vector initializer\n"),
+        },
+        {
+            "vector init: designator not allowed", __LINE__,
+            SV("typedef int v4si __attribute__((vector_size(16)));\n"
+               "v4si v = {[0] = 1};\n"),
+            SV("(test):2:11: error: designators not allowed in vector initializer\n"),
+        },
+        {
+            "packed on non-struct", __LINE__,
+            SV("typedef int packed_int __attribute__((packed));\n"),
+            SV("(test):1:1: error: packed attribute on non-struct type is not supported\n"),
+        },
+        {
+            "transparent_union on non-union", __LINE__,
+            SV("typedef int tu __attribute__((transparent_union));\n"),
+            SV("(test):1:1: error: transparent_union attribute on non-union type is not supported\n"),
+        },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         ArenaAllocator aa = {0};
@@ -1252,7 +2467,7 @@ TestFunction(test_parse_errors){
         }
         if(c->expected_msg.length){
             StringView log = msb_borrow_sv(&log_sb);
-            test_expect_equals_sv(log, c->expected_msg, "actual error", "expected error", &TEST_stats, __FILE__, __func__, c->line);
+            test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
         }
         fin:
         ArenaAllocator_free_all(&aa);
@@ -1738,7 +2953,7 @@ TestFunction(test_struct_layout){
                 TEST_stats.executed++;
                 if(af->name){
                     StringView actual_name = {.text = af->name->data, .length = af->name->length};
-                    test_expect_equals_sv(actual_name, fe->name, "field name", "expected", &TEST_stats, __FILE__, __func__, c->line);
+                    test_expect_equals_sv(fe->name, actual_name, "expected", "field name", &TEST_stats, __FILE__, __func__, c->line);
                 }
                 else if(fe->name.length){
                     TEST_stats.failures++;
@@ -1768,7 +2983,7 @@ TestFunction(test_struct_layout){
                     msb_reset(&sb);
                     cc_print_type(&sb, af->type);
                     StringView r = msb_borrow_sv(&sb);
-                    test_expect_equals_sv(r, fe->type_repr, "field type", "expected type", &TEST_stats, __FILE__, __func__, c->line);
+                    test_expect_equals_sv(fe->type_repr, r, "expected type", "field type", &TEST_stats, __FILE__, __func__, c->line);
                 }
             }
         }
