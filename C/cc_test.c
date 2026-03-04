@@ -2048,6 +2048,51 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("int"), .init = SV("f(1, 2)") },
             },
         },
+        // --- Named argument tests ---
+        {
+            "named args", __LINE__,
+            SV("int f(int a, int b);\n"
+               "int r = f(.b = 2, .a = 1);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, 2)") },
+            },
+        },
+        {
+            "named args mixed with positional", __LINE__,
+            SV("int f(int a, int b, int c);\n"
+               "int r = f(1, .c = 3, .b = 2);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, int, int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, 2, 3)") },
+            },
+        },
+        {
+            "positional designator args", __LINE__,
+            SV("int f(int a, int b);\n"
+               "int r = f([1] = 2, [0] = 1);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, 2)") },
+            },
+        },
+        {
+            "mixed positional designator and named", __LINE__,
+            SV("int f(int a, int b, int c);\n"
+               "int r = f([2] = 3, .a = 1, [1] = 2);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, int, int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, 2, 3)") },
+            },
+        },
         // --- Function call implicit cast tests ---
         {
             "call: int arg to long param", __LINE__,

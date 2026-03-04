@@ -33,6 +33,12 @@ LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimp(p, msg) cc_unimplemented(p, (SrcLoc){0}, msg)
 #define cc_unreachable(p, msg) (cc_error(p, (SrcLoc){0}, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
+typedef struct CcEvalResult CcEvalResult;
+struct CcEvalResult {
+    enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR } kind;
+    union { int64_t i; uint64_t u; float f; double d; };
+};
+static CcEvalResult cc_eval_expr(CcExpr* e);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
 static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
 static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
@@ -1608,76 +1614,218 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     continue;
                 }
                 cc_unget(p, &peek);
-                // Parse args into a small stack buffer, then allocate
-                CcExpr* arg_buf[64];
-                uint32_t nargs = 0;
-                for(;;){
-                    if(nargs >= 64)
-                        return cc_error(p, tok.loc, "Too many function arguments (max 64)");
-                    CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, &arg);
-                    if(err) return err;
-                    arg_buf[nargs++] = arg;
-                    CcToken sep;
-                    err = cc_next_token(p, &sep);
-                    if(err) return err;
-                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
-                        break;
-                    if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma)
-                        return cc_error(p, sep.loc, "Expected ',' or ')' in function call");
-                    // Allow trailing comma as extension
-                    err = cc_peek(p, &sep);
-                    if(err) return err;
-                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen){
-                        cc_next_token(p, &sep);
-                        break;
-                    }
-                }
-                // Resolve function type
+                // Resolve function type early so we can look up param names
                 CcQualType ct = operand->type;
                 if(ccqt_kind(ct) == CC_POINTER)
                     ct = ccqt_as_ptr(ct)->pointee;
                 if(ccqt_kind(ct) != CC_FUNCTION)
                     return cc_error(p, tok.loc, "Called object is not a function or function pointer");
                 CcFunction* ftype = ccqt_as_function(ct);
+                // Get param names if available (from CcFunc declaration)
+                Atom*_Null_unspecified param_names = NULL;
+                size_t param_names_count = 0;
+                if(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count){
+                    param_names = operand->func->params.data;
+                    param_names_count = operand->func->params.count;
+                }
+                Allocator call_al = cc_scratch_allocator(p);
+                Parray args = {0};
+                _Bool has_named = 0;
+                uint32_t positional_index = 0;
+                for(;;){
+                    // Check for designated argument: .name = or [N] =
+                    CcToken dot;
+                    err = cc_peek(p, &dot);
+                    if(err) goto call_cleanup;
+                    if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_dot){
+                        cc_next_token(p, &dot);
+                        CcToken name_tok;
+                        err = cc_next_token(p, &name_tok);
+                        if(err) goto call_cleanup;
+                        if(name_tok.type != CC_IDENTIFIER){
+                            err = cc_error(p, name_tok.loc, "expected parameter name after '.'");
+                            goto call_cleanup;
+                        }
+                        CcToken eq;
+                        err = cc_next_token(p, &eq);
+                        if(err) goto call_cleanup;
+                        if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
+                            err = cc_error(p, eq.loc, "expected '=' after parameter name");
+                            goto call_cleanup;
+                        }
+                        if(!param_names){
+                            err = cc_error(p, dot.loc, "named arguments require a function with known parameter names");
+                            goto call_cleanup;
+                        }
+                        // Find param index by name
+                        Atom name = name_tok.ident.ident;
+                        uint32_t idx = UINT32_MAX;
+                        for(size_t j = 0; j < param_names_count; j++){
+                            if(param_names[j] == name){ idx = (uint32_t)j; break; }
+                        }
+                        if(idx == UINT32_MAX){
+                            err = cc_error(p, name_tok.loc, "no parameter named '%.*s'", name->length, name->data);
+                            goto call_cleanup;
+                        }
+                        // Parse the value
+                        CcExpr* arg;
+                        err = cc_parse_assignment_expr(p, &arg);
+                        if(err) goto call_cleanup;
+                        // Ensure args array is big enough
+                        while(args.count <= idx){
+                            err = pa_push(&args, call_al, NULL);
+                            if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                        }
+                        if(args.data[idx] != NULL){
+                            err = cc_error(p, name_tok.loc, "duplicate argument for parameter '%.*s'", name->length, name->data);
+                            goto call_cleanup;
+                        }
+                        args.data[idx] = arg;
+                        has_named = 1;
+                    }
+                    else if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_lbracket){
+                        // Designated positional argument: [N] = value
+                        cc_next_token(p, &dot);
+                        CcExpr* idx_expr;
+                        err = cc_parse_assignment_expr(p, &idx_expr);
+                        if(err) goto call_cleanup;
+                        CcEvalResult ev = cc_eval_expr(idx_expr);
+                        int64_t idx_signed;
+                        switch(ev.kind){
+                            case CC_EVAL_INT:    idx_signed = ev.i; break;
+                            case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
+                            case CC_EVAL_FLOAT:
+                            case CC_EVAL_DOUBLE: err = cc_error(p, dot.loc, "positional designator must be an integer"); goto call_cleanup;
+                            case CC_EVAL_ERROR:  err = cc_error(p, dot.loc, "positional designator must be a constant expression"); goto call_cleanup;
+                        }
+                        if(idx_signed < 0 || idx_signed > UINT32_MAX){
+                            err = cc_error(p, dot.loc, "positional designator value out of range");
+                            goto call_cleanup;
+                        }
+                        uint32_t idx = (uint32_t)idx_signed;
+                        err = cc_expect_punct(p, CC_rbracket);
+                        if(err) goto call_cleanup;
+                        CcToken eq;
+                        err = cc_next_token(p, &eq);
+                        if(err) goto call_cleanup;
+                        if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
+                            err = cc_error(p, eq.loc, "expected '=' after positional designator");
+                            goto call_cleanup;
+                        }
+                        CcExpr* arg;
+                        err = cc_parse_assignment_expr(p, &arg);
+                        if(err) goto call_cleanup;
+                        while(args.count <= idx){
+                            err = pa_push(&args, call_al, NULL);
+                            if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                        }
+                        if(args.data[idx] != NULL){
+                            err = cc_error(p, dot.loc, "duplicate argument for position %u", (unsigned)idx);
+                            goto call_cleanup;
+                        }
+                        args.data[idx] = arg;
+                        has_named = 1;
+                    }
+                    else {
+                        // Positional argument
+                        if(has_named){
+                            // Skip already-filled named slots
+                            while(positional_index < args.count && args.data[positional_index] != NULL)
+                                positional_index++;
+                        }
+                        CcExpr* arg;
+                        err = cc_parse_assignment_expr(p, &arg);
+                        if(err) goto call_cleanup;
+                        if(has_named){
+                            while(args.count <= positional_index){
+                                err = pa_push(&args, call_al, NULL);
+                                if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                            }
+                            if(args.data[positional_index] != NULL){
+                                err = cc_error(p, arg->loc, "argument position %u already filled by named argument", (unsigned)positional_index);
+                                goto call_cleanup;
+                            }
+                            args.data[positional_index] = arg;
+                            positional_index++;
+                        }
+                        else {
+                            err = pa_push(&args, call_al, arg);
+                            if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                        }
+                    }
+                    CcToken sep;
+                    err = cc_next_token(p, &sep);
+                    if(err) goto call_cleanup;
+                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
+                        break;
+                    if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma){
+                        err = cc_error(p, sep.loc, "Expected ',' or ')' in function call");
+                        goto call_cleanup;
+                    }
+                    // Allow trailing comma as extension
+                    err = cc_peek(p, &sep);
+                    if(err) goto call_cleanup;
+                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen){
+                        cc_next_token(p, &sep);
+                        break;
+                    }
+                }
+                uint32_t nargs = (uint32_t)args.count;
+                // Check for unfilled slots when named args were used
+                if(has_named){
+                    for(uint32_t i = 0; i < nargs && i < ftype->param_count; i++){
+                        if(!args.data[i]){
+                            Atom pn = (param_names && i < param_names_count) ? param_names[i] : NULL;
+                            err = cc_error(p, tok.loc, "missing argument for parameter '%.*s'",
+                                pn ? (int)pn->length : 1, pn ? pn->data : "?");
+                            goto call_cleanup;
+                        }
+                    }
+                }
                 // Check arg count
-                if(!ftype->is_variadic && !ftype->no_prototype && nargs != ftype->param_count)
-                    return cc_error(p, tok.loc, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
-                if(ftype->is_variadic && nargs < ftype->param_count)
-                    return cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                if(!ftype->is_variadic && !ftype->no_prototype && nargs != ftype->param_count){
+                    err = cc_error(p, tok.loc, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                    goto call_cleanup;
+                }
+                if(ftype->is_variadic && nargs < ftype->param_count){
+                    err = cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                    goto call_cleanup;
+                }
                 // Type check / implicit cast args
                 for(uint32_t i = 0; i < nargs; i++){
+                    CcExpr** argp = (CcExpr**)&args.data[i];
                     if(!ftype->no_prototype && i < ftype->param_count){
-                        // Prototyped parameter: implicit cast to param type
-                        err = cc_implicit_cast(p, arg_buf[i], ftype->params[i], &arg_buf[i]);
-                        if(err) return err;
-                    } 
+                        err = cc_implicit_cast(p, *argp, ftype->params[i], argp);
+                        if(err) goto call_cleanup;
+                    }
                     else {
-                        // Variadic / no-prototype arg: default argument promotions
-                        CcQualType at = arg_buf[i]->type;
+                        CcQualType at = (*argp)->type;
                         if(ccqt_is_basic(at)){
                             CcBasicTypeKind k = at.basic.kind;
                             if(k == CCBT_float){
-                                err = cc_implicit_cast(p, arg_buf[i], ccqt_basic(CCBT_double), &arg_buf[i]);
-                                if(err) return err;
-                            } 
+                                err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_double), argp);
+                                if(err) goto call_cleanup;
+                            }
                             else if(ccbt_is_integer(k) && ccbt_int_rank(k) < ccbt_int_rank(CCBT_int)){
-                                err = cc_implicit_cast(p, arg_buf[i], ccqt_basic(CCBT_int), &arg_buf[i]);
-                                if(err) return err;
+                                err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_int), argp);
+                                if(err) goto call_cleanup;
                             }
                         }
                     }
                 }
                 CcExpr* node = cc_alloc_expr(p, nargs);
-                if(!node) return CC_OOM_ERROR;
+                if(!node){ err = CC_OOM_ERROR; goto call_cleanup; }
                 node->kind = CC_EXPR_CALL;
                 node->loc = tok.loc;
                 node->call.nargs = nargs;
                 node->value0 = operand;
                 node->type = ftype->return_type;
-                for(uint32_t i = 0; i < nargs; i++)
-                    node->values[i] = arg_buf[i];
+                memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
                 operand = node;
+                err = 0;
+                call_cleanup:
+                pa_cleanup(&args, call_al);
+                if(err) return err;
                 continue;
             }
             default:
@@ -1997,17 +2145,6 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
     }
     msb_write_literal(sb, "<unknown>");
 }
-
-typedef struct CcEvalResult CcEvalResult;
-struct CcEvalResult {
-    enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR } kind;
-    union {
-        int64_t i;
-        uint64_t u;
-        float f;
-        double d;
-    };
-};
 
 static CcEvalResult cc_eval_error(void){ return (CcEvalResult){.kind = CC_EVAL_ERROR}; }
 

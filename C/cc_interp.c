@@ -239,10 +239,15 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
             return cc_interp_expr(p, operand, &discard);
         }
         uint64_t val = 0;
-        uint32_t from_sz;
-        int err = cc_sizeof_as_uint(p, from, expr->loc, &from_sz);
+        int err = cc_interp_expr(p, operand, &val);
         if(err) return err;
-        err = cc_interp_expr(p, operand, &val);
+        // Array-to-pointer decay: the value is already a pointer, just copy it.
+        if(ccqt_kind(from) == CC_ARRAY){
+            memcpy(result, &val, sizeof(void*));
+            return 0;
+        }
+        uint32_t from_sz;
+        err = cc_sizeof_as_uint(p, from, expr->loc, &from_sz);
         if(err) return err;
         uint32_t to_sz;
         err = cc_sizeof_as_uint(p, to, expr->loc, &to_sz);

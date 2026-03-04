@@ -1,27 +1,100 @@
 #ifndef DRP_PARRAY_H
 #define DRP_PARRAY_H
-// Marray but for void*
-typedef void* _void_pointer;
-#define MARRAY_T _void_pointer
+#include <stddef.h>
+#include "Allocators/allocator.h"
 #ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnullability-completeness"
+#pragma clang assume_nonnull begin
+#else
+#ifndef _Null_unspecified
+#define _Null_unspecified
 #endif
-#include "Marray.h"
+#ifndef _Nonnull
+#define _Nonnull
+#endif
+#endif
+
+#ifndef warn_unused
+#if defined(__GNUC__) || defined(__clang__)
+#define warn_unused __attribute__((warn_unused_result))
+#elif defined(_MSC_VER)
+#define warn_unused
+#else
+#define warn_unused
+#endif
+#endif
+
+typedef struct Parray Parray;
+struct Parray {
+    size_t count, capacity;
+    void*_Null_unspecified*_Null_unspecified data;
+};
+
+static
+warn_unused
+int
+pa_ensure_additional(Parray* pa, Allocator a, size_t n_additional){
+    size_t required_capacity = pa->count + n_additional;
+    if(pa->capacity >= required_capacity)
+        return 0;
+    size_t new_capacity;
+    if(required_capacity < 8)
+        new_capacity = 8;
+    else {
+        new_capacity = pa->capacity ? pa->capacity* 2:8;
+        while(new_capacity < required_capacity)
+            new_capacity *= 2;
+    }
+    size_t old_size = pa->capacity*sizeof *pa->data;
+    size_t new_size = new_capacity*sizeof *pa->data;
+    void* p = Allocator_realloc(a, pa->data, old_size, new_size);
+    if(!p)
+        return 1;
+    pa->data = p;
+    pa->capacity = new_capacity;
+    return 0;
+}
+
+static
+warn_unused
+int
+pa_push(Parray* pa, Allocator a, void*_Null_unspecified value){
+    int err = pa_ensure_additional(pa, a, 1);
+    if(err)
+        return err;
+    #if defined(__GNUC__) && !defined(__clang__)
+    // False positive diagnostic, this function doesn't read what
+    // value points to and the analysis is wrong anyway.
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+    #endif
+    pa->data[pa->count++] = value;
+    #if defined(__GNUC__) && !defined(__clang__)
+    #pragma GCC diagnostic pop
+    #endif
+    return 0;
+}
+
+static
+void
+pa_cleanup(Parray* pa, Allocator a){
+    Allocator_free(a, pa->data, pa->capacity*sizeof *pa->data);
+    pa->data = NULL;
+    pa->count = 0;
+    pa->capacity = 0;
+}
+
+static
+warn_unused
+int
+pa_shrink_to_size(Parray* pa, Allocator a){
+    if(pa->count == pa->capacity) return 0;
+    void* p = Allocator_realloc(a, pa->data, pa->capacity * sizeof *pa->data, pa->count * sizeof *pa->data);
+    if(!p) return 1;
+    pa->data = p;
+    pa->capacity = pa->count;
+    return 0;
+}
 #ifdef __clang__
-#pragma clang diagnostic pop
+#pragma clang assume_nonnull end
 #endif
-typedef Marray(_void_pointer) Parray;
-#define pa_push ma_push(_void_pointer)
-#define pa_pop ma_pop(_void_pointer)
-#define pa_cleanup ma_cleanup(_void_pointer)
-#define pa_ensure_total ma_ensure_total(_void_pointer)
-#define pa_ensure_additional ma_ensure_additional(_void_pointer)
-#define pa_extend ma_extend(_void_pointer)
-#define pa_insert ma_insert(_void_pointer)
-#define pa_remove_at ma_remove_at(_void_pointer)
-#define pa_alloc ma_alloc(_void_pointer)
-#define pa_zalloc ma_zalloc(_void_pointer)
-#define pa_alloc_index ma_alloc_index(_void_pointer)
-#define pa_shrink_to_size ma_shrink_to_size(_void_pointer)
 #endif
