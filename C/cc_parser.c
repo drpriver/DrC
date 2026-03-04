@@ -47,6 +47,7 @@ static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nu
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc);
+static void cc_print_type(MStringBuilder*, CcQualType t);
 static CcExpr* _Nullable cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type);
 static CcExpr* _Nullable cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* operand);
 static CcExpr* _Nullable cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* left, CcExpr* right);
@@ -61,6 +62,12 @@ static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value)
 static int cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType target_type);
 static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_asssert(CcParser*);
+static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
+static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
+// private logging API
+static void cpp_msg_preamble(CPreprocessor* cpp, SrcLoc loc, const char* prefix);
+static void cpp_msg_postamble(CPreprocessor* cpp, SrcLoc loc, LogLevel level);
+static void cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 
 enum {
     CC_NO_ERROR                 = _cc_no_error,
@@ -155,6 +162,7 @@ struct CcDeclBase {
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p);
+static int cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels);
 
 static
 int
@@ -273,24 +281,98 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     return cc_error(p, loc, "dereferencing non-pointer type");
 }
 
-// Wrap an expression in an implicit cast if types differ.
-// Returns the original expression if types match or target is void.
+// Check if `from` can be implicitly converted to `to`.
+// Based on C2y 6.5.17.2 simple assignment constraints.
 static
-CcExpr* _Nullable
-cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target){
-    if(target.basic.kind == CCBT_void && ccqt_is_basic(target))
-        return e;
-    if(e->type.bits == target.bits)
-        return e;
-    if(e->type.basic.kind == CCBT_void && ccqt_is_basic(e->type))
-        return e;
+_Bool
+cc_implicit_convertible(CcQualType from, CcQualType to){
+    if(from.bits == to.bits) return 1;
+    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
+    _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind)) || fk == CC_ENUM;
+    _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(to.basic.kind)) || tk == CC_ENUM;
+    // arithmetic <- arithmetic (includes bool, enum)
+    if(f_arith && t_arith) return 1;
+    // struct/union <- compatible struct/union (same type, ignoring qualifiers)
+    if(fk == CC_STRUCT && tk == CC_STRUCT) return from.ptr == to.ptr;
+    if(fk == CC_UNION && tk == CC_UNION) return from.ptr == to.ptr;
+    // pointer <- pointer
+    // The left pointee must have all qualifiers of the right pointee.
+    // One of the pointees may be void.
+    if(fk == CC_POINTER && tk == CC_POINTER){
+        CcQualType fp = ccqt_as_ptr(from)->pointee;
+        CcQualType tp = ccqt_as_ptr(to)->pointee;
+        // void* <-> any* is ok
+        _Bool fvoid = ccqt_is_basic(fp) && fp.basic.kind == CCBT_void;
+        _Bool tvoid = ccqt_is_basic(tp) && tp.basic.kind == CCBT_void;
+        if(fvoid || tvoid || fp.ptr == tp.ptr){
+            // target pointee must have all qualifiers of source pointee
+            if((fp.is_const    && !tp.is_const)
+            || (fp.is_volatile && !tp.is_volatile)
+            || (fp.is_atomic   && !tp.is_atomic))
+                return 0;
+            return 1;
+        }
+        return 0;
+    }
+    // array decays to pointer
+    if(fk == CC_ARRAY && tk == CC_POINTER) return 1;
+    // function decays to function pointer
+    if(fk == CC_FUNCTION && tk == CC_POINTER) return 1;
+    // pointer <- nullptr_t
+    if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t && tk == CC_POINTER) return 1;
+    // nullptr_t <- nullptr_t (different qualifiers)
+    if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t
+    && tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t) return 1;
+    // bool <- pointer or nullptr_t
+    if(tk == CC_BASIC && to.basic.kind == CCBT_bool){
+        if(fk == CC_POINTER) return 1;
+        if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t) return 1;
+    }
+    // vector <- compatible vector (same type, ignoring qualifiers)
+    if(fk == CC_VECTOR && tk == CC_VECTOR) return from.ptr == to.ptr;
+    return 0;
+}
+
+// Wrap an expression in an implicit cast if types differ.
+// Returns 0 on success, error on incompatible types or OOM.
+static
+int
+cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
+    if(target.basic.kind == CCBT_void && ccqt_is_basic(target)){
+        *out = e; return 0;
+    }
+    if(e->type.bits == target.bits){
+        *out = e; return 0;
+    }
+    if(e->type.basic.kind == CCBT_void && ccqt_is_basic(e->type)){
+        *out = e; return 0;
+    }
+    // null pointer constant: integer literal 0 -> pointer
+    _Bool is_npc = ccqt_kind(target) == CC_POINTER
+        && e->kind == CC_EXPR_VALUE
+        && ccqt_is_basic(e->type)
+        && ccbt_is_integer(e->type.basic.kind)
+        && e->uinteger == 0;
+    if(!is_npc && !cc_implicit_convertible(e->type, target)){
+        cpp_msg_preamble(&p->cpp, e->loc, "error");
+        MStringBuilder* buff = &p->cpp.logger->buff;
+        msb_write_literal(buff, "cannot implicitly convert from '");
+        cc_print_type(buff, e->type);
+        msb_write_literal(buff, "' to '");
+        cc_print_type(buff, target);
+        msb_write_char(buff, '\'');
+        log_flush(p->cpp.logger, LOG_PRINT_ERROR);
+        cpp_msg_postamble(&p->cpp, e->loc, LOG_PRINT_ERROR);
+        return CC_SYNTAX_ERROR;
+    }
     CcExpr* cast = cc_alloc_expr(p, 0);
-    if(!cast) return NULL;
+    if(!cast) return CC_OOM_ERROR;
     cast->kind = CC_EXPR_CAST;
     cast->loc = e->loc;
     cast->type = target;
     cast->value0 = e;
-    return cast;
+    *out = cast;
+    return 0;
 }
 
 static
@@ -495,8 +577,9 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
                 // Runtime: vla_expr * sizeof(element)
                 CcExpr* dim = arr->vla_expr;
                 if(!dim) return cc_error(p, loc, "sizeof applied to VLA with no dimension");
-                CcExpr* cast_dim = cc_implicit_cast(p, dim, size_type);
-                if(!cast_dim) return CC_OOM_ERROR;
+                CcExpr* cast_dim;
+                err = cc_implicit_cast(p, dim, size_type, &cast_dim);
+                if(err) return err;
                 CcExpr* mul = cc_binary_expr(p, CC_EXPR_MUL, loc, size_type, cast_dim, elem_size);
                 if(!mul) return CC_OOM_ERROR;
                 *out = mul;
@@ -827,13 +910,14 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
         if(cc_assign_lookup(tok.punct.punct, &kind)){
+            if(left->type.is_const)
+                return cc_error(p, tok.loc, "cannot assign to variable with const-qualified type");
             CcExpr* right;
             // right-associative: recurse into assignment_expr
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
-            CcExpr* cright = cc_implicit_cast(p, right, left->type);
-            if(!cright) return CC_OOM_ERROR;
-            right = cright;
+            err = cc_implicit_cast(p, right, left->type, &right);
+            if(err) return err;
             CcExpr* node = cc_alloc_expr(p, 1);
             if(!node) return CC_OOM_ERROR;
             node->kind = kind;
@@ -876,12 +960,10 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         CcQualType common;
         err = cc_usual_arithmetic(p, then_expr->type, else_expr->type, &common, tok.loc);
         if(err) return err;
-        CcExpr* ct = cc_implicit_cast(p, then_expr, common);
-        if(!ct) return CC_OOM_ERROR;
-        then_expr = ct;
-        CcExpr* ce = cc_implicit_cast(p, else_expr, common);
-        if(!ce) return CC_OOM_ERROR;
-        else_expr = ce;
+        err = cc_implicit_cast(p, then_expr, common, &then_expr);
+        if(err) return err;
+        err = cc_implicit_cast(p, else_expr, common, &else_expr);
+        if(err) return err;
         CcExpr* node = cc_alloc_expr(p, 2);
         if(!node) return CC_OOM_ERROR;
         node->kind = CC_EXPR_TERNARY;
@@ -939,12 +1021,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     CcQualType common;
                     err = cc_usual_arithmetic(p, left->type, right->type, &common, tok.loc);
                     if(err) return err;
-                    CcExpr* cl = cc_implicit_cast(p, left, common);
-                    if(!cl) return CC_OOM_ERROR;
-                    left = cl;
-                    CcExpr* cr = cc_implicit_cast(p, right, common);
-                    if(!cr) return CC_OOM_ERROR;
-                    right = cr;
+                    err = cc_implicit_cast(p, left, common, &left);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, right, common, &right);
+                    if(err) return err;
                 }
                 result_type = ccqt_basic(CCBT_int);
                 break;
@@ -955,12 +1035,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 if(err) return err;
                 err = cc_integer_promote(p, right->type, &rp, tok.loc);
                 if(err) return err;
-                CcExpr* cl = cc_implicit_cast(p, left, lp);
-                if(!cl) return CC_OOM_ERROR;
-                left = cl;
-                CcExpr* cr = cc_implicit_cast(p, right, rp);
-                if(!cr) return CC_OOM_ERROR;
-                right = cr;
+                err = cc_implicit_cast(p, left, lp, &left);
+                if(err) return err;
+                err = cc_implicit_cast(p, right, rp, &right);
+                if(err) return err;
                 result_type = lp;
                 break;
             }
@@ -972,12 +1050,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 else {
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
-                    CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                    if(!cl) return CC_OOM_ERROR;
-                    left = cl;
-                    CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                    if(!cr) return CC_OOM_ERROR;
-                    right = cr;
+                    err = cc_implicit_cast(p, left, result_type, &left);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, right, result_type, &right);
+                    if(err) return err;
                 }
                 break;
             }
@@ -995,12 +1071,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 else {
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
-                    CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                    if(!cl) return CC_OOM_ERROR;
-                    left = cl;
-                    CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                    if(!cr) return CC_OOM_ERROR;
-                    right = cr;
+                    err = cc_implicit_cast(p, left, result_type, &left);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, right, result_type, &right);
+                    if(err) return err;
                 }
                 break;
             }
@@ -1008,12 +1082,10 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 // arithmetic/bitwise: *,/,%,&,|,^
                 err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                 if(err) return err;
-                CcExpr* cl = cc_implicit_cast(p, left, result_type);
-                if(!cl) return CC_OOM_ERROR;
-                left = cl;
-                CcExpr* cr = cc_implicit_cast(p, right, result_type);
-                if(!cr) return CC_OOM_ERROR;
-                right = cr;
+                err = cc_implicit_cast(p, left, result_type, &left);
+                if(err) return err;
+                err = cc_implicit_cast(p, right, result_type, &right);
+                if(err) return err;
                 break;
             }
         }
@@ -1096,9 +1168,8 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_NEG: case CC_EXPR_POS: case CC_EXPR_BITNOT: {
                     err = cc_integer_promote(p, operand->type, &result_type, tok.loc);
                     if(err) return err;
-                    CcExpr* co = cc_implicit_cast(p, operand, result_type);
-                    if(!co) return CC_OOM_ERROR;
-                    operand = co;
+                    err = cc_implicit_cast(p, operand, result_type, &operand);
+                    if(err) return err;
                     break;
                 }
                 case CC_EXPR_LOGNOT:
@@ -1212,9 +1283,9 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->kind = CC_EXPR_VALUE;
             node->loc = tok.loc;
             node->str.length = tok.str.length;
-            node->text = tok.str.text;
-            // Type: char[N] (array of char, including null terminator)
-            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), tok.str.length + 1, 0, 0);
+            node->text = tok.str.utf8;
+            // Type: char[N] (array of char, length includes null terminator)
+            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), tok.str.length, 0, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
             *out = node;
@@ -1377,9 +1448,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 if(arr->is_vla){
                     CcExpr* dim = arr->vla_expr;
                     if(!dim) return cc_error(p, tok.loc, "_Countof: VLA has no dimension expression");
-                    CcExpr* cast = cc_implicit_cast(p, dim, size_type);
-                    if(!cast) return CC_OOM_ERROR;
-                    *out = cast;
+                    err = cc_implicit_cast(p, dim, size_type, out);
+                    if(err) return err;
                     return 0;
                 }
                 CcExpr* node = cc_value_expr(p, tok.loc, size_type);
@@ -1516,12 +1586,24 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen){
                     // No args
+                    CcQualType ct = operand->type;
+                    if(ccqt_kind(ct) == CC_POINTER)
+                        ct = ccqt_as_ptr(ct)->pointee;
+                    if(ccqt_kind(ct) != CC_FUNCTION)
+                        return cc_error(p, tok.loc, "Called object is not a function or function pointer");
+                    CcFunction* ftype = ccqt_as_function(ct);
+                    if(!ftype->no_prototype && ftype->param_count != 0){
+                        if(ftype->is_variadic)
+                            return cc_error(p, tok.loc, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
+                        return cc_error(p, tok.loc, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
+                    }
                     CcExpr* node = cc_alloc_expr(p, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->kind = CC_EXPR_CALL;
                     node->loc = tok.loc;
                     node->call.nargs = 0;
                     node->value0 = operand;
+                    node->type = ftype->return_type;
                     operand = node;
                     continue;
                 }
@@ -1544,13 +1626,48 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma)
                         return cc_error(p, sep.loc, "Expected ',' or ')' in function call");
                 }
-                // nargs values + the function expr in value0
+                // Resolve function type
+                CcQualType ct = operand->type;
+                if(ccqt_kind(ct) == CC_POINTER)
+                    ct = ccqt_as_ptr(ct)->pointee;
+                if(ccqt_kind(ct) != CC_FUNCTION)
+                    return cc_error(p, tok.loc, "Called object is not a function or function pointer");
+                CcFunction* ftype = ccqt_as_function(ct);
+                // Check arg count
+                if(!ftype->is_variadic && !ftype->no_prototype && nargs != ftype->param_count)
+                    return cc_error(p, tok.loc, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                if(ftype->is_variadic && nargs < ftype->param_count)
+                    return cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                // Type check / implicit cast args
+                for(uint32_t i = 0; i < nargs; i++){
+                    if(!ftype->no_prototype && i < ftype->param_count){
+                        // Prototyped parameter: implicit cast to param type
+                        err = cc_implicit_cast(p, arg_buf[i], ftype->params[i], &arg_buf[i]);
+                        if(err) return err;
+                    } 
+                    else {
+                        // Variadic / no-prototype arg: default argument promotions
+                        CcQualType at = arg_buf[i]->type;
+                        if(ccqt_is_basic(at)){
+                            CcBasicTypeKind k = at.basic.kind;
+                            if(k == CCBT_float){
+                                err = cc_implicit_cast(p, arg_buf[i], ccqt_basic(CCBT_double), &arg_buf[i]);
+                                if(err) return err;
+                            } 
+                            else if(ccbt_is_integer(k) && ccbt_int_rank(k) < ccbt_int_rank(CCBT_int)){
+                                err = cc_implicit_cast(p, arg_buf[i], ccqt_basic(CCBT_int), &arg_buf[i]);
+                                if(err) return err;
+                            }
+                        }
+                    }
+                }
                 CcExpr* node = cc_alloc_expr(p, nargs);
                 if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_CALL;
                 node->loc = tok.loc;
                 node->call.nargs = nargs;
                 node->value0 = operand;
+                node->type = ftype->return_type;
                 for(uint32_t i = 0; i < nargs; i++)
                     node->values[i] = arg_buf[i];
                 operand = node;
@@ -1741,7 +1858,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_VALUE:
             if(e->str.length && e->text){
-                msb_sprintf(sb, "\"%.*s\"", e->str.length, e->text);
+                msb_sprintf(sb, "\"%.*s\"", e->str.length - 1, e->text);
             }
             else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
                 if(e->type.basic.kind == CCBT_float)
@@ -2178,21 +2295,34 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
 }
 
 static
+int
+cc_parse_all(CcParser* p){
+    _Bool finished = 0;
+    while(!finished){
+        int err = cc_parse_top_level(p, &finished);
+        if(err) return err;
+    }
+    return cc_resolve_gotos(p,
+        p->toplevel_statements.data,
+        p->toplevel_statements.count,
+        &p->toplevel_labels);
+}
+
+static
 void
 cc_parser_discard_input(CcParser* p){
     p->pending.count = 0;
-    cpp_discard_all_input(&p->lexer.cpp);
+    cpp_discard_all_input(&p->cpp);
 }
 
 
-static void cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 
 static
 int
 cc_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
-    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
+    cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
     va_end(va);
     return CC_SYNTAX_ERROR;
 }
@@ -2202,7 +2332,7 @@ void
 cc_warn(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
-    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
+    cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
     va_end(va);
 }
 
@@ -2211,7 +2341,7 @@ void
 cc_info(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
-    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
+    cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
     va_end(va);
 }
 
@@ -2220,7 +2350,7 @@ void
 cc_debug(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
-    cpp_msg(&p->lexer.cpp, loc, LOG_PRINT_ERROR, "debug", fmt, va);
+    cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "debug", fmt, va);
     va_end(va);
 }
 
@@ -2231,7 +2361,7 @@ cc_next_token(CcParser* p, CcToken* tok){
         *tok = ma_pop(CcToken)(&p->pending);
         return 0;
     }
-    return cc_lex_next_token(&p->lexer, tok);
+    return cpp_next_c_token(&p->cpp, tok);
 }
 
 static
@@ -2303,7 +2433,7 @@ cc_release_scratch(CcParser* p, Marray(CcToken)* toks){
 static
 Allocator
 cc_allocator(CcParser*p){
-    return p->lexer.cpp.allocator;
+    return p->cpp.allocator;
 }
 static
 Allocator
@@ -2795,7 +2925,7 @@ cc_pragma_pack(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, cons
 static
 int
 cc_register_pragmas(CcParser* p){
-    return cpp_register_pragma(&p->lexer.cpp, SV("pack"), cc_pragma_pack, p);
+    return cpp_register_pragma(&p->cpp, SV("pack"), cc_pragma_pack, p);
 }
 
 static
@@ -2883,10 +3013,9 @@ int
 cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, CcFieldLoc field_loc, Marray(CcInitEntry)* buf){
     CcQualType t = target;
     t.is_const = 0; t.is_volatile = 0; t.is_atomic = 0;
-    int err = cc_check_cast(p, value->type, t, value->loc);
+    CcExpr* casted;
+    int err = cc_implicit_cast(p, value, t, &casted);
     if(err) return err;
-    CcExpr* casted = cc_implicit_cast(p, value, t);
-    if(!casted) return CC_OOM_ERROR;
     err = ma_push(CcInitEntry)(buf, cc_allocator(p),
         ((CcInitEntry){.field_loc = field_loc, .value = casted}));
     if(err) return CC_OOM_ERROR;
@@ -3416,10 +3545,8 @@ cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType targ
             if(err) return err;
             CcQualType t = target_type;
             t.is_const = 0; t.is_volatile = 0; t.is_atomic = 0;
-            err = cc_check_cast(p, v->type, t, v->loc);
+            err = cc_implicit_cast(p, v, t, &v);
             if(err) return err;
-            v = cc_implicit_cast(p, v, t);
-            if(!v) return CC_OOM_ERROR;
             // Consume optional trailing comma
             err = cc_peek(p, &peek);
             if(err) return err;
@@ -4502,10 +4629,219 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
     return 0;
 }
 
+// Resolve goto labels to statement indices.
+// Must be called after the full body is parsed.
+static
+int
+cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels){
+    for(size_t i = 0; i < count; i++){
+        CcStatement* s = &stmts[i];
+        if(s->kind != CC_STMT_GOTO) continue;
+        if(!s->goto_label) continue;
+        Atom label = s->goto_label;
+        void* v = AM_get(labels, label);
+        if(!v)
+            return cc_error(p, s->loc, "Use of undeclared label '%.*s'", label->length, label->data);
+        s->targets[0] = (uint32_t)((uintptr_t)v - 1);
+        s->goto_label = NULL; // clear the temp
+    }
+    return 0;
+}
+
+static
+int
+cc_stmt(CcParser* p, CcStmtKind k, SrcLoc loc, size_t* idx){
+    int err;
+    CcStatement *s;
+    Marray(CcStatement) *stmts = p->current_func?&p->current_func->body : &p->toplevel_statements;
+    err = ma_zalloc(CcStatement)(stmts, cc_allocator(p), &s);
+    if(err) return CC_OOM_ERROR;
+    *idx = (size_t)(s - stmts->data);
+    s->kind = k;
+    s->loc = loc;
+    return 0;
+}
+
+static
+CcStatement*_Nullable
+cc_get_stmt(CcParser* p , size_t idx){
+    Marray(CcStatement) *stmts = p->current_func?&p->current_func->body : &p->toplevel_statements;
+    if(idx >= stmts->count) return NULL;
+    return &stmts->data[idx];
+}
+
 static
 int
 cc_parse_statement(CcParser* p){
-    (void)p;
+    int err;
+    CcToken tok;
+    size_t stmt_idx;
+    err = cc_next_token(p, &tok);
+    if(err) return err;
+    switch(tok.type){
+        case CC_EOF:
+            return 0;
+        case CC_KEYWORD:
+            switch(tok.kw.kw){
+                case CC_if:
+                case CC_while:
+                case CC_do:
+                case CC_for:
+                case CC_switch:
+                case CC_case:
+                case CC_default:
+                case CC_return:
+                case CC_break:
+                case CC_continue:
+                case CC_goto: {
+                    CcToken label_tok;
+                    err = cc_next_token(p, &label_tok);
+                    if(err) return err;
+                    if(label_tok.type != CC_IDENTIFIER)
+                        return cc_error(p, label_tok.loc, "Expected identifier after 'goto'");
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    err = cc_stmt(p, CC_STMT_GOTO, tok.loc, &stmt_idx);
+                    if(err) return err;
+                    CcStatement* s = cc_get_stmt(p, stmt_idx);
+                    if(!s) return CC_UNREACHABLE_ERROR;
+                    s->goto_label = label_tok.ident.ident;
+                    return 0;
+                }
+                case CC_sizeof:
+                case CC_true:
+                case CC_alignof:
+                case CC_nullptr:
+                case CC__Generic:
+                case CC_false:
+                    goto expression_statement;
+                case CC_int:
+                case CC_asm:
+                case CC_long:
+                case CC_char:
+                case CC_auto:
+                case CC_bool:
+                case CC_else:
+                case CC_enum:
+                case CC_void:
+                case CC_float:
+                case CC_const:
+                case CC_short:
+                case CC_union:
+                case CC_double:
+                case CC_extern:
+                case CC_inline:
+                case CC_signed:
+                case CC_static:
+                case CC_struct:
+                case CC_typeof:
+                case CC_alignas:
+                case CC_typedef:
+                case CC__Atomic:
+                case CC__BitInt:
+                case CC__Complex:
+                case CC_register:
+                case CC_restrict:
+                case CC_unsigned:
+                case CC_volatile:
+                case CC__Float16:
+                case CC__Float32:
+                case CC__Float64:
+                case CC_constexpr:
+                case CC__Float128:
+                case CC__Imaginary:
+                case CC__Noreturn:
+                case CC__Decimal32:
+                case CC__Decimal64:
+                case CC__Decimal128:
+                case CC___auto_type:
+                case CC_thread_local:
+                case CC_static_assert:
+                case CC_typeof_unqual:
+                case CC__Countof:
+                    return cc_error(p, tok.loc, "Unexpected keyword in this position");
+                case CC___attribute__:
+                    return cc_unimplemented(p, tok.loc, "TODO: __attribute__ as statement"); // __attribute__((fallthrough))
+            }
+            break;
+        case CC_PUNCTUATOR:
+            if(tok.punct.punct == '{'){
+                err = cc_push_scope(p);
+                if(err) return err;
+                for(;;){
+                    CcToken peek;
+                    err = cc_peek(p, &peek);
+                    if(err) goto end_block;
+                    if(peek.type == CC_EOF){
+                        err = cc_error(p, tok.loc, "Unterminated block");
+                        goto end_block;
+                    }
+                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'){
+                        cc_next_token(p, &peek); // consume '}'
+                        break;
+                    }
+                    CcDeclBase b = {0};
+                    err = cc_parse_declaration_specifier(p, &b);
+                    if(err) goto end_block;
+                    if(b.spec.bits || b.type.bits){
+                        err = cc_resolve_specifiers(p, &b);
+                        if(!err) err = cc_parse_decls(p, &b);
+                        if(err) goto end_block;
+                    }
+                    else {
+                        err = cc_parse_statement(p);
+                        if(err) goto end_block;
+                    }
+                }
+                end_block:
+                cc_pop_scope(p);
+                return err;
+            }
+            if(tok.punct.punct == ';'){
+                err = cc_stmt(p, CC_STMT_NULL, tok.loc, &stmt_idx);
+                if(err) return err;
+                return 0;
+            }
+            goto expression_statement;
+        case CC_IDENTIFIER:{
+            CcToken peek;
+            err = cc_peek(p, &peek);
+            if(err) return err;
+            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+                cc_next_token(p, &peek); // consume ':'
+                Atom label_name = tok.ident.ident;
+                err = cc_stmt(p, CC_STMT_LABEL, tok.loc, &stmt_idx);
+                if(err) return err;
+                AtomMap(uintptr_t)* labels = p->current_func
+                    ? &p->current_func->labels
+                    : &p->toplevel_labels;
+                void* existing = AM_get(labels, label_name);
+                if(existing)
+                    return cc_error(p, tok.loc, "Duplicate label '%.*s'", label_name->length, label_name->data);
+                err = AM_put(labels, cc_allocator(p), label_name, (void*)(uintptr_t)(stmt_idx + 1));
+                if(err) return CC_OOM_ERROR;
+                return cc_parse_statement(p);
+            }
+            goto expression_statement;
+        }
+        case CC_CONSTANT:
+        case CC_STRING_LITERAL:{
+            expression_statement:;
+            err = cc_unget(p, &tok);
+            if(err) return err;
+            CcExpr* expr;
+            err = cc_parse_expr(p, &expr);
+            if(err) return err;
+            err = cc_expect_punct(p, ';');
+            if(err) return err;
+            err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &stmt_idx);
+            if(err) return err;
+            CcStatement* s = cc_get_stmt(p, stmt_idx);
+            if(!s) return CC_UNREACHABLE_ERROR;
+            s->exprs[0] = expr;
+            return 0;
+        }
+    }
     return cc_unimp(p, "parse statement");
 }
 static
@@ -4889,7 +5225,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 if(err) return err;
                 if(tok.type != CC_STRING_LITERAL)
                     return cc_error(p, tok.loc, "Expected string literal in asm label");
-                asm_label = AT_atomize(p->lexer.cpp.at, tok.str.text, tok.str.length);
+                asm_label = AT_atomize(p->cpp.at, tok.str.utf8, tok.str.length - 1);
                 if(!asm_label) return CC_OOM_ERROR;
                 err = cc_next_token(p, &tok);
                 if(err) return err;
@@ -5005,10 +5341,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 target.is_const = 0;
                 target.is_volatile = 0;
                 target.is_atomic = 0;
-                err = cc_check_cast(p, initializer->type, target, tok.loc);
+                err = cc_implicit_cast(p, initializer, target, &initializer);
                 if(err) return err;
-                initializer = cc_implicit_cast(p, initializer, target);
-                if(!initializer) return CC_OOM_ERROR;
             }
         }
         else if(declbase->spec.sp_infer_type){
@@ -5084,7 +5418,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
 static
 const CcTargetConfig*
 cc_target(const CcParser* p){
-    return &p->lexer.cpp.target;
+    return &p->cpp.target;
 }
 
 static
@@ -5125,7 +5459,7 @@ cc_handle_static_asssert(CcParser* p){
         if(err) return err;
         if(tok.type != CC_STRING_LITERAL)
             return cc_error(p, tok.loc, "expected string literal in static_assert");
-        msg = tok.str.text;
+        msg = tok.str.utf8;
         msg_len = tok.str.length;
     }
     err = cc_expect_punct(p, CC_rparen);
@@ -5138,7 +5472,7 @@ cc_handle_static_asssert(CcParser* p){
         cc_print_expr(&tmp, expr);
         if(msg){
             msb_write_literal(&tmp, ": \"");
-            msb_write_str(&tmp, msg, msg_len);
+            msb_write_str(&tmp, msg, msg_len - 1);
             msb_write_literal(&tmp, "\"");
         }
         StringView sv = msb_borrow_sv(&tmp);

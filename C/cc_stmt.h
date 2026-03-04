@@ -44,7 +44,13 @@ struct CcStatement {
     // CC_STMT_SWITCH:  exprs[0] = expr
     // CC_STMT_CASE:    exprs[0] = case value expr
     // CC_STMT_RETURN:  exprs[0] = expr (nullable)
-    CcExpr* _Nullable exprs[3];
+    // CC_STMT_GOTO:    targets[0] = resolved statement index
+    //                  Before resolution, goto_label holds the label name.
+    // CC_STMT_LABEL:   (no extra data needed, just a target for gotos)
+    union {
+        CcExpr* _Null_unspecified exprs[3];
+        Atom goto_label; // for CC_STMT_GOTO before resolution
+    };
 };
 
 #ifdef __clang__

@@ -697,6 +697,67 @@ TestFunction(test_parse_decls){
                 { SV("f"), SV("float"), SV("(float)42") },
             },
         },
+        // --- Implicit conversion tests (C2y 6.5.17.2) ---
+        {
+            "null pointer constant 0", __LINE__,
+            SV("int *p = 0;\n"),
+            .vars = {
+                { SV("p"), SV("int *"), .init = SV("(int *)0") },
+            },
+        },
+        {
+            "nullptr to pointer", __LINE__,
+            SV("int *p = nullptr;\n"),
+            .vars = {
+                { SV("p"), SV("int *"), .init = SV("(int *)0") },
+            },
+        },
+        {
+            "pointer to bool", __LINE__,
+            SV("int x;\n"
+               "_Bool b = &x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("b"), SV("_Bool"), .init = SV("(_Bool)&x") },
+            },
+        },
+        {
+            "void* to int*", __LINE__,
+            SV("void *vp;\n"
+               "int *ip = vp;\n"),
+            .vars = {
+                { SV("vp"), SV("void *") },
+                { SV("ip"), SV("int *"), .init = SV("(int *)vp") },
+            },
+        },
+        {
+            "int* to void*", __LINE__,
+            SV("int *ip;\n"
+               "void *vp = ip;\n"),
+            .vars = {
+                { SV("ip"), SV("int *") },
+                { SV("vp"), SV("void *"), .init = SV("(void *)ip") },
+            },
+        },
+        {
+            "int* to const int*", __LINE__,
+            SV("int *ip;\n"
+               "const int *cip = ip;\n"),
+            .vars = {
+                { SV("ip"), SV("int *") },
+                { SV("cip"), SV("const int *"), .init = SV("(const int *)ip") },
+            },
+        },
+        {
+            "enum to int", __LINE__,
+            SV("enum E { A, B };\n"
+               "enum E e;\n"
+               "int x = e;\n"),
+            .vars = {
+                { SV("e"), SV("enum E") },
+                { SV("x"), SV("int"), .init = SV("(int)e") },
+            },
+        },
         {
             "type inference __auto_type", __LINE__,
             SV("__auto_type x = 42;\n"),
@@ -1976,6 +2037,55 @@ TestFunction(test_parse_decls){
                 { SV("bar"), SV("void(int)"), .mangle = SV("_bar") },
             },
         },
+        // --- Function call implicit cast tests ---
+        {
+            "call: int arg to long param", __LINE__,
+            SV("long f(long x);\n"
+               "long r = f(42);\n"),
+            .funcs = {
+                { SV("f"), SV("long(long)") },
+            },
+            .vars = {
+                { SV("r"), SV("long"), .init = SV("f((long)42)") },
+            },
+        },
+        {
+            "call: matching types, no cast", __LINE__,
+            SV("int f(int x);\n"
+               "int r = f(42);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(42)") },
+            },
+        },
+        {
+            "call: variadic, extra args get default promotions", __LINE__,
+            SV("int f(int x, ...);\n"
+               "float g(void);\n"
+               "int r = f(1, g());\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, ...)") },
+                { SV("g"), SV("float(void)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, (double)g())") },
+            },
+        },
+        {
+            "call: char arg promoted to int param", __LINE__,
+            SV("int f(int x);\n"
+               "char c;\n"
+               "int r = f(c);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int)") },
+            },
+            .vars = {
+                { SV("c"), SV("char") },
+                { SV("r"), SV("int"), .init = SV("f((int)c)") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -1989,15 +2099,13 @@ TestFunction(test_parse_decls){
         int err;
         MStringBuilder sb = {.allocator=al};
         CcParser cc = {
-            .lexer = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_target_test(),
-                },
+            .cpp = {
+                .allocator = al,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .env = &env,
+                .target = cc_target_test(),
             },
             .current = &cc.global,
         };
@@ -2005,14 +2113,12 @@ TestFunction(test_parse_decls){
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
         if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto finally;}
-        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto finally;}
-        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto finally;}
-        for(_Bool finished = 0; !finished;){
-            err = cc_parse_top_level(&cc, &finished);
-            if(err) {TestPrintf("%s:%d: failed to parse", __FILE__, c->line); goto finally;}
-        }
+        err = cc_parse_all(&cc);
+        if(err) {TestPrintf("%s:%d: failed to parse", __FILE__, c->line); goto finally;}
         for(size_t n = 0; n < N; n++){
             StringView name = c->vars[n].name;
             if(!name.length) break;
@@ -2097,7 +2203,7 @@ TestFunction(test_parse_decls){
         }
         TestExpectFalse(err);
         ArenaAllocator_free_all(&aa);
-        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
     }
     TESTEND();
@@ -2425,6 +2531,107 @@ TestFunction(test_parse_errors){
             SV("typedef int tu __attribute__((transparent_union));\n"),
             SV("(test):1:1: error: transparent_union attribute on non-union type is not supported\n"),
         },
+        // --- Function call arg errors ---
+        {
+            "too few args", __LINE__,
+            SV("void f(int a, int b);\n"
+               "int x = f(1);\n"),
+            SV("(test):2:10: error: Expected 2 arguments, got 1\n"),
+        },
+        {
+            "too many args", __LINE__,
+            SV("void f(int a);\n"
+               "int x = f(1, 2);\n"),
+            SV("(test):2:10: error: Expected 1 arguments, got 2\n"),
+        },
+        {
+            "zero args to non-void function", __LINE__,
+            SV("int f(int a);\n"
+               "int x = f();\n"),
+            SV("(test):2:10: error: Expected 1 arguments, got 0\n"),
+        },
+        {
+            "too few args to variadic", __LINE__,
+            SV("int printf(const char *fmt, ...);\n"
+               "int x = printf();\n"),
+            SV("(test):2:15: error: Too few arguments: expected at least 1, got 0\n"),
+        },
+        {
+            "call non-function", __LINE__,
+            SV("int x;\n"
+               "int y = x(1);\n"),
+            SV("(test):2:10: error: Called object is not a function or function pointer\n"),
+        },
+        // --- Incompatible type errors ---
+        {
+            "call: struct arg to int param", __LINE__,
+            SV("struct S { int x; };\n"
+               "void f(int a);\n"
+               "struct S s;\n"
+               "int x = f(s);\n"),
+            SV("(test):4:11: error: cannot implicitly convert from 'struct S' to 'int'\n"),
+        },
+        {
+            "call: struct arg to float param", __LINE__,
+            SV("struct S { int x; };\n"
+               "int f(float a);\n"
+               "struct S s;\n"
+               "int x = f(s);\n"),
+            SV("(test):4:11: error: cannot implicitly convert from 'struct S' to 'float'\n"),
+        },
+        {
+            "call: pointer arg to struct param", __LINE__,
+            SV("struct S { int x; };\n"
+               "void f(struct S s);\n"
+               "int *p;\n"
+               "int x = f(p);\n"),
+            SV("(test):4:11: error: cannot implicitly convert from 'int *' to 'struct S'\n"),
+        },
+        // --- Assignment implicit conversion errors ---
+        {
+            "assign struct to int", __LINE__,
+            SV("struct S { int x; };\n"
+               "struct S s;\n"
+               "int x = s;\n"),
+            SV("(test):3:9: error: cannot implicitly convert from 'struct S' to 'int'\n"),
+        },
+        {
+            "assign int to struct", __LINE__,
+            SV("struct S { int x; };\n"
+               "struct S s = 42;\n"),
+            SV("(test):2:14: error: cannot implicitly convert from 'int' to 'struct S'\n"),
+        },
+        {
+            "assign non-zero int to pointer", __LINE__,
+            SV("int *p = 1;\n"),
+            SV("(test):1:10: error: cannot implicitly convert from 'int' to 'int *'\n"),
+        },
+        {
+            "assign pointer to int", __LINE__,
+            SV("int *p;\n"
+               "int x = p;\n"),
+            SV("(test):2:9: error: cannot implicitly convert from 'int *' to 'int'\n"),
+        },
+        {
+            "const int* to int* (drops const)", __LINE__,
+            SV("const int *cip;\n"
+               "int *ip = cip;\n"),
+            SV("(test):2:11: error: cannot implicitly convert from 'const int *' to 'int *'\n"),
+        },
+        {
+            "assign to const variable", __LINE__,
+            SV("const int x = 0;\n"
+               "x = 1;\n"),
+            SV("(test):2:3: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "incompatible struct types", __LINE__,
+            SV("struct A { int x; };\n"
+               "struct B { int x; };\n"
+               "struct A a;\n"
+               "struct B b = a;\n"),
+            SV("(test):4:14: error: cannot implicitly convert from 'struct A' to 'struct B'\n"),
+        },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         ArenaAllocator aa = {0};
@@ -2436,15 +2643,13 @@ TestFunction(test_parse_errors){
         AtomTable at = {.allocator = al};
         Environment env = {.allocator = al, .at=&at};
         CcParser cc = {
-            .lexer = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_target_test(),
-                },
+            .cpp = {
+                .allocator = al,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .env = &env,
+                .target = cc_target_test(),
             },
             .current = &cc.global,
         };
@@ -2452,14 +2657,11 @@ TestFunction(test_parse_errors){
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, c->input);
         if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto fin;}
-        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto fin;}
-        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto fin;}
-        for(_Bool finished = 0; !finished;){
-            err = cc_parse_top_level(&cc, &finished);
-            if(err) break;
-        }
+        err = cc_parse_all(&cc);
         TEST_stats.executed++;
         if(!err){
             TEST_stats.failures++;
@@ -2471,7 +2673,7 @@ TestFunction(test_parse_errors){
         }
         fin:
         ArenaAllocator_free_all(&aa);
-        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
     }
     TESTEND();
@@ -2876,15 +3078,13 @@ TestFunction(test_struct_layout){
         Environment env = {.allocator = al, .at=&at};
         int err = 0;
         CcParser cc = {
-            .lexer = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_target_test(),
-                },
+            .cpp = {
+                .allocator = al,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .env = &env,
+                .target = cc_target_test(),
             },
             .current = &cc.global,
         };
@@ -2892,16 +3092,14 @@ TestFunction(test_struct_layout){
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
         if(err) {TestReport("failed to cache"); goto fin;}
-        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestReport("failed to define builtins"); goto fin;}
         err = cc_register_pragmas(&cc);
         if(err) {TestReport("failed to register pragmas"); goto fin;}
-        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto fin;}
-        for(_Bool finished = 0; !finished;){
-            err = cc_parse_top_level(&cc, &finished);
-            if(err) {TestReport("failed to parse"); goto fin;}
-        }
+        err = cc_parse_all(&cc);
+        if(err) {TestReport("failed to parse"); goto fin;}
         {
             Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
             if(!tag){
@@ -2994,7 +3192,7 @@ TestFunction(test_struct_layout){
         }
         TestExpectFalse(err);
         ArenaAllocator_free_all(&aa);
-        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
     }
     TESTEND();
@@ -3149,15 +3347,13 @@ TestFunction(test_bitfield_abi){
         CcTargetConfig tgt = cc_target_test();
         tgt.bitfield_abi = cases[i].abi;
         CcParser cc = {
-            .lexer = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = tgt,
-                },
+            .cpp = {
+                .allocator = al,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .env = &env,
+                .target = tgt,
             },
             .current = &cc.global,
         };
@@ -3165,14 +3361,12 @@ TestFunction(test_bitfield_abi){
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
         if(err) {TestReport("failed to cache"); goto bffin;}
-        err = cpp_define_builtin_macros(&cc.lexer.cpp);
+        err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestReport("failed to define builtins"); goto bffin;}
-        err = cpp_include_file_via_file_cache(&cc.lexer.cpp, SV("(test)"));
+        err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto bffin;}
-        for(_Bool finished = 0; !finished;){
-            err = cc_parse_top_level(&cc, &finished);
-            if(err) {TestReport("failed to parse"); goto bffin;}
-        }
+        err = cc_parse_all(&cc);
+        if(err) {TestReport("failed to parse"); goto bffin;}
         {
             Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
             if(!tag){ TestReport("tag atom not found"); err = 1; goto bffin; }
@@ -3225,7 +3419,7 @@ TestFunction(test_bitfield_abi){
         }
         TestExpectFalse(err);
         ArenaAllocator_free_all(&aa);
-        ArenaAllocator_free_all(&cc.lexer.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
     }
     TESTEND();
@@ -3253,5 +3447,4 @@ int main(int argc, char** argv){
 #include "../Drp/Allocators/allocator.c"
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
-#include "cc_lexer.c"
 #include "cc_parser.c"

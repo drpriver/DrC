@@ -6,7 +6,6 @@
 #include "../Drp/atom_map.h"
 #include "../Drp/free_list.h"
 #include "../Drp/Allocators/arena_allocator.h"
-#include "cc_lexer.h"
 #include "cc_tok.h"
 #include "cc_type.h"
 #include "cc_type_cache.h"
@@ -15,6 +14,8 @@
 #include "cc_func.h"
 #include "cc_var.h"
 #include "cc_scope.h"
+#include "cc_interp.h"
+#include "cpp_preprocessor.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CcToken
@@ -72,7 +73,8 @@ struct CcParser {
         };
     };
     Marray(CcStatement) toplevel_statements; // only allowed in repl/script mode.
-    CcLexer lexer;
+    AtomMap(uintptr_t) toplevel_labels; // label name -> statement index (1-based, like CcFunc.labels)
+    CPreprocessor cpp;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
     Marray(CcToken) pending;
@@ -85,9 +87,12 @@ struct CcParser {
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
     ArenaAllocator scratch_arena;
+    CcInterpFrame top_frame;
+    CcInterpFrame *current_frame;
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
+static int cc_parse_all(CcParser*);
 static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);

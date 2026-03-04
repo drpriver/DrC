@@ -210,7 +210,11 @@ struct CcToken {
             CcStringType stype: 8;
             uint32_t _bitpadding: 16;
             uint32_t length;
-            const char* text;
+            union {
+                const char* utf8;
+                const unsigned short* utf16;
+                const unsigned int* utf32;
+            };
         } str;
         struct {
             CcTokenType type: 8;

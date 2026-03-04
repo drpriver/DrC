@@ -152,7 +152,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             max_candidates = N_DIRECTIVES;
         else {
             max_candidates += N_KEYWORDS;
-            AtomMapItems mi = AM_items(&parser->lexer.cpp.macros);
+            AtomMapItems mi = AM_items(&parser->cpp.macros);
             max_candidates += mi.count;
             max_candidates += AM_items(&parser->global.typedefs).count;
             max_candidates += AM_items(&parser->global.variables).count;
@@ -168,7 +168,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             COLLECT_FROM_TABLE(cc_directive_strs, N_DIRECTIVES);
         else {
             COLLECT_FROM_TABLE(cc_keyword_strs, N_KEYWORDS);
-            COLLECT_FROM_ATOMMAP(AM_items(&parser->lexer.cpp.macros));
+            COLLECT_FROM_ATOMMAP(AM_items(&parser->cpp.macros));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.typedefs));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.variables));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.structs));

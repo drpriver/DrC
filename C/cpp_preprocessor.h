@@ -17,6 +17,7 @@
 #include "../Drp/rng.h"
 #include "cpp_tok.h"
 #include "cc_target.h"
+#include "cc_tok.h"
 
 #ifndef MARRAY_STRING_VIEW
 #define MARRAY_STRING_VIEW
@@ -221,7 +222,7 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name);
 
 static
 int
-cpp_next_token(CPreprocessor* cpp, CppToken* tok);
+cpp_next_c_token(CPreprocessor* cpp, CcToken* tok);
 
 static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
 

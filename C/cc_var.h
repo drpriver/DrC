@@ -23,6 +23,7 @@ struct CcVariable {
              tenative: 1,
              _padding: 29;
     CcExpr* _Nullable initializer;
+    void* _Nullable interp_val; // runtime storage for globals (sizeof(type) bytes)
 };
 
 #ifdef __clang__

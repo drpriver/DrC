@@ -17,15 +17,13 @@
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
 #include "cpp_tok.h"
+#include "cpp_preprocessor.h"
 #include "cc_tok.h"
-#include "cc_lexer.h"
 
 #include "../Drp/compiler_warnings.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-
-static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
 
 enum { MAX_TEST_TOKENS = 64 };
 
@@ -43,22 +41,20 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
-    CcLexer lexer = {
-        .cpp = {
-            .allocator = a,
-            .fc = fc,
-            .at = &at,
-            .logger = logger,
-            .env = &env,
-            .target = cc_target_test(),
-        },
+    CPreprocessor cpp = {
+        .allocator = a,
+        .fc = fc,
+        .at = &at,
+        .logger = logger,
+        .env = &env,
+        .target = cc_target_test(),
     };
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
     if(err){ result = 1; goto finally; }
-    err = cpp_define_builtin_macros(&lexer.cpp);
+    err = cpp_define_builtin_macros(&cpp);
     if(err){ result = 1; goto finally; }
-    err = cpp_include_file_via_file_cache(&lexer.cpp, SV("(test)"));
+    err = cpp_include_file_via_file_cache(&cpp, SV("(test)"));
     if(err){ result = 1; goto finally; }
     *count = 0;
     for(;;){
@@ -67,7 +63,7 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
             goto finally;
         }
         CcToken tok;
-        err = cc_lex_next_token(&lexer, &tok);
+        err = cpp_next_c_token(&cpp, &tok);
         if(err){
             result = 1;
             goto finally;
@@ -81,7 +77,7 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
     *out_aa = aa;
-    *out_synth = lexer.cpp.synth_arena;
+    *out_synth = cpp.synth_arena;
     return result;
 }
 #define CC_LEX_STRING(txt, out, count, aa, synth) cc_lex_string(txt, &out, count, aa, synth, __FILE__, __func__, __LINE__)
@@ -100,27 +96,25 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
-    CcLexer lexer = {
-        .cpp = {
-            .allocator = a,
-            .fc = fc,
-            .at = &at,
-            .logger = logger,
-            .env = &env,
-            .target = cc_target_test(),
-        },
+    CPreprocessor cpp = {
+        .allocator = a,
+        .fc = fc,
+        .at = &at,
+        .logger = logger,
+        .env = &env,
+        .target = cc_target_test(),
     };
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
     if(err) goto finally;
-    err = cpp_define_builtin_macros(&lexer.cpp);
+    err = cpp_define_builtin_macros(&cpp);
     if(err) goto finally;
-    err = cpp_include_file_via_file_cache(&lexer.cpp, SV("(test)"));
+    err = cpp_include_file_via_file_cache(&cpp, SV("(test)"));
     if(err) goto finally;
     {
         CcToken tok;
         for(;;){
-            err = cc_lex_next_token(&lexer, &tok);
+            err = cpp_next_c_token(&cpp, &tok);
             if(err) break;
             if(tok.type == CC_EOF) break;
         }
@@ -134,7 +128,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     else
         *err_out = (StringView){0};
     ArenaAllocator_free_all(&aa);
-    ArenaAllocator_free_all(&lexer.cpp.synth_arena);
+    ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
 }
 
@@ -148,7 +142,9 @@ static CcToken cc_punct_tok(CcPunct p){ return (CcToken){.punct={.type=CC_PUNCTU
 // Abuse: stash a const char* in the Atom field. cc_tok_matches knows to
 // compare the real atom's data/length against this C string.
 static CcToken cc_ident_tok(const char* name){ return (CcToken){.ident={.type=CC_IDENTIFIER, .ident=(Atom)name}}; }
-static CcToken cc_str_tok(CcStringType stype, StringView sv){ return (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .text=sv.text, .length=(uint32_t)sv.length}}; }
+static CcToken cc_str_tok(CcStringType stype, StringView sv){ return (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .utf8=sv.text, .length=(uint32_t)sv.length}}; }
+static CcToken cc_str16_tok(CcStringType stype, const unsigned short* data, uint32_t len){ return (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .utf16=data, .length=len}}; }
+static CcToken cc_str32_tok(CcStringType stype, const unsigned int* data, uint32_t len){ return (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .utf32=data, .length=len}}; }
 
 static
 const char*
@@ -194,7 +190,16 @@ cc_tok_matches(CcToken got, CcToken exp){
         case CC_STRING_LITERAL:
             if(got.str.stype != exp.str.stype) return 0;
             if(got.str.length != exp.str.length) return 0;
-            return memcmp(got.str.text, exp.str.text, got.str.length) == 0;
+            switch(got.str.stype){
+                case CC_uSTRING:
+                    return memcmp(got.str.utf16, exp.str.utf16, got.str.length * 2) == 0;
+                case CC_USTRING:
+                    return memcmp(got.str.utf32, exp.str.utf32, got.str.length * 4) == 0;
+                case CC_LSTRING:
+                    return memcmp(got.str.utf32, exp.str.utf32, got.str.length * 4) == 0;
+                default:
+                    return memcmp(got.str.utf8, exp.str.utf8, got.str.length) == 0;
+            }
         case CC_PUNCTUATOR:
             return got.punct.punct == exp.punct.punct;
     }
@@ -423,18 +428,22 @@ TestFunction(test_cc_lex_strings){
     struct {
         const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
-        {"basic",    SV("\"hello\""),     cc_str_tok(CC_STRING,   SV("hello")), __LINE__},
-        {"empty",    SV("\"\""),          cc_str_tok(CC_STRING,   SV("")), __LINE__},
-        {"L_str",    SV("L\"wide\""),     cc_str_tok(CC_LSTRING,  SV("wide")), __LINE__},
-        {"u_str",    SV("u\"utf16\""),    cc_str_tok(CC_uSTRING,  SV("utf16")), __LINE__},
-        {"U_str",    SV("U\"utf32\""),    cc_str_tok(CC_USTRING,  SV("utf32")), __LINE__},
-        {"u8_str",   SV("u8\"utf8\""),    cc_str_tok(CC_U8STRING, SV("utf8")), __LINE__},
-        {"escapes",  SV("\"a\\nb\""),     cc_str_tok(CC_STRING,   SV("a\\nb")), __LINE__},
+        {"basic",    SV("\"hello\""),     cc_str_tok(CC_STRING,   SV("hello\0")), __LINE__},
+        {"empty",    SV("\"\""),          cc_str_tok(CC_STRING,   SV("\0")), __LINE__},
+        {"L_str",    SV("L\"wide\""),     cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 'w','i','d','e', 0}, 5), __LINE__},
+        {"u_str",    SV("u\"utf16\""),    cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 'u','t','f','1','6', 0}, 6), __LINE__},
+        {"U_str",    SV("U\"utf32\""),    cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 'u','t','f','3','2', 0}, 6), __LINE__},
+        {"u8_str",   SV("u8\"utf8\""),    cc_str_tok(CC_U8STRING, SV("utf8\0")), __LINE__},
+        {"escapes",  SV("\"a\\nb\""),     cc_str_tok(CC_STRING,   SV("a\nb\0")), __LINE__},
+        // Universal character names
+        {"ucn_u",    SV("\"\\u0041\""),   cc_str_tok(CC_STRING,   SV("A\0")), __LINE__},
+        {"ucn_U",    SV("\"\\U00000041\""), cc_str_tok(CC_STRING, SV("A\0")), __LINE__},
+        {"ucn_e_acute", SV("\"\\u00E9\""), cc_str_tok(CC_STRING,  SV("\xc3\xa9\0")), __LINE__},
         // Empty prefixed strings
-        {"L_empty",  SV("L\"\""),        cc_str_tok(CC_LSTRING,  SV("")), __LINE__},
-        {"u_empty",  SV("u\"\""),        cc_str_tok(CC_uSTRING,  SV("")), __LINE__},
-        {"U_empty",  SV("U\"\""),        cc_str_tok(CC_USTRING,  SV("")), __LINE__},
-        {"u8_empty", SV("u8\"\""),       cc_str_tok(CC_U8STRING, SV("")), __LINE__},
+        {"L_empty",  SV("L\"\""),        cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 0}, 1), __LINE__},
+        {"u_empty",  SV("u\"\""),        cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0}, 1), __LINE__},
+        {"U_empty",  SV("U\"\""),        cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 0}, 1), __LINE__},
+        {"u8_empty", SV("u8\"\""),       cc_str_tok(CC_U8STRING, SV("\0")), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
@@ -443,7 +452,7 @@ TestFunction(test_cc_lex_strings){
         int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
         TestAssertFalse(err);
         if(count != 1){
-            TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
+            TestPrintf("%s:%d: test '%s': expected 1 token, got %d\n", __FILE__, test_cases[i].line, test_cases[i].name, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
             ArenaAllocator_free_all(&aa);
@@ -670,7 +679,7 @@ TestFunction(test_cc_lex_multi_token){
             cc_punct_tok(CC_rparen),
         }, __LINE__},
         {"string_and_int", SV("\"hello\" 42"), 2, {
-            cc_str_tok(CC_STRING, SV("hello")),
+            cc_str_tok(CC_STRING, SV("hello\0")),
             cc_int_tok(42, CC_INT),
         }, __LINE__},
         // No-whitespace adjacency
@@ -743,4 +752,3 @@ int main(int argc, char** argv){
 #include "../Drp/Allocators/allocator.c"
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
-#include "cc_lexer.c"

@@ -237,6 +237,13 @@ ccbt_is_float(CcBasicTypeKind k){
 
 static inline
 _Bool
+ccbt_is_arithmetic(CcBasicTypeKind k){
+    // bool through long_double_complex, excludes void, nullptr_t, INVALID
+    return k >= CCBT_bool && k <= CCBT_long_double_complex;
+}
+
+static inline
+_Bool
 ccbt_is_unsigned(CcBasicTypeKind k){
     switch(k){
         case CCBT_bool:

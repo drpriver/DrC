@@ -15,7 +15,6 @@
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_tok.h"
-#include "C/cc_lexer.h"
 #include "C/cc_parser.h"
 #include "cpp_args.h"
 #include "Drp/get_input.h"
@@ -41,17 +40,16 @@ int main(int argc, char** argv, char** envp){
         return 1;
     }
     CcParser cc_parser = {
-        .lexer = {
-            .cpp = {
-                .allocator = MALLOCATOR,
-                .fc = fc,
-                .at = &at,
-                .logger = logger,
-                .target = cc_target_funcs[CC_TARGET_NATIVE](),
-                .env = &env,
-            },
+        .cpp = {
+            .allocator = MALLOCATOR,
+            .fc = fc,
+            .at = &at,
+            .logger = logger,
+            .target = cc_target_funcs[CC_TARGET_NATIVE](),
+            .env = &env,
         },
         .current = &cc_parser.global,
+        .current_frame = &cc_parser.top_frame,
     };
     const char* filename = NULL;
     ArgToParse pos_args[] = {
@@ -102,7 +100,7 @@ int main(int argc, char** argv, char** envp){
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
-        .keyword.next = cpp_kwargs(&cc_parser.lexer.cpp),
+        .keyword.next = cpp_kwargs(&cc_parser.cpp),
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal(),
@@ -133,11 +131,11 @@ int main(int argc, char** argv, char** envp){
         return 1;
     }
     // Re-apply target in case --target was given (overrides native default)
-    cc_parser.lexer.cpp.target = cc_target_funcs[cc_target_arg]();
-    err = cpp_define_builtin_macros(&cc_parser.lexer.cpp);
+    cc_parser.cpp.target = cc_target_funcs[cc_target_arg]();
+    err = cpp_define_builtin_macros(&cc_parser.cpp);
     if(err) return err;
     if(!cpp_nostdinc)
-        err = cpp_setup_default_includes(&cc_parser.lexer.cpp);
+        err = cpp_setup_default_includes(&cc_parser.cpp);
     if(err) return err;
     if(!filename && !repl){
         LongString txt;
@@ -155,24 +153,22 @@ int main(int argc, char** argv, char** envp){
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
     }
-    err = cpp_cli_defines(&cc_parser.lexer.cpp);
+    err = cpp_cli_defines(&cc_parser.cpp);
     if(err) return err;
     fc->may_read_real_files = 1;
     if(filename){
-        err = cpp_include_file_via_file_cache(&cc_parser.lexer.cpp, (StringView){strlen(filename), filename});
+        err = cpp_include_file_via_file_cache(&cc_parser.cpp, (StringView){strlen(filename), filename});
         if(err){
             log_error(logger, "Unable to read '%s'", filename);
             return err;
         }
     }
-    _Bool finished = 0;
-    while(!finished){
-        err = cc_parse_top_level(&cc_parser, &finished);
-        if(err) return err;
-    }
+    err = cc_parse_all(&cc_parser);
+    if(err) return err;
     if(repl){
         cc_parser.repl = 1;
-        err = cpp_cli_defines(&cc_parser.lexer.cpp);
+        cc_parser.current_frame = &cc_parser.top_frame;
+        err = cpp_cli_defines(&cc_parser.cpp);
         if(err) return err;
         fc->may_read_real_files = 1;
         struct ReplCompleterCtx completer_ctx = {.parser = &cc_parser};
@@ -204,18 +200,24 @@ int main(int argc, char** argv, char** envp){
                 fc_write_path(fc, name, namelen);
                 err = fc_cache_file(fc, src);
                 if(err) return err;
-                err = cpp_include_file_via_file_cache(&cc_parser.lexer.cpp, (StringView){namelen, name});
+                err = cpp_include_file_via_file_cache(&cc_parser.cpp, (StringView){namelen, name});
                 if(err){
                     log_error(logger, "REPL error");
                     msb.cursor = 0;
                     continue;
                 }
-                finished = 0;
-                while(!finished){
-                    err = cc_parse_top_level(&cc_parser, &finished);
-                    if(err) break;
+                err = cc_parse_all(&cc_parser);
+                if(err){ cc_parser_discard_input(&cc_parser); msb.cursor = 0; continue; }
+                // Execute new statements
+                {
+                    CcInterpFrame* frame = &cc_parser.top_frame;
+                    frame->stmts = cc_parser.toplevel_statements.data;
+                    frame->stmt_count = cc_parser.toplevel_statements.count;
+                    while(frame->pc < frame->stmt_count){
+                        err = cc_interp_step(&cc_parser);
+                        if(err) break;
+                    }
                 }
-                if(err) cc_parser_discard_input(&cc_parser);
                 msb.cursor = 0;
                 continue;
             }
@@ -231,7 +233,16 @@ int main(int argc, char** argv, char** envp){
         return 0;
     }
     else {
-        repl_builtin_command(&cc_parser, SV("/dump symbols"));
+        // Execute toplevel statements
+        cc_parser.current_frame = &cc_parser.top_frame;
+        CcInterpFrame* frame = &cc_parser.top_frame;
+        frame->stmts = cc_parser.toplevel_statements.data;
+        frame->stmt_count = cc_parser.toplevel_statements.count;
+        while(frame->pc < frame->stmt_count){
+            err = cc_interp_step(&cc_parser);
+            if(err) return err;
+        }
+        if(0)repl_builtin_command(&cc_parser, SV("/dump symbols"));
     }
     return 0;
 }
@@ -242,7 +253,7 @@ static void cc_print_expr(MStringBuilder*sb, CcExpr* e);
 static
 _Bool
 repl_builtin_command(CcParser* parser, StringView input){
-    Logger* l = parser->lexer.cpp.logger;
+    Logger* l = parser->cpp.logger;
     input = stripped(input);
     if(!input.length) return 0;
     if(!sv_startswith(input, SV("/"))) return 0;
@@ -464,7 +475,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         }
     }
     if(dump & DUMP_MACROS){
-        AtomMapItems mi = AM_items(&parser->lexer.cpp.macros);
+        AtomMapItems mi = AM_items(&parser->cpp.macros);
         log_sprintf(l, "Macros (%zu):\n", mi.count);
         for(size_t i = 0; i < mi.count; i++){
             Atom a = mi.data[i].atom;
@@ -487,8 +498,8 @@ repl_builtin_command(CcParser* parser, StringView input){
 #include "Drp/Allocators/allocator.c"
 #include "Drp/file_cache.c"
 #include "C/cpp_preprocessor.c"
-#include "C/cc_lexer.c"
 #include "C/cc_parser.c"
 #include "Drp/get_input.c"
 #include "C/native_call.c"
+#include "C/cc_interp.c"
 #include "Drp/dre.c"
