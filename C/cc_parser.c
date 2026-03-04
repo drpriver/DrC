@@ -1683,10 +1683,6 @@ done:
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Type printer
-// ---------------------------------------------------------------------------
-
 static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_INVALID]            = "<invalid>",
     [CCBT_void]               = "void",
@@ -1714,8 +1710,6 @@ static const char* _Null_unspecified cc_basic_names[] = {
 static void cc_print_type_pre(MStringBuilder*, CcQualType t);
 static void cc_print_type_post(MStringBuilder*, CcQualType t);
 
-// Returns true if this type kind binds tighter than pointer
-// (i.e. pointer-to-this needs grouping parens).
 static
 _Bool
 cc_type_needs_parens(CcQualType t){
