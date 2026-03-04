@@ -16,5 +16,6 @@ enum {
     _cc_file_not_found_error,
     _cc_macro_already_exists_error,
     _cc_redefining_builtin_macro_error,
+    _cc_runtime_error,
 };
 #endif

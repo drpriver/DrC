@@ -22,6 +22,7 @@
 #include "cc_repl_completion.h"
 #include "C/native_call.h"
 #include "Drp/dre.h"
+#include "C/ci_interp.h"
 #include <dlfcn.h>
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -183,17 +184,19 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    CcParser cc_parser = {
-        .cpp = {
-            .allocator = MALLOCATOR,
-            .fc = fc,
-            .at = &at,
-            .logger = logger,
-            .target = cc_target_funcs[CC_TARGET_NATIVE](),
-            .env = &env,
+    CiInterpreter interp = {
+        .parser = {
+            .cpp = {
+                .allocator = MALLOCATOR,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                .env = &env,
+            },
+            .current = &interp.parser.global,
         },
-        .current = &cc_parser.global,
-        .current_frame = &cc_parser.top_frame,
+        .current_frame = &interp.top_frame,
     };
     const char* filename = NULL;
     ArgToParse pos_args[] = {
@@ -264,7 +267,7 @@ int main(int argc, char** argv, char** envp){
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
-        .keyword.next = cpp_kwargs(&cc_parser.cpp),
+        .keyword.next = cpp_kwargs(&interp.parser.cpp),
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal(),
@@ -295,17 +298,17 @@ int main(int argc, char** argv, char** envp){
         return 1;
     }
     // Re-apply target in case --target was given (overrides native default)
-    cc_parser.cpp.target = cc_target_funcs[cc_target_arg]();
-    err = cpp_define_builtin_macros(&cc_parser.cpp);
+    interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
+    err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) return err;
-    err = cc_define_builtin_types(&cc_parser);
+    err = cc_define_builtin_types(&interp.parser);
     if(err) return err;
-    err = cpp_register_pragma(&cc_parser.cpp, SV("lib"), cc_pragma_lib, &cc_parser);
+    err = cpp_register_pragma(&interp.parser.cpp, SV("lib"), cc_pragma_lib, &interp.parser);
     if(err) return err;
-    err = cpp_register_pragma(&cc_parser.cpp, SV("lib_path"), cc_pragma_lib_path, NULL);
+    err = cpp_register_pragma(&interp.parser.cpp, SV("lib_path"), cc_pragma_lib_path, NULL);
     if(err) return err;
     if(!cpp_nostdinc)
-        err = cpp_setup_default_includes(&cc_parser.cpp);
+        err = cpp_setup_default_includes(&interp.parser.cpp);
     if(err) return err;
     if(!filename && !repl){
         LongString txt;
@@ -323,25 +326,25 @@ int main(int argc, char** argv, char** envp){
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
     }
-    err = cpp_cli_defines(&cc_parser.cpp);
+    err = cpp_cli_defines(&interp.parser.cpp);
     if(err) return err;
     fc->may_read_real_files = 1;
     if(filename){
-        err = cpp_include_file_via_file_cache(&cc_parser.cpp, (StringView){strlen(filename), filename});
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){strlen(filename), filename});
         if(err){
             log_error(logger, "Unable to read '%s'", filename);
             return err;
         }
     }
-    err = cc_parse_all(&cc_parser);
+    err = cc_parse_all(&interp.parser);
     if(err) return err;
     if(repl){
-        cc_parser.repl = 1;
-        cc_parser.current_frame = &cc_parser.top_frame;
-        err = cpp_cli_defines(&cc_parser.cpp);
+        interp.parser.repl = 1;
+        interp.current_frame = &interp.top_frame;
+        err = cpp_cli_defines(&interp.parser.cpp);
         if(err) return err;
         fc->may_read_real_files = 1;
-        struct ReplCompleterCtx completer_ctx = {.parser = &cc_parser};
+        struct ReplCompleterCtx completer_ctx = {.parser = &interp.parser};
         GetInputCtx gi = {
             .tab_completion_func = repl_tab_complete,
             .tab_completion_user_data = &completer_ctx,
@@ -356,7 +359,7 @@ int main(int argc, char** argv, char** envp){
             StringView line = {n, gi.buff};
             line = stripped(line);
             if(!sv_startswith(line, SV("/*"))){ // comment, not command
-                if(repl_builtin_command(&cc_parser, line))
+                if(repl_builtin_command(&interp.parser, line))
                     continue;
             }
             if(n == 0){
@@ -370,21 +373,21 @@ int main(int argc, char** argv, char** envp){
                 fc_write_path(fc, name, namelen);
                 err = fc_cache_file(fc, src);
                 if(err) return err;
-                err = cpp_include_file_via_file_cache(&cc_parser.cpp, (StringView){namelen, name});
+                err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){namelen, name});
                 if(err){
                     log_error(logger, "REPL error");
                     msb.cursor = 0;
                     continue;
                 }
-                err = cc_parse_all(&cc_parser);
-                if(err){ cc_parser_discard_input(&cc_parser); msb.cursor = 0; continue; }
+                err = cc_parse_all(&interp.parser);
+                if(err){ cc_parser_discard_input(&interp.parser); msb.cursor = 0; continue; }
                 // Execute new statements
                 {
-                    CcInterpFrame* frame = &cc_parser.top_frame;
-                    frame->stmts = cc_parser.toplevel_statements.data;
-                    frame->stmt_count = cc_parser.toplevel_statements.count;
+                    CiInterpFrame* frame = &interp.top_frame;
+                    frame->stmts = interp.parser.toplevel_statements.data;
+                    frame->stmt_count = interp.parser.toplevel_statements.count;
                     while(frame->pc < frame->stmt_count){
-                        err = cc_interp_step(&cc_parser);
+                        err = ci_interp_step(&interp);
                         if(err) break;
                     }
                 }
@@ -404,15 +407,15 @@ int main(int argc, char** argv, char** envp){
     }
     else {
         // Execute toplevel statements
-        cc_parser.current_frame = &cc_parser.top_frame;
-        CcInterpFrame* frame = &cc_parser.top_frame;
-        frame->stmts = cc_parser.toplevel_statements.data;
-        frame->stmt_count = cc_parser.toplevel_statements.count;
+        interp.current_frame = &interp.top_frame;
+        CiInterpFrame* frame = &interp.top_frame;
+        frame->stmts = interp.parser.toplevel_statements.data;
+        frame->stmt_count = interp.parser.toplevel_statements.count;
         while(frame->pc < frame->stmt_count){
-            err = cc_interp_step(&cc_parser);
+            err = ci_interp_step(&interp);
             if(err) return err;
         }
-        if(0)repl_builtin_command(&cc_parser, SV("/dump symbols"));
+        if(0)repl_builtin_command(&interp.parser, SV("/dump symbols"));
     }
     return 0;
 }
@@ -671,7 +674,7 @@ repl_builtin_command(CcParser* parser, StringView input){
 #include "C/cc_parser.c"
 #include "Drp/get_input.c"
 #include "C/native_call.c"
-#include "C/cc_interp.c"
+#include "C/ci_interp.c"
 #include "Drp/dre.c"
 
 #if defined __DVM_CC__ && __INCLUDE_LEVEL__ == 1

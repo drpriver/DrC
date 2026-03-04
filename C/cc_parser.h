@@ -14,7 +14,6 @@
 #include "cc_func.h"
 #include "cc_var.h"
 #include "cc_scope.h"
-#include "cc_interp.h"
 #include "cpp_preprocessor.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
@@ -89,8 +88,6 @@ struct CcParser {
     ArenaAllocator scratch_arena;
     uint32_t loop_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
-    CcInterpFrame top_frame;
-    CcInterpFrame *current_frame;
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
