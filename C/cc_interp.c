@@ -76,6 +76,16 @@ static
 int
 interp_ensure_global_storage(CcParser* p, CcVariable* var){
     if(var->interp_val) return 0;
+    if(var->extern_){
+        const char* sym = var->mangle ? var->mangle->data : var->name->data;
+        void* addr = dlsym(RTLD_DEFAULT, sym);
+        if(!addr && sym[0] == '_')
+            addr = dlsym(RTLD_DEFAULT, sym + 1);
+        if(!addr)
+            return cc_error(p, var->loc, "extern variable '%s' not found: %s", sym, dlerror());
+        var->interp_val = addr;
+        return 0;
+    }
     uint32_t sz;
     int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
     if(err) return err;
@@ -108,7 +118,11 @@ interp_find_field(CcExpr* expr, CcQualType agg_type){
 
 static
 int
-cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out){
+cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
+    uint32_t _type_sz;
+    int _serr = cc_sizeof_as_uint(p, expr->type, expr->loc, &_type_sz);
+    if(_serr) return _serr;
+    *size = _type_sz;
     switch(expr->kind){
         case CC_EXPR_VARIABLE: {
             CcVariable* var = expr->var;
@@ -123,7 +137,7 @@ cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out){
         case CC_EXPR_DEREF: {
             // *ptr: evaluate ptr, return the pointer value
             void* ptr_val = NULL;
-            int err = cc_interp_expr(p, expr->value0, &ptr_val);
+            int err = cc_interp_expr(p, expr->value0, &ptr_val, sizeof ptr_val);
             if(err) return err;
             *out = ptr_val;
             return 0;
@@ -131,19 +145,22 @@ cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out){
         case CC_EXPR_DOT: {
             // base.member: get lvalue of base, add field offset
             void* base;
-            int err = cc_interp_lvalue(p, expr->values[0], &base);
+            size_t base_size;
+            int err = cc_interp_lvalue(p, expr->values[0], &base, &base_size);
             if(err) return err;
             CcQualType agg_type = expr->values[0]->type;
             CcField* f = interp_find_field(expr, agg_type);
             if(!f)
                 return cc_error(p, expr->loc, "no member named '%.*s'", expr->extra, expr->text);
+            if(f->offset + _type_sz > base_size)
+                return cc_error(p, expr->loc, "field access out of bounds");
             *out = (char*)base + f->offset;
             return 0;
         }
         case CC_EXPR_ARROW: {
             // ptr->member: eval ptr, add field offset
             void* ptr_val = NULL;
-            int err = cc_interp_expr(p, expr->values[0], &ptr_val);
+            int err = cc_interp_expr(p, expr->values[0], &ptr_val, sizeof ptr_val);
             if(err) return err;
             CcQualType ptr_type = expr->values[0]->type;
             CcPointer* pt = ccqt_as_ptr(ptr_type);
@@ -165,20 +182,23 @@ cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out){
             uint32_t idx_sz;
             err = cc_sizeof_as_uint(p, idx_expr->type, expr->loc, &idx_sz);
             if(err) return err;
-            err = cc_interp_expr(p, idx_expr, &idx);
+            err = cc_interp_expr(p, idx_expr, &idx, sizeof idx);
             if(err) return err;
             idx = interp_read_uint(&idx, idx_sz);
             if(ccqt_kind(base_type) == CC_ARRAY){
                 // Array: get lvalue of base, index into it
                 void* base;
-                err = cc_interp_lvalue(p, base_expr, &base);
+                size_t base_size;
+                err = cc_interp_lvalue(p, base_expr, &base, &base_size);
                 if(err) return err;
+                if(idx * elem_sz + elem_sz > base_size)
+                    return cc_error(p, expr->loc, "array subscript out of bounds");
                 *out = (char*)base + idx * elem_sz;
             }
             else {
                 // Pointer: eval base as rvalue
                 void* ptr_val = NULL;
-                err = cc_interp_expr(p, base_expr, &ptr_val);
+                err = cc_interp_expr(p, base_expr, &ptr_val, sizeof ptr_val);
                 if(err) return err;
                 *out = (char*)ptr_val + idx * elem_sz;
             }
@@ -191,17 +211,21 @@ cc_interp_lvalue(CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out){
 
 static
 int
-cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
+cc_interp_expr(CcParser* p, CcExpr* expr, void* result, size_t size){
     switch(expr->kind){
     case CC_EXPR_VALUE: {
         uint32_t sz;
         int err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
         if(ccqt_kind(expr->type) == CC_ARRAY){
+            if(sizeof(void*) > size)
+                return cc_error(p, expr->loc, "interpreter: result buffer too small");
             const void* ptr = expr->text;
             memcpy(result, &ptr, sizeof ptr);
             return 0;
         }
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &expr->uinteger, sz);
         return 0;
     }
@@ -215,18 +239,24 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         CcQualType var_type = var->type;
         // Array variables decay to pointer
         if(ccqt_kind(var_type) == CC_ARRAY){
+            if(sizeof storage > size)
+                return cc_error(p, expr->loc, "interpreter: result buffer too small");
             memcpy(result, &storage, sizeof storage);
             return 0;
         }
         uint32_t sz;
         err = cc_sizeof_as_uint(p, var_type, expr->loc, &sz);
         if(err) return err;
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, storage, sz);
         return 0;
     }
     case CC_EXPR_FUNCTION: {
         CcFunc* func = expr->func;
         void (*fn)(void) = func->native_func;
+        if(sizeof fn > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &fn, sizeof fn);
         return 0;
     }
@@ -236,13 +266,15 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         CcQualType to = expr->type;
         if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
             uint64_t discard;
-            return cc_interp_expr(p, operand, &discard);
+            return cc_interp_expr(p, operand, &discard, sizeof discard);
         }
         uint64_t val = 0;
-        int err = cc_interp_expr(p, operand, &val);
+        int err = cc_interp_expr(p, operand, &val, sizeof val);
         if(err) return err;
         // Array-to-pointer decay: the value is already a pointer, just copy it.
         if(ccqt_kind(from) == CC_ARRAY){
+            if(sizeof(void*) > size)
+                return cc_error(p, expr->loc, "interpreter: result buffer too small");
             memcpy(result, &val, sizeof(void*));
             return 0;
         }
@@ -252,6 +284,8 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t to_sz;
         err = cc_sizeof_as_uint(p, to, expr->loc, &to_sz);
         if(err) return err;
+        if(to_sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         _Bool from_is_float = ccqt_is_basic(from) && ccbt_is_float(from.basic.kind);
         _Bool to_is_float = ccqt_is_basic(to) && ccbt_is_float(to.basic.kind);
         if(from_is_float && to_is_float){
@@ -281,57 +315,83 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
     }
     case CC_EXPR_ASSIGN: {
         void* lval;
-        int err = cc_interp_lvalue(p, expr->value0, &lval);
+        size_t lval_size;
+        int err = cc_interp_lvalue(p, expr->value0, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->values[0], lval);
+        if(sz > lval_size)
+            return cc_error(p, expr->loc, "interpreter: assignment exceeds lvalue storage");
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
+        err = cc_interp_expr(p, expr->values[0], lval, lval_size);
         if(err) return err;
         memcpy(result, lval, sz);
         return 0;
     }
     case CC_EXPR_COMMA: {
-        uint64_t discard;
-        int err = cc_interp_expr(p, expr->value0, &discard);
+        uint64_t small_buf;
+        void* discard = &small_buf;
+        size_t dsz = sizeof small_buf;
+        CcQualType lhs_type = expr->value0->type;
+        if(!(ccqt_is_basic(lhs_type) && lhs_type.basic.kind == CCBT_void)){
+            uint32_t tsz;
+            int err = cc_sizeof_as_uint(p, lhs_type, expr->loc, &tsz);
+            if(err) return err;
+            if(tsz > sizeof small_buf){
+                discard = Allocator_zalloc(cc_scratch_allocator(p), tsz);
+                if(!discard) return CC_OOM_ERROR;
+                dsz = tsz;
+            }
+        }
+        int err = cc_interp_expr(p, expr->value0, discard, dsz);
+        if(discard != &small_buf)
+            Allocator_free(cc_scratch_allocator(p), discard, dsz);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
-        return cc_interp_expr(p, expr->values[0], result);
+        return cc_interp_expr(p, expr->values[0], result, size);
     }
     case CC_EXPR_TERNARY: {
         uint64_t cond = 0;
         uint32_t cond_sz;
         int err = cc_sizeof_as_uint(p, expr->value0->type, expr->loc, &cond_sz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->value0, &cond);
+        err = cc_interp_expr(p, expr->value0, &cond, sizeof cond);
         if(err) return err;
         if(interp_read_uint(&cond, cond_sz))
-            return cc_interp_expr(p, expr->values[0], result);
+            return cc_interp_expr(p, expr->values[0], result, size);
         else
-            return cc_interp_expr(p, expr->values[1], result);
+            return cc_interp_expr(p, expr->values[1], result, size);
     }
     case CC_EXPR_ADDR: {
         void* lval;
-        int err = cc_interp_lvalue(p, expr->value0, &lval);
+        size_t lval_size;
+        int err = cc_interp_lvalue(p, expr->value0, &lval, &lval_size);
         if(err) return err;
+        if(sizeof lval > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &lval, sizeof lval);
         return 0;
     }
     case CC_EXPR_DEREF: {
         void* ptr_val = NULL;
-        int err = cc_interp_expr(p, expr->value0, &ptr_val);
+        int err = cc_interp_expr(p, expr->value0, &ptr_val, sizeof ptr_val);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, ptr_val, sz);
         return 0;
     }
     case CC_EXPR_DOT: {
         void* base;
-        int err = cc_interp_lvalue(p, expr->values[0], &base);
+        size_t base_size;
+        int err = cc_interp_lvalue(p, expr->values[0], &base, &base_size);
         if(err) return err;
         CcField* f = interp_find_field(expr, expr->values[0]->type);
         if(!f)
@@ -339,12 +399,16 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(f->offset + sz > base_size)
+            return cc_error(p, expr->loc, "interpreter: field access out of bounds");
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, (char*)base + f->offset, sz);
         return 0;
     }
     case CC_EXPR_ARROW: {
         void* ptr_val = NULL;
-        int err = cc_interp_expr(p, expr->values[0], &ptr_val);
+        int err = cc_interp_expr(p, expr->values[0], &ptr_val, sizeof ptr_val);
         if(err) return err;
         CcPointer* pt = ccqt_as_ptr(expr->values[0]->type);
         CcField* f = interp_find_field(expr, pt->pointee);
@@ -353,16 +417,21 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, (char*)ptr_val + f->offset, sz);
         return 0;
     }
     case CC_EXPR_SUBSCRIPT: {
         void* addr;
-        int err = cc_interp_lvalue(p, expr, &addr);
+        size_t addr_size;
+        int err = cc_interp_lvalue(p, expr, &addr, &addr_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, addr, sz);
         return 0;
     }
@@ -371,7 +440,9 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t sz;
         int err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->value0, &val);
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
+        err = cc_interp_expr(p, expr->value0, &val, sizeof val);
         if(err) return err;
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
             double d = -interp_read_float(&val, expr->type.basic.kind);
@@ -387,14 +458,16 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t sz;
         int err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
-        return cc_interp_expr(p, expr->value0, result);
+        return cc_interp_expr(p, expr->value0, result, size);
     }
     case CC_EXPR_BITNOT: {
         uint64_t val = 0;
         uint32_t sz;
         int err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->value0, &val);
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
+        err = cc_interp_expr(p, expr->value0, &val, sizeof val);
         if(err) return err;
         uint64_t v = ~interp_read_uint(&val, sz);
         interp_write_uint(result, sz, v);
@@ -405,12 +478,14 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t sz;
         int err = cc_sizeof_as_uint(p, expr->value0->type, expr->loc, &sz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->value0, &val);
+        err = cc_interp_expr(p, expr->value0, &val, sizeof val);
         if(err) return err;
         _Bool v = !interp_read_uint(&val, sz);
         uint32_t rsz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &rsz);
         if(err) return err;
+        if(rsz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         interp_write_uint(result, rsz, v);
         return 0;
     }
@@ -419,11 +494,16 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
     case CC_EXPR_POSTINC:
     case CC_EXPR_POSTDEC: {
         void* lval;
-        int err = cc_interp_lvalue(p, expr->value0, &lval);
+        size_t lval_size;
+        int err = cc_interp_lvalue(p, expr->value0, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(sz > lval_size)
+            return cc_error(p, expr->loc, "interpreter: write exceeds lvalue storage");
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
         _Bool is_pre = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_PREDEC);
         _Bool is_inc = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_POSTINC);
@@ -475,33 +555,35 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         if(err) return err;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &result_sz);
         if(err) return err;
+        if(result_sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         if(expr->kind == CC_EXPR_LOGAND){
-            err = cc_interp_expr(p, lhs, &lbuf);
+            err = cc_interp_expr(p, lhs, &lbuf, sizeof lbuf);
             if(err) return err;
             if(!interp_read_uint(&lbuf, lsz)){
                 interp_write_uint(result, result_sz, 0);
                 return 0;
             }
-            err = cc_interp_expr(p, rhs, &rbuf);
+            err = cc_interp_expr(p, rhs, &rbuf, sizeof rbuf);
             if(err) return err;
             interp_write_uint(result, result_sz, interp_read_uint(&rbuf, rsz) ? 1 : 0);
             return 0;
         }
         if(expr->kind == CC_EXPR_LOGOR){
-            err = cc_interp_expr(p, lhs, &lbuf);
+            err = cc_interp_expr(p, lhs, &lbuf, sizeof lbuf);
             if(err) return err;
             if(interp_read_uint(&lbuf, lsz)){
                 interp_write_uint(result, result_sz, 1);
                 return 0;
             }
-            err = cc_interp_expr(p, rhs, &rbuf);
+            err = cc_interp_expr(p, rhs, &rbuf, sizeof rbuf);
             if(err) return err;
             interp_write_uint(result, result_sz, interp_read_uint(&rbuf, rsz) ? 1 : 0);
             return 0;
         }
-        err = cc_interp_expr(p, lhs, &lbuf);
+        err = cc_interp_expr(p, lhs, &lbuf, sizeof lbuf);
         if(err) return err;
-        err = cc_interp_expr(p, rhs, &rbuf);
+        err = cc_interp_expr(p, rhs, &rbuf, sizeof rbuf);
         if(err) return err;
         _Bool lhs_ptr = ccqt_kind(lhs->type) == CC_POINTER || ccqt_kind(lhs->type) == CC_ARRAY;
         _Bool rhs_ptr = ccqt_kind(rhs->type) == CC_POINTER || ccqt_kind(rhs->type) == CC_ARRAY;
@@ -620,8 +702,15 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
             return 0;
         }
         _Bool is_unsigned = ccqt_is_basic(lhs->type) && ccbt_is_unsigned(lhs->type.basic.kind);
-        uint64_t lu = interp_read_uint(&lbuf, lsz);
-        uint64_t ru = interp_read_uint(&rbuf, rsz);
+        uint64_t lu, ru;
+        if(is_unsigned){
+            lu = interp_read_uint(&lbuf, lsz);
+            ru = interp_read_uint(&rbuf, rsz);
+        }
+        else {
+            lu = (uint64_t)interp_read_int(&lbuf, lsz);
+            ru = (uint64_t)interp_read_int(&rbuf, rsz);
+        }
         uint64_t res;
         switch(expr->kind){
             case CC_EXPR_ADD: res = lu + ru; break;
@@ -673,16 +762,21 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
     case CC_EXPR_BITANDASSIGN: case CC_EXPR_BITORASSIGN: case CC_EXPR_BITXORASSIGN:
     case CC_EXPR_LSHIFTASSIGN: case CC_EXPR_RSHIFTASSIGN: {
         void* lval;
-        int err = cc_interp_lvalue(p, expr->value0, &lval);
+        size_t lval_size;
+        int err = cc_interp_lvalue(p, expr->value0, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(sz > lval_size)
+            return cc_error(p, expr->loc, "interpreter: write exceeds lvalue storage");
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         uint64_t rbuf = 0;
         uint32_t rsz;
         err = cc_sizeof_as_uint(p, expr->values[0]->type, expr->loc, &rsz);
         if(err) return err;
-        err = cc_interp_expr(p, expr->values[0], &rbuf);
+        err = cc_interp_expr(p, expr->values[0], &rbuf, sizeof rbuf);
         if(err) return err;
 
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
@@ -731,6 +825,9 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         if(!func->native_func){
             const char* sym = func->mangle ? func->mangle->data : func->name->data;
             void* addr = dlsym(RTLD_DEFAULT, sym);
+            // On macOS, headers use __asm("_name") mangles but dlsym wants the unprefixed name
+            if(!addr && sym[0] == '_')
+                addr = dlsym(RTLD_DEFAULT, sym + 1);
             if(!addr)
                 return cc_error(p, expr->loc, "function '%s' not found: %s", sym, dlerror());
             func->native_func = (void(*)(void))addr;
@@ -745,17 +842,29 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
             // Array-to-pointer decay
             if(ccqt_kind(arg_type) == CC_ARRAY){
                 arg_storage[i] = 0;
-                int err = cc_interp_expr(p, arg, &arg_storage[i]);
+                int err = cc_interp_expr(p, arg, &arg_storage[i], sizeof arg_storage[i]);
                 if(err) return err;
                 // arg_storage[i] now holds the pointer (from VALUE or VARIABLE decay)
                 memcpy(&decay_ptrs[i], &arg_storage[i], sizeof(void*));
                 args[i] = &decay_ptrs[i];
             }
             else {
-                arg_storage[i] = 0;
-                int err = cc_interp_expr(p, arg, &arg_storage[i]);
+                uint32_t arg_sz;
+                int err = cc_sizeof_as_uint(p, arg_type, expr->loc, &arg_sz);
                 if(err) return err;
-                args[i] = &arg_storage[i];
+                if(arg_sz <= sizeof arg_storage[i]){
+                    arg_storage[i] = 0;
+                    err = cc_interp_expr(p, arg, &arg_storage[i], sizeof arg_storage[i]);
+                    if(err) return err;
+                    args[i] = &arg_storage[i];
+                }
+                else {
+                    void* buf = Allocator_zalloc(cc_scratch_allocator(p), arg_sz);
+                    if(!buf) return CC_OOM_ERROR;
+                    err = cc_interp_expr(p, arg, buf, arg_sz);
+                    if(err) return err;
+                    args[i] = buf;
+                }
             }
         }
         CcQualType vararg_types[64];
@@ -787,7 +896,51 @@ cc_interp_expr(CcParser* p, CcExpr* expr, void* result){
         uint32_t ret_sz;
         err = cc_sizeof_as_uint(p, ret_type, expr->loc, &ret_sz);
         if(err) return err;
+        if(ret_sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &rval, ret_sz);
+        return 0;
+    }
+    case CC_EXPR_INIT_LIST: {
+        uint32_t sz;
+        int err = cc_sizeof_as_uint(p, expr->type, expr->loc, &sz);
+        if(err) return err;
+        if(sz > size)
+            return cc_error(p, expr->loc, "interpreter: result buffer too small");
+        memset(result, 0, sz);
+        CcInitList* il = expr->init_list;
+        for(uint32_t i = 0; i < il->count; i++){
+            CcInitEntry* e = &il->entries[i];
+            if(!e->value) continue;
+            uint32_t esz;
+            err = cc_sizeof_as_uint(p, e->value->type, expr->loc, &esz);
+            if(err) return err;
+            uint64_t off = e->field_loc.byte_offset;
+            if(off + esz > sz)
+                return cc_error(p, expr->loc, "interpreter: init list entry out of bounds");
+            if(esz <= sizeof(uint64_t)){
+                uint64_t val = 0;
+                err = cc_interp_expr(p, e->value, &val, sizeof val);
+                if(err) return err;
+                if(e->field_loc.bit_width){
+                    // bitfield
+                    uint64_t existing = 0;
+                    memcpy(&existing, (char*)result + off, esz);
+                    uint64_t mask = ((uint64_t)1 << e->field_loc.bit_width) - 1;
+                    existing &= ~(mask << e->field_loc.bit_offset);
+                    existing |= (val & mask) << e->field_loc.bit_offset;
+                    memcpy((char*)result + off, &existing, esz);
+                }
+                else {
+                    memcpy((char*)result + off, &val, esz);
+                }
+            }
+            else {
+                // Nested struct/union: write directly into result at offset
+                err = cc_interp_expr(p, e->value, (char*)result + off, esz);
+                if(err) return err;
+            }
+        }
         return 0;
     }
     default:
@@ -808,8 +961,23 @@ cc_interp_step(CcParser* p){
             frame->pc++;
             return 0;
         case CC_STMT_EXPR: {
-            uint64_t discard;
-            int err = cc_interp_expr(p, stmt->exprs[0], &discard);
+            uint64_t small_buf;
+            void* discard = &small_buf;
+            size_t dsz = sizeof small_buf;
+            CcQualType et = stmt->exprs[0]->type;
+            if(!(ccqt_is_basic(et) && et.basic.kind == CCBT_void)){
+                uint32_t tsz;
+                int err = cc_sizeof_as_uint(p, et, stmt->loc, &tsz);
+                if(err) return err;
+                if(tsz > sizeof small_buf){
+                    discard = Allocator_zalloc(cc_scratch_allocator(p), tsz);
+                    if(!discard) return CC_OOM_ERROR;
+                    dsz = tsz;
+                }
+            }
+            int err = cc_interp_expr(p, stmt->exprs[0], discard, dsz);
+            if(discard != &small_buf)
+                Allocator_free(cc_scratch_allocator(p), discard, dsz);
             if(err) return err;
             frame->pc++;
             return 0;
@@ -817,6 +985,97 @@ cc_interp_step(CcParser* p){
         case CC_STMT_GOTO:
             frame->pc = stmt->targets[0];
             return 0;
+        case CC_STMT_FOR: {
+            if(stmt->exprs[1]){
+                uint64_t cond = 0;
+                int err = cc_interp_expr(p, stmt->exprs[1], &cond, sizeof cond);
+                if(err) return err;
+                if(!cond){
+                    frame->pc = stmt->targets[0];
+                    return 0;
+                }
+            }
+            frame->pc++;
+            return 0;
+        }
+        case CC_STMT_WHILE: {
+            uint64_t cond = 0;
+            int err = cc_interp_expr(p, stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(!cond){
+                frame->pc = stmt->targets[0];
+                return 0;
+            }
+            frame->pc++;
+            return 0;
+        }
+        case CC_STMT_IF: {
+            uint64_t cond = 0;
+            int err = cc_interp_expr(p, stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(!cond)
+                frame->pc = stmt->targets[0];
+            else
+                frame->pc++;
+            return 0;
+        }
+        case CC_STMT_DOWHILE: {
+            uint64_t cond = 0;
+            int err = cc_interp_expr(p, stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(cond)
+                frame->pc = stmt->targets[0];
+            else
+                frame->pc++;
+            return 0;
+        }
+        case CC_STMT_RETURN: {
+            if(stmt->exprs[0]){
+                uint64_t small_buf;
+                void* discard = &small_buf;
+                size_t dsz = sizeof small_buf;
+                CcQualType et = stmt->exprs[0]->type;
+                if(!(ccqt_is_basic(et) && et.basic.kind == CCBT_void)){
+                    uint32_t tsz;
+                    int err = cc_sizeof_as_uint(p, et, stmt->loc, &tsz);
+                    if(err) return err;
+                    if(tsz > sizeof small_buf){
+                        discard = Allocator_zalloc(cc_scratch_allocator(p), tsz);
+                        if(!discard) return CC_OOM_ERROR;
+                        dsz = tsz;
+                    }
+                }
+                int err = cc_interp_expr(p, stmt->exprs[0], discard, dsz);
+                if(discard != &small_buf)
+                    Allocator_free(cc_scratch_allocator(p), discard, dsz);
+                if(err) return err;
+            }
+            frame->pc = frame->stmt_count;
+            return 0;
+        }
+        case CC_STMT_SWITCH: {
+            uint64_t val = 0;
+            int err = cc_interp_expr(p, stmt->switch_expr, &val, sizeof val);
+            if(err) return err;
+            uint32_t count = stmt->targets[2];
+            CcSwitchEntry* table = stmt->switch_table;
+            // Binary search for matching case
+            uint32_t lo = 0, hi = count;
+            while(lo < hi){
+                uint32_t mid = lo + (hi - lo) / 2;
+                if(table[mid].value < val)
+                    lo = mid + 1;
+                else if(table[mid].value > val)
+                    hi = mid;
+                else {
+                    frame->pc = table[mid].target;
+                    return 0;
+                }
+            }
+            // No match — jump to default or exit
+            frame->pc = stmt->targets[1];
+            return 0;
+        }
         default:
             return cc_unimplemented(p, stmt->loc, "interpreter: unsupported statement kind");
     }

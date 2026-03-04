@@ -87,6 +87,8 @@ struct CcParser {
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
     ArenaAllocator scratch_arena;
+    uint32_t loop_depth;
+    struct CcSwitchCtx* _Nullable switch_ctx;
     CcInterpFrame top_frame;
     CcInterpFrame *current_frame;
 };

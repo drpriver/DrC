@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include "../Drp/bit_util.h"
 #include "../Drp/parray.h"
+#include "../Drp/merge_sort.h"
 #include "cc_parser.h"
 #include "cpp_preprocessor.h"
 #include "cc_errors.h"
@@ -100,6 +101,11 @@ enum {
 #ifndef MARRAY_CCINITENTRY
 #define MARRAY_CCINITENTRY
 #define MARRAY_T CcInitEntry
+#include "../Drp/Marray.h"
+#endif
+#ifndef MARRAY_CCSWITCHENTRY
+#define MARRAY_CCSWITCHENTRY
+#define MARRAY_T CcSwitchEntry
 #include "../Drp/Marray.h"
 #endif
 #ifdef __clang__
@@ -222,6 +228,11 @@ cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
 static
 int
 cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, SrcLoc loc){
+    // Promote enums to their underlying integer type.
+    if(!ccqt_is_basic(a) && ccqt_kind(a) == CC_ENUM)
+        a = ccqt_as_enum(a)->underlying;
+    if(!ccqt_is_basic(b) && ccqt_kind(b) == CC_ENUM)
+        b = ccqt_as_enum(b)->underlying;
     if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
         return cc_error(p, loc, "usual arithmetic conversions require arithmetic types");
     CcBasicTypeKind ak = a.basic.kind, bk = b.basic.kind;
@@ -4964,6 +4975,58 @@ cc_get_stmt(CcParser* p , size_t idx){
 }
 
 static
+void
+cc_backpatch_break_continue(CcParser* p, size_t body_start, uint32_t break_target, uint32_t continue_target){
+    Marray(CcStatement)* stmts = p->current_func
+        ? &p->current_func->body
+        : &p->toplevel_statements;
+    for(size_t i = body_start; i < stmts->count; i++){
+        CcStatement* s = &stmts->data[i];
+        if(s->kind == CC_STMT_BREAK){
+            s->kind = CC_STMT_GOTO;
+            s->targets[0] = break_target;
+        }
+        else if(s->kind == CC_STMT_CONTINUE){
+            s->kind = CC_STMT_GOTO;
+            s->targets[0] = continue_target;
+        }
+    }
+}
+
+static
+void
+cc_backpatch_break(CcParser* p, size_t body_start, uint32_t break_target){
+    Marray(CcStatement)* stmts = p->current_func
+        ? &p->current_func->body
+        : &p->toplevel_statements;
+    for(size_t i = body_start; i < stmts->count; i++){
+        CcStatement* s = &stmts->data[i];
+        if(s->kind == CC_STMT_BREAK){
+            s->kind = CC_STMT_GOTO;
+            s->targets[0] = break_target;
+        }
+    }
+}
+
+typedef struct CcSwitchCtx CcSwitchCtx;
+struct CcSwitchCtx {
+    Marray(CcSwitchEntry) entries;
+    uint32_t default_target;
+    _Bool has_default;
+};
+
+static
+int
+cc_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b){
+    (void)ctx;
+    const CcSwitchEntry* ea = a;
+    const CcSwitchEntry* eb = b;
+    if(ea->value < eb->value) return -1;
+    if(ea->value > eb->value) return 1;
+    return 0;
+}
+
+static
 int
 cc_parse_statement(CcParser* p){
     int err;
@@ -4976,17 +5039,435 @@ cc_parse_statement(CcParser* p){
             return 0;
         case CC_KEYWORD:
             switch(tok.kw.kw){
-                case CC_if:
-                case CC_while:
-                case CC_do:
-                case CC_for:
-                case CC_switch:
-                case CC_case:
-                case CC_default:
-                case CC_return:
-                case CC_break:
-                case CC_continue:
-                    return cc_unimplemented(p, tok.loc, "TODO: statement");
+                case CC_for: {
+                    // for(init; cond; inc) body
+                    //
+                    // Lowered to:
+                    //   [init decl or expr stmt]  -- handled inline
+                    //   N: CC_STMT_FOR            -- cond check, targets[0]=EXIT
+                    //   N+1..M: body stmts
+                    //   M+1: CC_STMT_EXPR(inc)    -- if inc exists
+                    //   M+2: CC_STMT_GOTO(N)      -- back-edge
+                    //   EXIT: next stmt
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    // for introduces a new scope for init declarations
+                    err = cc_push_scope(p);
+                    if(err) return err;
+                    // Parse init
+                    {
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) goto for_end;
+                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';'){
+                            // empty init
+                            cc_next_token(p, &peek); // consume ';'
+                        }
+                        else {
+                            CcDeclBase b = {0};
+                            err = cc_parse_declaration_specifier(p, &b);
+                            if(err) goto for_end;
+                            if(b.spec.bits || b.type.bits){
+                                // Declaration init: cc_parse_decls handles
+                                // multiple declarators and consumes the ';'
+                                err = cc_resolve_specifiers(p, &b);
+                                if(!err) err = cc_parse_decls(p, &b);
+                                if(err) goto for_end;
+                            }
+                            else {
+                                // Expression init
+                                CcExpr* init_expr;
+                                err = cc_parse_expr(p, &init_expr);
+                                if(err) goto for_end;
+                                err = cc_expect_punct(p, ';');
+                                if(err) goto for_end;
+                                size_t init_idx;
+                                err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &init_idx);
+                                if(err) goto for_end;
+                                CcStatement* init_s = cc_get_stmt(p, init_idx);
+                                if(!init_s){ err = CC_UNREACHABLE_ERROR; goto for_end; }
+                                init_s->exprs[0] = init_expr;
+                            }
+                        }
+                    }
+                    // Parse cond
+                    CcExpr* _Nullable cond_expr = NULL;
+                    {
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) goto for_end;
+                        if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
+                            err = cc_parse_expr(p, &cond_expr);
+                            if(err) goto for_end;
+                        }
+                        err = cc_expect_punct(p, ';');
+                        if(err) goto for_end;
+                    }
+                    // Parse inc
+                    CcExpr* _Nullable inc_expr = NULL;
+                    {
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) goto for_end;
+                        if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ')')){
+                            err = cc_parse_expr(p, &inc_expr);
+                            if(err) goto for_end;
+                        }
+                        err = cc_expect_punct(p, ')');
+                        if(err) goto for_end;
+                    }
+                    // Emit CC_STMT_FOR (cond check)
+                    size_t for_idx;
+                    err = cc_stmt(p, CC_STMT_FOR, tok.loc, &for_idx);
+                    if(err) goto for_end;
+                    {
+                        CcStatement* for_s = cc_get_stmt(p, for_idx);
+                        if(!for_s){ err = CC_UNREACHABLE_ERROR; goto for_end; }
+                        for_s->exprs[1] = cond_expr;
+                    }
+                    // Parse body
+                    p->loop_depth++;
+                    err = cc_parse_statement(p);
+                    p->loop_depth--;
+                    if(err) goto for_end;
+                    // continue target = inc (or back-edge goto if no inc)
+                    {
+                        Marray(CcStatement)* stmts = p->current_func
+                            ? &p->current_func->body
+                            : &p->toplevel_statements;
+                        uint32_t continue_target = (uint32_t)stmts->count;
+                        // Emit inc as expr stmt (if present)
+                        if(inc_expr){
+                            size_t inc_idx;
+                            err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &inc_idx);
+                            if(err) goto for_end;
+                            CcStatement* inc_s = cc_get_stmt(p, inc_idx);
+                            if(!inc_s){ err = CC_UNREACHABLE_ERROR; goto for_end; }
+                            inc_s->exprs[0] = inc_expr;
+                        }
+                        // Emit goto back to for cond check
+                        {
+                            size_t goto_idx;
+                            err = cc_stmt(p, CC_STMT_GOTO, tok.loc, &goto_idx);
+                            if(err) goto for_end;
+                            CcStatement* goto_s = cc_get_stmt(p, goto_idx);
+                            if(!goto_s){ err = CC_UNREACHABLE_ERROR; goto for_end; }
+                            goto_s->targets[0] = (uint32_t)for_idx;
+                        }
+                        // Backpatch for's targets[0] = exit (current position)
+                        uint32_t break_target = (uint32_t)stmts->count;
+                        CcStatement* for_s = cc_get_stmt(p, for_idx);
+                        if(!for_s){ err = CC_UNREACHABLE_ERROR; goto for_end; }
+                        for_s->targets[0] = break_target;
+                        // Backpatch break/continue in body
+                        cc_backpatch_break_continue(p, for_idx + 1, break_target, continue_target);
+                    }
+                    for_end:
+                    cc_pop_scope(p);
+                    return err;
+                }
+                case CC_while: {
+                    // while(cond) body
+                    //
+                    //   N: CC_STMT_WHILE       -- cond check, targets[0]=EXIT
+                    //   N+1..M: body stmts
+                    //   M+1: CC_STMT_GOTO(N)   -- back-edge
+                    //   EXIT: next stmt
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* cond;
+                    err = cc_parse_expr(p, &cond);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    size_t while_idx;
+                    err = cc_stmt(p, CC_STMT_WHILE, tok.loc, &while_idx);
+                    if(err) return err;
+                    {
+                        CcStatement* ws = cc_get_stmt(p, while_idx);
+                        if(!ws) return CC_UNREACHABLE_ERROR;
+                        ws->exprs[0] = cond;
+                    }
+                    p->loop_depth++;
+                    err = cc_parse_statement(p);
+                    p->loop_depth--;
+                    if(err) return err;
+                    {
+                        size_t goto_idx;
+                        err = cc_stmt(p, CC_STMT_GOTO, tok.loc, &goto_idx);
+                        if(err) return err;
+                        CcStatement* gs = cc_get_stmt(p, goto_idx);
+                        if(!gs) return CC_UNREACHABLE_ERROR;
+                        gs->targets[0] = (uint32_t)while_idx;
+                    }
+                    {
+                        Marray(CcStatement)* stmts = p->current_func
+                            ? &p->current_func->body
+                            : &p->toplevel_statements;
+                        uint32_t break_target = (uint32_t)stmts->count;
+                        CcStatement* ws = cc_get_stmt(p, while_idx);
+                        if(!ws) return CC_UNREACHABLE_ERROR;
+                        ws->targets[0] = break_target;
+                        cc_backpatch_break_continue(p, while_idx + 1, break_target, (uint32_t)while_idx);
+                    }
+                    return 0;
+                }
+                case CC_do: {
+                    // do body while(cond);
+                    //
+                    //   N..M: body stmts
+                    //   M+1: CC_STMT_DOWHILE   -- cond check, targets[0]=N
+                    //   M+2: next stmt
+                    Marray(CcStatement)* stmts = p->current_func
+                        ? &p->current_func->body
+                        : &p->toplevel_statements;
+                    size_t body_start = stmts->count;
+                    p->loop_depth++;
+                    err = cc_parse_statement(p);
+                    p->loop_depth--;
+                    if(err) return err;
+                    {
+                        CcToken wtok;
+                        err = cc_next_token(p, &wtok);
+                        if(err) return err;
+                        if(wtok.type != CC_KEYWORD || wtok.kw.kw != CC_while)
+                            return cc_error(p, wtok.loc, "Expected 'while' after do body");
+                    }
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* cond;
+                    err = cc_parse_expr(p, &cond);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    size_t dw_idx;
+                    err = cc_stmt(p, CC_STMT_DOWHILE, tok.loc, &dw_idx);
+                    if(err) return err;
+                    CcStatement* dws = cc_get_stmt(p, dw_idx);
+                    if(!dws) return CC_UNREACHABLE_ERROR;
+                    dws->exprs[0] = cond;
+                    dws->targets[0] = (uint32_t)body_start;
+                    cc_backpatch_break_continue(p, body_start, (uint32_t)(dw_idx + 1), (uint32_t)dw_idx);
+                    return 0;
+                }
+                case CC_if: {
+                    // if(cond) then-body [else else-body]
+                    //
+                    // Without else:
+                    //   N: CC_STMT_IF          -- cond check, targets[0]=EXIT
+                    //   N+1..M: then-body
+                    //   EXIT: next stmt
+                    //
+                    // With else:
+                    //   N: CC_STMT_IF          -- cond check, targets[0]=ELSE
+                    //   N+1..M: then-body
+                    //   M+1: CC_STMT_GOTO(EXIT) -- skip else
+                    //   ELSE..X: else-body
+                    //   EXIT: next stmt
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* cond;
+                    err = cc_parse_expr(p, &cond);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    size_t if_idx;
+                    err = cc_stmt(p, CC_STMT_IF, tok.loc, &if_idx);
+                    if(err) return err;
+                    {
+                        CcStatement* ifs = cc_get_stmt(p, if_idx);
+                        if(!ifs) return CC_UNREACHABLE_ERROR;
+                        ifs->exprs[0] = cond;
+                    }
+                    err = cc_parse_statement(p);
+                    if(err) return err;
+                    // Check for else
+                    CcToken peek;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(peek.type == CC_KEYWORD && peek.kw.kw == CC_else){
+                        cc_next_token(p, &peek); // consume 'else'
+                        // Emit goto to skip else body
+                        size_t goto_idx;
+                        err = cc_stmt(p, CC_STMT_GOTO, tok.loc, &goto_idx);
+                        if(err) return err;
+                        // Backpatch if's targets[0] = else start (current position)
+                        {
+                            Marray(CcStatement)* stmts = p->current_func
+                                ? &p->current_func->body
+                                : &p->toplevel_statements;
+                            CcStatement* ifs = cc_get_stmt(p, if_idx);
+                            if(!ifs) return CC_UNREACHABLE_ERROR;
+                            ifs->targets[0] = (uint32_t)stmts->count;
+                        }
+                        err = cc_parse_statement(p);
+                        if(err) return err;
+                        // Backpatch goto's targets[0] = exit (current position)
+                        {
+                            Marray(CcStatement)* stmts = p->current_func
+                                ? &p->current_func->body
+                                : &p->toplevel_statements;
+                            CcStatement* gs = cc_get_stmt(p, goto_idx);
+                            if(!gs) return CC_UNREACHABLE_ERROR;
+                            gs->targets[0] = (uint32_t)stmts->count;
+                        }
+                    }
+                    else {
+                        // No else: backpatch if's targets[0] = exit
+                        Marray(CcStatement)* stmts = p->current_func
+                            ? &p->current_func->body
+                            : &p->toplevel_statements;
+                        CcStatement* ifs = cc_get_stmt(p, if_idx);
+                        if(!ifs) return CC_UNREACHABLE_ERROR;
+                        ifs->targets[0] = (uint32_t)stmts->count;
+                    }
+                    return 0;
+                }
+                case CC_break: {
+                    if(!p->loop_depth)
+                        return cc_error(p, tok.loc, "'break' statement not in loop or switch statement");
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    err = cc_stmt(p, CC_STMT_BREAK, tok.loc, &stmt_idx);
+                    if(err) return err;
+                    return 0;
+                }
+                case CC_continue: {
+                    if(!p->loop_depth)
+                        return cc_error(p, tok.loc, "'continue' statement not in loop statement");
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    err = cc_stmt(p, CC_STMT_CONTINUE, tok.loc, &stmt_idx);
+                    if(err) return err;
+                    return 0;
+                }
+                case CC_switch: {
+                    // switch(expr) { case V: ... default: ... }
+                    //
+                    // Lowered to:
+                    //   N: CC_STMT_SWITCH  -- exprs[0]=expr, targets[0]=EXIT,
+                    //                         targets[1]=default (or EXIT),
+                    //                         targets[2]=table_count,
+                    //                         switch_table=sorted entries
+                    //   N+1..M: body stmts (case bodies, fall through)
+                    //   EXIT: next stmt
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* switch_expr;
+                    err = cc_parse_expr(p, &switch_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    size_t switch_idx;
+                    err = cc_stmt(p, CC_STMT_SWITCH, tok.loc, &switch_idx);
+                    if(err) return err;
+                    {
+                        CcStatement* sw = cc_get_stmt(p, switch_idx);
+                        if(!sw) return CC_UNREACHABLE_ERROR;
+                        sw->switch_expr = switch_expr;
+                    }
+                    // Parse switch body
+                    {
+                        CcSwitchCtx ctx = {0};
+                        CcSwitchCtx* prev_ctx = p->switch_ctx;
+                        p->switch_ctx = &ctx;
+                        p->loop_depth++; // for break
+                        err = cc_parse_statement(p);
+                        p->loop_depth--;
+                        p->switch_ctx = prev_ctx;
+                        if(err) goto switch_cleanup;
+                        // Sort entries by value
+                        {
+                            void* scratch = Allocator_alloc(cc_scratch_allocator(p), ctx.entries.count * sizeof(CcSwitchEntry));
+                            if(!scratch && ctx.entries.count){ err = CC_OOM_ERROR; goto switch_cleanup; }
+                            drp_merge_sort(scratch, ctx.entries.data, ctx.entries.count, sizeof(CcSwitchEntry), NULL, cc_cmp_switch_entry);
+                            Allocator_free(cc_scratch_allocator(p), scratch, ctx.entries.count * sizeof(CcSwitchEntry));
+                        }
+                        // Shrink and steal the table
+                        if(ctx.entries.count){
+                            int serr = ma_shrink_to_size(CcSwitchEntry)(&ctx.entries, cc_allocator(p));
+                            if(serr){ err = CC_OOM_ERROR; goto switch_cleanup; }
+                        }
+                        {
+                            Marray(CcStatement)* stmts = p->current_func
+                                ? &p->current_func->body
+                                : &p->toplevel_statements;
+                            uint32_t break_target = (uint32_t)stmts->count;
+                            CcStatement* sw = cc_get_stmt(p, switch_idx);
+                            if(!sw){ err = CC_UNREACHABLE_ERROR; goto switch_cleanup; }
+                            sw->targets[0] = break_target;
+                            sw->targets[1] = ctx.has_default ? ctx.default_target : break_target;
+                            sw->targets[2] = (uint32_t)ctx.entries.count;
+                            sw->switch_table = ctx.entries.data;
+                            ctx.entries.data = NULL;
+                            ctx.entries.count = 0;
+                            ctx.entries.capacity = 0;
+                            cc_backpatch_break(p, switch_idx + 1, break_target);
+                        }
+                        switch_cleanup:
+                        ma_cleanup(CcSwitchEntry)(&ctx.entries, cc_allocator(p));
+                    }
+                    return err;
+                }
+                case CC_case: {
+                    if(!p->switch_ctx)
+                        return cc_error(p, tok.loc, "'case' label not within a switch statement");
+                    CcExpr* case_expr;
+                    err = cc_parse_expr(p, &case_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ':');
+                    if(err) return err;
+                    CcEvalResult ev = cc_eval_expr(case_expr);
+                    if(ev.kind == CC_EVAL_ERROR)
+                        return cc_error(p, tok.loc, "case label must be a constant expression");
+                    uint64_t case_val;
+                    switch(ev.kind){
+                        case CC_EVAL_INT:  case_val = (uint64_t)ev.i; break;
+                        case CC_EVAL_UINT: case_val = ev.u; break;
+                        default: return cc_error(p, tok.loc, "case label must be an integer constant expression");
+                    }
+                    Marray(CcStatement)* stmts = p->current_func
+                        ? &p->current_func->body
+                        : &p->toplevel_statements;
+                    CcSwitchEntry entry = {.value = case_val, .target = (uint32_t)stmts->count};
+                    err = ma_push(CcSwitchEntry)(&p->switch_ctx->entries, cc_allocator(p), entry);
+                    if(err) return CC_OOM_ERROR;
+                    return cc_parse_statement(p);
+                }
+                case CC_default: {
+                    if(!p->switch_ctx)
+                        return cc_error(p, tok.loc, "'default' label not within a switch statement");
+                    err = cc_expect_punct(p, ':');
+                    if(err) return err;
+                    if(p->switch_ctx->has_default)
+                        return cc_error(p, tok.loc, "Multiple default labels in switch");
+                    p->switch_ctx->has_default = 1;
+                    Marray(CcStatement)* stmts = p->current_func
+                        ? &p->current_func->body
+                        : &p->toplevel_statements;
+                    p->switch_ctx->default_target = (uint32_t)stmts->count;
+                    return cc_parse_statement(p);
+                }
+                case CC_return: {
+                    CcExpr* _Nullable ret_expr = NULL;
+                    CcToken peek;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
+                        err = cc_parse_expr(p, &ret_expr);
+                        if(err) return err;
+                    }
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    err = cc_stmt(p, CC_STMT_RETURN, tok.loc, &stmt_idx);
+                    if(err) return err;
+                    CcStatement* s = cc_get_stmt(p, stmt_idx);
+                    if(!s) return CC_UNREACHABLE_ERROR;
+                    s->exprs[0] = ret_expr;
+                    return 0;
+                }
                 case CC_goto: {
                     CcToken label_tok;
                     err = cc_next_token(p, &label_tok);
@@ -5709,6 +6190,24 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             };
             err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
             if(err) return err;
+            // In interpreted (non-function) context, emit an assignment
+            // statement so the interpreter evaluates the initializer.
+            if(initializer){
+                CcExpr* var_ref = cc_alloc_expr(p, 0);
+                if(!var_ref) return CC_OOM_ERROR;
+                var_ref->kind = CC_EXPR_VARIABLE;
+                var_ref->loc = tok.loc;
+                var_ref->type = type;
+                var_ref->var = var;
+                CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, tok.loc, type, var_ref, initializer);
+                if(!assign) return CC_OOM_ERROR;
+                size_t si;
+                err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &si);
+                if(err) return err;
+                CcStatement* s = cc_get_stmt(p, si);
+                if(!s) return CC_UNREACHABLE_ERROR;
+                s->exprs[0] = assign;
+            }
         }
         if(stop) break;
     }

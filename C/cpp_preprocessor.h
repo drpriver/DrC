@@ -19,6 +19,7 @@
 #include "cc_target.h"
 #include "cc_tok.h"
 
+
 #ifndef MARRAY_SIZE_T
 #define MARRAY_SIZE_T
 #define MARRAY_T size_t
@@ -266,6 +267,8 @@ static void cpp_release_scratch(CppPreprocessor*, CppTokens*);
 static int cpp_expand_argument(CppPreprocessor*, const CppToken*_Null_unspecified toks, size_t count, CppTokens* out);
 
 static int cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value);
+
+LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

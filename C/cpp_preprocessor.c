@@ -40,7 +40,6 @@ enum {
 // Internal APIs
 static int cpp_next_raw_token(CppPreprocessor*, CppToken*);
 static int cpp_next_pp_token(CppPreprocessor*, CppToken*);
-LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cpp_info(CppPreprocessor*, SrcLoc, const char*, ...);
 static int cpp_push_if(CppPreprocessor* cpp, CppPoundIf s);

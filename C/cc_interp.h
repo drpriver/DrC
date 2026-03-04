@@ -29,10 +29,10 @@ struct CcInterpFrame {
 static int cc_interp_step(struct CcParser* p);
 
 // Evaluate an expression, writing sizeof(expr->type) bytes into result.
-static int cc_interp_expr(struct CcParser* p, CcExpr* expr, void* result);
+static int cc_interp_expr(struct CcParser* p, CcExpr* expr, void* result, size_t size);
 
 // Evaluate an expression as an lvalue, returning pointer to its storage.
-static int cc_interp_lvalue(struct CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out);
+static int cc_interp_lvalue(struct CcParser* p, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
