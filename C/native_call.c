@@ -10,76 +10,102 @@
 #else
 #include <ffi.h>
 #endif
+#include "cc_errors.h"
 #include "native_call.h"
 #include "cc_func.h"
+
+enum {
+    NC_NO_ERROR = _cc_no_error,
+    NC_OOM_ERROR = _cc_oom_error,
+    NC_UNSUPPORTED_TYPE = _cc_unimplemented_error,
+};
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
 static
-ffi_type* // FIXME: return error, use outparam
-cctype_to_ffi_type(CcQualType t){
+int
+cctype_to_ffi_type(CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
         case CC_POINTER:
         case CC_ARRAY:
         case CC_FUNCTION:
-            return &ffi_type_pointer;
-        case CC_ENUM:
-            return &ffi_type_sint32;
-        case CC_STRUCT:
-        case CC_UNION: {
-            // CcStruct and CcUnion have the same layout up through ffi_cache.
-            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7); // FIXME: wtf?
-            if(s->ffi_cache) return s->ffi_cache;
+            *out = &ffi_type_pointer;
+            return NC_NO_ERROR;
+        case CC_ENUM: {
+            CcEnum* e = ccqt_as_enum(t);
+            return cctype_to_ffi_type(e->underlying, out);
+        }
+        case CC_STRUCT: {
+            CcStruct* s = ccqt_as_struct(t);
+            if(s->ffi_cache){ *out = s->ffi_cache; return NC_NO_ERROR; }
             uint32_t n = s->field_count;
-            ffi_type* st = Allocator_alloc(MALLOCATOR, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
-            if(!st) return &ffi_type_void; // FIXME: return error
+            ffi_type* st = Allocator_zalloc(MALLOCATOR, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
+            if(!st) return NC_OOM_ERROR;
             ffi_type** elements = (ffi_type**)(st + 1);
-            st->size = 0;
-            st->alignment = 0;
-            st->type = FFI_TYPE_STRUCT;
-            st->elements = elements;
+            *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
             for(uint32_t i = 0; i < n; i++){
-                elements[i] = cctype_to_ffi_type(s->fields[i].type);
+                int err = cctype_to_ffi_type(s->fields[i].type, &elements[i]);
+                if(err){ Allocator_free(MALLOCATOR, st, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1)); return err; }
             }
             elements[n] = NULL;
             s->ffi_cache = st;
-            return st;
+            *out = st;
+            return NC_NO_ERROR;
+        }
+        case CC_UNION: {
+            CcUnion* u = ccqt_as_union(t);
+            if(u->ffi_cache){ *out = u->ffi_cache; return NC_NO_ERROR; }
+            uint32_t n = u->field_count;
+            ffi_type* st = Allocator_zalloc(MALLOCATOR, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
+            if(!st) return NC_OOM_ERROR;
+            ffi_type** elements = (ffi_type**)(st + 1);
+            *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
+            for(uint32_t i = 0; i < n; i++){
+                int err = cctype_to_ffi_type(u->fields[i].type, &elements[i]);
+                if(err){ Allocator_free(MALLOCATOR, st, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1)); return err; }
+            }
+            elements[n] = NULL;
+            u->ffi_cache = st;
+            *out = st;
+            return NC_NO_ERROR;
         }
         case CC_VECTOR:
-            return &ffi_type_pointer; // TODO: proper vector support
+            return NC_UNSUPPORTED_TYPE;
         case CC_BASIC:
             switch(t.basic.kind){
-                case CCBT_void:               return &ffi_type_void;
-                case CCBT_bool:               return &ffi_type_uint8;
-                case CCBT_char:               return &ffi_type_sint8;
-                case CCBT_signed_char:        return &ffi_type_sint8;
-                case CCBT_unsigned_char:      return &ffi_type_uint8;
-                case CCBT_short:              return &ffi_type_sint16;
-                case CCBT_unsigned_short:     return &ffi_type_uint16;
-                case CCBT_int:                return &ffi_type_sint32;
-                case CCBT_unsigned:           return &ffi_type_uint32;
-                case CCBT_long:               return &ffi_type_sint64;
-                case CCBT_unsigned_long:      return &ffi_type_uint64;
-                case CCBT_long_long:          return &ffi_type_sint64;
-                case CCBT_unsigned_long_long: return &ffi_type_uint64;
-                case CCBT_int128:             return &ffi_type_void; // FIXME: return error
-                case CCBT_unsigned_int128:    return &ffi_type_void; // FIXME: return error
-                case CCBT_float16:            return &ffi_type_void; // FIXME: return error
-                case CCBT_float:              return &ffi_type_float;
-                case CCBT_double:             return &ffi_type_double;
-                case CCBT_long_double:        return &ffi_type_longdouble;
-                case CCBT_float_complex:      return &ffi_type_complex_float;
-                case CCBT_double_complex:     return &ffi_type_complex_double;
-                case CCBT_long_double_complex:return &ffi_type_complex_longdouble;
-                case CCBT_nullptr_t:          return &ffi_type_pointer;
-                case CCBT_INVALID:            return &ffi_type_void;
-                case CCBT_COUNT:              return &ffi_type_void;
+                case CCBT_void:               *out = &ffi_type_void; return NC_NO_ERROR;
+                case CCBT_bool:               *out = &ffi_type_uint8; return NC_NO_ERROR;
+                case CCBT_char:               *out = &ffi_type_sint8; return NC_NO_ERROR;
+                case CCBT_signed_char:        *out = &ffi_type_sint8; return NC_NO_ERROR;
+                case CCBT_unsigned_char:      *out = &ffi_type_uint8; return NC_NO_ERROR;
+                case CCBT_short:              *out = &ffi_type_sint16; return NC_NO_ERROR;
+                case CCBT_unsigned_short:     *out = &ffi_type_uint16; return NC_NO_ERROR;
+                case CCBT_int:                *out = &ffi_type_sint32; return NC_NO_ERROR;
+                case CCBT_unsigned:           *out = &ffi_type_uint32; return NC_NO_ERROR;
+                case CCBT_long:               *out = &ffi_type_sint64; return NC_NO_ERROR;
+                case CCBT_unsigned_long:      *out = &ffi_type_uint64; return NC_NO_ERROR;
+                case CCBT_long_long:          *out = &ffi_type_sint64; return NC_NO_ERROR;
+                case CCBT_unsigned_long_long: *out = &ffi_type_uint64; return NC_NO_ERROR;
+                case CCBT_float:              *out = &ffi_type_float; return NC_NO_ERROR;
+                case CCBT_double:             *out = &ffi_type_double; return NC_NO_ERROR;
+                case CCBT_long_double:        *out = &ffi_type_longdouble; return NC_NO_ERROR;
+                case CCBT_float_complex:      *out = &ffi_type_complex_float; return NC_NO_ERROR;
+                case CCBT_double_complex:     *out = &ffi_type_complex_double; return NC_NO_ERROR;
+                case CCBT_long_double_complex:*out = &ffi_type_complex_longdouble; return NC_NO_ERROR;
+                case CCBT_nullptr_t:          *out = &ffi_type_pointer; return NC_NO_ERROR;
+                case CCBT_int128:
+                case CCBT_unsigned_int128:
+                case CCBT_float16:
+                    return NC_UNSUPPORTED_TYPE;
+                case CCBT_INVALID:
+                case CCBT_COUNT:
+                    return NC_UNSUPPORTED_TYPE;
             }
             break;
     }
-    return &ffi_type_void; // FIXME: return error
+    return NC_UNSUPPORTED_TYPE;
 }
 
 // Cached cif for non-variadic calls.
@@ -92,40 +118,51 @@ struct NativeCallCache {
 };
 
 static
-NativeCallCache*_Nullable
-native_call_cache_create(Allocator a, CcFunction* func_type){
+int
+native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nullable*_Nonnull out){
+    *out = NULL;
     uint32_t n = func_type->param_count;
     NativeCallCache* c = Allocator_zalloc(a, sizeof *c + n * sizeof *c->arg_types);
-    if(!c) return NULL;
+    if(!c) return NC_OOM_ERROR;
     c->nparams = n;
-    ffi_type* rtype = cctype_to_ffi_type(func_type->return_type);
+    ffi_type* rtype;
+    int err = cctype_to_ffi_type(func_type->return_type, &rtype);
+    if(err) goto fail;
     for(uint32_t i = 0; i < n; i++){
-        c->arg_types[i] = cctype_to_ffi_type(func_type->params[i]);
+        err = cctype_to_ffi_type(func_type->params[i], &c->arg_types[i]);
+        if(err) goto fail;
     }
     ffi_status s = ffi_prep_cif(&c->cif, FFI_DEFAULT_ABI, n, rtype, c->arg_types);
-    if(s != FFI_OK){
-        Allocator_free(a, c, sizeof *c + n * sizeof *c->arg_types);
-        return NULL;
-    }
-    return c;
+    if(s != FFI_OK){ err = NC_UNSUPPORTED_TYPE; goto fail; }
+    *out = c;
+    return NC_NO_ERROR;
+    fail:
+    Allocator_free(a, c, sizeof *c + n * sizeof *c->arg_types);
+    return err;
 }
 
 static
 int
 native_call(Allocator a, CcFunc* func, void*_Nonnull*_Nonnull args, int nargs, const CcQualType*_Nullable vararg_types, void* rvalue){
     CcFunction* func_type = func->type;
+    int err;
     // Variadic calls can't use the cache (nargs varies).
     if(func_type->is_variadic){
         if(nargs > 64) return -1;
         ffi_cif cif;
         ffi_type* arg_types[64];
-        ffi_type* rtype = cctype_to_ffi_type(func_type->return_type);
+        ffi_type* rtype;
+        err = cctype_to_ffi_type(func_type->return_type, &rtype);
+        if(err) return err;
         for(int i = 0; i < nargs && (uint32_t)i < func_type->param_count; i++){
-            arg_types[i] = cctype_to_ffi_type(func_type->params[i]);
+            err = cctype_to_ffi_type(func_type->params[i], &arg_types[i]);
+            if(err) return err;
         }
         for(int i = (int)func_type->param_count; i < nargs; i++){
-            if(vararg_types)
-                arg_types[i] = cctype_to_ffi_type(vararg_types[i - func_type->param_count]);
+            if(vararg_types){
+                err = cctype_to_ffi_type(vararg_types[i - func_type->param_count], &arg_types[i]);
+                if(err) return err;
+            }
             else
                 arg_types[i] = &ffi_type_pointer;
         }
@@ -137,8 +174,8 @@ native_call(Allocator a, CcFunc* func, void*_Nonnull*_Nonnull args, int nargs, c
     // Non-variadic: use or create cache.
     NativeCallCache* c = func->native_call_cache;
     if(!c){
-        c = native_call_cache_create(a, func_type);
-        if(!c) return -1;
+        err = native_call_cache_create(a, func_type, &c);
+        if(err) return err;
         func->native_call_cache = c;
     }
     ffi_call(&c->cif, func->native_func, rvalue, args);
@@ -173,33 +210,37 @@ closure_trampoline(ffi_cif* cif, void* rvalue, void*_Nonnull*_Nonnull args, void
 }
 
 static
-NativeClosure*_Nullable
-native_closure_create(Allocator a, CcFunction* func_type, NativeClosureCallback* cb, void*_Nullable userdata){
+int
+native_closure_create(Allocator a, CcFunction* func_type, NativeClosureCallback* cb, void*_Nullable userdata, NativeClosure*_Nullable*_Nonnull out){
+    *out = NULL;
     uint32_t nparams = func_type->param_count;
     NativeClosure* nc = Allocator_zalloc(a, sizeof *nc + nparams * sizeof *nc->arg_types);
-    if(!nc) return NULL;
+    if(!nc) return NC_OOM_ERROR;
     nc->nparams = nparams;
     nc->cb = cb;
     nc->userdata = userdata;
-    ffi_type* rtype = cctype_to_ffi_type(func_type->return_type);
+    ffi_type* rtype;
+    int err = cctype_to_ffi_type(func_type->return_type, &rtype);
+    if(err) goto fail;
     for(uint32_t i = 0; i < nparams; i++){
-        nc->arg_types[i] = cctype_to_ffi_type(func_type->params[i]);
+        err = cctype_to_ffi_type(func_type->params[i], &nc->arg_types[i]);
+        if(err) goto fail;
     }
     ffi_status s = ffi_prep_cif(&nc->cif, FFI_DEFAULT_ABI, nparams, rtype, nc->arg_types);
-    if(s != FFI_OK)
-        goto fail;
+    if(s != FFI_OK){ err = NC_UNSUPPORTED_TYPE; goto fail; }
     nc->closure = ffi_closure_alloc(sizeof(ffi_closure), (void**)&nc->fn);
-    if(!nc->closure)
-        goto fail;
+    if(!nc->closure){ err = NC_OOM_ERROR; goto fail; }
     s = ffi_prep_closure_loc(nc->closure, &nc->cif, closure_trampoline, nc, (void*)nc->fn);
     if(s != FFI_OK){
         ffi_closure_free(nc->closure);
+        err = NC_UNSUPPORTED_TYPE;
         goto fail;
     }
-    return nc;
+    *out = nc;
+    return NC_NO_ERROR;
     fail:
     Allocator_free(a, nc, sizeof *nc + nparams * sizeof nc->arg_types[0]);
-    return NULL;
+    return err;
 }
 
 static

@@ -10,53 +10,131 @@
 #pragma clang assume_nonnull begin
 #endif
 
-struct CcFunc;
+typedef struct CcFunc CcFunc;
 
-// Call a native function through a CcFunc.
-// Uses func->native_func, func->type for the signature, and
-// func->native_call_cache to avoid re-preparing the cif each call.
-// args:           array of pointers to argument values (nargs elements).
-// nargs:          number of actual arguments (>= param_count for variadic).
-// vararg_types:   types of the variadic arguments (nargs - param_count elements).
-//                 NULL for non-variadic calls.
-// rvalue:         storage for the return value.
-// Returns 0 on success.
 static
 int
-native_call(Allocator, struct CcFunc* func,
-            void*_Nonnull*_Nonnull args, int nargs,
-            const CcQualType*_Nullable vararg_types,
-            void* rvalue);
+native_call(Allocator al, CcFunc* func, void*_Nonnull*_Nonnull args,
+    int nargs, const CcQualType*_Nullable vararg_types, void* rvalue);
+// ---------------------------------
+// Call a native function through a CcFunc.
+//
+// Arguments:
+// ----------
+// al:
+//    Allocator used for creating/caching the ffi call interface.
+//
+// func:
+//    The CcFunc to call. Must have native_func set to a valid function pointer.
+//
+// args:
+//    Array of pointers to argument values (nargs elements).
+//
+// nargs:
+//    Number of actual arguments (>= param_count for variadic).
+//
+// vararg_types:
+//    Types of the variadic arguments (nargs - param_count elements).
+//    NULL for non-variadic calls.
+//
+// rvalue:
+//    Storage for the return value.
+//
+// Returns:
+// --------
+// 0 on success or an error code on failure.
 
-// Free the cached cif on a CcFunc (call when destroying a CcFunc).
 static
 void
-native_call_cache_free(Allocator, struct CcFunc* func);
+native_call_cache_free(Allocator al, CcFunc* func);
+// ---------------------------------
+// Free the cached ffi call interface on a CcFunc.
+//
+// Arguments:
+// ----------
+// al:
+//    The allocator that was used to create the cache.
+//
+// func:
+//    The CcFunc whose cache should be freed.
 
-// Callback type for closures. Called when native code invokes the closure.
-// rvalue:   write the return value here.
-// args:     array of pointers to the argument values (param_count elements).
-// userdata: the userdata passed to native_closure_create.
 typedef void (NativeClosureCallback)(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata);
+// ---------------------------------
+// Callback type for closures. Called when native code invokes the closure.
+//
+// Arguments:
+// ----------
+// rvalue:
+//    Write the return value here.
+//
+// args:
+//    Array of pointers to the argument values (param_count elements).
+//
+// userdata:
+//    The userdata passed to native_closure_create.
 
-// Opaque handle to a closure. Do not inspect.
 typedef struct NativeClosure NativeClosure;
+// ------------
+// Opaque handle to a native closure. A closure wraps a callback so it can be
+// called through a C function pointer with a specific signature. Created with
+// native_closure_create, freed with native_closure_destroy.
 
-// Create a closure: a native function pointer that, when called, invokes cb.
-// func_type: the function signature the pointer should have.
-// cb:        your callback (e.g. "interpret this CcFunc").
-// userdata:  passed through to cb on every call.
-// Returns NULL on failure.
-// The returned NativeClosure must be freed with native_closure_destroy.
 static
-NativeClosure*_Nullable
-native_closure_create(Allocator, CcFunction* func_type, NativeClosureCallback* cb, void*_Nullable userdata);
+int
+native_closure_create(Allocator al, CcFunction* func_type,
+    NativeClosureCallback* cb, void*_Nullable userdata,
+    NativeClosure*_Nullable*_Nonnull out);
+// ---------------------------------
+// Create a closure: a native function pointer that, when called, invokes cb.
+//
+// Arguments:
+// ----------
+// al:
+//    Allocator for the closure's internal data.
+//
+// func_type:
+//    The function signature the closure's function pointer should have.
+//
+// cb:
+//    The callback to invoke when the closure is called.
+//
+// userdata:
+//    Opaque pointer passed through to cb on every call.
+//
+// out:
+//    On success, receives the created closure. Must be freed with
+//    native_closure_destroy.
+//
+// Returns:
+// --------
+// 0 on success or an error code on failure.
 
-// Get the callable function pointer from a closure.
 static void (*native_closure_fn(NativeClosure* closure))(void);
+// ---------------------------------
+// Get the callable function pointer from a closure.
+//
+// Arguments:
+// ----------
+// closure:
+//    The closure to get the function pointer from.
+//
+// Returns:
+// --------
+// A function pointer that can be called by native code.
 
+static
+void
+native_closure_destroy(Allocator al, NativeClosure* closure);
+// ---------------------------------
 // Destroy a closure and free its resources.
-static void native_closure_destroy(Allocator, NativeClosure* closure);
+//
+// Arguments:
+// ----------
+// al:
+//    The allocator that was used to create the closure.
+//
+// closure:
+//    The closure to destroy.
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
