@@ -650,6 +650,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
                             .length = (uint32_t)sb.cursor,
                             .utf8 = msb_detach_sv(&sb).text,
                         },
+                        .loc = tok.loc,
                     };
                 }
                 else if(sv_equals(prefix, SV("u")) || (cpp->target.wchar_type == CCBT_unsigned_short && sv_equals(prefix, SV("L")))){ // utf-16
@@ -688,6 +689,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
                             .length = (uint32_t)(sb.cursor / 2),
                             .utf16 = (const unsigned short*)msb_detach_sv(&sb).text,
                         },
+                        .loc = tok.loc,
                     };
                 }
                 else { // utf-32 (U"..." or L"..." when wchar is 32-bit)
@@ -716,6 +718,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
                             .length = (uint32_t)(sb.cursor / 4),
                             .utf32 = (const unsigned int*)msb_detach_sv(&sb).text,
                         },
+                        .loc = tok.loc,
                     };
                 }
                 string_finally:
