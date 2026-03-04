@@ -4986,6 +4986,7 @@ cc_parse_statement(CcParser* p){
                 case CC_return:
                 case CC_break:
                 case CC_continue:
+                    return cc_unimplemented(p, tok.loc, "TODO: statement");
                 case CC_goto: {
                     CcToken label_tok;
                     err = cc_next_token(p, &label_tok);
