@@ -23,7 +23,7 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static int cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok);
+static int cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok);
 enum {SKIP = 1};
 
 // Helper to run preprocessor on a string and collect output tokens as a string
@@ -42,7 +42,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     int err;
     err = env_setenv4(&env, "wolo", 4, "woo", 3);
     if(err) goto finally;
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,
@@ -118,7 +118,7 @@ cpp_expand_with_files(
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,
@@ -189,7 +189,7 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     Logger* logger = msb_logger(&logger_, &log_sb);
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,

@@ -31,7 +31,7 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = MALLOCATOR,
         .fc = fc,
         .at = &at,

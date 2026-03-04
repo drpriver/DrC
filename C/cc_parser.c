@@ -71,9 +71,9 @@ static int cc_handle_static_asssert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
 static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
 // private logging API
-static void cpp_msg_preamble(CPreprocessor* cpp, SrcLoc loc, const char* prefix);
-static void cpp_msg_postamble(CPreprocessor* cpp, SrcLoc loc, LogLevel level);
-static void cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
+static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix);
+static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
+static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 
 enum {
     CC_NO_ERROR                 = _cc_no_error,
@@ -2934,7 +2934,7 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
 
 static
 int
-cc_pragma_pack(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+cc_pragma_pack(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     CcParser* p = (CcParser*)ctx;
     if(!ntoks || toks[0].type != CPP_PUNCTUATOR || toks[0].punct != '(')
         return (cc_warn(p, loc, "#pragma pack expects '('"), 0);

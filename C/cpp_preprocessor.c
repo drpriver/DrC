@@ -26,24 +26,6 @@
 #pragma GCC diagnostic ignored "-Wmultichar"
 #endif
 
-// Internal APIs
-static int cpp_next_raw_token(CPreprocessor*, CppToken*);
-static int cpp_next_pp_token(CPreprocessor*, CppToken*);
-LOG_PRINTF(3, 4) static int cpp_error(CPreprocessor*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4) static void cpp_warn(CPreprocessor*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4) static void cpp_info(CPreprocessor*, SrcLoc, const char*, ...);
-static int cpp_push_if(CPreprocessor* cpp, CppPoundIf s);
-
-static CppTokens*_Nullable cpp_get_scratch(CPreprocessor*);
-static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CPreprocessor*);
-static void cpp_release_scratch(CPreprocessor*, CppTokens*);
-static void cpp_release_scratch_idxes(CPreprocessor*, Marray(size_t)*);
-static int cpp_substitute_and_paste(CPreprocessor*, const CppToken*, size_t, const CMacro*, const CppTokens*, const Marray(size_t)*, CppTokens*_Nullable*_Null_unspecified, CppTokens*, _Bool, SrcLocExp*);
-static int cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out);
-LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CPreprocessor*, const char* fmt, ...);
-static int cpp_eval_tokens(CPreprocessor*, CppToken*_Null_unspecified toks, size_t count, int64_t* value);
-// str should exclude outer quotes
-static int cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
 enum {
     CPP_NO_ERROR                       = _cc_no_error,
     CPP_OOM_ERROR                      = _cc_oom_error,
@@ -54,20 +36,43 @@ enum {
     CPP_MACRO_ALREADY_EXISTS_ERROR     = _cc_macro_already_exists_error,
     CPP_REDEFINING_BUILTIN_MACRO_ERROR = _cc_redefining_builtin_macro_error,
 };
-static SrcLocExp*_Nullable cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc);
-static SrcLoc cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
-static int cpp_ident_to_cc_tok(CPreprocessor*, CppToken*, CcToken*);
-static int cpp_number_to_cc_tok(CPreprocessor*, CppToken*, CcToken*);
-static int cpp_string_to_cc_tok(CPreprocessor*, CppToken*, CcToken*);
-static int cpp_char_to_cc_tok(CPreprocessor*, CppToken*, CcToken*);
-static int cpp_punct_to_cc_tok(CPreprocessor*, CppToken*, CcToken*);
+
+// Internal APIs
+static int cpp_next_raw_token(CppPreprocessor*, CppToken*);
+static int cpp_next_pp_token(CppPreprocessor*, CppToken*);
+LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cpp_info(CppPreprocessor*, SrcLoc, const char*, ...);
+static int cpp_push_if(CppPreprocessor* cpp, CppPoundIf s);
+
+static CppTokens*_Nullable cpp_get_scratch(CppPreprocessor*);
+static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CppPreprocessor*);
+static void cpp_release_scratch(CppPreprocessor*, CppTokens*);
+static void cpp_release_scratch_idxes(CppPreprocessor*, Marray(size_t)*);
+static int cpp_substitute_and_paste(CppPreprocessor*, const CppToken*, size_t, const CppMacro*, const CppTokens*, const Marray(size_t)*, CppTokens*_Nullable*_Null_unspecified, CppTokens*, _Bool, SrcLocExp*);
+static int cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out);
+LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
+static int cpp_eval_tokens(CppPreprocessor*, CppToken*_Null_unspecified toks, size_t count, int64_t* value);
+// str should exclude outer quotes
+static int cpp_mixin_string(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
+static SrcLocExp*_Nullable cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc);
+static SrcLoc cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
+static int cpp_ident_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_number_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_string_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_char_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_punct_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_handle_directive(CppPreprocessor *cpp);
+static int cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp);
+static int cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, CppTokens *dst);
+static int cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst);
 
 static
 int
-cpp_define_macro(CPreprocessor* cpp, StringView name, size_t ntoks, size_t nparams, CMacro*_Nullable*_Nonnull outmacro){
+cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t nparams, CppMacro*_Nullable*_Nonnull outmacro){
     Atom key = AT_atomize(cpp->at, name.text, name.length);
     if(!key) return CPP_OOM_ERROR;
-    CMacro* macro = AM_get(&cpp->macros, key);
+    CppMacro* macro = AM_get(&cpp->macros, key);
     if(macro) return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
     size_t size = sizeof *macro + sizeof(CppToken)*ntoks + sizeof(Atom)*nparams;
     macro = Allocator_zalloc(cpp->allocator, size);
@@ -82,7 +87,7 @@ cpp_define_macro(CPreprocessor* cpp, StringView name, size_t ntoks, size_t npara
 
 static
 void
-cpp_free_macro(CPreprocessor* cpp, CMacro * macro){
+cpp_free_macro(CppPreprocessor* cpp, CppMacro * macro){
     size_t size;
     if(macro->is_builtin){
         size = sizeof *macro + sizeof(CppToken)*2 + sizeof(Atom)*macro->nparams;
@@ -94,17 +99,17 @@ cpp_free_macro(CPreprocessor* cpp, CMacro * macro){
 
 static
 _Bool
-cpp_has_macro(CPreprocessor* cpp, StringView name){
+cpp_has_macro(CppPreprocessor* cpp, StringView name){
     Atom key = AT_get_atom(cpp->at, name.text, name.length);
     if(!key) return 0;
-    CMacro* macro = AM_get(&cpp->macros, key);
+    CppMacro* macro = AM_get(&cpp->macros, key);
     if(!macro) return 0;
     return 1;
 }
 
 static
 _Bool
-cpp_isdef(CPreprocessor* cpp, StringView name){
+cpp_isdef(CppPreprocessor* cpp, StringView name){
     if(cpp_has_macro(cpp, name)) return 1;
     if(sv_equals(name, SV("__has_include"))) return 1;
     if(sv_equals(name, SV("__has_include_next"))) return 1;
@@ -116,10 +121,10 @@ cpp_isdef(CPreprocessor* cpp, StringView name){
 
 static
 int
-cpp_undef_macro(CPreprocessor* cpp, StringView name){
+cpp_undef_macro(CppPreprocessor* cpp, StringView name){
     Atom key = AT_get_atom(cpp->at, name.text, name.length);
     if(!key) return 0;
-    CMacro* macro = AM_get(&cpp->macros, key);
+    CppMacro* macro = AM_get(&cpp->macros, key);
     if(!macro) return 0;
     cpp_free_macro(cpp, macro);
     int err = AM_put(&cpp->macros, cpp->allocator, key, NULL);
@@ -129,8 +134,8 @@ cpp_undef_macro(CPreprocessor* cpp, StringView name){
 
 static
 int
-cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks){
-    CMacro* macro;
+cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks){
+    CppMacro* macro;
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
     if(err) return err;
     if(ntoks) memcpy(cpp_cmacro_replacement(macro), toks, ntoks * sizeof *toks);
@@ -139,8 +144,8 @@ cpp_define_obj_macro(CPreprocessor* cpp, StringView name, CppToken*_Null_unspeci
 
 static
 int
-cpp_define_builtin_obj_macro(CPreprocessor* cpp, StringView name, CppObjMacroFn* fn, void*_Null_unspecified ctx){
-    CMacro* macro;
+cpp_define_builtin_obj_macro(CppPreprocessor* cpp, StringView name, CppObjMacroFn* fn, void*_Null_unspecified ctx){
+    CppMacro* macro;
     int err = cpp_define_macro(cpp, name, 2, 0, &macro);
     if(err) return err;
     macro->is_builtin = 1;
@@ -154,8 +159,8 @@ cpp_define_builtin_obj_macro(CPreprocessor* cpp, StringView name, CppObjMacroFn*
 
 static
 int
-cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand){
-    CMacro* macro;
+cpp_define_builtin_func_macro(CppPreprocessor* cpp, StringView name, CppFuncMacroFn* fn, void*_Null_unspecified ctx, size_t nparams, _Bool variadic, _Bool no_expand){
+    CppMacro* macro;
     int err = cpp_define_macro(cpp, name, 2, nparams, &macro);
     if(err) return err;
     macro->is_builtin = 1;
@@ -172,7 +177,7 @@ cpp_define_builtin_func_macro(CPreprocessor* cpp, StringView name, CppFuncMacroF
 
 static
 _Bool
-cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name){
+cpp_has_include(CppPreprocessor* cpp, _Bool quote, StringView header_name){
     MStringBuilder* sb = fc_path_builder(cpp->fc);
     for(size_t i = quote?0:1; i < arrlen(cpp->include_paths); i++){
         Marray(StringView)* dirs = &cpp->include_paths[i];
@@ -193,7 +198,7 @@ cpp_has_include(CPreprocessor* cpp, _Bool quote, StringView header_name){
 
 static
 _Bool
-cpp_is_pragma_once(CPreprocessor* cpp, uint32_t file_id){
+cpp_is_pragma_once(CppPreprocessor* cpp, uint32_t file_id){
     // Binary search in sorted list
     size_t lo = 0, hi = cpp->pragma_once_files.count;
     while(lo < hi){
@@ -208,7 +213,7 @@ cpp_is_pragma_once(CPreprocessor* cpp, uint32_t file_id){
 
 static
 int
-cpp_add_pragma_once(CPreprocessor* cpp, uint32_t file_id){
+cpp_add_pragma_once(CppPreprocessor* cpp, uint32_t file_id){
     // Insert into sorted position
     size_t lo = 0, hi = cpp->pragma_once_files.count;
     while(lo < hi){
@@ -270,7 +275,7 @@ cpp_frame_only_whitespace_left(CppFrame* f){
 
 static
 Atom _Nullable
-cpp_get_include_guard(CPreprocessor* cpp, uint32_t file_id){
+cpp_get_include_guard(CppPreprocessor* cpp, uint32_t file_id){
     size_t lo = 0, hi = cpp->include_guard_files.count;
     while(lo < hi){
         size_t mid = lo + (hi - lo) / 2;
@@ -286,7 +291,7 @@ cpp_get_include_guard(CPreprocessor* cpp, uint32_t file_id){
 
 static
 int
-cpp_add_include_guard(CPreprocessor* cpp, uint32_t file_id, Atom guard){
+cpp_add_include_guard(CppPreprocessor* cpp, uint32_t file_id, Atom guard){
     size_t lo = 0, hi = cpp->include_guard_files.count;
     while(lo < hi){
         size_t mid = lo + (hi - lo) / 2;
@@ -319,7 +324,7 @@ cpp_add_include_guard(CPreprocessor* cpp, uint32_t file_id, Atom guard){
 // out_pos is set to the position in the include path arrays for include_next.
 static
 int
-cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next, StringView header_name, IncludePosition* out_pos){
+cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView header_name, CppIncludePosition* out_pos){
     MStringBuilder* sb = fc_path_builder(cpp->fc);
     // For quoted includes (not include_next), first search the current file's directory
     if(quote && !is_next){
@@ -342,7 +347,7 @@ cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next, StringView head
                         msb_write_char(sb, '/');
                 }
                 msb_write_str(sb, header_name.text, header_name.length);
-                *out_pos = (IncludePosition){0, 0};
+                *out_pos = (CppIncludePosition){0, 0};
                 return 0;
             }
         }
@@ -372,7 +377,7 @@ cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next, StringView head
                 if(d.text[d.length-1] != '/')
                     msb_write_char(sb, '/');
                 msb_write_str(sb, header_name.text, header_name.length);
-                *out_pos = (IncludePosition){i, j};
+                *out_pos = (CppIncludePosition){i, j};
                 return 0;
             }
         }
@@ -401,7 +406,7 @@ cpp_find_include(CPreprocessor* cpp, _Bool quote, _Bool is_next, StringView head
                     msb_write_str(sb, header_name.text, fw_len);
                     msb_write_str(sb, ".framework/Headers/", 19);
                     msb_write_str(sb, remaining, remaining_len);
-                    *out_pos = (IncludePosition){0, 0};
+                    *out_pos = (CppIncludePosition){0, 0};
                     return 0;
                 }
             }
@@ -502,7 +507,7 @@ cpp_decode_str_char(StringView s, size_t* c){
 
 static
 int
-cpp_next_c_token(CPreprocessor* cpp, CcToken* ctok){
+cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
     CppToken tok;
     // phase 5, phase 6, part of 7
     for(;;){
@@ -721,14 +726,10 @@ cpp_next_c_token(CPreprocessor* cpp, CcToken* ctok){
         return 0;
     }
 }
-static int cpp_handle_directive(CPreprocessor *cpp);
-static int cpp_handle_directive_in_inactive_region(CPreprocessor *cpp);
-static int cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, CppTokens *dst);
-static int cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst);
 
 static
 int
-cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok){
+cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
     // phase 4
     for(;;){
         CppToken tok;
@@ -766,7 +767,7 @@ cpp_next_pp_token(CPreprocessor* cpp, CppToken* ptok){
                 if(tok.disabled) goto noexp;
                 Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
                 if(!a) goto noexp;
-                CMacro* macro = AM_get(&cpp->macros, a);
+                CppMacro* macro = AM_get(&cpp->macros, a);
                 if(!macro) goto noexp;
                 if(macro->is_disabled) goto noexp;
                 if(macro->is_function_like){
@@ -991,7 +992,7 @@ cpp_match_oneof(CppFrame* f, const char* set){
 
 static
 StringView
-cpp_clean_token(CPreprocessor* cpp, size_t len, const char* txt){
+cpp_clean_token(CppPreprocessor* cpp, size_t len, const char* txt){
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
 
     const char* prev = txt;
@@ -1021,7 +1022,7 @@ cpp_clean_token(CPreprocessor* cpp, size_t len, const char* txt){
 
 static
 int
-cpp_tokenize_from_frame(CPreprocessor* cpp, CppFrame* f, CppToken* tok){
+cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
     retry:;
     SrcLoc loc = {.file_id = f->file_id, .line = f->line, .column = f->column};
     cpp_handle_continuation(f);
@@ -1375,12 +1376,12 @@ cpp_tokenize_from_frame(CPreprocessor* cpp, CppFrame* f, CppToken* tok){
 
 static
 int
-cpp_next_raw_token(CPreprocessor* cpp, CppToken* tok){
+cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
     while(cpp->pending.count){
         *tok = ma_tail(cpp->pending);
         cpp->pending.count--;
         if(tok->type == CPP_REENABLE){
-            ((CMacro*)tok->data1)->is_disabled = 0;
+            ((CppMacro*)tok->data1)->is_disabled = 0;
             continue;
         }
         return 0;
@@ -1405,7 +1406,7 @@ cpp_next_raw_token(CPreprocessor* cpp, CppToken* tok){
 
 static
 void
-cpp_msg_preamble(CPreprocessor* cpp, SrcLoc loc, const char* prefix){
+cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix){
     uint64_t line = 0;
     uint64_t column = 0;
     uint64_t file_id = 0;
@@ -1426,7 +1427,7 @@ cpp_msg_preamble(CPreprocessor* cpp, SrcLoc loc, const char* prefix){
 
 static
 void
-cpp_msg_postamble(CPreprocessor* cpp, SrcLoc loc, LogLevel level){
+cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level){
     if(loc.is_actually_a_pointer){
         SrcLocExp* e = (SrcLocExp*)(loc.bits & ~1);
         while(e->parent){
@@ -1442,7 +1443,7 @@ cpp_msg_postamble(CPreprocessor* cpp, SrcLoc loc, LogLevel level){
 
 static
 void
-cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va){
+cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va){
     cpp_msg_preamble(cpp, loc, prefix);
     log_logv(cpp->logger, level, fmt, va);
     cpp_msg_postamble(cpp, loc, level);
@@ -1450,7 +1451,7 @@ cpp_msg(CPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, cons
 
 static
 int
-cpp_error(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
+cpp_error(CppPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
@@ -1460,7 +1461,7 @@ cpp_error(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
 
 static
 void
-cpp_warn(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
+cpp_warn(CppPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(cpp, loc, LOG_PRINT_ERROR, "warning", fmt, va);
@@ -1469,7 +1470,7 @@ cpp_warn(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
 
 static
 void
-cpp_info(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
+cpp_info(CppPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
@@ -1478,7 +1479,7 @@ cpp_info(CPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
 
 static
 int
-cpp_handle_directive(CPreprocessor* cpp){
+cpp_handle_directive(CppPreprocessor* cpp){
     int err;
     CppToken tok;
     do {
@@ -1510,7 +1511,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
                 if(!a) return CPP_UNREACHABLE_ERROR;
-                CMacro* m = AM_get(&cpp->macros, a);
+                CppMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
                 if(m->nparams || m->is_function_like || m->nreplace){
                     cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions", sv_p(name));
@@ -1582,7 +1583,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             if(err) return err;
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
-            CMacro* m;
+            CppMacro* m;
             err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
                 return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
@@ -1741,7 +1742,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
                 if(!a) return CPP_UNREACHABLE_ERROR;
-                CMacro* m = AM_get(&cpp->macros, a);
+                CppMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
                 if(m->is_function_like){
                     cpp_error(cpp, tok.loc, "Redefinition of function-like macro (%.*s) as an object-like macro", sv_p(name));
@@ -1769,7 +1770,7 @@ cpp_handle_directive(CPreprocessor* cpp){
                 err = 0;
             }
             if(err) return err;
-            ((CMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
+            ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
             cpp_release_scratch(cpp, repl);
             return 0;
         }
@@ -2211,7 +2212,7 @@ cpp_handle_directive(CPreprocessor* cpp){
             return cpp_error(cpp, directive_loc, "Empty header name in #include");
         }
         // Find the file
-        IncludePosition inc_pos = {0};
+        CppIncludePosition inc_pos = {0};
         err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
         if(err){
             int e = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
@@ -2334,7 +2335,7 @@ cpp_handle_directive(CPreprocessor* cpp){
 
 static
 int
-cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
+cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
     int err;
     CppToken tok;
     do {
@@ -2522,7 +2523,7 @@ cpp_handle_directive_in_inactive_region(CPreprocessor *cpp){
 }
 static
 int
-cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, CppTokens *dst){
+cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, CppTokens *dst){
     if(macro->is_builtin){
         CppObjMacroFn* fn = (CppObjMacroFn*)macro->data[0];
         void* ctx = (void*) macro->data[1];
@@ -2564,7 +2565,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, Cp
             if(tok.type == CPP_IDENTIFIER && !tok.disabled){
                 Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
                 if(a){
-                    CMacro* m = AM_get(&cpp->macros, a);
+                    CppMacro* m = AM_get(&cpp->macros, a);
                     if(m && m->is_disabled)
                         tok.disabled = 1;
                 }
@@ -2584,7 +2585,7 @@ cpp_expand_obj_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, Cp
         if(tok.type == CPP_IDENTIFIER && !tok.disabled){
             Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
             if(a){
-                CMacro* m = AM_get(&cpp->macros, a);
+                CppMacro* m = AM_get(&cpp->macros, a);
                 if(m && m->is_disabled)
                     tok.disabled = 1;
             }
@@ -2656,7 +2657,7 @@ cpp_get_va_args(const CppTokens *args, const Marray(size_t) *arg_seps, size_t np
 // Uses the expanded_args cache so the expansion is done at most once.
 static
 _Bool
-cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *_Nullable*_Null_unspecified expanded_args){
+cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *_Nullable*_Null_unspecified expanded_args){
     CppToken* start;
     size_t count;
     cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
@@ -2686,7 +2687,7 @@ cpp_va_args_nonempty(CPreprocessor *cpp, const CMacro *macro, const CppTokens *a
 // Helper: Stringify argument tokens (C23 6.10.4.2)
 static
 CppToken
-cpp_stringify_argument(CPreprocessor *cpp, CppToken*_Nullable toks, size_t count, SrcLoc loc){
+cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t count, SrcLoc loc){
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     msb_write_char(&sb, '"');
     for(size_t i = 0; i < count; i++){
@@ -2720,12 +2721,12 @@ cpp_stringify_argument(CPreprocessor *cpp, CppToken*_Nullable toks, size_t count
 }
 
 // Forward declaration for tokenizing from a frame directly
-static int cpp_tokenize_from_frame(CPreprocessor *cpp, CppFrame *f, CppToken *tok);
+static int cpp_tokenize_from_frame(CppPreprocessor *cpp, CppFrame *f, CppToken *tok);
 
 // Helper: Paste two tokens (C23 6.10.4.3)
 static
 int
-cpp_paste_tokens(CPreprocessor *cpp, CppToken left, CppToken right, CppToken *result, SrcLoc loc, SrcLocExp* expansion_parent){
+cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *result, SrcLoc loc, SrcLocExp* expansion_parent){
     // Handle placemarker tokens
     if(left.type == CPP_PLACEMARKER){
         *result = right;
@@ -2768,7 +2769,7 @@ cpp_paste_tokens(CPreprocessor *cpp, CppToken left, CppToken right, CppToken *re
 // Expands macros in a slice of tokens. Assumes the tokens doesn't have directives, like for a function-like macro's arguments
 static
 int
-cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out){
+cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out){
     if(!count) return 0;
     int err = 0;
     CppToken tok;
@@ -2780,7 +2781,7 @@ cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, s
         if(pending->count){
             tok = ma_pop_(*pending);
             if(tok.type == CPP_REENABLE){
-                ((CMacro*)tok.data1)->is_disabled = 0;
+                ((CppMacro*)tok.data1)->is_disabled = 0;
                 continue;
             }
         }
@@ -2794,7 +2795,7 @@ cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, s
             continue;
         }
         Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
-        CMacro* macro = NULL;
+        CppMacro* macro = NULL;
         if(a) macro = AM_get(&cpp->macros, a);
         if(!macro || macro->is_disabled){
             err = cpp_push_tok(cpp, out, tok);
@@ -2811,7 +2812,7 @@ cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, s
             while(pending->count){
                 next = ma_pop_(*pending);
                 if(next.type == CPP_REENABLE){
-                    ((CMacro*)next.data1)->is_disabled = 0;
+                    ((CppMacro*)next.data1)->is_disabled = 0;
                     continue;
                 }
                 goto got_next;
@@ -2844,7 +2845,7 @@ cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, s
             while(pending->count){
                 next = ma_pop_(*pending);
                 if(next.type == CPP_REENABLE){
-                    ((CMacro*)next.data1)->is_disabled = 0;
+                    ((CppMacro*)next.data1)->is_disabled = 0;
                     continue;
                 }
                 goto got_arg_tok;
@@ -2906,7 +2907,7 @@ cpp_expand_argument(CPreprocessor *cpp, const CppToken*_Null_unspecified toks, s
 // between variadic and regular arguments.
 static inline
 void
-cpp_get_param_arg(const CMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, size_t pidx, CppToken*_Nullable*_Nonnull out_start, size_t *out_count){
+cpp_get_param_arg(const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, size_t pidx, CppToken*_Nullable*_Nonnull out_start, size_t *out_count){
     if(pidx == macro->nparams && macro->is_variadic)
         cpp_get_va_args(args, arg_seps, macro->nparams, out_start, out_count);
     else
@@ -2918,7 +2919,7 @@ cpp_get_param_arg(const CMacro *macro, const CppTokens *args, const Marray(size_
 // to the index of the matching ')'.
 static
 int
-cpp_parse_va_opt_content(CPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren, SrcLocExp* expansion_parent){
+cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren, SrcLocExp* expansion_parent){
     size_t k = after_va_opt;
     while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
     if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '('){
@@ -2950,9 +2951,9 @@ cpp_parse_va_opt_content(CPreprocessor *cpp, const CppToken *repl, size_t nrepla
 static
 int
 cpp_resolve_va_arg(
-    CPreprocessor *cpp,
+    CppPreprocessor *cpp,
     const CppToken *repl, size_t nreplace, size_t after,
-    const CMacro *macro,
+    const CppMacro *macro,
     const CppTokens *args, const Marray(size_t) *arg_seps,
     CppTokens *_Nullable*_Null_unspecified expanded_args,
     SrcLoc loc, SrcLocExp *expansion_parent,
@@ -3017,9 +3018,9 @@ cpp_resolve_va_arg(
 static
 int
 cpp_substitute_and_paste(
-    CPreprocessor *cpp,
+    CppPreprocessor *cpp,
     const CppToken *repl, size_t nreplace,
-    const CMacro *macro,
+    const CppMacro *macro,
     const CppTokens *args,
     const Marray(size_t) *arg_seps,
     CppTokens *_Nullable*_Null_unspecified expanded_args,
@@ -3390,7 +3391,7 @@ cpp_substitute_and_paste(
 
 static
 int
-cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst){
+cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst){
     if(macro->is_builtin){
         CppFuncMacroFn *fn = (CppFuncMacroFn*)macro->data[0];
         void* ctx = (void*)macro->data[1];
@@ -3414,7 +3415,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, c
                 if(t.type == CPP_IDENTIFIER && !t.disabled){
                     Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
                     if(a){
-                        CMacro* m = AM_get(&cpp->macros, a);
+                        CppMacro* m = AM_get(&cpp->macros, a);
                         if(m && m->is_disabled)
                             t.disabled = 1;
                     }
@@ -3465,7 +3466,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, c
                 if(t.type == CPP_IDENTIFIER && !t.disabled){
                     Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
                     if(a){
-                        CMacro* m = AM_get(&cpp->macros, a);
+                        CppMacro* m = AM_get(&cpp->macros, a);
                         if(m && m->is_disabled)
                             t.disabled = 1;
                     }
@@ -3514,7 +3515,7 @@ cpp_expand_func_macro(CPreprocessor *cpp, CMacro *macro, SrcLoc expansion_loc, c
         if(t.type == CPP_IDENTIFIER && !t.disabled){
             Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
             if(a){
-                CMacro* m = AM_get(&cpp->macros, a);
+                CppMacro* m = AM_get(&cpp->macros, a);
                 if(m && m->is_disabled)
                     t.disabled = 1;
             }
@@ -3536,7 +3537,7 @@ finally:
 
 static
 CppTokens*_Nullable
-cpp_get_scratch(CPreprocessor *cpp){
+cpp_get_scratch(CppPreprocessor *cpp){
     CppTokens *scratch = fl_pop(&cpp->scratch_list);
     if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
     if(!scratch) return NULL;
@@ -3545,13 +3546,13 @@ cpp_get_scratch(CPreprocessor *cpp){
 }
 static
 void
-cpp_release_scratch(CPreprocessor *cpp, CppTokens *scratch){
+cpp_release_scratch(CppPreprocessor *cpp, CppTokens *scratch){
     fl_push(&cpp->scratch_list, scratch);
 }
 
 static
 Marray(size_t)*_Nullable
-cpp_get_scratch_idxes(CPreprocessor *cpp){
+cpp_get_scratch_idxes(CppPreprocessor *cpp){
     Marray(size_t) *scratch = fl_pop(&cpp->scratch_idxes);
     if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
     if(!scratch) return NULL;
@@ -3560,7 +3561,7 @@ cpp_get_scratch_idxes(CPreprocessor *cpp){
 }
 static
 void
-cpp_release_scratch_idxes(CPreprocessor *cpp, Marray(size_t) *scratch){
+cpp_release_scratch_idxes(CppPreprocessor *cpp, Marray(size_t) *scratch){
     fl_push(&cpp->scratch_idxes, scratch);
 }
 
@@ -3601,7 +3602,7 @@ static CppPragmaFn cpp_builtin_pragma_once,
 // E.g. CCBT_unsigned_long -> "long unsigned int" (3 identifier tokens).
 static
 int
-cpp_define_type_name_macro(CPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
+cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
     CppToken toks[7];
     size_t ntoks = 0;
     switch(kind){
@@ -3710,25 +3711,25 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
 
 static
 int
-cpp_def_1(CPreprocessor* cpp, StringView name){
+cpp_def_1(CppPreprocessor* cpp, StringView name){
     return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
 }
 static
 int
-cpp_def_int(CPreprocessor* cpp, StringView name, int val){
+cpp_def_int(CppPreprocessor* cpp, StringView name, int val){
     Atom a = cpp_atomizef(cpp, "%d", val);
     if(!a) return CPP_OOM_ERROR;
     return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
 }
 static
 int
-cpp_def_num(CPreprocessor* cpp, StringView name, StringView num){
+cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
     return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt=num}}, 1);
 }
 
 static
 int
-cpp_define_target_macros(CPreprocessor* cpp){
+cpp_define_target_macros(CppPreprocessor* cpp){
     int err;
     CcTargetConfig t = cpp->target;
 
@@ -3989,7 +3990,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
         if(!c_param) return CPP_OOM_ERROR;
         for(size_t i = 0; i < sizeof c_macros / sizeof c_macros[0]; i++){
             size_t ntoks = c_macros[i].suffix ? 3 : 1;
-            CMacro* macro;
+            CppMacro* macro;
             err = cpp_define_macro(cpp, c_macros[i].name, ntoks, 1, &macro);
             if(err) return err;
             macro->is_function_like = 1;
@@ -4055,7 +4056,7 @@ cpp_define_target_macros(CPreprocessor* cpp){
 
 static
 _Bool
-cpp_dir_exists(CPreprocessor* cpp, const char* path){
+cpp_dir_exists(CppPreprocessor* cpp, const char* path){
     #ifdef _WIN32
     MStringBuilder16 sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     msb16_write_utf8(&sb, path, strlen(path));
@@ -4076,7 +4077,7 @@ cpp_dir_exists(CPreprocessor* cpp, const char* path){
 
 static
 int
-cpp_add_default_include(CPreprocessor* cpp, Marray(StringView)* arr, const char* path){
+cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr, const char* path){
     if(!cpp_dir_exists(cpp, path))
         return 0; // silently skip non-existent paths
     size_t len = strlen(path);
@@ -4090,7 +4091,7 @@ cpp_add_default_include(CPreprocessor* cpp, Marray(StringView)* arr, const char*
 
 static
 int
-cpp_cache_builtin_header(CPreprocessor* cpp, StringView name, StringView content){
+cpp_cache_builtin_header(CppPreprocessor* cpp, StringView name, StringView content){
     MStringBuilder* sb = fc_path_builder(cpp->fc);
     msb_write_str(sb, "<builtin>/", 10);
     msb_write_str(sb, name.text, name.length);
@@ -4101,7 +4102,7 @@ cpp_cache_builtin_header(CPreprocessor* cpp, StringView name, StringView content
 
 static
 int
-cpp_setup_builtin_headers(CPreprocessor* cpp){
+cpp_setup_builtin_headers(CppPreprocessor* cpp){
     int err;
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
@@ -4177,7 +4178,7 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
 
 static
 int
-cpp_setup_default_includes(CPreprocessor* cpp){
+cpp_setup_default_includes(CppPreprocessor* cpp){
     int err = cpp_setup_builtin_headers(cpp);
     if(err) return err;
     CcTargetConfig t = cpp->target;
@@ -4281,7 +4282,7 @@ cpp_setup_default_includes(CPreprocessor* cpp){
 
 static
 int
-cpp_define_builtin_macros(CPreprocessor* cpp){
+cpp_define_builtin_macros(CppPreprocessor* cpp){
     int err;
     static const struct {
         StringView name; CppObjMacroFn* fn;
@@ -4359,7 +4360,7 @@ cpp_define_builtin_macros(CPreprocessor* cpp){
 }
 static
 int
-cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     uint64_t file_id = 0;
     if(loc.is_actually_a_pointer){
@@ -4385,7 +4386,7 @@ cpp_builtin_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 
 static
 int
-cpp_builtin_filename(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     uint64_t file_id = 0;
     if(loc.is_actually_a_pointer){
@@ -4416,7 +4417,7 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc
 
 static
 int
-cpp_builtin_date(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_date(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     CppToken tok = {
         .txt = cpp->date?(StringView){cpp->date->length, cpp->date->data}: SV("\"Jan 01 1900\""),
@@ -4429,7 +4430,7 @@ cpp_builtin_date(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 
 static
 int
-cpp_builtin_time(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_time(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     CppToken tok = {
         .txt = cpp->time?(StringView){cpp->time->length, cpp->time->data}: SV("\"01:02:03\""),
@@ -4442,7 +4443,7 @@ cpp_builtin_time(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 
 static
 int
-cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_line(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     unsigned line = 0;
     if(loc.is_actually_a_pointer){
@@ -4466,7 +4467,7 @@ cpp_builtin_line(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 }
 static
 int
-cpp_builtin_include_level(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_include_level(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     if(!cpp->frames.count) return CPP_UNREACHABLE_ERROR;
     Atom a = cpp_atomizef(cpp, "%zu", cpp->frames.count);
@@ -4481,7 +4482,7 @@ cpp_builtin_include_level(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLo
 }
 static
 int
-cpp_builtin_counter(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_counter(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     uint64_t c = cpp->counter++;
     Atom a = cpp_atomizef(cpp, "%llu", (unsigned long long)c);
@@ -4496,7 +4497,7 @@ cpp_builtin_counter(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc,
 }
 static
 int
-cpp_builtin_rand(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_rand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     if(!cpp->rng.state && !cpp->rng.inc)
         seed_rng_auto(&cpp->rng);
@@ -4514,7 +4515,7 @@ cpp_builtin_rand(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 
 static
 int
-cpp_builtin_base_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_base_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     // __BASE_FILE__ is the outermost file (bottom of frame stack).
     uint64_t file_id = 0;
@@ -4533,7 +4534,7 @@ cpp_builtin_base_file(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc lo
 
 static
 int
-cpp_builtin_timestamp(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+cpp_builtin_timestamp(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     // __TIMESTAMP__ is the modification time of the current source file.
     // For simplicity, use the same as __DATE__ __TIME__ combined.
@@ -4549,7 +4550,7 @@ cpp_builtin_timestamp(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc lo
 
 static
 int
-cpp_builtin_eval(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+cpp_builtin_eval(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
     (void)ctx;
     (void)arg_seps;
     int err;
@@ -4573,7 +4574,7 @@ cpp_builtin_eval(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cp
 
 static
 int
-cpp_builtin_mixin(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_mixin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)arg_seps;
     int err = 0;
@@ -4597,7 +4598,7 @@ cpp_builtin_mixin(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
 
 static
 int
-cpp_builtin_if(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_if(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)loc;
     CppToken *toks; size_t count;
@@ -4612,7 +4613,7 @@ cpp_builtin_if(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppT
 
 static
 int
-cpp_builtin_ident(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_ident(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)arg_seps;
     int err = 0;
@@ -4644,7 +4645,7 @@ cpp_builtin_ident(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
 
 static
 int
-cpp_builtin_fmt(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     int err = 0;
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
@@ -4748,7 +4749,7 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_print(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_print(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)outtoks;
     (void)ctx;
     (void)arg_seps;
@@ -4779,7 +4780,7 @@ cpp_builtin_print(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
 }
 static
 int
-cpp_builtin_where(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_where(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx; (void)outtoks; (void)arg_seps;
     // Find the first non-whitespace token — should be an identifier
     const CppToken* name_tok = NULL;
@@ -4792,7 +4793,7 @@ cpp_builtin_where(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
     if(!name_tok || name_tok->type != CPP_IDENTIFIER)
         return cpp_error(cpp, loc, "__where__: expected a macro name");
     Atom a = AT_get_atom(cpp->at, name_tok->txt.text, name_tok->txt.length);
-    CMacro* m = a ? AM_get(&cpp->macros, a) : NULL;
+    CppMacro* m = a ? AM_get(&cpp->macros, a) : NULL;
     if(!m){
         cpp_warn(cpp, loc, "__where__: '%.*s' is not defined", (int)name_tok->txt.length, name_tok->txt.text);
         return 0;
@@ -4802,7 +4803,7 @@ cpp_builtin_where(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, C
 }
 static
 int
-cpp_builtin_env(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)arg_seps;
     int err = 0;
@@ -4840,7 +4841,7 @@ cpp_builtin_env(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_set(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_set(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)outtoks;
     // First arg is the key (an identifier)
@@ -4895,7 +4896,7 @@ cpp_builtin_set(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_get(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_get(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)arg_seps;
     // The single arg is the key (an identifier)
@@ -4925,7 +4926,7 @@ cpp_builtin_get(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_append(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_append(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)outtoks;
     // First arg is the key (an identifier)
@@ -4964,7 +4965,7 @@ cpp_builtin_append(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, 
 
 static
 int
-cpp_builtin_for(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_for(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     int err;
     // arg 0: start expression
@@ -5024,7 +5025,7 @@ cpp_builtin_for(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_map(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_map(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     int err;
     // arg 0: macro name (identifier)
@@ -5100,7 +5101,7 @@ cpp_builtin_map(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_let(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     int err;
     // arg 0: NAME or NAME(params...)
@@ -5167,7 +5168,7 @@ cpp_builtin_let(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
     }
     // Define the temporary macro
     if(is_function_like){
-        CMacro* m;
+        CppMacro* m;
         err = cpp_define_macro(cpp, macro_name, repl_count, nparams, &m);
         if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
             return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
@@ -5206,7 +5207,7 @@ cpp_builtin_let(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, Cpp
 
 static
 int
-cpp_builtin_pragma_once(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+cpp_builtin_pragma_once(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     (void)ctx;
     (void)toks;
     if(ntoks)
@@ -5218,7 +5219,7 @@ cpp_builtin_pragma_once(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc 
 
 static
 int
-cpp_builtin_pragma_message(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+cpp_builtin_pragma_message(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     (void)ctx;
     // Macro-expand the tokens
     CppTokens* expanded = cpp_get_scratch(cpp);
@@ -5255,7 +5256,7 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcL
 
 static
 int
-cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     (void)ctx;
     // Macro-expand the tokens
     CppTokens* expanded = cpp_get_scratch(cpp);
@@ -5287,7 +5288,7 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CPreprocessor* cpp,
 
 static
 int
-cpp_builtin__Pragma(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
     (void)outtoks;
     (void)arg_seps;
@@ -5351,7 +5352,7 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CPreprocessor* cpp, SrcLoc loc,
 
 static
 Atom _Nullable
-cpp_atomizef(CPreprocessor* cpp, const char* fmt, ...){
+cpp_atomizef(CppPreprocessor* cpp, const char* fmt, ...){
     Atom a = NULL;
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     va_list va;
@@ -5369,21 +5370,21 @@ cpp_atomizef(CPreprocessor* cpp, const char* fmt, ...){
 
 static
 int
-cpp_push_tok(CPreprocessor* cpp, CppTokens* dst, CppToken tok){
+cpp_push_tok(CppPreprocessor* cpp, CppTokens* dst, CppToken tok){
     int err = ma_push(CppToken)(dst, cpp->allocator, tok);
     return err;
 }
 
 static
 int
-cpp_push_if(CPreprocessor* cpp, CppPoundIf s){
+cpp_push_if(CppPreprocessor* cpp, CppPoundIf s){
     int err = ma_push(CppPoundIf)(&cpp->if_stack, cpp->allocator, s);
     return err;
 }
 
 static
 SrcLocExp*_Nullable
-cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc){
+cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc){
     if(loc.is_actually_a_pointer)
         return (SrcLocExp*)((uintptr_t)loc.pointer.bits << 1);
     SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
@@ -5394,7 +5395,7 @@ cpp_srcloc_to_exp(CPreprocessor* cpp, SrcLoc loc){
 
 static
 SrcLoc
-cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
+cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
     SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
     if(!exp) return tok_loc;
     uint64_t file_id, column, line;
@@ -5416,7 +5417,7 @@ cpp_chain_loc(CPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
 
 static
 int
-cpp_include_file_via_file_cache(CPreprocessor* cpp, StringView path){
+cpp_include_file_via_file_cache(CppPreprocessor* cpp, StringView path){
     int err;
     fc_write_path(cpp->fc, path.text, path.length);
     StringView txt;
@@ -5444,17 +5445,17 @@ static CppToken cpp_ts_next(CppTokenStream* s);
 
 static
 int
-cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *tok);
+cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *tok);
 static
 int
-cpp_recursive_eval(CPreprocessor* cpp, CppTokenStream* s, int64_t* value);
+cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value);
 static
 int
-cpp_recursive_eval_prec(CPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec);
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec);
 
 static
 int
-cpp_eval_tokens(CPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t count, int64_t* value){
+cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t count, int64_t* value){
     int err = 0;
     CppTokens *pending = NULL;
     pending = cpp_get_scratch(cpp);
@@ -5476,7 +5477,7 @@ cpp_eval_tokens(CPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t coun
 
 static
 int
-cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
+cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
     int err;
     CppToken tok;
     for(;;){
@@ -5509,7 +5510,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             case CPP_PLACEMARKER:
                 return CPP_UNREACHABLE_ERROR;
             case CPP_REENABLE:
-                ((CMacro*)tok.data1)->is_disabled = 0;
+                ((CppMacro*)tok.data1)->is_disabled = 0;
                 continue;
         }
         StringView name = tok.txt;
@@ -5547,7 +5548,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                     msb_write_str(&sb, next.txt.text, next.txt.length);
                 }
                 header_name = msb_borrow_sv(&sb);
-                IncludePosition dummy;
+                CppIncludePosition dummy;
                 _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy) == 0;
                 if(result) msb_reset(fc_path_builder(cpp->fc));
                 msb_destroy(&sb);
@@ -5594,7 +5595,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                     quote = 1;
                     header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
                     cpp_release_scratch(cpp, expanded);
-                    IncludePosition dummy3;
+                    CppIncludePosition dummy3;
                     _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy3) == 0;
                     if(result) msb_reset(fc_path_builder(cpp->fc));
                     *outtok = (CppToken){.type=CPP_NUMBER, .txt = result?SV("1"):SV("0"), .loc = tok.loc};
@@ -5615,7 +5616,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                         return cpp_error(cpp, tok.loc, "Unterminated < in %.*s after expansion", (int)name.length, name.text);
                     }
                     header_name = msb_borrow_sv(&hsb);
-                    IncludePosition dummy3;
+                    CppIncludePosition dummy3;
                     _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy3) == 0;
                     if(result) msb_reset(fc_path_builder(cpp->fc));
                     cpp_release_scratch(cpp, expanded);
@@ -5631,7 +5632,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != ')')
                 return cpp_error(cpp, tok.loc, "Expected ')' after %.*s", (int)name.length, name.text);
-            IncludePosition dummy2;
+            CppIncludePosition dummy2;
             _Bool result = !is_embed && cpp_find_include(cpp, quote, is_next, header_name, &dummy2) == 0;
             if(result) msb_reset(fc_path_builder(cpp->fc));
             *outtok = (CppToken){.type=CPP_NUMBER, .txt = result?SV("1"):SV("0"), .loc = tok.loc};
@@ -5698,7 +5699,7 @@ cpp_eval_ts_next(CPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
             return 0;
         }
-        CMacro* m = AM_get(&cpp->macros, a);
+        CppMacro* m = AM_get(&cpp->macros, a);
         if(!m || m->is_disabled){
             *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
             return 0;
@@ -5781,7 +5782,7 @@ cpp_ts_next(CppTokenStream* s){
         else
             tok = (CppToken){0};
         if(tok.type == CPP_REENABLE){
-            ((CMacro*)tok.data1)->is_disabled = 0;
+            ((CppMacro*)tok.data1)->is_disabled = 0;
             continue;
         }
         break;
@@ -5791,7 +5792,7 @@ cpp_ts_next(CppTokenStream* s){
 
 static
 int
-cpp_eval_parse_number(CPreprocessor* cpp, CppToken tok, int64_t* value){
+cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
     // Strip integer suffixes: [uUlL]+
@@ -5826,7 +5827,7 @@ cpp_eval_parse_number(CPreprocessor* cpp, CppToken tok, int64_t* value){
 
 static
 int
-cpp_eval_parse_char(CPreprocessor* cpp, CppToken tok, int64_t* value){
+cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
     if(len < 3 || s[0] != '\'' || s[len-1] != '\'')
@@ -5915,7 +5916,7 @@ cpp_eval_binop_prec(CppToken tok){
 
 static
 int
-cpp_eval_atom(CPreprocessor* cpp, CppTokenStream* s, int64_t* value){
+cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
     int err;
     CppToken tok;
     err = cpp_eval_ts_next(cpp, s, &tok);
@@ -5964,7 +5965,7 @@ cpp_eval_atom(CPreprocessor* cpp, CppTokenStream* s, int64_t* value){
 
 static
 int
-cpp_recursive_eval_prec(CPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec){
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec){
     int err;
     err = cpp_eval_atom(cpp, s, value);
     if(err) return err;
@@ -6033,13 +6034,13 @@ cpp_recursive_eval_prec(CPreprocessor* cpp, CppTokenStream* s, int64_t* value, i
 
 static
 int
-cpp_recursive_eval(CPreprocessor* cpp, CppTokenStream* s, int64_t* value){
+cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
     return cpp_recursive_eval_prec(cpp, s, value, 1);
 }
 
 static
 int
-cpp_register_pragma(CPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* _Null_unspecified ctx){
+cpp_register_pragma(CppPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* _Null_unspecified ctx){
     Atom a = AT_atomize(cpp->at, name.text, name.length);
     if(!a) return CPP_OOM_ERROR;
     CppPragma* prag = AM_get(&cpp->pragmas, a);
@@ -6059,7 +6060,7 @@ cpp_register_pragma(CPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* 
 
 static
 int
-cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
+cpp_mixin_string(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     for(size_t i = 0; i < str.length;){
         unsigned char c = (unsigned char)str.text[i++];
@@ -6118,7 +6119,7 @@ cpp_mixin_string(CPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out)
 
 static
 void
-cpp_discard_all_input(CPreprocessor* cpp){
+cpp_discard_all_input(CppPreprocessor* cpp){
     cpp->frames.count = 0;
     cpp->if_stack.count = 0;
     cpp->pending.count = 0;
@@ -6300,7 +6301,7 @@ cpp_lex_str_to_keyword(StringView txt){
 }
 static
 int
-cpp_ident_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+cpp_ident_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     uint32_t kw = cpp_lex_str_to_keyword(cpptok->txt);
     if(kw != (uint32_t)-1){
         *cctok = (CcToken){
@@ -6326,7 +6327,7 @@ cpp_ident_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
 
 static
 int
-cpp_number_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
     // Detect hex prefix before suffix stripping so we don't eat hex digits
@@ -6468,7 +6469,7 @@ cpp_number_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
 }
 static
 int
-cpp_char_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
     // Skip prefix (L, u, U, u8) to find opening quote, track type
@@ -6568,7 +6569,7 @@ cpp_char_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
 }
 static
 int
-cpp_punct_to_cc_tok(CPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+cpp_punct_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     uint32_t p = (uint32_t)cpptok->punct;
     #ifdef __GNUC__
     #pragma GCC diagnostic push

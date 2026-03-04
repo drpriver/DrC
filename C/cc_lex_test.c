@@ -41,7 +41,7 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,
@@ -96,7 +96,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     AtomTable at = {.allocator = a};
     Environment env = {.allocator = a, .at=&at};
     int err;
-    CPreprocessor cpp = {
+    CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,

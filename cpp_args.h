@@ -16,7 +16,7 @@
 static
 int
 ma_sv_appender(ArgToParse* ap, const void* arg){
-    CPreprocessor* cpp = ap->dest.user_pointer->user_data;
+    CppPreprocessor* cpp = ap->dest.user_pointer->user_data;
     Marray(StringView)* dst = ap->dest.pointer;
     const StringView* sv = arg;
     int err = ma_push(StringView)(dst, cpp->allocator, *sv);
@@ -84,7 +84,7 @@ static const ArgParseEnumType cc_target_argparse_enum = {
 };
 static
 ArgParseKwParams*
-cpp_kwargs(CPreprocessor* cpp){
+cpp_kwargs(CppPreprocessor* cpp){
     static ArgParseUserDefinedType t = {
         .type_name = SV("path"),
     };
@@ -169,7 +169,7 @@ cpp_kwargs(CPreprocessor* cpp){
 
 static
 int
-cpp_cli_defines(CPreprocessor* cpp){
+cpp_cli_defines(CppPreprocessor* cpp){
     int err = 0;
     if(cpp_cli_macros.cursor){
         fc_write_path(cpp->fc, "(command line)", sizeof "(command line)" -1);

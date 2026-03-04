@@ -74,7 +74,7 @@ struct CcParser {
     };
     Marray(CcStatement) toplevel_statements; // only allowed in repl/script mode.
     AtomMap(uintptr_t) toplevel_labels; // label name -> statement index (1-based, like CcFunc.labels)
-    CPreprocessor cpp;
+    CppPreprocessor cpp;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
     Marray(CcToken) pending;
