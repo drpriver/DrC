@@ -94,6 +94,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC_unsigned,
     CC_volatile,
     CC__Generic,
+    CC___int128,
     CC__Float16,
     CC__Float32,
     CC__Float64,

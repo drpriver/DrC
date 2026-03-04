@@ -18,7 +18,7 @@
 #endif
 
 static
-ffi_type*
+ffi_type* // FIXME: return error, use outparam
 cctype_to_ffi_type(CcQualType t){
     switch(ccqt_kind(t)){
         case CC_POINTER:
@@ -30,11 +30,11 @@ cctype_to_ffi_type(CcQualType t){
         case CC_STRUCT:
         case CC_UNION: {
             // CcStruct and CcUnion have the same layout up through ffi_cache.
-            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7);
+            CcStruct* s = (CcStruct*)(t.bits & ~(uintptr_t)7); // FIXME: wtf?
             if(s->ffi_cache) return s->ffi_cache;
             uint32_t n = s->field_count;
             ffi_type* st = Allocator_alloc(MALLOCATOR, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
-            if(!st) return &ffi_type_void;
+            if(!st) return &ffi_type_void; // FIXME: return error
             ffi_type** elements = (ffi_type**)(st + 1);
             st->size = 0;
             st->alignment = 0;
@@ -64,6 +64,8 @@ cctype_to_ffi_type(CcQualType t){
                 case CCBT_unsigned_long:      return &ffi_type_uint64;
                 case CCBT_long_long:          return &ffi_type_sint64;
                 case CCBT_unsigned_long_long: return &ffi_type_uint64;
+                case CCBT_int128:             return &ffi_type_void; // FIXME: return error
+                case CCBT_unsigned_int128:    return &ffi_type_void; // FIXME: return error
                 case CCBT_float:              return &ffi_type_float;
                 case CCBT_double:             return &ffi_type_double;
                 case CCBT_long_double:        return &ffi_type_longdouble;
@@ -76,7 +78,7 @@ cctype_to_ffi_type(CcQualType t){
             }
             break;
     }
-    return &ffi_type_void;
+    return &ffi_type_void; // FIXME: return error
 }
 
 // Cached cif for non-variadic calls.

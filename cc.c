@@ -134,6 +134,8 @@ int main(int argc, char** argv, char** envp){
     cc_parser.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&cc_parser.cpp);
     if(err) return err;
+    err = cc_define_builtin_types(&cc_parser);
+    if(err) return err;
     if(!cpp_nostdinc)
         err = cpp_setup_default_includes(&cc_parser.cpp);
     if(err) return err;

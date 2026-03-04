@@ -38,6 +38,8 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_unsigned_long,
     CCBT_long_long,
     CCBT_unsigned_long_long,
+    CCBT_int128,
+    CCBT_unsigned_int128,
     CCBT_float,
     CCBT_double,
     CCBT_long_double,
@@ -226,7 +228,7 @@ struct CcVector {
 static inline
 _Bool
 ccbt_is_integer(CcBasicTypeKind k){
-    return k >= CCBT_bool && k <= CCBT_unsigned_long_long;
+    return k >= CCBT_bool && k <= CCBT_unsigned_int128;
 }
 
 static inline
@@ -252,6 +254,7 @@ ccbt_is_unsigned(CcBasicTypeKind k){
         case CCBT_unsigned:
         case CCBT_unsigned_long:
         case CCBT_unsigned_long_long:
+        case CCBT_unsigned_int128:
             return 1;
         default:
             return 0;
@@ -280,6 +283,9 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_long_long:
         case CCBT_unsigned_long_long:
             return 5;
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+            return 6;
         default:
             return -1;
     }
@@ -300,6 +306,8 @@ ccbt_to_unsigned(CcBasicTypeKind k){
             return CCBT_unsigned_long;
         case CCBT_long_long:
             return CCBT_unsigned_long_long;
+        case CCBT_int128:
+            return CCBT_unsigned_int128;
         default:
             return k;
     }

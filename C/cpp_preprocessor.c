@@ -4111,7 +4111,6 @@ cpp_setup_builtin_headers(CPreprocessor* cpp){
                               "#define va_copy __builtin_va_copy\n"
                               "#define va_arg __builtin_va_arg\n"
                               "#define va_end __builtin_va_end\n"
-                              "typedef void* __builtin_va_list;\n"
                               "typedef __builtin_va_list va_list;\n"
                             )},
         {SV("stddef.h"),   SV("#pragma once\n"
@@ -6210,6 +6209,7 @@ X(__signed, signed) \
 X(__thread, thread_local) \
 X(noreturn, _Noreturn)\
 X(__typeof, typeof) \
+X(__int128, __int128) \
 
 #define CKWS9(X) \
 X(constexpr, constexpr) \

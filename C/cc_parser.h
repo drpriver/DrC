@@ -97,6 +97,7 @@ static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);
 static int cc_register_pragmas(CcParser*);
+static int cc_define_builtin_types(CcParser*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -113,14 +113,14 @@ struct CcSpecifier {
     union {
         uint32_t bits;
         struct {
-            uint32_t sp_typebits: 8,
+            uint32_t sp_typebits: 9,
                      sp_storagebits: 6,
                      _sp_typedef: 1,
                      sp_funcbits: 2,
                      sp_qualbits: 4,
 
                      _sp_infer: 1,
-                     _padding1: 32-22;
+                     _padding1: 32-23;
         };
         struct {
             uint32_t
@@ -131,6 +131,7 @@ struct CcSpecifier {
                      sp_short:        1,
                      sp_int:          1,
                      sp_char:         1,
+                     sp_int128:       1,
 
                      sp_auto:         1,
                      sp_constexpr:    1,
@@ -150,7 +151,7 @@ struct CcSpecifier {
 
                      sp_infer_type:    1,
 
-                     _padding2:       32-22;
+                     _padding2:       32-23;
         };
     };
 };
@@ -389,6 +390,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_void: case CC_char: case CC_short: case CC_int:
             case CC_long: case CC_float: case CC_double:
             case CC_signed: case CC_unsigned: case CC_bool:
+            case CC___int128:
             case CC_struct: case CC_union: case CC_enum:
             case CC_typeof: case CC_typeof_unqual:
             case CC___auto_type:
@@ -1853,6 +1855,8 @@ static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_unsigned_long]      = "unsigned long",
     [CCBT_long_long]          = "long long",
     [CCBT_unsigned_long_long] = "unsigned long long",
+    [CCBT_int128]             = "__int128",
+    [CCBT_unsigned_int128]    = "unsigned __int128",
     [CCBT_float]              = "float",
     [CCBT_double]             = "double",
     [CCBT_long_double]        = "long double",
@@ -2194,8 +2198,16 @@ cc_eval_expr(CcExpr* e){
                     case CCBT_unsigned_long_long: case CCBT_unsigned_char:
                     case CCBT_unsigned_short: case CCBT_bool:
                         return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
-                    default:
+                    case CCBT_char: case CCBT_signed_char:
+                    case CCBT_short: case CCBT_int:
+                    case CCBT_long: case CCBT_long_long:
                         return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
+                    case CCBT_int128: case CCBT_unsigned_int128:
+                    case CCBT_float_complex: case CCBT_double_complex:
+                    case CCBT_long_double_complex:
+                    case CCBT_void: case CCBT_nullptr_t:
+                    case CCBT_INVALID: case CCBT_COUNT:
+                        return cc_eval_error();
                 }
             }
             return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
@@ -4397,6 +4409,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "int after char");
                         if(spec->sp___auto_type)
                             return cc_error(p, tok.loc, "int after __auto_type");
+                        if(spec->sp_int128)
+                            return cc_error(p, tok.loc, "int after __int128");
                         spec->sp_int = 1;
                         continue;
                     case CC_long:
@@ -4410,6 +4424,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "long after short");
                         if(spec->sp___auto_type)
                             return cc_error(p, tok.loc, "long after __auto_type");
+                        if(spec->sp_int128)
+                            return cc_error(p, tok.loc, "long after __int128");
                         spec->sp_long++;
                         continue;
                     case CC_char:
@@ -4425,6 +4441,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "char after __auto_type");
                         if(spec->sp_int)
                             return cc_error(p, tok.loc, "char after int");
+                        if(spec->sp_int128)
+                            return cc_error(p, tok.loc, "char after __int128");
                         spec->sp_char = 1;
                         continue;
                     case CC___auto_type:
@@ -4433,6 +4451,23 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         spec->sp___auto_type = 1;
+                        continue;
+                    case CC___int128:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_int128)
+                            return cc_error(p, tok.loc, "Duplicate __int128 in declaration");
+                        if(spec->sp_char)
+                            return cc_error(p, tok.loc, "__int128 after char");
+                        if(spec->sp_short)
+                            return cc_error(p, tok.loc, "__int128 after short");
+                        if(spec->sp_long)
+                            return cc_error(p, tok.loc, "__int128 after long");
+                        if(spec->sp_int)
+                            return cc_error(p, tok.loc, "__int128 after int");
+                        if(spec->sp___auto_type)
+                            return cc_error(p, tok.loc, "__int128 after __auto_type");
+                        spec->sp_int128 = 1;
                         continue;
                     case CC_auto:
                         if(spec->sp_typedef)
@@ -4483,6 +4518,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "short after char");
                         if(spec->sp___auto_type)
                             return cc_error(p, tok.loc, "short after __auto_type");
+                        if(spec->sp_int128)
+                            return cc_error(p, tok.loc, "short after __int128");
                         spec->sp_short = 1;
                         continue;
                     case CC_union: {
@@ -4893,6 +4930,7 @@ cc_parse_statement(CcParser* p){
                 case CC__Decimal64:
                 case CC__Decimal128:
                 case CC___auto_type:
+                case CC___int128:
                 case CC_thread_local:
                 case CC_static_assert:
                 case CC_typeof_unqual:
@@ -4997,6 +5035,9 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
         // construct type from keywords
         if(b.spec.sp_char){
             b.type = ccqt_basic(b.spec.sp_signed? CCBT_signed_char: b.spec.sp_unsigned? CCBT_unsigned_char : CCBT_char);
+        }
+        else if(b.spec.sp_int128){
+            b.type = ccqt_basic(b.spec.sp_unsigned? CCBT_unsigned_int128 : CCBT_int128);
         }
         else {
             CcBasicTypeKind k = CCBT_int;
@@ -5617,6 +5658,82 @@ cc_handle_static_asssert(CcParser* p){
         cc_error(p, assert_loc, "%.*s", sv_p(sv));
         return CC_SYNTAX_ERROR;
     }
+    return 0;
+}
+
+static
+int
+cc_define_builtin_types(CcParser* p){
+    Allocator al = cc_allocator(p);
+    CcTargetConfig t = p->cpp.target;
+    Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
+    if(!va_list_name) return CC_OOM_ERROR;
+    CcQualType va_list_type;
+
+    switch(t.target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS: {
+            // struct __va_list_tag { unsigned gp_offset; unsigned fp_offset;
+            //                       void *overflow_arg_area; void *reg_save_area; };
+            Atom tag_name = AT_atomize(p->cpp.at, "__va_list_tag", 13);
+            if(!tag_name) return CC_OOM_ERROR;
+
+            Atom gp_name = AT_atomize(p->cpp.at, "gp_offset", 9);
+            Atom fp_name = AT_atomize(p->cpp.at, "fp_offset", 9);
+            Atom oa_name = AT_atomize(p->cpp.at, "overflow_arg_area", 17);
+            Atom rs_name = AT_atomize(p->cpp.at, "reg_save_area", 13);
+            if(!gp_name || !fp_name || !oa_name || !rs_name) return CC_OOM_ERROR;
+
+            CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
+            if(!void_ptr) return CC_OOM_ERROR;
+            CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
+
+            CcField* fields = Allocator_alloc(al, 4 * sizeof(CcField));
+            if(!fields) return CC_OOM_ERROR;
+            fields[0] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = gp_name};
+            fields[1] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = fp_name};
+            fields[2] = (CcField){.type = void_ptr_type, .name = oa_name};
+            fields[3] = (CcField){.type = void_ptr_type, .name = rs_name};
+
+            CcStruct* s = Allocator_zalloc(al, sizeof *s);
+            if(!s) return CC_OOM_ERROR;
+            *s = (CcStruct){
+                .kind = CC_STRUCT,
+                .name = tag_name,
+                .field_count = 4,
+                .fields = fields,
+            };
+            int err = cc_compute_struct_layout(p, s, 0);
+            if(err) return err;
+            err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
+            if(err) return CC_OOM_ERROR;
+
+            // typedef __va_list_tag __builtin_va_list[1];
+            CcQualType struct_type = {.bits = (uintptr_t)s};
+            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0);
+            if(!arr) return CC_OOM_ERROR;
+            va_list_type = (CcQualType){.bits = (uintptr_t)arr};
+            break;
+        }
+        default: {
+            // typedef void *__builtin_va_list;
+            CcPointer* ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
+            if(!ptr) return CC_OOM_ERROR;
+            va_list_type = (CcQualType){.bits = (uintptr_t)ptr};
+            break;
+        }
+    }
+    int err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
+    if(err) return CC_OOM_ERROR;
+
+    // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
+    Atom int128_name = AT_atomize(p->cpp.at, "__int128_t", 10);
+    Atom uint128_name = AT_atomize(p->cpp.at, "__uint128_t", 11);
+    if(!int128_name || !uint128_name) return CC_OOM_ERROR;
+    err = cc_scope_insert_typedef(al, &p->global, int128_name, ccqt_basic(CCBT_int128));
+    if(err) return CC_OOM_ERROR;
+    err = cc_scope_insert_typedef(al, &p->global, uint128_name, ccqt_basic(CCBT_unsigned_int128));
+    if(err) return CC_OOM_ERROR;
     return 0;
 }
 

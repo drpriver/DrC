@@ -2171,6 +2171,8 @@ TestFunction(test_parse_decls){
         if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto finally;}
         err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto finally;}
+        err = cc_define_builtin_types(&cc);
+        if(err) {TestPrintf("%s:%d: failed to define builtin types", __FILE__, c->line); goto finally;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto finally;}
         err = cc_parse_all(&cc);
@@ -2715,6 +2717,8 @@ TestFunction(test_parse_errors){
         if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto fin;}
         err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto fin;}
+        err = cc_define_builtin_types(&cc);
+        if(err) {TestPrintf("%s:%d: failed to define builtin types", __FILE__, c->line); goto fin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
@@ -3150,6 +3154,8 @@ TestFunction(test_struct_layout){
         if(err) {TestReport("failed to cache"); goto fin;}
         err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestReport("failed to define builtins"); goto fin;}
+        err = cc_define_builtin_types(&cc);
+        if(err) {TestReport("failed to define builtin types"); goto fin;}
         err = cc_register_pragmas(&cc);
         if(err) {TestReport("failed to register pragmas"); goto fin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
@@ -3419,6 +3425,8 @@ TestFunction(test_bitfield_abi){
         if(err) {TestReport("failed to cache"); goto bffin;}
         err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestReport("failed to define builtins"); goto bffin;}
+        err = cc_define_builtin_types(&cc);
+        if(err) {TestReport("failed to define builtin types"); goto bffin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto bffin;}
         err = cc_parse_all(&cc);
