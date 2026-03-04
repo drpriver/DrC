@@ -106,7 +106,7 @@ enum {
 #pragma clang assume_nonnull begin
 #endif
 
-static int cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index);
+static int cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value);
 
 typedef struct CcSpecifier CcSpecifier;
 struct CcSpecifier {
@@ -3304,6 +3304,20 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
 
 static
 int
+cc_init_apply_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, CcExpr* value, SrcLoc loc, Marray(CcInitEntry)* buf){
+    CcQualType unqual = field_type;
+    unqual.is_const = 0; unqual.is_volatile = 0; unqual.is_atomic = 0;
+    CcTypeKind ftk = ccqt_kind(unqual);
+    if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY){
+        if(cc_implicit_convertible(value->type, unqual))
+            return cc_push_scalar(p, value, unqual, field_loc, buf);
+        return cc_parse_init(p, field_type, field_loc.byte_offset, 0, loc, buf, NULL, value);
+    }
+    return cc_push_scalar(p, value, field_type, field_loc, buf);
+}
+
+static
+int
 cc_parse_init_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, _Bool positional, SrcLoc loc, Marray(CcInitEntry)* buf){
     int err;
     CcTypeKind ftk = ccqt_kind(field_type);
@@ -3313,7 +3327,7 @@ cc_parse_init_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, _B
         if(err) return err;
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
             cc_next_token(p, &peek); // consume '{'
-            return cc_parse_init(p, field_type, field_loc.byte_offset, 1, peek.loc, buf, NULL);
+            return cc_parse_init(p, field_type, field_loc.byte_offset, 1, peek.loc, buf, NULL, NULL);
         }
         // String literal initializing a char array (brace elision)
         if(ftk == CC_ARRAY && peek.type == CC_STRING_LITERAL){
@@ -3331,13 +3345,14 @@ cc_parse_init_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, _B
                 return 0;
             }
         }
-        if(positional)
-            return cc_parse_init(p, field_type, field_loc.byte_offset, 0, loc, buf, NULL);
-        // From designator: parse expression for whole aggregate assign
-        CcExpr* v;
-        err = cc_parse_assignment_expr(p, &v);
-        if(err) return err;
-        return cc_push_scalar(p, v, field_type, field_loc, buf);
+        {
+            CcExpr* v;
+            err = cc_parse_assignment_expr(p, &v);
+            if(err) return err;
+            if(positional)
+                return cc_init_apply_value(p, field_type, field_loc, v, loc, buf);
+            return cc_push_scalar(p, v, field_type, field_loc, buf);
+        }
     }
     // Scalar
     CcExpr* v;
@@ -3369,7 +3384,7 @@ cc_is_parent_token(CcParser* p, _Bool* out){
 
 static
 int
-cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index){
+cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value){
     int err;
     CcQualType unqual = target;
     unqual.is_const = 0;
@@ -3383,6 +3398,32 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
             return cc_error(p, loc, "initializer for incomplete struct type");
         uint32_t fi = 0;
         for(;;){
+            if(first_value){
+                CcExpr* fv = first_value;
+                while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+                    fi++;
+                if(fi >= s->field_count) break;
+                CcField* fld = &s->fields[fi];
+                CcFieldLoc fl = {
+                    .byte_offset = base_offset + fld->offset,
+                    .bit_offset = fld->is_bitfield ? fld->bitoffset : 0,
+                    .bit_width = fld->is_bitfield ? fld->bitwidth : 0,
+                };
+                err = cc_init_apply_value(p, fld->type, fl, fv, loc, buf);
+                if(err) return err;
+                first_value = NULL;
+                fi++;
+                while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+                    fi++;
+                if(fi >= s->field_count) break;
+                CcToken peek;
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
+                    cc_next_token(p, &peek);
+                else break;
+                continue;
+            }
             CcToken peek;
             err = cc_peek(p, &peek);
             if(err) return err;
@@ -3522,13 +3563,19 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
             }
         }
         if(!field)
-            return cc_error(p, peek.loc, "initializer for empty union");
+            return cc_error(p, loc, "initializer for empty union");
         CcFieldLoc fl = {
             .byte_offset = base_offset + field->offset,
             .bit_offset = field->is_bitfield ? field->bitoffset : 0,
             .bit_width = field->is_bitfield ? field->bitwidth : 0,
         };
-        err = cc_parse_init_value(p, field->type, fl, 1, loc, buf);
+        if(first_value){
+            CcExpr* fv = first_value;
+            first_value = NULL;
+            err = cc_init_apply_value(p, field->type, fl, fv, loc, buf);
+        }
+        else
+            err = cc_parse_init_value(p, field->type, fl, 1, loc, buf);
         if(err) return err;
         if(braced){
             err = cc_init_list_comma(p);
@@ -3545,6 +3592,24 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
         if(err) return err;
         uint32_t ai = 0, max_ai = 0;
         for(;;){
+            if(first_value){
+                CcExpr* fv = first_value;
+                if(!arr->is_incomplete && ai >= arr->length) break;
+                CcFieldLoc fl = {.byte_offset = base_offset + ai * elem_size};
+                err = cc_init_apply_value(p, elem, fl, fv, loc, buf);
+                if(err) return err;
+                first_value = NULL;
+                ai++;
+                if(ai > max_ai) max_ai = ai;
+                if(!arr->is_incomplete && ai >= arr->length) break;
+                CcToken peek;
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
+                    cc_next_token(p, &peek);
+                else break;
+                continue;
+            }
             CcToken peek;
             err = cc_peek(p, &peek);
             if(err) return err;
@@ -3750,7 +3815,7 @@ cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType targ
     else {
         Marray(CcInitEntry) entries = {0};
         uint32_t max_index = 0;
-        err = cc_parse_init(p, target_type, 0, 1, loc, &entries, &max_index);
+        err = cc_parse_init(p, target_type, 0, 1, loc, &entries, &max_index, NULL);
         if(err) return err;
         list = Allocator_alloc(cc_allocator(p), sizeof(CcInitList) + entries.count * sizeof(CcInitEntry));
         if(!list) return CC_OOM_ERROR;

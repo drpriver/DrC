@@ -1816,6 +1816,81 @@ TestFunction(test_parse_decls){
                 { SV("s"), SV("struct S"), SV("{@0 = (short)0, @2 = \"abc\"}") },
             },
         },
+        {
+            "positional struct var in init", __LINE__,
+            SV("struct T { int a; int b; };\n"
+               "struct S { int x; struct T t; };\n"
+               "struct T v = {10, 20};\n"
+               "struct S s = { 1, v };\n"),
+            .vars = {
+                { SV("v"), SV("struct T"), SV("{@0 = 10, @4 = 20}") },
+                { SV("s"), SV("struct S"), SV("{@0 = 1, @4 = v}") },
+            },
+        },
+        {
+            "compound literal in array init", __LINE__,
+            SV("struct SV { unsigned long length; const char *text; };\n"
+               "struct SV arr[] = { (struct SV){3, \"abc\"}, (struct SV){2, \"de\"} };\n"),
+            .vars = {
+                { SV("arr"), SV("struct SV[2]") },
+            },
+        },
+        {
+            "parenthesized compound literal in array init", __LINE__,
+            SV("struct SV { unsigned long length; const char *text; };\n"
+               "struct SV arr[] = { ((struct SV){3, \"abc\"}), ((struct SV){2, \"de\"}) };\n"),
+            .vars = {
+                { SV("arr"), SV("struct SV[2]") },
+            },
+        },
+        {
+            "compound literal in struct init", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "struct Outer o = { 1, (struct Inner){2, 3} };\n"),
+            .vars = {
+                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = (struct Inner){@0 = 2, @4 = 3}}") },
+            },
+        },
+        {
+            "struct var as first aggregate field", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { struct Inner inner; int c; };\n"
+               "struct Inner v = {10, 20};\n"
+               "struct Outer o = { v, 3 };\n"),
+            .vars = {
+                { SV("v"), SV("struct Inner"), SV("{@0 = 10, @4 = 20}") },
+                { SV("o"), SV("struct Outer"), SV("{@0 = v, @8 = 3}") },
+            },
+        },
+        {
+            "deeply nested brace elision", __LINE__,
+            SV("struct A { int x; };\n"
+               "struct B { struct A a; int y; };\n"
+               "struct C { struct B b; int z; };\n"
+               "struct C c = { 1, 2, 3 };\n"),
+            .vars = {
+                { SV("c"), SV("struct C"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "brace elision with nested struct", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "struct Outer o = { 1, 2, 3 };\n"),
+            .vars = {
+                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
+        {
+            "braced nested struct init", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "struct Outer o = { 1, {2, 3} };\n"),
+            .vars = {
+                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = 2, @8 = 3}") },
+            },
+        },
         // EXAMPLE 12: variable reference in initializer + last-write-wins
         {
             "std ex12: struct init with designated", __LINE__,

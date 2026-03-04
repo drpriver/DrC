@@ -3755,6 +3755,8 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         if(err) return err; \
     } while(0)
 
+    DEFINT("__DVM_CC__", 1);
+
     // __GNUC__ compatibility
     DEFINT("__GNUC__", 4);
     DEFINT("__GNUC_MINOR__", 2);
