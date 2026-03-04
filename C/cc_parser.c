@@ -3315,6 +3315,22 @@ cc_parse_init_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, _B
             cc_next_token(p, &peek); // consume '{'
             return cc_parse_init(p, field_type, field_loc.byte_offset, 1, peek.loc, buf, NULL);
         }
+        // String literal initializing a char array (brace elision)
+        if(ftk == CC_ARRAY && peek.type == CC_STRING_LITERAL){
+            CcArray* arr = ccqt_as_array(field_type);
+            CcBasicTypeKind ek = ccqt_is_basic(arr->element) ? arr->element.basic.kind : CCBT_COUNT;
+            if(ek == CCBT_char || ek == CCBT_signed_char || ek == CCBT_unsigned_char){
+                CcExpr* v;
+                err = cc_parse_assignment_expr(p, &v);
+                if(err) return err;
+                if(!arr->is_incomplete && arr->length < v->str.length - 1)
+                    return cc_error(p, v->loc, "initializer string too long for array");
+                err = ma_push(CcInitEntry)(buf, cc_allocator(p),
+                    ((CcInitEntry){.field_loc = field_loc, .value = v}));
+                if(err) return CC_OOM_ERROR;
+                return 0;
+            }
+        }
         if(positional)
             return cc_parse_init(p, field_type, field_loc.byte_offset, 0, loc, buf, NULL);
         // From designator: parse expression for whole aggregate assign

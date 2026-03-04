@@ -1808,6 +1808,14 @@ TestFunction(test_parse_decls){
                 { SV("t"), SV("char[3]"), SV("\"abc\"") },
             },
         },
+        {
+            "string literal in struct char array field", __LINE__,
+            SV("struct S { short temp; char pair[201]; };\n"
+               "struct S s = { 0, \"abc\" };\n"),
+            .vars = {
+                { SV("s"), SV("struct S"), SV("{@0 = (short)0, @2 = \"abc\"}") },
+            },
+        },
         // EXAMPLE 12: variable reference in initializer + last-write-wins
         {
             "std ex12: struct init with designated", __LINE__,
