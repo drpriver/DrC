@@ -144,7 +144,7 @@ struct CcField {
              bitoffset: 6, // bit offset within storage unit
              is_method: 1,
              is_bitfield: 1,
-             _padding: 17;
+             alignment: 17; // from _Alignas, 0 means default
     SrcLoc loc;
 };
 

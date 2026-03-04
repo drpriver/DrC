@@ -407,6 +407,46 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "_Alignas on decl", __LINE__,
+            SV("_Alignas(16) int x;\n"
+               "_Alignas(32) char buf[64];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("buf"), SV("char[64]") },
+            },
+        },
+        {
+            "_Alignof _Alignas decl", __LINE__,
+            SV("_Alignas(16) int x;\n"
+               "int a[_Alignof x];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
+            "_Alignas with type arg", __LINE__,
+            SV("_Alignas(double) int x;\n"
+               "int a[_Alignof x];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int[8]") },
+            },
+        },
+        {
+            "prefix aligned attribute on decl", __LINE__,
+            SV("__attribute__((aligned(16))) int x;\n"
+               "int a[_Alignof x];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
             "typeof sizeof", __LINE__,
             SV("typeof(sizeof(int)) a;\n"),
             .vars = {
@@ -2950,9 +2990,20 @@ TestFunction(test_struct_layout){
             SV("_Alignas(32) struct AS { int x; };\n"
                "struct AS as;\n"),
             SV("AS"), 0,
-            .size = 32, .alignment = 32,
+            .size = 4, .alignment = 4,
             .fields = {
                 { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "alignas on struct field", __LINE__,
+            SV("struct AF { char a; _Alignas(16) int b; };\n"
+               "struct AF af;\n"),
+            SV("AF"), 0,
+            .size = 32, .alignment = 16,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 16 },
             },
         },
         {

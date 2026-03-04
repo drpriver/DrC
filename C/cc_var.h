@@ -21,7 +21,8 @@ struct CcVariable {
     uint32_t extern_: 1,
              static_: 1,
              tenative: 1,
-             _padding: 29;
+             _padding: 13,
+             alignment: 16; // 0 means default alignment
     CcExpr* _Nullable initializer;
     void* _Nullable interp_val; // runtime storage for globals (sizeof(type) bytes)
 };

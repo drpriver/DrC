@@ -164,6 +164,7 @@ struct CcDeclBase {
     CcQualType type;
     CcSpecifier spec;
     SrcLoc loc;
+    uint16_t alignment; // from _Alignas or prefix __attribute__((aligned))
 };
 
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
@@ -1423,8 +1424,15 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_prefix(p, &operand);
                 if(err) return err;
                 CcExpr* al;
-                err = cc_alignof_as_expr(p, operand->type, tok.loc, &al);
-                if(err) return err;
+                if(operand->kind == CC_EXPR_VARIABLE && operand->var->alignment){
+                    al = cc_value_expr(p, tok.loc, ccqt_basic(cc_target(p)->size_type));
+                    if(!al) return CC_OOM_ERROR;
+                    al->uinteger = operand->var->alignment;
+                }
+                else {
+                    err = cc_alignof_as_expr(p, operand->type, tok.loc, &al);
+                    if(err) return err;
+                }
                 *out = al;
                 return 0;
             }
@@ -2810,6 +2818,8 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
         if(err) return err;
         err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
         if(err) return err;
+        if(f->alignment > field_align)
+            field_align = f->alignment;
         if(s->packed)
             field_align = 1;
         else if(pack_value > 0 && field_align > pack_value)
@@ -2912,6 +2922,8 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         uint32_t field_align;
         err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
         if(err) return err;
+        if(f->alignment > field_align)
+            field_align = f->alignment;
         if(pack_value > 0 && field_align > pack_value)
             field_align = pack_value;
         f->offset = 0; // all union fields start at offset 0
@@ -4065,6 +4077,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     .name = member_name,
                     .bitwidth = (uint32_t)bitwidth,
                     .is_bitfield = is_bitfield,
+                    .alignment = member_base.alignment,
                     .loc = tok.loc,
                 }));
                 if(err){ err = CC_OOM_ERROR; goto struct_err; }
@@ -4657,10 +4670,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         if(align_val > 0){
-                            if(!p->attributes.has_aligned || align_val > p->attributes.aligned){
-                                p->attributes.aligned = (uint16_t)align_val;
-                                p->attributes.has_aligned = 1;
-                            }
+                            if(align_val > base->alignment)
+                                base->alignment = (uint16_t)align_val;
                         }
                         continue;
                     }
@@ -4762,6 +4773,12 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(err) return err;
                         err = cc_parse_attributes(p, &p->attributes);
                         if(err) return err;
+                        if(p->attributes.has_aligned){
+                            if(p->attributes.aligned > base->alignment)
+                                base->alignment = p->attributes.aligned;
+                            p->attributes.has_aligned = 0;
+                            p->attributes.aligned = 0;
+                        }
                         continue;
                     }
                     case CC_typeof_unqual:
@@ -5603,6 +5620,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 .mangle = asm_label,
                 .loc = tok.loc,
                 .type = type,
+                .alignment = declbase->alignment,
                 .extern_ = declbase->spec.sp_extern,
                 .static_ = declbase->spec.sp_static,
                 .initializer = initializer,
