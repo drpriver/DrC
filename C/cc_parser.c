@@ -1625,6 +1625,13 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         break;
                     if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma)
                         return cc_error(p, sep.loc, "Expected ',' or ')' in function call");
+                    // Allow trailing comma as extension
+                    err = cc_peek(p, &sep);
+                    if(err) return err;
+                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen){
+                        cc_next_token(p, &sep);
+                        break;
+                    }
                 }
                 // Resolve function type
                 CcQualType ct = operand->type;

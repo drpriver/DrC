@@ -2037,6 +2037,17 @@ TestFunction(test_parse_decls){
                 { SV("bar"), SV("void(int)"), .mangle = SV("_bar") },
             },
         },
+        {
+            "trailing comma in call", __LINE__,
+            SV("int f(int x, int y);\n"
+               "int r = f(1, 2,);\n"),
+            .funcs = {
+                { SV("f"), SV("int(int, int)") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("f(1, 2)") },
+            },
+        },
         // --- Function call implicit cast tests ---
         {
             "call: int arg to long param", __LINE__,
