@@ -1857,6 +1857,7 @@ static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_unsigned_long_long] = "unsigned long long",
     [CCBT_int128]             = "__int128",
     [CCBT_unsigned_int128]    = "unsigned __int128",
+    [CCBT_float16]            = "_Float16",
     [CCBT_float]              = "float",
     [CCBT_double]             = "double",
     [CCBT_long_double]        = "long double",
@@ -2203,6 +2204,7 @@ cc_eval_expr(CcExpr* e){
                     case CCBT_long: case CCBT_long_long:
                         return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
                     case CCBT_int128: case CCBT_unsigned_int128:
+                    case CCBT_float16:
                     case CCBT_float_complex: case CCBT_double_complex:
                     case CCBT_long_double_complex:
                     case CCBT_void: case CCBT_nullptr_t:
@@ -4713,10 +4715,28 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         spec->sp_constexpr = 1;
                         continue;
                     case CC__Float16:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_float16);
+                        continue;
                     case CC__Float32:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_float);
+                        continue;
                     case CC__Float64:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_double);
+                        continue;
                     case CC__Float128:
-                        return cc_unimplemented(p, tok.loc, "_FloatNN parsing in declaration");
+                        return cc_unimplemented(p, tok.loc, "_Float128 parsing in declaration");
                     case CC__Imaginary:
                         return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
                     case CC__Noreturn:

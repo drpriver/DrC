@@ -66,6 +66,7 @@ cctype_to_ffi_type(CcQualType t){
                 case CCBT_unsigned_long_long: return &ffi_type_uint64;
                 case CCBT_int128:             return &ffi_type_void; // FIXME: return error
                 case CCBT_unsigned_int128:    return &ffi_type_void; // FIXME: return error
+                case CCBT_float16:            return &ffi_type_void; // FIXME: return error
                 case CCBT_float:              return &ffi_type_float;
                 case CCBT_double:             return &ffi_type_double;
                 case CCBT_long_double:        return &ffi_type_longdouble;
