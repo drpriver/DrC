@@ -6018,6 +6018,9 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     return cc_error(p, tok.loc, "Expected ')' after asm label");
             }
         }
+        // trailing __attribute__ after asm label
+        err = cc_parse_attributes(p, &p->attributes);
+        if(err) return err;
         // postfix processing
         _Bool stop = 0;
         err = cc_next_token(p, &tok);
