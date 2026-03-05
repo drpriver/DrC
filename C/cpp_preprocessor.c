@@ -4012,7 +4012,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             macro->is_function_like = 1;
             cpp_cmacro_params(macro)[0] = c_param;
             CppToken* repl = cpp_cmacro_replacement(macro);
-            repl[0] = (CppToken){.type=CPP_IDENTIFIER, .param_idx=1};
+            repl[0] = (CppToken){.type=CPP_IDENTIFIER, .param_idx=1, .txt=SV("c")};
             if(c_macros[i].suffix){
                 const char* suff = c_macros[i].suffix;
                 repl[1] = (CppToken){.type=CPP_PUNCTUATOR, .txt=SV("##"), .punct='##'};
