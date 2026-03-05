@@ -5646,6 +5646,7 @@ cc_parse_statement(CcParser* p){
     }
     return cc_unimp(p, "parse statement");
 }
+
 static
 int
 cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
@@ -5923,9 +5924,8 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
     return 0;
 }
 
-// Walk a type built by cc_parse_declarator and re-intern all derived
-// type nodes so pointer equality works for type comparison.
-static CcQualType
+static
+CcQualType
 cc_intern_qualtype(CcParser* p, CcQualType t){
     uintptr_t quals = t.bits & 7;
     switch(ccqt_kind(t)){

@@ -18,6 +18,8 @@
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/MStringBuilder16.h"
 #include "../Drp/cmd_run.h"
+#include "../Drp/stringview.h"
+#include "../Drp/argument_parsing.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -53,6 +55,12 @@ ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
 static inline
 uint64_t
 ci_read_uint(const void* buf, uint32_t sz){
+    switch(sz){
+        case 1: return *(const uint8_t*)buf;
+        case 2: return *(const uint16_t*)buf;
+        case 4: return *(const uint32_t*)buf;
+        case 8: return *(const uint64_t*)buf;
+    }
     uint64_t v = 0;
     memcpy(&v, buf, sz);
     return v;
@@ -67,7 +75,6 @@ ci_read_int(const void* buf, uint32_t sz){
         case 4: return *(const int32_t*)buf;
         case 8: return *(const int64_t*)buf;
     }
-    // fallback
     uint64_t v = 0;
     memcpy(&v, buf, sz);
     return (int64_t)v;
@@ -1416,10 +1423,6 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         StringView pkg_name = {toks->txt.length-2, toks->txt.text+1};
         CmdBuilder cmd = {.allocator = scratch};
         cmd_prog(&cmd, LS("pkg-config"));
-        if(!cpp->env){
-            err = cpp_error(cpp, loc, "#pragma pkg_config: no environment available");
-            goto finally;
-        }
         cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
         if(cmd.errored){
             err = cpp_error(cpp, loc, "'pkg-config' not found in PATH");
@@ -1438,91 +1441,115 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         }
         size_t envp_size = 0;
         void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+        if(!envp) {
+            err = CI_OOM_ERROR;
+            goto finally;
+        }
         int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
         cmd_destroy(&cmd);
-        if(envp) Allocator_free(scratch, envp, envp_size);
+        Allocator_free(scratch, envp, envp_size);
         if(run_err){
             err = cpp_error(cpp, loc, "pkg-config failed for '%.*s'", (int)pkg_name.length, pkg_name.text);
             goto finally;
         }
-        // Parse the output: split on whitespace, handle flags
-        const char* p = output.text;
-        const char* end = output.text + output.length;
-        while(p < end){
-            // skip whitespace
-            while(p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
-                p++;
-            if(p >= end) break;
-            const char* tok_start = p;
-            while(p < end && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
-                p++;
-            StringView flag = {(size_t)(p - tok_start), tok_start};
-            if(flag.length >= 2 && flag.text[0] == '-'){
-                char c = flag.text[1];
-                StringView val = {flag.length - 2, flag.text + 2};
-                if(c == 'I' && val.length){
-                    Atom a = AT_atomize(ci->parser.cpp.at, val.text, val.length);
-                    if(!a){
-                        err = CI_OOM_ERROR;
-                        goto finally;
-                    }
-                    err = cpp_add_default_includea(cpp, &cpp->Ipaths, a);
-                    if(err) goto finally;
-                }
-                else if(c == 'L' && val.length){
-                    err = ci_append_lib_path(ci, val);
-                    if(err) goto finally;
-                }
-                else if(c == 'l' && val.length){
-                    err = ci_load_library(ci, val);
-                    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
-                        err = cpp_error(cpp, loc, "pkg-config: failed to load library '%.*s'", (int)val.length, val.text);
-                    if(err) goto finally;
-                }
-                else if(c == 'F' && val.length){
-                    Atom a = AT_atomize(ci->parser.cpp.at, val.text, val.length);
-                    if(!a){
-                        err = CI_OOM_ERROR;
-                        goto finally;
-                    }
-                    err = cpp_add_default_includea(cpp, &cpp->framework_paths, a);
-                    if(err) goto finally;
-                }
-                else if(c == 'D' && val.length){
-                    // Define macro: -Dfoo or -Dfoo=bar
-                    const char* eq = memchr(val.text, '=', val.length);
-                    if(eq){
-                        StringView mname = {(size_t)(eq - val.text), val.text};
-                        StringView mval = {val.length - mname.length - 1, eq + 1};
-                        CppToken valtok = {.type = CPP_NUMBER, .txt = {mval.length, mval.text}};
-                        err = cpp_define_obj_macro(cpp, mname, &valtok, 1);
-                    }
-                    else {
-                        CppToken onetok = {.type = CPP_NUMBER, .txt = {1, "1"}};
-                        err = cpp_define_obj_macro(cpp, val, &onetok, 1);
-                    }
-                    if(err) goto finally;
-                }
-                else if(flag.length >= 10 && memcmp(flag.text, "-framework", 10) == 0){
-                    // -framework Name (next token is the framework name)
-                    // skip whitespace to get next token
-                    while(p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
-                        p++;
-                    if(p >= end){
-                        err = cpp_error(cpp, loc, "pkg-config: -framework without a name");
-                        goto finally;
-                    }
-                    const char* fw_start = p;
-                    while(p < end && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
-                        p++;
-                    StringView fw_name = {(size_t)(p - fw_start), fw_start};
-                    err = ci_load_library(ci, fw_name);
-                    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
-                        err = cpp_error(cpp, loc, "pkg-config: failed to load framework '%.*s'", (int)fw_name.length, fw_name.text);
-                    if(err) goto finally;
-                }
-                // else: ignore other flags like -pthread
+        #if defined(__clang__) || defined(__GNUC__)
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wcast-qual"
+            #if !defined(__clang__)
+                #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+            #endif
+        #elif defined(_MSC_VER)
+            #pragma warning(push)
+            #pragma warning(disable: 4090)
+        #else
+        #endif
+        // The cast is safe: we own the buffer from cmd_run_capture.
+        char* cmdline = (char*)output.text;
+        #if defined(__clang__) || defined(__GNUC__)
+            #pragma GCC diagnostic pop
+        #elif defined(_MSC_VER)
+            #pragma warning(pop)
+        #endif
+        enum { MAX_PKG_FLAGS = 64 };
+        StringView pkg_I[MAX_PKG_FLAGS], pkg_L[MAX_PKG_FLAGS], pkg_l[MAX_PKG_FLAGS];
+        StringView pkg_F[MAX_PKG_FLAGS], pkg_D[MAX_PKG_FLAGS], pkg_fw[MAX_PKG_FLAGS];
+        size_t npkg_I=0, npkg_L=0, npkg_l=0, npkg_F=0, npkg_D=0, npkg_fw=0;
+        #define PKG_KW(flag_, name_) { \
+            .name = SV(flag_), \
+            .max_num = MAX_PKG_FLAGS, \
+            .one_at_a_time = 1, \
+            .space_sep_is_optional = 1, \
+            .dest = {.type = ARG_STRING, .pointer = name_}, \
+            .pnum_parsed = &n##name_, \
+        }
+        ArgToParse pkg_kwargs[] = {
+            PKG_KW("-I", pkg_I),
+            PKG_KW("-L", pkg_L),
+            PKG_KW("-l", pkg_l),
+            PKG_KW("-F", pkg_F),
+            PKG_KW("-D", pkg_D),
+            {
+                .name = SV("-framework"),
+                .max_num = MAX_PKG_FLAGS,
+                .one_at_a_time = 1,
+                .dest = {.type = ARG_STRING, .pointer = pkg_fw},
+                .pnum_parsed = &npkg_fw,
+            },
+        };
+        #undef PKG_KW
+        ArgParser pkg_parser = {
+            .keyword = {.args = pkg_kwargs, .count = arrlen(pkg_kwargs)},
+        };
+        enum ArgParseError ap_err = parse_args_cmdline(&pkg_parser, cmdline,
+            ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS
+            | ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL
+            | ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS);
+        if(ap_err){
+            err = cpp_error(cpp, loc, "pkg-config: failed to parse flags for '%.*s'", (int)pkg_name.length, pkg_name.text);
+            goto finally;
+        }
+        for(size_t i = 0; i < npkg_I; i++){
+            Atom a = AT_atomize(ci->parser.cpp.at, pkg_I[i].text, pkg_I[i].length);
+            if(!a){ err = CI_OOM_ERROR; goto finally; }
+            err = cpp_add_default_includea(cpp, &cpp->Ipaths, a);
+            if(err) goto finally;
+        }
+        for(size_t i = 0; i < npkg_L; i++){
+            err = ci_append_lib_path(ci, pkg_L[i]);
+            if(err) goto finally;
+        }
+        for(size_t i = 0; i < npkg_l; i++){
+            err = ci_load_library(ci, pkg_l[i]);
+            if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+                err = cpp_error(cpp, loc, "pkg-config: failed to load library '%.*s'", (int)pkg_l[i].length, pkg_l[i].text);
+            if(err) goto finally;
+        }
+        for(size_t i = 0; i < npkg_F; i++){
+            Atom a = AT_atomize(ci->parser.cpp.at, pkg_F[i].text, pkg_F[i].length);
+            if(!a){ err = CI_OOM_ERROR; goto finally; }
+            err = cpp_add_default_includea(cpp, &cpp->framework_paths, a);
+            if(err) goto finally;
+        }
+        for(size_t i = 0; i < npkg_D; i++){
+            StringView val = pkg_D[i];
+            const char* eq = memchr(val.text, '=', val.length);
+            if(eq){
+                StringView mname = {(size_t)(eq - val.text), val.text};
+                StringView mval = {val.length - mname.length - 1, eq + 1};
+                CppToken valtok = {.type = CPP_NUMBER, .txt = {mval.length, mval.text}};
+                err = cpp_define_obj_macro(cpp, mname, &valtok, 1);
             }
+            else {
+                CppToken onetok = {.type = CPP_NUMBER, .txt = {1, "1"}};
+                err = cpp_define_obj_macro(cpp, val, &onetok, 1);
+            }
+            if(err) goto finally;
+        }
+        for(size_t i = 0; i < npkg_fw; i++){
+            err = ci_load_library(ci, pkg_fw[i]);
+            if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+                err = cpp_error(cpp, loc, "pkg-config: failed to load framework '%.*s'", (int)pkg_fw[i].length, pkg_fw[i].text);
+            if(err) goto finally;
         }
     }
     finally:
@@ -1540,7 +1567,6 @@ static
 int
 ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
 #ifdef _WIN32
-    // No RTLD_DEFAULT on Windows — search all loaded libraries.
     // Try the exe module first, then each dlopen'd library.
     void* p = (void*)GetProcAddress(GetModuleHandleW(NULL), sym.text);
     if(!p){
@@ -1594,7 +1620,8 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
                 cmd_destroy(&cmd);
                 return err;
             }
-        } else {
+        }
+        else {
             cmd_aarg(&cmd, a);
         }
     }
