@@ -3,12 +3,20 @@
 //
 #include <string.h>
 #include <stddef.h>
+#ifdef _WIN32
+#include "../Drp/windowsheader.h"
+#else
 #include <dlfcn.h>
+#endif
 #include "ci_interp.h"
 #include "cc_errors.h"
 #include "cc_var.h"
 #include "cc_expr.h"
+#include "cc_target.h"
 #include "../Drp/Allocators/allocator.h"
+#include "../Drp/Allocators/arena_allocator.h"
+#include "../Drp/MStringBuilder.h"
+#include "../Drp/MStringBuilder16.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -18,11 +26,15 @@ enum {
     CI_OOM_ERROR = _cc_oom_error,
     CI_UNIMPLEMENTED_ERROR = _cc_unimplemented_error,
     CI_RUNTIME_ERROR = _cc_runtime_error,
+    CI_INVALID_VALUE_ERROR = _cc_invalid_value_error,
+    CI_LIBRARY_NOT_FOUND_ERROR = _cc_file_not_found_error,
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
 static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
+static const CcTargetConfig* ci_target(const CiInterpreter*);
+static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 
 static
 int
@@ -102,19 +114,18 @@ ci_var_storage(CiInterpreter* ci, CcVariable* var){
 static
 int
 ci_ensure_global_storage(CiInterpreter* ci, CcVariable* var){
+    int err;
     if(var->interp_val) return 0;
     if(var->extern_){
-        const char* sym = var->mangle ? var->mangle->data : var->name->data;
-        void* addr = dlsym(RTLD_DEFAULT, sym);
-        if(!addr && sym[0] == '_')
-            addr = dlsym(RTLD_DEFAULT, sym + 1);
-        if(!addr)
-            return ci_error(ci, var->loc, "extern variable '%s' not found: %s", sym, dlerror());
+        LongString sym = var->mangle? (LongString){var->mangle->length, var->mangle->data}:(LongString){var->name->length, var->name->data};
+        void* addr;
+        err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
+        if(err) return err;
         var->interp_val = addr;
         return 0;
     }
     uint32_t sz;
-    int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
+    err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
     if(err) return err;
     var->interp_val = Allocator_zalloc(ci_allocator(ci), sz);
     if(!var->interp_val) return CC_OOM_ERROR;
@@ -246,13 +257,13 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(err) return err;
         if(ccqt_kind(expr->type) == CC_ARRAY){
             if(sizeof(void*) > size)
-                return ci_error(ci, expr->loc, "cireter: result buffer too small");
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             const void* ptr = expr->text;
             memcpy(result, &ptr, sizeof ptr);
             return 0;
         }
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &expr->uinteger, sz);
         return 0;
     }
@@ -267,7 +278,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         // Array variables decay to pointer
         if(ccqt_kind(var_type) == CC_ARRAY){
             if(sizeof storage > size)
-                return ci_error(ci, expr->loc, "cireter: result buffer too small");
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             memcpy(result, &storage, sizeof storage);
             return 0;
         }
@@ -275,7 +286,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, var_type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, storage, sz);
         return 0;
     }
@@ -283,7 +294,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         CcFunc* func = expr->func;
         void (*fn)(void) = func->native_func;
         if(sizeof fn > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &fn, sizeof fn);
         return 0;
     }
@@ -301,7 +312,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         // Array-to-pointer decay: the value is already a pointer, just copy it.
         if(ccqt_kind(from) == CC_ARRAY){
             if(sizeof(void*) > size)
-                return ci_error(ci, expr->loc, "cireter: result buffer too small");
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             memcpy(result, &val, sizeof(void*));
             return 0;
         }
@@ -312,7 +323,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, to, expr->loc, &to_sz);
         if(err) return err;
         if(to_sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         _Bool from_is_float = ccqt_is_basic(from) && ccbt_is_float(from.basic.kind);
         _Bool to_is_float = ccqt_is_basic(to) && ccbt_is_float(to.basic.kind);
         if(from_is_float && to_is_float){
@@ -349,9 +360,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > lval_size)
-            return ci_error(ci, expr->loc, "cireter: assignment exceeds lvalue storage");
+            return ci_error(ci, expr->loc, "interpreter: assignment exceeds lvalue storage");
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         err = ci_interp_expr(ci, expr->values[0], lval, lval_size);
         if(err) return err;
         memcpy(result, lval, sz);
@@ -399,7 +410,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         int err = ci_interp_lvalue(ci, expr->value0, &lval, &lval_size);
         if(err) return err;
         if(sizeof lval > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &lval, sizeof lval);
         return 0;
     }
@@ -411,7 +422,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, ptr_val, sz);
         return 0;
     }
@@ -427,9 +438,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(f->offset + sz > base_size)
-            return ci_error(ci, expr->loc, "cireter: field access out of bounds");
+            return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, (char*)base + f->offset, sz);
         return 0;
     }
@@ -445,7 +456,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, (char*)ptr_val + f->offset, sz);
         return 0;
     }
@@ -458,7 +469,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, addr, sz);
         return 0;
     }
@@ -468,7 +479,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         err = ci_interp_expr(ci, expr->value0, &val, sizeof val);
         if(err) return err;
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
@@ -493,7 +504,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         err = ci_interp_expr(ci, expr->value0, &val, sizeof val);
         if(err) return err;
         uint64_t v = ~ci_read_uint(&val, sz);
@@ -512,7 +523,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
         if(err) return err;
         if(rsz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         ci_write_uint(result, rsz, v);
         return 0;
     }
@@ -528,9 +539,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > lval_size)
-            return ci_error(ci, expr->loc, "cireter: write exceeds lvalue storage");
+            return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
         _Bool is_pre = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_PREDEC);
         _Bool is_inc = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_POSTINC);
@@ -583,7 +594,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &result_sz);
         if(err) return err;
         if(result_sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         if(expr->kind == CC_EXPR_LOGAND){
             err = ci_interp_expr(ci, lhs, &lbuf, sizeof lbuf);
             if(err) return err;
@@ -796,9 +807,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > lval_size)
-            return ci_error(ci, expr->loc, "cireter: write exceeds lvalue storage");
+            return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         uint64_t rbuf = 0;
         uint32_t rsz;
         err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
@@ -847,16 +858,14 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         CcExpr* callee = expr->value0;
         uint32_t nargs = expr->call.nargs;
         if(callee->kind != CC_EXPR_FUNCTION)
-            return ci_error(ci, expr->loc, "indirect function calls not yet supported in cireter");
+            return ci_error(ci, expr->loc, "indirect function calls not yet supported in interpreter");
         CcFunc* func = callee->func;
         if(!func->native_func){
-            const char* sym = func->mangle ? func->mangle->data : func->name->data;
-            void* addr = dlsym(RTLD_DEFAULT, sym);
-            // On macOS, headers use __asm("_name") mangles but dlsym wants the unprefixed name
-            if(!addr && sym[0] == '_')
-                addr = dlsym(RTLD_DEFAULT, sym + 1);
-            if(!addr)
-                return ci_error(ci, expr->loc, "function '%s' not found: %s", sym, dlerror());
+            LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
+            void* addr;
+            int err;
+            err = ci_dlsym(ci, expr->loc, sym, "function", &addr);
+            if(err) return err;
             func->native_func = (void(*)(void))addr;
         }
         CcFunction* ftype = func->type;
@@ -924,7 +933,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
         if(err) return err;
         if(ret_sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &rval, ret_sz);
         return 0;
     }
@@ -933,7 +942,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return ci_error(ci, expr->loc, "cireter: result buffer too small");
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memset(result, 0, sz);
         CcInitList* il = expr->init_list;
         for(uint32_t i = 0; i < il->count; i++){
@@ -944,7 +953,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             if(err) return err;
             uint64_t off = e->field_loc.byte_offset;
             if(off + esz > sz)
-                return ci_error(ci, expr->loc, "cireter: init list entry out of bounds");
+                return ci_error(ci, expr->loc, "interpreter: init list entry out of bounds");
             if(esz <= sizeof(uint64_t)){
                 uint64_t val = 0;
                 err = ci_interp_expr(ci, e->value, &val, sizeof val);
@@ -971,7 +980,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         return 0;
     }
     default:
-        return ci_unimplemented(ci, expr->loc, "cireter: unsupported expression kind");
+        return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
     }
 }
 
@@ -1118,6 +1127,255 @@ ci_scratch_allocator(CiInterpreter* ci){
     return allocator_from_arena(&ci->parser.scratch_arena);
 }
 
+static
+int
+ci_append_lib_path(CiInterpreter* ci, StringView sv){
+    if(!sv.length) return CI_INVALID_VALUE_ERROR;
+    Atom a = AT_atomize(ci->parser.cpp.at, sv.text, sv.length);
+    if(!a) return CI_OOM_ERROR;
+    int err = AM_put(&ci->lib_paths, ci_allocator(ci), a, (void*)(uintptr_t)1);
+    if(err) return CI_OOM_ERROR;
+    return 0;
+}
+
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path;
+static
+int
+ci_register_pragmas(CiInterpreter*ci){
+    int err = 0;
+    err = cpp_register_pragma(&ci->parser.cpp, SV("lib"), ci_pragma_lib, ci);
+    if(err) return err;
+    err = cpp_register_pragma(&ci->parser.cpp, SV("lib_path"), ci_pragma_lib_path, ci);
+    return err;
+}
+
+static
+int
+ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
+    Atom a = AT_atomize(ci->parser.cpp.at, lib.text, lib.length);
+    if(!a) return CI_OOM_ERROR;
+    void* handle = AM_get(&ci->opened_libs, a);
+    if(handle) {*success = 1; return 0;}
+    #ifdef _WIN32
+    MStringBuilder16 sb = {.allocator = ci_scratch_allocator(ci)};
+    msb16_write_utf8(&sb, a->data, a->length);
+    msb16_nul_terminate(&sb);
+    if(sb.errored){
+        msb16_destroy(&sb);
+        return CI_OOM_ERROR;
+    }
+    LongStringUtf16 wlib = msb16_borrow_ls(&sb);
+    handle = LoadLibraryW((const wchar_t*)wlib.text);
+    msb16_destroy(&sb);
+    if(!handle) {*success = 0; return 0;}
+    #else
+    handle = dlopen(a->data, RTLD_GLOBAL | RTLD_LAZY);
+    if(!handle) {*success = 0; return 0;}
+    #endif
+    int err = AM_put(&ci->opened_libs, ci_allocator(ci), a, handle);
+    if(err) {
+        #ifdef _WIN32
+        FreeLibrary(handle);
+        #else
+        dlclose(handle);
+        #endif
+        return CI_OOM_ERROR;
+    }
+    *success = 1;
+    return 0;
+}
+
+static
+int
+ci_load_library(CiInterpreter* ci, StringView sv){
+    MStringBuilder sb = {.allocator=ci_scratch_allocator(ci)};
+    int err = 0;
+    _Bool success = 0;
+    StringView prefix = SV("lib");
+    StringView suffixes[2] = {{0}, {0}};
+    size_t nsuffixes = 0;
+    switch(ci_target(ci)->os){
+        case CC_OS_MACOS:
+            suffixes[nsuffixes++] = SV(".dylib");
+            suffixes[nsuffixes++] = SV(".so");
+            break;
+        case CC_OS_LINUX:
+        case CC_OS_TEST:
+            suffixes[nsuffixes++] = SV(".so");
+            break;
+        case CC_OS_WINDOWS:
+            prefix = SV("");
+            suffixes[nsuffixes++] = SV(".dll");
+            break;
+    }
+    // Search lib_paths for {prefix}{name}{suffix}
+    AtomMapItems items = AM_items(&ci->lib_paths);
+    for(size_t i = 0; i < items.count; i++){
+        if(!items.data[i].p) continue;
+        Atom path = items.data[i].atom;
+        for(size_t s = 0; s < nsuffixes; s++){
+            // Try {path}/{prefix}{name}{suffix}
+            msb_reset(&sb);
+            msb_write_str(&sb, path->data, path->length);
+            if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
+            msb_write_str(&sb, prefix.text, prefix.length);
+            msb_write_str(&sb, sv.text, sv.length);
+            msb_write_str(&sb, suffixes[s].text, suffixes[s].length);
+            msb_nul_terminate(&sb);
+            if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            if(err) goto finally;
+            if(success) goto finally;
+        }
+        // Try {path}/{name} verbatim
+        msb_reset(&sb);
+        msb_write_str(&sb, path->data, path->length);
+        if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
+        msb_write_str(&sb, sv.text, sv.length);
+        msb_nul_terminate(&sb);
+        if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        if(err) goto finally;
+        if(success) goto finally;
+    }
+    // Search framework paths for {path}/{name}.framework/{name} (macOS)
+    if(ci_target(ci)->os == CC_OS_MACOS){
+        for(size_t i = 0; !success && i < ci->parser.cpp.framework_paths.count; i++){
+            StringView fp = ci->parser.cpp.framework_paths.data[i];
+            msb_reset(&sb);
+            msb_write_str(&sb, fp.text, fp.length);
+            if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
+            msb_write_str(&sb, sv.text, sv.length);
+            msb_write_literal(&sb, ".framework/");
+            msb_write_str(&sb, sv.text, sv.length);
+            msb_nul_terminate(&sb);
+            if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            if(err) goto finally;
+            if(success) goto finally;
+        }
+    }
+    // Fallback: {prefix}{name}{suffix} (let system search handle it)
+    for(size_t s = 0; s < nsuffixes; s++){
+        msb_reset(&sb);
+        msb_write_str(&sb, prefix.text, prefix.length);
+        msb_write_str(&sb, sv.text, sv.length);
+        msb_write_str(&sb, suffixes[s].text, suffixes[s].length);
+        msb_nul_terminate(&sb);
+        if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        if(err) goto finally;
+        if(success) goto finally;
+    }
+    // Last resort: name verbatim (for absolute paths or full filenames)
+    {
+        msb_reset(&sb);
+        msb_write_str(&sb, sv.text, sv.length);
+        msb_nul_terminate(&sb);
+        if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        if(err) goto finally;
+        if(success) goto finally;
+    }
+    err = CI_LIBRARY_NOT_FOUND_ERROR;
+    finally:
+    msb_destroy(&sb);
+    return err;
+}
+
+static
+int
+ci_pragma_lib(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CiInterpreter* ci = ctx;
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CI_OOM_ERROR;
+    int err = 0;
+    err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err) goto finally;
+    toks = expanded->data;
+    ntoks = expanded->count;
+    while(ntoks && toks->type == CPP_WHITESPACE){
+        toks++;
+        ntoks--;
+    }
+    while(ntoks && toks[ntoks-1].type == CPP_WHITESPACE)
+        ntoks--;
+    if(!ntoks){
+        err = cpp_error(cpp, loc, "#pragma lib without any arguments");
+        goto finally;
+    }
+    if(toks->type != CPP_STRING){
+        err = cpp_error(cpp, loc, "#pragma lib requires a string literal library name");
+        goto finally;
+    }
+    StringView name = {toks->txt.length-2, toks->txt.text+1};
+    err = ci_load_library(ci, name);
+    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+        err = cpp_error(cpp, loc, "failed to load library '%.*s'", (int)name.length, name.text);
+    finally:
+    cpp_release_scratch(cpp, expanded);
+    return err;
+}
+static
+int
+ci_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CiInterpreter* ci = ctx;
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CI_OOM_ERROR;
+    int err = 0;
+    toks = expanded->data;
+    ntoks = expanded->count;
+    while(ntoks && toks->type == CPP_WHITESPACE){
+        toks++;
+        ntoks--;
+    }
+    while(ntoks && toks[ntoks-1].type == CPP_WHITESPACE)
+        ntoks--;
+    if(!ntoks){
+        err = cpp_error(cpp, loc, "#pragma lib_path without any arguments");
+        goto finally;
+    }
+    if(toks->type != CPP_STRING){
+        err = cpp_error(cpp, loc, "#pragma lib_path requires a string literal library name");
+        goto finally;
+    }
+    StringView name = {toks->txt.length-2, toks->txt.text+1};
+    err = ci_append_lib_path(ci, name);
+    finally:
+    cpp_release_scratch(cpp, expanded);
+    return err;
+}
+static
+const CcTargetConfig*
+ci_target(const CiInterpreter* ci){
+    return &ci->parser.cpp.target;
+}
+static
+int
+ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
+#ifdef _WIN32
+    // No RTLD_DEFAULT on Windows — search all loaded libraries.
+    // Try the exe module first, then each dlopen'd library.
+    void* p = (void*)GetProcAddress(GetModuleHandleW(NULL), sym.text);
+    if(!p){
+        AtomMapItems items = AM_items(&ci->opened_libs);
+        for(size_t i = 0; !p && i < items.count; i++){
+            if(!items.data[i].p) continue;
+            p = (void*)GetProcAddress(items.data[i].p, sym.text);
+        }
+    }
+    if(!p) return ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+    *out = p;
+    return 0;
+#else
+    void* p = dlsym(RTLD_DEFAULT, sym.text);
+    if(!p && sym.text[0] == '_')
+        p = dlsym(RTLD_DEFAULT, sym.text+1);
+    if(!p) return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
+    *out = p;
+    return 0;
+#endif
+}
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

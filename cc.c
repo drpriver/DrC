@@ -23,154 +23,11 @@
 #include "C/native_call.h"
 #include "Drp/dre.h"
 #include "C/ci_interp.h"
-#include <dlfcn.h>
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
-static Marray(StringView) lib_paths;
-
-static
-int
-cc_lib_path_appender(ArgToParse* ap, const void* arg){
-    (void)ap;
-    const StringView* sv = arg;
-    return ma_push(StringView)(&lib_paths, MALLOCATOR, *sv);
-}
-
-static
-int
-cc_lib_appender(ArgToParse* ap, const void* arg){
-    (void)ap;
-    const StringView* sv = arg;
-    char buf[1024];
-    void* handle = NULL;
-    // Search lib_paths
-    for(size_t j = 0; !handle && j < lib_paths.count; j++){
-        StringView lp = lib_paths.data[j];
-#ifdef __APPLE__
-        int n = snprintf(buf, sizeof buf, "%.*s/lib%.*s.dylib", (int)lp.length, lp.text, (int)sv->length, sv->text);
-#else
-        int n = snprintf(buf, sizeof buf, "%.*s/lib%.*s.so", (int)lp.length, lp.text, (int)sv->length, sv->text);
-#endif
-        if(n > 0 && (size_t)n < sizeof buf)
-            handle = dlopen(buf, RTLD_GLOBAL | RTLD_LAZY);
-    }
-    if(!handle){
-#ifdef __APPLE__
-        snprintf(buf, sizeof buf, "lib%.*s.dylib", (int)sv->length, sv->text);
-#else
-        snprintf(buf, sizeof buf, "lib%.*s.so", (int)sv->length, sv->text);
-#endif
-        handle = dlopen(buf, RTLD_GLOBAL | RTLD_LAZY);
-    }
-    if(!handle){
-        snprintf(buf, sizeof buf, "%.*s", (int)sv->length, sv->text);
-        handle = dlopen(buf, RTLD_GLOBAL | RTLD_LAZY);
-    }
-    if(!handle){
-        fprintf(stderr, "error: failed to load library '%.*s': %s\n", (int)sv->length, sv->text, dlerror());
-        return ARGPARSE_CONVERSION_ERROR;
-    }
-    return 0;
-}
-
-static
-int
-cc_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
-    (void)ctx;
-    CppTokens* expanded = cpp_get_scratch(cpp);
-    if(!expanded) return _cc_oom_error;
-    int err = cpp_expand_argument(cpp, toks, ntoks, expanded);
-    if(err){ cpp_release_scratch(cpp, expanded); return err; }
-    const CppToken* etoks = expanded->data;
-    size_t en = expanded->count;
-    size_t i = 0;
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
-    if(i >= en || etoks[i].type != CPP_STRING){
-        cpp_release_scratch(cpp, expanded);
-        return cpp_error(cpp, loc, "#pragma lib_path requires a string literal path");
-    }
-    CppToken strtok = etoks[i];
-    StringView path = {strtok.txt.length - 2, strtok.txt.text + 1};
-    err = ma_push(StringView)(&lib_paths, MALLOCATOR, path);
-    cpp_release_scratch(cpp, expanded);
-    if(err) return _cc_oom_error;
-    return 0;
-}
-
-static
-int
-cc_try_dlopen(const char* path){
-    void* handle = dlopen(path, RTLD_GLOBAL | RTLD_LAZY);
-    return handle != NULL;
-}
-
-static
-int
-cc_pragma_lib(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
-    CcParser* p = ctx;
-    CppTokens* expanded = cpp_get_scratch(cpp);
-    if(!expanded) return _cc_oom_error;
-    int err = cpp_expand_argument(cpp, toks, ntoks, expanded);
-    if(err){ cpp_release_scratch(cpp, expanded); return err; }
-    const CppToken* etoks = expanded->data;
-    size_t en = expanded->count;
-    size_t i = 0;
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
-    if(i >= en || etoks[i].type != CPP_STRING){
-        cpp_release_scratch(cpp, expanded);
-        return cpp_error(cpp, loc, "#pragma lib requires a string literal library name");
-    }
-    CppToken strtok = etoks[i];
-    cpp_release_scratch(cpp, expanded);
-    // Extract name (strip quotes)
-    StringView name = {strtok.txt.length - 2, strtok.txt.text + 1};
-    char buf[1024];
-    _Bool loaded = 0;
-    // Search lib_paths
-    for(size_t j = 0; !loaded && j < lib_paths.count; j++){
-        StringView lp = lib_paths.data[j];
-#ifdef __APPLE__
-        int n = snprintf(buf, sizeof buf, "%.*s/lib%.*s.dylib", (int)lp.length, lp.text, (int)name.length, name.text);
-#else
-        int n = snprintf(buf, sizeof buf, "%.*s/lib%.*s.so", (int)lp.length, lp.text, (int)name.length, name.text);
-#endif
-        if(n > 0 && (size_t)n < sizeof buf)
-            loaded = cc_try_dlopen(buf);
-    }
-    // Search framework paths (macOS)
-#ifdef __APPLE__
-    if(!loaded && p){
-        for(size_t j = 0; !loaded && j < p->cpp.framework_paths.count; j++){
-            StringView fp = p->cpp.framework_paths.data[j];
-            int n = snprintf(buf, sizeof buf, "%.*s/%.*s.framework/%.*s",
-                (int)fp.length, fp.text, (int)name.length, name.text, (int)name.length, name.text);
-            if(n > 0 && (size_t)n < sizeof buf)
-                loaded = cc_try_dlopen(buf);
-        }
-    }
-#endif
-    // Fallback: let dlopen search system paths
-    if(!loaded){
-#ifdef __APPLE__
-        snprintf(buf, sizeof buf, "lib%.*s.dylib", (int)name.length, name.text);
-#else
-        snprintf(buf, sizeof buf, "lib%.*s.so", (int)name.length, name.text);
-#endif
-        loaded = cc_try_dlopen(buf);
-    }
-    // Last resort: try the name verbatim
-    if(!loaded){
-        snprintf(buf, sizeof buf, "%.*s", (int)name.length, name.text);
-        loaded = cc_try_dlopen(buf);
-    }
-    if(!loaded){
-        return cpp_error(cpp, loc, "failed to load library '%.*s': %s", (int)name.length, name.text, dlerror());
-    }
-    return 0;
-}
 
 int main(int argc, char** argv, char** envp){
     Logger* logger = std_logger();
@@ -198,6 +55,15 @@ int main(int argc, char** argv, char** envp){
         },
         .current_frame = &interp.top_frame,
     };
+    Marray(StringView) libs = {0}, lib_paths = {0};
+    ArgParseUserDefinedType tpath = {
+        .type_name = SV("path"),
+        .user_data = &interp.parser.cpp,
+    };
+    ArgParseUserDefinedType tlib = {
+        .type_name = SV("lib"),
+        .user_data = &interp.parser.cpp,
+    };
     const char* filename = NULL;
     ArgToParse pos_args[] = {
         {
@@ -209,8 +75,6 @@ int main(int argc, char** argv, char** envp){
     };
     StringView output = {0};
     _Bool repl = 0;
-    static ArgParseUserDefinedType lib_path_type = {.type_name = SV("path")};
-    static ArgParseUserDefinedType lib_type = {.type_name = SV("lib")};
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
@@ -225,8 +89,8 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-L"),
-            .dest = {.type = ARG_USER_DEFINED, .pointer = &lib_paths, .user_pointer = &lib_path_type},
-            .append_proc = cc_lib_path_appender,
+            .dest = cpp_ma_sv_dest(&tpath, &lib_paths),
+            .append_proc = ma_sv_appender,
             .help = "Extra library search paths.",
             .max_num = 1000,
             .one_at_a_time = 1,
@@ -234,8 +98,8 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-l"),
-            .dest = {.type = ARG_USER_DEFINED, .pointer = &lib_paths, .user_pointer = &lib_type},
-            .append_proc = cc_lib_appender,
+            .dest = cpp_ma_sv_dest(&tlib, &libs),
+            .append_proc = ma_sv_appender,
             .help = "Link a shared library.",
             .max_num = 1000,
             .one_at_a_time = 1,
@@ -303,13 +167,26 @@ int main(int argc, char** argv, char** envp){
     if(err) return err;
     err = cc_define_builtin_types(&interp.parser);
     if(err) return err;
-    err = cpp_register_pragma(&interp.parser.cpp, SV("lib"), cc_pragma_lib, &interp.parser);
+    err = cc_register_pragmas(&interp.parser);
     if(err) return err;
-    err = cpp_register_pragma(&interp.parser.cpp, SV("lib_path"), cc_pragma_lib_path, NULL);
+    err = ci_register_pragmas(&interp);
     if(err) return err;
     if(!cpp_nostdinc)
         err = cpp_setup_default_includes(&interp.parser.cpp);
     if(err) return err;
+    for(size_t i = 0; i < lib_paths.count; i++){
+        StringView p = lib_paths.data[i];
+        err = ci_append_lib_path(&interp, p);
+        if(err) return err;
+    }
+    for(size_t i = 0; i < libs.count; i++){
+        StringView l = libs.data[i];
+        err = ci_load_library(&interp, l);
+        if(err){
+            log_error(logger, "Unable to load library '%s'", l.text);
+            return err;
+        }
+    }
     if(!filename && !repl){
         LongString txt;
         #ifdef _WIN32

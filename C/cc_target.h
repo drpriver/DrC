@@ -22,6 +22,21 @@ enum CcTarget TYPED_ENUM(int) {
 };
 TYPEDEF_ENUM(CcTarget, int);
 
+enum CcOs TYPED_ENUM(int){
+    CC_OS_LINUX,
+    CC_OS_MACOS,
+    CC_OS_WINDOWS,
+    CC_OS_TEST,
+};
+TYPEDEF_ENUM(CcOs, int);
+
+enum CcArch TYPED_ENUM(int){
+    CC_ARCH_x86_64,
+    CC_ARCH_ARM64,
+    CC_ARCH_TEST,
+};
+TYPEDEF_ENUM(CcArch, int);
+
 static const StringView cc_target_names[CC_TARGET_COUNT] = {
     [CC_TARGET_X86_64_LINUX]   = SV("x86_64-linux"),
     [CC_TARGET_AARCH64_LINUX]  = SV("aarch64-linux"),
@@ -42,6 +57,8 @@ TYPEDEF_ENUM(CcBitfieldABI, uint8_t);
 typedef struct CcTargetConfig CcTargetConfig;
 struct CcTargetConfig {
     CcTarget target;
+    CcOs os;
+    CcArch arch;
     uint8_t sizeof_[CCBT_COUNT];
     uint8_t alignof_[CCBT_COUNT];
     CcBitfieldABI bitfield_abi;
@@ -74,6 +91,8 @@ static inline CcTargetConfig
 cc_target_x86_64_linux(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_LINUX,
+        .os = CC_OS_LINUX,
+        .arch = CC_ARCH_x86_64,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,
@@ -162,6 +181,8 @@ static inline CcTargetConfig
 cc_target_aarch64_linux(void){
     return (CcTargetConfig){
         .target = CC_TARGET_AARCH64_LINUX,
+        .os = CC_OS_LINUX,
+        .arch = CC_ARCH_ARM64,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,
@@ -247,6 +268,8 @@ static inline CcTargetConfig
 cc_target_x86_64_macos(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_MACOS,
+        .os = CC_OS_MACOS,
+        .arch = CC_ARCH_x86_64,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,
@@ -334,6 +357,8 @@ static inline CcTargetConfig
 cc_target_aarch64_macos(void){
     return (CcTargetConfig){
         .target = CC_TARGET_AARCH64_MACOS,
+        .os = CC_OS_MACOS,
+        .arch = CC_ARCH_ARM64,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,
@@ -419,6 +444,8 @@ static inline CcTargetConfig
 cc_target_x86_64_windows(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_WINDOWS,
+        .os = CC_OS_WINDOWS,
+        .arch = CC_ARCH_x86_64,
         .bitfield_abi = CC_BITFIELD_MSVC,
         .sizeof_ = {
             [CCBT_void]                = 1,
@@ -505,6 +532,8 @@ static inline CcTargetConfig
 cc_target_test(void){
     return (CcTargetConfig){
         .target = CC_TARGET_TEST,
+        .os = CC_OS_TEST,
+        .arch = CC_ARCH_TEST,
         .sizeof_ = {
             [CCBT_void]                = 1,
             [CCBT_bool]                = 1,

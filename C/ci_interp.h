@@ -9,6 +9,10 @@
 #include "ci_interp.h"
 #include "cc_parser.h"
 #include "../Drp/pointer_map.h"
+#include "../Drp/stringview.h"
+#include "../Drp/atom_map.h"
+#include "../Drp/atom.h"
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -28,17 +32,22 @@ struct CiInterpreter {
     CcParser parser;
     CiInterpFrame top_frame;
     CiInterpFrame *current_frame;
+    AtomMap(void*) opened_libs;
+    AtomMap lib_paths;
 };
 
 // Execute one statement at current pc. Advances pc.
 // Returns 0 on success, >0 on error.
-static int ci_interp_step(CiInterpreter* p);
-
+static int ci_interp_step(CiInterpreter*);
 // Evaluate an expression, writing sizeof(expr->type) bytes into result.
-static int ci_interp_expr(CiInterpreter* p, CcExpr* expr, void* result, size_t size);
-
+static int ci_interp_expr(CiInterpreter*, CcExpr* expr, void* result, size_t size);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
-static int ci_interp_lvalue(CiInterpreter* p, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
+static int ci_interp_lvalue(CiInterpreter*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
+static int ci_append_lib_path(CiInterpreter*, StringView);
+static int ci_register_pragmas(CiInterpreter*);
+static int ci_load_library(CiInterpreter*, StringView);
+
+
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
