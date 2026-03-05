@@ -6319,6 +6319,7 @@ X(_Float128, _Float128) \
 X(_Float32x, _Float32x) \
 X(_Float64x, _Float64x) \
 X(__const__, const) \
+X(__alignof, alignof) \
 
 #define CKWS10(X) \
 X(_Imaginary, _Imaginary) \
@@ -6334,6 +6335,7 @@ X(__signed__, signed) \
 X(_Decimal128, _Decimal128) \
 X(__auto_type, __auto_type) \
 X(__attribute, __attribute__) \
+X(__alignof__, alignof) \
 
 #define CKWS12(X) \
 X(thread_local, thread_local) \
