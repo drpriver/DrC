@@ -6294,8 +6294,10 @@ int
 cc_define_builtin_types(CcParser* p){
     Allocator al = cc_allocator(p);
     CcTargetConfig t = p->cpp.target;
-    Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
+    Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", sizeof "__builtin_va_list"-1);
     if(!va_list_name) return CC_OOM_ERROR;
+    Atom gnu_va_list = AT_atomize(p->cpp.at, "__gnuc_va_list", sizeof "__gnuc_va_list" - 1);
+    if(!gnu_va_list) return CC_OOM_ERROR;
     CcQualType va_list_type;
 
     switch(t.target){
@@ -6303,13 +6305,13 @@ cc_define_builtin_types(CcParser* p){
         case CC_TARGET_X86_64_MACOS: {
             // struct __va_list_tag { unsigned gp_offset; unsigned fp_offset;
             //                       void *overflow_arg_area; void *reg_save_area; };
-            Atom tag_name = AT_atomize(p->cpp.at, "__va_list_tag", 13);
+            Atom tag_name = AT_atomize(p->cpp.at, "__va_list_tag", sizeof "__va_list_tag" -1);
             if(!tag_name) return CC_OOM_ERROR;
 
-            Atom gp_name = AT_atomize(p->cpp.at, "gp_offset", 9);
-            Atom fp_name = AT_atomize(p->cpp.at, "fp_offset", 9);
-            Atom oa_name = AT_atomize(p->cpp.at, "overflow_arg_area", 17);
-            Atom rs_name = AT_atomize(p->cpp.at, "reg_save_area", 13);
+            Atom gp_name = AT_atomize(p->cpp.at, "gp_offset", sizeof "gp_offset" - 1);
+            Atom fp_name = AT_atomize(p->cpp.at, "fp_offset", sizeof "fp_offset" - 1);
+            Atom oa_name = AT_atomize(p->cpp.at, "overflow_arg_area", sizeof "overflow_arg_area" -1);
+            Atom rs_name = AT_atomize(p->cpp.at, "reg_save_area", sizeof "reg_save_area"-1);
             if(!gp_name || !fp_name || !oa_name || !rs_name) return CC_OOM_ERROR;
 
             CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
@@ -6352,6 +6354,8 @@ cc_define_builtin_types(CcParser* p){
         }
     }
     int err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
+    if(err) return CC_OOM_ERROR;
+    err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type);
     if(err) return CC_OOM_ERROR;
 
     // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
