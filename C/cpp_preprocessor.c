@@ -1573,7 +1573,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE){
                     // coalesce whitespace in #defines
                 }
+                else if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#')){
+                    // elide whitespace after ## and #
+                }
                 else {
+                    // elide whitespace before ##
+                    if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                        repl->count--;
                     err = cpp_push_tok(cpp, repl, tok);
                     if(err) return err;
                 }
@@ -1716,7 +1722,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE){
                     // coalesce whitespace in #defines
                 }
+                else if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#')){
+                    // elide whitespace after ## and #
+                }
                 else {
+                    // elide whitespace before ##
+                    if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                        repl->count--;
                     err = cpp_push_tok(cpp, repl, tok);
                     if(err) return err;
                 }
