@@ -411,7 +411,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_typeof: case CC_typeof_unqual:
             case CC___auto_type:
             case CC__Complex: case CC__Imaginary:
-            case CC__Float16: case CC__Float32: case CC__Float64: case CC__Float128:
+            case CC__Float16: case CC__Float32: case CC__Float64: case CC__Float128: case CC__Float32x: case CC__Float64x:
             case CC__Decimal32: case CC__Decimal64: case CC__Decimal128:
             case CC__BitInt:
             case CC__Atomic:
@@ -4850,6 +4850,20 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "Second type in declaration");
                         *base_type = ccqt_basic(CCBT_float128);
                         continue;
+                    case CC__Float32x:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_double);
+                        continue;
+                    case CC__Float64x:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_long_double);
+                        continue;
                     case CC__Imaginary:
                         return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
                     case CC__Noreturn:
@@ -5534,6 +5548,8 @@ cc_parse_statement(CcParser* p){
                 case CC__Float64:
                 case CC_constexpr:
                 case CC__Float128:
+                case CC__Float32x:
+                case CC__Float64x:
                 case CC__Imaginary:
                 case CC__Noreturn:
                 case CC__Decimal32:

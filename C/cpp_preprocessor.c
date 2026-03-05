@@ -6291,6 +6291,8 @@ X(__int128, __int128) \
 X(constexpr, constexpr) \
 X(_Noreturn, _Noreturn) \
 X(_Float128, _Float128) \
+X(_Float32x, _Float32x) \
+X(_Float64x, _Float64x) \
 X(__const__, const) \
 
 #define CKWS10(X) \

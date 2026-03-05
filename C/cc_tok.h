@@ -100,6 +100,8 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC__Float64,
     CC_constexpr,
     CC__Float128,
+    CC__Float32x,
+    CC__Float64x,
     CC__Imaginary,
     CC__Noreturn,
     CC__Decimal32,
