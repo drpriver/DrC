@@ -6,10 +6,10 @@
 #include <netdb.h>
 
 // Minimal HTTP GET client using BSD sockets.
-// Usage: echo "example.com" | dvm httpget.c
+// Usage: echo "example.com" | Bin/cc httpget.c
 //    or: modify the host/path below.
 
-const char* host = "example.com";
+const char* host = "httpforever.com";
 const char* path = "/";
 const char* port = "80";
 

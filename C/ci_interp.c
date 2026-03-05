@@ -17,6 +17,7 @@
 #include "../Drp/Allocators/arena_allocator.h"
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/MStringBuilder16.h"
+#include "../Drp/cmd_run.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -242,6 +243,13 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             }
             return 0;
         }
+        case CC_EXPR_VALUE:
+            if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
+                *out = (void*)(uintptr_t)expr->text;
+                *size = expr->str.length;
+                return 0;
+            }
+            return ci_error(ci, expr->loc, "expression is not an lvalue");
         default:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
     }
@@ -256,10 +264,11 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(ccqt_kind(expr->type) == CC_ARRAY){
-            if(sizeof(void*) > size)
+            if(sz > size)
                 return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-            const void* ptr = expr->text;
-            memcpy(result, &ptr, sizeof ptr);
+            uint32_t len = expr->str.length;
+            if(len > sz) len = sz;
+            memcpy(result, expr->text, len);
             return 0;
         }
         if(sz > size)
@@ -306,16 +315,19 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             uint64_t discard;
             return ci_interp_expr(ci, operand, &discard, sizeof discard);
         }
-        uint64_t val = 0;
-        int err = ci_interp_expr(ci, operand, &val, sizeof val);
-        if(err) return err;
-        // Array-to-pointer decay: the value is already a pointer, just copy it.
+        // Array-to-pointer decay: get address of array data.
         if(ccqt_kind(from) == CC_ARRAY){
             if(sizeof(void*) > size)
                 return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-            memcpy(result, &val, sizeof(void*));
+            void* ptr;
+            size_t lval_size;
+            int err = ci_interp_lvalue(ci, operand, &ptr, &lval_size);
+            if(err) return err;
+            memcpy(result, &ptr, sizeof ptr);
             return 0;
         }
+        uint64_t val = 0;
+        int err = ci_interp_expr(ci, operand, &val, sizeof val);
         uint32_t from_sz;
         err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
         if(err) return err;
@@ -1138,7 +1150,7 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path;
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_pkg_config;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
@@ -1146,6 +1158,8 @@ ci_register_pragmas(CiInterpreter*ci){
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib"), ci_pragma_lib, ci);
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib_path"), ci_pragma_lib_path, ci);
+    if(err) return err;
+    err = cpp_register_pragma(&ci->parser.cpp, SV("pkg_config"), ci_pragma_pkg_config, ci);
     return err;
 }
 
@@ -1345,6 +1359,165 @@ ci_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
     cpp_release_scratch(cpp, expanded);
     return err;
 }
+static
+_Bool
+ci_file_exists(void* _Null_unspecified ctx, const char* path, size_t length){
+    (void)ctx;
+    (void)length;
+    #ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    #else
+    return access(path, F_OK) == 0;
+    #endif
+}
+
+static
+int
+ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CiInterpreter* ci = ctx;
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CI_OOM_ERROR;
+    int err = 0;
+    LongString output = {0};
+    Allocator scratch = ci_scratch_allocator(ci);
+    err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err) goto finally;
+    toks = expanded->data;
+    ntoks = expanded->count;
+    while(ntoks && toks->type == CPP_WHITESPACE){
+        toks++;
+        ntoks--;
+    }
+    while(ntoks && toks[ntoks-1].type == CPP_WHITESPACE)
+        ntoks--;
+    if(!ntoks){
+        err = cpp_error(cpp, loc, "#pragma pkg_config without any arguments");
+        goto finally;
+    }
+    if(toks->type != CPP_STRING){
+        err = cpp_error(cpp, loc, "#pragma pkg_config requires a string literal package name");
+        goto finally;
+    }
+    {
+        StringView pkg_name = {toks->txt.length-2, toks->txt.text+1};
+        CmdBuilder cmd = {.allocator = scratch};
+        cmd_prog(&cmd, LS("pkg-config"));
+        if(!cpp->env){
+            err = cpp_error(cpp, loc, "#pragma pkg_config: no environment available");
+            goto finally;
+        }
+        cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
+        if(cmd.errored){
+            err = cpp_error(cpp, loc, "'pkg-config' not found in PATH");
+            cmd_destroy(&cmd);
+            goto finally;
+        }
+        cmd_carg(&cmd, "--cflags");
+        cmd_carg(&cmd, "--libs");
+        {
+            Atom a = AT_atomize(ci->parser.cpp.at, pkg_name.text, pkg_name.length);
+            if(!a){
+                err = CI_OOM_ERROR;
+                goto finally;
+            }
+            cmd_aarg(&cmd, a);
+        }
+        size_t envp_size = 0;
+        void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+        int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
+        cmd_destroy(&cmd);
+        if(envp) Allocator_free(scratch, envp, envp_size);
+        if(run_err){
+            err = cpp_error(cpp, loc, "pkg-config failed for '%.*s'", (int)pkg_name.length, pkg_name.text);
+            goto finally;
+        }
+        // Parse the output: split on whitespace, handle flags
+        const char* p = output.text;
+        const char* end = output.text + output.length;
+        while(p < end){
+            // skip whitespace
+            while(p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+                p++;
+            if(p >= end) break;
+            const char* tok_start = p;
+            while(p < end && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                p++;
+            StringView flag = {(size_t)(p - tok_start), tok_start};
+            if(flag.length >= 2 && flag.text[0] == '-'){
+                char c = flag.text[1];
+                StringView val = {flag.length - 2, flag.text + 2};
+                if(c == 'I' && val.length){
+                    Atom a = AT_atomize(ci->parser.cpp.at, val.text, val.length);
+                    if(!a){
+                        err = CI_OOM_ERROR;
+                        goto finally;
+                    }
+                    err = cpp_add_default_includea(cpp, &cpp->Ipaths, a);
+                    if(err) goto finally;
+                }
+                else if(c == 'L' && val.length){
+                    err = ci_append_lib_path(ci, val);
+                    if(err) goto finally;
+                }
+                else if(c == 'l' && val.length){
+                    err = ci_load_library(ci, val);
+                    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+                        err = cpp_error(cpp, loc, "pkg-config: failed to load library '%.*s'", (int)val.length, val.text);
+                    if(err) goto finally;
+                }
+                else if(c == 'F' && val.length){
+                    Atom a = AT_atomize(ci->parser.cpp.at, val.text, val.length);
+                    if(!a){
+                        err = CI_OOM_ERROR;
+                        goto finally;
+                    }
+                    err = cpp_add_default_includea(cpp, &cpp->framework_paths, a);
+                    if(err) goto finally;
+                }
+                else if(c == 'D' && val.length){
+                    // Define macro: -Dfoo or -Dfoo=bar
+                    const char* eq = memchr(val.text, '=', val.length);
+                    if(eq){
+                        StringView mname = {(size_t)(eq - val.text), val.text};
+                        StringView mval = {val.length - mname.length - 1, eq + 1};
+                        CppToken valtok = {.type = CPP_NUMBER, .txt = {mval.length, mval.text}};
+                        err = cpp_define_obj_macro(cpp, mname, &valtok, 1);
+                    }
+                    else {
+                        CppToken onetok = {.type = CPP_NUMBER, .txt = {1, "1"}};
+                        err = cpp_define_obj_macro(cpp, val, &onetok, 1);
+                    }
+                    if(err) goto finally;
+                }
+                else if(flag.length >= 10 && memcmp(flag.text, "-framework", 10) == 0){
+                    // -framework Name (next token is the framework name)
+                    // skip whitespace to get next token
+                    while(p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+                        p++;
+                    if(p >= end){
+                        err = cpp_error(cpp, loc, "pkg-config: -framework without a name");
+                        goto finally;
+                    }
+                    const char* fw_start = p;
+                    while(p < end && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                        p++;
+                    StringView fw_name = {(size_t)(p - fw_start), fw_start};
+                    err = ci_load_library(ci, fw_name);
+                    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+                        err = cpp_error(cpp, loc, "pkg-config: failed to load framework '%.*s'", (int)fw_name.length, fw_name.text);
+                    if(err) goto finally;
+                }
+                // else: ignore other flags like -pthread
+            }
+        }
+    }
+    finally:
+    if(output.text) Allocator_free(scratch, output.text, output.length+1);
+    cpp_release_scratch(cpp, expanded);
+    return err;
+}
+
 static
 const CcTargetConfig*
 ci_target(const CiInterpreter* ci){

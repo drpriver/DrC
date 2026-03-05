@@ -267,6 +267,8 @@ static void cpp_release_scratch(CppPreprocessor*, CppTokens*);
 static int cpp_expand_argument(CppPreprocessor*, const CppToken*_Null_unspecified toks, size_t count, CppTokens* out);
 
 static int cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value);
+static int cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr, const char* path);
+static int cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom path);
 
 LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
 #ifdef __clang__

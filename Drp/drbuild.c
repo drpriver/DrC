@@ -3015,6 +3015,7 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
             cmd_argf(cmd, "%s/%s.deps", ctx->deps_dir->data, name);
             if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");
             if(optimize) cmd_cargs(cmd, "-O2");
+            if(target_os == OS_LINUX) cmd_cargs(cmd, "-lm", "-lpthread");
             break;
         case COMPILER_CL:
             cmd_cargs(cmd, "/nologo", "/std:c11");

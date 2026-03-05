@@ -4081,6 +4081,16 @@ cpp_dir_exists(CppPreprocessor* cpp, const char* path){
 
 static
 int
+cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom a){
+    if(!cpp_dir_exists(cpp, a->data))
+        return 0; // silently skip non-existent paths
+    StringView sv = {a->length, a->data};
+    int err = ma_push(StringView)(arr, cpp->allocator, sv);
+    return err ? CPP_OOM_ERROR : 0;
+}
+
+static
+int
 cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr, const char* path){
     if(!cpp_dir_exists(cpp, path))
         return 0; // silently skip non-existent paths
@@ -4150,6 +4160,51 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#include_next <limits.h>\n"
                               "#endif\n"
                             )},
+        {SV("stdatomic.h"), SV("#pragma once\n"
+                              "typedef enum {\n"
+                              "    memory_order_relaxed,\n"
+                              "    memory_order_consume,\n"
+                              "    memory_order_acquire,\n"
+                              "    memory_order_release,\n"
+                              "    memory_order_acq_rel,\n"
+                              "    memory_order_seq_cst\n"
+                              "} memory_order;\n"
+                              "#define _Atomic(tp) tp\n"
+                              "#define ATOMIC_VAR_INIT(value) (value)\n"
+                              "#define atomic_init(obj, value) (*(obj) = (value))\n"
+                              "#define atomic_store(obj, value) (*(obj) = (value))\n"
+                              "#define atomic_store_explicit(obj, value, order) (*(obj) = (value))\n"
+                              "#define atomic_load(obj) (*(obj))\n"
+                              "#define atomic_load_explicit(obj, order) (*(obj))\n"
+                              "#define atomic_exchange(obj, value) ({typeof(*(obj)) _old = *(obj); *(obj) = (value); _old;})\n"
+                              "#define atomic_exchange_explicit(obj, value, order) atomic_exchange(obj, value)\n"
+                              "#define atomic_compare_exchange_strong(obj, expected, desired) \\\n"
+                              "    ({_Bool _r = (*(obj) == *(expected)); if(_r) *(obj) = (desired); else *(expected) = *(obj); _r;})\n"
+                              "#define atomic_compare_exchange_strong_explicit(obj, expected, desired, s, f) \\\n"
+                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
+                              "#define atomic_compare_exchange_weak(obj, expected, desired) \\\n"
+                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
+                              "#define atomic_compare_exchange_weak_explicit(obj, expected, desired, s, f) \\\n"
+                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
+                              "#define atomic_fetch_add(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) += (arg); _old;})\n"
+                              "#define atomic_fetch_add_explicit(obj, arg, order) atomic_fetch_add(obj, arg)\n"
+                              "#define atomic_fetch_sub(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) -= (arg); _old;})\n"
+                              "#define atomic_fetch_sub_explicit(obj, arg, order) atomic_fetch_sub(obj, arg)\n"
+                              "#define atomic_fetch_or(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) |= (arg); _old;})\n"
+                              "#define atomic_fetch_or_explicit(obj, arg, order) atomic_fetch_or(obj, arg)\n"
+                              "#define atomic_fetch_and(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) &= (arg); _old;})\n"
+                              "#define atomic_fetch_and_explicit(obj, arg, order) atomic_fetch_and(obj, arg)\n"
+                              "#define atomic_fetch_xor(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) ^= (arg); _old;})\n"
+                              "#define atomic_fetch_xor_explicit(obj, arg, order) atomic_fetch_xor(obj, arg)\n"
+                              "#define atomic_thread_fence(order) ((void)0)\n"
+                              "#define atomic_signal_fence(order) ((void)0)\n"
+                              "#define atomic_flag_test_and_set(obj) ({_Bool _old = *(obj); *(obj) = 1; _old;})\n"
+                              "#define atomic_flag_test_and_set_explicit(obj, order) atomic_flag_test_and_set(obj)\n"
+                              "#define atomic_flag_clear(obj) (*(obj) = 0)\n"
+                              "#define atomic_flag_clear_explicit(obj, order) (*(obj) = 0)\n"
+                              "typedef _Bool atomic_flag;\n"
+                              "#define ATOMIC_FLAG_INIT 0\n"
+                           )},
         {SV("std.h"),      SV("#pragma once\n"
                               "#include <stdarg.h>\n"
                               "#include <stddef.h>\n"
@@ -4311,10 +4366,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     if(err) return err;
     err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"dvm cc 0.1\"")}}, 1);
     if(err) return err;
-    if(0){
-        err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
-        if(err) return err;
-    }
+    err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
+    if(err) return err;
     static const struct {
         StringView name; CppFuncMacroFn* fn; size_t nparams; _Bool variadic, no_expand;
     } func_builtins[] = {

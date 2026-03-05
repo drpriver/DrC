@@ -5840,6 +5840,12 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 err = cc_parse_declarator(p, &param_head, &param_tail, &param_name, NULL);
                 if(err) goto param_err;
                 *param_tail = param_base.type;
+                // consume trailing __attribute__ on parameter (e.g. __attribute__((unused)))
+                {
+                    CcAttributes param_attrs = {0};
+                    err = cc_parse_attributes(p, &param_attrs);
+                    if(err) goto param_err;
+                }
 
                 err = ma_push(CcQualType)(&param_types, cc_scratch_allocator(p), param_head);
                 if(err){ err = CC_OOM_ERROR; goto param_err; }

@@ -1,17 +1,12 @@
 #include <std.h>
-
 enum {W=80};
 enum {STEPS=60};
-
 unsigned char cells[W];
-// seed: single cell on the right
 cells[W-1] = 1;
-
 for(int step = 0; step < STEPS; step++){
     for(int i = 0; i < W; i++)
         putchar(cells[i] ? '#' : ' ');
     putchar('\n');
-    // in-place update, saving the previous left neighbor
     unsigned char prev = 0;
     for(int i = 0; i < W; i++){
         int L = prev;
