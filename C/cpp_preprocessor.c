@@ -3769,9 +3769,9 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__DVM_CC__", 1);
 
     // __GNUC__ compatibility
-    DEFINT("__GNUC__", 4);
-    DEFINT("__GNUC_MINOR__", 2);
-    DEFINT("__GNUC_PATCHLEVEL__", 1);
+    DEFINT("__GNUC__", 7);
+    DEFINT("__GNUC_MINOR__", 0);
+    DEFINT("__GNUC_PATCHLEVEL__", 0);
 
     // __SIZEOF_*__
     DEFINT("__SIZEOF_SHORT__",       t.sizeof_[CCBT_short]);
