@@ -6328,6 +6328,7 @@ X(__inline__, inline) \
 X(__volatile, volatile) \
 X(__typeof__, typeof) \
 X(__restrict, restrict) \
+X(__signed__, signed) \
 
 #define CKWS11(X) \
 X(_Decimal128, _Decimal128) \
