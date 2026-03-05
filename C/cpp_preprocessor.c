@@ -531,6 +531,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
             case CPP_NUMBER:
                 return cpp_number_to_cc_tok(cpp, &tok, ctok);
             case CPP_IDENTIFIER:
+                if(sv_equals(tok.txt, SV("__extension__"))) continue;
                 return cpp_ident_to_cc_tok(cpp, &tok, ctok);
             case CPP_CHAR:
                 return cpp_char_to_cc_tok(cpp, &tok, ctok);
