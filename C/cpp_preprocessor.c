@@ -5587,9 +5587,13 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("1"), .loc = tok.loc};
             return 0;
         }
-        if(sv_equals(name, SV("__has_include")) || sv_equals(name, SV("__has_include_next")) || sv_equals(name, SV("__has_embed"))){
-            _Bool is_embed = name.text[6] == 'e';
-            _Bool is_next = name.length > 14 && name.text[14] == '_';
+        _Bool is_embed = 0;
+        _Bool is_next = sv_equals(name, SV("__has_include_next"));
+        if(is_next) goto has_include;
+        is_embed = sv_equals(name, SV("__has_embed"));
+        if(is_embed) goto has_include;
+        if(sv_equals(name, SV("__has_include"))){
+            has_include:;
             CppToken next;
             do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != '(')
