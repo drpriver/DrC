@@ -1532,6 +1532,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             CppTokens *repl = cpp_get_scratch(cpp);
             if(!repl) return CPP_OOM_ERROR;
             _Bool variadic = 0;
+            StringView named_variadic = {0};
             for(;;){
                 do {
                     err = cpp_next_raw_token(cpp, &tok);
@@ -1559,6 +1560,25 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 if(tok.type != CPP_IDENTIFIER)
                     return cpp_error(cpp, tok.loc, "expected macro param name");
+                // GCC extension: name... (named variadic parameter)
+                {
+                    CppToken peek;
+                    err = cpp_next_raw_token(cpp, &peek);
+                    if(err) return err;
+                    if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
+                        variadic = 1;
+                        named_variadic = tok.txt;
+                        do {
+                            err = cpp_next_raw_token(cpp, &tok);
+                            if(err) return err;
+                        }while(tok.type == CPP_WHITESPACE);
+                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
+                            return cpp_error(cpp, tok.loc, "named variadic param must be last");
+                        break;
+                    }
+                    err = cpp_push_tok(cpp, &cpp->pending, peek);
+                    if(err) return err;
+                }
                 err = cpp_push_tok(cpp, names, tok);
                 if(err) return err;
             }
@@ -1659,6 +1679,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     continue;
                 // Tag __VA_ARGS__ in variadic macros
                 if(variadic && sv_equals(t->txt, SV("__VA_ARGS__"))){
+                    t->param_idx = m->nparams + 1;
+                    continue;
+                }
+                // Tag named variadic parameter (GCC extension: name...)
+                if(named_variadic.length && sv_equals(t->txt, named_variadic)){
                     t->param_idx = m->nparams + 1;
                     continue;
                 }

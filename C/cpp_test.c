@@ -244,9 +244,13 @@ TestFunction(test_func_macros){
         {"paste_empty_left",SV("#define PASTE(a,b) a##b\nPASTE(,bar)"),SV("\nbar"), __LINE__},
         {"paste_empty_right",SV("#define PASTE(a,b) a##b\nPASTE(foo,)"),SV("\nfoo"), __LINE__},
         {"va_args",SV("#define VA(...) __VA_ARGS__\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
+        {"gnu_va_args",SV("#define VA(args...) args\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
         {"va_args_empty",SV("#define VA(...) [__VA_ARGS__]\nVA()"),SV("\n[]"),__LINE__},
+        {"gnu_va_args_empty",SV("#define VA(args...) [args]\nVA()"),SV("\n[]"),__LINE__},
         {"va_opt_nonempty",SV("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT(1, 2)"),SV("\nprefix , 1, 2 suffix"),__LINE__},
         {"va_opt_empty",SV("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT()"),SV("\nprefix  suffix"),__LINE__},
+        {"gnu_va_opt_nonempty",SV("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT(1, 2)"),SV("\nprefix , 1, 2 suffix"),__LINE__},
+        {"gnu_va_opt_empty",SV("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT()"),SV("\nprefix  suffix"),__LINE__},
         {"nested_expansion",SV(
             "#define F(x) x*x\n"
             "#define IDENT(x) x\n"
@@ -265,12 +269,19 @@ TestFunction(test_func_macros){
         "#define IDENT(x) x\n"
         "IDENT(EMPTY())test"),SV("\n\ntest"), __LINE__},
         {"stringify_va_args",SV("#define LOG(...) #__VA_ARGS__\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
+        {"gnu_stringify_va_args",SV("#define LOG(args...) #args\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
         {"variadic_with_named_param", SV(
         "#define FOO(x, ...) x __VA_ARGS__\n"
+        "FOO(1)"), SV("\n1 "), __LINE__},
+        {"gnu_variadic_with_named_param", SV(
+        "#define FOO(x, args...) x args\n"
         "FOO(1)"), SV("\n1 "), __LINE__},
         {"variadic_with_named_param_and_args", SV("#define FOO(x, ...) x __VA_ARGS__\nFOO(1, 2, 3)"), SV("\n1 2, 3"), __LINE__},
         {"variadic_with_named_param_va_opt", SV("#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1)"), SV("\n1 "), __LINE__},
         {"variadic_with_named_param_va_opt_nonempty", SV( "#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1, 2, 3)"),SV("\n1 , 2, 3"), __LINE__},
+        {"gnu_variadic_with_named_param_and_args", SV("#define FOO(x, args...) x args\nFOO(1, 2, 3)"), SV("\n1 2, 3"), __LINE__},
+        {"gnu_variadic_with_named_param_va_opt", SV("#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1)"), SV("\n1 "), __LINE__},
+        {"gnu_variadic_with_named_param_va_opt_nonempty", SV( "#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1, 2, 3)"),SV("\n1 , 2, 3"), __LINE__},
         // __VA_OPT__ emptiness is determined after expansion (C23 6.10.4.1)
         {"va_opt_expands_to_empty", SV(
             "#define EMPTY\n"
@@ -354,6 +365,9 @@ TestFunction(test_func_macros_extensions){
         {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
         {"gnu va args comma2",SV("#define F(...) f(1, ## __VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
         {"gnu va args nocomma",SV("#define F(...) f(1 ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
+        {"gnu gnu va args comma",SV("#define F(args...) f(1, ##args)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu gnu va args comma2",SV("#define F(args...) f(1, ## args)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu gnu va args nocomma",SV("#define F(args...) f(1 ##args)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         StringView inp = test_cases[i].inp;
