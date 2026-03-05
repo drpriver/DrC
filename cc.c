@@ -27,6 +27,7 @@
 #pragma clang assume_nonnull begin
 #endif
 
+
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
 
 int main(int argc, char** argv, char** envp){
@@ -170,6 +171,8 @@ int main(int argc, char** argv, char** envp){
     err = cc_register_pragmas(&interp.parser);
     if(err) return err;
     err = ci_register_pragmas(&interp);
+    if(err) return err;
+    err = ci_register_macros(&interp);
     if(err) return err;
     if(!cpp_nostdinc)
         err = cpp_setup_default_includes(&interp.parser.cpp);

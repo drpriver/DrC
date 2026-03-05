@@ -45,6 +45,7 @@ static int ci_interp_expr(CiInterpreter*, CcExpr* expr, void* result, size_t siz
 static int ci_interp_lvalue(CiInterpreter*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
+static int ci_register_macros(CiInterpreter*);
 static int ci_load_library(CiInterpreter*, StringView);
 
 

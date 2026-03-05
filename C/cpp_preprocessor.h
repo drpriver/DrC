@@ -220,6 +220,14 @@ int
 cpp_push_tok(CppPreprocessor* cpp, CppTokens* dst, CppToken tok);
 
 static
+void
+cpp_get_argument(const CppTokens *args, const Marray(size_t) *arg_seps, size_t arg_idx, CppToken*_Nullable*_Nonnull out_start, size_t *out_count);
+
+LOG_PRINTF(2, 3)
+static Atom _Nullable
+cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
+
+static
 _Bool
 cpp_has_include(CppPreprocessor* cpp, _Bool quote, StringView header_name);
 

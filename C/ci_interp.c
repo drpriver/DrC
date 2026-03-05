@@ -37,6 +37,8 @@ static Allocator ci_scratch_allocator(CiInterpreter*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 
+static CppFuncMacroFn ci_shell;
+
 static
 int
 ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
@@ -1165,6 +1167,17 @@ ci_register_pragmas(CiInterpreter*ci){
 
 static
 int
+ci_register_macros(CiInterpreter* ci){
+    int err = 0;
+    err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__shell"), ci_shell, ci, 1, 1, 0);
+    if(err) return err;
+    err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__SHELL__"), ci_shell, ci, 1, 1, 0);
+    if(err) return err;
+    return err;
+}
+
+static
+int
 ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
     Atom a = AT_atomize(ci->parser.cpp.at, lib.text, lib.length);
     if(!a) return CI_OOM_ERROR;
@@ -1548,6 +1561,67 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
     *out = p;
     return 0;
 #endif
+}
+static
+int
+ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    (void)arg_seps;
+    int err = 0;
+    CiInterpreter* ci = ctx;
+    Allocator scratch = ci_scratch_allocator(ci);
+    LongString output = {0};
+    if(!cpp->env){
+        return cpp_error(cpp, loc, "__SHELL__: no environment available");
+    }
+    // Each string token across all args becomes a separate command argument.
+    // The first string is the program.
+    CmdBuilder cmd = {.allocator = scratch};
+    for(size_t i = 0; i < args->count; i++){
+        CppToken t = args->data[i];
+        if(t.type == CPP_WHITESPACE || t.type == CPP_NEWLINE || t.type == CPP_PUNCTUATOR) continue;
+        if(t.type != CPP_STRING || t.txt.length < 2){
+            err = cpp_error(cpp, t.loc, "__SHELL__: arguments must be string literals");
+            cmd_destroy(&cmd);
+            return err;
+        }
+        Atom a = AT_atomize(cpp->at, t.txt.text + 1, t.txt.length - 2);
+        if(!a){ cmd_destroy(&cmd); return CI_OOM_ERROR; }
+        if(!cmd.args.count){
+            cmd_prog(&cmd, (LongString){a->length, a->data});
+            cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
+            if(cmd.errored){
+                err = cpp_error(cpp, loc, "__SHELL__: '%s' not found in PATH", a->data);
+                cmd_destroy(&cmd);
+                return err;
+            }
+        } else {
+            cmd_aarg(&cmd, a);
+        }
+    }
+    if(!cmd.args.count){
+        return cpp_error(cpp, loc, "__SHELL__: requires at least one argument");
+    }
+    size_t envp_size = 0;
+    void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+    int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
+    cmd_destroy(&cmd);
+    if(envp) Allocator_free(scratch, envp, envp_size);
+    if(run_err){
+        return cpp_error(cpp, loc, "__SHELL__: command failed");
+    }
+    // Strip trailing newlines.
+    while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
+        output.length--;
+    Atom v = cpp_atomizef(cpp, "\"%.*s\"", (int)output.length, output.text);
+    Allocator_free(scratch, output.text, output.length);
+    if(!v) return CI_OOM_ERROR;
+    CppToken result = {
+        .txt = {v->length, v->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    err = cpp_push_tok(cpp, outtoks, result);
+    return err;
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end
