@@ -238,6 +238,10 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     CcBasicTypeKind ak = a.basic.kind, bk = b.basic.kind;
     if(ak == CCBT_void || bk == CCBT_void)
         return cc_error(p, loc, "usual arithmetic conversions on void");
+    // _Float128
+    if(ak == CCBT_float128 || bk == CCBT_float128){
+        *out = ccqt_basic(CCBT_float128); return 0;
+    }
     // long double
     if(ak == CCBT_long_double || bk == CCBT_long_double){
         *out = ccqt_basic(CCBT_long_double); return 0;
@@ -1880,6 +1884,7 @@ static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_float]              = "float",
     [CCBT_double]             = "double",
     [CCBT_long_double]        = "long double",
+    [CCBT_float128]           = "_Float128",
     [CCBT_float_complex]      = "float _Complex",
     [CCBT_double_complex]     = "double _Complex",
     [CCBT_long_double_complex]= "long double _Complex",
@@ -2223,7 +2228,7 @@ cc_eval_expr(CcExpr* e){
                     case CCBT_long: case CCBT_long_long:
                         return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
                     case CCBT_int128: case CCBT_unsigned_int128:
-                    case CCBT_float16:
+                    case CCBT_float16: case CCBT_float128:
                     case CCBT_float_complex: case CCBT_double_complex:
                     case CCBT_long_double_complex:
                     case CCBT_void: case CCBT_nullptr_t:
@@ -4839,7 +4844,12 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         *base_type = ccqt_basic(CCBT_double);
                         continue;
                     case CC__Float128:
-                        return cc_unimplemented(p, tok.loc, "_Float128 parsing in declaration");
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT_float128);
+                        continue;
                     case CC__Imaginary:
                         return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
                     case CC__Noreturn:

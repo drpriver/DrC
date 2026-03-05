@@ -44,6 +44,7 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_float,
     CCBT_double,
     CCBT_long_double,
+    CCBT_float128,
     CCBT_float_complex,
     CCBT_double_complex,
     CCBT_long_double_complex,
@@ -235,7 +236,7 @@ ccbt_is_integer(CcBasicTypeKind k){
 static inline
 _Bool
 ccbt_is_float(CcBasicTypeKind k){
-    return k >= CCBT_float16 && k <= CCBT_long_double;
+    return k >= CCBT_float16 && k <= CCBT_float128;
 }
 
 static inline

@@ -3782,6 +3782,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__SIZEOF_FLOAT__",       t.sizeof_[CCBT_float]);
     DEFINT("__SIZEOF_DOUBLE__",      t.sizeof_[CCBT_double]);
     DEFINT("__SIZEOF_LONG_DOUBLE__", t.sizeof_[CCBT_long_double]);
+    DEFINT("__SIZEOF_FLOAT128__",    t.sizeof_[CCBT_float128]);
     DEFINT("__SIZEOF_POINTER__",     t.sizeof_[CCBT_nullptr_t]);
     DEFINT("__SIZEOF_SIZE_T__",      t.sizeof_[t.size_type]);
     DEFINT("__SIZEOF_PTRDIFF_T__",   t.sizeof_[t.ptrdiff_type]);

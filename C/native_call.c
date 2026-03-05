@@ -95,6 +95,7 @@ cctype_to_ffi_type(CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 case CCBT_double_complex:     *out = &ffi_type_complex_double; return NC_NO_ERROR;
                 case CCBT_long_double_complex:*out = &ffi_type_complex_longdouble; return NC_NO_ERROR;
                 case CCBT_nullptr_t:          *out = &ffi_type_pointer; return NC_NO_ERROR;
+                case CCBT_float128:
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
                 case CCBT_float16:
