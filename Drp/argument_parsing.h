@@ -99,7 +99,10 @@ enum ArgParseFlags {
 
     // Kwargs are allowed to not need a separator between the flag and the arg
     // like -o/foo/bar
-    ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL
+    ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL = 1 << 4,
+
+    // Silently ignore args that don't match any positional or keyword arg
+    ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS = 1 << 5,
 };
 
 typedef struct Args Args;
@@ -130,6 +133,39 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned)
 static inline
 enum ArgParseError
 parse_args_strings(ArgParser* parser, const StringView* longstrings, size_t count, /*enum ArgParseFlags*/ unsigned);
+
+//
+// Like parse_args, but parses a single command line string.
+// The cmdline buffer is mutated in-place and must be
+// nul-terminated (c string).
+//
+// This is a simplified shell/cmd syntax:
+// - Tokens are separated by whitespace.
+// - " toggles a quoted region. Within a quoted region, whitespace
+//   does not separate tokens.
+// - \\ produces a literal backslash.
+// - \" produces a literal double quote.
+// - \<space> produces a literal space (outside quotes).
+// - \ before any other character is a literal backslash.
+// - Quoted and unquoted regions can be adjacent within a single token:
+//   `foo"bar baz"qux` -> `foobar bazqux`
+//
+// Examples:
+//   `foo bar baz`   -> `foo` `bar` `baz`
+//   ` foo bar baz ` -> `foo` `bar` `baz`
+//   `"foo bar" baz` -> `foo bar` `baz`
+//   `foo\ bar baz`  -> `foo bar` `baz`
+//   `foo\\bar`      -> `foo\bar`
+//   `foo\"bar`      -> `foo"bar`
+//   `"foo\"bar"`    -> `foo"bar`
+//   `"foo\\bar"`    -> `foo\bar`
+//   `""`            -> `` (empty string)
+//   `\foo`          -> `\foo`
+//   `"foo bar `     -> `foo bar ` (unterminated quote consumes to end)
+//
+static inline
+enum ArgParseError
+parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsigned);
 
 //
 // After receiving a non-zero error code from `parse_args`, use this function
@@ -781,7 +817,14 @@ print_argparse_help(ArgParser* p, int columns){
 
 static inline
 void
-print_argparse_hidden_help(const ArgParser* p, int columns){
+print_argparse_hidden_help(ArgParser* p, int columns){
+    #ifndef AP_NO_STDIO
+    if(!p->print){
+        p->print = (int(*)(void*, const char*, ...))fprintf;
+        p->hout = stdout;
+        p->herr = stderr;
+    }
+    #endif
     ArgStyle style = determine_styling(p);
     // There might be no hidden args. Only print the header if we are actually
     // going to print an arg.
@@ -1311,13 +1354,6 @@ find_matching_kwarg(ArgParser* parser, StringView sv){
 static inline
 enum ArgParseError
 parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned flags){
-    #ifndef AP_NO_STDIO
-    if(!parser->print){
-        parser->print = (int(*)(void*, const char*, ...))fprintf;
-        parser->hout = stdout;
-        parser->herr = stderr;
-    }
-    #endif
     ArgToParse* pos_arg = NULL;
     ArgToParse* past_the_end = NULL;
     if(parser->positional.count){
@@ -1446,8 +1482,10 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                 pos_arg++;
         }
         else {
-            parser->failed.arg = *arg;
-            return ARGPARSE_EXCESS_ARGS;
+            if(!(flags & ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS)){
+                parser->failed.arg = *arg;
+                return ARGPARSE_EXCESS_ARGS;
+            }
         }
     }
     for(size_t i = 0; i < parser->positional.count; i++){
@@ -1615,8 +1653,10 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                 pos_arg++;
         }
         else {
-            parser->failed.arg = arg->text;
-            return ARGPARSE_EXCESS_ARGS;
+            if(!(flags & ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS)){
+                parser->failed.arg = arg->text;
+                return ARGPARSE_EXCESS_ARGS;
+            }
         }
     }
     for(size_t i = 0; i < parser->positional.count; i++){
@@ -1649,6 +1689,213 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                 return ARGPARSE_EXCESS_ARGS;
             }
             // This only makes sense for keyword arguments.
+            if(arg->visited && arg->num_parsed == 0 && arg->min_num){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_VISITED_NO_ARG_GIVEN;
+            }
+        }
+    }
+    return 0;
+}
+
+// See top of file.
+static inline
+enum ArgParseError
+parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsigned flags){
+    ArgToParse* pos_arg = NULL;
+    ArgToParse* past_the_end = NULL;
+    if(parser->positional.count){
+        pos_arg = &parser->positional.args[0];
+        past_the_end = pos_arg + parser->positional.count;
+    }
+    ArgToParse* kwarg = NULL;
+    char* p = cmdline;
+    while(*p){
+        // Skip leading whitespace.
+        while(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if(!*p) break;
+        // Scan one argument, unescaping in-place.
+        char* arg_start = p;
+        char* w = p; // write cursor
+        _Bool in_quotes = 0;
+        while(*p){
+            if(in_quotes){
+                if(*p == '"'){
+                    p++;
+                    in_quotes = 0;
+                }
+                else if(*p == '\\' && (p[1] == '\\' || p[1] == '"')){
+                    *w++ = p[1];
+                    p += 2;
+                }
+                else {
+                    *w++ = *p++;
+                }
+            }
+            else {
+                if(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+                    break;
+                if(*p == '"'){
+                    p++;
+                    in_quotes = 1;
+                }
+                else if(*p == '\\' && (p[1] == '\\' || p[1] == '"' || p[1] == ' ')){
+                    *w++ = p[1];
+                    p += 2;
+                }
+                else {
+                    *w++ = *p++;
+                }
+            }
+        }
+        // Null-terminate this argument.
+        *w = '\0';
+        StringView s = {(size_t)(w - arg_start), arg_start};
+        if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))
+            continue;
+        _Bool arg_after_eq = 0;
+        if(s.length > 1){
+            ArgToParse* new_kwarg;
+            if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
+                new_kwarg = find_matching_kwarg(parser, s);
+                if(new_kwarg) goto found_new_kwarg;
+                const char* eq = memchr(s.text, '=', s.length);
+                if(eq && eq != s.text){
+                    new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                    if(new_kwarg){
+                        arg_after_eq = 1;
+                        s = (StringView){s.text+s.length - eq - 1, eq+1};
+                        goto found_new_kwarg;
+                    }
+                }
+            }
+            if(s.text[0] == '-'){
+                _Bool number = s.text[1] == '.' || (s.text[1] >= '0' && s.text[1] <= '9');
+                if(!number){
+                    // Not a number, find matching kwarg
+                    new_kwarg = find_matching_kwarg(parser, s);
+                    if(!new_kwarg){
+                        const char* eq = memchr(s.text, '=', s.length);
+                        if(eq && eq != s.text){
+                            new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                            if(new_kwarg){
+                                arg_after_eq = 1;
+                                s = (StringView){s.text+s.length - eq - 1, eq+1};
+                                goto found_new_kwarg;
+                            }
+                        }
+                    }
+                    if(!new_kwarg && (flags & ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL)){
+                        for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+                            for(size_t k = 0; k < keywords->count; k++){
+                                ArgToParse* kw = &keywords->args[k];
+                                if(!kw->space_sep_is_optional) continue;
+                                if(sv_startswith(s, kw->name)){
+                                    new_kwarg = kw;
+                                    arg_after_eq = 1;
+                                    s = (StringView){s.length-kw->name.length, s.text+kw->name.length};
+                                    goto found_new_kwarg;
+                                }
+                            }
+                        }
+                    }
+                    if(!new_kwarg){
+                        if(flags & ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS)
+                            goto skip;
+                        parser->failed.arg = arg_start;
+                        return ARGPARSE_UNKNOWN_KWARG;
+                    }
+                    found_new_kwarg:;
+                    if(new_kwarg->visited){
+                        if(!new_kwarg->one_at_a_time){
+                            parser->failed.arg_to_parse = new_kwarg;
+                            parser->failed.arg = arg_start;
+                            return ARGPARSE_DUPLICATE_KWARG;
+                        }
+                    }
+                    if(pos_arg && pos_arg != past_the_end && pos_arg->visited)
+                        pos_arg++;
+                    kwarg = new_kwarg;
+                    kwarg->visited = 1;
+                    if(kwarg->dest.type == ARG_FLAG || kwarg->dest.type == ARG_BITFLAG){
+                        if(arg_after_eq){
+                            parser->failed.arg_to_parse = kwarg;
+                            parser->failed.arg = arg_start;
+                            return ARGPARSE_EXCESS_ARGS;
+                        }
+                        enum ArgParseError error = set_flag(kwarg);
+                        if(error){
+                            parser->failed.arg_to_parse = kwarg;
+                            parser->failed.arg = arg_start;
+                            return error;
+                        }
+                        kwarg = NULL;
+                    }
+                    if(!arg_after_eq)
+                        continue;
+                }
+            }
+        }
+        skip:;
+        if(kwarg){
+            enum ArgParseError err = parse_arg(kwarg, s);
+            if(err){
+                parser->failed.arg = arg_start;
+                parser->failed.arg_to_parse = kwarg;
+                return err;
+            }
+            if(kwarg->num_parsed == agp_maxnum(kwarg->max_num))
+                kwarg = NULL;
+            else if(kwarg->one_at_a_time)
+                kwarg = NULL;
+        }
+        else if(pos_arg && pos_arg != past_the_end){
+            pos_arg->visited = 1;
+            enum ArgParseError err = parse_arg(pos_arg, s);
+            if(err){
+                parser->failed.arg = arg_start;
+                parser->failed.arg_to_parse = pos_arg;
+                return err;
+            }
+            if(pos_arg->num_parsed == agp_maxnum(pos_arg->max_num))
+                pos_arg++;
+        }
+        else {
+            if(!(flags & ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS)){
+                parser->failed.arg = arg_start;
+                return ARGPARSE_EXCESS_ARGS;
+            }
+        }
+    }
+    for(size_t i = 0; i < parser->positional.count; i++){
+        ArgToParse* arg = &parser->positional.args[i];
+        if(arg->num_parsed < agp_minnum(arg->min_num)){
+            parser->failed.arg_to_parse = arg;
+            return ARGPARSE_INSUFFICIENT_ARGS;
+        }
+        if(arg->num_parsed > agp_maxnum(arg->max_num)){
+            parser->failed.arg_to_parse = arg;
+            return ARGPARSE_EXCESS_ARGS;
+        }
+    }
+    for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            ArgToParse* arg = &keywords->args[i];
+            if(!arg->visited){
+                if(arg->required){
+                    parser->failed.arg_to_parse = arg;
+                    return ARGPARSE_INSUFFICIENT_ARGS;
+                }
+                continue;
+            }
+            if(arg->num_parsed < agp_minnum(arg->min_num)){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_INSUFFICIENT_ARGS;
+            }
+            if(arg->num_parsed > agp_maxnum(arg->max_num)){
+                parser->failed.arg_to_parse = arg;
+                return ARGPARSE_EXCESS_ARGS;
+            }
             if(arg->visited && arg->num_parsed == 0 && arg->min_num){
                 parser->failed.arg_to_parse = arg;
                 return ARGPARSE_VISITED_NO_ARG_GIVEN;
