@@ -68,10 +68,14 @@ void
 cmd_carg(CmdBuilder* cmd, const char* arg){
     cmd_arg(cmd, (LongString){strlen(arg), arg});
 }
+
 static
 void
 cmd_aarg(CmdBuilder* cmd, Atom arg){
-    cmd_arg(cmd, (LongString){arg->length, arg->data});
+    if(!cmd->args.count) cmd->errored = 1;
+    if(cmd->errored) return;
+    LongString a = {arg->length, arg->data};
+    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, a);
 }
 
 static

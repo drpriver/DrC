@@ -8,6 +8,7 @@
 #include "which.h"
 #include "windowsheader.h"
 #include "posixheader.h"
+#include "file_util.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -253,6 +254,101 @@ cmd_exec(CmdBuilder* cmd, void* envp){
         #endif
     }
     return 1;
+}
+
+static
+int
+cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, LongString* out){
+    if(cmd->errored) return 1;
+    if(!cmd->prog.cursor) return 1;
+    intptr_t hProc = -1;
+    int ret = 0;
+    if(IS_WINDOWS){
+        #ifdef _WIN32
+        SECURITY_ATTRIBUTES sa = {.nLength = sizeof sa, .bInheritHandle = TRUE};
+        HANDLE read_handle, write_handle;
+        if(!CreatePipe(&read_handle, &write_handle, &sa, 0))
+            return 1;
+        SetHandleInformation(read_handle, HANDLE_FLAG_INHERIT, 0);
+        msb_reset(&cmd->cmd_line);
+        for(size_t i = 0; i < cmd->args.count; i++){
+            if(i != 0) msb_write_char(&cmd->cmd_line, ' ');
+            StringView sv = LS_to_SV(cmd->args.data[i]);
+            if(arg_needs_escape_win32(sv)){
+                msb_write_char(&cmd->cmd_line, '"');
+                for(size_t j = 0; j < sv.length; j++){
+                    char c = sv.text[j];
+                    if(c == '"' || c == '\\')
+                        msb_write_char(&cmd->cmd_line, '\\');
+                    msb_write_char(&cmd->cmd_line, c);
+                }
+                msb_write_char(&cmd->cmd_line, '"');
+            }
+            else
+                msb_write_str(&cmd->cmd_line, sv.text, sv.length);
+        }
+        msb_nul_terminate(&cmd->cmd_line);
+        msb_nul_terminate(&cmd->prog);
+        if(cmd->cmd_line.errored || cmd->prog.errored){
+            CloseHandle(read_handle);
+            CloseHandle(write_handle);
+            return 1;
+        }
+        STARTUPINFOA si = {
+            .cb = sizeof si,
+            .hStdOutput = write_handle,
+            .hStdError = GetStdHandle(STD_ERROR_HANDLE),
+            .hStdInput = GetStdHandle(STD_INPUT_HANDLE),
+            .dwFlags = STARTF_USESTDHANDLES,
+        };
+        PROCESS_INFORMATION pi = {0};
+        BOOL ok = CreateProcessA(cmd->prog.data, cmd->cmd_line.data, NULL, NULL, TRUE, 0, envp, NULL, &si, &pi);
+        CloseHandle(write_handle);
+        if(!ok){
+            CloseHandle(read_handle);
+            return 1;
+        }
+        CloseHandle(pi.hThread);
+        hProc = (intptr_t)(uintptr_t)pi.hProcess;
+        FileError fe = read_file_handle(read_handle, a, out);
+        CloseHandle(read_handle);
+        if(fe.errored){ ret = 1; goto wait; }
+        #endif
+    }
+    else {
+        #ifndef _WIN32
+        int pipefd[2];
+        if(pipe(pipefd) != 0) return 1;
+        void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
+        char** argv = _argv;
+        {
+            const char** pargv = _argv;
+            for(size_t i = 0; i < cmd->args.count; i++)
+                pargv[i] = cmd->args.data[i].text;
+        }
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+        posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+        posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+        pid_t pid;
+        int e = posix_spawn(&pid, cmd->prog.data, &actions, NULL, argv, envp);
+        posix_spawn_file_actions_destroy(&actions);
+        close(pipefd[1]);
+        if(e){
+            close(pipefd[0]);
+            return e;
+        }
+        hProc = (intptr_t)pid;
+        FileError fe = read_file_handle(pipefd[0], a, out);
+        close(pipefd[0]);
+        if(fe.errored){ ret = 1; goto wait; }
+        #endif
+    }
+    wait:;
+    int wr = cmd_wait(&hProc);
+    if(!ret) ret = wr;
+    return ret;
 }
 
 #ifdef __clang__
