@@ -260,6 +260,7 @@ cc_target_aarch64_linux(void){
             "__unix\0"
             "unix\0"
             "__aarch64__\0"
+            "__AARCH64EL__\0"
         ),
     };
 }
@@ -431,6 +432,7 @@ cc_target_aarch64_macos(void){
             "__APPLE__\0"
             "__MACH__\0"
             "__aarch64__\0"
+            "__AARCH64EL__\0"
             "__arm64__\0"
             "TARGET_CPU_ARM64\0"
             "TARGET_OS_MAC\0"
