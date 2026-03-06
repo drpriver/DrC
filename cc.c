@@ -71,13 +71,24 @@ int main(int argc, char** argv, char** envp){
         .user_data = &interp.parser.cpp,
     };
     const char* filename = NULL;
+    enum { MAX_PROG_ARGS = 128 };
+    const char* prog_args[MAX_PROG_ARGS];
+    size_t num_prog_args = 0;
     ArgToParse pos_args[] = {
         {
             .name = SV("file"),
             .dest = ARGDEST(&filename),
             .help = "The file to preprocess.",
             .min_num = 0, .max_num = 1,
-        }
+        },
+        {
+            .name = SV("args"),
+            .dest = ARGDEST(prog_args),
+            .pnum_parsed = &num_prog_args,
+            .help = "Arguments to pass to main().",
+            .min_num = 0, .max_num = MAX_PROG_ARGS,
+            .remainder = 1,
+        },
     };
     StringView output = {0};
     _Bool repl = 0;
@@ -314,12 +325,12 @@ int main(int argc, char** argv, char** envp){
         // Call main if defined
         {
             int main_ret = 0;
-            int main_argc = 1;
-            // FIXME: we should support args after filename, but our argparser needs a new kind of flag
-            // to support that.
+            int main_argc = 1 + (int)num_prog_args;
             char** main_argv = Allocator_zalloc(MALLOCATOR, (main_argc+1)*sizeof *main_argv);
             if(!main_argv) return 1;
             main_argv[0] = Allocator_strndup(MALLOCATOR, filename, strlen(filename));
+            for(size_t i = 0; i < num_prog_args; i++)
+                main_argv[1+i] = Allocator_strndup(MALLOCATOR, prog_args[i], strlen(prog_args[i]));
             err = ci_call_main(&interp, main_argc, main_argv, envp, &main_ret);
             if(!err) return main_ret;
             if(err != _cc_symbol_not_found_error) return err;

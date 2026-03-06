@@ -486,6 +486,11 @@ struct ArgToParse {
     // from the argument is optional.
     _Bool space_sep_is_optional;
 
+    // When set on a positional arg, all remaining argv entries are consumed
+    // as values for this arg, skipping kwarg matching. This is useful for
+    // passing args through to a sub-program.
+    _Bool remainder;
+
     //
     // The description of the argument. When printed, the helpstring will be
     // tokenized and adjacent whitespace will be merged into a single space.
@@ -1371,6 +1376,8 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
         StringView s = {strlen(*arg), *arg};
         if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))
             continue;
+        if(pos_arg && pos_arg != past_the_end && pos_arg->remainder)
+            goto skip;
         if(s.length > 1){
             ArgToParse* new_kwarg;
             if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
@@ -1543,6 +1550,8 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
         StringView s = *arg;
         if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))
             continue;
+        if(pos_arg && pos_arg != past_the_end && pos_arg->remainder)
+            goto skip;
         if(s.length > 1){
             ArgToParse* new_kwarg;
             if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
@@ -1629,6 +1638,7 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                 }
             }
         }
+        skip:;
         if(kwarg){
             enum ArgParseError err = parse_arg(kwarg, s);
             if(err){
@@ -1753,6 +1763,8 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
         StringView s = {(size_t)(w - arg_start), arg_start};
         if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))
             continue;
+        if(pos_arg && pos_arg != past_the_end && pos_arg->remainder)
+            goto skip;
         _Bool arg_after_eq = 0;
         if(s.length > 1){
             ArgToParse* new_kwarg;
