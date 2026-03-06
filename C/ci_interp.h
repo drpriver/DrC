@@ -50,7 +50,14 @@ static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_register_macros(CiInterpreter*);
 static int ci_load_library(CiInterpreter*, StringView);
-static int ci_call_by_name(CiInterpreter*, StringView name, void* result, size_t size);
+typedef struct CiArg CiArg;
+struct CiArg {
+    const void* data;
+    size_t size;
+    CcQualType type;
+};
+static int ci_call_by_name(CiInterpreter*, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size);
+static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret);
 
 
 #ifdef __clang__

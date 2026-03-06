@@ -314,7 +314,13 @@ int main(int argc, char** argv, char** envp){
         // Call main if defined
         {
             int main_ret = 0;
-            err = ci_call_by_name(&interp, SV("main"), &main_ret, sizeof main_ret);
+            int main_argc = 1;
+            // FIXME: we should support args after filename, but our argparser needs a new kind of flag
+            // to support that.
+            char** main_argv = Allocator_zalloc(MALLOCATOR, (main_argc+1)*sizeof *main_argv);
+            if(!main_argv) return 1;
+            main_argv[0] = Allocator_strndup(MALLOCATOR, filename, strlen(filename));
+            err = ci_call_main(&interp, main_argc, main_argv, envp, &main_ret);
             if(!err) return main_ret;
             if(err != _cc_symbol_not_found_error) return err;
         }

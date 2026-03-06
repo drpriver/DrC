@@ -1263,7 +1263,7 @@ ci_interp_call(CiInterpreter* ci, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, 
 
 static
 int
-ci_call_by_name(CiInterpreter* ci, StringView name, void* result, size_t size){
+ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size){
     Atom atom = AT_atomize(ci->parser.cpp.at, name.text, name.length);
     if(!atom) return CI_OOM_ERROR;
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
@@ -1272,6 +1272,17 @@ ci_call_by_name(CiInterpreter* ci, StringView name, void* result, size_t size){
     if(!func->parsed){
         int err = cc_parse_func_body(&ci->parser, func);
         if(err) return err;
+    }
+    CcFunction* ftype = func->type;
+    // Check arg count.
+    if(nargs != ftype->param_count)
+        return ci_error(ci, func->loc, "ci_call_by_name '%.*s': expected %u args, got %u",
+            (int)name.length, name.text, ftype->param_count, nargs);
+    // Type-check args against parameter types.
+    for(uint32_t i = 0; i < nargs; i++){
+        if(args[i].type.bits != ftype->params[i].bits)
+            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u type mismatch",
+                (int)name.length, name.text, i);
     }
     size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
@@ -1284,6 +1295,21 @@ ci_call_by_name(CiInterpreter* ci, StringView name, void* result, size_t size){
         .return_size = size,
         .data_length = func->frame_size,
     };
+    // Copy args into param storage.
+    for(uint32_t i = 0; i < nargs; i++){
+        CcVariable* var = func->param_vars[i];
+        if(!var) continue;
+        void* storage = (char*)(frame + 1) + var->frame_offset;
+        uint32_t param_sz;
+        int err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
+        if(args[i].size < param_sz){
+            Allocator_free(ci_allocator(ci), frame, alloc_size);
+            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u buffer too small",
+                (int)name.length, name.text, i);
+        }
+        memcpy(storage, args[i].data, param_sz);
+    }
     CiInterpFrame* saved = ci->current_frame;
     ci->current_frame = frame;
     int err = 0;
@@ -1294,6 +1320,38 @@ ci_call_by_name(CiInterpreter* ci, StringView name, void* result, size_t size){
     ci->current_frame = saved;
     Allocator_free(ci_allocator(ci), frame, alloc_size);
     return err;
+}
+
+static
+int
+ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret){
+    Atom atom = AT_atomize(ci->parser.cpp.at, "main", 4);
+    if(!atom) return CI_OOM_ERROR;
+    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    if(!func || !func->defined)
+        return CI_SYMBOL_NOT_FOUND;
+    CcFunction* ftype = func->type;
+    uint32_t nparams = ftype->param_count;
+    CiArg args[3];
+    switch(nparams){
+        case 0:
+            break;
+        case 3:
+            args[2] = (CiArg){.data = &envp, .size = sizeof envp, .type = ftype->params[2]};
+            goto argv;
+        case 2:
+            argv:
+            args[0] = (CiArg){.data = &argc, .size = sizeof argc, .type = ftype->params[0]};
+            args[1] = (CiArg){.data = &argv, .size = sizeof argv, .type = ftype->params[1]};
+            break;
+        default:
+            return ci_error(ci, func->loc, "main has unsupported signature (%u params)", nparams);
+    }
+    int ret = 0;
+    int err = ci_call_by_name(ci, SV("main"), args, nparams, &ret, sizeof ret);
+    if(err) return err;
+    *out_ret = ret;
+    return 0;
 }
 
 static
