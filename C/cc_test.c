@@ -2265,6 +2265,53 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("int"), .init = SV("f((int)c)") },
             },
         },
+        // --- Lambda tests ---
+        {
+            "lambda: basic immediate call", __LINE__,
+            SV("int r = int(int x, int y){ return x + y; }(3, 4);\n"),
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("<lambda>(3, 4)") },
+            },
+        },
+        {
+            "lambda: single param", __LINE__,
+            SV("int r = int(int a){ return a * 2; }(5);\n"),
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("<lambda>(5)") },
+            },
+        },
+        {
+            "lambda: void params", __LINE__,
+            SV("int r = int(void){ return 42; }();\n"),
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("<lambda>()") },
+            },
+        },
+        {
+            "lambda: in subexpression", __LINE__,
+            SV("int r = 1 + int(int a){ return a; }(10);\n"),
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("(1 + <lambda>(10))") },
+            },
+        },
+        {
+            "lambda: typedef return type", __LINE__,
+            SV("typedef int myint;\n"
+               "myint r = myint(myint x){ return x; }(7);\n"),
+            .typedefs = {
+                { SV("myint"), SV("int") },
+            },
+            .vars = {
+                { SV("r"), SV("int"), .init = SV("<lambda>(7)") },
+            },
+        },
+        {
+            "lambda: implicit cast on arg", __LINE__,
+            SV("long r = long(long x){ return x; }(42);\n"),
+            .vars = {
+                { SV("r"), SV("long"), .init = SV("<lambda>((long)42)") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};
@@ -2812,6 +2859,17 @@ TestFunction(test_parse_errors){
                "struct A a;\n"
                "struct B b = a;\n"),
             SV("(test):4:14: error: cannot implicitly convert from 'struct A' to 'struct B'\n"),
+        },
+        // --- Lambda error tests ---
+        {
+            "lambda: non-function type", __LINE__,
+            SV("int r = int{1};\n"),
+            SV("(test):1:9: error: Lambda requires a function type, got non-function type\n"),
+        },
+        {
+            "lambda: missing body", __LINE__,
+            SV("int r = int(int x);\n"),
+            SV("(test):1:9: error: Expected '{' for lambda body\n"),
         },
     };
     for(size_t i = 0; i < arrlen(cases); i++){

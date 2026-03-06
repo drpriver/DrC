@@ -48,6 +48,8 @@ static Allocator cc_scratch_allocator(CcParser*p);
 static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, Marray(Atom) *_Nullable out_param_names);
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
+static int cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
 static int cc_parse_type_name(CcParser* p, CcQualType* out);
 static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
@@ -449,6 +451,65 @@ cc_parse_type_name(CcParser* p, CcQualType* out){
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
     return 0;
+}
+
+static
+int
+cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    // Parse the function type using existing type parsing machinery.
+    // e.g. int(int x, int y) — this is already a valid function type.
+    CcDeclBase base = {0};
+    int err = cc_parse_declaration_specifier(p, &base);
+    if(err) return err;
+    if(!base.spec.bits && !base.type.bits)
+        return cc_error(p, loc, "Expected type in lambda expression");
+    err = cc_resolve_specifiers(p, &base);
+    if(err) return err;
+    CcQualType head = {0};
+    CcQualType* tail = &head;
+    Marray(Atom) param_names = {0};
+    err = cc_parse_declarator(p, &head, &tail, NULL, &param_names);
+    if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+    *tail = base.type;
+    CcQualType type = cc_intern_qualtype(p, head);
+    if(ccqt_kind(type) != CC_FUNCTION){
+        ma_cleanup(Atom)(&param_names, cc_allocator(p));
+        return cc_error(p, loc, "Lambda requires a function type, got non-function type");
+    }
+    // Expect '{'
+    CcToken peek;
+    err = cc_peek(p, &peek);
+    if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+    if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_lbrace){
+        ma_cleanup(Atom)(&param_names, cc_allocator(p));
+        return cc_error(p, loc, "Expected '{' for lambda body");
+    }
+    err = cc_next_token(p, &peek); // consume '{'
+    if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+    // Create anonymous CcFunc
+    CcFunction* ftype = ccqt_as_function(type);
+    CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+    if(!func){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return CC_OOM_ERROR; }
+    func->name = NULL;
+    func->type = ftype;
+    func->loc = loc;
+    func->defined = 1;
+    func->params.count = param_names.count;
+    func->params.data = param_names.data;
+    func->enclosing = p->current_func;
+    err = cc_parse_func_body_inner(p, func, 1);
+    if(err) return err;
+    // consume '}'
+    err = cc_expect_punct(p, CC_rbrace);
+    if(err) return err;
+    // Build CC_EXPR_FUNCTION node
+    CcExpr* node = cc_alloc_expr(p, 0);
+    if(!node) return CC_OOM_ERROR;
+    node->kind = CC_EXPR_FUNCTION;
+    node->loc = loc;
+    node->type = (CcQualType){.bits = (uintptr_t)func->type};
+    node->func = func;
+    return cc_parse_postfix(p, node, out);
 }
 
 static
@@ -1400,8 +1461,9 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     return 0;
                 }
                 case CC_SYM_TYPEDEF:
-                    return cc_error(p, tok.loc, "unexpected type name '%.*s' in expression",
-                        tok.ident.ident->length, tok.ident.ident->data);
+                    err = cc_unget(p, &tok);
+                    if(err) return err;
+                    return cc_parse_lambda(p, tok.loc, out);
             }
             return cc_error(p, tok.loc, "unexpected symbol kind");
         }
@@ -1549,6 +1611,11 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 node->uinteger = 0;
                 *out = node;
                 return 0;
+            }
+            if(cc_is_type_start(p, &tok)){
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                return cc_parse_lambda(p, tok.loc, out);
             }
             return cc_error(p, tok.loc, "Unexpected keyword in expression");
         case CC_EOF:
@@ -2110,7 +2177,10 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             msb_sprintf(sb, "%.*s", e->var->name->length, e->var->name->data);
             return;
         case CC_EXPR_FUNCTION:
-            msb_sprintf(sb, "%.*s", e->func->name->length, e->func->name->data);
+            if(e->func->name)
+                msb_sprintf(sb, "%.*s", e->func->name->length, e->func->name->data);
+            else
+                msb_write_literal(sb, "<lambda>");
             return;
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
@@ -6109,26 +6179,55 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         if(first && tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
             if(!is_fndef)
                 return cc_error(p, tok.loc, "Expected ',' or ';'");
-            // Collect tokens for lazy parsing
-            Marray(CcToken)* body_tokens = cc_get_scratch(p);
-            if(!body_tokens) return CC_OOM_ERROR;
-            int depth = 1;
-            while(depth > 0){
-                CcToken t;
-                err = cc_next_token(p, &t);
-                if(err) return err;
-                if(t.type == CC_EOF)
-                    return cc_error(p, tok.loc, "Unexpected EOF in function body");
-                if(t.type == CC_PUNCTUATOR){
-                    if(t.punct.punct == '{') depth++;
-                    else if(t.punct.punct == '}') depth--;
+            _Bool eager = p->eager_parsing || p->current_func;
+            if(!eager){
+                // Collect tokens for lazy parsing
+                Marray(CcToken)* body_tokens = cc_get_scratch(p);
+                if(!body_tokens) return CC_OOM_ERROR;
+                int depth = 1;
+                while(depth > 0){
+                    CcToken t;
+                    err = cc_next_token(p, &t);
+                    if(err) return err;
+                    if(t.type == CC_EOF)
+                        return cc_error(p, tok.loc, "Unexpected EOF in function body");
+                    if(t.type == CC_PUNCTUATOR){
+                        if(t.punct.punct == '{') depth++;
+                        else if(t.punct.punct == '}') depth--;
+                    }
+                    if(depth > 0){
+                        err = ma_push(CcToken)(body_tokens, cc_allocator(p), t);
+                        if(err) return err;
+                    }
                 }
-                if(depth > 0){
-                    err = ma_push(CcToken)(body_tokens, cc_allocator(p), t);
+                // Lookup existing forward declaration
+                CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
+                if(func){
+                    if(func->defined)
+                        return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
+                    err = cc_check_func_compat(p, func, declbase, type, tok.loc);
                     if(err) return err;
                 }
+                else {
+                    func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                    if(!func) return CC_OOM_ERROR;
+                    func->name = name;
+                    err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
+                    if(err) return err;
+                }
+                func->type = ccqt_as_function(type);
+                func->loc = tok.loc;
+                func->mangle = asm_label;
+                func->defined = 1;
+                func->extern_ = declbase->spec.sp_extern;
+                func->static_ = declbase->spec.sp_static;
+                func->inline_ = declbase->spec.sp_inline;
+                func->tokens = body_tokens;
+                func->params.count = param_names.count;
+                func->params.data = param_names.data;
+                return 0;
             }
-            // Lookup existing forward declaration
+            // Eager parsing: parse body directly
             CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
             if(func){
                 if(func->defined)
@@ -6143,19 +6242,21 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
                 if(err) return err;
             }
-            func->type = ccqt_as_function(type);
+            CcFunction* ftype = ccqt_as_function(type);
+            func->type = ftype;
             func->loc = tok.loc;
             func->mangle = asm_label;
             func->defined = 1;
             func->extern_ = declbase->spec.sp_extern;
             func->static_ = declbase->spec.sp_static;
             func->inline_ = declbase->spec.sp_inline;
-            func->tokens = body_tokens;
             func->params.count = param_names.count;
             func->params.data = param_names.data;
-            if(p->eager_parsing){
-                return cc_unimplemented(p, tok.loc, "eager function body parsing");
-            }
+            func->enclosing = p->current_func;
+            err = cc_parse_func_body_inner(p, func, 1);
+            if(err) return err;
+            err = cc_expect_punct(p, CC_rbrace);
+            if(err) return err;
             return 0;
         }
         // For non-typedef, non-function variable declarations, insert
@@ -6485,41 +6586,32 @@ cc_define_builtin_types(CcParser* p){
     }
     return 0;
 }
+// Core function body parser. Sets up scope, registers params, parses
+// declarations/statements. When terminate_on_rbrace is true, stops at '}'
+// (but does not consume it). When false, stops at EOF (for lazy parsing
+// from saved tokens).
 static
 int
-cc_parse_func_body(CcParser* p, CcFunc* f){
-    if(!f->defined) return CC_UNREACHABLE_ERROR;
-    if(f->parsed) return 0;
-    Marray(CcToken)* tokens = f->tokens;
+cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
+    CcFunction* ftype = f->type;
     int err = 0;
-    // Reverse the token array so it works as LIFO pending
-    for(size_t i = 0, j = tokens->count; i < j; ){
-        j--;
-        CcToken tmp = tokens->data[i];
-        tokens->data[i] = tokens->data[j];
-        tokens->data[j] = tmp;
-        i++;
-    }
-    // Swap into pending
-    Marray(CcToken) saved_pending = p->pending;
-    p->pending = *tokens;
     CcFunc* prev = p->current_func;
     p->current_func = f;
     err = cc_push_scope(p);
-    if(err) goto finally;
+    if(err){ p->current_func = prev; return err; }
     // Register parameters as variables
-    if(f->type->param_count){
-        f->param_vars = Allocator_zalloc(cc_allocator(p), f->type->param_count * sizeof *f->param_vars);
+    if(ftype->param_count){
+        f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
         if(!f->param_vars){ err = CC_OOM_ERROR; goto end_scope; }
     }
     f->frame_size = 0;
-    for(uint32_t i = 0; i < f->type->param_count; i++){
+    for(uint32_t i = 0; i < ftype->param_count; i++){
         Atom name = (i < f->params.count) ? f->params.data[i] : NULL;
         if(!name) continue;
         uint32_t param_sz, param_align;
-        err = cc_sizeof_as_uint(p, f->type->params[i], f->loc, &param_sz);
+        err = cc_sizeof_as_uint(p, ftype->params[i], f->loc, &param_sz);
         if(err) goto end_scope;
-        err = cc_alignof_as_uint(p, f->type->params[i], f->loc, &param_align);
+        err = cc_alignof_as_uint(p, ftype->params[i], f->loc, &param_align);
         if(err) goto end_scope;
         f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
         CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
@@ -6527,7 +6619,7 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
         *var = (CcVariable){
             .name = name,
             .loc = f->loc,
-            .type = f->type->params[i],
+            .type = ftype->params[i],
             .automatic = 1,
             .frame_offset = f->frame_size,
         };
@@ -6536,12 +6628,20 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
         err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
         if(err) goto end_scope;
     }
-    // Parse body: declarations and statements until EOF
     for(;;){
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) goto end_scope;
-        if(peek.type == CC_EOF) break;
+        if(terminate_on_rbrace){
+            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace) break;
+            if(peek.type == CC_EOF){
+                err = cc_error(p, f->loc, "Unexpected EOF in function body");
+                goto end_scope;
+            }
+        }
+        else {
+            if(peek.type == CC_EOF) break;
+        }
         CcDeclBase b = {0};
         err = cc_parse_declaration_specifier(p, &b);
         if(err) goto end_scope;
@@ -6563,13 +6663,33 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
     err = cc_resolve_gotos(p, f->body.data, f->body.count, &f->labels);
     end_scope:
     cc_pop_scope(p);
-    finally:
+    p->current_func = prev;
+    return err;
+}
+
+static
+int
+cc_parse_func_body(CcParser* p, CcFunc* f){
+    if(!f->defined) return CC_UNREACHABLE_ERROR;
+    if(f->parsed) return 0;
+    Marray(CcToken)* tokens = f->tokens;
+    // Reverse the token array so it works as LIFO pending
+    for(size_t i = 0, j = tokens->count; i < j; ){
+        j--;
+        CcToken tmp = tokens->data[i];
+        tokens->data[i] = tokens->data[j];
+        tokens->data[j] = tmp;
+        i++;
+    }
+    // Swap into pending
+    Marray(CcToken) saved_pending = p->pending;
+    p->pending = *tokens;
+    int err = cc_parse_func_body_inner(p, f, 0);
     // Restore pending (tokens array was consumed into p->pending)
     *tokens = p->pending;
     p->pending = saved_pending;
     cc_release_scratch(p, tokens);
     f->tokens = NULL;
-    p->current_func = prev;
     return err;
 }
 

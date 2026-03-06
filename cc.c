@@ -31,6 +31,7 @@
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
 
 int main(int argc, char** argv, char** envp){
+    _Bool eager = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
     AtomTable at = {.allocator=MALLOCATOR};
@@ -110,6 +111,11 @@ int main(int argc, char** argv, char** envp){
             .one_at_a_time = 1,
             .space_sep_is_optional = 1,
         },
+        {
+            .name = SV("--eager"),
+            .dest = ARGDEST(&eager),
+            .help = "Parse functions eagerly instead of deferring to usage",
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -167,6 +173,7 @@ int main(int argc, char** argv, char** envp){
         return 1;
     }
     // Re-apply target in case --target was given (overrides native default)
+    interp.parser.eager_parsing = eager;
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) return err;
