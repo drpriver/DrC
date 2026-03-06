@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include "../Drp/atom_map.h"
+#include "../Drp/typed_enum.h"
 #include "../Drp/free_list.h"
 #include "../Drp/Allocators/arena_allocator.h"
 #include "cc_tok.h"
@@ -61,6 +62,12 @@ cc_clear_attributes(CcAttributes* attrs){
     attrs->bits = 0;
 }
 
+enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
+    CC_BUILTIN_NONE,
+    CC_BUILTIN_CONSTANT_P,
+};
+TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
+
 typedef struct CcParser CcParser;
 struct CcParser {
     union {
@@ -88,6 +95,7 @@ struct CcParser {
     ArenaAllocator scratch_arena;
     uint32_t loop_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
+    AtomMap(uintptr_t) builtins;
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);
@@ -97,6 +105,7 @@ static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);
 static int cc_register_pragmas(CcParser*);
 static int cc_define_builtin_types(CcParser*);
+static int cc_parse_func_body(CcParser*, CcFunc*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

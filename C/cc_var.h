@@ -21,10 +21,14 @@ struct CcVariable {
     uint32_t extern_: 1,
              static_: 1,
              tenative: 1,
-             _padding: 13,
+             automatic: 1,
+             _padding: 12,
              alignment: 16; // 0 means default alignment
     CcExpr* _Nullable initializer;
-    void* _Nullable interp_val; // runtime storage for globals (sizeof(type) bytes)
+    union {
+        void* _Nullable interp_val; // runtime storage for extern/static vars
+        uintptr_t frame_offset;      // offset into CiInterpFrame trailing data (automatic vars)
+    };
 };
 
 #ifdef __clang__

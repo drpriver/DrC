@@ -31,6 +31,7 @@ enum {
     CI_RUNTIME_ERROR = _cc_runtime_error,
     CI_INVALID_VALUE_ERROR = _cc_invalid_value_error,
     CI_LIBRARY_NOT_FOUND_ERROR = _cc_file_not_found_error,
+    CI_SYMBOL_NOT_FOUND = _cc_symbol_not_found_error,
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
@@ -38,6 +39,7 @@ static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
+static int ci_interp_call(CiInterpreter*, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size);
 
 static CppFuncMacroFn ci_shell;
 
@@ -114,31 +116,30 @@ ci_write_float(void* buf, CcBasicTypeKind k, double val){
 static
 void* _Nullable
 ci_var_storage(CiInterpreter* ci, CcVariable* var){
-    for(CiInterpFrame* f = ci->current_frame; f; f = f->parent){
-        void* storage = PM_get(&f->locals, var);
-        if(storage) return storage;
-    }
+    if(var->automatic)
+        return (char*)(ci->current_frame + 1) + var->frame_offset;
     return var->interp_val;
 }
 
 static
 int
-ci_ensure_global_storage(CiInterpreter* ci, CcVariable* var){
-    int err;
+ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
+    if(var->automatic) return 0; // storage is in the frame's trailing data
     if(var->interp_val) return 0;
     if(var->extern_){
         LongString sym = var->mangle? (LongString){var->mangle->length, var->mangle->data}:(LongString){var->name->length, var->name->data};
         void* addr;
-        err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
+        int err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
         if(err) return err;
         var->interp_val = addr;
         return 0;
     }
     uint32_t sz;
-    err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
+    int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
     if(err) return err;
-    var->interp_val = Allocator_zalloc(ci_allocator(ci), sz);
-    if(!var->interp_val) return CC_OOM_ERROR;
+    void* storage = Allocator_zalloc(ci_allocator(ci), sz);
+    if(!storage) return CI_OOM_ERROR;
+    var->interp_val = storage;
     return 0;
 }
 
@@ -174,7 +175,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
     switch(expr->kind){
         case CC_EXPR_VARIABLE: {
             CcVariable* var = expr->var;
-            int err = ci_ensure_global_storage(ci, var);
+            int err = ci_ensure_var_storage(ci, var);
             if(err) return err;
             void* storage = ci_var_storage(ci, var);
             if(!storage)
@@ -287,7 +288,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_VARIABLE: {
         CcVariable* var = expr->var;
-        int err = ci_ensure_global_storage(ci, var);
+        int err = ci_ensure_var_storage(ci, var);
         if(err) return err;
         void* storage = ci_var_storage(ci, var);
         if(!storage)
@@ -368,7 +369,11 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             ci_write_float(result, to.basic.kind, d);
         }
         else {
-            ci_write_uint(result, to_sz, ci_read_uint(&val, from_sz));
+            _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+            if(from_unsigned)
+                ci_write_uint(result, to_sz, ci_read_uint(&val, from_sz));
+            else
+                ci_write_uint(result, to_sz, (uint64_t)ci_read_int(&val, from_sz));
         }
         return 0;
     }
@@ -881,6 +886,25 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(callee->kind != CC_EXPR_FUNCTION)
             return ci_error(ci, expr->loc, "indirect function calls not yet supported in interpreter");
         CcFunc* func = callee->func;
+        if(func->defined){
+            // TODO: refactor to continuation-style eval stack so we can
+            // yield here instead of looping synchronously.
+            int err = ci_interp_call(ci, func, expr->values, nargs, result, size);
+            if(err) return err;
+            CiInterpFrame* frame = ci->current_frame;
+            CiInterpFrame* caller = frame->parent;
+            while(frame->pc < frame->stmt_count){
+                err = ci_interp_step(ci);
+                if(err){
+                    ci->current_frame = caller;
+                    Allocator_free(ci_allocator(ci), frame, sizeof(CiInterpFrame) + frame->data_length);
+                    return err;
+                }
+            }
+            ci->current_frame = caller;
+            Allocator_free(ci_allocator(ci), frame, sizeof(CiInterpFrame) + frame->data_length);
+            return 0;
+        }
         if(!func->native_func){
             LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
             void* addr;
@@ -1088,23 +1112,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_RETURN: {
             if(stmt->exprs[0]){
-                uint64_t small_buf;
-                void* discard = &small_buf;
-                size_t dsz = sizeof small_buf;
-                CcQualType et = stmt->exprs[0]->type;
-                if(!(ccqt_is_basic(et) && et.basic.kind == CCBT_void)){
-                    uint32_t tsz;
-                    int err = cc_sizeof_as_uint(&ci->parser, et, stmt->loc, &tsz);
-                    if(err) return err;
-                    if(tsz > sizeof small_buf){
-                        discard = Allocator_zalloc(ci_scratch_allocator(ci), tsz);
-                        if(!discard) return CC_OOM_ERROR;
-                        dsz = tsz;
-                    }
-                }
-                int err = ci_interp_expr(ci, stmt->exprs[0], discard, dsz);
-                if(discard != &small_buf)
-                    Allocator_free(ci_scratch_allocator(ci), discard, dsz);
+                int err = ci_interp_expr(ci, stmt->exprs[0], frame->return_buf, frame->return_size);
                 if(err) return err;
             }
             frame->pc = frame->stmt_count;
@@ -1137,6 +1145,81 @@ ci_interp_step(CiInterpreter* ci){
             return ci_unimplemented(ci, stmt->loc, "unsupported statement kind");
     }
 }
+
+// Push a new frame for an interpreted function call.
+// Evaluates arguments and sets up parameter storage.
+// Does NOT run the step loop — the caller must drive stepping.
+static
+int
+ci_interp_call(CiInterpreter* ci, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size){
+    int err;
+    if(!func->parsed){
+        err = cc_parse_func_body(&ci->parser, func);
+        if(err) return err;
+    }
+    CcFunction* ftype = func->type;
+    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
+    CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
+    if(!frame) return CI_OOM_ERROR;
+    *frame = (CiInterpFrame){
+        .parent = ci->current_frame,
+        .stmts = func->body.data,
+        .stmt_count = func->body.count,
+        .return_buf = result,
+        .return_size = size,
+        .data_length = func->frame_size,
+    };
+    // Evaluate args into param storage in the frame's trailing data.
+    // We must evaluate in the CALLER's frame context.
+    for(uint32_t i = 0; i < ftype->param_count && i < nargs; i++){
+        CcVariable* var = func->param_vars[i];
+        if(!var) continue;
+        uint32_t param_sz;
+        err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        if(err) return err;
+        void* storage = (char*)(frame + 1) + var->frame_offset;
+        err = ci_interp_expr(ci, args[i], storage, param_sz);
+        if(err) return err;
+    }
+    ci->current_frame = frame;
+    return 0;
+}
+
+static
+int
+ci_call_by_name(CiInterpreter* ci, StringView name, void* result, size_t size){
+    Atom atom = AT_atomize(ci->parser.cpp.at, name.text, name.length);
+    if(!atom) return CI_OOM_ERROR;
+    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    if(!func || !func->defined)
+        return CI_SYMBOL_NOT_FOUND;
+    if(!func->parsed){
+        int err = cc_parse_func_body(&ci->parser, func);
+        if(err) return err;
+    }
+    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
+    CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
+    if(!frame) return CI_OOM_ERROR;
+    *frame = (CiInterpFrame){
+        .parent = ci->current_frame,
+        .stmts = func->body.data,
+        .stmt_count = func->body.count,
+        .return_buf = result,
+        .return_size = size,
+        .data_length = func->frame_size,
+    };
+    CiInterpFrame* saved = ci->current_frame;
+    ci->current_frame = frame;
+    int err = 0;
+    while(frame->pc < frame->stmt_count){
+        err = ci_interp_step(ci);
+        if(err) break;
+    }
+    ci->current_frame = saved;
+    Allocator_free(ci_allocator(ci), frame, alloc_size);
+    return err;
+}
+
 static
 Allocator
 ci_allocator(CiInterpreter* ci){

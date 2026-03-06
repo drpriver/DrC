@@ -6,12 +6,10 @@
 #include <netdb.h>
 
 // Minimal HTTP GET client using BSD sockets.
-// Usage: echo "example.com" | Bin/cc httpget.c
-//    or: modify the host/path below.
 
-const char* host = "httpforever.com";
-const char* path = "/";
-const char* port = "80";
+const char* host = __ENV__("HOST", "localhost");
+const char* path = __ENV__("WEBPATH", "/");
+const char* port = __ENV__("PORT", "6969");
 
 // resolve host
 struct addrinfo hints;

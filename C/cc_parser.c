@@ -940,8 +940,16 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             // right-associative: recurse into assignment_expr
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
-            err = cc_implicit_cast(p, right, left->type, &right);
-            if(err) return err;
+            // For += and -=, pointer +/- integer is valid pointer arithmetic.
+            if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN)
+                && ccqt_kind(left->type) == CC_POINTER
+                && ccqt_is_basic(right->type) && ccbt_is_integer(right->type.basic.kind)){
+                // no cast needed
+            }
+            else {
+                err = cc_implicit_cast(p, right, left->type, &right);
+                if(err) return err;
+            }
             CcExpr* node = cc_alloc_expr(p, 1);
             if(!node) return CC_OOM_ERROR;
             node->kind = kind;
@@ -1069,8 +1077,19 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
             case CC_EXPR_ADD: {
                 _Bool lptr = ccqt_is_pointer_like(left->type);
                 _Bool rptr = ccqt_is_pointer_like(right->type);
-                if(lptr)       result_type = left->type;
-                else if(rptr)  result_type = right->type;
+                if(lptr || rptr) {
+                    CcExpr** ptr_operand = lptr ? &left : &right;
+                    if(ccqt_kind((*ptr_operand)->type) == CC_ARRAY){
+                        CcQualType elem = ccqt_as_array((*ptr_operand)->type)->element;
+                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
+                        if(!ptr) return CC_OOM_ERROR;
+                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        err = cc_implicit_cast(p, *ptr_operand, result_type, ptr_operand);
+                        if(err) return err;
+                    }
+                    else
+                        result_type = (*ptr_operand)->type;
+                }
                 else {
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                     if(err) return err;
@@ -1089,8 +1108,16 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
-                    result_type = left->type;
-
+                    if(ccqt_kind(left->type) == CC_ARRAY){
+                        CcQualType elem = ccqt_as_array(left->type)->element;
+                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
+                        if(!ptr) return CC_OOM_ERROR;
+                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        err = cc_implicit_cast(p, left, result_type, &left);
+                        if(err) return err;
+                    }
+                    else
+                        result_type = left->type;
                 }
                 else {
                     err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
@@ -1316,6 +1343,26 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             return 0;
         }
         case CC_IDENTIFIER: {
+            CcBuiltinFunc builtin = (CcBuiltinFunc)AM_get(&p->builtins, tok.ident.ident);
+            switch(builtin){
+                case CC_BUILTIN_NONE:
+                    break;
+                case CC_BUILTIN_CONSTANT_P: {
+                    err = cc_expect_punct(p, CC_lparen);
+                    if(err) return err;
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, &arg);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                    CcEvalResult ev = cc_eval_expr(arg);
+                    CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
+                    if(!node) return CC_OOM_ERROR;
+                    node->integer = (ev.kind != CC_EVAL_ERROR) ? 1 : 0;
+                    *out = node;
+                    return 0;
+                }
+            }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
                 return cc_error(p, tok.loc, "undeclared identifier '%.*s'",
@@ -1825,7 +1872,15 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     }
                     else {
                         CcQualType at = (*argp)->type;
-                        if(ccqt_is_basic(at)){
+                        if(ccqt_kind(at) == CC_ARRAY){
+                            // Array decays to pointer to element
+                            CcQualType elem = ccqt_as_array(at)->element;
+                            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
+                            if(!ptr){ err = CC_OOM_ERROR; goto call_cleanup; }
+                            err = cc_implicit_cast(p, *argp, (CcQualType){.bits = (uintptr_t)ptr}, argp);
+                            if(err) goto call_cleanup;
+                        }
+                        else if(ccqt_is_basic(at)){
                             CcBasicTypeKind k = at.basic.kind;
                             if(k == CCBT_float){
                                 err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_double), argp);
@@ -6103,7 +6158,31 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             }
             return 0;
         }
-        else if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
+        // For non-typedef, non-function variable declarations, insert
+        // the variable into scope before parsing the initializer so that
+        // self-referential expressions like sizeof(*var) work.
+        CcVariable* _Null_unspecified var = NULL;
+        if(name && !declbase->spec.sp_typedef && !is_fndef){
+            if(declbase->spec.sp_inline)
+                return cc_error(p, tok.loc, "'inline' is only valid on functions");
+            if(declbase->spec.sp_noreturn)
+                return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
+            var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+            if(!var) return CC_OOM_ERROR;
+            *var = (CcVariable){
+                .name = name,
+                .mangle = asm_label,
+                .loc = tok.loc,
+                .type = type,
+                .alignment = declbase->alignment,
+                .extern_ = declbase->spec.sp_extern,
+                .static_ = declbase->spec.sp_static,
+                .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
+            };
+            err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
+            if(err) return err;
+        }
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
             CcToken peek_init;
             err = cc_peek(p, &peek_init);
             if(err) return err;
@@ -6201,30 +6280,29 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->params.data = param_names.data;
         }
         else {
-            if(declbase->spec.sp_inline)
-                return cc_error(p, tok.loc, "'inline' is only valid on functions");
-            if(declbase->spec.sp_noreturn)
-                return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
+            // var was already created and inserted into scope above.
             // Reject incomplete array types without initializer in local scope.
             if(!initializer && !declbase->spec.sp_extern && p->current_func && ccqt_kind(type) == CC_ARRAY){
                 CcArray* arr = ccqt_as_array(type);
                 if(arr->is_incomplete)
                     return cc_error(p, tok.loc, "variable '%.*s' has incomplete array type", name->length, name->data);
             }
-            CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
-            if(!var) return CC_OOM_ERROR;
-            *var = (CcVariable){
-                .name = name,
-                .mangle = asm_label,
-                .loc = tok.loc,
-                .type = type,
-                .alignment = declbase->alignment,
-                .extern_ = declbase->spec.sp_extern,
-                .static_ = declbase->spec.sp_static,
-                .initializer = initializer,
-            };
-            err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
-            if(err) return err;
+            if(var){
+                var->type = type;
+                var->initializer = initializer;
+                if(var->automatic && p->current_func){
+                    uint32_t sz, align;
+                    err = cc_sizeof_as_uint(p, type, tok.loc, &sz);
+                    if(err) return err;
+                    err = cc_alignof_as_uint(p, type, tok.loc, &align);
+                    if(err) return err;
+                    if(var->alignment && var->alignment > align)
+                        align = var->alignment;
+                    p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
+                    var->frame_offset = p->current_func->frame_size;
+                    p->current_func->frame_size += sz;
+                }
+            }
             // In interpreted (non-function) context, emit an assignment
             // statement so the interpreter evaluates the initializer.
             if(initializer){
@@ -6392,7 +6470,107 @@ cc_define_builtin_types(CcParser* p){
     if(err) return CC_OOM_ERROR;
     err = cc_scope_insert_typedef(al, &p->global, uint128_name, ccqt_basic(CCBT_unsigned_int128));
     if(err) return CC_OOM_ERROR;
+
+    // Register builtin functions
+    {
+        static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
+            {SV("__builtin_constant_p"), CC_BUILTIN_CONSTANT_P},
+        };
+        for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
+            Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
+            if(!a) return CC_OOM_ERROR;
+            err = AM_put(&p->builtins, al, a, (void*)builtins[i].id);
+            if(err) return CC_OOM_ERROR;
+        }
+    }
     return 0;
+}
+static
+int
+cc_parse_func_body(CcParser* p, CcFunc* f){
+    if(!f->defined) return CC_UNREACHABLE_ERROR;
+    if(f->parsed) return 0;
+    Marray(CcToken)* tokens = f->tokens;
+    int err = 0;
+    // Reverse the token array so it works as LIFO pending
+    for(size_t i = 0, j = tokens->count; i < j; ){
+        j--;
+        CcToken tmp = tokens->data[i];
+        tokens->data[i] = tokens->data[j];
+        tokens->data[j] = tmp;
+        i++;
+    }
+    // Swap into pending
+    Marray(CcToken) saved_pending = p->pending;
+    p->pending = *tokens;
+    CcFunc* prev = p->current_func;
+    p->current_func = f;
+    err = cc_push_scope(p);
+    if(err) goto finally;
+    // Register parameters as variables
+    if(f->type->param_count){
+        f->param_vars = Allocator_zalloc(cc_allocator(p), f->type->param_count * sizeof *f->param_vars);
+        if(!f->param_vars){ err = CC_OOM_ERROR; goto end_scope; }
+    }
+    f->frame_size = 0;
+    for(uint32_t i = 0; i < f->type->param_count; i++){
+        Atom name = (i < f->params.count) ? f->params.data[i] : NULL;
+        if(!name) continue;
+        uint32_t param_sz, param_align;
+        err = cc_sizeof_as_uint(p, f->type->params[i], f->loc, &param_sz);
+        if(err) goto end_scope;
+        err = cc_alignof_as_uint(p, f->type->params[i], f->loc, &param_align);
+        if(err) goto end_scope;
+        f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
+        CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+        if(!var){ err = CC_OOM_ERROR; goto end_scope; }
+        *var = (CcVariable){
+            .name = name,
+            .loc = f->loc,
+            .type = f->type->params[i],
+            .automatic = 1,
+            .frame_offset = f->frame_size,
+        };
+        f->frame_size += param_sz;
+        f->param_vars[i] = var;
+        err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
+        if(err) goto end_scope;
+    }
+    // Parse body: declarations and statements until EOF
+    for(;;){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) goto end_scope;
+        if(peek.type == CC_EOF) break;
+        CcDeclBase b = {0};
+        err = cc_parse_declaration_specifier(p, &b);
+        if(err) goto end_scope;
+        if(b.spec.bits || b.type.bits){
+            if(b.spec.sp_typedef && !b.spec.sp_typebits && !b.type.bits){
+                err = cc_error(p, peek.loc, "typedef requires a type");
+                goto end_scope;
+            }
+            err = cc_resolve_specifiers(p, &b);
+            if(!err) err = cc_parse_decls(p, &b);
+            if(err) goto end_scope;
+        }
+        else {
+            err = cc_parse_statement(p);
+            if(err) goto end_scope;
+        }
+    }
+    f->parsed = 1;
+    err = cc_resolve_gotos(p, f->body.data, f->body.count, &f->labels);
+    end_scope:
+    cc_pop_scope(p);
+    finally:
+    // Restore pending (tokens array was consumed into p->pending)
+    *tokens = p->pending;
+    p->pending = saved_pending;
+    cc_release_scratch(p, tokens);
+    f->tokens = NULL;
+    p->current_func = prev;
+    return err;
 }
 
 #ifdef __clang__

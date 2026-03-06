@@ -55,6 +55,10 @@ int main(int argc, char** argv, char** envp){
             .current = &interp.parser.global,
         },
         .current_frame = &interp.top_frame,
+        .top_frame = {
+            .return_buf = &interp.exit_code,
+            .return_size = sizeof interp.exit_code,
+        },
     };
     Marray(StringView) libs = {0}, lib_paths = {0};
     ArgParseUserDefinedType tpath = {
@@ -287,6 +291,8 @@ int main(int argc, char** argv, char** envp){
     }
     else {
         // Execute toplevel statements
+        enum { EXIT_CODE_SENTINEL = 0x4a544d }; // "JTM" = jump to main
+        interp.exit_code = EXIT_CODE_SENTINEL;
         interp.current_frame = &interp.top_frame;
         CiInterpFrame* frame = &interp.top_frame;
         frame->stmts = interp.parser.toplevel_statements.data;
@@ -294,6 +300,16 @@ int main(int argc, char** argv, char** envp){
         while(frame->pc < frame->stmt_count){
             err = ci_interp_step(&interp);
             if(err) return err;
+        }
+        // Top-level return sets exit code
+        if(interp.exit_code != EXIT_CODE_SENTINEL)
+            return interp.exit_code;
+        // Call main if defined
+        {
+            int main_ret = 0;
+            err = ci_call_by_name(&interp, SV("main"), &main_ret, sizeof main_ret);
+            if(!err) return main_ret;
+            if(err != _cc_symbol_not_found_error) return err;
         }
         if(0)repl_builtin_command(&interp.parser, SV("/dump symbols"));
     }

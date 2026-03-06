@@ -18,5 +18,6 @@ enum {
     _cc_redefining_builtin_macro_error = 7,
     _cc_runtime_error = 8,
     _cc_invalid_value_error = 9,
+    _cc_symbol_not_found_error = 10,
 };
 #endif

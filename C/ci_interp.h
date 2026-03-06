@@ -8,7 +8,6 @@
 #include "cc_expr.h"
 #include "ci_interp.h"
 #include "cc_parser.h"
-#include "../Drp/pointer_map.h"
 #include "../Drp/stringview.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/atom.h"
@@ -19,11 +18,12 @@
 
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
-    CiInterpFrame* parent;
-    PointerMap locals;
+    CiInterpFrame*_Nullable parent;
     size_t pc;
     size_t stmt_count;
-    CcStatement* stmts;
+    CcStatement*_Null_unspecified stmts;
+    void* return_buf;
+    size_t return_size;
     size_t data_length; // after this is the data, but we can't use a FLA and also embed in CcInterpreter
 };
 
@@ -32,6 +32,7 @@ struct CiInterpreter {
     CcParser parser;
     CiInterpFrame top_frame;
     CiInterpFrame *current_frame;
+    int exit_code;
     AtomMap(void*) opened_libs;
     AtomMap lib_paths;
 };
@@ -47,7 +48,7 @@ static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_register_macros(CiInterpreter*);
 static int ci_load_library(CiInterpreter*, StringView);
-
+static int ci_call_by_name(CiInterpreter*, StringView name, void* result, size_t size);
 
 
 #ifdef __clang__

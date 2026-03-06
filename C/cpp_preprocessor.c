@@ -4414,8 +4414,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SV("__eval"), cpp_builtin_eval, 1, 0, 1},
         {SV("__MIXIN__"), cpp_builtin_mixin, 1, 0, 0},
         {SV("__mixin"), cpp_builtin_mixin, 1, 0, 0},
-        {SV("__env"), cpp_builtin_env, 1, 0, 0},
-        {SV("__ENV__"), cpp_builtin_env, 1, 0, 0},
+        {SV("__env"), cpp_builtin_env, 1, 1, 0},
+        {SV("__ENV__"), cpp_builtin_env, 1, 1, 0},
         {SV("__IF__"), cpp_builtin_if, 3, 0, 1},
         {SV("__if"), cpp_builtin_if, 3, 0, 1},
         {SV("__ident"), cpp_builtin_ident, 1, 0, 0},
@@ -4901,11 +4901,12 @@ static
 int
 cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
-    (void)arg_seps;
     int err = 0;
+    CppToken *arg0_toks; size_t arg0_count;
+    cpp_get_argument(args, arg_seps, 0, &arg0_toks, &arg0_count);
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
-    for(size_t i = 0; i < args->count; i++){
-        CppToken tok = args->data[i];
+    for(size_t i = 0; i < arg0_count; i++){
+        CppToken tok = arg0_toks[i];
         if(tok.type == CPP_WHITESPACE) continue;
         if(tok.type == CPP_STRING){
             if(tok.txt.length > 2)
@@ -4917,6 +4918,16 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     }
     StringView sv = msb_borrow_sv(&sb);
     Atom v = env_getenv2(cpp->env, sv.text, sv.length);
+    if(!v && arg_seps->count >= 1){
+        // Fallback: emit the second argument's tokens directly (already expanded)
+        CppToken *fb_toks; size_t fb_count;
+        cpp_get_argument(args, arg_seps, 1, &fb_toks, &fb_count);
+        for(size_t i = 0; i < fb_count; i++){
+            err = cpp_push_tok(cpp, outtoks, fb_toks[i]);
+            if(err) goto finally;
+        }
+        goto finally;
+    }
     if(!v) v = cpp_atomizef(cpp, "\"\"");
     else v = cpp_atomizef(cpp, "\"%s\"", v->data);
     if(!v) {
