@@ -125,7 +125,7 @@ void move_snake(Tile* board, Tile** snake, int x, int y){
     return;
   }
   if(b == 1){
-    if(glen >= BOARD_SIZE * BOARD_SIZE / 8){
+    if(glen >= BOARD_SIZE * BOARD_SIZE / 4){
       gwinlose = WIN;
       return;
     }

@@ -265,6 +265,79 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
     }
 }
 
+// Userdata for interpreted function closures.
+typedef struct CiClosureData CiClosureData;
+struct CiClosureData {
+    CiInterpreter* ci;
+    CcFunc* func;
+};
+
+// NativeClosureCallback: called when native code invokes an interpreted function
+// through a function pointer (e.g. qsort calling a comparator).
+static
+void
+ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
+    CiClosureData* cd = userdata;
+    CiInterpreter* ci = cd->ci;
+    CcFunc* func = cd->func;
+    CcFunction* ftype = func->type;
+    if(!func->parsed){
+        int err = cc_parse_func_body(&ci->parser, func);
+        if(err) return; // silently fail (no good way to propagate)
+    }
+    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
+    CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
+    if(!frame) return;
+    uint32_t ret_sz = 0;
+    if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void))
+        cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
+    *frame = (CiInterpFrame){
+        .parent = ci->current_frame,
+        .stmts = func->body.data,
+        .stmt_count = func->body.count,
+        .return_buf = rvalue,
+        .return_size = ret_sz,
+        .data_length = func->frame_size,
+    };
+    // Copy raw arg values into param storage.
+    for(uint32_t i = 0; i < ftype->param_count; i++){
+        CcVariable* var = func->param_vars[i];
+        if(!var) continue;
+        uint32_t param_sz;
+        cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        void* storage = (char*)(frame + 1) + var->frame_offset;
+        memcpy(storage, args[i], param_sz);
+    }
+    ci->current_frame = frame;
+    while(frame->pc < frame->stmt_count){
+        int err = ci_interp_step(ci);
+        if(err) break;
+    }
+    CiInterpFrame* caller = frame->parent;
+    ci->current_frame = caller;
+    Allocator_free(ci_allocator(ci), frame, alloc_size);
+}
+
+// Create a native closure for an interpreted function, storing the
+// resulting function pointer in func->native_func.
+static
+int
+ci_create_closure(CiInterpreter* ci, CcFunc* func){
+    CiClosureData* cd = Allocator_zalloc(ci_allocator(ci), sizeof *cd);
+    if(!cd) return CI_OOM_ERROR;
+    cd->ci = ci;
+    cd->func = func;
+    NativeClosure* nc = NULL;
+    int err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
+    if(err){
+        Allocator_free(ci_allocator(ci), cd, sizeof *cd);
+        return err;
+    }
+    func->native_func = native_closure_fn(nc);
+    func->native_call_cache = nc;
+    return 0;
+}
+
 static
 int
 ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
@@ -311,6 +384,22 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_FUNCTION: {
         CcFunc* func = expr->func;
+        if(!func->native_func){
+            if(func->defined){
+                // Create a native closure so interpreted functions can be
+                // used as function pointers (e.g. passed to qsort).
+                int err = ci_create_closure(ci, func);
+                if(err) return err;
+            }
+            else if(func->name){
+                // Resolve external symbol via dlsym.
+                LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
+                void* addr;
+                int err = ci_dlsym(ci, expr->loc, sym, "function", &addr);
+                if(err) return err;
+                func->native_func = (void(*)(void))addr;
+            }
+        }
         void (*fn)(void) = func->native_func;
         if(sizeof fn > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
@@ -324,6 +413,11 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
             uint64_t discard;
             return ci_interp_expr(ci, operand, &discard, sizeof discard);
+        }
+        // Function-to-pointer decay: the function expression already
+        // produces the function pointer value.
+        if(ccqt_kind(from) == CC_FUNCTION){
+            return ci_interp_expr(ci, operand, result, size);
         }
         // Array-to-pointer decay: get address of array data.
         if(ccqt_kind(from) == CC_ARRAY){
@@ -883,9 +977,42 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_CALL: {
         CcExpr* callee = expr->value0;
         uint32_t nargs = expr->call.nargs;
-        if(callee->kind != CC_EXPR_FUNCTION)
-            return ci_error(ci, expr->loc, "indirect function calls not yet supported in interpreter");
-        CcFunc* func = callee->func;
+        CcFunc* func;
+        if(callee->kind == CC_EXPR_FUNCTION){
+            func = callee->func;
+        }
+        else {
+            // Indirect call through function pointer.
+            void (*fn)(void) = NULL;
+            int err = ci_interp_expr(ci, callee, &fn, sizeof fn);
+            if(err) return err;
+            // Get the function type from the pointer type.
+            CcQualType callee_type = callee->type;
+            CcFunction* ftype;
+            if(ccqt_kind(callee_type) == CC_POINTER){
+                CcQualType pointee = ccqt_as_ptr(callee_type)->pointee;
+                if(ccqt_kind(pointee) != CC_FUNCTION)
+                    return ci_error(ci, expr->loc, "Called object is not a function pointer");
+                ftype = ccqt_as_function(pointee);
+            }
+            else if(ccqt_kind(callee_type) == CC_FUNCTION){
+                ftype = ccqt_as_function(callee_type);
+            }
+            else {
+                return ci_error(ci, expr->loc, "Called object is not a function pointer");
+            }
+            // Get or create a stub CcFunc for this function type so
+            // native_call can cache the CIF on it.
+            func = PM_get(&ci->ffi_cache, ftype);
+            if(!func){
+                func = Allocator_zalloc(ci_allocator(ci), sizeof *func);
+                if(!func) return CI_OOM_ERROR;
+                func->type = ftype;
+                err = PM_put(&ci->ffi_cache, ci_allocator(ci), ftype, func);
+                if(err) return err;
+            }
+            func->native_func = fn;
+        }
         if(func->defined){
             // TODO: refactor to continuation-style eval stack so we can
             // yield here instead of looping synchronously.
@@ -906,6 +1033,8 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             return 0;
         }
         if(!func->native_func){
+            if(!func->name)
+                return ci_error(ci, expr->loc, "call through null function pointer");
             LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
             void* addr;
             int err;
@@ -914,62 +1043,44 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             func->native_func = (void(*)(void))addr;
         }
         CcFunction* ftype = func->type;
-        void* args[64];
-        uint64_t arg_storage[64];
-        void* decay_ptrs[64];
+        // Compute total size needed for arg storage.
+        uint32_t nvarargs = (ftype->is_variadic && nargs > ftype->param_count) ? nargs - ftype->param_count : 0;
+        size_t arg_data_size = 0;
         for(uint32_t i = 0; i < nargs; i++){
-            CcExpr* arg = expr->values[i];
-            CcQualType arg_type = arg->type;
-            // Array-to-pointer decay
-            if(ccqt_kind(arg_type) == CC_ARRAY){
-                arg_storage[i] = 0;
-                int err = ci_interp_expr(ci, arg, &arg_storage[i], sizeof arg_storage[i]);
-                if(err) return err;
-                // arg_storage[i] now holds the pointer (from VALUE or VARIABLE decay)
-                memcpy(&decay_ptrs[i], &arg_storage[i], sizeof(void*));
-                args[i] = &decay_ptrs[i];
-            }
-            else {
-                uint32_t arg_sz;
-                int err = cc_sizeof_as_uint(&ci->parser, arg_type, expr->loc, &arg_sz);
-                if(err) return err;
-                if(arg_sz <= sizeof arg_storage[i]){
-                    arg_storage[i] = 0;
-                    err = ci_interp_expr(ci, arg, &arg_storage[i], sizeof arg_storage[i]);
-                    if(err) return err;
-                    args[i] = &arg_storage[i];
-                }
-                else {
-                    void* buf = Allocator_zalloc(ci_scratch_allocator(ci), arg_sz);
-                    if(!buf) return CC_OOM_ERROR;
-                    err = ci_interp_expr(ci, arg, buf, arg_sz);
-                    if(err) return err;
-                    args[i] = buf;
-                }
-            }
+            uint32_t arg_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, expr->values[i]->type, expr->loc, &arg_sz);
+            if(err) return err;
+            if(arg_sz < 8) arg_sz = 8;
+            arg_data_size += arg_sz;
         }
-        CcQualType vararg_types[64];
-        const CcQualType* vt = NULL;
-        if(ftype->is_variadic && nargs > ftype->param_count){
-            for(uint32_t i = ftype->param_count; i < nargs; i++){
-                CcQualType at = expr->values[i]->type;
-                // Array decay type for varargs
-                if(ccqt_kind(at) == CC_ARRAY){
-                    CcArray* arr = ccqt_as_array(at);
-                    CcPointer* ptr = Allocator_zalloc(ci_allocator(ci), sizeof *ptr);
-                    if(!ptr) return CC_OOM_ERROR;
-                    ptr->kind = CC_POINTER;
-                    ptr->pointee = arr->element;
-                    vararg_types[i - ftype->param_count] = (CcQualType){.bits = (uintptr_t)ptr};
-                }
-                else {
-                    vararg_types[i - ftype->param_count] = at;
-                }
+        // One allocation: void*[nargs] | arg data | CcQualType[nvarargs]
+        size_t total = nargs * sizeof(void*)
+                     + arg_data_size
+                     + nvarargs * sizeof(CcQualType);
+        char* buf = Allocator_zalloc(ci_scratch_allocator(ci), total);
+        if(!buf) return CC_OOM_ERROR;
+        void** args = (void**)buf;
+        char* arg_data = buf + nargs * sizeof(void*);
+        CcQualType* vararg_types = (CcQualType*)(buf + total - nvarargs * sizeof(CcQualType));
+        for(uint32_t i = 0; i < nargs; i++){
+            uint32_t arg_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, expr->values[i]->type, expr->loc, &arg_sz);
+            if(err) return err;
+            if(arg_sz < 8) arg_sz = 8;
+            args[i] = arg_data;
+            err = ci_interp_expr(ci, expr->values[i], arg_data, arg_sz);
+            if(err){
+                Allocator_free(ci_scratch_allocator(ci), buf, total);
+                return err;
             }
-            vt = vararg_types;
+            arg_data += arg_sz;
+            if(i >= ftype->param_count && nvarargs)
+                vararg_types[i - ftype->param_count] = expr->values[i]->type;
         }
+        const CcQualType* vt = nvarargs ? vararg_types : NULL;
         uint64_t rval = 0;
         int err = native_call(ci_allocator(ci), func, args, (int)nargs, vt, &rval);
+        Allocator_free(ci_scratch_allocator(ci), buf, total);
         if(err) return err;
         CcQualType ret_type = ftype->return_type;
         if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void)

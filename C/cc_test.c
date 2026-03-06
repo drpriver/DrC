@@ -2312,6 +2312,54 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("long"), .init = SV("<lambda>((long)42)") },
             },
         },
+        {
+            "offsetof: simple member", __LINE__,
+            SV("struct S { int x; double y; char z; };\n"
+               "unsigned long a = __builtin_offsetof(struct S, x);\n"
+               "unsigned long b = __builtin_offsetof(struct S, y);\n"
+               "unsigned long c = __builtin_offsetof(struct S, z);\n"),
+            .vars = {
+                { SV("a"), SV("unsigned long"), .init = SV("0") },
+                { SV("b"), SV("unsigned long"), .init = SV("8") },
+                { SV("c"), SV("unsigned long"), .init = SV("16") },
+            },
+        },
+        {
+            "offsetof: nested member", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "unsigned long r = __builtin_offsetof(struct Outer, inner.b);\n"),
+            .vars = {
+                { SV("r"), SV("unsigned long"), .init = SV("8") },
+            },
+        },
+        {
+            "offsetof: array subscript", __LINE__,
+            SV("struct S { int x; int arr[4]; };\n"
+               "unsigned long r = __builtin_offsetof(struct S, arr[2]);\n"),
+            .vars = {
+                { SV("r"), SV("unsigned long"), .init = SV("12") },
+            },
+        },
+        {
+            "offsetof: array subscript with nested member", __LINE__,
+            SV("struct Inner { char c; int val; };\n"
+               "struct S { int x; struct Inner items[3]; };\n"
+               "unsigned long r = __builtin_offsetof(struct S, items[1].val);\n"),
+            .vars = {
+                { SV("r"), SV("unsigned long"), .init = SV("16") },
+            },
+        },
+        {
+            "offsetof: union member", __LINE__,
+            SV("union U { int x; double y; };\n"
+               "unsigned long a = __builtin_offsetof(union U, x);\n"
+               "unsigned long b = __builtin_offsetof(union U, y);\n"),
+            .vars = {
+                { SV("a"), SV("unsigned long"), .init = SV("0") },
+                { SV("b"), SV("unsigned long"), .init = SV("0") },
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         ArenaAllocator aa = {0};

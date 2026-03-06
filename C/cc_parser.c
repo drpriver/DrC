@@ -1408,7 +1408,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             switch(builtin){
                 case CC_BUILTIN_NONE:
                     break;
-                case CC_BUILTIN_CONSTANT_P: {
+                case CC__builtin_constant_p: {
                     err = cc_expect_punct(p, CC_lparen);
                     if(err) return err;
                     CcExpr* arg;
@@ -1420,6 +1420,87 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
                     if(!node) return CC_OOM_ERROR;
                     node->integer = (ev.kind != CC_EVAL_ERROR) ? 1 : 0;
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_offsetof:{
+                    // __builtin_offsetof(type, member-designator)
+                    // member-designator: ident ( '.' ident | '[' expr ']' )*
+                    err = cc_expect_punct(p, CC_lparen);
+                    if(err) return err;
+                    CcQualType type;
+                    err = cc_parse_type_name(p, &type);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_comma);
+                    if(err) return err;
+                    uint64_t offset = 0;
+                    CcQualType cur = type;
+                    // First element must be an identifier
+                    for(;;){
+                        CcToken member;
+                        err = cc_next_token(p, &member);
+                        if(err) return err;
+                        if(member.type != CC_IDENTIFIER)
+                            return cc_error(p, member.loc, "expected member name in __builtin_offsetof");
+                        CcTypeKind tk = ccqt_is_basic(cur) ? CC_BASIC : ccqt_kind(cur);
+                        CcField* f = NULL;
+                        if(tk == CC_STRUCT){
+                            CcStruct* s = ccqt_as_struct(cur);
+                            f = cc_lookup_field(s->fields, s->field_count, member.ident.ident);
+                        }
+                        else if(tk == CC_UNION){
+                            CcUnion* u = ccqt_as_union(cur);
+                            f = cc_lookup_field(u->fields, u->field_count, member.ident.ident);
+                        }
+                        if(!f)
+                            return cc_error(p, member.loc, "no member named '%s' in type", member.ident.ident->data);
+                        offset += f->offset;
+                        cur = f->type;
+                        // Handle subscripts: [expr][expr]...
+                        for(;;){
+                            CcToken next;
+                            err = cc_peek(p, &next);
+                            if(err) return err;
+                            if(next.type != CC_PUNCTUATOR || next.punct.punct != '[')
+                                break;
+                            cc_next_token(p, &next);
+                            if(ccqt_is_basic(cur) || ccqt_kind(cur) != CC_ARRAY)
+                                return cc_error(p, next.loc, "subscript in __builtin_offsetof requires array type");
+                            CcArray* arr = ccqt_as_array(cur);
+                            CcExpr* idx_expr = NULL;
+                            err = cc_parse_assignment_expr(p, &idx_expr);
+                            if(err) return err;
+                            CcEvalResult idx_val = cc_eval_expr(idx_expr);
+                            int64_t idx;
+                            switch(idx_val.kind){
+                                case CC_EVAL_INT:    idx = idx_val.i; break;
+                                case CC_EVAL_UINT:   idx = (int64_t)idx_val.u; break;
+                                default: return cc_error(p, next.loc, "array index in __builtin_offsetof must be a constant integer");
+                            }
+                            uint32_t elem_size;
+                            err = cc_sizeof_as_uint(p, arr->element, next.loc, &elem_size);
+                            if(err) return err;
+                            offset += (uint64_t)idx * elem_size;
+                            cur = arr->element;
+                            err = cc_expect_punct(p, CC_rbracket);
+                            if(err) return err;
+                        }
+                        // Check for '.' continuation
+                        CcToken next;
+                        err = cc_peek(p, &next);
+                        if(err) return err;
+                        if(next.type == CC_PUNCTUATOR && next.punct.punct == '.'){
+                            cc_next_token(p, &next);
+                            continue;
+                        }
+                        break;
+                    }
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                    CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
+                    CcExpr* node = cc_value_expr(p, tok.loc, size_type);
+                    if(!node) return CC_OOM_ERROR;
+                    node->uinteger = offset;
                     *out = node;
                     return 0;
                 }
@@ -5902,8 +5983,26 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             CcArray* arr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *arr);
             if(!arr) return CC_OOM_ERROR;
             arr->kind = CC_ARRAY;
-            // Parse array dimension
+            // Parse optional qualifiers and 'static' inside [] (C99 §6.7.6.2)
+            // e.g. int a[static restrict 10], int a[const], int a[restrict]
             CcToken peek;
+            for(;;){
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type != CC_KEYWORD) break;
+                if(peek.kw.kw == CC_static){
+                    cc_next_token(p, &peek);
+                    arr->is_static = 1;
+                }
+                else if(peek.kw.kw == CC_const
+                     || peek.kw.kw == CC_volatile
+                     || peek.kw.kw == CC_restrict){
+                    cc_next_token(p, &peek);
+                    // qualifiers on array parameter (apply to decayed pointer)
+                    // ignored for now
+                }
+                else break;
+            }
             err = cc_peek(p, &peek);
             if(err) return err;
             if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
@@ -6575,7 +6674,8 @@ cc_define_builtin_types(CcParser* p){
     // Register builtin functions
     {
         static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
-            {SV("__builtin_constant_p"), CC_BUILTIN_CONSTANT_P},
+            {SV("__builtin_constant_p"), CC__builtin_constant_p},
+            {SV("__builtin_offsetof"), CC__builtin_offsetof},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);

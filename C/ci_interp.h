@@ -11,6 +11,7 @@
 #include "../Drp/stringview.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/atom.h"
+#include "../Drp/pointer_map.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -35,6 +36,7 @@ struct CiInterpreter {
     int exit_code;
     AtomMap(void*) opened_libs;
     AtomMap lib_paths;
+    PointerMap(void*) ffi_cache; // CcFunction* -> NativeCallCache*
 };
 
 // Execute one statement at current pc. Advances pc.

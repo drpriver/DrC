@@ -64,7 +64,8 @@ cc_clear_attributes(CcAttributes* attrs){
 
 enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC_BUILTIN_NONE,
-    CC_BUILTIN_CONSTANT_P,
+    CC__builtin_constant_p,
+    CC__builtin_offsetof,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

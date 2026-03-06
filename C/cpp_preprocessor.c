@@ -4175,7 +4175,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#ifndef NULL\n"
                               "#define NULL ((void*)0)\n"
                               "#endif\n"
-                              "#define offsetof(type, member) ((__SIZE_TYPE__)&((type*)0)->member)\n"
+                              "#define offsetof(type, member) __builtin_offsetof(type, member)\n"
                            )},
         {SV("stdbool.h"),  SV("#pragma once\n"
                               "#define __bool_true_false_are_defined 1\n"
@@ -4289,6 +4289,8 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
             if(err) goto finally;
             err = cpp_add_default_include(cpp, &cpp->framework_paths, "/Library/Frameworks");
+            if(err) goto finally;
+            err = cpp_add_default_include(cpp, &cpp->framework_paths, "/System/Library/Frameworks");
             if(err) goto finally;
             // Find SDK path: $SDKROOT > well-known paths
             const char* sdk = NULL;
