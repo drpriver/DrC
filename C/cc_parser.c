@@ -65,7 +65,7 @@ static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase*
 static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
 static int cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type);
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
-static CcField* _Nullable cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name);
+static _Bool cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type);
 static int cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value);
 static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value);
 static int cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType target_type);
@@ -395,7 +395,7 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
     cast->kind = CC_EXPR_CAST;
     cast->loc = e->loc;
     cast->type = target;
-    cast->value0 = e;
+    cast->lhs = e;
     *out = cast;
     return 0;
 }
@@ -531,7 +531,7 @@ cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr*
     node->kind = kind;
     node->loc = loc;
     node->type = type;
-    node->value0 = operand;
+    node->lhs = operand;
     return node;
 }
 
@@ -543,7 +543,7 @@ cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr
     node->kind = kind;
     node->loc = loc;
     node->type = type;
-    node->value0 = left;
+    node->lhs = left;
     node->values[0] = right;
     return node;
 }
@@ -968,7 +968,7 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_COMMA;
             node->loc = tok.loc;
-            node->value0 = left;
+            node->lhs = left;
             node->values[0] = right;
             node->type = right->type;
             left = node;
@@ -1016,7 +1016,7 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->kind = kind;
             node->loc = tok.loc;
             node->type = left->type;
-            node->value0 = left;
+            node->lhs = left;
             node->values[0] = right;
             *out = node;
             return 0;
@@ -1062,7 +1062,7 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         node->kind = CC_EXPR_TERNARY;
         node->loc = tok.loc;
         node->type = common;
-        node->value0 = cond;
+        node->lhs = cond;
         node->values[0] = then_expr;
         node->values[1] = else_expr;
         *out = node;
@@ -1206,7 +1206,7 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
         node->kind = kind;
         node->loc = tok.loc;
         node->type = result_type;
-        node->value0 = left;
+        node->lhs = left;
         node->values[0] = right;
         left = node;
     }
@@ -1306,7 +1306,7 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             node->kind = kind;
             node->loc = tok.loc;
             node->type = result_type;
-            node->value0 = operand;
+            node->lhs = operand;
             *out = node;
             return 0;
         }
@@ -1443,19 +1443,21 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         if(member.type != CC_IDENTIFIER)
                             return cc_error(p, member.loc, "expected member name in __builtin_offsetof");
                         CcTypeKind tk = ccqt_is_basic(cur) ? CC_BASIC : ccqt_kind(cur);
-                        CcField* f = NULL;
+                        CcFieldLoc floc = {0};
+                        CcQualType member_type = {0};
+                        _Bool found = 0;
                         if(tk == CC_STRUCT){
                             CcStruct* s = ccqt_as_struct(cur);
-                            f = cc_lookup_field(s->fields, s->field_count, member.ident.ident);
+                            found = cc_lookup_field(s->fields, s->field_count, member.ident.ident, &floc, &member_type);
                         }
                         else if(tk == CC_UNION){
                             CcUnion* u = ccqt_as_union(cur);
-                            f = cc_lookup_field(u->fields, u->field_count, member.ident.ident);
+                            found = cc_lookup_field(u->fields, u->field_count, member.ident.ident, &floc, &member_type);
                         }
-                        if(!f)
+                        if(!found)
                             return cc_error(p, member.loc, "no member named '%s' in type", member.ident.ident->data);
-                        offset += f->offset;
-                        cur = f->type;
+                        offset += floc.byte_offset;
+                        cur = member_type;
                         // Handle subscripts: [expr][expr]...
                         for(;;){
                             CcToken next;
@@ -1724,7 +1726,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 node->kind = CC_EXPR_POSTINC;
                 node->loc = tok.loc;
                 node->type = operand->type;
-                node->value0 = operand;
+                node->lhs = operand;
                 operand = node;
                 continue;
             }
@@ -1734,7 +1736,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 node->kind = CC_EXPR_POSTDEC;
                 node->loc = tok.loc;
                 node->type = operand->type;
-                node->value0 = operand;
+                node->lhs = operand;
                 operand = node;
                 continue;
             }
@@ -1753,7 +1755,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                 if(err) return err;
                 node->type = elem_type;
-                node->value0 = operand;
+                node->lhs = operand;
                 node->values[0] = index;
                 operand = node;
                 continue;
@@ -1776,18 +1778,17 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     CcPointer* ptr = ccqt_as_ptr(agg_type);
                     agg_type = ptr->pointee;
                 }
+                CcFieldLoc floc = {0};
                 CcQualType member_type = {0};
                 if(!ccqt_is_basic(agg_type)){
                     CcTypeKind tk = ccqt_kind(agg_type);
                     if(tk == CC_STRUCT){
                         CcStruct* s = ccqt_as_struct(agg_type);
-                        CcField* f = cc_lookup_field(s->fields, s->field_count, member_name);
-                        if(f) member_type = f->type;
+                        cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type);
                     }
                     else if(tk == CC_UNION){
                         CcUnion* u = ccqt_as_union(agg_type);
-                        CcField* f = cc_lookup_field(u->fields, u->field_count, member_name);
-                        if(f) member_type = f->type;
+                        cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type);
                     }
                 }
                 if(!member_type.bits)
@@ -1797,8 +1798,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 mnode->kind = mkind;
                 mnode->loc = tok.loc;
                 mnode->type = member_type;
-                mnode->extra = member_name->length;
-                mnode->text = member_name->data;
+                mnode->field_loc = floc;
                 mnode->values[0] = operand;
                 operand = mnode;
                 continue;
@@ -1828,7 +1828,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     node->kind = CC_EXPR_CALL;
                     node->loc = tok.loc;
                     node->call.nargs = 0;
-                    node->value0 = operand;
+                    node->lhs = operand;
                     node->type = ftype->return_type;
                     operand = node;
                     continue;
@@ -2046,7 +2046,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 node->kind = CC_EXPR_CALL;
                 node->loc = tok.loc;
                 node->call.nargs = nargs;
-                node->value0 = operand;
+                node->lhs = operand;
                 node->type = ftype->return_type;
                 memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
                 operand = node;
@@ -2251,9 +2251,6 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 msb_sprintf(sb, "%llu", (unsigned long long)e->uinteger);
             }
             return;
-        case CC_EXPR_IDENTIFIER:
-            msb_sprintf(sb, "%.*s", e->extra, e->text);
-            return;
         case CC_EXPR_VARIABLE:
             msb_sprintf(sb, "%.*s", e->var->name->length, e->var->name->data);
             return;
@@ -2293,7 +2290,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             return;
         }
         // Unary prefix
-        #define UNOP(K, S) case K: msb_write_literal(sb, S); cc_print_expr(sb, e->value0); return;
+        #define UNOP(K, S) case K: msb_write_literal(sb, S); cc_print_expr(sb, e->lhs); return;
         UNOP(CC_EXPR_NEG,    "-")
         UNOP(CC_EXPR_POS,    "+")
         UNOP(CC_EXPR_BITNOT, "~")
@@ -2304,10 +2301,10 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         UNOP(CC_EXPR_PREDEC, "--")
         #undef UNOP
         // Unary postfix
-        case CC_EXPR_POSTINC: cc_print_expr(sb, e->value0); msb_write_literal(sb, "++"); return;
-        case CC_EXPR_POSTDEC: cc_print_expr(sb, e->value0); msb_write_literal(sb, "--"); return;
+        case CC_EXPR_POSTINC: cc_print_expr(sb, e->lhs); msb_write_literal(sb, "++"); return;
+        case CC_EXPR_POSTDEC: cc_print_expr(sb, e->lhs); msb_write_literal(sb, "--"); return;
         // Binary ops
-        #define BINOP(K, S) case K: msb_write_char(sb, '('); cc_print_expr(sb, e->value0); msb_write_literal(sb, " " S " "); cc_print_expr(sb, e->values[0]); msb_write_char(sb, ')'); return;
+        #define BINOP(K, S) case K: msb_write_char(sb, '('); cc_print_expr(sb, e->lhs); msb_write_literal(sb, " " S " "); cc_print_expr(sb, e->values[0]); msb_write_char(sb, ')'); return;
         BINOP(CC_EXPR_ADD,    "+")
         BINOP(CC_EXPR_SUB,    "-")
         BINOP(CC_EXPR_MUL,    "*")
@@ -2340,14 +2337,14 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         BINOP(CC_EXPR_COMMA,        ",")
         #undef BINOP
         case CC_EXPR_SUBSCRIPT:
-            cc_print_expr(sb, e->value0);
+            cc_print_expr(sb, e->lhs);
             msb_write_char(sb, '[');
             cc_print_expr(sb, e->values[0]);
             msb_write_char(sb, ']');
             return;
         case CC_EXPR_TERNARY:
             msb_write_char(sb, '(');
-            cc_print_expr(sb, e->value0);
+            cc_print_expr(sb, e->lhs);
             msb_write_literal(sb, " ? ");
             cc_print_expr(sb, e->values[0]);
             msb_write_literal(sb, " : ");
@@ -2358,18 +2355,18 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             msb_write_char(sb, '(');
             cc_print_type(sb, e->type);
             msb_write_char(sb, ')');
-            cc_print_expr(sb, e->value0);
+            cc_print_expr(sb, e->lhs);
             return;
         case CC_EXPR_DOT:
             cc_print_expr(sb, e->values[0]);
-            msb_sprintf(sb, ".%.*s", e->extra, e->text);
+            msb_sprintf(sb, ".@%llu", (unsigned long long)e->field_loc.byte_offset);
             return;
         case CC_EXPR_ARROW:
             cc_print_expr(sb, e->values[0]);
-            msb_sprintf(sb, "->%.*s", e->extra, e->text);
+            msb_sprintf(sb, "->@%llu", (unsigned long long)e->field_loc.byte_offset);
             return;
         case CC_EXPR_CALL:
-            cc_print_expr(sb, e->value0);
+            cc_print_expr(sb, e->lhs);
             msb_write_char(sb, '(');
             for(uint32_t i = 0; i < e->call.nargs; i++){
                 if(i) msb_write_literal(sb, ", ");
@@ -2443,10 +2440,8 @@ cc_eval_expr(CcExpr* e){
                 }
             }
             return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
-        case CC_EXPR_IDENTIFIER:
-            return cc_eval_error(); // unresolved identifier
         case CC_EXPR_NEG: {
-            CcEvalResult v = cc_eval_expr(e->value0);
+            CcEvalResult v = cc_eval_expr(e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
                 case CC_EVAL_INT:    v.i = -v.i; return v;
@@ -2456,9 +2451,9 @@ cc_eval_expr(CcExpr* e){
                 default: return cc_eval_error();
             }
         }
-        case CC_EXPR_POS: return cc_eval_expr(e->value0);
+        case CC_EXPR_POS: return cc_eval_expr(e->lhs);
         case CC_EXPR_BITNOT: {
-            CcEvalResult v = cc_eval_expr(e->value0);
+            CcEvalResult v = cc_eval_expr(e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
                 case CC_EVAL_INT:  v.i = ~v.i; return v;
@@ -2467,7 +2462,7 @@ cc_eval_expr(CcExpr* e){
             }
         }
         case CC_EXPR_LOGNOT: {
-            CcEvalResult v = cc_eval_expr(e->value0);
+            CcEvalResult v = cc_eval_expr(e->lhs);
             switch(v.kind){
                 case CC_EVAL_INT:    return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.i};
                 case CC_EVAL_UINT:   return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.u};
@@ -2478,11 +2473,11 @@ cc_eval_expr(CcExpr* e){
             return cc_eval_error();
         }
         case CC_EXPR_COMMA: {
-            cc_eval_expr(e->value0); // discard
+            cc_eval_expr(e->lhs); // discard
             return cc_eval_expr(e->values[0]);
         }
         case CC_EXPR_TERNARY: {
-            CcEvalResult cond = cc_eval_expr(e->value0);
+            CcEvalResult cond = cc_eval_expr(e->lhs);
             _Bool truthy;
             switch(cond.kind){
                 case CC_EVAL_INT:    truthy = cond.i != 0; break;
@@ -2502,7 +2497,7 @@ cc_eval_expr(CcExpr* e){
         case CC_EXPR_EQ: case CC_EXPR_NE:
         case CC_EXPR_LT: case CC_EXPR_GT: case CC_EXPR_LE: case CC_EXPR_GE:
         {
-            CcEvalResult L = cc_eval_expr(e->value0);
+            CcEvalResult L = cc_eval_expr(e->lhs);
             CcEvalResult R = cc_eval_expr(e->values[0]);
             if(L.kind == CC_EVAL_ERROR || R.kind == CC_EVAL_ERROR)
                 return cc_eval_error();
@@ -2576,7 +2571,7 @@ cc_eval_expr(CcExpr* e){
             #undef ICMPOP
         }
         case CC_EXPR_CAST: {
-            CcEvalResult v = cc_eval_expr(e->value0);
+            CcEvalResult v = cc_eval_expr(e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             if(!ccqt_is_basic(e->type)) return v;
             CcBasicTypeKind tk = e->type.basic.kind;
@@ -3315,43 +3310,76 @@ cc_register_pragmas(CcParser* p){
 }
 
 static
-CcField* _Nullable
-cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name){
+_Bool
+cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type){
     for(uint32_t i = 0; i < field_count; i++){
         CcField* f = &fields[i];
         if(f->is_method){
-            if(f->method->name == name) return f;
+            if(f->method->name == name){
+                *out_loc = (CcFieldLoc){.byte_offset = f->offset};
+                *out_type = f->type;
+                return 1;
+            }
             continue;
         }
-        if(f->name == name) return f;
+        if(f->name == name){
+            *out_loc = (CcFieldLoc){
+                .byte_offset = f->offset,
+                .bit_offset = f->is_bitfield ? f->bitoffset : 0,
+                .bit_width = f->is_bitfield ? f->bitwidth : 0,
+            };
+            *out_type = f->type;
+            return 1;
+        }
         if(!f->name){
             // Anonymous member — search recursively
             CcTypeKind tk = ccqt_kind(f->type);
+            CcField* _Nullable sub_fields = NULL;
+            uint32_t sub_count = 0;
             if(tk == CC_STRUCT){
                 CcStruct* inner = ccqt_as_struct(f->type);
-                CcField* found = cc_lookup_field(inner->fields, inner->field_count, name);
-                if(found) return found;
+                sub_fields = inner->fields;
+                sub_count = inner->field_count;
             }
             else if(tk == CC_UNION){
                 CcUnion* inner = ccqt_as_union(f->type);
-                CcField* found = cc_lookup_field(inner->fields, inner->field_count, name);
-                if(found) return found;
+                sub_fields = inner->fields;
+                sub_count = inner->field_count;
+            }
+            if(sub_fields && cc_lookup_field(sub_fields, sub_count, name, out_loc, out_type)){
+                out_loc->byte_offset += f->offset;
+                return 1;
             }
         }
     }
-    return NULL;
+    return 0;
+}
+
+static
+_Bool
+cc_has_field(CcField* _Nullable fields, uint32_t field_count, Atom name){
+    CcFieldLoc loc;
+    CcQualType type;
+    return cc_lookup_field(fields, field_count, name, &loc, &type);
 }
 
 static
 uint32_t
-cc_find_field_index(CcField*_Nullable fields, uint32_t field_count, Atom name, CcField*_Nullable*_Nonnull out_field){
+cc_find_field_index(CcField*_Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type){
     for(uint32_t k = 0; k < field_count; k++){
         if(fields[k].is_method) continue;
         if(fields[k].name == name){
-            *out_field = &fields[k];
+            *out_loc = (CcFieldLoc){
+                .byte_offset = fields[k].offset,
+                .bit_offset = fields[k].is_bitfield ? fields[k].bitoffset : 0,
+                .bit_width = fields[k].is_bitfield ? fields[k].bitwidth : 0,
+            };
+            *out_type = fields[k].type;
             return k;
         }
         if(!fields[k].name){
+            CcFieldLoc inner_loc;
+            CcQualType inner_type;
             CcField* _Nullable sub_fields;
             uint32_t sub_count;
             CcTypeKind tk = ccqt_kind(fields[k].type);
@@ -3364,14 +3392,16 @@ cc_find_field_index(CcField*_Nullable fields, uint32_t field_count, Atom name, C
                 sub_count = ccqt_as_union(fields[k].type)->field_count;
             }
             else continue;
-            CcField* found = cc_lookup_field(sub_fields, sub_count, name);
-            if(found){
-                *out_field = found;
+            if(cc_lookup_field(sub_fields, sub_count, name, &inner_loc, &inner_type)){
+                inner_loc.byte_offset += fields[k].offset;
+                *out_loc = inner_loc;
+                *out_type = inner_type;
                 return k;
             }
         }
     }
-    *out_field = NULL;
+    *out_loc = (CcFieldLoc){0};
+    *out_type = (CcQualType){0};
     return field_count;
 }
 
@@ -3479,14 +3509,15 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
             uint32_t sub_count;
             if(cc_get_fields(*sub, &sub_fields, &sub_count))
                 return cc_error(p, peek.loc, "member designator into non-struct/union type");
-            CcField* sf = cc_lookup_field(sub_fields, sub_count, field_tok.ident.ident);
-            if(!sf)
+            CcFieldLoc inner_loc;
+            CcQualType inner_type;
+            if(!cc_lookup_field(sub_fields, sub_count, field_tok.ident.ident, &inner_loc, &inner_type))
                 return cc_error(p, peek.loc, "no member named '%.*s'",
                     field_tok.ident.ident->length, field_tok.ident.ident->data);
-            fl->byte_offset += sf->offset;
-            *sub = sf->type;
-            fl->bit_offset = sf->is_bitfield ? sf->bitoffset : 0;
-            fl->bit_width = sf->is_bitfield ? sf->bitwidth : 0;
+            fl->byte_offset += inner_loc.byte_offset;
+            fl->bit_offset = inner_loc.bit_offset;
+            fl->bit_width = inner_loc.bit_width;
+            *sub = inner_type;
         }
         else if(peek.punct.punct == CC_lbracket){
             cc_next_token(p, &peek);
@@ -3667,18 +3698,14 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                     if(err) return err;
                     if(field_tok.type != CC_IDENTIFIER)
                         return cc_error(p, field_tok.loc, "expected field name after '.'");
-                    CcField* field;
-                    uint32_t idx = cc_find_field_index(s->fields, s->field_count, field_tok.ident.ident, &field);
+                    CcFieldLoc fl;
+                    CcQualType sub;
+                    uint32_t idx = cc_find_field_index(s->fields, s->field_count, field_tok.ident.ident, &fl, &sub);
                     if(idx >= s->field_count)
                         return cc_error(p, desig_loc, "no member named '%.*s'",
                             field_tok.ident.ident->length, field_tok.ident.ident->data);
                     fi = idx + 1;
-                    CcQualType sub = field->type;
-                    CcFieldLoc fl = {
-                        .byte_offset = base_offset + field->offset,
-                        .bit_offset = field->is_bitfield ? field->bitoffset : 0,
-                        .bit_width = field->is_bitfield ? field->bitwidth : 0,
-                    };
+                    fl.byte_offset += base_offset;
                     err = cc_parse_desig_tail(p, &sub, &fl);
                     if(err) return err;
                     err = cc_parse_init_value(p, sub, fl, 0, desig_loc, buf);
@@ -3758,15 +3785,11 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                 if(err) return err;
                 if(field_tok.type != CC_IDENTIFIER)
                     return cc_error(p, field_tok.loc, "expected field name after '.'");
-                CcField* field = cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident);
-                if(!field)
+                CcFieldLoc fl;
+                CcQualType sub;
+                if(!cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub))
                     return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
-                CcQualType sub = field->type;
-                CcFieldLoc fl = {
-                    .byte_offset = base_offset + field->offset,
-                    .bit_offset = field->is_bitfield ? field->bitoffset : 0,
-                    .bit_width = field->is_bitfield ? field->bitwidth : 0,
-                };
+                fl.byte_offset += base_offset;
                 err = cc_parse_desig_tail(p, &sub, &fl);
                 if(err) return err;
                 err = cc_parse_init_value(p, sub, fl, 0, desig_loc, buf);
@@ -4085,11 +4108,11 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
     for(uint32_t i = 0; i < inner_count; i++){
         CcField* f = &inner_fields[i];
         if(f->is_method){
-            if(cc_lookup_field(existing, existing_count, f->method->name))
+            if(cc_has_field(existing, existing_count, f->method->name))
                 return cc_error(p, loc, "duplicate member '%s'", f->method->name->data);
         }
         else if(f->name){
-            if(cc_lookup_field(existing, existing_count, f->name))
+            if(cc_has_field(existing, existing_count, f->name))
                 return cc_error(p, loc, "duplicate member '%s'", f->name->data);
         }
         else {
@@ -4298,7 +4321,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_parse_attributes(p, &member_attrs);
                         if(err) goto struct_err;
                         cc_clear_attributes(&p->attributes);
-                        if(cc_lookup_field(fields_arr.data, (uint32_t)fields_arr.count, func->name)){
+                        if(cc_has_field(fields_arr.data, (uint32_t)fields_arr.count, func->name)){
                             err = cc_error(p, tok.loc, "duplicate member '%s'", func->name->data);
                             goto struct_err;
                         }
@@ -4371,7 +4394,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                 if(err) goto struct_err;
                 cc_clear_attributes(&p->attributes);
                 // Create field
-                if(member_name && cc_lookup_field(fields_arr.data, (uint32_t)fields_arr.count, member_name)){
+                if(member_name && cc_has_field(fields_arr.data, (uint32_t)fields_arr.count, member_name)){
                     err = cc_error(p, tok.loc, "duplicate member '%s'", member_name->data);
                     goto struct_err;
                 }

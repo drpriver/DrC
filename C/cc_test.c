@@ -50,7 +50,7 @@ TestFunction(test_parse_decls){
             StringView name;
             StringView repr;
         } typedefs[N];
-
+        _Bool skip;
     } testcases[] = {
         {
             "parse decls", __LINE__,
@@ -2360,8 +2360,23 @@ TestFunction(test_parse_decls){
                 { SV("b"), SV("unsigned long"), .init = SV("0") },
             },
         },
+        {
+            "offsetof: anonymous union member", __LINE__,
+            SV("struct S { int x; union { int a; float b;};};\n"
+               "unsigned long ox = __builtin_offsetof(struct S, x);\n"
+               "unsigned long oa = __builtin_offsetof(struct S, a);\n"
+               "unsigned long ob = __builtin_offsetof(struct S, b);\n"),
+            .vars = {
+                { SV("ox"), SV("unsigned long"), .init = SV("0")},
+                { SV("oa"), SV("unsigned long"), .init = SV("4")},
+                { SV("ob"), SV("unsigned long"), .init = SV("4")},
+            },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
+        if(testcases[i].skip){
+            continue;
+        }
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         FileCache* fc = fc_create(al);

@@ -348,6 +348,7 @@ cc_target_x86_64_macos(void){
         .platform_macros = SV(
             "__APPLE__\0"
             "__MACH__\0"
+            "__APPLE_CC__=6000\0"
             "__x86_64__\0"
             "__x86_64\0"
             "__amd64__\0"
@@ -439,6 +440,7 @@ cc_target_aarch64_macos(void){
         .platform_macros = SV(
             "__APPLE__\0"
             "__MACH__\0"
+            "__APPLE_CC__=6000\0"
             "__aarch64__\0"
             "__AARCH64EL__\0"
             "__arm64__\0"

@@ -824,7 +824,7 @@ TestFunction(test_builtin_macros){
         {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
         {"__mixin", SV("#define S(x) #x\n__mixin(S(1)\"+1\")"), SV("\n1+1"), __LINE__, 0},
         {"__env", SV("__env(\"wolo\")"), SV("\"woo\""), __LINE__, 0},
-        {"__ENV__", SV("__ENV__(\"foobar\")"), SV("\"\""), __LINE__, 0},
+        {"__ENV__", SV("__ENV__(\"foobar\")"), SV(""), __LINE__, 0},
         {"__if", SV("__if(1, 2, 3)"), SV("2"), __LINE__, 0},
         {"__if", SV("__if(1, , __eval(1/0))"), SV(""), __LINE__, 0},
         {"__IF__", SV("#define X 1\n__IF__(X, 3, __eval(1/0))"), SV("\n3"), __LINE__, 0},

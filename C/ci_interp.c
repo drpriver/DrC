@@ -143,28 +143,6 @@ ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
     return 0;
 }
 
-static inline
-Atom
-ci_recover_atom(const char* text){
-    return (Atom)(text - offsetof(Atom_, data));
-}
-
-static
-CcField* _Nullable
-ci_find_field(CcExpr* expr, CcQualType agg_type){
-    Atom name = ci_recover_atom(expr->text);
-    CcTypeKind tk = ccqt_kind(agg_type);
-    if(tk == CC_STRUCT){
-        CcStruct* s = ccqt_as_struct(agg_type);
-        return cc_lookup_field(s->fields, s->field_count, name);
-    }
-    if(tk == CC_UNION){
-        CcUnion* u = ccqt_as_union(agg_type);
-        return cc_lookup_field(u->fields, u->field_count, name);
-    }
-    return NULL;
-}
-
 static
 int
 ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
@@ -186,7 +164,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
         case CC_EXPR_DEREF: {
             // *ptr: evaluate ptr, return the pointer value
             void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, expr->value0, &ptr_val, sizeof ptr_val);
+            int err = ci_interp_expr(ci, expr->lhs, &ptr_val, sizeof ptr_val);
             if(err) return err;
             *out = ptr_val;
             return 0;
@@ -197,13 +175,10 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             size_t base_size;
             int err = ci_interp_lvalue(ci, expr->values[0], &base, &base_size);
             if(err) return err;
-            CcQualType agg_type = expr->values[0]->type;
-            CcField* f = ci_find_field(expr, agg_type);
-            if(!f)
-                return ci_error(ci, expr->loc, "no member named '%.*s'", expr->extra, expr->text);
-            if(f->offset + _type_sz > base_size)
+            uint64_t off = expr->field_loc.byte_offset;
+            if(off + _type_sz > base_size)
                 return ci_error(ci, expr->loc, "field access out of bounds");
-            *out = (char*)base + f->offset;
+            *out = (char*)base + off;
             return 0;
         }
         case CC_EXPR_ARROW: {
@@ -211,17 +186,12 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             void* ptr_val = NULL;
             int err = ci_interp_expr(ci, expr->values[0], &ptr_val, sizeof ptr_val);
             if(err) return err;
-            CcQualType ptr_type = expr->values[0]->type;
-            CcPointer* pt = ccqt_as_ptr(ptr_type);
-            CcField* f = ci_find_field(expr, pt->pointee);
-            if(!f)
-                return ci_error(ci, expr->loc, "no member named '%.*s'", expr->extra, expr->text);
-            *out = (char*)ptr_val + f->offset;
+            *out = (char*)ptr_val + expr->field_loc.byte_offset;
             return 0;
         }
         case CC_EXPR_SUBSCRIPT: {
             // base[index]
-            CcExpr* base_expr = expr->value0;
+            CcExpr* base_expr = expr->lhs;
             CcExpr* idx_expr = expr->values[0];
             CcQualType base_type = base_expr->type;
             uint32_t elem_sz;
@@ -407,7 +377,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         return 0;
     }
     case CC_EXPR_CAST: {
-        CcExpr* operand = expr->value0;
+        CcExpr* operand = expr->lhs;
         CcQualType from = operand->type;
         CcQualType to = expr->type;
         if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
@@ -474,7 +444,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_ASSIGN: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->value0, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -492,7 +462,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         uint64_t small_buf;
         void* discard = &small_buf;
         size_t dsz = sizeof small_buf;
-        CcQualType lhs_type = expr->value0->type;
+        CcQualType lhs_type = expr->lhs->type;
         if(!(ccqt_is_basic(lhs_type) && lhs_type.basic.kind == CCBT_void)){
             uint32_t tsz;
             int err = cc_sizeof_as_uint(&ci->parser, lhs_type, expr->loc, &tsz);
@@ -503,7 +473,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
                 dsz = tsz;
             }
         }
-        int err = ci_interp_expr(ci, expr->value0, discard, dsz);
+        int err = ci_interp_expr(ci, expr->lhs, discard, dsz);
         if(discard != &small_buf)
             Allocator_free(ci_scratch_allocator(ci), discard, dsz);
         if(err) return err;
@@ -515,9 +485,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_TERNARY: {
         uint64_t cond = 0;
         uint32_t cond_sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->value0->type, expr->loc, &cond_sz);
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
         if(err) return err;
-        err = ci_interp_expr(ci, expr->value0, &cond, sizeof cond);
+        err = ci_interp_expr(ci, expr->lhs, &cond, sizeof cond);
         if(err) return err;
         if(ci_read_uint(&cond, cond_sz))
             return ci_interp_expr(ci, expr->values[0], result, size);
@@ -527,7 +497,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_ADDR: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->value0, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
         if(err) return err;
         if(sizeof lval > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
@@ -536,7 +506,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_DEREF: {
         void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, expr->value0, &ptr_val, sizeof ptr_val);
+        int err = ci_interp_expr(ci, expr->lhs, &ptr_val, sizeof ptr_val);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -551,33 +521,28 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         size_t base_size;
         int err = ci_interp_lvalue(ci, expr->values[0], &base, &base_size);
         if(err) return err;
-        CcField* f = ci_find_field(expr, expr->values[0]->type);
-        if(!f)
-            return ci_error(ci, expr->loc, "no member named '%.*s'", expr->extra, expr->text);
+        uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
-        if(f->offset + sz > base_size)
+        if(off + sz > base_size)
             return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        memcpy(result, (char*)base + f->offset, sz);
+        memcpy(result, (char*)base + off, sz);
         return 0;
     }
     case CC_EXPR_ARROW: {
         void* ptr_val = NULL;
         int err = ci_interp_expr(ci, expr->values[0], &ptr_val, sizeof ptr_val);
         if(err) return err;
-        CcPointer* pt = ccqt_as_ptr(expr->values[0]->type);
-        CcField* f = ci_find_field(expr, pt->pointee);
-        if(!f)
-            return ci_error(ci, expr->loc, "no member named '%.*s'", expr->extra, expr->text);
+        uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        memcpy(result, (char*)ptr_val + f->offset, sz);
+        memcpy(result, (char*)ptr_val + off, sz);
         return 0;
     }
     case CC_EXPR_SUBSCRIPT: {
@@ -600,7 +565,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, expr->value0, &val, sizeof val);
+        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
         if(err) return err;
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
             double d = -ci_read_float(&val, expr->type.basic.kind);
@@ -616,7 +581,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
-        return ci_interp_expr(ci, expr->value0, result, size);
+        return ci_interp_expr(ci, expr->lhs, result, size);
     }
     case CC_EXPR_BITNOT: {
         uint64_t val = 0;
@@ -625,7 +590,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, expr->value0, &val, sizeof val);
+        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
         if(err) return err;
         uint64_t v = ~ci_read_uint(&val, sz);
         ci_write_uint(result, sz, v);
@@ -634,9 +599,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_LOGNOT: {
         uint64_t val = 0;
         uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->value0->type, expr->loc, &sz);
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
         if(err) return err;
-        err = ci_interp_expr(ci, expr->value0, &val, sizeof val);
+        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
         if(err) return err;
         _Bool v = !ci_read_uint(&val, sz);
         uint32_t rsz;
@@ -653,7 +618,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_POSTDEC: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->value0, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -703,7 +668,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_LT: case CC_EXPR_GT:
     case CC_EXPR_LE: case CC_EXPR_GE:
     case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: {
-        CcExpr* lhs = expr->value0;
+        CcExpr* lhs = expr->lhs;
         CcExpr* rhs = expr->values[0];
         uint64_t lbuf = 0, rbuf = 0;
         uint32_t lsz, rsz, result_sz;
@@ -921,7 +886,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_LSHIFTASSIGN: case CC_EXPR_RSHIFTASSIGN: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->value0, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -975,7 +940,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         return 0;
     }
     case CC_EXPR_CALL: {
-        CcExpr* callee = expr->value0;
+        CcExpr* callee = expr->lhs;
         uint32_t nargs = expr->call.nargs;
         CcFunc* func;
         if(callee->kind == CC_EXPR_FUNCTION){

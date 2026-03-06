@@ -23,7 +23,6 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_SIZEOF_VMT, // sizeof of vla
     CC_EXPR_VARIABLE, // Reference to a variable, eagerly resolved
     CC_EXPR_FUNCTION, // Reference to a function, eagerly resolved
-    CC_EXPR_IDENTIFIER, // maybe unneeded?
     CC_EXPR_COMPOUND_LITERAL,
     CC_EXPR_INIT_LIST,
     CC_EXPR_NEG,
@@ -124,14 +123,12 @@ struct CcExpr {
     };
     SrcLoc loc;
     CcQualType type;
-    // `values` is interpreted based on `kind`.
-    // For most nodes, it is just the referenced exprs, like the rhs and lhs of CC_EXPR_ADD
-    // the lhs will be in value0;
-    // For CC_EXPR_VALUE, it actually should be reinterpreted based on type.
+    // For binary ops: lhs is the left operand, values[0] is the right operand.
+    // For unary ops/casts: lhs is the operand.
+    // For CC_EXPR_VALUE: reinterpret based on type (uinteger, float_, etc).
     union {
-        CcExpr* value0;
+        CcExpr* lhs;
         _Bool boolean;
-        size_t field; // index into struct's fields
         uint64_t uinteger;
         int64_t integer;
         float float_;
@@ -141,6 +138,7 @@ struct CcExpr {
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;
+        CcFieldLoc field_loc; // CC_EXPR_DOT, CC_EXPR_ARROW: resolved field offset+bitfield info
     };
     CcExpr*_Nonnull values[];
 };
