@@ -284,16 +284,6 @@ struct TestStats {
     unsigned long long skipped;
 };
 
-static inline
-struct TestStats
-merge_stats(struct TestStats a, struct TestStats b){
-    a.funcs_executed += b.funcs_executed;
-    a.failures += b.failures;
-    a.executed += b.executed;
-    a.assert_failures += b.assert_failures;
-    return a;
-}
-
 enum {MAX_TEST_NUM = 1000};
 
 // TestResults
@@ -326,6 +316,13 @@ enum TestCaseFlags {
     // This is useful for slow or exhaustive tests that don't need to be run
     // on every change, but you want to keep them compiling and in tree.
     TEST_CASE_FLAGS_SKIP_UNLESS_NAMED = 0x1,
+
+    // TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD
+    // ------------------------------------------
+    // When running multithreaded, each thread will invoke this test function.
+    // The test function is expected to use an internal atomic to distribute
+    // its test cases across the threads.
+    TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD = 0x2,
 };
 
 // TestCase
@@ -1118,6 +1115,7 @@ test_atomic_increment(int*_Nonnull p){
 force_inline
 int
 test_atomic_increment(int*_Nonnull p){
+    // _Static_assert(sizeof(LONG) == sizeof(int), "");
     return InterlockedIncrement((LONG volatile*)p)-1;
 }
 #else
@@ -1134,15 +1132,31 @@ static
 ThreadReturnValue
 test_thread_worker(void*_Nonnull thread_arg){
     struct TestJobData* jd = thread_arg;
+    // First: run all DUPLICATE_FOR_EACH_THREAD tests (each thread runs all of them)
+    for(int i = 0; i < jd->test_count; i++){
+        size_t which_test = jd->which_tests[i];
+        if(!(test_funcs[which_test].flags & TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD))
+            continue;
+        TestFunc* func = test_funcs[which_test].test_func;
+        assert(func);
+        struct TestStats func_result = func();
+        jd->result.failures += func_result.failures;
+        jd->result.executed += func_result.executed;
+        jd->result.assert_failures += func_result.assert_failures;
+        if(func_result.assert_failures || func_result.failures)
+            jd->result.failed_tests[jd->result.n_failed_tests++] = i;
+    }
+    // Then: work-steal non-DUPLICATE tests
     for(;;){
         int idx = test_atomic_increment(jd->test_idx);
         if(idx >= jd->test_count)
             break;
         size_t which_test = jd->which_tests[idx];
+        if(test_funcs[which_test].flags & TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD)
+            continue;
         TestFunc* func = test_funcs[which_test].test_func;
         assert(func);
         struct TestStats func_result = func();
-        jd->result.funcs_executed++;
         jd->result.failures += func_result.failures;
         jd->result.executed += func_result.executed;
         jd->result.assert_failures += func_result.assert_failures;
@@ -1183,9 +1197,9 @@ run_the_tests_multithreaded(size_t*_Nonnull which_tests, int test_count, struct 
     for(int i = 0 ;i < num_threads-1; i++){
         join_thread(handles[i]);
     }
+    result->funcs_executed += test_count;
     for(int i = 0; i < num_threads; i++){
         struct TestResults* r = &jds[i].result;
-        result->funcs_executed += r->funcs_executed;
         result->failures += r->failures;
         result->executed += r->executed;
         result->assert_failures += r->assert_failures;

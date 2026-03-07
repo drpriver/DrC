@@ -1307,8 +1307,8 @@ ci_resolve_refs(CiInterpreter* ci){
             if(err) return err;
             // Parsing may have grown used_funcs/used_vars, loop will pick them up.
         }
-        // Create a native closure so the function can be used as a function pointer.
-        if(!func->native_func){
+        // Create a native closure only if the function's address is taken.
+        if(!func->native_func && func->addr_taken){
             int err = ci_create_closure(ci, func);
             if(err) return err;
         }

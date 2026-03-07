@@ -5,18 +5,19 @@
 
 // Multithreaded Mandelbrot set renderer.
 // Each thread renders a horizontal band of the image.
-// Outputs a PPM image to stdout.
-//   Bin/cc Samples/threads.c > mandelbrot.ppm
+// Outputs a PPM image to a file (default: mandelbrot.ppm).
+//   Bin/cc Samples/threads.c [output.ppm]
 
 enum { W = 800, H = 600, MAX_ITER = 256, NTHREADS = __mixin(__env("NTHREADS", "8")) };
 
 unsigned char pixels[H][W][3];
 
-typedef struct {
+typedef struct Band Band;
+struct Band {
     int y_start;
     int y_end;
     int id;
-} Band;
+};
 
 void hsv_to_rgb(double h, double s, double v, unsigned char* r, unsigned char* g, unsigned char* b){
     int hi = (int)(h / 60.0) % 6;
@@ -54,7 +55,8 @@ void* render_band(void* arg){
                 pixels[y][x][0] = 0;
                 pixels[y][x][1] = 0;
                 pixels[y][x][2] = 0;
-            } else {
+            }
+            else {
                 double hue = 360.0 * iter / MAX_ITER;
                 hsv_to_rgb(hue, 1.0, 1.0, &pixels[y][x][0], &pixels[y][x][1], &pixels[y][x][2]);
             }
@@ -81,8 +83,12 @@ for(int i = 0; i < NTHREADS; i++)
     pthread_join(threads[i], NULL);
 
 // Write PPM
-printf("P6\n%d %d\n255\n", W, H);
+const char* outpath = __argv(1, "mandelbrot.ppm");
+FILE* out = fopen(outpath, "wb");
+if(!out){ perror(outpath); return 1; }
+fprintf(out, "P6\n%d %d\n255\n", W, H);
 for(int y = 0; y < H; y++)
-    fwrite(pixels[y], 3, W, stdout);
+    fwrite(pixels[y], 3, W, out);
+fclose(out);
 
-fprintf(stderr, "Done.\n");
+fprintf(stderr, "Wrote %s\n", outpath);

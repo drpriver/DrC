@@ -2316,6 +2316,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
         }
     }
 done:
+    if(operand->kind == CC_EXPR_FUNCTION)
+        operand->func->addr_taken = 1;
     *out = operand;
     return 0;
 }

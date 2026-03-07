@@ -27,11 +27,11 @@
 #pragma clang assume_nonnull begin
 #endif
 
-TestFunction(test_whatever){
+TestFunction(test_interpreter){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    struct tc { 
+    struct tc {
         const char* name; int line;
         StringView program;
         int exit_code;
@@ -49,9 +49,1003 @@ TestFunction(test_whatever){
                "return result;\n"),
             .exit_code = 45,
         },
+        // Arithmetic
+        {
+            "arith: add", __LINE__,
+            SV("return 3 + 4;\n"),
+            .exit_code = 7,
+        },
+        {
+            "arith: sub", __LINE__,
+            SV("return 10 - 3;\n"),
+            .exit_code = 7,
+        },
+        {
+            "arith: mul", __LINE__,
+            SV("return 6 * 7;\n"),
+            .exit_code = 42,
+        },
+        {
+            "arith: div", __LINE__,
+            SV("return 42 / 6;\n"),
+            .exit_code = 7,
+        },
+        {
+            "arith: mod", __LINE__,
+            SV("return 17 % 5;\n"),
+            .exit_code = 2,
+        },
+        {
+            "arith: negative div", __LINE__,
+            SV("return -7 / 2;\n"),
+            .exit_code = -3,
+        },
+        {
+            "arith: negative mod", __LINE__,
+            SV("return -7 % 3;\n"),
+            .exit_code = -1,
+        },
+        {
+            "arith: precedence", __LINE__,
+            SV("return 2 + 3 * 4;\n"),
+            .exit_code = 14,
+        },
+        {
+            "arith: parens", __LINE__,
+            SV("return (2 + 3) * 4;\n"),
+            .exit_code = 20,
+        },
+        {
+            "arith: unary minus", __LINE__,
+            SV("return -(-5);\n"),
+            .exit_code = 5,
+        },
+        // Bitwise
+        {
+            "bitwise: and", __LINE__,
+            SV("return 0xFF & 0x0F;\n"),
+            .exit_code = 15,
+        },
+        {
+            "bitwise: or", __LINE__,
+            SV("return 0xF0 | 0x0F;\n"),
+            .exit_code = 255,
+        },
+        {
+            "bitwise: xor", __LINE__,
+            SV("return 0xFF ^ 0x0F;\n"),
+            .exit_code = 240,
+        },
+        {
+            "bitwise: not", __LINE__,
+            SV("return ~0 & 0xFF;\n"),
+            .exit_code = 255,
+        },
+        {
+            "bitwise: lshift", __LINE__,
+            SV("return 1 << 4;\n"),
+            .exit_code = 16,
+        },
+        {
+            "bitwise: rshift", __LINE__,
+            SV("return 256 >> 4;\n"),
+            .exit_code = 16,
+        },
+        // Comparison
+        {
+            "cmp: eq true", __LINE__,
+            SV("return 5 == 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cmp: eq false", __LINE__,
+            SV("return 5 == 6;\n"),
+            .exit_code = 0,
+        },
+        {
+            "cmp: neq", __LINE__,
+            SV("return 5 != 6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cmp: lt", __LINE__,
+            SV("return 3 < 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cmp: gt", __LINE__,
+            SV("return 5 > 3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cmp: le", __LINE__,
+            SV("return 5 <= 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cmp: ge", __LINE__,
+            SV("return 5 >= 6;\n"),
+            .exit_code = 0,
+        },
+        // Logical
+        {
+            "logical: and true", __LINE__,
+            SV("return 1 && 2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logical: and false", __LINE__,
+            SV("return 1 && 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "logical: or", __LINE__,
+            SV("return 0 || 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logical: not", __LINE__,
+            SV("return !0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logical: not truthy", __LINE__,
+            SV("return !42;\n"),
+            .exit_code = 0,
+        },
+        {
+            "logical: short circuit and", __LINE__,
+            SV("int x = 0;\n"
+               "0 && (x = 1);\n"
+               "return x;\n"),
+            .exit_code = 0,
+        },
+        {
+            "logical: short circuit or", __LINE__,
+            SV("int x = 0;\n"
+               "1 || (x = 1);\n"
+               "return x;\n"),
+            .exit_code = 0,
+        },
+        // Ternary
+        {
+            "ternary: true", __LINE__,
+            SV("return 1 ? 10 : 20;\n"),
+            .exit_code = 10,
+        },
+        {
+            "ternary: false", __LINE__,
+            SV("return 0 ? 10 : 20;\n"),
+            .exit_code = 20,
+        },
+        // Comma
+        {
+            "comma", __LINE__,
+            SV("return (1, 2, 3);\n"),
+            .exit_code = 3,
+        },
+        // Assignment operators
+        {
+            "assign: plus_eq", __LINE__,
+            SV("int x = 10;\n"
+               "x += 5;\n"
+               "return x;\n"),
+            .exit_code = 15,
+        },
+        {
+            "assign: minus_eq", __LINE__,
+            SV("int x = 10;\n"
+               "x -= 3;\n"
+               "return x;\n"),
+            .exit_code = 7,
+        },
+        {
+            "assign: mul_eq", __LINE__,
+            SV("int x = 6;\n"
+               "x *= 7;\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "assign: div_eq", __LINE__,
+            SV("int x = 42;\n"
+               "x /= 6;\n"
+               "return x;\n"),
+            .exit_code = 7,
+        },
+        {
+            "assign: mod_eq", __LINE__,
+            SV("int x = 17;\n"
+               "x %= 5;\n"
+               "return x;\n"),
+            .exit_code = 2,
+        },
+        {
+            "assign: and_eq", __LINE__,
+            SV("int x = 0xFF;\n"
+               "x &= 0x0F;\n"
+               "return x;\n"),
+            .exit_code = 15,
+        },
+        {
+            "assign: or_eq", __LINE__,
+            SV("int x = 0xF0;\n"
+               "x |= 0x0F;\n"
+               "return x;\n"),
+            .exit_code = 255,
+        },
+        {
+            "assign: xor_eq", __LINE__,
+            SV("int x = 0xFF;\n"
+               "x ^= 0x0F;\n"
+               "return x;\n"),
+            .exit_code = 240,
+        },
+        {
+            "assign: lshift_eq", __LINE__,
+            SV("int x = 1;\n"
+               "x <<= 4;\n"
+               "return x;\n"),
+            .exit_code = 16,
+        },
+        {
+            "assign: rshift_eq", __LINE__,
+            SV("int x = 256;\n"
+               "x >>= 4;\n"
+               "return x;\n"),
+            .exit_code = 16,
+        },
+        // Increment / Decrement
+        {
+            "prefix increment", __LINE__,
+            SV("int x = 5;\n"
+               "return ++x;\n"),
+            .exit_code = 6,
+        },
+        {
+            "postfix increment", __LINE__,
+            SV("int x = 5;\n"
+               "int y = x++;\n"
+               "return y * 10 + x;\n"),
+            .exit_code = 56,
+        },
+        {
+            "prefix decrement", __LINE__,
+            SV("int x = 5;\n"
+               "return --x;\n"),
+            .exit_code = 4,
+        },
+        {
+            "postfix decrement", __LINE__,
+            SV("int x = 5;\n"
+               "int y = x--;\n"
+               "return y * 10 + x;\n"),
+            .exit_code = 54,
+        },
+        // Cast
+        {
+            "cast: int to char truncation", __LINE__,
+            SV("int x = 257;\n"
+               "char c = (char)x;\n"
+               "return c;\n"),
+            .exit_code = 1,
+        },
+        // sizeof
+        {
+            "sizeof int", __LINE__,
+            SV("return sizeof(int);\n"),
+            .exit_code = 4,
+        },
+        {
+            "sizeof char", __LINE__,
+            SV("return sizeof(char);\n"),
+            .exit_code = 1,
+        },
+        {
+            "sizeof expr", __LINE__,
+            SV("int x = 0;\n"
+               "return sizeof x;\n"),
+            .exit_code = 4,
+        },
+        // If/else
+        {
+            "if: true branch", __LINE__,
+            SV("if(1) return 10;\n"
+               "return 20;\n"),
+            .exit_code = 10,
+        },
+        {
+            "if: false branch", __LINE__,
+            SV("if(0) return 10;\n"
+               "return 20;\n"),
+            .exit_code = 20,
+        },
+        {
+            "if: else", __LINE__,
+            SV("if(0) return 10;\n"
+               "else return 20;\n"),
+            .exit_code = 20,
+        },
+        {
+            "if: else if chain", __LINE__,
+            SV("int x = 2;\n"
+               "if(x == 0) return 0;\n"
+               "else if(x == 1) return 1;\n"
+               "else if(x == 2) return 2;\n"
+               "else return 3;\n"),
+            .exit_code = 2,
+        },
+        // While
+        {
+            "while", __LINE__,
+            SV("int i = 0;\n"
+               "int s = 0;\n"
+               "while(i < 5){ s += i; i++; }\n"
+               "return s;\n"),
+            .exit_code = 10,
+        },
+        // Do-while
+        {
+            "do while", __LINE__,
+            SV("int i = 0;\n"
+               "do { i++; } while(i < 5);\n"
+               "return i;\n"),
+            .exit_code = 5,
+        },
+        {
+            "do while: executes at least once", __LINE__,
+            SV("int i = 0;\n"
+               "do { i++; } while(0);\n"
+               "return i;\n"),
+            .exit_code = 1,
+        },
+        // For loop variants
+        {
+            "for: empty body", __LINE__,
+            SV("int i;\n"
+               "for(i = 0; i < 10; i++);\n"
+               "return i;\n"),
+            .exit_code = 10,
+        },
+        {
+            "for: no init", __LINE__,
+            SV("int i = 5;\n"
+               "for(; i < 10; i++);\n"
+               "return i;\n"),
+            .exit_code = 10,
+        },
+        // Break / Continue
+        {
+            "break", __LINE__,
+            SV("int i = 0;\n"
+               "while(1){ if(i == 5) break; i++; }\n"
+               "return i;\n"),
+            .exit_code = 5,
+        },
+        {
+            "continue", __LINE__,
+            SV("int s = 0;\n"
+               "for(int i = 0; i < 10; i++){\n"
+               "  if(i % 2 == 0) continue;\n"
+               "  s += i;\n"
+               "}\n"
+               "return s;\n"),
+            .exit_code = 25,
+        },
+        {
+            "break: nested loops", __LINE__,
+            SV("int s = 0;\n"
+               "for(int i = 0; i < 5; i++){\n"
+               "  for(int j = 0; j < 5; j++){\n"
+               "    if(j == 2) break;\n"
+               "    s++;\n"
+               "  }\n"
+               "}\n"
+               "return s;\n"),
+            .exit_code = 10,
+        },
+        // Switch
+        {
+            "switch: match", __LINE__,
+            SV("int x = 2;\n"
+               "switch(x){\n"
+               "  case 1: return 10;\n"
+               "  case 2: return 20;\n"
+               "  case 3: return 30;\n"
+               "}\n"
+               "return 0;\n"),
+            .exit_code = 20,
+        },
+        {
+            "switch: default", __LINE__,
+            SV("int x = 99;\n"
+               "switch(x){\n"
+               "  case 1: return 10;\n"
+               "  default: return 42;\n"
+               "}\n"
+               "return 0;\n"),
+            .exit_code = 42,
+        },
+        {
+            "switch: fallthrough", __LINE__,
+            SV("int x = 1;\n"
+               "int r = 0;\n"
+               "switch(x){\n"
+               "  case 1: r += 1;\n"
+               "  case 2: r += 2;\n"
+               "  case 3: r += 3; break;\n"
+               "  case 4: r += 4;\n"
+               "}\n"
+               "return r;\n"),
+            .exit_code = 6,
+        },
+        // Goto
+        {
+            "goto: forward", __LINE__,
+            SV("goto end;\n"
+               "return 1;\n"
+               "end:\n"
+               "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "goto: backward (loop)", __LINE__,
+            SV("int i = 0;\n"
+               "top:\n"
+               "if(i >= 5) return i;\n"
+               "i++;\n"
+               "goto top;\n"),
+            .exit_code = 5,
+        },
+        // Blocks / scoping
+        {
+            "block: variable shadowing", __LINE__,
+            SV("int x = 1;\n"
+               "{\n"
+               "  int x = 2;\n"
+               "  x = x + 10;\n"
+               "}\n"
+               "return x;\n"),
+            .exit_code = 1,
+        },
+        // Pointers
+        {
+            "pointer: address and deref", __LINE__,
+            SV("int x = 42;\n"
+               "int *p = &x;\n"
+               "return *p;\n"),
+            .exit_code = 42,
+        },
+        {
+            "pointer: write through", __LINE__,
+            SV("int x = 0;\n"
+               "int *p = &x;\n"
+               "*p = 42;\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "pointer: arithmetic", __LINE__,
+            SV("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "return *(p + 2);\n"),
+            .exit_code = 30,
+        },
+        {
+            "pointer: subscript", __LINE__,
+            SV("int arr[3] = {5, 10, 15};\n"
+               "int *p = arr;\n"
+               "return p[1];\n"),
+            .exit_code = 10,
+        },
+        {
+            "pointer: difference", __LINE__,
+            SV("int arr[5] = {0};\n"
+               "int *a = &arr[1];\n"
+               "int *b = &arr[4];\n"
+               "return (int)(b - a);\n"),
+            .exit_code = 3,
+        },
+        // Arrays
+        {
+            "array: basic", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "return arr[0] + arr[1] + arr[2];\n"),
+            .exit_code = 60,
+        },
+        {
+            "array: zero init", __LINE__,
+            SV("int arr[5] = {0};\n"
+               "return arr[0] + arr[1] + arr[4];\n"),
+            .exit_code = 0,
+        },
+        {
+            "array: partial init", __LINE__,
+            SV("int arr[5] = {1, 2};\n"
+               "return arr[0] + arr[1] + arr[2];\n"),
+            .exit_code = 3,
+        },
+        // Struct
+        {
+            "struct: basic", __LINE__,
+            SV("struct point { int x; int y; };\n"
+               "struct point p = {3, 4};\n"
+               "return p.x * 10 + p.y;\n"),
+            .exit_code = 34,
+        },
+        {
+            "struct: designated init", __LINE__,
+            SV("struct point { int x; int y; };\n"
+               "struct point p = {.y = 7, .x = 3};\n"
+               "return p.x * 10 + p.y;\n"),
+            .exit_code = 37,
+        },
+        {
+            "struct: pointer arrow", __LINE__,
+            SV("struct point { int x; int y; };\n"
+               "struct point p = {5, 6};\n"
+               "struct point *pp = &p;\n"
+               "return pp->x * 10 + pp->y;\n"),
+            .exit_code = 56,
+        },
+        {
+            "struct: nested", __LINE__,
+            SV("struct inner { int val; };\n"
+               "struct outer { struct inner a; int b; };\n"
+               "struct outer o = {{42}, 7};\n"
+               "return o.a.val + o.b;\n"),
+            .exit_code = 49,
+        },
+        // Union
+        {
+            "union: basic", __LINE__,
+            SV("union u { int i; char c; };\n"
+               "union u v;\n"
+               "v.i = 0;\n"
+               "v.c = 5;\n"
+               "return v.c;\n"),
+            .exit_code = 5,
+        },
+        // Enum
+        {
+            "enum", __LINE__,
+            SV("enum color { RED, GREEN, BLUE };\n"
+               "enum color c = BLUE;\n"
+               "return c;\n"),
+            .exit_code = 2,
+        },
+        {
+            "enum: explicit values", __LINE__,
+            SV("enum { A = 10, B, C = 20 };\n"
+               "return A + B + C;\n"),
+            .exit_code = 41,
+        },
+        // Typedef
+        {
+            "typedef", __LINE__,
+            SV("typedef int myint;\n"
+               "myint x = 42;\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        // Functions
+        {
+            "function: basic call", __LINE__,
+            SV("int add(int a, int b){ return a + b; }\n"
+               "return add(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function: recursion (factorial)", __LINE__,
+            SV("int fact(int n){\n"
+               "  if(n <= 1) return 1;\n"
+               "  return n * fact(n - 1);\n"
+               "}\n"
+               "return fact(5);\n"),
+            .exit_code = 120,
+        },
+        {
+            "function: mutual recursion", __LINE__,
+            SV("int is_even(int n);\n"
+               "int is_odd(int n);\n"
+               "int is_even(int n){ if(n == 0) return 1; return is_odd(n - 1); }\n"
+               "int is_odd(int n){ if(n == 0) return 0; return is_even(n - 1); }\n"
+               "return is_even(10);\n"),
+            .exit_code = 1,
+        },
+        // Function pointers
+        {
+            "function pointer", __LINE__,
+            SV("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = add;\n"
+               "return fp(3, 4);\n"),
+            .exit_code = 7,
+            .skip = 1, // requires native call support (libffi)
+        },
+        // Static locals
+        {
+            "static local", __LINE__,
+            SV("int counter(void){\n"
+               "  static int n = 0;\n"
+               "  return n++;\n"
+               "}\n"
+               "counter();\n"
+               "counter();\n"
+               "return counter();\n"),
+            .exit_code = 2,
+            .skip = 1, // BUG: static local initializer re-runs on each call
+        },
+        // Global variables
+        {
+            "global variable", __LINE__,
+            SV("int g = 10;\n"
+               "int get(void){ return g; }\n"
+               "void set(int v){ g = v; }\n"
+               "set(42);\n"
+               "return get();\n"),
+            .exit_code = 42,
+        },
+        // Type conversions
+        {
+            "unsigned wrap", __LINE__,
+            SV("unsigned int x = 0;\n"
+               "x = x - 1;\n"
+               "return (x > 1000) ? 1 : 0;\n"),
+            .exit_code = 1,
+        },
+        // Compound literals
+        {
+            "compound literal", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt p = (struct pt){.x=3, .y=4};\n"
+               "return p.x + p.y;\n"),
+            .exit_code = 7,
+            .skip = 1, // compound literals not yet implemented in interpreter
+        },
+        // String literals
+        {
+            "string literal indexing", __LINE__,
+            SV("const char *s = \"hello\";\n"
+               "return s[1];\n"),
+            .exit_code = 101, // 'e'
+        },
+        // Multidimensional array
+        {
+            "2d array", __LINE__,
+            SV("int m[2][3] = {{1,2,3},{4,5,6}};\n"
+               "return m[1][2];\n"),
+            .exit_code = 6,
+        },
+        // Deeply nested expressions
+        {
+            "nested ternary", __LINE__,
+            SV("int x = 3;\n"
+               "return x == 1 ? 10 : x == 2 ? 20 : x == 3 ? 30 : 40;\n"),
+            .exit_code = 30,
+        },
+        // Zero iteration
+        {
+            "zero iteration for", __LINE__,
+            SV("int s = 5;\n"
+               "for(int i = 0; i < 0; i++) s += i;\n"
+               "return s;\n"),
+            .exit_code = 5,
+        },
+        {
+            "zero iteration while", __LINE__,
+            SV("int s = 5;\n"
+               "while(0) s = 0;\n"
+               "return s;\n"),
+            .exit_code = 5,
+        },
+        // Unary plus
+        {
+            "unary plus", __LINE__,
+            SV("int x = -5;\n"
+               "return +x;\n"),
+            .exit_code = -5,
+        },
+        // Ternary: side effects only in taken branch
+        {
+            "ternary: no side effect in untaken", __LINE__,
+            SV("int x = 0;\n"
+               "int y = 1 ? (x = 10) : (x = 20);\n"
+               "return x;\n"),
+            .exit_code = 10,
+        },
+        // Cast: sign extension
+        {
+            "cast: sign extend char to int", __LINE__,
+            SV("char c = -1;\n"
+               "int x = (int)c;\n"
+               "return x;\n"),
+            .exit_code = -1,
+        },
+        // Subscript equivalence *(a+i)
+        {
+            "subscript: *(a+i)", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "return *(arr + 2);\n"),
+            .exit_code = 30,
+        },
+        // Return without value (void function)
+        {
+            "return void", __LINE__,
+            SV("void noop(void){ return; }\n"
+               "noop();\n"
+               "return 42;\n"),
+            .exit_code = 42,
+        },
+        // for(;;) infinite loop with break
+        {
+            "for: infinite with break", __LINE__,
+            SV("int i = 0;\n"
+               "for(;;){ if(i == 7) break; i++; }\n"
+               "return i;\n"),
+            .exit_code = 7,
+        },
+        // Empty statement
+        {
+            "empty statement", __LINE__,
+            SV(";;;\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        // Integer types: short
+        {
+            "type: short", __LINE__,
+            SV("short s = 127;\n"
+               "return s;\n"),
+            .exit_code = 127,
+        },
+        // Integer types: long
+        {
+            "type: long", __LINE__,
+            SV("long l = 100;\n"
+               "return (int)l;\n"),
+            .exit_code = 100,
+        },
+        // Integer types: unsigned char
+        {
+            "type: unsigned char", __LINE__,
+            SV("unsigned char c = 200;\n"
+               "return c;\n"),
+            .exit_code = 200,
+        },
+        // Multi-level pointer
+        {
+            "pointer: multi-level", __LINE__,
+            SV("int x = 42;\n"
+               "int *p = &x;\n"
+               "int **pp = &p;\n"
+               "return **pp;\n"),
+            .exit_code = 42,
+        },
+        // Null pointer check
+        {
+            "pointer: null check", __LINE__,
+            SV("int *p = 0;\n"
+               "return p == 0;\n"),
+            .exit_code = 1,
+        },
+        // Array decay to pointer
+        {
+            "array: decay to pointer", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "int *p = arr;\n"
+               "return *p;\n"),
+            .exit_code = 10,
+        },
+        // Pointer comparison
+        {
+            "pointer: comparison", __LINE__,
+            SV("int arr[3] = {0};\n"
+               "int *a = &arr[0];\n"
+               "int *b = &arr[2];\n"
+               "return a < b;\n"),
+            .exit_code = 1,
+        },
+        // void* as generic pointer
+        {
+            "pointer: void star", __LINE__,
+            SV("int x = 42;\n"
+               "void *v = &x;\n"
+               "int *p = (int*)v;\n"
+               "return *p;\n"),
+            .exit_code = 42,
+        },
+        // Local variable without initializer
+        {
+            "decl: uninitialized local", __LINE__,
+            SV("int x;\n"
+               "x = 7;\n"
+               "return x;\n"),
+            .exit_code = 7,
+        },
+        // Adjacent string literal concatenation
+        {
+            "string: adjacent concat", __LINE__,
+            SV("const char *s = \"hel\" \"lo\";\n"
+               "return s[3];\n"),
+            .exit_code = 108, // 'l'
+        },
+        // Integer constants: hex and octal
+        {
+            "constant: hex", __LINE__,
+            SV("return 0x2A;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constant: octal", __LINE__,
+            SV("return 052;\n"),
+            .exit_code = 42,
+        },
+        // Integer promotion: unsigned + signed
+        {
+            "promotion: unsigned arith", __LINE__,
+            SV("unsigned int a = 10;\n"
+               "int b = 3;\n"
+               "return (int)(a - b);\n"),
+            .exit_code = 7,
+        },
+        // Truncation on narrowing assignment
+        {
+            "promotion: narrowing truncation", __LINE__,
+            SV("int x = 0x1FF;\n"
+               "unsigned char c = x;\n"
+               "return c;\n"),
+            .exit_code = 255,
+        },
+        // Fibonacci (recursion)
+        {
+            "recursion: fibonacci", __LINE__,
+            SV("int fib(int n){\n"
+               "  if(n <= 1) return n;\n"
+               "  return fib(n-1) + fib(n-2);\n"
+               "}\n"
+               "return fib(11);\n"),
+            .exit_code = 89,
+        },
+        // Early return from deep nesting
+        {
+            "early return from nesting", __LINE__,
+            SV("int find(void){\n"
+               "  for(int i = 0; i < 10; i++){\n"
+               "    for(int j = 0; j < 10; j++){\n"
+               "      if(i == 3 && j == 4) return i * 10 + j;\n"
+               "    }\n"
+               "  }\n"
+               "  return -1;\n"
+               "}\n"
+               "return find();\n"),
+            .exit_code = 34,
+        },
+        // Comma in for-loop
+        {
+            "for: comma in clauses", __LINE__,
+            SV("int a, b;\n"
+               "for(a = 0, b = 10; a < 5; a++, b--)\n"
+               "  ;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 55,
+        },
+        // Struct: sizeof with padding
+        {
+            "struct: sizeof", __LINE__,
+            SV("struct s { char c; int i; };\n"
+               "return sizeof(struct s) >= 5;\n"),
+            .exit_code = 1,
+        },
+        // Union: sizeof is max member
+        {
+            "union: sizeof", __LINE__,
+            SV("union u { char c; int i; };\n"
+               "return sizeof(union u) == sizeof(int);\n"),
+            .exit_code = 1,
+        },
+        // Cast between pointer types
+        {
+            "pointer: cast types", __LINE__,
+            SV("int x = 0x01020304;\n"
+               "char *cp = (char*)&x;\n"
+               "return *cp != 0;\n"),  // just check it doesn't crash; endian-independent
+            .exit_code = 1,
+        },
+        // Sizeof pointer
+        {
+            "sizeof pointer", __LINE__,
+            SV("return sizeof(int*) == sizeof(void*);\n"),
+            .exit_code = 1,
+        },
+        // Sizeof array
+        {
+            "sizeof array", __LINE__,
+            SV("int arr[10];\n"
+               "return sizeof arr / sizeof arr[0];\n"),
+            .exit_code = 10,
+        },
+        // Float / double
+        {
+            "float: basic arith", __LINE__,
+            SV("float f = 3.5f;\n"
+               "return (int)(f * 2.0f);\n"),
+            .exit_code = 7,
+        },
+        {
+            "double: basic arith", __LINE__,
+            SV("double d = 6.5;\n"
+               "return (int)(d + 0.5);\n"),
+            .exit_code = 7,
+        },
+        {
+            "float: truncation to int", __LINE__,
+            SV("float f = 9.9f;\n"
+               "return (int)f;\n"),
+            .exit_code = 9,
+        },
+        {
+            "double: negative truncation", __LINE__,
+            SV("double d = -3.7;\n"
+               "return (int)d;\n"),
+            .exit_code = -3,
+        },
+        {
+            "int to float to int", __LINE__,
+            SV("int a = 7;\n"
+               "float f = (float)a;\n"
+               "return (int)(f + 0.5f);\n"),
+            .exit_code = 7,
+        },
+        {
+            "float: comparison", __LINE__,
+            SV("float a = 1.5f;\n"
+               "float b = 2.5f;\n"
+               "return a < b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "double: sizeof", __LINE__,
+            SV("return sizeof(double);\n"),
+            .exit_code = 8,
+        },
+        {
+            "float: sizeof", __LINE__,
+            SV("return sizeof(float);\n"),
+            .exit_code = 4,
+        },
+        {
+            "float: division", __LINE__,
+            SV("float f = 10.0f / 3.0f;\n"
+               "return (int)(f * 3.0f);\n"),
+            .exit_code = 10,
+        },
+        {
+            "double: mixed arith with int", __LINE__,
+            SV("int a = 5;\n"
+               "double d = a + 2.5;\n"
+               "return (int)d;\n"),
+            .exit_code = 7,
+        },
+        {
+            "lambda (IIFE)", __LINE__,
+            SV("int x = int(){\n"
+               "    return 42;\n"
+               "}();\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE)", __LINE__,
+            SV("return int(){\n"
+               "    return 42;\n"
+               "}();\n"),
+            .exit_code = 42,
+        },
     };
     int err;
-    for(size_t i = 0; i < sizeof testcases/sizeof testcases[0]; i++){
+    static int idx = 0;
+    size_t i = test_atomic_increment(&idx);
+    for(; i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
         if(tc->skip){
             TEST_stats.skipped++;
@@ -136,7 +1130,7 @@ TestFunction(test_whatever){
 
 int main(int argc, char** argv){
     testing_allocator_init();
-    RegisterTest(test_whatever);
+    RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     testing_assert_all_freed();
     return err;
