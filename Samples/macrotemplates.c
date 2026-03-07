@@ -66,7 +66,6 @@ for(size_t i = 0; i < strings.count; i++){
 
 #define Optional(T) __ident("Optional(" S(T) ")")
 #defblock OPTIONAL_DEF(T)
-__if(__get(Optional(T))+0, , // single use macro block
 typedef struct Optional(T) Optional(T);
 static if(__is_pointer(T)){
     struct Optional(T){
@@ -112,16 +111,9 @@ else {
         }
     };
 }
-__set(Optional(T), 1)
-)
 #endblock
 OPTIONAL_DEF(int);
-OPTIONAL_DEF(int);
 OPTIONAL_DEF(const char*);
-OPTIONAL_DEF(const char*);
-OPTIONAL_DEF(char*);
-OPTIONAL_DEF(char*);
-OPTIONAL_DEF(char*);
 OPTIONAL_DEF(char*);
 
 Optional(int) optint = {0};
