@@ -1914,7 +1914,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer o = { 1, (struct Inner){2, 3} };\n"),
             .vars = {
-                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = (struct Inner){@0 = 2, @4 = 3}}") },
+                { SV("o"), SV("struct Outer"), SV("{@0 = 1, @4 = {@0 = 2, @4 = 3}}") },
             },
         },
         {

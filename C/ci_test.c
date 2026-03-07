@@ -700,7 +700,100 @@ TestFunction(test_interpreter){
                "struct pt p = (struct pt){.x=3, .y=4};\n"
                "return p.x + p.y;\n"),
             .exit_code = 7,
-            .skip = 1, // compound literals not yet implemented in interpreter
+        },
+        {
+            "compound literal parens", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt p = ((struct pt){.x=3, .y=4});\n"
+               "return p.x + p.y;\n"),
+            .exit_code = 7,
+        },
+        {
+            "compound literal lvalue", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt* p = &(struct pt){.x=3, .y=4};\n"
+               "return p->x + p->y;\n"),
+            .exit_code = 7,
+        },
+        {
+            "compound literal lvalue parens", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt* p = &((struct pt){.x=3, .y=4});\n"
+               "return p->x + p->y;\n"),
+            .exit_code = 7,
+        },
+        {
+            "compound literal member access", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "return (struct pt){.x=10, .y=20}.y;\n"),
+            .exit_code = 20,
+        },
+        {
+            "compound literal array subscript", __LINE__,
+            SV("return (int[]){10, 20, 30}[1];\n"),
+            .exit_code = 20,
+        },
+        {
+            "compound literal assignment", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt p = {0, 0};\n"
+               "p = (struct pt){.x=5, .y=6};\n"
+               "return p.x + p.y;\n"),
+            .exit_code = 11,
+        },
+        {
+            "compound literal in struct init", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "struct Outer o = { 1, (struct Inner){2, 3} };\n"
+               "return o.x + o.inner.a + o.inner.b;\n"),
+            .exit_code = 6,
+        },
+        {
+            "compound literal array lvalue", __LINE__,
+            SV("int *p = (int[]){10, 20, 30};\n"
+               "p[1] = 99;\n"
+               "return p[1];\n"),
+            .exit_code = 99,
+        },
+        {
+            "compound literal member lvalue", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "(struct pt){.x=3, .y=4}.x = 10;\n"
+               "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "compound literal deep lvalue", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { int x; struct Inner inner; };\n"
+               "struct Outer *p = &(struct Outer){.x=1, .inner={.a=2, .b=3}};\n"
+               "p->inner.a = 42;\n"
+               "return p->inner.a + p->inner.b;\n"),
+            .exit_code = 45,
+        },
+        {
+            "compound literal array element lvalue", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "struct pt *p = (struct pt[]){ {1, 2}, {3, 4} };\n"
+               "p[1].x = 50;\n"
+               "return p[0].x + p[1].x + p[1].y;\n"),
+            .exit_code = 55,
+        },
+        {
+            "compound literal member array decay", __LINE__,
+            SV("struct SmallStr { char txt[8]; };\n"
+               "char *p = (struct SmallStr){\"hello\"}.txt;\n"
+               "return p[1];\n"),
+            .exit_code = 101, // 'e'
+        },
+        {
+            "compound literal as function arg", __LINE__,
+            SV("struct pt { int x; int y; };\n"
+               "int* bump(int* p) { *p += 10; return p; }\n"
+               "int* q = bump(&(struct pt){3, 4}.x);\n"
+               "return *q;\n"),
+            .exit_code = 13,
         },
         // String literals
         {

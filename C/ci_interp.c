@@ -217,6 +217,13 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             }
             return 0;
         }
+        case CC_EXPR_COMMA: {
+            // Evaluate left side for side effects, then get lvalue of right side.
+            // Used by desugared compound literals: (anon = init, anon)
+            int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
+            if(err) return err;
+            return ci_interp_lvalue(ci, frame, expr->values[0], out, size);
+        }
         case CC_EXPR_VALUE:
             if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
                 *out = (void*)(uintptr_t)expr->text;
@@ -999,6 +1006,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         memcpy(result, &rval, ret_sz);
         return 0;
     }
+    case CC_EXPR_COMPOUND_LITERAL:
     case CC_EXPR_INIT_LIST: {
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);

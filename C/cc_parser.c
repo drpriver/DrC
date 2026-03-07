@@ -69,6 +69,7 @@ static _Bool cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, At
 static int cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value);
 static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value);
 static int cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType target_type);
+static int cc_desugar_compound_literal(CcParser* p, CcExpr* compound_lit, CcExpr*_Nullable*_Nonnull out);
 static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_asssert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
@@ -398,6 +399,10 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         cpp_msg_postamble(&p->cpp, e->loc, LOG_PRINT_ERROR);
         return CC_SYNTAX_ERROR;
     }
+    if(e->kind == CC_EXPR_COMPOUND_LITERAL){
+        int err = cc_desugar_compound_literal(p, e, &e);
+        if(err) return err;
+    }
     CcExpr* cast = cc_alloc_expr(p, 0);
     if(!cast) return CC_OOM_ERROR;
     cast->kind = CC_EXPR_CAST;
@@ -558,6 +563,56 @@ cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr
     node->lhs = left;
     node->values[0] = right;
     return node;
+}
+
+// Desugar a CC_EXPR_COMPOUND_LITERAL into an anonymous variable:
+//   (type){init} -> (__anon = init_list, __anon)
+// The anonymous variable has block scope lifetime.
+static
+int
+cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull out){
+    CcQualType type = cl->type;
+    SrcLoc loc = cl->loc;
+    CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
+    if(!anon) return CC_OOM_ERROR;
+    *anon = (CcVariable){
+        .name = nil_atom,
+        .loc = loc,
+        .type = type,
+        .automatic = p->current_func != NULL,
+    };
+    if(anon->automatic){
+        uint32_t sz, align;
+        int err = cc_sizeof_as_uint(p, type, loc, &sz);
+        if(err) return err;
+        err = cc_alignof_as_uint(p, type, loc, &align);
+        if(err) return err;
+        p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
+        anon->frame_offset = p->current_func->frame_size;
+        p->current_func->frame_size += sz;
+    } else {
+        int perr = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
+        if(perr) return CC_OOM_ERROR;
+    }
+    cl->kind = CC_EXPR_INIT_LIST; // demote to plain init list for the assignment RHS
+    CcExpr* var_ref = cc_alloc_expr(p, 0);
+    if(!var_ref) return CC_OOM_ERROR;
+    var_ref->kind = CC_EXPR_VARIABLE;
+    var_ref->loc = loc;
+    var_ref->type = type;
+    var_ref->var = anon;
+    CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, loc, type, var_ref, cl);
+    if(!assign) return CC_OOM_ERROR;
+    CcExpr* var_ref2 = cc_alloc_expr(p, 0);
+    if(!var_ref2) return CC_OOM_ERROR;
+    var_ref2->kind = CC_EXPR_VARIABLE;
+    var_ref2->loc = loc;
+    var_ref2->type = type;
+    var_ref2->var = anon;
+    CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, loc, type, assign, var_ref2);
+    if(!comma) return CC_OOM_ERROR;
+    *out = comma;
+    return 0;
 }
 
 // Validate that a cast from `from` to `to` is legal.
@@ -990,6 +1045,8 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             break;
         }
     }
+    if(left->kind == CC_EXPR_COMPOUND_LITERAL)
+        return cc_desugar_compound_literal(p, left, out);
     *out = left;
     return 0;
 }
@@ -1023,6 +1080,8 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_implicit_cast(p, right, left->type, &right);
                 if(err) return err;
             }
+            if(kind == CC_EXPR_ASSIGN && right->kind == CC_EXPR_COMPOUND_LITERAL)
+                right->kind = CC_EXPR_INIT_LIST;
             CcExpr* node = cc_alloc_expr(p, 1);
             if(!node) return CC_OOM_ERROR;
             node->kind = kind;
@@ -1382,12 +1441,20 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     break;
                 case CC_EXPR_ADDR: {
+                    if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
+                        err = cc_desugar_compound_literal(p, operand, &operand);
+                        if(err) return err;
+                    }
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                     if(!ptr) return CC_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
                     break;
                 }
                 default: // PREINC, PREDEC
+                    if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
+                        err = cc_desugar_compound_literal(p, operand, &operand);
+                        if(err) return err;
+                    }
                     result_type = operand->type;
                     break;
             }
@@ -1918,6 +1985,19 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
         }
         if(tok.punct.punct != CC_lparen && tok.punct.punct != CC_dot && tok.punct.punct != CC_arrow)
             receiver = NULL;
+        // Compound literal used as lvalue in postfix context: desugar to anonymous variable.
+        // Only desugar for actual postfix operators that need an lvalue, not for
+        // tokens like ',' or '}' that just terminate the expression.
+        if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
+            switch((uint32_t)tok.punct.punct){
+                case CC_plusplus: case CC_minusminus:
+                case CC_lbracket: case CC_dot: case CC_arrow:
+                    err = cc_desugar_compound_literal(p, operand, &operand);
+                    if(err) return err;
+                    break;
+                default: break;
+            }
+        }
         switch((uint32_t)tok.punct.punct){
             case CC_plusplus: {
                 CcExpr* node = cc_alloc_expr(p, 0);
@@ -3915,6 +3995,8 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
 static
 int
 cc_init_apply_value(CcParser* p, CcQualType field_type, CcFieldLoc field_loc, CcExpr* value, SrcLoc loc, Marray(CcInitEntry)* buf){
+    if(value->kind == CC_EXPR_COMPOUND_LITERAL)
+        value->kind = CC_EXPR_INIT_LIST;
     CcQualType unqual = field_type;
     unqual.is_const = 0; unqual.is_volatile = 0; unqual.is_atomic = 0;
     CcTypeKind ftk = ccqt_kind(unqual);
@@ -6943,6 +7025,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     int perr = PM_put(&p->used_vars, cc_allocator(p), var, var);
                     if(perr) return CC_OOM_ERROR;
                 }
+                if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
+                    initializer->kind = CC_EXPR_INIT_LIST;
                 CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, tok.loc, type, var_ref, initializer);
                 if(!assign) return CC_OOM_ERROR;
                 size_t si;
