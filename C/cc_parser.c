@@ -178,6 +178,7 @@ struct CcDeclBase {
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p);
+static int cc_parse_one(CcParser* p);
 static int cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels);
 static int cc_skip_braced_block(CcParser* p);
 static int cc_eval_static_if_cond(CcParser* p, _Bool* out);
@@ -1535,7 +1536,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         if(err) return err;
                         if(member.type != CC_IDENTIFIER)
                             return cc_error(p, member.loc, "expected member name in __builtin_offsetof");
-                        CcTypeKind tk = ccqt_is_basic(cur) ? CC_BASIC : ccqt_kind(cur);
+                        CcTypeKind tk = ccqt_kind(cur);
                         CcFieldLoc floc = {0};
                         CcQualType member_type = {0};
                         _Bool found = 0;
@@ -1559,7 +1560,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             if(next.type != CC_PUNCTUATOR || next.punct.punct != '[')
                                 break;
                             cc_next_token(p, &next);
-                            if(ccqt_is_basic(cur) || ccqt_kind(cur) != CC_ARRAY)
+                            if(ccqt_kind(cur) != CC_ARRAY)
                                 return cc_error(p, next.loc, "subscript in __builtin_offsetof requires array type");
                             CcArray* arr = ccqt_as_array(cur);
                             CcExpr* idx_expr = NULL;
@@ -1615,14 +1616,88 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__type_equals: // (expr-or-type, type)
-                case CC__is_pointer: // (expr-or-type)
-                case CC__is_arithmetic: // (expr-or-type)
-                case CC__is_castable_to: // (expr-or-type, type)
-                case CC__is_implicitly_castable_to: // (expr-or-type, type)
-                case CC__has_quals: // (expr-or-type, qualifier)
-                case CC__is_const: // (expr-or-type)
-                    return cc_unimplemented(p, tok.loc, "TODO");
+                case CC__is_pointer:
+                case CC__is_arithmetic:
+                case CC__is_const:
+                case CC__type_equals:
+                case CC__is_castable_to:
+                case CC__is_implicitly_castable_to:
+                case CC__has_quals: {
+                    CcBuiltinFunc which = builtin;
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    // Parse first arg: type-or-expr
+                    CcQualType first_type;
+                    CcToken peek2;
+                    err = cc_peek(p, &peek2);
+                    if(err) return err;
+                    if(cc_is_type_start(p, &peek2)){
+                        err = cc_parse_type_name(p, &first_type);
+                        if(err) return err;
+                    }
+                    else {
+                        CcExpr* arg;
+                        err = cc_parse_assignment_expr(p, &arg);
+                        if(err) return err;
+                        first_type = arg->type;
+                    }
+                    _Bool result = 0;
+                    CcTypeKind fk = ccqt_kind(first_type);
+                    switch(which){
+                        case CC__is_pointer:
+                            result = fk == CC_POINTER;
+                            break;
+                        case CC__is_arithmetic:
+                            result = (fk == CC_BASIC && ccbt_is_arithmetic(first_type.basic.kind)) || fk == CC_ENUM;
+                            break;
+                        case CC__is_const:
+                            result = first_type.is_const;
+                            break;
+                        case CC__type_equals:
+                        case CC__is_castable_to:
+                        case CC__is_implicitly_castable_to:
+                        case CC__has_quals: {
+                            err = cc_expect_punct(p, ',');
+                            if(err) return err;
+                            CcQualType second_type;
+                            err = cc_peek(p, &peek2);
+                            if(err) return err;
+                            if(cc_is_type_start(p, &peek2)){
+                                err = cc_parse_type_name(p, &second_type);
+                                if(err) return err;
+                            }
+                            else {
+                                CcExpr* arg2;
+                                err = cc_parse_assignment_expr(p, &arg2);
+                                if(err) return err;
+                                second_type = arg2->type;
+                            }
+                            if(which == CC__type_equals)
+                                result = first_type.bits == second_type.bits;
+                            else if(which == CC__is_implicitly_castable_to)
+                                result = cc_implicit_convertible(first_type, second_type);
+                            else if(which == CC__is_castable_to)
+                                // For now, same as implicit — explicit casts are always allowed between scalars
+                                result = cc_implicit_convertible(first_type, second_type);
+                            else if(which == CC__has_quals){
+                                // second_type's qualifiers are treated as a mask
+                                if(second_type.is_const && !first_type.is_const) result = 0;
+                                else if(second_type.is_volatile && !first_type.is_volatile) result = 0;
+                                else if(second_type.is_atomic && !first_type.is_atomic) result = 0;
+                                else result = 1;
+                            }
+                            break;
+                        }
+                        default: break;
+                    }
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
+                    if(!node) return CC_OOM_ERROR;
+                    node->integer = result ? 1 : 0;
+                    *out = node;
+                    return 0;
+                }
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -1899,26 +1974,28 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 Atom member_name = member.ident.ident;
                 // Resolve the aggregate type, allowing . and -> interchangeably.
                 CcQualType agg_type = operand->type;
-                if(!ccqt_is_basic(agg_type) && ccqt_kind(agg_type) == CC_POINTER){
+                if(ccqt_kind(agg_type) == CC_POINTER){
                     CcPointer* ptr = ccqt_as_ptr(agg_type);
                     agg_type = ptr->pointee;
                     mkind = CC_EXPR_ARROW;
-                } else {
+                }
+                else {
                     mkind = CC_EXPR_DOT;
                 }
                 CcFieldLoc floc = {0};
                 CcQualType member_type = {0};
                 CcFunc* _Null_unspecified method = NULL;
-                if(!ccqt_is_basic(agg_type)){
-                    CcTypeKind tk = ccqt_kind(agg_type);
-                    if(tk == CC_STRUCT){
-                        CcStruct* s = ccqt_as_struct(agg_type);
-                        cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type, &method);
-                    }
-                    else if(tk == CC_UNION){
-                        CcUnion* u = ccqt_as_union(agg_type);
-                        cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type, &method);
-                    }
+                CcTypeKind tk = ccqt_kind(agg_type);
+                if(tk == CC_STRUCT){
+                    CcStruct* s = ccqt_as_struct(agg_type);
+                    cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type, &method);
+                }
+                else if(tk == CC_UNION){
+                    CcUnion* u = ccqt_as_union(agg_type);
+                    cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type, &method);
+                }
+                else {
+                    return cc_error(p, member.loc, "not a struct or union");
                 }
                 if(!member_type.bits)
                     return cc_error(p, member.loc, "no member named '%s'", member_name->data);
@@ -1934,7 +2011,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     if(mkind == CC_EXPR_ARROW){
                         // Already a pointer
                         receiver = operand;
-                    } else {
+                    }
+                    else {
                         // Take address of the object
                         CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                         if(!ptr) return CC_OOM_ERROR;
@@ -2280,7 +2358,6 @@ static void cc_print_type_post(MStringBuilder*, CcQualType t);
 static
 _Bool
 cc_type_needs_parens(CcQualType t){
-    if(ccqt_is_basic(t)) return 0;
     CcTypeKind k = ccqt_kind(t);
     return k == CC_ARRAY || k == CC_FUNCTION;
 }
@@ -2288,16 +2365,15 @@ cc_type_needs_parens(CcQualType t){
 static
 void
 cc_print_type_pre(MStringBuilder* sb, CcQualType t){
-    if(ccqt_is_basic(t)){
-        if(t.is_const) msb_write_literal(sb, "const ");
-        if(t.is_volatile) msb_write_literal(sb, "volatile ");
-        if(t.is_atomic) msb_write_literal(sb, "_Atomic ");
-        CcBasicTypeKind k = t.basic.kind;
-        msb_sprintf(sb, "%s", k < CCBT_COUNT ? cc_basic_names[k] : "<bad-basic>");
-        return;
-    }
     CcTypeKind kind = ccqt_kind(t);
     switch(kind){
+        case CC_BASIC:
+            if(t.is_const) msb_write_literal(sb, "const ");
+            if(t.is_volatile) msb_write_literal(sb, "volatile ");
+            if(t.is_atomic) msb_write_literal(sb, "_Atomic ");
+            CcBasicTypeKind k = t.basic.kind;
+            msb_sprintf(sb, "%s", k < CCBT_COUNT ? cc_basic_names[k] : "<bad-basic>");
+            return;
         case CC_POINTER: {
             CcPointer* p = ccqt_as_ptr(t);
             cc_print_type_pre(sb, p->pointee);
@@ -2344,8 +2420,6 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
             cc_print_type_pre(sb, v->element);
             return;
         }
-        case CC_BASIC:
-            break;
     }
     msb_sprintf(sb, "<type:%d>", (int)kind);
 }
@@ -2353,9 +2427,7 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
 static
 void
 cc_print_type_post(MStringBuilder* sb, CcQualType t){
-    if(ccqt_is_basic(t)) return;
-    CcTypeKind kind = ccqt_kind(t);
-    switch(kind){
+    switch(ccqt_kind(t)){
         case CC_POINTER: {
             CcPointer* p = ccqt_as_ptr(t);
             if(cc_type_needs_parens(p->pointee))
@@ -2619,6 +2691,7 @@ cc_eval_expr(CcExpr* e){
                         return cc_eval_error();
                 }
             }
+            return cc_eval_error();
             return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
         case CC_EXPR_NEG: {
             CcEvalResult v = cc_eval_expr(e->lhs);
@@ -2807,11 +2880,118 @@ cc_print_eval_result(MStringBuilder* sb, CcEvalResult r){
     }
 }
 
+// Skip all remaining else/else-if branches (condition was already taken).
+static
+int
+cc_skip_static_else_chain(CcParser* p){
+    int err;
+    CcToken tok;
+    for(;;){
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type != CC_KEYWORD || tok.kw.kw != CC_else)
+            return 0;
+        cc_next_token(p, &tok); // consume `else`
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_KEYWORD && tok.kw.kw == CC_if){
+            cc_next_token(p, &tok); // consume `if`
+            // Skip the condition: ( ... )
+            err = cc_expect_punct(p, '(');
+            if(err) return err;
+            int depth = 1;
+            while(depth > 0){
+                err = cc_next_token(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_EOF) return cc_error(p, tok.loc, "unterminated static if condition");
+                if(tok.type == CC_PUNCTUATOR){
+                    if(tok.punct.punct == '(') depth++;
+                    else if(tok.punct.punct == ')') depth--;
+                }
+            }
+            err = cc_skip_braced_block(p);
+            if(err) return err;
+            continue; // check for more else/else-if
+        }
+        // plain else { ... }
+        return cc_skip_braced_block(p);
+    }
+}
+
+// Parse a braced block body, executing its contents.
+// No scope push/pop — declarations are injected into the current scope.
+static
+int
+cc_parse_static_if_body(CcParser* p, SrcLoc loc){
+    int err = cc_expect_punct(p, '{');
+    if(err) return err;
+    for(;;){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        if(peek.type == CC_EOF) return cc_error(p, loc, "unterminated static if block");
+        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'){
+            cc_next_token(p, &peek);
+            break;
+        }
+        err = cc_parse_one(p);
+        if(err) return err;
+    }
+    return 0;
+}
+
+// Handle `static if(cond) { ... } [else if(cond) { ... }]* [else { ... }]`
+// Assumes `static` and `if` have already been consumed.
+static
+int
+cc_parse_static_if(CcParser* p, SrcLoc loc){
+    int err;
+    CcToken tok;
+    _Bool cond;
+    err = cc_eval_static_if_cond(p, &cond);
+    if(err) return err;
+    if(cond){
+        err = cc_parse_static_if_body(p, loc);
+        if(err) return err;
+        return cc_skip_static_else_chain(p);
+    }
+    err = cc_skip_braced_block(p);
+    if(err) return err;
+    // Check for else / else if
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_KEYWORD || tok.kw.kw != CC_else)
+        return 0;
+    cc_next_token(p, &tok); // consume `else`
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_KEYWORD && tok.kw.kw == CC_if){
+        cc_next_token(p, &tok); // consume `if`
+        return cc_parse_static_if(p, loc); // recurse for else-if
+    }
+    // plain else { ... }
+    return cc_parse_static_if_body(p, loc);
+}
+
 static
 int
 cc_parse_one(CcParser* p){
     int err;
     CcToken tok;
+    // Check for `static if`
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
+        CcToken if_tok;
+        cc_next_token(p, &tok); // consume `static`
+        err = cc_peek(p, &if_tok);
+        if(err) return err;
+        if(if_tok.type == CC_KEYWORD && if_tok.kw.kw == CC_if){
+            cc_next_token(p, &if_tok); // consume `if`
+            return cc_parse_static_if(p, tok.loc);
+        }
+        cc_unget(p, &tok); // push `static` back
+    }
     CcDeclBase b = {0};
     err = cc_parse_declaration_specifier(p, &b);
     if(err) return err;

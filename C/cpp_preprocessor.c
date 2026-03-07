@@ -4889,12 +4889,11 @@ static
 int
 cpp_builtin_if(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx;
-    (void)loc;
     CppToken *toks; size_t count;
     cpp_get_argument(args, arg_seps, 0, &toks, &count);
     int64_t value;
     int err = cpp_eval_tokens(cpp, toks, count, &value);
-    if(err) return err;
+    if(err) return cpp_error(cpp, loc, "failed to evaluate __if condition");
     cpp_get_argument(args, arg_seps, value?1:2, &toks, &count);
     err = cpp_expand_argument(cpp, toks, count, outtoks);
     return err;

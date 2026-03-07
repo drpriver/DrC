@@ -63,3 +63,84 @@ for(size_t i = 0; i < ints.count; i++){
 for(size_t i = 0; i < strings.count; i++){
     printf("strings[%d] = '%s'\n", i, strings.data[i]);
 }
+
+#define Optional(T) __ident("Optional(" S(T) ")")
+#defblock OPTIONAL_DEF(T)
+__if(__get(Optional(T))+0, , // single use macro block
+typedef struct Optional(T) Optional(T);
+static if(__is_pointer(T)){
+    struct Optional(T){
+        T value;
+        _Bool has_value(Optional(T)* self){ return self.value; }
+        void set(Optional(T)* self, T val){ self.value = val; }
+        void clear(Optional(T)* self){ self.value = NULL; }
+        void print(Optional(T)* self, const char* prefix){
+            if(!self.value) {
+                printf("%s: null\n", prefix);
+                return;
+            }
+            static if(__type_equals(typeof_unqual(*self.value), char)){
+                printf("%s: '%s'\n", prefix, self.value);
+            }
+            else {
+                _Static_assert(0, "TODO: how to print this type");
+            }
+        }
+    };
+}
+else {
+    struct Optional(T){
+        T value;
+        _Bool _has_value;
+        _Bool has_value(Optional(T)* self){ return self._has_value; }
+        void set(Optional(T)* self, T val){ self.value = val; self._has_value = 1;}
+        void clear(Optional(T)* self){ self._has_value = 0;}
+        void print(Optional(T)* self, const char* prefix){
+            if(!self._has_value) {
+                printf("%s: null\n", prefix);
+                return;
+            }
+            static if(__type_equals(typeof_unqual(T), int)){
+                printf("%s: %d\n", prefix, self.value);
+            }
+            else if(__type_equals(typeof_unqual(T), double)){
+                printf("%s: %f\n", prefix, self.value);
+            }
+            else {
+                _Static_assert(0, "TODO: how to print this type");
+            }
+        }
+    };
+}
+__set(Optional(T), 1)
+)
+#endblock
+OPTIONAL_DEF(int);
+OPTIONAL_DEF(int);
+OPTIONAL_DEF(const char*);
+OPTIONAL_DEF(const char*);
+OPTIONAL_DEF(char*);
+OPTIONAL_DEF(char*);
+OPTIONAL_DEF(char*);
+OPTIONAL_DEF(char*);
+
+Optional(int) optint = {0};
+optint.print("optint.value");
+optint.set(3);
+optint.print("optint.value");
+optint.clear();
+optint.print("optint.value");
+printf("----\n");
+Optional(const char*) optstr = {0};
+optstr.print("optstr.value");
+optstr.set("hello");
+optstr.print("optstr.value");
+optstr.clear();
+optstr.print("optstr.value");
+printf("----\n");
+Optional(char*) optmutstr = {0};
+optmutstr.print("optmutstr.value");
+optmutstr.set("world");
+optmutstr.print("optmutstr.value");
+optmutstr.clear();
+optmutstr.print("optmutstr.value");

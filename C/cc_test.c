@@ -2437,6 +2437,55 @@ TestFunction(test_parse_decls){
                 { SV("ob"), SV("unsigned long"), .init = SV("4")},
             },
         },
+        {
+            "static if true branch", __LINE__,
+            SV("static if(1) { int x; }\n"),
+            .vars = { { SV("x"), SV("int") } },
+        },
+        {
+            "static if false branch skipped", __LINE__,
+            SV("static if(0) { int x; } \n"
+               "int y;\n"),
+            .vars = { { SV("y"), SV("int") } },
+        },
+        {
+            "static if else", __LINE__,
+            SV("static if(0) { int x; } else { int y; }\n"),
+            .vars = { { SV("y"), SV("int") } },
+        },
+        {
+            "static if else if", __LINE__,
+            SV("static if(0) { int a; }\n"
+               "else if(0) { int b; }\n"
+               "else if(1) { int c; }\n"
+               "else { int d; }\n"),
+            .vars = { { SV("c"), SV("int") } },
+        },
+        {
+            "static if sizeof condition", __LINE__,
+            SV("static if(sizeof(int) == 4) { int yes; }\n"
+               "else { int no; }\n"),
+            .vars = { { SV("yes"), SV("int") } },
+        },
+        {
+            "static if first wins", __LINE__,
+            SV("static if(1) { int a; }\n"
+               "else if(1) { int b; }\n"
+               "else { int c; }\n"),
+            .vars = { { SV("a"), SV("int") } },
+        },
+        {
+            "static if with typedef", __LINE__,
+            SV("static if(sizeof(void*) == 8) { typedef long intptr; }\n"
+               "else { typedef int intptr; }\n"),
+            .typedefs = { { SV("intptr"), SV("long") } },
+        },
+        {
+            "static if no else", __LINE__,
+            SV("static if(0) { int x; }\n"
+               "int y;\n"),
+            .vars = { { SV("y"), SV("int") } },
+        },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){
         if(testcases[i].skip){
@@ -2998,6 +3047,12 @@ TestFunction(test_parse_errors){
             "lambda: missing body", __LINE__,
             SV("int r = int(int x);\n"),
             SV("(test):1:9: error: Expected '{' for lambda body\n"),
+        },
+        {
+            "static if: non-constant condition", __LINE__,
+            SV("int x;\n"
+               "static if(x) { int y; }\n"),
+            SV("(test):2:11: error: static if condition must be a constant expression\n"),
         },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
