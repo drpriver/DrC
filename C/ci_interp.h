@@ -12,6 +12,7 @@
 #include "../Drp/atom_map.h"
 #include "../Drp/atom.h"
 #include "../Drp/pointer_map.h"
+#include "../Drp/thread_utils.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -19,7 +20,6 @@
 
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
-    CiInterpFrame*_Nullable parent;
     size_t pc;
     size_t stmt_count;
     CcStatement*_Null_unspecified stmts;
@@ -32,20 +32,20 @@ typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
     CcParser parser;
     CiInterpFrame top_frame;
-    CiInterpFrame *current_frame;
     int exit_code;
     AtomMap(void*) opened_libs;
     AtomMap lib_paths;
     PointerMap(void*) ffi_cache; // CcFunction* -> NativeCallCache*
+    LOCK_T error_lock;
 };
 
 // Execute one statement at current pc. Advances pc.
 // Returns 0 on success, >0 on error.
-static int ci_interp_step(CiInterpreter*);
+static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 // Evaluate an expression, writing sizeof(expr->type) bytes into result.
-static int ci_interp_expr(CiInterpreter*, CcExpr* expr, void* result, size_t size);
+static int ci_interp_expr(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void* result, size_t size);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
-static int ci_interp_lvalue(CiInterpreter*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
+static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_register_macros(CiInterpreter*);
@@ -58,6 +58,9 @@ struct CiArg {
 };
 static int ci_call_by_name(CiInterpreter*, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size);
 static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret);
+// Parse bodies of all reachable functions and resolve extern symbols.
+// Call after cc_parse_all and before execution.
+static int ci_resolve_refs(CiInterpreter*);
 
 
 #ifdef __clang__

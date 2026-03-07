@@ -579,6 +579,71 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "ternary pointer", __LINE__,
+            SV("int* p;\n"
+               "int* q;\n"
+               "int* r = 1 ? p : q;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+                { SV("q"), SV("int *") },
+                { SV("r"), SV("int *") },
+            },
+        },
+        {
+            "ternary pointer and null", __LINE__,
+            SV("int* p;\n"
+               "int* q = 1 ? p : 0;\n"
+               "int* r = 0 ? 0 : p;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+                { SV("q"), SV("int *") },
+                { SV("r"), SV("int *") },
+            },
+        },
+        {
+            "ternary void pointer", __LINE__,
+            SV("int* p;\n"
+               "void* v;\n"
+               "void* r = 1 ? p : v;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+                { SV("v"), SV("void *") },
+                { SV("r"), SV("void *") },
+            },
+        },
+        {
+            "ternary pointer qualifier merge", __LINE__,
+            SV("const int* p;\n"
+               "volatile int* q;\n"
+               "const volatile int* r = 1 ? p : q;\n"),
+            .vars = {
+                { SV("p"), SV("const int *") },
+                { SV("q"), SV("volatile int *") },
+                { SV("r"), SV("const volatile int *") },
+            },
+        },
+        {
+            "ternary pointer and string literal", __LINE__,
+            SV("char* p;\n"
+               "const char* r = 1 ? p : \"hello\";\n"),
+            .vars = {
+                { SV("p"), SV("char *") },
+                { SV("r"), SV("const char *") },
+            },
+        },
+        {
+            "ternary struct pointer", __LINE__,
+            SV("struct S { int x; };\n"
+               "struct S* a;\n"
+               "struct S* b;\n"
+               "struct S* c = 1 ? a : b;\n"),
+            .vars = {
+                { SV("a"), SV("struct S *") },
+                { SV("b"), SV("struct S *") },
+                { SV("c"), SV("struct S *") },
+            },
+        },
+        {
             "sizeof expr init", __LINE__,
             SV("unsigned long a = sizeof(int);\n"
                "unsigned long b = sizeof(char);\n"

@@ -30,6 +30,15 @@
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
 
+typedef struct {
+    const char*const* args;
+    size_t count;
+    const char* filename;
+} ProgArgvCtx;
+
+static int
+cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
+
 int main(int argc, char** argv, char** envp){
     _Bool eager = 0;
     Logger* logger = std_logger();
@@ -55,12 +64,12 @@ int main(int argc, char** argv, char** envp){
             },
             .current = &interp.parser.global,
         },
-        .current_frame = &interp.top_frame,
         .top_frame = {
             .return_buf = &interp.exit_code,
             .return_size = sizeof interp.exit_code,
         },
     };
+    LOCK_T_init(&interp.error_lock);
     Marray(StringView) libs = {0}, lib_paths = {0};
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
@@ -188,6 +197,23 @@ int main(int argc, char** argv, char** envp){
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) return err;
+    ProgArgvCtx argv_ctx = {
+        .args = prog_args,
+        .count = num_prog_args,
+        .filename = filename,
+    };
+    err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__ARGV__"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
+    if(err) return err;
+    err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__argv"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
+    if(err) return err;
+    {
+        int argc_val = 1 + (int)num_prog_args;
+        Atom a = cpp_atomizef(&interp.parser.cpp, "%d", argc_val);
+        if(!a) return 1;
+        CppToken tok = {.type = CPP_NUMBER, .txt = {a->length, a->data}};
+        err = cpp_define_obj_macro(&interp.parser.cpp, SV("__ARGC__"), &tok, 1);
+        if(err) return err;
+    }
     err = cc_define_builtin_types(&interp.parser);
     if(err) return err;
     err = cc_register_pragmas(&interp.parser);
@@ -240,9 +266,10 @@ int main(int argc, char** argv, char** envp){
     }
     err = cc_parse_all(&interp.parser);
     if(err) return err;
+    err = ci_resolve_refs(&interp);
+    if(err) return err;
     if(repl){
         interp.parser.repl = 1;
-        interp.current_frame = &interp.top_frame;
         err = cpp_cli_defines(&interp.parser.cpp);
         if(err) return err;
         fc->may_read_real_files = 1;
@@ -283,13 +310,15 @@ int main(int argc, char** argv, char** envp){
                 }
                 err = cc_parse_all(&interp.parser);
                 if(err){ cc_parser_discard_input(&interp.parser); msb.cursor = 0; continue; }
+                err = ci_resolve_refs(&interp);
+                if(err){ msb.cursor = 0; continue; }
                 // Execute new statements
                 {
                     CiInterpFrame* frame = &interp.top_frame;
                     frame->stmts = interp.parser.toplevel_statements.data;
                     frame->stmt_count = interp.parser.toplevel_statements.count;
                     while(frame->pc < frame->stmt_count){
-                        err = ci_interp_step(&interp);
+                        err = ci_interp_step(&interp, frame);
                         if(err) break;
                     }
                 }
@@ -311,12 +340,11 @@ int main(int argc, char** argv, char** envp){
         // Execute toplevel statements
         enum { EXIT_CODE_SENTINEL = 0x4a544d }; // "JTM" = jump to main
         interp.exit_code = EXIT_CODE_SENTINEL;
-        interp.current_frame = &interp.top_frame;
         CiInterpFrame* frame = &interp.top_frame;
         frame->stmts = interp.parser.toplevel_statements.data;
         frame->stmt_count = interp.parser.toplevel_statements.count;
         while(frame->pc < frame->stmt_count){
-            err = ci_interp_step(&interp);
+            err = ci_interp_step(&interp, frame);
             if(err) return err;
         }
         // Top-level return sets exit code
@@ -338,6 +366,58 @@ int main(int argc, char** argv, char** envp){
         if(0)repl_builtin_command(&interp.parser, SV("/dump symbols"));
     }
     return 0;
+}
+
+static int
+cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    ProgArgvCtx* pctx = ctx;
+    // Parse the index from arg 0
+    CppToken *arg0_toks; size_t arg0_count;
+    cpp_get_argument(args, arg_seps, 0, &arg0_toks, &arg0_count);
+    int64_t index = -1;
+    for(size_t i = 0; i < arg0_count; i++){
+        if(arg0_toks[i].type == CPP_WHITESPACE) continue;
+        if(arg0_toks[i].type == CPP_NUMBER){
+            index = 0;
+            for(size_t j = 0; j < arg0_toks[i].txt.length; j++){
+                char c = arg0_toks[i].txt.text[j];
+                if(c < '0' || c > '9')
+                    return cpp_error(cpp, arg0_toks[i].loc, "Expected integer index as arg to __ARGV__");
+                index = index * 10 + (c - '0');
+            }
+            break;
+        }
+        return cpp_error(cpp, arg0_toks[i].loc, "Expected integer index as arg to __ARGV__");
+    }
+    if(index < 0)
+        return cpp_error(cpp, loc, "Missing index argument to __ARGV__");
+    // Look up the value
+    const char* value = NULL;
+    if(index == 0)
+        value = pctx->filename;
+    else if((size_t)(index - 1) < pctx->count)
+        value = pctx->args[index - 1];
+    if(value){
+        Atom a = cpp_atomizef(cpp, "\"%s\"", value);
+        if(!a) return _cc_oom_error;
+        CppToken tok = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = loc};
+        return cpp_push_tok(cpp, outtoks, tok);
+    }
+    // No value: use fallback (second arg) if provided
+    if(arg_seps->count >= 1){
+        CppToken *fb_toks; size_t fb_count;
+        cpp_get_argument(args, arg_seps, 1, &fb_toks, &fb_count);
+        for(size_t i = 0; i < fb_count; i++){
+            int e = cpp_push_tok(cpp, outtoks, fb_toks[i]);
+            if(e) return e;
+        }
+        return 0;
+    }
+    // No fallback: emit empty string
+    Atom a = cpp_atomizef(cpp, "\"\"");
+    if(!a) return _cc_oom_error;
+    CppToken tok = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = loc};
+    return cpp_push_tok(cpp, outtoks, tok);
 }
 
 static void cc_print_type(MStringBuilder*, CcQualType t);

@@ -51,7 +51,7 @@ struct CcFunc {
     struct CcVariable*_Nullable*_Null_unspecified param_vars; // set during body parsing, parallel to params
     AtomMap(uintptr_t) labels; // label name -> statement index in body: NOTE: we're punning the pointers, it's not pointers to uintptr_t
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
-    void*_Nullable native_call_cache; // opaque, managed by native_call.c
+    void*_Nullable native_closure; // NativeClosure*, managed by native_call.c
 };
 
 #ifdef __clang__

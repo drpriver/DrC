@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include "../Drp/atom_map.h"
+#include "../Drp/pointer_map.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/free_list.h"
 #include "../Drp/Allocators/arena_allocator.h"
@@ -97,6 +98,10 @@ struct CcParser {
     uint32_t loop_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
     AtomMap(uintptr_t) builtins;
+    PointerMap used_funcs; // CcFunc* set (value = key)
+    PointerMap used_vars;  // CcVariable* set, non-automatic only (value = key)
+    PointerMap used_call_types; // CcFunction* set, function types used in indirect calls (value = key)
+    PointerMap used_var_calls;  // CcExpr* set, variadic call expressions (value = key)
 };
 
 static int cc_parse_top_level(CcParser*, _Bool* finished);

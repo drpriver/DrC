@@ -4,10 +4,10 @@
 
 // Minigrep: grep with a tiny Thompson NFA regex engine.
 // Supports: . * + ? | () [] [^] ^ $
-// Usage: set PATTERN env var, reads stdin.
-//   PATTERN="foo|bar" ./minigrep < file.txt
+//   Bin/cc ./minigrep < file.txt
 
-const char* pattern = __ENV__("PATTERN", ".*");
+const char* pattern = __argv(1, ".*");
+const char* input = __argv(2, NULL);
 
 // --- NFA compiler ---
 
@@ -330,7 +330,9 @@ State* start = compiled.start;
 
 // Read stdin line by line, print matching lines
 char line[8192];
-while(fgets(line, sizeof line, stdin)){
+FILE* fp = input?fopen(input, "rb"):stdin;
+if(!fp) return (perror(input), 1);
+while(fgets(line, sizeof line, fp)){
     int len = (int)strlen(line);
     if(len > 0 && line[len - 1] == '\n'){
         line[len - 1] = '\0';

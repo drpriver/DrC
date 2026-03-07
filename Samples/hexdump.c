@@ -1,9 +1,12 @@
 #include <stdio.h>
-// Hex dump of stdin, similar to `xxd` or `hexdump -C`
+// Hex dump of input/stdin, similar to `xxd` or `hexdump -C`
 unsigned char buf[16];
 unsigned long offset = 0;
+const char* input = __argv(1, NULL);
+FILE* fp = input?fopen(input, "rb"):stdin;
+if(!fp) return (perror(input), 1);
 for(;;){
-    size_t n = fread(buf, 1, 16, stdin);
+    size_t n = fread(buf, 1, 16, fp);
     if(!n) break;
     // offset
     printf("%08lx  ", offset);

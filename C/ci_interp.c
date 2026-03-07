@@ -14,6 +14,7 @@
 #include "cc_expr.h"
 #include "cc_target.h"
 #include "../Drp/Allocators/allocator.h"
+#include "../Drp/Allocators/mallocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/MStringBuilder16.h"
@@ -35,21 +36,24 @@ enum {
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
+static char ci_discard_buf[8192];
 static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
-static int ci_interp_call(CiInterpreter*, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size);
+static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
 
 static CppFuncMacroFn ci_shell;
 
 static
 int
 ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
+    LOCK_T_lock(&ci->error_lock);
     va_list va;
     va_start(va, fmt);
     cpp_msg(&ci->parser.cpp, loc, LOG_PRINT_ERROR, "error", fmt, va);
     va_end(va);
+    LOCK_T_unlock(&ci->error_lock);
     return CI_RUNTIME_ERROR;
 }
 #define ci_unimplemented(p, loc, msg) (ci_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CI_UNIMPLEMENTED_ERROR)
@@ -115,37 +119,23 @@ ci_write_float(void* buf, CcBasicTypeKind k, double val){
 
 static
 void* _Nullable
-ci_var_storage(CiInterpreter* ci, CcVariable* var){
+ci_var_storage(CiInterpFrame* frame, CcVariable* var){
     if(var->automatic)
-        return (char*)(ci->current_frame + 1) + var->frame_offset;
+        return (char*)(frame + 1) + var->frame_offset;
     return var->interp_val;
 }
 
 static
 int
 ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
-    if(var->automatic) return 0; // storage is in the frame's trailing data
+    if(var->automatic) return 0;
     if(var->interp_val) return 0;
-    if(var->extern_){
-        LongString sym = var->mangle? (LongString){var->mangle->length, var->mangle->data}:(LongString){var->name->length, var->name->data};
-        void* addr;
-        int err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
-        if(err) return err;
-        var->interp_val = addr;
-        return 0;
-    }
-    uint32_t sz;
-    int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
-    if(err) return err;
-    void* storage = Allocator_zalloc(ci_allocator(ci), sz);
-    if(!storage) return CI_OOM_ERROR;
-    var->interp_val = storage;
-    return 0;
+    return ci_error(ci, var->loc, "ICE: variable '%s' storage not resolved before execution", var->name->data);
 }
 
 static
 int
-ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
+ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
     uint32_t _type_sz;
     int _serr = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &_type_sz);
     if(_serr) return _serr;
@@ -155,7 +145,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             CcVariable* var = expr->var;
             int err = ci_ensure_var_storage(ci, var);
             if(err) return err;
-            void* storage = ci_var_storage(ci, var);
+            void* storage = ci_var_storage(frame, var);
             if(!storage)
                 return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
             *out = storage;
@@ -164,7 +154,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
         case CC_EXPR_DEREF: {
             // *ptr: evaluate ptr, return the pointer value
             void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, expr->lhs, &ptr_val, sizeof ptr_val);
+            int err = ci_interp_expr(ci, frame,expr->lhs, &ptr_val, sizeof ptr_val);
             if(err) return err;
             *out = ptr_val;
             return 0;
@@ -173,7 +163,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             // base.member: get lvalue of base, add field offset
             void* base;
             size_t base_size;
-            int err = ci_interp_lvalue(ci, expr->values[0], &base, &base_size);
+            int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
             if(err) return err;
             uint64_t off = expr->field_loc.byte_offset;
             if(off + _type_sz > base_size)
@@ -184,7 +174,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
         case CC_EXPR_ARROW: {
             // ptr->member: eval ptr, add field offset
             void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, expr->values[0], &ptr_val, sizeof ptr_val);
+            int err = ci_interp_expr(ci, frame,expr->values[0], &ptr_val, sizeof ptr_val);
             if(err) return err;
             *out = (char*)ptr_val + expr->field_loc.byte_offset;
             return 0;
@@ -201,14 +191,14 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             uint32_t idx_sz;
             err = cc_sizeof_as_uint(&ci->parser, idx_expr->type, expr->loc, &idx_sz);
             if(err) return err;
-            err = ci_interp_expr(ci, idx_expr, &idx, sizeof idx);
+            err = ci_interp_expr(ci, frame,idx_expr, &idx, sizeof idx);
             if(err) return err;
             idx = ci_read_uint(&idx, idx_sz);
             if(ccqt_kind(base_type) == CC_ARRAY){
                 // Array: get lvalue of base, index into it
                 void* base;
                 size_t base_size;
-                err = ci_interp_lvalue(ci, base_expr, &base, &base_size);
+                err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);
                 if(err) return err;
                 if(idx * elem_sz + elem_sz > base_size)
                     return ci_error(ci, expr->loc, "array subscript out of bounds");
@@ -217,7 +207,7 @@ ci_interp_lvalue(CiInterpreter* ci, CcExpr* expr, void*_Nullable*_Nonnull out, s
             else {
                 // Pointer: eval base as rvalue
                 void* ptr_val = NULL;
-                err = ci_interp_expr(ci, base_expr, &ptr_val, sizeof ptr_val);
+                err = ci_interp_expr(ci, frame,base_expr, &ptr_val, sizeof ptr_val);
                 if(err) return err;
                 *out = (char*)ptr_val + idx * elem_sz;
             }
@@ -252,8 +242,8 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
     CcFunc* func = cd->func;
     CcFunction* ftype = func->type;
     if(!func->parsed){
-        int err = cc_parse_func_body(&ci->parser, func);
-        if(err) return; // silently fail (no good way to propagate)
+        // ICE: should have been resolved before execution.
+        return;
     }
     size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
@@ -262,7 +252,6 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
     if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void))
         cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
     *frame = (CiInterpFrame){
-        .parent = ci->current_frame,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = rvalue,
@@ -278,13 +267,10 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
         void* storage = (char*)(frame + 1) + var->frame_offset;
         memcpy(storage, args[i], param_sz);
     }
-    ci->current_frame = frame;
     while(frame->pc < frame->stmt_count){
-        int err = ci_interp_step(ci);
+        int err = ci_interp_step(ci, frame);
         if(err) break;
     }
-    CiInterpFrame* caller = frame->parent;
-    ci->current_frame = caller;
     Allocator_free(ci_allocator(ci), frame, alloc_size);
 }
 
@@ -304,13 +290,13 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         return err;
     }
     func->native_func = native_closure_fn(nc);
-    func->native_call_cache = nc;
+    func->native_closure = nc;
     return 0;
 }
 
 static
 int
-ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
+ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* result, size_t size){
     switch(expr->kind){
     case CC_EXPR_VALUE: {
         uint32_t sz;
@@ -333,7 +319,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         CcVariable* var = expr->var;
         int err = ci_ensure_var_storage(ci, var);
         if(err) return err;
-        void* storage = ci_var_storage(ci, var);
+        void* storage = ci_var_storage(frame, var);
         if(!storage)
             return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
         CcQualType var_type = var->type;
@@ -354,22 +340,9 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_FUNCTION: {
         CcFunc* func = expr->func;
-        if(!func->native_func){
-            if(func->defined){
-                // Create a native closure so interpreted functions can be
-                // used as function pointers (e.g. passed to qsort).
-                int err = ci_create_closure(ci, func);
-                if(err) return err;
-            }
-            else if(func->name){
-                // Resolve external symbol via dlsym.
-                LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
-                void* addr;
-                int err = ci_dlsym(ci, expr->loc, sym, "function", &addr);
-                if(err) return err;
-                func->native_func = (void(*)(void))addr;
-            }
-        }
+        if(!func->native_func)
+            return ci_error(ci, expr->loc, "ICE: function '%s' not resolved before execution",
+                func->name ? func->name->data : "<unknown>");
         void (*fn)(void) = func->native_func;
         if(sizeof fn > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
@@ -382,12 +355,12 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         CcQualType to = expr->type;
         if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
             uint64_t discard;
-            return ci_interp_expr(ci, operand, &discard, sizeof discard);
+            return ci_interp_expr(ci, frame,operand, &discard, sizeof discard);
         }
         // Function-to-pointer decay: the function expression already
         // produces the function pointer value.
         if(ccqt_kind(from) == CC_FUNCTION){
-            return ci_interp_expr(ci, operand, result, size);
+            return ci_interp_expr(ci, frame,operand, result, size);
         }
         // Array-to-pointer decay: get address of array data.
         if(ccqt_kind(from) == CC_ARRAY){
@@ -395,13 +368,13 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
                 return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             void* ptr;
             size_t lval_size;
-            int err = ci_interp_lvalue(ci, operand, &ptr, &lval_size);
+            int err = ci_interp_lvalue(ci, frame, operand, &ptr, &lval_size);
             if(err) return err;
             memcpy(result, &ptr, sizeof ptr);
             return 0;
         }
         uint64_t val = 0;
-        int err = ci_interp_expr(ci, operand, &val, sizeof val);
+        int err = ci_interp_expr(ci, frame,operand, &val, sizeof val);
         uint32_t from_sz;
         err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
         if(err) return err;
@@ -444,7 +417,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_ASSIGN: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -453,51 +426,35 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             return ci_error(ci, expr->loc, "interpreter: assignment exceeds lvalue storage");
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, expr->values[0], lval, lval_size);
+        err = ci_interp_expr(ci, frame,expr->values[0], lval, lval_size);
         if(err) return err;
         memcpy(result, lval, sz);
         return 0;
     }
     case CC_EXPR_COMMA: {
-        uint64_t small_buf;
-        void* discard = &small_buf;
-        size_t dsz = sizeof small_buf;
-        CcQualType lhs_type = expr->lhs->type;
-        if(!(ccqt_is_basic(lhs_type) && lhs_type.basic.kind == CCBT_void)){
-            uint32_t tsz;
-            int err = cc_sizeof_as_uint(&ci->parser, lhs_type, expr->loc, &tsz);
-            if(err) return err;
-            if(tsz > sizeof small_buf){
-                discard = Allocator_zalloc(ci_scratch_allocator(ci), tsz);
-                if(!discard) return CC_OOM_ERROR;
-                dsz = tsz;
-            }
-        }
-        int err = ci_interp_expr(ci, expr->lhs, discard, dsz);
-        if(discard != &small_buf)
-            Allocator_free(ci_scratch_allocator(ci), discard, dsz);
+        int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
-        return ci_interp_expr(ci, expr->values[0], result, size);
+        return ci_interp_expr(ci, frame,expr->values[0], result, size);
     }
     case CC_EXPR_TERNARY: {
         uint64_t cond = 0;
         uint32_t cond_sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
         if(err) return err;
-        err = ci_interp_expr(ci, expr->lhs, &cond, sizeof cond);
+        err = ci_interp_expr(ci, frame,expr->lhs, &cond, sizeof cond);
         if(err) return err;
         if(ci_read_uint(&cond, cond_sz))
-            return ci_interp_expr(ci, expr->values[0], result, size);
+            return ci_interp_expr(ci, frame,expr->values[0], result, size);
         else
-            return ci_interp_expr(ci, expr->values[1], result, size);
+            return ci_interp_expr(ci, frame,expr->values[1], result, size);
     }
     case CC_EXPR_ADDR: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
         if(err) return err;
         if(sizeof lval > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
@@ -506,7 +463,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_DEREF: {
         void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, expr->lhs, &ptr_val, sizeof ptr_val);
+        int err = ci_interp_expr(ci, frame,expr->lhs, &ptr_val, sizeof ptr_val);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -519,7 +476,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_DOT: {
         void* base;
         size_t base_size;
-        int err = ci_interp_lvalue(ci, expr->values[0], &base, &base_size);
+        int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
         if(err) return err;
         uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
@@ -534,7 +491,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     }
     case CC_EXPR_ARROW: {
         void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, expr->values[0], &ptr_val, sizeof ptr_val);
+        int err = ci_interp_expr(ci, frame,expr->values[0], &ptr_val, sizeof ptr_val);
         if(err) return err;
         uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
@@ -548,7 +505,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_SUBSCRIPT: {
         void* addr;
         size_t addr_size;
-        int err = ci_interp_lvalue(ci, expr, &addr, &addr_size);
+        int err = ci_interp_lvalue(ci, frame, expr, &addr, &addr_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -565,7 +522,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
+        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
         if(err) return err;
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
             double d = -ci_read_float(&val, expr->type.basic.kind);
@@ -581,7 +538,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
-        return ci_interp_expr(ci, expr->lhs, result, size);
+        return ci_interp_expr(ci, frame,expr->lhs, result, size);
     }
     case CC_EXPR_BITNOT: {
         uint64_t val = 0;
@@ -590,7 +547,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
+        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
         if(err) return err;
         uint64_t v = ~ci_read_uint(&val, sz);
         ci_write_uint(result, sz, v);
@@ -601,7 +558,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
         if(err) return err;
-        err = ci_interp_expr(ci, expr->lhs, &val, sizeof val);
+        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
         if(err) return err;
         _Bool v = !ci_read_uint(&val, sz);
         uint32_t rsz;
@@ -618,7 +575,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_POSTDEC: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -681,32 +638,32 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         if(result_sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         if(expr->kind == CC_EXPR_LOGAND){
-            err = ci_interp_expr(ci, lhs, &lbuf, sizeof lbuf);
+            err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
             if(err) return err;
             if(!ci_read_uint(&lbuf, lsz)){
                 ci_write_uint(result, result_sz, 0);
                 return 0;
             }
-            err = ci_interp_expr(ci, rhs, &rbuf, sizeof rbuf);
+            err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
             if(err) return err;
             ci_write_uint(result, result_sz, ci_read_uint(&rbuf, rsz) ? 1 : 0);
             return 0;
         }
         if(expr->kind == CC_EXPR_LOGOR){
-            err = ci_interp_expr(ci, lhs, &lbuf, sizeof lbuf);
+            err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
             if(err) return err;
             if(ci_read_uint(&lbuf, lsz)){
                 ci_write_uint(result, result_sz, 1);
                 return 0;
             }
-            err = ci_interp_expr(ci, rhs, &rbuf, sizeof rbuf);
+            err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
             if(err) return err;
             ci_write_uint(result, result_sz, ci_read_uint(&rbuf, rsz) ? 1 : 0);
             return 0;
         }
-        err = ci_interp_expr(ci, lhs, &lbuf, sizeof lbuf);
+        err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
         if(err) return err;
-        err = ci_interp_expr(ci, rhs, &rbuf, sizeof rbuf);
+        err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
         if(err) return err;
         _Bool lhs_ptr = ccqt_kind(lhs->type) == CC_POINTER || ccqt_kind(lhs->type) == CC_ARRAY;
         _Bool rhs_ptr = ccqt_kind(rhs->type) == CC_POINTER || ccqt_kind(rhs->type) == CC_ARRAY;
@@ -886,7 +843,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_LSHIFTASSIGN: case CC_EXPR_RSHIFTASSIGN: {
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -899,7 +856,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
         uint32_t rsz;
         err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
         if(err) return err;
-        err = ci_interp_expr(ci, expr->values[0], &rbuf, sizeof rbuf);
+        err = ci_interp_expr(ci, frame,expr->values[0], &rbuf, sizeof rbuf);
         if(err) return err;
 
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
@@ -942,18 +899,36 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
     case CC_EXPR_CALL: {
         CcExpr* callee = expr->lhs;
         uint32_t nargs = expr->call.nargs;
-        CcFunc* func;
+        void (*fn)(void) = NULL;
+        CcFunction* ftype;
+        // Direct call to a known function.
         if(callee->kind == CC_EXPR_FUNCTION){
-            func = callee->func;
+            CcFunc* func = callee->func;
+            ftype = func->type;
+            if(func->defined){
+                CiInterpFrame* callee_frame = NULL;
+                int err = ci_interp_call(ci, frame, func, expr->values, nargs, result, size, &callee_frame);
+                if(err) return err;
+                while(callee_frame->pc < callee_frame->stmt_count){
+                    err = ci_interp_step(ci, callee_frame);
+                    if(err){
+                        Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+                        return err;
+                    }
+                }
+                Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+                return 0;
+            }
+            fn = func->native_func;
+            if(!fn)
+                return ci_error(ci, expr->loc, "ICE: function '%s' not resolved before execution",
+                    func->name ? func->name->data : "<unknown>");
         }
         else {
             // Indirect call through function pointer.
-            void (*fn)(void) = NULL;
-            int err = ci_interp_expr(ci, callee, &fn, sizeof fn);
+            int err = ci_interp_expr(ci, frame, callee, &fn, sizeof fn);
             if(err) return err;
-            // Get the function type from the pointer type.
             CcQualType callee_type = callee->type;
-            CcFunction* ftype;
             if(ccqt_kind(callee_type) == CC_POINTER){
                 CcQualType pointee = ccqt_as_ptr(callee_type)->pointee;
                 if(ccqt_kind(pointee) != CC_FUNCTION)
@@ -966,49 +941,8 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             else {
                 return ci_error(ci, expr->loc, "Called object is not a function pointer");
             }
-            // Get or create a stub CcFunc for this function type so
-            // native_call can cache the CIF on it.
-            func = PM_get(&ci->ffi_cache, ftype);
-            if(!func){
-                func = Allocator_zalloc(ci_allocator(ci), sizeof *func);
-                if(!func) return CI_OOM_ERROR;
-                func->type = ftype;
-                err = PM_put(&ci->ffi_cache, ci_allocator(ci), ftype, func);
-                if(err) return err;
-            }
-            func->native_func = fn;
         }
-        if(func->defined){
-            // TODO: refactor to continuation-style eval stack so we can
-            // yield here instead of looping synchronously.
-            int err = ci_interp_call(ci, func, expr->values, nargs, result, size);
-            if(err) return err;
-            CiInterpFrame* frame = ci->current_frame;
-            CiInterpFrame* caller = frame->parent;
-            while(frame->pc < frame->stmt_count){
-                err = ci_interp_step(ci);
-                if(err){
-                    ci->current_frame = caller;
-                    Allocator_free(ci_allocator(ci), frame, sizeof(CiInterpFrame) + frame->data_length);
-                    return err;
-                }
-            }
-            ci->current_frame = caller;
-            Allocator_free(ci_allocator(ci), frame, sizeof(CiInterpFrame) + frame->data_length);
-            return 0;
-        }
-        if(!func->native_func){
-            if(!func->name)
-                return ci_error(ci, expr->loc, "call through null function pointer");
-            LongString sym = func->mangle? (LongString){func->mangle->length, func->mangle->data}:(LongString){func->name->length, func->name->data};
-            void* addr;
-            int err;
-            err = ci_dlsym(ci, expr->loc, sym, "function", &addr);
-            if(err) return err;
-            func->native_func = (void(*)(void))addr;
-        }
-        CcFunction* ftype = func->type;
-        // Compute total size needed for arg storage.
+        // Native call path: build args, look up CIF, call.
         uint32_t nvarargs = (ftype->is_variadic && nargs > ftype->param_count) ? nargs - ftype->param_count : 0;
         size_t arg_data_size = 0;
         for(uint32_t i = 0; i < nargs; i++){
@@ -1018,40 +952,43 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             if(arg_sz < 8) arg_sz = 8;
             arg_data_size += arg_sz;
         }
-        // One allocation: void*[nargs] | arg data | CcQualType[nvarargs]
-        size_t total = nargs * sizeof(void*)
-                     + arg_data_size
-                     + nvarargs * sizeof(CcQualType);
-        char* buf = Allocator_zalloc(ci_scratch_allocator(ci), total);
+        size_t total = nargs * sizeof(void*) + arg_data_size;
+        char* buf = Allocator_zalloc(ci_allocator(ci), total);
         if(!buf) return CC_OOM_ERROR;
         void** args = (void**)buf;
         char* arg_data = buf + nargs * sizeof(void*);
-        CcQualType* vararg_types = (CcQualType*)(buf + total - nvarargs * sizeof(CcQualType));
         for(uint32_t i = 0; i < nargs; i++){
             uint32_t arg_sz;
             int err = cc_sizeof_as_uint(&ci->parser, expr->values[i]->type, expr->loc, &arg_sz);
             if(err) return err;
             if(arg_sz < 8) arg_sz = 8;
             args[i] = arg_data;
-            err = ci_interp_expr(ci, expr->values[i], arg_data, arg_sz);
+            err = ci_interp_expr(ci, frame, expr->values[i], arg_data, arg_sz);
             if(err){
-                Allocator_free(ci_scratch_allocator(ci), buf, total);
+                Allocator_free(ci_allocator(ci), buf, total);
                 return err;
             }
             arg_data += arg_sz;
-            if(i >= ftype->param_count && nvarargs)
-                vararg_types[i - ftype->param_count] = expr->values[i]->type;
         }
-        const CcQualType* vt = nvarargs ? vararg_types : NULL;
+        // Look up pre-built CIF. Non-variadic: keyed by CcFunction*.
+        // Variadic: keyed by CcExpr* (the call expression node).
+        NativeCallCache* cache;
+        if(!nvarargs)
+            cache = PM_get(&ci->ffi_cache, ftype);
+        else
+            cache = PM_get(&ci->ffi_cache, expr);
+        if(!cache){
+            Allocator_free(ci_allocator(ci), buf, total);
+            return ci_error(ci, expr->loc, "ICE: ffi_cache not populated for call type");
+        }
         uint64_t rval = 0;
-        int err = native_call(ci_allocator(ci), func, args, (int)nargs, vt, &rval);
-        Allocator_free(ci_scratch_allocator(ci), buf, total);
-        if(err) return err;
+        native_call(cache, fn, args, &rval);
+        Allocator_free(ci_allocator(ci), buf, total);
         CcQualType ret_type = ftype->return_type;
         if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void)
             return 0;
         uint32_t ret_sz;
-        err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
+        int err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
         if(err) return err;
         if(ret_sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
@@ -1077,7 +1014,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
                 return ci_error(ci, expr->loc, "interpreter: init list entry out of bounds");
             if(esz <= sizeof(uint64_t)){
                 uint64_t val = 0;
-                err = ci_interp_expr(ci, e->value, &val, sizeof val);
+                err = ci_interp_expr(ci, frame,e->value, &val, sizeof val);
                 if(err) return err;
                 if(e->field_loc.bit_width){
                     // bitfield
@@ -1094,7 +1031,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
             }
             else {
                 // Nested struct/union: write directly into result at offset
-                err = ci_interp_expr(ci, e->value, (char*)result + off, esz);
+                err = ci_interp_expr(ci, frame,e->value, (char*)result + off, esz);
                 if(err) return err;
             }
         }
@@ -1107,8 +1044,7 @@ ci_interp_expr(CiInterpreter* ci, CcExpr* expr, void* result, size_t size){
 
 static
 int
-ci_interp_step(CiInterpreter* ci){
-    CiInterpFrame* frame = ci->current_frame;
+ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
     if(frame->pc >= frame->stmt_count)
         return 0;
     CcStatement* stmt = &frame->stmts[frame->pc];
@@ -1118,23 +1054,7 @@ ci_interp_step(CiInterpreter* ci){
             frame->pc++;
             return 0;
         case CC_STMT_EXPR: {
-            uint64_t small_buf;
-            void* discard = &small_buf;
-            size_t dsz = sizeof small_buf;
-            CcQualType et = stmt->exprs[0]->type;
-            if(!(ccqt_is_basic(et) && et.basic.kind == CCBT_void)){
-                uint32_t tsz;
-                int err = cc_sizeof_as_uint(&ci->parser, et, stmt->loc, &tsz);
-                if(err) return err;
-                if(tsz > sizeof small_buf){
-                    discard = Allocator_zalloc(ci_scratch_allocator(ci), tsz);
-                    if(!discard) return CC_OOM_ERROR;
-                    dsz = tsz;
-                }
-            }
-            int err = ci_interp_expr(ci, stmt->exprs[0], discard, dsz);
-            if(discard != &small_buf)
-                Allocator_free(ci_scratch_allocator(ci), discard, dsz);
+            int err = ci_interp_expr(ci, frame, stmt->exprs[0], ci_discard_buf, sizeof ci_discard_buf);
             if(err) return err;
             frame->pc++;
             return 0;
@@ -1145,7 +1065,7 @@ ci_interp_step(CiInterpreter* ci){
         case CC_STMT_FOR: {
             if(stmt->exprs[1]){
                 uint64_t cond = 0;
-                int err = ci_interp_expr(ci, stmt->exprs[1], &cond, sizeof cond);
+                int err = ci_interp_expr(ci, frame,stmt->exprs[1], &cond, sizeof cond);
                 if(err) return err;
                 if(!cond){
                     frame->pc = stmt->targets[0];
@@ -1157,7 +1077,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_WHILE: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, stmt->exprs[0], &cond, sizeof cond);
+            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
             if(err) return err;
             if(!cond){
                 frame->pc = stmt->targets[0];
@@ -1168,7 +1088,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_IF: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, stmt->exprs[0], &cond, sizeof cond);
+            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
             if(err) return err;
             if(!cond)
                 frame->pc = stmt->targets[0];
@@ -1178,7 +1098,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_DOWHILE: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, stmt->exprs[0], &cond, sizeof cond);
+            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
             if(err) return err;
             if(cond)
                 frame->pc = stmt->targets[0];
@@ -1188,7 +1108,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_RETURN: {
             if(stmt->exprs[0]){
-                int err = ci_interp_expr(ci, stmt->exprs[0], frame->return_buf, frame->return_size);
+                int err = ci_interp_expr(ci, frame,stmt->exprs[0], frame->return_buf, frame->return_size);
                 if(err) return err;
             }
             frame->pc = frame->stmt_count;
@@ -1196,7 +1116,7 @@ ci_interp_step(CiInterpreter* ci){
         }
         case CC_STMT_SWITCH: {
             uint64_t val = 0;
-            int err = ci_interp_expr(ci, stmt->switch_expr, &val, sizeof val);
+            int err = ci_interp_expr(ci, frame,stmt->switch_expr, &val, sizeof val);
             if(err) return err;
             uint32_t count = stmt->targets[2];
             CcSwitchEntry* table = stmt->switch_table;
@@ -1227,18 +1147,15 @@ ci_interp_step(CiInterpreter* ci){
 // Does NOT run the step loop — the caller must drive stepping.
 static
 int
-ci_interp_call(CiInterpreter* ci, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size){
+ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame){
     int err;
-    if(!func->parsed){
-        err = cc_parse_func_body(&ci->parser, func);
-        if(err) return err;
-    }
+    if(!func->parsed)
+        return ci_error(ci, func->loc, "ICE: function '%s' not parsed before execution", func->name->data);
     CcFunction* ftype = func->type;
     size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
-        .parent = ci->current_frame,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = result,
@@ -1254,10 +1171,10 @@ ci_interp_call(CiInterpreter* ci, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, 
         err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
         if(err) return err;
         void* storage = (char*)(frame + 1) + var->frame_offset;
-        err = ci_interp_expr(ci, args[i], storage, param_sz);
-        if(err) return err;
+        err = ci_interp_expr(ci, caller, args[i], storage, param_sz);
+        if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
     }
-    ci->current_frame = frame;
+    *out_frame = frame;
     return 0;
 }
 
@@ -1269,10 +1186,8 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return CI_SYMBOL_NOT_FOUND;
-    if(!func->parsed){
-        int err = cc_parse_func_body(&ci->parser, func);
-        if(err) return err;
-    }
+    if(!func->parsed)
+        return ci_error(ci, func->loc, "ICE: function '%s' not parsed before execution", func->name->data);
     CcFunction* ftype = func->type;
     // Check arg count.
     if(nargs != ftype->param_count)
@@ -1288,7 +1203,6 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
-        .parent = ci->current_frame,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = result,
@@ -1310,14 +1224,11 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
         }
         memcpy(storage, args[i].data, param_sz);
     }
-    CiInterpFrame* saved = ci->current_frame;
-    ci->current_frame = frame;
     int err = 0;
     while(frame->pc < frame->stmt_count){
-        err = ci_interp_step(ci);
+        err = ci_interp_step(ci, frame);
         if(err) break;
     }
-    ci->current_frame = saved;
     Allocator_free(ci_allocator(ci), frame, alloc_size);
     return err;
 }
@@ -1355,9 +1266,138 @@ ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecifi
 }
 
 static
+int
+ci_resolve_refs(CiInterpreter* ci){
+    CcParser* p = &ci->parser;
+    Allocator al = ci_allocator(ci);
+    // Add main() as a root if it exists.
+    {
+        Atom main_atom = AT_atomize(p->cpp.at, "main", 4);
+        if(!main_atom) return CI_OOM_ERROR;
+        CcFunc* main_func = cc_scope_lookup_func(&p->global, main_atom, CC_SCOPE_NO_WALK);
+        if(main_func && main_func->defined){
+            int err = PM_put(&p->used_funcs, al, main_func, main_func);
+            if(err) return CI_OOM_ERROR;
+        }
+    }
+    // Worklist: iterate used_funcs. Parsing bodies may add new entries,
+    // so we re-check count each iteration.
+    for(size_t i = 0; i < p->used_funcs.count; i++){
+        PointerMapItems items = PM_items(&p->used_funcs);
+        CcFunc* func = (CcFunc*)(uintptr_t)items.data[i].key;
+        if(!func->defined) {
+            // Extern: resolve via dlsym.
+            if(!func->native_func && func->name){
+                LongString sym = func->mangle
+                    ? (LongString){func->mangle->length, func->mangle->data}
+                    : (LongString){func->name->length, func->name->data};
+                void* addr;
+                int err = ci_dlsym(ci, func->loc, sym, "function", &addr);
+                if(err) return err;
+                func->native_func = (void(*)(void))addr;
+            }
+            continue;
+        }
+        if(!func->parsed){
+            int err = cc_parse_func_body(p, func);
+            if(err) return err;
+            // Parsing may have grown used_funcs/used_vars, loop will pick them up.
+        }
+        // Create a native closure so the function can be used as a function pointer.
+        if(!func->native_func){
+            int err = ci_create_closure(ci, func);
+            if(err) return err;
+        }
+    }
+    // Resolve non-automatic variable storage.
+    {
+        PointerMapItems items = PM_items(&p->used_vars);
+        for(size_t i = 0; i < items.count; i++){
+            CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
+            if(var->interp_val) continue;
+            if(var->extern_){
+                LongString sym = var->mangle
+                    ? (LongString){var->mangle->length, var->mangle->data}
+                    : (LongString){var->name->length, var->name->data};
+                void* addr;
+                int err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
+                if(err) return err;
+                var->interp_val = addr;
+            }
+            else {
+                uint32_t sz;
+                int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
+                if(err) return err;
+                void* storage = Allocator_zalloc(al, sz);
+                if(!storage) return CI_OOM_ERROR;
+                var->interp_val = storage;
+            }
+        }
+    }
+    // Pre-populate ffi_cache for non-variadic call types.
+    // Collect all CcFunction* that need a CIF: extern funcs + indirect call types.
+    {
+        // From extern functions.
+        PointerMapItems funcs = PM_items(&p->used_funcs);
+        for(size_t i = 0; i < funcs.count; i++){
+            CcFunc* func = (CcFunc*)(uintptr_t)funcs.data[i].key;
+            if(func->defined) continue;
+            CcFunction* ftype = func->type;
+            if(PM_get(&ci->ffi_cache, ftype)) continue;
+            NativeCallCache* cache = NULL;
+            int err = native_call_cache_create(al, ftype, 0, NULL, &cache);
+            if(err) return err;
+            err = PM_put(&ci->ffi_cache, al, ftype, cache);
+            if(err) return CI_OOM_ERROR;
+        }
+        // From indirect call types.
+        PointerMapItems ctypes = PM_items(&p->used_call_types);
+        for(size_t i = 0; i < ctypes.count; i++){
+            CcFunction* ftype = (CcFunction*)(uintptr_t)ctypes.data[i].key;
+            if(PM_get(&ci->ffi_cache, ftype)) continue;
+            NativeCallCache* cache = NULL;
+            int err = native_call_cache_create(al, ftype, 0, NULL, &cache);
+            if(err) return err;
+            err = PM_put(&ci->ffi_cache, al, ftype, cache);
+            if(err) return CI_OOM_ERROR;
+        }
+    }
+    // Pre-populate ffi_cache for variadic call expressions, keyed by CcExpr*.
+    {
+        PointerMapItems vcalls = PM_items(&p->used_var_calls);
+        for(size_t i = 0; i < vcalls.count; i++){
+            CcExpr* call_expr = (CcExpr*)(uintptr_t)vcalls.data[i].key;
+            CcQualType ct = call_expr->lhs->type;
+            CcFunction* ftype;
+            if(ccqt_kind(ct) == CC_POINTER)
+                ftype = ccqt_as_function(ccqt_as_ptr(ct)->pointee);
+            else
+                ftype = ccqt_as_function(ct);
+            uint32_t nvarargs = call_expr->call.nargs - ftype->param_count;
+            CcQualType* vararg_types = Allocator_alloc(al, nvarargs * sizeof(CcQualType));
+            if(!vararg_types) return CI_OOM_ERROR;
+            for(uint32_t j = 0; j < nvarargs; j++)
+                vararg_types[j] = call_expr->values[ftype->param_count + j]->type;
+            NativeCallCache* cache = NULL;
+            int err = native_call_cache_create(al, ftype, nvarargs, vararg_types, &cache);
+            Allocator_free(al, vararg_types, nvarargs * sizeof(CcQualType));
+            if(err) return err;
+            err = PM_put(&ci->ffi_cache, al, call_expr, cache);
+            if(err) return CI_OOM_ERROR;
+        }
+    }
+    return 0;
+}
+
+static
 Allocator
 ci_allocator(CiInterpreter* ci){
+#if 1
+    (void)ci;
+    return MALLOCATOR;
+#else
     return ci->parser.cpp.allocator;
+#endif
 }
 static
 Allocator

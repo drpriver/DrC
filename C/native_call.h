@@ -10,35 +10,33 @@
 #pragma clang assume_nonnull begin
 #endif
 
-typedef struct CcFunc CcFunc;
+typedef struct NativeCallCache NativeCallCache;
 
 static
 int
-native_call(Allocator al, CcFunc* func, void*_Nonnull*_Nonnull args,
-    int nargs, const CcQualType*_Nullable vararg_types, void* rvalue);
+native_call_cache_create(Allocator al, CcFunction* func_type,
+    uint32_t nvarargs, const CcQualType*_Nullable vararg_types,
+    NativeCallCache*_Nullable*_Nonnull out);
 // ---------------------------------
-// Call a native function through a CcFunc.
+// Create a CIF cache for a function call signature.
 //
 // Arguments:
 // ----------
 // al:
-//    Allocator used for creating/caching the ffi call interface.
+//    Allocator for the cache.
 //
-// func:
-//    The CcFunc to call. Must have native_func set to a valid function pointer.
+// func_type:
+//    The base function type.
 //
-// args:
-//    Array of pointers to argument values (nargs elements).
-//
-// nargs:
-//    Number of actual arguments (>= param_count for variadic).
+// nvarargs:
+//    Number of variadic arguments (0 for non-variadic calls).
 //
 // vararg_types:
-//    Types of the variadic arguments (nargs - param_count elements).
+//    Types of the variadic arguments (nvarargs elements).
 //    NULL for non-variadic calls.
 //
-// rvalue:
-//    Storage for the return value.
+// out:
+//    On success, receives the created cache.
 //
 // Returns:
 // --------
@@ -46,17 +44,35 @@ native_call(Allocator al, CcFunc* func, void*_Nonnull*_Nonnull args,
 
 static
 void
-native_call_cache_free(Allocator al, CcFunc* func);
+native_call_cache_destroy(Allocator al, NativeCallCache*);
 // ---------------------------------
-// Free the cached ffi call interface on a CcFunc.
+// Destroy a CIF cache and free its resources.
 //
 // Arguments:
 // ----------
 // al:
 //    The allocator that was used to create the cache.
+
+static
+void
+native_call(NativeCallCache*, void (*fn)(void),
+    void*_Nonnull*_Nonnull args, void* rvalue);
+// ---------------------------------
+// Call a native function through a pre-built CIF. Read-only, thread-safe.
 //
-// func:
-//    The CcFunc whose cache should be freed.
+// Arguments:
+// ----------
+// cache:
+//    The pre-built CIF cache for this call signature.
+//
+// fn:
+//    The native function pointer to call.
+//
+// args:
+//    Array of pointers to argument values.
+//
+// rvalue:
+//    Storage for the return value.
 
 typedef void (NativeClosureCallback)(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata);
 // ---------------------------------

@@ -366,6 +366,7 @@ struct TargetSettings {
     _Bool optimize;
     _Bool sanitize;
     _Bool native_sanitize;
+    _Bool tsan;
     _Bool no_debug_symbols;
 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
 #define X(type, field, help, def) type field;

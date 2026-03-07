@@ -511,7 +511,7 @@ enum {
 
 static struct TargetSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
-    MemberInfo members[9 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
+    MemberInfo members[10 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
 } TI_TargetSettings;
 static struct GlobalCachedSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
@@ -814,6 +814,11 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                     .name = b_atomize(ctx, "native_sanitize"),
                     .type = &TI__Bool.type_info,
                     .offset = offsetof(TargetSettings, native_sanitize),
+                },
+                {
+                    .name = b_atomize(ctx, "tsan"),
+                    .type = &TI__Bool.type_info,
+                    .offset = offsetof(TargetSettings, tsan),
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                     #define X(ty, field, help, def) { \
@@ -1218,6 +1223,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     _Bool no_optimize = 0;
     _Bool no_sanitize = 0;
     _Bool no_native_sanitize = 0;
+    _Bool no_tsan = 0;
     _Bool debug_symbols = 0;
     _Bool no_rebuild = 0;
     TargetSettings before_ap = ctx->target;
@@ -1232,7 +1238,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         LongString*: ARGDEST((StringView*)x), \
         Atom*: ArgAtomDest((Atom*)x, &ctx->at))
 
-    enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=16};
+    enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=18};
 
     ArgToParse kw_args[] = {
         [BCC_IDX] = {
@@ -1330,6 +1336,16 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             .name = SV("--no-sanitize-native"),
             .dest = BARGDEST(&no_native_sanitize),
             .help = "Build native tools without sanitizers",
+        },
+        {
+            .name = SV("--tsan"),
+            .dest = BARGDEST(&ctx->target.tsan),
+            .help = "Build with thread sanitizer (incompatible with --sanitize)",
+        },
+        {
+            .name = SV("--no-tsan"),
+            .dest = BARGDEST(&no_tsan),
+            .help = "Build without thread sanitizer",
         },
         {
             .name = SV("-b"),
@@ -1481,6 +1497,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     }
     if(no_sanitize) ctx->target.sanitize = 0;
     if(no_native_sanitize) ctx->target.native_sanitize = 0;
+    if(no_tsan) ctx->target.tsan = 0;
     if(no_optimize) ctx->target.optimize = 0;
     if(debug_symbols) ctx->target.no_debug_symbols = 0;
     if(kw_args[HCC_IDX].visited && !kw_args[HCC_FLAVOR_IDX].visited)
@@ -1511,6 +1528,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             if(after_ap.bits != before_ap.bits) ctx->target.bits = after_ap.bits;
             if(after_ap.optimize != before_ap.optimize) ctx->target.optimize = after_ap.optimize;
             if(after_ap.sanitize != before_ap.sanitize) ctx->target.sanitize = after_ap.sanitize;
+            if(after_ap.tsan != before_ap.tsan) ctx->target.tsan = after_ap.tsan;
             #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                 #define X(ty, field, help, def) \
                 if(after_ap.field != before_ap.field) \
@@ -2943,6 +2961,7 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     Atom cc = ctx->target.cc;
     enum CompilerFlavor flavor = ctx->target.compiler_flavor;
     _Bool sanitize = ctx->target.sanitize;
+    _Bool tsan = ctx->target.tsan;
     _Bool optimize = ctx->target.optimize;
     _Bool native = 0;
     _Bool debug = !ctx->target.no_debug_symbols;
@@ -3013,7 +3032,9 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
             cmd_cargs(cmd, "-o", binary->data);
             cmd_cargs(cmd, "-MT", binary->data, "-MMD", "-MP", "-MF");
             cmd_argf(cmd, "%s/%s.deps", ctx->deps_dir->data, name);
-            if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");
+            if(tsan && sanitize) cmd_cargs(cmd, "-fsanitize=thread,undefined");
+            else if(tsan) cmd_cargs(cmd, "-fsanitize=thread");
+            else if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");
             if(optimize) cmd_cargs(cmd, "-O2");
             if(target_os == OS_LINUX) cmd_cargs(cmd, "-lm", "-lpthread");
             break;

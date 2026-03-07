@@ -1,8 +1,11 @@
 #include <stdio.h>
-// Word, line, and character count on stdin (like wc)
+// Word, line, and character count on stdin/input (like wc)
 long lines = 0, words = 0, chars = 0;
 bool in_word = 0;
-for(int c; (c = getchar()) != EOF;){
+const char* input = __argv(1, NULL);
+FILE* fp = input?fopen(input, "rb"):stdin;
+if(!fp) return (perror(input), 1);
+for(int c; (c = fgetc(fp)) != EOF;){
     chars++;
     if(c == '\n') lines++;
     if(c == ' ' || c == '\t' || c == '\n' || c == '\r'){

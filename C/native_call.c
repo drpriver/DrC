@@ -109,9 +109,6 @@ cctype_to_ffi_type(CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     return NC_UNSUPPORTED_TYPE;
 }
 
-// Cached cif for non-variadic calls.
-// Stored as func->native_call_cache.
-typedef struct NativeCallCache NativeCallCache;
 struct NativeCallCache {
     ffi_cif cif;
     uint32_t nparams;
@@ -120,76 +117,50 @@ struct NativeCallCache {
 
 static
 int
-native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nullable*_Nonnull out){
+native_call_cache_create(Allocator a, CcFunction* func_type,
+    uint32_t nvarargs, const CcQualType*_Nullable vararg_types,
+    NativeCallCache*_Nullable*_Nonnull out){
     *out = NULL;
-    uint32_t n = func_type->param_count;
-    NativeCallCache* c = Allocator_zalloc(a, sizeof *c + n * sizeof *c->arg_types);
+    uint32_t fixed = func_type->param_count;
+    uint32_t total = fixed + nvarargs;
+    NativeCallCache* c = Allocator_zalloc(a, sizeof *c + total * sizeof *c->arg_types);
     if(!c) return NC_OOM_ERROR;
-    c->nparams = n;
+    c->nparams = total;
     ffi_type* rtype;
     int err = cctype_to_ffi_type(func_type->return_type, &rtype);
     if(err) goto fail;
-    for(uint32_t i = 0; i < n; i++){
+    for(uint32_t i = 0; i < fixed; i++){
         err = cctype_to_ffi_type(func_type->params[i], &c->arg_types[i]);
         if(err) goto fail;
     }
-    ffi_status s = ffi_prep_cif(&c->cif, FFI_DEFAULT_ABI, n, rtype, c->arg_types);
+    for(uint32_t i = 0; i < nvarargs; i++){
+        err = cctype_to_ffi_type(vararg_types[i], &c->arg_types[fixed + i]);
+        if(err) goto fail;
+    }
+    ffi_status s;
+    if(nvarargs)
+        s = ffi_prep_cif_var(&c->cif, FFI_DEFAULT_ABI, fixed, total, rtype, c->arg_types);
+    else
+        s = ffi_prep_cif(&c->cif, FFI_DEFAULT_ABI, total, rtype, c->arg_types);
     if(s != FFI_OK){ err = NC_UNSUPPORTED_TYPE; goto fail; }
     *out = c;
     return NC_NO_ERROR;
     fail:
-    Allocator_free(a, c, sizeof *c + n * sizeof *c->arg_types);
+    Allocator_free(a, c, sizeof *c + total * sizeof *c->arg_types);
     return err;
 }
 
 static
-int
-native_call(Allocator a, CcFunc* func, void*_Nonnull*_Nonnull args, int nargs, const CcQualType*_Nullable vararg_types, void* rvalue){
-    CcFunction* func_type = func->type;
-    int err;
-    // Variadic calls can't use the cache (nargs varies).
-    if(func_type->is_variadic){
-        if(nargs > 64) return -1;
-        ffi_cif cif;
-        ffi_type* arg_types[64];
-        ffi_type* rtype;
-        err = cctype_to_ffi_type(func_type->return_type, &rtype);
-        if(err) return err;
-        for(int i = 0; i < nargs && (uint32_t)i < func_type->param_count; i++){
-            err = cctype_to_ffi_type(func_type->params[i], &arg_types[i]);
-            if(err) return err;
-        }
-        for(int i = (int)func_type->param_count; i < nargs; i++){
-            if(vararg_types){
-                err = cctype_to_ffi_type(vararg_types[i - func_type->param_count], &arg_types[i]);
-                if(err) return err;
-            }
-            else
-                arg_types[i] = &ffi_type_pointer;
-        }
-        ffi_status s = ffi_prep_cif_var(&cif, FFI_DEFAULT_ABI, (unsigned)func_type->param_count, (unsigned)nargs, rtype, arg_types);
-        if(s != FFI_OK) return (int)s;
-        ffi_call(&cif, func->native_func, rvalue, args);
-        return 0;
-    }
-    // Non-variadic: use or create cache.
-    NativeCallCache* c = func->native_call_cache;
-    if(!c){
-        err = native_call_cache_create(a, func_type, &c);
-        if(err) return err;
-        func->native_call_cache = c;
-    }
-    ffi_call(&c->cif, func->native_func, rvalue, args);
-    return 0;
+void
+native_call(NativeCallCache* c, void (*fn)(void), void*_Nonnull*_Nonnull args, void* rvalue){
+    ffi_call(&c->cif, fn, rvalue, args);
 }
 
 static
 void
-native_call_cache_free(Allocator a, CcFunc* func){
-    NativeCallCache* c = func->native_call_cache;
+native_call_cache_destroy(Allocator a, NativeCallCache* c){
     if(!c) return;
     Allocator_free(a, c, sizeof *c + c->nparams * sizeof *c->arg_types);
-    func->native_call_cache = NULL;
 }
 
 struct NativeClosure {
