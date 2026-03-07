@@ -2809,7 +2809,7 @@ cc_print_eval_result(MStringBuilder* sb, CcEvalResult r){
 
 static
 int
-cc_parse_top_level(CcParser* p, _Bool* finished){
+cc_parse_one(CcParser* p){
     int err;
     CcToken tok;
     CcDeclBase b = {0};
@@ -2822,30 +2822,23 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
             if(err) return err;
             return cc_error(p, peek.loc, "typedef requires a type");
         }
-        err = cc_resolve_specifiers(p,  &b);
+        err = cc_resolve_specifiers(p, &b);
         if(err) return err;
         err = cc_parse_decls(p, &b);
         if(err) return err;
         return 0;
     }
 
-    err = cc_next_token(p, &tok);
+    err = cc_peek(p, &tok);
     if(err) return err;
     switch(tok.type){
-        case CC_EOF:
-            *finished = 1;
-            return 0;
         case CC_KEYWORD:
             if(tok.kw.kw == CC_static_assert){
-                err = cc_unget(p, &tok);
-                if(err) return err;
                 return cc_handle_static_asssert(p);
             }
             goto Ldefault;
         default:
             Ldefault:;
-            err = cc_unget(p, &tok);
-            if(err) return err;
             break;
     }
     return cc_parse_statement(p);
@@ -2854,9 +2847,13 @@ cc_parse_top_level(CcParser* p, _Bool* finished){
 static
 int
 cc_parse_all(CcParser* p){
-    _Bool finished = 0;
-    while(!finished){
-        int err = cc_parse_top_level(p, &finished);
+    int err;
+    CcToken tok;
+    for(;;){
+        err = cc_peek(p, &tok);
+        if(tok.type == CC_EOF)
+            break;
+        err = cc_parse_one(p);
         if(err) return err;
     }
     return cc_resolve_gotos(p,
@@ -6050,18 +6047,8 @@ cc_parse_statement(CcParser* p){
                         cc_next_token(p, &peek); // consume '}'
                         break;
                     }
-                    CcDeclBase b = {0};
-                    err = cc_parse_declaration_specifier(p, &b);
+                    err = cc_parse_one(p);
                     if(err) goto end_block;
-                    if(b.spec.bits || b.type.bits){
-                        err = cc_resolve_specifiers(p, &b);
-                        if(!err) err = cc_parse_decls(p, &b);
-                        if(err) goto end_block;
-                    }
-                    else {
-                        err = cc_parse_statement(p);
-                        if(err) goto end_block;
-                    }
                 }
                 end_block:
                 cc_pop_scope(p);
@@ -7016,22 +7003,8 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
         else {
             if(peek.type == CC_EOF) break;
         }
-        CcDeclBase b = {0};
-        err = cc_parse_declaration_specifier(p, &b);
+        err = cc_parse_one(p);
         if(err) goto end_scope;
-        if(b.spec.bits || b.type.bits){
-            if(b.spec.sp_typedef && !b.spec.sp_typebits && !b.type.bits){
-                err = cc_error(p, peek.loc, "typedef requires a type");
-                goto end_scope;
-            }
-            err = cc_resolve_specifiers(p, &b);
-            if(!err) err = cc_parse_decls(p, &b);
-            if(err) goto end_scope;
-        }
-        else {
-            err = cc_parse_statement(p);
-            if(err) goto end_scope;
-        }
     }
     f->parsed = 1;
     err = cc_resolve_gotos(p, f->body.data, f->body.count, &f->labels);
