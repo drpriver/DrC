@@ -1818,6 +1818,197 @@ cpp_handle_directive(CppPreprocessor* cpp){
             return cpp_error(cpp, tok.loc, "Unexpected token type in #define");
         }
     }
+    else if(sv_equals(tok.txt, SV("defblock"))){
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
+        StringView name = tok.txt;
+        // Check for function-like macro: name(
+        err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
+        _Bool is_func = (tok.type == CPP_PUNCTUATOR && tok.punct == '(');
+        CppTokens *names = cpp_get_scratch(cpp);
+        if(!names) return CPP_OOM_ERROR;
+        CppTokens *repl = cpp_get_scratch(cpp);
+        if(!repl) return CPP_OOM_ERROR;
+        _Bool variadic = 0;
+        StringView named_variadic = {0};
+        if(is_func){
+            // Parse params (same as #define)
+            for(;;){
+                do {
+                    err = cpp_next_raw_token(cpp, &tok);
+                    if(err) return err;
+                }while(tok.type == CPP_WHITESPACE);
+                if(tok.type == CPP_PUNCTUATOR && tok.punct == ')')
+                    break;
+                if(names->count){
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ',')
+                        return cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) return err;
+                    }while(tok.type == CPP_WHITESPACE);
+                }
+                if(tok.type == CPP_PUNCTUATOR && tok.punct == '...'){
+                    variadic = 1;
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) return err;
+                    }while(tok.type == CPP_WHITESPACE);
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
+                        return cpp_error(cpp, tok.loc, "... must be last macro param");
+                    break;
+                }
+                if(tok.type != CPP_IDENTIFIER)
+                    return cpp_error(cpp, tok.loc, "expected macro param name");
+                {
+                    CppToken peek;
+                    err = cpp_next_raw_token(cpp, &peek);
+                    if(err) return err;
+                    if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
+                        variadic = 1;
+                        named_variadic = tok.txt;
+                        do {
+                            err = cpp_next_raw_token(cpp, &tok);
+                            if(err) return err;
+                        }while(tok.type == CPP_WHITESPACE);
+                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
+                            return cpp_error(cpp, tok.loc, "named variadic param must be last");
+                        break;
+                    }
+                    err = cpp_push_tok(cpp, &cpp->pending, peek);
+                    if(err) return err;
+                }
+                err = cpp_push_tok(cpp, names, tok);
+                if(err) return err;
+            }
+        }
+        // Skip to end of the #defblock line
+        while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        }
+        // Collect body tokens until #endblock
+        _Bool at_bol = 1; // at beginning of line
+        for(;;){
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+            if(tok.type == CPP_EOF){
+                cpp_release_scratch(cpp, repl);
+                cpp_release_scratch(cpp, names);
+                return cpp_error(cpp, tok.loc, "unterminated #defblock (missing #endblock)");
+            }
+            if(tok.type == CPP_NEWLINE){
+                at_bol = 1;
+                // Convert newlines to whitespace in the macro body
+                if(repl->count && ma_tail(*repl).type != CPP_WHITESPACE){
+                    CppToken ws = {.type = CPP_WHITESPACE, .txt = SV(" "), .loc = tok.loc};
+                    err = cpp_push_tok(cpp, repl, ws);
+                    if(err) return err;
+                }
+                continue;
+            }
+            if(tok.type == CPP_WHITESPACE && at_bol)
+                continue;
+            if(at_bol && tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
+                // Peek for "endblock"
+                CppToken dir;
+                do {
+                    err = cpp_next_raw_token(cpp, &dir);
+                    if(err) return err;
+                } while(dir.type == CPP_WHITESPACE);
+                if(dir.type == CPP_IDENTIFIER && sv_equals(dir.txt, SV("endblock"))){
+                    // Consume rest of line
+                    do {
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) return err;
+                    } while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF);
+                    err = cpp_push_tok(cpp, &cpp->pending, tok);
+                    if(err) return err;
+                    break;
+                }
+                // Not endblock — push back and treat # as part of body
+                err = cpp_push_tok(cpp, &cpp->pending, dir);
+                if(err) return err;
+            }
+            at_bol = 0;
+            // Coalesce whitespace
+            if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                continue;
+            // Elide whitespace after ## and #
+            if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#'))
+                continue;
+            // Elide whitespace before ##
+            if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+                repl->count--;
+            err = cpp_push_tok(cpp, repl, tok);
+            if(err) return err;
+        }
+        while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
+            repl->count--;
+        // Define the macro
+        if(is_func){
+            CppMacro* m;
+            err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
+                cpp_release_scratch(cpp, repl);
+                cpp_release_scratch(cpp, names);
+                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+            }
+            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR){
+                cpp_release_scratch(cpp, repl);
+                cpp_release_scratch(cpp, names);
+                return err;
+            }
+            if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
+            else {
+                m->def_loc = tok.loc;
+                m->is_variadic = variadic;
+                m->is_function_like = 1;
+                Atom* params = cpp_cmacro_params(m);
+                for(size_t i = 0; i < names->count; i++){
+                    Atom a = AT_atomize(cpp->at, names->data[i].txt.text, names->data[i].txt.length);
+                    if(!a){ cpp_release_scratch(cpp, repl); cpp_release_scratch(cpp, names); return CPP_OOM_ERROR; }
+                    params[i] = a;
+                }
+                // Tag replacement tokens with param indices
+                MARRAY_FOR_EACH(CppToken, t, *repl){
+                    if(t->type != CPP_IDENTIFIER) continue;
+                    if(variadic && sv_equals(t->txt, SV("__VA_ARGS__"))){ t->param_idx = m->nparams + 1; continue; }
+                    if(named_variadic.length && sv_equals(t->txt, named_variadic)){ t->param_idx = m->nparams + 1; continue; }
+                    if(variadic && sv_equals(t->txt, SV("__VA_COUNT__"))){ t->param_idx = m->nparams + 2; continue; }
+                    Atom a = AT_get_atom(cpp->at, t->txt.text, t->txt.length);
+                    if(!a) continue;
+                    for(size_t i = 0; i < m->nparams; i++){
+                        if(a == params[i]){ t->param_idx = i+1; break; }
+                    }
+                }
+                if(repl->count)
+                    memcpy(cpp_cmacro_replacement(m), repl->data, repl->count*sizeof repl->data[0]);
+            }
+        }
+        else {
+            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
+                cpp_release_scratch(cpp, repl);
+                cpp_release_scratch(cpp, names);
+                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+            }
+            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR){
+                cpp_release_scratch(cpp, repl);
+                cpp_release_scratch(cpp, names);
+                return err;
+            }
+            if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
+        }
+        cpp_release_scratch(cpp, repl);
+        cpp_release_scratch(cpp, names);
+        return 0;
+    }
     else if(sv_equals(tok.txt, SV("undef"))){
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;

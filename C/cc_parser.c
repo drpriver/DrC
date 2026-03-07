@@ -65,7 +65,7 @@ static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase*
 static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
 static int cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type);
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
-static _Bool cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type);
+static _Bool cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcFunc*_Nullable*_Nullable out_method);
 static int cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value);
 static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value);
 static int cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType target_type);
@@ -179,6 +179,8 @@ static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p);
 static int cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels);
+static int cc_skip_braced_block(CcParser* p);
+static int cc_eval_static_if_cond(CcParser* p, _Bool* out);
 
 static
 int
@@ -336,6 +338,15 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
             || (fp.is_atomic   && !tp.is_atomic))
                 return 0;
             return 1;
+        }
+        // Plan9 extension: ptr-to-struct -> ptr-to-anonymously-embedded-struct
+        if(ccqt_kind(fp) == CC_STRUCT && ccqt_kind(tp) == CC_STRUCT){
+            CcStruct* fs = ccqt_as_struct(fp);
+            for(uint32_t i = 0; i < fs->field_count; i++){
+                CcField* f = &fs->fields[i];
+                if(f->name || f->is_method || f->is_bitfield) continue;
+                if(f->type.ptr == tp.ptr) return 1;
+            }
         }
         return 0;
     }
@@ -1530,11 +1541,11 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         _Bool found = 0;
                         if(tk == CC_STRUCT){
                             CcStruct* s = ccqt_as_struct(cur);
-                            found = cc_lookup_field(s->fields, s->field_count, member.ident.ident, &floc, &member_type);
+                            found = cc_lookup_field(s->fields, s->field_count, member.ident.ident, &floc, &member_type, NULL);
                         }
                         else if(tk == CC_UNION){
                             CcUnion* u = ccqt_as_union(cur);
-                            found = cc_lookup_field(u->fields, u->field_count, member.ident.ident, &floc, &member_type);
+                            found = cc_lookup_field(u->fields, u->field_count, member.ident.ident, &floc, &member_type, NULL);
                         }
                         if(!found)
                             return cc_error(p, member.loc, "no member named '%s' in type", member.ident.ident->data);
@@ -1588,6 +1599,30 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__func__:{
+                    Atom name = p->current_func ? p->current_func->name : NULL;
+                    const char* s = name ? name->data : "";
+                    uint32_t len = name ? name->length : 0;
+                    CcExpr* node = cc_alloc_expr(p, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->kind = CC_EXPR_VALUE;
+                    node->loc = tok.loc;
+                    node->str.length = len + 1;
+                    node->text = s;
+                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0);
+                    if(!sa) return CC_OOM_ERROR;
+                    node->type = (CcQualType){.bits = (uintptr_t)sa};
+                    *out = node;
+                    return 0;
+                }
+                case CC__type_equals: // (expr-or-type, type)
+                case CC__is_pointer: // (expr-or-type)
+                case CC__is_arithmetic: // (expr-or-type)
+                case CC__is_castable_to: // (expr-or-type, type)
+                case CC__is_implicitly_castable_to: // (expr-or-type, type)
+                case CC__has_quals: // (expr-or-type, qualifier)
+                case CC__is_const: // (expr-or-type)
+                    return cc_unimplemented(p, tok.loc, "TODO");
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -1801,6 +1836,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
 static
 int
 cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
+    CcExpr* _Nullable receiver = NULL;
     for(;;){
         CcToken tok;
         int err = cc_next_token(p, &tok);
@@ -1809,6 +1845,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             cc_unget(p, &tok);
             break;
         }
+        if(tok.punct.punct != CC_lparen && tok.punct.punct != CC_dot && tok.punct.punct != CC_arrow)
+            receiver = NULL;
         switch((uint32_t)tok.punct.punct){
             case CC_plusplus: {
                 CcExpr* node = cc_alloc_expr(p, 0);
@@ -1859,30 +1897,58 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(member.type != CC_IDENTIFIER)
                     return cc_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
                 Atom member_name = member.ident.ident;
-                // Resolve the aggregate type
+                // Resolve the aggregate type, allowing . and -> interchangeably.
                 CcQualType agg_type = operand->type;
-                if(mkind == CC_EXPR_ARROW){
-                    // -> requires pointer to struct/union
-                    if(ccqt_is_basic(agg_type) || ccqt_kind(agg_type) != CC_POINTER)
-                        return cc_error(p, tok.loc, "member reference with '->' requires a pointer type");
+                if(!ccqt_is_basic(agg_type) && ccqt_kind(agg_type) == CC_POINTER){
                     CcPointer* ptr = ccqt_as_ptr(agg_type);
                     agg_type = ptr->pointee;
+                    mkind = CC_EXPR_ARROW;
+                } else {
+                    mkind = CC_EXPR_DOT;
                 }
                 CcFieldLoc floc = {0};
                 CcQualType member_type = {0};
+                CcFunc* _Null_unspecified method = NULL;
                 if(!ccqt_is_basic(agg_type)){
                     CcTypeKind tk = ccqt_kind(agg_type);
                     if(tk == CC_STRUCT){
                         CcStruct* s = ccqt_as_struct(agg_type);
-                        cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type);
+                        cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type, &method);
                     }
                     else if(tk == CC_UNION){
                         CcUnion* u = ccqt_as_union(agg_type);
-                        cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type);
+                        cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type, &method);
                     }
                 }
                 if(!member_type.bits)
                     return cc_error(p, member.loc, "no member named '%s'", member_name->data);
+                if(method){
+                    CcExpr* mnode = cc_alloc_expr(p, 0);
+                    if(!mnode) return CC_OOM_ERROR;
+                    mnode->kind = CC_EXPR_FUNCTION;
+                    mnode->loc = tok.loc;
+                    mnode->type = member_type;
+                    mnode->func = method;
+                    int perr = PM_put(&p->used_funcs, cc_allocator(p), method, method);
+                    if(perr) return CC_OOM_ERROR;
+                    if(mkind == CC_EXPR_ARROW){
+                        // Already a pointer
+                        receiver = operand;
+                    } else {
+                        // Take address of the object
+                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
+                        if(!ptr) return CC_OOM_ERROR;
+                        CcExpr* addr = cc_alloc_expr(p, 0);
+                        if(!addr) return CC_OOM_ERROR;
+                        addr->kind = CC_EXPR_ADDR;
+                        addr->loc = tok.loc;
+                        addr->type = (CcQualType){.bits = (uintptr_t)ptr};
+                        addr->lhs = operand;
+                        receiver = addr;
+                    }
+                    operand = mnode;
+                    continue;
+                }
                 CcExpr* mnode = cc_alloc_expr(p, 1);
                 if(!mnode) return CC_OOM_ERROR;
                 mnode->kind = mkind;
@@ -1900,7 +1966,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 CcToken peek;
                 err = cc_next_token(p, &peek);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen){
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen && !receiver){
                     // No args
                     CcQualType ct = operand->type;
                     if(ccqt_kind(ct) == CC_POINTER)
@@ -1927,7 +1993,11 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     operand = node;
                     continue;
                 }
-                cc_unget(p, &peek);
+                _Bool rparen_consumed = 0;
+                if(receiver && peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen)
+                    rparen_consumed = 1;
+                else
+                    cc_unget(p, &peek);
                 // Resolve function type early so we can look up param names
                 CcQualType ct = operand->type;
                 if(ccqt_kind(ct) == CC_POINTER)
@@ -1944,8 +2014,15 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 }
                 Allocator call_al = cc_scratch_allocator(p);
                 Parray args = {0};
+                _Bool has_receiver = receiver != NULL;
+                if(receiver){
+                    err = pa_push(&args, call_al, receiver);
+                    if(err){ return CC_OOM_ERROR; }
+                    receiver = NULL;
+                }
                 _Bool has_named = 0;
-                uint32_t positional_index = 0;
+                uint32_t positional_index = has_receiver ? 1 : 0;
+                if(rparen_consumed) goto call_args_done;
                 for(;;){
                     // Check for designated argument: .name = or [N] =
                     CcToken dot;
@@ -2084,6 +2161,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         break;
                     }
                 }
+                call_args_done:;
                 uint32_t nargs = (uint32_t)args.count;
                 // Check for unfilled slots when named args were used
                 if(has_named){
@@ -3413,13 +3491,14 @@ cc_register_pragmas(CcParser* p){
 
 static
 _Bool
-cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type){
+cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcFunc*_Nullable*_Nullable out_method){
     for(uint32_t i = 0; i < field_count; i++){
         CcField* f = &fields[i];
         if(f->is_method){
             if(f->method->name == name){
                 *out_loc = (CcFieldLoc){.byte_offset = f->offset};
                 *out_type = f->type;
+                if(out_method) *out_method = f->method;
                 return 1;
             }
             continue;
@@ -3431,6 +3510,7 @@ cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFi
                 .bit_width = f->is_bitfield ? f->bitwidth : 0,
             };
             *out_type = f->type;
+            if(out_method) *out_method = NULL;
             return 1;
         }
         if(!f->name){
@@ -3448,7 +3528,7 @@ cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFi
                 sub_fields = inner->fields;
                 sub_count = inner->field_count;
             }
-            if(sub_fields && cc_lookup_field(sub_fields, sub_count, name, out_loc, out_type)){
+            if(sub_fields && cc_lookup_field(sub_fields, sub_count, name, out_loc, out_type, out_method)){
                 out_loc->byte_offset += f->offset;
                 return 1;
             }
@@ -3462,7 +3542,7 @@ _Bool
 cc_has_field(CcField* _Nullable fields, uint32_t field_count, Atom name){
     CcFieldLoc loc;
     CcQualType type;
-    return cc_lookup_field(fields, field_count, name, &loc, &type);
+    return cc_lookup_field(fields, field_count, name, &loc, &type, NULL);
 }
 
 static
@@ -3494,7 +3574,7 @@ cc_find_field_index(CcField*_Nullable fields, uint32_t field_count, Atom name, C
                 sub_count = ccqt_as_union(fields[k].type)->field_count;
             }
             else continue;
-            if(cc_lookup_field(sub_fields, sub_count, name, &inner_loc, &inner_type)){
+            if(cc_lookup_field(sub_fields, sub_count, name, &inner_loc, &inner_type, NULL)){
                 inner_loc.byte_offset += fields[k].offset;
                 *out_loc = inner_loc;
                 *out_type = inner_type;
@@ -3613,7 +3693,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
                 return cc_error(p, peek.loc, "member designator into non-struct/union type");
             CcFieldLoc inner_loc;
             CcQualType inner_type;
-            if(!cc_lookup_field(sub_fields, sub_count, field_tok.ident.ident, &inner_loc, &inner_type))
+            if(!cc_lookup_field(sub_fields, sub_count, field_tok.ident.ident, &inner_loc, &inner_type, NULL))
                 return cc_error(p, peek.loc, "no member named '%.*s'",
                     field_tok.ident.ident->length, field_tok.ident.ident->data);
             fl->byte_offset += inner_loc.byte_offset;
@@ -3889,7 +3969,7 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                     return cc_error(p, field_tok.loc, "expected field name after '.'");
                 CcFieldLoc fl;
                 CcQualType sub;
-                if(!cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub))
+                if(!cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub, NULL))
                     return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
                 fl.byte_offset += base_offset;
                 err = cc_parse_desig_tail(p, &sub, &fl);
@@ -5381,6 +5461,54 @@ cc_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b){
     return 0;
 }
 
+// Skip a balanced `{ ... }` block. Assumes the opening `{` has NOT
+// been consumed yet.
+static
+int
+cc_skip_braced_block(CcParser* p){
+    int err;
+    CcToken tok;
+    err = cc_expect_punct(p, '{');
+    if(err) return err;
+    int depth = 1;
+    while(depth > 0){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF)
+            return cc_error(p, tok.loc, "unterminated block in static if");
+        if(tok.type == CC_PUNCTUATOR){
+            if(tok.punct.punct == '{') depth++;
+            else if(tok.punct.punct == '}') depth--;
+        }
+    }
+    return 0;
+}
+
+// Parse the condition of `static if(expr)` — assumes `static` and `if`
+// have already been consumed. Evaluates the condition as a constant
+// expression and writes the boolean result to *out.
+static
+int
+cc_eval_static_if_cond(CcParser* p, _Bool* out){
+    int err = cc_expect_punct(p, '(');
+    if(err) return err;
+    CcExpr* cond;
+    err = cc_parse_expr(p, &cond);
+    if(err) return err;
+    err = cc_expect_punct(p, ')');
+    if(err) return err;
+    CcEvalResult ev = cc_eval_expr(cond);
+    switch(ev.kind){
+        case CC_EVAL_INT:    *out = ev.i != 0; return 0;
+        case CC_EVAL_UINT:   *out = ev.u != 0; return 0;
+        case CC_EVAL_FLOAT:  *out = ev.f != 0; return 0;
+        case CC_EVAL_DOUBLE: *out = ev.d != 0; return 0;
+        case CC_EVAL_ERROR:
+            return cc_error(p, cond->loc, "static if condition must be a constant expression");
+    }
+    return CC_UNREACHABLE_ERROR;
+}
+
 static
 int
 cc_parse_statement(CcParser* p){
@@ -5806,13 +5934,22 @@ cc_parse_statement(CcParser* p){
                     return cc_parse_statement(p);
                 }
                 case CC_return: {
-                    CcExpr* _Nullable ret_expr = NULL;
+                    CcExpr* _Null_unspecified ret_expr = NULL;
                     CcToken peek;
                     err = cc_peek(p, &peek);
                     if(err) return err;
+                    CcQualType ret_type = ccqt_basic(CCBT_int);
+                    if(p->current_func)
+                        ret_type = p->current_func->type->return_type;
+
                     if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
                         err = cc_parse_expr(p, &ret_expr);
                         if(err) return err;
+                        err = cc_implicit_cast(p, ret_expr, ret_type, &ret_expr); // technically this casts to void if returning from void func, but that's an ok extension
+                        if(err) return err;
+                    }
+                    else if(!(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void)){
+                        return cc_error(p, peek.loc, "Returning void from non-void function");
                     }
                     err = cc_expect_punct(p, ';');
                     if(err) return err;
@@ -6637,6 +6774,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 var_ref->loc = tok.loc;
                 var_ref->type = type;
                 var_ref->var = var;
+                if(var && !var->automatic){
+                    int perr = PM_put(&p->used_vars, cc_allocator(p), var, var);
+                    if(perr) return CC_OOM_ERROR;
+                }
                 CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, tok.loc, type, var_ref, initializer);
                 if(!assign) return CC_OOM_ERROR;
                 size_t si;
@@ -6801,6 +6942,14 @@ cc_define_builtin_types(CcParser* p){
         static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
             {SV("__builtin_constant_p"), CC__builtin_constant_p},
             {SV("__builtin_offsetof"), CC__builtin_offsetof},
+            {SV("__func__"), CC__func__},
+            {SV("__FUNCTION__"), CC__func__},
+            {SV("__type_equals"), CC__type_equals},
+            {SV("__is_pointer"), CC__is_pointer},
+            {SV("__is_arithmetic"), CC__is_arithmetic},
+            {SV("__is_castable_to"), CC__is_castable_to},
+            {SV("__is_implicitly_castable_to"), CC__is_implicitly_castable_to},
+            {SV("__has_quals"), CC__has_quals},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
