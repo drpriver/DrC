@@ -3795,7 +3795,7 @@ TestFunction(test_bitfield_abi){
             .current = &cc.global,
         };
         struct BFCase* c = &cases[i];
-        fc_write_path(fc, "(test)", 6);
+        fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, c->input);
         if(err) {TestReport("failed to cache"); goto bffin;}
         err = cpp_define_builtin_macros(&cc.cpp);

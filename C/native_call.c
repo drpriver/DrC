@@ -1,6 +1,10 @@
+#ifndef C_NATIVE_CALL_C
+#define C_NATIVE_CALL_C
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+
+#ifndef NO_NATIVE_CALL
 #ifdef __has_include
 #if __has_include(<ffi/ffi.h>)
 #include <ffi/ffi.h>
@@ -10,6 +14,8 @@
 #else
 #include <ffi.h>
 #endif
+#endif
+
 #include "cc_errors.h"
 #include "native_call.h"
 #include "cc_func.h"
@@ -18,12 +24,18 @@ enum {
     NC_NO_ERROR = _cc_no_error,
     NC_OOM_ERROR = _cc_oom_error,
     NC_UNSUPPORTED_TYPE = _cc_unimplemented_error,
+    NC_UNIMPLEMENTED_ERROR = _cc_unimplemented_error,
 };
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
+#ifndef NO_NATIVE_CALL
+
+
+// FIXME:
+//   why are we calling MALLOCATOR in here? allocation and lifetime should be managed by user.
 static
 int
 cctype_to_ffi_type(CcQualType t, ffi_type*_Nonnull*_Nonnull out){
@@ -226,7 +238,48 @@ native_closure_destroy(Allocator a, NativeClosure* closure){
     ffi_closure_free(closure->closure);
     Allocator_free(a, closure, sizeof *closure + closure->nparams * sizeof *closure->arg_types);
 }
+#else
+
+static
+int
+native_call_cache_create(Allocator a, CcFunction* func_type, uint32_t nvarargs, const CcQualType*_Nullable vararg_types, NativeCallCache*_Nullable*_Nonnull out){
+    (void)a;
+    (void)func_type;
+    (void)nvarargs;
+    (void)vararg_types;
+    (void)out;
+    return NC_UNIMPLEMENTED_ERROR;
+}
+static
+int
+native_closure_create(Allocator al, CcFunction* func_type, NativeClosureCallback* cb, void*_Nullable userdata, NativeClosure*_Nullable*_Nonnull out){
+    (void)al;
+    (void)func_type;
+    (void)cb;
+    (void)userdata;
+    (void)out;
+    return NC_UNIMPLEMENTED_ERROR;
+}
+
+static
+void (*native_closure_fn(NativeClosure* closure))(void){
+    (void)closure;
+    // should be unreachable
+    return (void(*)(void))(uintptr_t)1;
+}
+static
+void
+native_call(NativeCallCache* nc, void (*fn)(void),
+    void*_Nonnull*_Nonnull args, void* rvalue){
+    (void)nc;
+    (void)fn;
+    (void)args;
+    (void)rvalue;
+    // ... uh no way to return an error, but also should be unreachable.
+}
+#endif
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
+#endif
 #endif

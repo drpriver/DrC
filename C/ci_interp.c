@@ -13,6 +13,7 @@
 #include "cc_var.h"
 #include "cc_expr.h"
 #include "cc_target.h"
+#include "cpp_preprocessor.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/Allocators/mallocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
@@ -21,6 +22,7 @@
 #include "../Drp/cmd_run.h"
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
+#include "native_call.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -42,6 +44,8 @@ static Allocator ci_scratch_allocator(CiInterpreter*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
+// re-declare here as I'm not sure if this should be used in the interpreter or not
+static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 
 static CppFuncMacroFn ci_shell;
 
@@ -954,7 +958,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         size_t total = nargs * sizeof(void*) + arg_data_size;
         char* buf = Allocator_zalloc(ci_allocator(ci), total);
-        if(!buf) return CC_OOM_ERROR;
+        if(!buf) return CI_OOM_ERROR;
         void** args = (void**)buf;
         char* arg_data = buf + nargs * sizeof(void*);
         for(uint32_t i = 0; i < nargs; i++){
@@ -1392,7 +1396,7 @@ ci_resolve_refs(CiInterpreter* ci){
 static
 Allocator
 ci_allocator(CiInterpreter* ci){
-#if 1
+#ifndef CI_THREAD_UNSAFE_ALLOCATOR
     (void)ci;
     return MALLOCATOR;
 #else

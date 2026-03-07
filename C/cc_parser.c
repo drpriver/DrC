@@ -73,10 +73,6 @@ static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_asssert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
 static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
-// private logging API
-static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix);
-static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
-static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 
 enum {
     CC_NO_ERROR                 = _cc_no_error,

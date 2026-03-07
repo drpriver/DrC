@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 
+#include <stdarg.h>
 #include "../Drp/atom_map.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
@@ -279,6 +280,9 @@ static int cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr
 static int cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom path);
 
 LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
+static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix);
+static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
+static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

@@ -281,6 +281,7 @@ struct TestStats {
     unsigned long long failures;
     unsigned long long executed;
     unsigned long long assert_failures;
+    unsigned long long skipped;
 };
 
 static inline
@@ -303,6 +304,7 @@ struct TestResults {
     size_t failures;
     size_t executed;
     size_t assert_failures;
+    size_t skips;
     size_t failed_tests[MAX_TEST_NUM];
     size_t n_failed_tests;
 };
@@ -1000,6 +1002,7 @@ run_the_tests(size_t*_Nonnull which_tests, int test_count, struct TestResults* r
         result->assert_failures += func_result.assert_failures;
         if(func_result.assert_failures || func_result.failures)
             result->failed_tests[result->n_failed_tests++] = idx;
+        result->skips += func_result.skipped;
     }
 }
 
@@ -1186,6 +1189,7 @@ run_the_tests_multithreaded(size_t*_Nonnull which_tests, int test_count, struct 
         result->failures += r->failures;
         result->executed += r->executed;
         result->assert_failures += r->assert_failures;
+        result->skips += r->skips;
         for(size_t n = 0; n < r->n_failed_tests; n++){
             result->failed_tests[result->n_failed_tests++] = r->failed_tests[n];
         }
@@ -1550,6 +1554,14 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
             gray, filename, reset,
             color, result.failures, reset,
             text);
+    if(result.skips){
+        color = result.skips?green:red;
+        text = result.skips == 1? "test skipped" : "tests skipped";
+        TestPrintf("%s%s%s: %s%zu%s %s\n",
+                gray, filename, reset,
+                color, result.skips, reset,
+                text);
+    }
     for(size_t i = 0 ; i < TestOutFileCount; i++){
         if(TestOutFiles[i] != stderr)
             fclose(TestOutFiles[i]);
