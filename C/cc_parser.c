@@ -1872,11 +1872,110 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__builtin_va_start: // (ap, param) or (ap)
-                case CC__builtin_va_arg: // (ap, type)
-                case CC__builtin_va_end: // (ap)
-                case CC__builtin_va_copy: // (dst, src)
-                    return cc_unimplemented(p, tok.loc, "__builtin_va_whatever");
+                case CC__builtin_va_start: {
+                    // (ap, param) or (ap)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ap_expr;
+                    err = cc_parse_assignment_expr(p, &ap_expr);
+                    if(err) return err;
+                    {
+                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
+                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
+                        if(va_type.bits && _ccqt_to_type_ptr(ap_expr->type) != _ccqt_to_type_ptr(va_type))
+                            return cc_error(p, tok.loc, "first argument to va_start must have type va_list");
+                    }
+                    // Optional second arg (last fixed param) — parse and ignore.
+                    CcToken peek;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ','){
+                        err = cc_next_token(p, &peek); // consume comma
+                        if(err) return err;
+                        CcExpr* ignored;
+                        err = cc_parse_assignment_expr(p, &ignored);
+                        if(err) return err;
+                    }
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->extra = CC_VA_START;
+                    node->lhs = ap_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_va_end: {
+                    // (ap)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ap_expr;
+                    err = cc_parse_assignment_expr(p, &ap_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->extra = CC_VA_END;
+                    node->lhs = ap_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_va_arg: {
+                    // (ap, type)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ap_expr;
+                    err = cc_parse_assignment_expr(p, &ap_expr);
+                    if(err) return err;
+                    {
+                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
+                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
+                        if(va_type.bits && _ccqt_to_type_ptr(ap_expr->type) != _ccqt_to_type_ptr(va_type))
+                            return cc_error(p, tok.loc, "first argument to va_arg must have type va_list");
+                    }
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcQualType arg_type;
+                    err = cc_parse_type_name(p, &arg_type);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, arg_type, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->extra = CC_VA_ARG;
+                    node->lhs = ap_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_va_copy: {
+                    // (dest, src)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* dest_expr;
+                    err = cc_parse_assignment_expr(p, &dest_expr);
+                    if(err) return err;
+                    {
+                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
+                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
+                        if(va_type.bits && _ccqt_to_type_ptr(dest_expr->type) != _ccqt_to_type_ptr(va_type))
+                            return cc_error(p, tok.loc, "first argument to va_copy must have type va_list");
+                    }
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* src_expr;
+                    err = cc_parse_assignment_expr(p, &src_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->extra = CC_VA_COPY;
+                    node->lhs = dest_expr;
+                    node->values[0] = src_expr;
+                    *out = node;
+                    return 0;
+                }
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -2709,6 +2808,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
         case CC_EXPR_ATOMIC:
+        case CC_EXPR_VA:
             msb_write_literal(sb, "<unimpl>");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
@@ -7341,6 +7441,49 @@ cc_define_builtin_types(CcParser* p){
             CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0);
             if(!arr) return CC_OOM_ERROR;
             va_list_type = (CcQualType){.bits = (uintptr_t)arr};
+            break;
+        }
+        case CC_TARGET_AARCH64_LINUX: {
+            // struct __va_list { void *__stack; void *__gr_top; void *__vr_top;
+            //                    int __gr_offs; int __vr_offs; };
+            Atom tag_name = AT_atomize(p->cpp.at, "__va_list", sizeof "__va_list" - 1);
+            if(!tag_name) return CC_OOM_ERROR;
+
+            Atom stack_name = AT_atomize(p->cpp.at, "__stack", sizeof "__stack" - 1);
+            Atom gr_top_name = AT_atomize(p->cpp.at, "__gr_top", sizeof "__gr_top" - 1);
+            Atom vr_top_name = AT_atomize(p->cpp.at, "__vr_top", sizeof "__vr_top" - 1);
+            Atom gr_offs_name = AT_atomize(p->cpp.at, "__gr_offs", sizeof "__gr_offs" - 1);
+            Atom vr_offs_name = AT_atomize(p->cpp.at, "__vr_offs", sizeof "__vr_offs" - 1);
+            if(!stack_name || !gr_top_name || !vr_top_name || !gr_offs_name || !vr_offs_name)
+                return CC_OOM_ERROR;
+
+            CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
+            if(!void_ptr) return CC_OOM_ERROR;
+            CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
+
+            CcField* fields = Allocator_alloc(al, 5 * sizeof(CcField));
+            if(!fields) return CC_OOM_ERROR;
+            fields[0] = (CcField){.type = void_ptr_type, .name = stack_name};
+            fields[1] = (CcField){.type = void_ptr_type, .name = gr_top_name};
+            fields[2] = (CcField){.type = void_ptr_type, .name = vr_top_name};
+            fields[3] = (CcField){.type = ccqt_basic(CCBT_int), .name = gr_offs_name};
+            fields[4] = (CcField){.type = ccqt_basic(CCBT_int), .name = vr_offs_name};
+
+            CcStruct* s = Allocator_zalloc(al, sizeof *s);
+            if(!s) return CC_OOM_ERROR;
+            *s = (CcStruct){
+                .kind = CC_STRUCT,
+                .name = tag_name,
+                .field_count = 5,
+                .fields = fields,
+            };
+            int err = cc_compute_struct_layout(p, s, 0);
+            if(err) return err;
+            err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
+            if(err) return CC_OOM_ERROR;
+
+            // typedef struct __va_list __builtin_va_list;
+            va_list_type = (CcQualType){.bits = (uintptr_t)s};
             break;
         }
         default: {

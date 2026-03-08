@@ -74,6 +74,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_COMMA,
     CC_EXPR_STATEMENT_EXPRESSION, // gnu statement expression
     CC_EXPR_ATOMIC, // atomic builtin operation, op in extra field
+    CC_EXPR_VA, // va_start, va_end, va_arg, va_copy; op in extra field
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
@@ -89,6 +90,14 @@ enum CcAtomicOp TYPED_ENUM(uint32_t) {
     CC_ATOMIC_SIGNAL_FENCE,
 };
 TYPEDEF_ENUM(CcAtomicOp, uint32_t);
+
+enum CcVaOp TYPED_ENUM(uint32_t) {
+    CC_VA_START,
+    CC_VA_END,
+    CC_VA_ARG,
+    CC_VA_COPY,
+};
+TYPEDEF_ENUM(CcVaOp, uint32_t);
 
 typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;

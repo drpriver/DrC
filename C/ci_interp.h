@@ -26,6 +26,7 @@ struct CiInterpFrame {
     void* return_buf;
     size_t return_size;
     size_t data_length; // after this is the data, but we can't use a FLA and also embed in CcInterpreter
+    void*_Null_unspecified varargs_buf; // points into trailing data, past frame_size
 };
 
 typedef struct CiInterpreter CiInterpreter;

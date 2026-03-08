@@ -5,6 +5,7 @@
 #pragma lib "Python"
 #include <Python/Python.h>
 #endif
+#include <stdarg.h>
 #include <stdio.h>
 
 static PyObject*
@@ -30,6 +31,11 @@ static PyModuleDef module = {
     .m_methods = methods,
 };
 
+static PyObject*
+PyInit_native(void){
+    return PyModule_Create(&module);
+}
+
 static PyObject* PyInit_native(void);
 PyImport_AppendInittab("native", &PyInit_native);
 Py_Initialize();
@@ -38,9 +44,43 @@ PyRun_SimpleString(
     "print('3 + 4 =', native.add(3, 4))\n"
     "print('100 + 200 =', native.add(100, 200))\n"
 );
+
+// Don't write your code like this at home kids,
+// but it shows we're the real deal.
+static void
+crazy_call(int components, ...){
+    if(components < 2) return;
+    va_list va;
+    va_start(va);
+    PyObject *o = PyImport_ImportModule(va_arg(va, const char *));
+    PyObject* prev;
+    for(int i = 1; i < components; i++){
+        prev = o;
+        o = PyObject_GetAttrString(o, va_arg(va, const char *));
+        Py_DECREF(prev);
+    }
+    const char* fmt = va_arg(va, const char*);
+    PyObject* tup = Py_VaBuildValue(fmt, va);
+    va_end(va);
+    PyObject* result = PyObject_Call(o, tup, NULL);
+    Py_DECREF(o);
+    Py_DECREF(tup);
+    if(result != Py_None){
+        PyObject_Print(result, stdout, 0);
+        printf("\n");
+    }
+    Py_DECREF(result);
+}
+crazy_call(2, "builtins", "pow", "(ii)", 2, 10);
+crazy_call(2, "builtins", "print", "(s)", "hello from crazy_call");
+crazy_call(2, "builtins", "abs", "(i)", -42);
+crazy_call(2, "builtins", "max", "(iii)", 3, 7, 5);
+crazy_call(3, "os", "path", "join", "(ss)", "/usr", "local");
+crazy_call(2, "math", "factorial", "(i)", 10);
+crazy_call(2, "math", "gcd", "(ii)", 12, 8);
+crazy_call(2, "math", "isqrt", "(i)", 144);
+crazy_call(2, "operator", "mul", "(si)", "ha", 3);
+crazy_call(2, "native", "add", "(ii)", 4, 4);
+
 Py_Finalize();
 
-static PyObject*
-PyInit_native(void){
-    return PyModule_Create(&module);
-}

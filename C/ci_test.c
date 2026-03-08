@@ -1346,7 +1346,7 @@ TestFunction(test_interpreter){
                "int vsum(int n, va_list ap){\n"
                "    int sum = 0;\n"
                "    for(int i = 0; i < n; i++){\n"
-               "        sum += va_arg(ap, int)\n"
+               "        sum += va_arg(ap, int);\n"
                "    }\n"
                "    return sum;\n"
                "}\n"
@@ -1368,6 +1368,7 @@ TestFunction(test_interpreter){
                "    return result;\n"
                "}\n"
                "int x = sum(3, 4, 5, 6) + sum2(2, 8, 9);\n"
+               "return x;\n"
                ),
             .exit_code = 4+5+6+8+9+8+9,
         },

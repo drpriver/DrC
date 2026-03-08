@@ -42,6 +42,25 @@ enum {
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
 static char ci_discard_buf[8192];
+
+// SysV x86_64 va_list layout.
+typedef struct CiSysvVaListTag CiSysvVaListTag;
+struct CiSysvVaListTag {
+    unsigned gp_offset;
+    unsigned fp_offset;
+    void* overflow_arg_area;
+    void* reg_save_area;
+};
+
+// AAPCS64 (Linux ARM64) va_list layout.
+typedef struct CiAapcs64VaList CiAapcs64VaList;
+struct CiAapcs64VaList {
+    void* __stack;
+    void* __gr_top;
+    void* __vr_top;
+    int __gr_offs; // negative, counts up toward 0
+    int __vr_offs;
+};
 static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
@@ -1294,6 +1313,186 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         #undef ATOMIC_DISPATCH
         return 0;
     }
+    case CC_EXPR_VA: {
+        CcVaOp op = (CcVaOp)expr->extra;
+        switch(op){
+        case CC_VA_START: {
+            void* ap_addr;
+            size_t ap_size;
+            int err = ci_interp_lvalue(ci, frame, expr->lhs, &ap_addr, &ap_size);
+            if(err) return err;
+            if(!frame->varargs_buf)
+                return ci_error(ci, expr->loc, "va_start used in non-variadic function");
+            switch(ci_target(ci)->target){
+            case CC_TARGET_AARCH64_MACOS:
+            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_TEST: {
+                // va_list is a pointer.
+                void* va_ptr = frame->varargs_buf;
+                memcpy(ap_addr, &va_ptr, sizeof(void*));
+                return 0;
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                // Mark all register slots as used so va_arg always reads from __stack.
+                CiAapcs64VaList* va = ap_addr;
+                va->__stack = frame->varargs_buf;
+                va->__gr_top = NULL;
+                va->__vr_top = NULL;
+                va->__gr_offs = 0;
+                va->__vr_offs = 0;
+                return 0;
+            }
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                // Mark all register slots as used so va_arg always reads from overflow.
+                CiSysvVaListTag* tag = ap_addr;
+                tag->gp_offset = 48;
+                tag->fp_offset = 48 + 128;
+                tag->overflow_arg_area = frame->varargs_buf;
+                tag->reg_save_area = NULL;
+                return 0;
+            }
+            case CC_TARGET_COUNT:
+                break;
+            }
+            return ci_error(ci, expr->loc, "va_start: unsupported target");
+        }
+        case CC_VA_END:
+            return 0;
+        case CC_VA_ARG: {
+            void* ap_addr;
+            size_t ap_size;
+            int err = ci_interp_lvalue(ci, frame, expr->lhs, &ap_addr, &ap_size);
+            if(err) return err;
+            uint32_t sz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+            if(err) return err;
+            uint32_t advance = sz < 8 ? 8 : (sz + 7) & ~7u;
+            switch(ci_target(ci)->target){
+            case CC_TARGET_AARCH64_MACOS:
+            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_TEST: {
+                // va_list is a pointer.
+                void* cur;
+                memcpy(&cur, ap_addr, sizeof(void*));
+                if(result != ci_discard_buf){
+                    if(sz > size)
+                        return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+                    memcpy(result, cur, sz);
+                }
+                cur = (char*)cur + advance;
+                memcpy(ap_addr, &cur, sizeof(void*));
+                return 0;
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                CiAapcs64VaList* va = ap_addr;
+                _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
+                const void* src;
+                if(is_fp){
+                    if(va->__vr_offs < 0){
+                        src = (char*)va->__vr_top + va->__vr_offs;
+                        va->__vr_offs += 16;
+                    }
+                    else {
+                        src = va->__stack;
+                        va->__stack = (char*)va->__stack + advance;
+                    }
+                }
+                else {
+                    if(va->__gr_offs < 0){
+                        src = (char*)va->__gr_top + va->__gr_offs;
+                        va->__gr_offs += 8;
+                    }
+                    else {
+                        src = va->__stack;
+                        va->__stack = (char*)va->__stack + advance;
+                    }
+                }
+                if(result != ci_discard_buf){
+                    if(sz > size)
+                        return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+                    memcpy(result, src, sz);
+                }
+                return 0;
+            }
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                CiSysvVaListTag* tag = ap_addr;
+                _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
+                const void* src;
+                if(is_fp){
+                    if(tag->fp_offset < 176){
+                        src = (char*)tag->reg_save_area + tag->fp_offset;
+                        tag->fp_offset += 16;
+                    }
+                    else {
+                        src = tag->overflow_arg_area;
+                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
+                    }
+                }
+                else {
+                    if(tag->gp_offset < 48){
+                        src = (char*)tag->reg_save_area + tag->gp_offset;
+                        tag->gp_offset += 8;
+                    }
+                    else {
+                        src = tag->overflow_arg_area;
+                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
+                    }
+                }
+                if(result != ci_discard_buf){
+                    if(sz > size)
+                        return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+                    memcpy(result, src, sz);
+                }
+                return 0;
+            }
+            case CC_TARGET_COUNT:
+                break;
+            }
+            return ci_error(ci, expr->loc, "va_arg: unsupported target");
+        }
+        case CC_VA_COPY: {
+            void* dest_addr;
+            size_t dest_size;
+            int err = ci_interp_lvalue(ci, frame, expr->lhs, &dest_addr, &dest_size);
+            if(err) return err;
+            switch(ci_target(ci)->target){
+            case CC_TARGET_AARCH64_MACOS:
+            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_TEST: {
+                // va_list is a pointer.
+                void* src_val;
+                err = ci_interp_expr(ci, frame, expr->values[0], &src_val, sizeof src_val);
+                if(err) return err;
+                memcpy(dest_addr, &src_val, sizeof(void*));
+                return 0;
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                void* src_addr;
+                size_t src_size;
+                err = ci_interp_lvalue(ci, frame, expr->values[0], &src_addr, &src_size);
+                if(err) return err;
+                *(CiAapcs64VaList*)dest_addr = *(CiAapcs64VaList*)src_addr;
+                return 0;
+            }
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                void* src_addr;
+                size_t src_size;
+                err = ci_interp_lvalue(ci, frame, expr->values[0], &src_addr, &src_size);
+                if(err) return err;
+                *(CiSysvVaListTag*)dest_addr = *(CiSysvVaListTag*)src_addr;
+                return 0;
+            }
+            case CC_TARGET_COUNT:
+                break;
+            }
+            return ci_error(ci, expr->loc, "va_copy: unsupported target");
+        }
+        }
+        return ci_error(ci, expr->loc, "interpreter: unsupported va operation");
+    }
     default:
         return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
     }
@@ -1409,7 +1608,19 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
     if(!func->parsed)
         return ci_error(ci, func->loc, "ICE: function '%s' not parsed before execution", func->name->data);
     CcFunction* ftype = func->type;
-    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
+    // Compute varargs buffer size: each vararg gets an 8-byte-aligned slot.
+    size_t varargs_size = 0;
+    if(ftype->is_variadic && nargs > ftype->param_count){
+        for(uint32_t i = ftype->param_count; i < nargs; i++){
+            uint32_t arg_sz;
+            err = cc_sizeof_as_uint(&ci->parser, args[i]->type, func->loc, &arg_sz);
+            if(err) return err;
+            if(arg_sz < 8) arg_sz = 8;
+            arg_sz = (arg_sz + 7) & ~7u;
+            varargs_size += arg_sz;
+        }
+    }
+    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size + varargs_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
@@ -1417,9 +1628,10 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
         .stmt_count = func->body.count,
         .return_buf = result,
         .return_size = size,
-        .data_length = func->frame_size,
+        .data_length = func->frame_size + varargs_size,
+        .varargs_buf = varargs_size ? (char*)(frame + 1) + func->frame_size : NULL,
     };
-    // Evaluate args into param storage in the frame's trailing data.
+    // Evaluate fixed args into param storage in the frame's trailing data.
     // We must evaluate in the CALLER's frame context.
     for(uint32_t i = 0; i < ftype->param_count && i < nargs; i++){
         CcVariable* var = func->param_vars[i];
@@ -1430,6 +1642,19 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
         void* storage = (char*)(frame + 1) + var->frame_offset;
         err = ci_interp_expr(ci, caller, args[i], storage, param_sz);
         if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
+    }
+    // Evaluate varargs into the trailing buffer.
+    if(varargs_size){
+        char* va_buf = frame->varargs_buf;
+        for(uint32_t i = ftype->param_count; i < nargs; i++){
+            uint32_t arg_sz;
+            err = cc_sizeof_as_uint(&ci->parser, args[i]->type, func->loc, &arg_sz);
+            if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
+            err = ci_interp_expr(ci, caller, args[i], va_buf, arg_sz < 8 ? 8 : arg_sz);
+            if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
+            uint32_t slot = arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
+            va_buf += slot;
+        }
     }
     *out_frame = frame;
     return 0;
@@ -1562,6 +1787,8 @@ ci_resolve_refs(CiInterpreter* ci){
         }
         // Create a native closure only if the function's address is taken.
         if(!func->native_func && func->addr_taken){
+            if(func->type->is_variadic)
+                return ci_error(ci, func->loc, "cannot take address of variadic interpreted function");
             int err = ci_create_closure(ci, func);
             if(err) return err;
         }
@@ -1620,10 +1847,13 @@ ci_resolve_refs(CiInterpreter* ci){
         }
     }
     // Pre-populate ffi_cache for variadic call expressions, keyed by CcExpr*.
+    // Skip calls to interpreted (defined) functions — they go through ci_interp_call.
     {
         PointerMapItems vcalls = PM_items(&p->used_var_calls);
         for(size_t i = 0; i < vcalls.count; i++){
             CcExpr* call_expr = (CcExpr*)(uintptr_t)vcalls.data[i].key;
+            if(call_expr->lhs->kind == CC_EXPR_FUNCTION && call_expr->lhs->func->defined)
+                continue;
             CcQualType ct = call_expr->lhs->type;
             CcFunction* ftype;
             if(ccqt_kind(ct) == CC_POINTER)
