@@ -176,12 +176,12 @@ TestFunction(test_parse_decls){
                "void n(int ());\n"
               ),
             .funcs = {
-                { SV("f"), SV("void(int(int))") },
+                { SV("f"), SV("void(int (*)(int))") },
                 { SV("g"), SV("void(int (*)(int))") },
-                { SV("h"), SV("void(int[10])") },
+                { SV("h"), SV("void(int *)") },
                 { SV("k"), SV("void(int (*)[10])") },
                 { SV("m"), SV("void(int *, int * *, const int *)") },
-                { SV("n"), SV("void(int())") },
+                { SV("n"), SV("void(int (*)())") },
             },
         },
         {
@@ -2485,6 +2485,12 @@ TestFunction(test_parse_decls){
             SV("static if(0) { int x; }\n"
                "int y;\n"),
             .vars = { { SV("y"), SV("int") } },
+        },
+        {
+            "array to const-qualified pointer param", __LINE__,
+            SV("void f(char *const argv[]);\n"
+               "char* args[64];\n"
+               "f(args);\n"),
         },
     };
     for(size_t i = 0; i < arrlen(testcases); i++){

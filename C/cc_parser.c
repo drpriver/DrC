@@ -6837,9 +6837,24 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         }
         case CC_FUNCTION: {
             CcFunction* old = ccqt_as_function(t);
-            // Intern param types in-place — the old node is throwaway.
-            for(uint32_t i = 0; i < old->param_count; i++)
-                old->params[i] = cc_intern_qualtype(p, old->params[i]);
+            // Adjust and intern param types — the old node is throwaway.
+            for(uint32_t i = 0; i < old->param_count; i++){
+                CcQualType pt = old->params[i];
+                // C11 6.7.6.3p7: array params decay to pointers.
+                if(ccqt_kind(pt) == CC_ARRAY){
+                    CcArray* arr = ccqt_as_array(pt);
+                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), arr->element, 0);
+                    if(!ptr) return t;
+                    pt = (CcQualType){.bits = (uintptr_t)ptr | (pt.bits & 7)};
+                }
+                // C11 6.7.6.3p7: function params decay to function pointers.
+                else if(ccqt_kind(pt) == CC_FUNCTION){
+                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pt, 0);
+                    if(!ptr) return t;
+                    pt = (CcQualType){.bits = (uintptr_t)ptr};
+                }
+                old->params[i] = cc_intern_qualtype(p, pt);
+            }
             CcQualType ret = cc_intern_qualtype(p, old->return_type);
             CcFunction* func = cc_intern_function(&p->type_cache, cc_allocator(p), ret, old->params, old->param_count, old->is_variadic, old->no_prototype);
             if(!func) return t;
