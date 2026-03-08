@@ -750,6 +750,16 @@ TestFunction(test_torture){
                "M")
         },
         {
+            "stringify strips leading/trailing whitespace", __LINE__,
+            SV("#define S(x) #x\n"
+               "#define REDIRECT(name, alias) name __asm__(S(alias))\n"
+               "REDIRECT(sscanf,\n"
+               "         __isoc99_sscanf)\n"),
+            SV("\n"
+               "\n"
+               "sscanf __asm__(\"__isoc99_sscanf\")\n"),
+        },
+        {
             "", __LINE__,
             SV("#define M(...) __VA_OPT__(yes)no\n"
                "M()\n"

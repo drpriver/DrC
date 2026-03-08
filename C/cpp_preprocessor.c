@@ -2922,7 +2922,11 @@ CppToken
 cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t count, SrcLoc loc){
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     msb_write_char(&sb, '"');
-    for(size_t i = 0; i < count; i++){
+    // Skip leading whitespace
+    size_t start = 0;
+    while(start < count && (toks[start].type == CPP_WHITESPACE || toks[start].type == CPP_NEWLINE))
+        start++;
+    for(size_t i = start; i < count; i++){
         CppToken t = toks[i];
         if(t.type == CPP_WHITESPACE || t.type == CPP_NEWLINE){
             if(msb_peek(&sb) != ' ')
