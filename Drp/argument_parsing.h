@@ -1759,6 +1759,9 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
             }
         }
         // Null-terminate this argument.
+        // Advance p past the delimiter before writing the null, in case w == p
+        // (which happens when no unescaping occurred).
+        if(p == w && *p) p++;
         *w = '\0';
         StringView s = {(size_t)(w - arg_start), arg_start};
         if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))

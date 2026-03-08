@@ -1417,6 +1417,9 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                     if(!ptr) return CC_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                    // &func is the same as function-to-pointer decay: just cast.
+                    if(ccqt_kind(operand->type) == CC_FUNCTION)
+                        return cc_implicit_cast(p, operand, result_type, out);
                     break;
                 }
                 default: // PREINC, PREDEC
