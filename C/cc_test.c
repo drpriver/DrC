@@ -3054,6 +3054,13 @@ TestFunction(test_parse_errors){
                "static if(x) { int y; }\n"),
             SV("(test):2:11: error: static if condition must be a constant expression\n"),
         },
+        {
+            "address of bitfield", __LINE__,
+            SV("struct S { int a : 3; int b : 5; };\n"
+               "struct S s;\n"
+               "int* p = &s.a;\n"),
+            SV("(test):3:10: error: cannot take address of bitfield\n"),
+        },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         ArenaAllocator aa = {0};

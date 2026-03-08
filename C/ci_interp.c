@@ -236,6 +236,45 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
     }
 }
 
+// Get the address of the storage unit for a bitfield DOT/ARROW expression.
+static
+int
+ci_bitfield_storage_addr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out){
+    if(expr->kind == CC_EXPR_DOT){
+        void* base;
+        size_t base_size;
+        int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
+        if(err) return err;
+        *out = (char*)base + expr->field_loc.byte_offset;
+    }
+    else {
+        void* ptr_val = NULL;
+        int err = ci_interp_expr(ci, frame, expr->values[0], &ptr_val, sizeof ptr_val);
+        if(err) return err;
+        *out = (char*)ptr_val + expr->field_loc.byte_offset;
+    }
+    return 0;
+}
+
+static inline
+uint64_t
+ci_bitfield_read(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width){
+    uint64_t storage = 0;
+    memcpy(&storage, storage_addr, storage_sz);
+    return (storage >> bit_offset) & (((uint64_t)1 << bit_width) - 1);
+}
+
+static inline
+void
+ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width, uint64_t val){
+    uint64_t mask = ((uint64_t)1 << bit_width) - 1;
+    uint64_t storage = 0;
+    memcpy(&storage, storage_addr, storage_sz);
+    storage &= ~(mask << bit_offset);
+    storage |= (val & mask) << bit_offset;
+    memcpy(storage_addr, &storage, storage_sz);
+}
+
 // Userdata for interpreted function closures.
 typedef struct CiClosureData CiClosureData;
 struct CiClosureData {
@@ -426,9 +465,28 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return 0;
     }
     case CC_EXPR_ASSIGN: {
+        CcExpr* lhs = expr->lhs;
+        // Bitfield assignment: read-modify-write on the storage unit.
+        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
+            void* storage_addr;
+            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
+            if(err) return err;
+            uint32_t sz;
+            err = cc_sizeof_as_uint(&ci->parser, lhs->type, expr->loc, &sz);
+            if(err) return err;
+            uint64_t rval = 0;
+            err = ci_interp_expr(ci, frame, expr->values[0], &rval, sizeof rval);
+            if(err) return err;
+            rval = ci_read_uint(&rval, sz);
+            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, rval);
+            uint64_t out = rval & (((uint64_t)1 << lhs->field_loc.bit_width) - 1);
+            memset(result, 0, size);
+            memcpy(result, &out, sz < size ? sz : size);
+            return 0;
+        }
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -497,7 +555,14 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        memcpy(result, (char*)base + off, sz);
+        if(expr->field_loc.bit_width){
+            uint64_t val = ci_bitfield_read((char*)base + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+            memset(result, 0, size);
+            memcpy(result, &val, sz < size ? sz : size);
+        }
+        else {
+            memcpy(result, (char*)base + off, sz);
+        }
         return 0;
     }
     case CC_EXPR_ARROW: {
@@ -510,7 +575,14 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        memcpy(result, (char*)ptr_val + off, sz);
+        if(expr->field_loc.bit_width){
+            uint64_t val = ci_bitfield_read((char*)ptr_val + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+            memset(result, 0, size);
+            memcpy(result, &val, sz < size ? sz : size);
+        }
+        else {
+            memcpy(result, (char*)ptr_val + off, sz);
+        }
         return 0;
     }
     case CC_EXPR_SUBSCRIPT: {
@@ -584,9 +656,30 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_PREDEC:
     case CC_EXPR_POSTINC:
     case CC_EXPR_POSTDEC: {
+        CcExpr* lhs = expr->lhs;
+        _Bool is_pre = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_PREDEC);
+        _Bool is_inc = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_POSTINC);
+        // Bitfield inc/dec
+        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
+            void* storage_addr;
+            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
+            if(err) return err;
+            uint32_t sz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+            if(err) return err;
+            uint64_t v = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
+            uint64_t old = v;
+            v += is_inc ? 1 : (uint64_t)-1;
+            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, v);
+            uint64_t out = is_pre ? v : old;
+            out &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
+            memset(result, 0, size);
+            memcpy(result, &out, sz < size ? sz : size);
+            return 0;
+        }
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -596,8 +689,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
-        _Bool is_pre = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_PREDEC);
-        _Bool is_inc = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_POSTINC);
         if(is_float){
             double d = ci_read_float(lval, expr->type.basic.kind);
             double old = d;
@@ -606,7 +697,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             ci_write_float(result, expr->type.basic.kind, is_pre ? d : old);
         }
         else if(ccqt_kind(expr->type) == CC_POINTER){
-            // pointer increment: add sizeof(pointee)
             CcPointer* pt = ccqt_as_ptr(expr->type);
             uint32_t pointee_sz;
             err = cc_sizeof_as_uint(&ci->parser, pt->pointee, expr->loc, &pointee_sz);
@@ -852,9 +942,46 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_MULASSIGN: case CC_EXPR_DIVASSIGN: case CC_EXPR_MODASSIGN:
     case CC_EXPR_BITANDASSIGN: case CC_EXPR_BITORASSIGN: case CC_EXPR_BITXORASSIGN:
     case CC_EXPR_LSHIFTASSIGN: case CC_EXPR_RSHIFTASSIGN: {
+        CcExpr* lhs = expr->lhs;
+        // Bitfield compound assignment
+        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
+            void* storage_addr;
+            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
+            if(err) return err;
+            uint32_t sz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+            if(err) return err;
+            uint64_t rbuf = 0;
+            uint32_t rsz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
+            if(err) return err;
+            err = ci_interp_expr(ci, frame, expr->values[0], &rbuf, sizeof rbuf);
+            if(err) return err;
+            uint64_t lu = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
+            uint64_t ru = ci_read_uint(&rbuf, rsz);
+            uint64_t res;
+            switch(expr->kind){
+                case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
+                case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
+                case CC_EXPR_MULASSIGN:    res = lu * ru; break;
+                case CC_EXPR_DIVASSIGN:    res = ru ? lu / ru : 0; break;
+                case CC_EXPR_MODASSIGN:    res = ru ? lu % ru : 0; break;
+                case CC_EXPR_BITANDASSIGN: res = lu & ru; break;
+                case CC_EXPR_BITORASSIGN:  res = lu | ru; break;
+                case CC_EXPR_BITXORASSIGN: res = lu ^ ru; break;
+                case CC_EXPR_LSHIFTASSIGN: res = lu << ru; break;
+                case CC_EXPR_RSHIFTASSIGN: res = lu >> ru; break;
+                default: res = 0; break;
+            }
+            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
+            res &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
+            memset(result, 0, size);
+            memcpy(result, &res, sz < size ? sz : size);
+            return 0;
+        }
         void* lval;
         size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
+        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
         if(err) return err;
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);

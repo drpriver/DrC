@@ -1192,6 +1192,139 @@ TestFunction(test_interpreter){
                "return old * 100 + x;\n"),
             .exit_code = 10 * 100 + 13,
         },
+        // Bitfields
+        {
+            "bitfield: read", __LINE__,
+            SV("struct S { int a : 3; int b : 5; };\n"
+               "struct S s = {3, 10};\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 3 * 100 + 10,
+        },
+        {
+            "bitfield: write", __LINE__,
+            SV("struct S { int a : 3; int b : 5; };\n"
+               "struct S s = {0};\n"
+               "s.a = 5;\n"
+               "s.b = 17;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 5 * 100 + 17,
+        },
+        {
+            "bitfield: write preserves adjacent", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {7, 0};\n"
+               "s.b = 9;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 7 * 100 + 9,
+        },
+        {
+            "bitfield: arrow read", __LINE__,
+            SV("struct S { int a : 3; int b : 5; };\n"
+               "struct S s = {2, 15};\n"
+               "struct S* p = &s;\n"
+               "return p->a * 100 + p->b;\n"),
+            .exit_code = 2 * 100 + 15,
+        },
+        {
+            "bitfield: arrow write", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {0};\n"
+               "struct S* p = &s;\n"
+               "p->a = 11;\n"
+               "p->b = 6;\n"
+               "return p->a * 100 + p->b;\n"),
+            .exit_code = 11 * 100 + 6,
+        },
+        {
+            "bitfield: preinc", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 10};\n"
+               "int r = ++s.a;\n"
+               "return r * 100 + s.a;\n"),
+            .exit_code = 6 * 100 + 6,
+        },
+        {
+            "bitfield: postinc", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 10};\n"
+               "int r = s.a++;\n"
+               "return r * 100 + s.a;\n"),
+            .exit_code = 5 * 100 + 6,
+        },
+        {
+            "bitfield: predec", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 10};\n"
+               "int r = --s.b;\n"
+               "return r * 100 + s.b;\n"),
+            .exit_code = 9 * 100 + 9,
+        },
+        {
+            "bitfield: postdec", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 10};\n"
+               "int r = s.b--;\n"
+               "return r * 100 + s.b;\n"),
+            .exit_code = 10 * 100 + 9,
+        },
+        {
+            "bitfield: inc preserves adjacent", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {7, 3};\n"
+               "s.b++;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 7 * 100 + 4,
+        },
+        {
+            "bitfield: addassign", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {2, 3};\n"
+               "s.a += 5;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 7 * 100 + 3,
+        },
+        {
+            "bitfield: subassign", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {9, 3};\n"
+               "s.a -= 4;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 5 * 100 + 3,
+        },
+        {
+            "bitfield: orassign", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 3};\n"
+               "s.a |= 2;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 7 * 100 + 3,
+        },
+        {
+            "bitfield: andassign", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {7, 3};\n"
+               "s.a &= 5;\n"
+               "return s.a * 100 + s.b;\n"),
+            .exit_code = 5 * 100 + 3,
+        },
+        {
+            "bitfield: arrow preinc", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {5, 10};\n"
+               "struct S* p = &s;\n"
+               "int r = ++p->a;\n"
+               "return r * 100 + p->b;\n"),
+            .exit_code = 6 * 100 + 10,
+        },
+        {
+            "bitfield: arrow addassign", __LINE__,
+            SV("struct S { int a : 4; int b : 4; };\n"
+               "struct S s = {2, 3};\n"
+               "struct S* p = &s;\n"
+               "p->a += 5;\n"
+               "return p->a * 100 + p->b;\n"),
+            .exit_code = 7 * 100 + 3,
+        },
     };
     int err;
     static int idx = 0;

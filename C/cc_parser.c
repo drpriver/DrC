@@ -556,7 +556,8 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
         anon->frame_offset = p->current_func->frame_size;
         p->current_func->frame_size += sz;
-    } else {
+    }
+    else {
         int perr = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
         if(perr) return CC_OOM_ERROR;
     }
@@ -1411,6 +1412,8 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
                     }
+                    if((operand->kind == CC_EXPR_DOT || operand->kind == CC_EXPR_ARROW) && operand->field_loc.bit_width)
+                        return cc_error(p, tok.loc, "cannot take address of bitfield");
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                     if(!ptr) return CC_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
@@ -1834,7 +1837,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         node->atomic.weak = const_vals[0];
                         node->atomic.memorder = const_vals[1];
                         node->atomic.fail_memorder = const_vals[2];
-                    } else {
+                    }
+                    else {
                         node->atomic.memorder = const_vals[0];
                     }
                     err = cc_expect_punct(p, ')');
