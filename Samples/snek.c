@@ -51,8 +51,6 @@ void open_window_and_renderer(int width, int height){
 }
 int start(int width, int height){
   srand(time(NULL));
-  void* window;
-  void* renderer;
   if(width < 400) width = 400;
   if(width > 1200) width = 1200;
   if(height < 400) height = 400;
@@ -65,8 +63,8 @@ int start(int width, int height){
   main_loop();
   free(board);
   free(snake);
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(window);
+  SDL_DestroyRenderer(grenderer);
+  SDL_DestroyWindow(gwindow);
   SDL_Quit();
   return 0;
 }
@@ -207,12 +205,6 @@ void main_loop(void){
       else if(code == ' ') gpaused = !gpaused;
       else if(code == '=') grow_window();
       else if(code == '-') shrink_window();
-      else if(code == 'a'){
-        if(dx != 1){
-          dx = -1;
-          dy = 0;
-        }
-      }
       else if(code == 'r'){
         gwinlose = NONE;
         tick = trigger-1;

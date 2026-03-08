@@ -6,7 +6,7 @@
 // Multithreaded Mandelbrot set renderer.
 // Each thread renders a horizontal band of the image.
 // Outputs a PPM image to a file (default: mandelbrot.ppm).
-//   Bin/cc Samples/threads.c [output.ppm]
+//   Bin/cc Samples/mandelbrot_multithreaded.c [output.ppm]
 
 enum { W = 800, H = 600, MAX_ITER = 256, NTHREADS = __mixin(__env("NTHREADS", "8")) };
 

@@ -57,11 +57,11 @@ strings.push("world");
 strings.push("!");
 
 for(size_t i = 0; i < ints.count; i++){
-    printf("ints[%d] = %d\n", i, ints.data[i]);
+    printf("ints[%zu] = %d\n", i, ints.data[i]);
 }
 
 for(size_t i = 0; i < strings.count; i++){
-    printf("strings[%d] = '%s'\n", i, strings.data[i]);
+    printf("strings[%zu] = '%s'\n", i, strings.data[i]);
 }
 
 #define Optional(T) __ident("Optional(" S(T) ")")

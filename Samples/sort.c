@@ -1,18 +1,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// Sort lines from stdin (like sort)
+// Sort lines from fp or file (like sort)
+// Usage: Bin/cc Samples/sort.c [file]
 
-// Read all of stdin into a buffer
+const char* input = __argv(1, NULL);
+FILE* fp = input?fopen(input, "rb"):fp;
+if(!fp) return (perror(input), 1);
+
+void* xmalloc(size_t sz){
+    void *p = malloc(sz);
+    if(!p) exit(1);
+    return p;
+}
+void* xrealloc(void* p, size_t sz){
+    p = realloc(p, sz);
+    if(!p) exit(1);
+    return p;
+}
+
+// Read all of fp into a buffer
 size_t cap = 4096;
 size_t len = 0;
-char* buf = malloc(cap);
+char* buf = xmalloc(cap);
 for(;;){
-    size_t n = fread(buf+len, 1, cap-len, stdin);
+    size_t n = fread(buf+len, 1, cap-len, fp);
     len += n;
     if(n < cap-len) break;
     cap *= 2;
-    buf = realloc(buf, cap);
+    buf = xrealloc(buf, cap);
 }
 // Count lines
 size_t nlines = 0;
@@ -20,8 +36,8 @@ for(size_t i = 0; i < len; i++)
     if(buf[i] == '\n') nlines++;
 if(len && buf[len-1] != '\n') nlines++; // last line without newline
 // Build array of line pointers
-char** lines = malloc(nlines * sizeof *lines);
-size_t* lens = malloc(nlines * sizeof *lens);
+char** lines = xmalloc(nlines * sizeof *lines);
+size_t* lens = xmalloc(nlines * sizeof *lens);
 size_t li = 0;
 size_t start = 0;
 for(size_t i = 0; i < len; i++){

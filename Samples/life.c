@@ -16,15 +16,27 @@ grid[cy][cx-1]   = 1;
 grid[cy][cx]     = 1;
 grid[cy+1][cx]   = 1;
 
+// clear screen
+printf("\033[2J");
+
 for(int step = 0; step < STEPS; step++){
     // move cursor home
     printf("\033[H");
+    // top border
+    printf("┌");
+    for(int x = 0; x < W; x++) printf("─");
+    printf("┐\n");
     // draw
     for(int y = 0; y < H; y++){
+        printf("│");
         for(int x = 0; x < W; x++)
             putchar(grid[y][x] ? '#' : ' ');
-        putchar('\n');
+        printf("│\n");
     }
+    // bottom border
+    printf("└");
+    for(int x = 0; x < W; x++) printf("─");
+    printf("┘\n");
     printf("step %d/%d\n", step + 1, STEPS);
     // compute next generation
     memset(next, 0, sizeof next);

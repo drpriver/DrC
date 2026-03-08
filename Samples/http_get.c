@@ -41,7 +41,7 @@ freeaddrinfo(res);
 
 // send HTTP request
 char request[512];
-int reqlen = sprintf(request,
+int reqlen = snprintf(request, sizeof request,
     "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n",
     path, host);
 send(fd, request, (unsigned long)reqlen, 0);

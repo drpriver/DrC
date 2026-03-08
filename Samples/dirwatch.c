@@ -8,7 +8,7 @@
 // This is the kind of thing that normally requires fswatch/inotifywait
 // or a compiled program.
 
-const char* path = "/tmp";
+const char* path = __argv(1, "/tmp");
 
 int fd = open(path, O_RDONLY);
 if(fd < 0){
