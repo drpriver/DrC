@@ -7,6 +7,9 @@
 #include "../Drp/windowsheader.h"
 #else
 #include <dlfcn.h>
+#if defined(__GLIBC__) && !defined(RTLD_DEFAULT)
+#define RTLD_DEFAULT ((void *)0)
+#endif
 #endif
 #include "ci_interp.h"
 #include "cc_errors.h"
@@ -1674,37 +1677,43 @@ ci_register_macros(CiInterpreter* ci){
 static
 int
 ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
-    Atom a = AT_atomize(ci->parser.cpp.at, lib.text, lib.length);
-    if(!a) return CI_OOM_ERROR;
-    void* handle = AM_get(&ci->opened_libs, a);
-    if(handle) {*success = 1; return 0;}
-    #ifdef _WIN32
-    MStringBuilder16 sb = {.allocator = ci_scratch_allocator(ci)};
-    msb16_write_utf8(&sb, a->data, a->length);
-    msb16_nul_terminate(&sb);
-    if(sb.errored){
-        msb16_destroy(&sb);
-        return CI_OOM_ERROR;
-    }
-    LongStringUtf16 wlib = msb16_borrow_ls(&sb);
-    handle = LoadLibraryW((const wchar_t*)wlib.text);
-    msb16_destroy(&sb);
-    if(!handle) {*success = 0; return 0;}
+    #ifdef NO_NATIVE_CALL
+        (void)ci; (void)lib;
+        *success = 0;
+        return 0;
     #else
-    handle = dlopen(a->data, RTLD_GLOBAL | RTLD_LAZY);
-    if(!handle) {*success = 0; return 0;}
-    #endif
-    int err = AM_put(&ci->opened_libs, ci_allocator(ci), a, handle);
-    if(err) {
+        Atom a = AT_atomize(ci->parser.cpp.at, lib.text, lib.length);
+        if(!a) return CI_OOM_ERROR;
+        void* handle = AM_get(&ci->opened_libs, a);
+        if(handle) {*success = 1; return 0;}
         #ifdef _WIN32
-        FreeLibrary(handle);
+        MStringBuilder16 sb = {.allocator = ci_scratch_allocator(ci)};
+        msb16_write_utf8(&sb, a->data, a->length);
+        msb16_nul_terminate(&sb);
+        if(sb.errored){
+            msb16_destroy(&sb);
+            return CI_OOM_ERROR;
+        }
+        LongStringUtf16 wlib = msb16_borrow_ls(&sb);
+        handle = LoadLibraryW((const wchar_t*)wlib.text);
+        msb16_destroy(&sb);
+        if(!handle) {*success = 0; return 0;}
         #else
-        dlclose(handle);
+        handle = dlopen(a->data, RTLD_GLOBAL | RTLD_LAZY);
+        if(!handle) {*success = 0; return 0;}
         #endif
-        return CI_OOM_ERROR;
-    }
-    *success = 1;
-    return 0;
+        int err = AM_put(&ci->opened_libs, ci_allocator(ci), a, handle);
+        if(err) {
+            #ifdef _WIN32
+            FreeLibrary(handle);
+            #else
+            dlclose(handle);
+            #endif
+            return CI_OOM_ERROR;
+        }
+        *success = 1;
+        return 0;
+    #endif
 }
 
 static
@@ -2054,27 +2063,30 @@ ci_target(const CiInterpreter* ci){
 static
 int
 ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
-#ifdef _WIN32
-    // Try the exe module first, then each dlopen'd library.
-    void* p = (void*)GetProcAddress(GetModuleHandleW(NULL), sym.text);
-    if(!p){
-        AtomMapItems items = AM_items(&ci->opened_libs);
-        for(size_t i = 0; !p && i < items.count; i++){
-            if(!items.data[i].p) continue;
-            p = (void*)GetProcAddress(items.data[i].p, sym.text);
+    #ifdef NO_NATIVE_CALL
+        (void)out;
+        return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
+    #elif defined _WIN32
+        // Try the exe module first, then each dlopen'd library.
+        void* p = (void*)GetProcAddress(GetModuleHandleW(NULL), sym.text);
+        if(!p){
+            AtomMapItems items = AM_items(&ci->opened_libs);
+            for(size_t i = 0; !p && i < items.count; i++){
+                if(!items.data[i].p) continue;
+                p = (void*)GetProcAddress(items.data[i].p, sym.text);
+            }
         }
-    }
-    if(!p) return ci_error(ci, loc, "%s '%s' not found", what, sym.text);
-    *out = p;
-    return 0;
-#else
-    void* p = dlsym(RTLD_DEFAULT, sym.text);
-    if(!p && sym.text[0] == '_')
-        p = dlsym(RTLD_DEFAULT, sym.text+1);
-    if(!p) return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
-    *out = p;
-    return 0;
-#endif
+        if(!p) return ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+        *out = p;
+        return 0;
+    #else
+        void* p = dlsym(RTLD_DEFAULT, sym.text);
+        if(!p && sym.text[0] == '_')
+            p = dlsym(RTLD_DEFAULT, sym.text+1);
+        if(!p) return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
+        *out = p;
+        return 0;
+    #endif
 }
 static
 int

@@ -2264,6 +2264,8 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                     Atom a = b_atomize2(ctx, s.text, s.length);
                     if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%.*s'\n", __LINE__, (int)a->length, a->data);
                     current_target = get_targeta(ctx, a);
+                    if(!current_target)
+                        current_target = get_targeta(ctx, b_normalize_patha(ctx, a));
                     if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: current_target: %p\n", __LINE__, (void*)current_target);
                     break;
                 }

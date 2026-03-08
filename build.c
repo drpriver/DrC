@@ -23,6 +23,9 @@ int main(int argc, char** argv, char** envp){
     add_dep(ctx, all, cpp);
 
     BuildTarget* cc = exe_target(ctx, "cc", "cc.c", ctx->target.os);
+    if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
+        cmd_cargs(&cc->cmd, "-ldl");
+    }
     cmd_cargs(&cc->cmd, "-lffi");
     add_dep(ctx, all, cc);
 

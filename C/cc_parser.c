@@ -3758,9 +3758,9 @@ int
 cc_pragma_pack(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     CcParser* p = (CcParser*)ctx;
     if(!ntoks || toks[0].type != CPP_PUNCTUATOR || toks[0].punct != '(')
-        return (cc_warn(p, loc, "#pragma pack expects '('"), 0);
+        return ((void)cc_warn(p, loc, "#pragma pack expects '('"), 0);
     if(ntoks < 2)
-        return (cc_warn(p, loc, "#pragma pack expects at least ()"), 0);
+        return ((void)cc_warn(p, loc, "#pragma pack expects at least ()"), 0);
 
     // Find the closing paren.
     const CppToken* end = toks+ntoks;
