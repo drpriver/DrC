@@ -1325,6 +1325,16 @@ TestFunction(test_interpreter){
                "return p->a * 100 + p->b;\n"),
             .exit_code = 7 * 100 + 3,
         },
+        {
+            "big string", __LINE__,
+            SV("enum {SIZE = 1<<16};\n"
+               "char buff[SIZE] = \"hello\";\n"
+               "int sum = 0;\n"
+               "for(__SIZE_TYPE__ i = 0; i < SIZE && buff[i]; i++)\n"
+               "    sum += buff[i];\n"
+               "return sum;\n"),
+            .exit_code = 'h' + 'e' + 'l' + 'l' + 'o',
+        },
     };
     int err;
     static int idx = 0;

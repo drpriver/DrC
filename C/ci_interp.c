@@ -352,6 +352,7 @@ int
 ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* result, size_t size){
     switch(expr->kind){
     case CC_EXPR_VALUE: {
+        if(result == ci_discard_buf) return 0;
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
@@ -369,6 +370,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return 0;
     }
     case CC_EXPR_VARIABLE: {
+        if(result == ci_discard_buf) return 0;
         CcVariable* var = expr->var;
         int err = ci_ensure_var_storage(ci, var);
         if(err) return err;
@@ -392,6 +394,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return 0;
     }
     case CC_EXPR_FUNCTION: {
+        if(result == ci_discard_buf) return 0;
         CcFunc* func = expr->func;
         if(!func->native_func)
             return ci_error(ci, expr->loc, "ICE: function '%s' not resolved before execution",
@@ -407,16 +410,16 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         CcQualType from = operand->type;
         CcQualType to = expr->type;
         if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
-            uint64_t discard;
-            return ci_interp_expr(ci, frame,operand, &discard, sizeof discard);
+            return ci_interp_expr(ci, frame, operand, ci_discard_buf, sizeof ci_discard_buf);
         }
         // Function-to-pointer decay: the function expression already
         // produces the function pointer value.
         if(ccqt_kind(from) == CC_FUNCTION){
-            return ci_interp_expr(ci, frame,operand, result, size);
+            return ci_interp_expr(ci, frame, operand, result, size);
         }
         // Array-to-pointer decay: get address of array data.
         if(ccqt_kind(from) == CC_ARRAY){
+            if(result == ci_discard_buf) return 0;
             if(sizeof(void*) > size)
                 return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             void* ptr;
@@ -427,7 +430,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return 0;
         }
         uint64_t val = 0;
-        int err = ci_interp_expr(ci, frame,operand, &val, sizeof val);
+        int err = ci_interp_expr(ci, frame, operand, &val, sizeof val);
+        if(err) return err;
+        if(result == ci_discard_buf) return 0;
         uint32_t from_sz;
         err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
         if(err) return err;
@@ -482,6 +487,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(err) return err;
             rval = ci_read_uint(&rval, sz);
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, rval);
+            if(result == ci_discard_buf) return 0;
             uint64_t out = rval & (((uint64_t)1 << lhs->field_loc.bit_width) - 1);
             memset(result, 0, size);
             memcpy(result, &out, sz < size ? sz : size);
@@ -496,10 +502,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         if(sz > lval_size)
             return ci_error(ci, expr->loc, "interpreter: assignment exceeds lvalue storage");
-        if(sz > size)
-            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         err = ci_interp_expr(ci, frame,expr->values[0], lval, lval_size);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
+        if(sz > size)
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, lval, sz);
         return 0;
     }
@@ -528,6 +535,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         size_t lval_size;
         int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(sizeof lval > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, &lval, sizeof lval);
@@ -540,12 +548,14 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, ptr_val, sz);
         return 0;
     }
     case CC_EXPR_DOT: {
+        if(result == ci_discard_buf) return 0;
         void* base;
         size_t base_size;
         int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
@@ -576,6 +586,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         if(expr->field_loc.bit_width){
@@ -596,6 +607,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         memcpy(result, addr, sz);
@@ -606,10 +618,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
+        if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(sz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
-        if(err) return err;
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
             double d = -ci_read_float(&val, expr->type.basic.kind);
             ci_write_float(result, expr->type.basic.kind, d);
@@ -631,10 +644,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
-        if(sz > size)
-            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
+        if(sz > size)
+            return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         uint64_t v = ~ci_read_uint(&val, sz);
         ci_write_uint(result, sz, v);
         return 0;
@@ -650,6 +664,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint32_t rsz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
         if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(rsz > size)
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
         ci_write_uint(result, rsz, v);
@@ -674,6 +689,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             uint64_t old = v;
             v += is_inc ? 1 : (uint64_t)-1;
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, v);
+            if(result == ci_discard_buf) return 0;
             uint64_t out = is_pre ? v : old;
             out &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
             memset(result, 0, size);
@@ -697,6 +713,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             double old = d;
             d += is_inc ? 1.0 : -1.0;
             ci_write_float(lval, expr->type.basic.kind, d);
+            if(result == ci_discard_buf) return 0;
             ci_write_float(result, expr->type.basic.kind, is_pre ? d : old);
         }
         else if(ccqt_kind(expr->type) == CC_POINTER){
@@ -709,6 +726,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             void* old = ptr;
             ptr = (char*)ptr + (is_inc ? (int)pointee_sz : -(int)pointee_sz);
             memcpy(lval, &ptr, sizeof ptr);
+            if(result == ci_discard_buf) return 0;
             void* out = is_pre ? ptr : old;
             memcpy(result, &out, sizeof out);
         }
@@ -717,6 +735,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             uint64_t old = v;
             v += is_inc ? 1 : (uint64_t)-1;
             ci_write_uint(lval, sz, v);
+            if(result == ci_discard_buf) return 0;
             ci_write_uint(result, sz, is_pre ? v : old);
         }
         return 0;
@@ -977,6 +996,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 default: res = 0; break;
             }
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
+            if(result == ci_discard_buf) return 0;
             res &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
             memset(result, 0, size);
             memcpy(result, &res, sz < size ? sz : size);
@@ -1013,6 +1033,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 default: return ci_error(ci, expr->loc, "unsupported float compound assignment");
             }
             ci_write_float(lval, expr->type.basic.kind, res);
+            if(result == ci_discard_buf) return 0;
             ci_write_float(result, expr->type.basic.kind, res);
         }
         else {
@@ -1033,6 +1054,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 default: res = 0; break;
             }
             ci_write_uint(lval, sz, res);
+            if(result == ci_discard_buf) return 0;
             ci_write_uint(result, sz, res);
         }
         return 0;
@@ -1128,6 +1150,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         CcQualType ret_type = ftype->return_type;
         if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void)
             return 0;
+        if(result == ci_discard_buf) return 0;
         uint32_t ret_sz;
         int err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
         if(err) return err;

@@ -4668,7 +4668,7 @@ cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType targ
             if(arr->is_incomplete){
                 CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0);
                 if(!new_arr) return CC_OOM_ERROR;
-                resolved_type = (CcQualType){.bits = (uintptr_t)new_arr | (target_type.bits & 7)};
+                resolved_type = (CcQualType){.bits = (uintptr_t)new_arr | (target_type.quals)};
             }
         }
     }
@@ -6817,7 +6817,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
 static
 CcQualType
 cc_intern_qualtype(CcParser* p, CcQualType t){
-    uintptr_t quals = t.bits & 7;
+    uintptr_t quals = t.quals;
     switch(ccqt_kind(t)){
         case CC_BASIC:
             return t;
@@ -6898,7 +6898,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, declbase->loc, "vector_size must be a multiple of the element size");
             CcVector* v = cc_intern_vector(&p->type_cache, cc_allocator(p), base, p->attributes.vector_size);
             if(!v) return CC_OOM_ERROR;
-            type = (CcQualType){.bits = (uintptr_t)v | (base.bits & 7)};
+            type = (CcQualType){.bits = (uintptr_t)v | base.quals};
         }
         if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
             CcTypeKind tk = ccqt_kind(type);
