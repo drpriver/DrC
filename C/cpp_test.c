@@ -1844,6 +1844,18 @@ TestFunction(test_include){
             SV("test/main.c"), SV("#include \"hdr.h\"\n#undef HDR_H\n#undef VAL\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
             {0}, SV("\n\n\n\n\n\n\n\n\n\nok")},
+        {"include_oneof finds second candidate", __LINE__, 0,
+            SV("test/main.c"),   SV("#include_oneof <nonexistent.h> \"header.h\"\nRESULT"),
+            SV("test/header.h"), SV("#define RESULT found\n"),
+            {0}, SV("\n\nfound")},
+        {"include with fallback candidates", __LINE__, 0,
+            SV("test/main.c"),   SV("#include <no1.h> <no2.h> \"header.h\"\nRESULT"),
+            SV("test/header.h"), SV("#define RESULT fallback\n"),
+            {0}, SV("\n\nfallback")},
+        {"include_oneof first candidate found", __LINE__, 0,
+            SV("test/main.c"),   SV("#include_oneof \"header.h\" <nonexistent.h>\nRESULT"),
+            SV("test/header.h"), SV("#define RESULT first\n"),
+            {0}, SV("\n\nfirst")},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         if(test_cases[i].disabled) continue;

@@ -19,6 +19,28 @@ The cpp supports GNU named variadic parameters to support pre-historic C code.
 #define LOG(fmt, ...) fprintf(stderr, fmt, __VA_ARGS__)
 ```
 
+#### `#include_oneof`
+
+If you've ever written code like:
+```C
+#if __has_include(<Foo/foo.h>)
+#include <Foo/foo.h>
+#elif __has_include(<FooLib/foo.h>)
+#include <FooLib/foo.h>
+#elif __has_include(<foo.h>)
+#include <foo.h>
+....
+```
+then this is for you.
+
+The above can be replaced with just
+```C
+#include_oneof <Foo/foo.h> <Foolib/foo.h> <foo.h>
+```
+Each one will be tried in sequence, emitting an error if none can be found.
+
+Actually, `#include` also works this way now, get wrecked standard committee.
+
 #### `, ## __VA_ARGS__`
 The comma is deleted if `__VA_ARGS__` is empty.
 

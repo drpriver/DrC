@@ -2324,8 +2324,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         cpp_release_scratch(cpp, prag_toks);
         if(err) return err;
     }
-    else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next"))){
-        _Bool is_next = tok.txt.length > 7 && tok.txt.text[7] == '_';
+    else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next")) || sv_equals(tok.txt, SV("include_oneof"))){
+        _Bool is_next = sv_equals(tok.txt, SV("include_next"));
         SrcLoc directive_loc = tok.loc;
         // Skip whitespace after directive name
         do {
@@ -2335,82 +2335,110 @@ cpp_handle_directive(CppPreprocessor* cpp){
         _Bool quote = 0;
         StringView header_name = {0};
         MStringBuilder header_sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
-        if(tok.type == CPP_STRING){
-            // "header.h" form - strip quotes
-            quote = 1;
-            header_name = (StringView){tok.txt.length - 2, tok.txt.text + 1};
-            // Consume remaining tokens on the #include line
-            for(;;){
-                err = cpp_next_raw_token(cpp, &tok);
-                if(err){ msb_destroy(&header_sb); return err; }
-                if(tok.type == CPP_WHITESPACE) continue;
-                if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                    err = cpp_push_tok(cpp, &cpp->pending, tok);
-                    if(err){ msb_destroy(&header_sb); return err; }
-                    break;
-                }
-                cpp_warn(cpp, tok.loc, "Trailing tokens after #include");
-            }
+        if(0){
+            cleanup:;
+            msb_destroy(&header_sb);
+            return err;
         }
-        else if(tok.type == CPP_PUNCTUATOR && tok.punct == '<'){
-            // <header.h> form - collect raw tokens until >
-            quote = 0;
-            for(;;){
-                err = cpp_next_raw_token(cpp, &tok);
-                if(err){ msb_destroy(&header_sb); return err; }
-                if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
-                    msb_destroy(&header_sb);
-                    return cpp_error(cpp, directive_loc, "Unterminated < in #include");
-                }
-                if(tok.type == CPP_PUNCTUATOR && tok.punct == '>')
-                    break;
-                msb_write_str(&header_sb, tok.txt.text, tok.txt.length);
+        CppIncludePosition inc_pos = {0};
+        // Try each header candidate on the line. For plain #include this is
+        // typically one, but multiple are allowed (#include_oneof semantics).
+        for(;;){
+            if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                err = cpp_push_tok(cpp, &cpp->pending, tok);
+                if(err) goto cleanup;
+                break;
             }
-            header_name = msb_borrow_sv(&header_sb);
-            // Consume remaining tokens on the #include line
-            for(;;){
-                err = cpp_next_raw_token(cpp, &tok);
-                if(err){ msb_destroy(&header_sb); return err; }
-                if(tok.type == CPP_WHITESPACE) continue;
-                if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                    err = cpp_push_tok(cpp, &cpp->pending, tok);
-                    if(err){ msb_destroy(&header_sb); return err; }
-                    break;
-                }
-                cpp_warn(cpp, tok.loc, "Trailing tokens after #include");
+            if(tok.type == CPP_STRING){
+                // "header.h" form - strip quotes
+                quote = 1;
+                header_name = (StringView){tok.txt.length - 2, tok.txt.text + 1};
             }
+            else if(tok.type == CPP_PUNCTUATOR && tok.punct == '<'){
+                // <header.h> form - collect raw tokens until >
+                quote = 0;
+                msb_reset(&header_sb);
+                for(;;){
+                    err = cpp_next_raw_token(cpp, &tok);
+                    if(err) goto cleanup;
+                    if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
+                        err = cpp_error(cpp, directive_loc, "Unterminated < in #include");
+                        goto cleanup;
+                    }
+                    if(tok.type == CPP_PUNCTUATOR && tok.punct == '>')
+                        break;
+                    msb_write_str(&header_sb, tok.txt.text, tok.txt.length);
+                }
+                header_name = msb_borrow_sv(&header_sb);
+            }
+            else {
+                // Not a recognized header form - try macro expansion
+                break;
+            }
+            if(header_name.length){
+                int find_err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
+                if(find_err == 0){
+                    // Found - consume rest of line and proceed to include.
+                    for(;;){
+                        err = cpp_next_raw_token(cpp, &tok);
+                        if(err) goto cleanup;
+                        if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                            err = cpp_push_tok(cpp, &cpp->pending, tok);
+                            if(err) goto cleanup;
+                            break;
+                        }
+                    }
+                    goto include_found;
+                }
+            }
+            // Not found - skip whitespace and try next candidate
+            do {
+                err = cpp_next_raw_token(cpp, &tok);
+                if(err) goto cleanup;
+            } while(tok.type == CPP_WHITESPACE);
         }
-        else {
+        // No direct header candidate was found (or none existed).
+        // If the first token wasn't a header form, try macro expansion.
+        if(!header_name.length && tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
             // Macro-expanded include: collect remaining tokens, expand, then parse
             CppTokens* line_toks = cpp_get_scratch(cpp);
-            if(!line_toks){ msb_destroy(&header_sb); return CPP_OOM_ERROR; }
+            if(!line_toks){ err = CPP_OOM_ERROR; goto cleanup;}
+            if(0){
+                cleanup2:
+                cpp_release_scratch(cpp, line_toks);
+                goto cleanup;
+            }
             // Push back current token
             err = cpp_push_tok(cpp, line_toks, tok);
-            if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+            if(err) goto cleanup2;
             for(;;){
                 err = cpp_next_raw_token(cpp, &tok);
-                if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+                if(err) goto cleanup2;
                 if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE)
                     break;
                 err = cpp_push_tok(cpp, line_toks, tok);
-                if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+                if(err) goto cleanup2;
             }
             // Push back the newline/eof
             err = cpp_push_tok(cpp, &cpp->pending, tok);
-            if(err){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return err; }
+            if(err) goto cleanup2;
             // Macro-expand the collected tokens
             CppTokens* expanded = cpp_get_scratch(cpp);
-            if(!expanded){ cpp_release_scratch(cpp, line_toks); msb_destroy(&header_sb); return CPP_OOM_ERROR; }
+            if(!expanded){ err = CPP_OOM_ERROR; goto cleanup2; } 
+            if(0){
+                cleanup3:
+                cpp_release_scratch(cpp, expanded);
+                goto cleanup;
+            }
             err = cpp_expand_argument(cpp, line_toks->data, line_toks->count, expanded);
             cpp_release_scratch(cpp, line_toks);
-            if(err){ cpp_release_scratch(cpp, expanded); msb_destroy(&header_sb); return err; }
+            if(err) goto cleanup3;
             // Find the first non-whitespace expanded token
             size_t ei = 0;
             while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
             if(ei >= expanded->count){
-                cpp_release_scratch(cpp, expanded);
-                msb_destroy(&header_sb);
-                return cpp_error(cpp, directive_loc, "Empty #include after macro expansion");
+                err = cpp_error(cpp, directive_loc, "Empty #include after macro expansion");
+                goto cleanup3;
             }
             CppToken etok = expanded->data[ei];
             if(etok.type == CPP_STRING){
@@ -2426,38 +2454,42 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     msb_write_str(&header_sb, t.txt.text, t.txt.length);
                 }
                 if(ei >= expanded->count){
-                    cpp_release_scratch(cpp, expanded);
-                    msb_destroy(&header_sb);
-                    return cpp_error(cpp, directive_loc, "Unterminated < in macro-expanded #include");
+                    err = cpp_error(cpp, directive_loc, "Unterminated < in macro-expanded #include");
+                    goto cleanup3;
                 }
                 header_name = msb_borrow_sv(&header_sb);
             }
             else {
-                cpp_release_scratch(cpp, expanded);
-                msb_destroy(&header_sb);
-                return cpp_error(cpp, directive_loc, "Expected header name in #include after macro expansion");
+                err = cpp_error(cpp, directive_loc, "Expected header name in #include after macro expansion");
+                goto cleanup3;
             }
             cpp_release_scratch(cpp, expanded);
+            if(!header_name.length){
+                msb_destroy(&header_sb);
+                err = cpp_error(cpp, directive_loc, "Empty header name in #include");
+                goto cleanup;
+            }
+            err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
+            if(err){
+                err = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
+                goto cleanup;
+            }
+            goto include_found;
         }
-        if(!header_name.length){
-            msb_destroy(&header_sb);
-            return cpp_error(cpp, directive_loc, "Empty header name in #include");
+        {
+            err = header_name.length
+                ? cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text)
+                : cpp_error(cpp, directive_loc, "Empty #include");
+            goto cleanup;
         }
-        // Find the file
-        CppIncludePosition inc_pos = {0};
-        err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
-        if(err){
-            int e = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
-            msb_destroy(&header_sb);
-            return e;
-        }
+        include_found:;
         // cpp_find_include left the resolved path in fc->path_builder.
         // Read the file (may be cached) and push a new frame.
         StringView file_txt;
         err = fc_read_file(cpp->fc, &file_txt);
         if(err){
-            msb_destroy(&header_sb);
-            return cpp_error(cpp, directive_loc, "Could not read '%.*s'", (int)header_name.length, header_name.text);
+            err = cpp_error(cpp, directive_loc, "Could not read '%.*s'", (int)header_name.length, header_name.text);
+            goto cleanup;
         }
         // Find the file_id by matching the data pointer returned by fc_read_file
         uint32_t file_id = 0;
@@ -2468,21 +2500,19 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
         }
         // Check pragma once - skip if already included with #pragma once
-        if(cpp_is_pragma_once(cpp, file_id)){
-            msb_destroy(&header_sb);
-            return 0;
-        }
+        if(cpp_is_pragma_once(cpp, file_id))
+            goto cleanup;
         // Check include guard - skip if guard macro is still defined
         {
             Atom guard = cpp_get_include_guard(cpp, file_id);
             if(guard && AM_get(&cpp->macros, guard)){
                 // cpp_info(cpp, (SrcLoc){0}, "Skipping include: \"%s\"", guard->data);
-                msb_destroy(&header_sb);
-                return 0;
+                goto cleanup;
             }
         }
         if(cpp->frames.count > 512){
-            return cpp_error(cpp, tok.loc, "#include level over 512");
+            err = cpp_error(cpp, directive_loc, "#include level over 512");
+            goto cleanup;
         }
         CppFrame frame = {
             .file_id = file_id,
@@ -3806,6 +3836,7 @@ static CppObjMacroFn cpp_builtin_file,
                      cpp_builtin_line,
                      cpp_builtin_counter,
                      cpp_builtin_filename,
+                     cpp_builtin_dir,
                      cpp_builtin_include_level,
                      cpp_builtin_date,
                      cpp_builtin_time,
@@ -4637,6 +4668,7 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SV("__LINE__"), cpp_builtin_line},
         {SV("__COUNTER__"), cpp_builtin_counter},
         {SV("__FILE_NAME__"), cpp_builtin_filename},
+        {SV("__DIR__"), cpp_builtin_dir},
         {SV("__INCLUDE_LEVEL__"), cpp_builtin_include_level},
         {SV("__DATE__"), cpp_builtin_date},
         {SV("__TIME__"), cpp_builtin_time},
@@ -4757,6 +4789,36 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     };
     int err = cpp_push_tok(cpp, outtoks, tok);
     return err;
+}
+
+static int
+cpp_builtin_dir(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+    (void)ctx;
+    uint64_t file_id = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        file_id = e->file_id;
+    }
+    else {
+        file_id = loc.file_id;
+    }
+    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    _Bool windows = 0;
+    #ifdef _WIN32
+    windows = 1;
+    #endif
+    StringView dir = path_dirname(LS_to_SV(path), windows);
+    if(!dir.length) dir = SV(".");
+    Atom a = cpp_atomizef(cpp, "\"%.*s\"", sv_p(dir));
+    if(!a) return CPP_OOM_ERROR;
+    CppToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_STRING,
+    };
+    return cpp_push_tok(cpp, outtoks, tok);
 }
 
 static

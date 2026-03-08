@@ -280,6 +280,7 @@ static int cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr
 static int cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom path);
 
 LOG_PRINTF(3, 4) static int cpp_error(CppPreprocessor*, SrcLoc, const char*, ...);
+LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
 static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix);
 static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
 static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);

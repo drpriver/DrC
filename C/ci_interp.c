@@ -2165,6 +2165,16 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         err = cpp_error(cpp, loc, "#pragma pkg_config without any arguments");
         goto finally;
     }
+    _Bool optional = 0;
+    if(toks->type == CPP_IDENTIFIER){
+        if(sv_equals(toks->txt, SV("optional"))){
+            optional = 1;
+            do {
+                toks++;
+                ntoks--;
+            } while(ntoks && toks->type == CPP_WHITESPACE);
+        }
+    }
     if(toks->type != CPP_STRING){
         err = cpp_error(cpp, loc, "#pragma pkg_config requires a string literal package name");
         goto finally;
@@ -2175,6 +2185,11 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         cmd_prog(&cmd, LS("pkg-config"));
         cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
         if(cmd.errored){
+            if(optional){
+                cpp_warn(cpp, loc, "`pkg-config` not found in PATH");
+                err = 0;
+                goto finally;
+            }
             err = cpp_error(cpp, loc, "'pkg-config' not found in PATH");
             cmd_destroy(&cmd);
             goto finally;
@@ -2199,6 +2214,10 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         cmd_destroy(&cmd);
         Allocator_free(scratch, envp, envp_size);
         if(run_err){
+            if(optional) {
+                err = 0;
+                goto finally;
+            }
             err = cpp_error(cpp, loc, "pkg-config failed for '%.*s'", (int)pkg_name.length, pkg_name.text);
             goto finally;
         }
