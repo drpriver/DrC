@@ -6845,7 +6845,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
                     CcArray* arr = ccqt_as_array(pt);
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), arr->element, 0);
                     if(!ptr) return t;
-                    pt = (CcQualType){.bits = (uintptr_t)ptr | (pt.bits & 7)};
+                    pt = (CcQualType){.bits = (uintptr_t)ptr | pt.quals};
                 }
                 // C11 6.7.6.3p7: function params decay to function pointers.
                 else if(ccqt_kind(pt) == CC_FUNCTION){
