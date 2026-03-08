@@ -3036,7 +3036,6 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
             else if(tsan) cmd_cargs(cmd, "-fsanitize=thread");
             else if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");
             if(optimize) cmd_cargs(cmd, "-O2");
-            if(target_os == OS_LINUX) cmd_cargs(cmd, "-lm", "-lpthread");
             break;
         case COMPILER_CL:
             cmd_cargs(cmd, "/nologo", "/std:c11");
@@ -3053,6 +3052,10 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     }
     cmd_argf(cmd, "-I%s", ctx->gen_dir->data);
     target_src_inp(ctx, target, src_dep);
+    if(target_os == OS_LINUX){
+        cmd_cargs(cmd, "-lm", "-lpthread");
+        if(flavor == COMPILER_GCC) cmd_carg(cmd, "-latomic");
+    }
     BuildTarget* phony = phony_target(ctx, name);
     add_dep(ctx, phony, target);
     return target;
