@@ -1,19 +1,31 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 // Brainfuck interpreter
+// Usage: Bin/cc Samples/bf.c [file.bf]
+//   Reads program from file argument, or uses built-in "Hello, World!" demo.
+
 enum { MEMSZ = 30000 };
 enum { MAXPROG = 65536 };
 unsigned char mem[MEMSZ];
-char prog[MAXPROG] = ">++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<++.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-]<+."; // prints "Hello, World!"
-
+char prog[MAXPROG];
 int proglen = 0;
 
-// read from stdin
-int c;
-while((c = getchar()) != EOF && proglen < MAXPROG - 1){
-    prog[proglen++] = (char)c;
+const char* file = __ARGV__(1, NULL);
+if(file){
+    FILE* f = fopen(file, "r");
+    if(!f){
+        fprintf(stderr, "bf: cannot open '%s'\n", file);
+        return 1;
+    }
+    proglen = (int)fread(prog, 1, MAXPROG - 1, f);
+    fclose(f);
 }
-if(!proglen) proglen = strlen(prog);
+else {
+    const char* hello = ">++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<++.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-]<+.";
+    proglen = strlen(hello);
+    memcpy(prog, hello, proglen);
+}
 prog[proglen] = '\0';
 
 // precompute bracket matches
@@ -58,4 +70,5 @@ for(int ip = 0; ip < proglen; ip++){
         default: break;
     }
 }
+putchar('\n');
 return 0;
