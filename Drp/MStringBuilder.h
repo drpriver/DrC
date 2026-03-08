@@ -309,7 +309,7 @@ msb_write_utf32(MStringBuilder* msb, uint32_t u){
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 0) & 0x3fu));
         return;
     }
-    if(u < 0x1000u){
+    if(u < 0x10000u){
         msb->data[msb->cursor++] = (uint8_t)(0xe0u | (u >> 12));
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 6) & 0x3fu));
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 0) & 0x3fu));
@@ -320,6 +320,7 @@ msb_write_utf32(MStringBuilder* msb, uint32_t u){
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 12) & 0x3fu));
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 6) & 0x3fu));
         msb->data[msb->cursor++] = (uint8_t)(0x80u | ((u >> 0) & 0x3fu));
+        return;
     }
     msb->errored = 1;
 }

@@ -363,6 +363,9 @@ TestFunction(test_cc_lex_chars){
         {"ucn_u",       SV("'\\u0041'"),  0x0041,          CC_INT,    __LINE__},
         {"ucn_U",       SV("'\\U00000041'"), 0x0041,       CC_INT,    __LINE__},
         {"ucn_u_hi",    SV("'\\u00E9'"),  0x00E9,          CC_INT,    __LINE__},
+        {"ucn_u_3byte", SV("'\\u250c'"),  0x250c,          CC_INT,    __LINE__},
+        {"ucn_u_cjk",   SV("'\\u4e16'"),  0x4e16,          CC_INT,    __LINE__},
+        {"ucn_U_4byte", SV("'\\U0001F600'"), 0x1F600,      CC_INT,    __LINE__},
         // Prefixed with escape
         {"u8_escape_n", SV("u8'\\n'"),    '\n',             CC_UCHAR,  __LINE__},
         {"L_escape_0",  SV("L'\\0'"),     '\0',             CC_WCHAR,  __LINE__},
@@ -439,6 +442,11 @@ TestFunction(test_cc_lex_strings){
         {"ucn_u",    SV("\"\\u0041\""),   cc_str_tok(CC_STRING,   SV("A\0")), __LINE__},
         {"ucn_U",    SV("\"\\U00000041\""), cc_str_tok(CC_STRING, SV("A\0")), __LINE__},
         {"ucn_e_acute", SV("\"\\u00E9\""), cc_str_tok(CC_STRING,  SV("\xc3\xa9\0")), __LINE__},
+        // 3-byte UTF-8 (U+250C = box drawing ┌, U+4E16 = CJK 世)
+        {"ucn_u_3byte", SV("\"\\u250c\""), cc_str_tok(CC_STRING, SV("\xe2\x94\x8c\0")), __LINE__},
+        {"ucn_u_cjk",   SV("\"\\u4e16\""), cc_str_tok(CC_STRING, SV("\xe4\xb8\x96\0")), __LINE__},
+        // 4-byte UTF-8 (U+1F600 = 😀)
+        {"ucn_U_4byte", SV("\"\\U0001F600\""), cc_str_tok(CC_STRING, SV("\xf0\x9f\x98\x80\0")), __LINE__},
         // Empty prefixed strings
         {"L_empty",  SV("L\"\""),        cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 0}, 1), __LINE__},
         {"u_empty",  SV("u\"\""),        cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0}, 1), __LINE__},
