@@ -64,7 +64,7 @@ TestFunction(test_parse_decls){
             {
                 { SV("x"), SV("int (*)[10]") },
                 { SV("y"), SV("int") },
-                { SV("p"), SV("const int * *restrict  *") },
+                { SV("p"), SV("const int * * *") },
             },
             {
                 {SV("bar"), SV("int(int)")},

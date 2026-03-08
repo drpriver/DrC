@@ -6574,13 +6574,13 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '*'){
         // Pointer declarator: parse qualifiers, recurse, then splice.
-        _Bool restrict_ = 0, const_ = 0, volatile_ = 0, atomic_ = 0;
+        _Bool const_ = 0, volatile_ = 0, atomic_ = 0;
         for(;;){
             err = cc_next_token(p, &tok);
             if(err) return err;
             if(tok.type == CC_KEYWORD){
                 switch(tok.kw.kw){
-                    case CC_restrict: restrict_ = 1; continue;
+                    case CC_restrict: continue;
                     case CC_const:    const_    = 1; continue;
                     case CC_volatile: volatile_ = 1; continue;
                     case CC__Atomic:  atomic_   = 1; continue;
@@ -6596,7 +6596,6 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
         CcPointer* ptr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *ptr);
         if(!ptr) return CC_OOM_ERROR;
         ptr->kind = CC_POINTER;
-        ptr->restrict_ = restrict_;
         ptr->pointee = **out_tail;
         CcQualType qt = {.bits = (uintptr_t)ptr};
         qt.is_const = const_;
@@ -6824,7 +6823,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         case CC_POINTER: {
             CcPointer* old = ccqt_as_ptr(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
-            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, old->restrict_);
+            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0);
             if(!ptr) return t;
             return (CcQualType){.bits = (uintptr_t)ptr | quals};
         }

@@ -3994,6 +3994,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__GNUC__", 7);
     DEFINT("__GNUC_MINOR__", 0);
     DEFINT("__GNUC_PATCHLEVEL__", 0);
+    DEFINT("__OPTIMIZE__", 1);
 
     // __SIZEOF_*__
     DEFINT("__SIZEOF_SHORT__",       t.sizeof_[CCBT_short]);
