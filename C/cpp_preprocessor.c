@@ -4405,6 +4405,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#endif\n"
                             )},
         {SV("limits.h"),   SV("#pragma once\n"
+                              "#ifdef __linux__\n"
                               "#define _GCC_LIMITS_H_\n"
                               "#define CHAR_BIT __CHAR_BIT__\n"
                               "#define SCHAR_MIN (-__SCHAR_MAX__ - 1)\n"
@@ -4429,6 +4430,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define LLONG_MIN (-__LONG_LONG_MAX__ - 1LL)\n"
                               "#define LLONG_MAX __LONG_LONG_MAX__\n"
                               "#define ULLONG_MAX (__LONG_LONG_MAX__ * 2ULL + 1ULL)\n"
+                              "#endif\n"
                               "#if __has_include_next(<limits.h>)\n"
                               "#include_next <limits.h>\n"
                               "#endif\n"

@@ -13,7 +13,7 @@ py_add(PyObject* self, PyObject* args){
     int a, b;
     if(!PyArg_ParseTuple(args, "ii", &a, &b))
         return NULL;
-    printf("hello from C (%d, %d)\n", a, b);
+    printf("%s:%d: %s: hello from C (%d, %d)\n", __FILE__, __LINE__, __func__, a, b);
     return PyLong_FromLong(a + b);
 }
 
