@@ -1335,6 +1335,42 @@ TestFunction(test_interpreter){
                "return sum;\n"),
             .exit_code = 'h' + 'e' + 'l' + 'l' + 'o',
         },
+        {
+            "varargs", __LINE__,
+            SV(
+               "#define va_start __builtin_va_start\n"
+               "#define va_copy __builtin_va_copy\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap, int)\n"
+               "    }\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "int sum2(int n, ...){\n"
+               "    va_list ap, ap2;\n"
+               "    va_start(ap);\n" // c23
+               "    va_copy(ap2, ap);\n"
+               "    int result = vsum(n, ap);\n"
+               "    result += vsum(n, ap2);\n"
+               "    va_end(ap);\n"
+               "    va_end(ap2);\n"
+               "    return result;\n"
+               "}\n"
+               "int x = sum(3, 4, 5, 6) + sum2(2, 8, 9);\n"
+               ),
+            .exit_code = 4+5+6+8+9+8+9,
+        },
     };
     int err;
     static int idx = 0;

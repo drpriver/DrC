@@ -83,6 +83,10 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__atomic_compare_exchange_n, // (ptr, expected, desired, weak, success_order, failure_order)
     CC__atomic_thread_fence,  // (memorder)
     CC__atomic_signal_fence,  // (memorder)
+    CC__builtin_va_start,
+    CC__builtin_va_end,
+    CC__builtin_va_arg,
+    CC__builtin_va_copy,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

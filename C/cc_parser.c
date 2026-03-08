@@ -1872,6 +1872,11 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_va_start: // (ap, param) or (ap)
+                case CC__builtin_va_arg: // (ap, type)
+                case CC__builtin_va_end: // (ap)
+                case CC__builtin_va_copy: // (dst, src)
+                    return cc_unimplemented(p, tok.loc, "__builtin_va_whatever");
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -7381,6 +7386,10 @@ cc_define_builtin_types(CcParser* p){
             {SV("__atomic_compare_exchange_n"), CC__atomic_compare_exchange_n},
             {SV("__atomic_thread_fence"), CC__atomic_thread_fence},
             {SV("__atomic_signal_fence"), CC__atomic_signal_fence},
+            {SV("__builtin_va_start"), CC__builtin_va_start},
+            {SV("__builtin_va_end"),   CC__builtin_va_end},
+            {SV("__builtin_va_arg"),   CC__builtin_va_arg},
+            {SV("__builtin_va_copy"),  CC__builtin_va_copy},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
