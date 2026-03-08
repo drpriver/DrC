@@ -1049,6 +1049,98 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return 0;
     }
+    case CC_EXPR_ATOMIC: {
+        typedef struct { _Alignas(16) char bytes[16]; } Atomic16;
+        CcAtomicOp op = expr->atomic.op;
+        if(op == CC_ATOMIC_THREAD_FENCE){
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            return 0;
+        }
+        if(op == CC_ATOMIC_SIGNAL_FENCE){
+            __atomic_signal_fence(__ATOMIC_SEQ_CST);
+            return 0;
+        }
+        // Evaluate pointer argument to get memory address
+        void* ptr = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &ptr, sizeof ptr);
+        if(err) return err;
+        if(!ptr) return ci_error(ci, expr->loc, "null pointer in atomic operation");
+
+        CcQualType pointee = ccqt_as_ptr(expr->lhs->type)->pointee;
+        uint32_t sz;
+        err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &sz);
+        if(err) return err;
+
+        if(op == CC_ATOMIC_LOAD){
+            switch(sz){
+                case 1:  *( uint8_t*)result = __atomic_load_n(( uint8_t*)ptr, __ATOMIC_SEQ_CST); break;
+                case 2:  *(uint16_t*)result = __atomic_load_n((uint16_t*)ptr, __ATOMIC_SEQ_CST); break;
+                case 4:  *(uint32_t*)result = __atomic_load_n((uint32_t*)ptr, __ATOMIC_SEQ_CST); break;
+                case 8:  *(uint64_t*)result = __atomic_load_n((uint64_t*)ptr, __ATOMIC_SEQ_CST); break;
+                case 16: __atomic_load((Atomic16*)ptr, (Atomic16*)result, __ATOMIC_SEQ_CST); break;
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+            }
+            return 0;
+        }
+        if(op == CC_ATOMIC_COMPARE_EXCHANGE){
+            void* expected_ptr = NULL;
+            err = ci_interp_expr(ci, frame, expr->values[0], &expected_ptr, sizeof expected_ptr);
+            if(err) return err;
+            _Alignas(16) char desired_buf[16] = {0};
+            err = ci_interp_expr(ci, frame, expr->values[1], desired_buf, sz);
+            if(err) return err;
+            _Bool r;
+            switch(sz){
+                case 1:  r = __atomic_compare_exchange_n(( uint8_t*)ptr, ( uint8_t*)expected_ptr, *( uint8_t*)desired_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                case 2:  r = __atomic_compare_exchange_n((uint16_t*)ptr, (uint16_t*)expected_ptr, *(uint16_t*)desired_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                case 4:  r = __atomic_compare_exchange_n((uint32_t*)ptr, (uint32_t*)expected_ptr, *(uint32_t*)desired_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                case 8:  r = __atomic_compare_exchange_n((uint64_t*)ptr, (uint64_t*)expected_ptr, *(uint64_t*)desired_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                case 16: r = __atomic_compare_exchange((Atomic16*)ptr, (Atomic16*)expected_ptr, (Atomic16*)desired_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+            }
+            *(_Bool*)result = r;
+            return 0;
+        }
+        // fetch_add, fetch_sub, store, exchange: values[0]=val
+        _Alignas(16) char val_buf[16] = {0};
+        err = ci_interp_expr(ci, frame, expr->values[0], val_buf, sz);
+        if(err) return err;
+        #define ATOMIC_DISPATCH(OP) \
+            switch(sz){ \
+                case 1:  *( uint8_t*)result = OP(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 2:  *(uint16_t*)result = OP((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 4:  *(uint32_t*)result = OP((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 8:  *(uint64_t*)result = OP((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
+            }
+        switch(op){
+            case CC_ATOMIC_FETCH_ADD: ATOMIC_DISPATCH(__atomic_fetch_add); break;
+            case CC_ATOMIC_FETCH_SUB: ATOMIC_DISPATCH(__atomic_fetch_sub); break;
+            case CC_ATOMIC_EXCHANGE:
+                switch(sz){
+                    case 1:  *( uint8_t*)result = __atomic_exchange_n(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 2:  *(uint16_t*)result = __atomic_exchange_n((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 4:  *(uint32_t*)result = __atomic_exchange_n((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 8:  *(uint64_t*)result = __atomic_exchange_n((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 16: __atomic_exchange((Atomic16*)ptr, (Atomic16*)val_buf, (Atomic16*)result, __ATOMIC_SEQ_CST); break;
+                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+                }
+                break;
+            case CC_ATOMIC_STORE:
+                switch(sz){
+                    case 1:  __atomic_store_n(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 2:  __atomic_store_n((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 4:  __atomic_store_n((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 8:  __atomic_store_n((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
+                    case 16: __atomic_store((Atomic16*)ptr, (Atomic16*)val_buf, __ATOMIC_SEQ_CST); break;
+                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+                }
+                break;
+            default: return ci_error(ci, expr->loc, "unsupported atomic operation");
+        }
+        #undef ATOMIC_DISPATCH
+        return 0;
+    }
     default:
         return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
     }

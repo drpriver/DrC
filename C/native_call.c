@@ -12,8 +12,8 @@
 #include <ffi.h>
 #else
 #pragma message "<ffi.h> not found"
-#endif
 #define NO_NATIVE_CALL
+#endif
 #else
 #include <ffi.h>
 #endif

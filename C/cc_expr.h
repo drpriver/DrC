@@ -7,6 +7,7 @@
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "cc_type.h"
+#include "cc_memory_order.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -72,9 +73,22 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_ARROW,
     CC_EXPR_COMMA,
     CC_EXPR_STATEMENT_EXPRESSION, // gnu statement expression
+    CC_EXPR_ATOMIC, // atomic builtin operation, op in extra field
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
+
+enum CcAtomicOp TYPED_ENUM(uint32_t) {
+    CC_ATOMIC_FETCH_ADD,
+    CC_ATOMIC_FETCH_SUB,
+    CC_ATOMIC_LOAD,
+    CC_ATOMIC_STORE,
+    CC_ATOMIC_EXCHANGE,
+    CC_ATOMIC_COMPARE_EXCHANGE,
+    CC_ATOMIC_THREAD_FENCE,
+    CC_ATOMIC_SIGNAL_FENCE,
+};
+TYPEDEF_ENUM(CcAtomicOp, uint32_t);
 
 typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;
@@ -120,6 +134,15 @@ struct CcExpr {
             uint32_t _pad: 26;
             uint32_t length; //
         } str;
+        struct {
+            CcExprKind kind: 6;
+            uint32_t _pad: 2;
+            CcAtomicOp op: 8;
+            CcMemoryOrder memorder: 4;
+            CcMemoryOrder fail_memorder: 4; // compare_exchange only
+            uint32_t weak: 1;          // weak flag (compare_exchange only)
+            uint32_t _pad2: 7;
+        } atomic;
     };
     SrcLoc loc;
     CcQualType type;

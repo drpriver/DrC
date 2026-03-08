@@ -80,6 +80,7 @@ struct CcTargetConfig {
     _Bool is_lp64;
     _Bool user_label_prefix;
     _Bool char_is_signed;
+    uint8_t atomic_lock_free_max; // max size in bytes for lock-free atomics (e.g. 8 or 16)
     StringView platform_macros; // nul-character terminated macros. use `=` to include an arg. length should include terminating nul
 };
 
@@ -163,6 +164,7 @@ cc_target_x86_64_linux(void){
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 1,
+        .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "__linux__\0"
             "__linux\0"
@@ -255,6 +257,7 @@ cc_target_aarch64_linux(void){
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 0,
+        .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "__linux__\0"
             "__linux\0"
@@ -345,6 +348,7 @@ cc_target_x86_64_macos(void){
         .is_lp64 = 1,
         .user_label_prefix = 1,
         .char_is_signed = 1,
+        .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "__APPLE__\0"
             "__MACH__\0"
@@ -437,6 +441,7 @@ cc_target_aarch64_macos(void){
         .is_lp64 = 1,
         .user_label_prefix = 1,
         .char_is_signed = 0,
+        .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "__APPLE__\0"
             "__MACH__\0"
@@ -529,6 +534,7 @@ cc_target_x86_64_windows(void){
         .is_lp64 = 0,
         .user_label_prefix = 0,
         .char_is_signed = 1,
+        .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "_WIN32\0"
             "_WIN64\0"
@@ -618,6 +624,7 @@ cc_target_test(void){
         .is_lp64 = 1,
         .user_label_prefix = 0,
         .char_is_signed = 1,
+        .atomic_lock_free_max = 16,
     };
 }
 

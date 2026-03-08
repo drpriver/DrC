@@ -1134,6 +1134,64 @@ TestFunction(test_interpreter){
                "}();\n"),
             .exit_code = 42,
         },
+        // Atomics
+        {
+            "atomic: fetch_add", __LINE__,
+            SV("int x = 10;\n"
+               "int old = __atomic_fetch_add(&x, 5, __ATOMIC_SEQ_CST);\n"
+               "return old * 100 + x;\n"),
+            .exit_code = 10 * 100 + 15,
+        },
+        {
+            "atomic: fetch_sub", __LINE__,
+            SV("int x = 20;\n"
+               "int old = __atomic_fetch_sub(&x, 7, __ATOMIC_SEQ_CST);\n"
+               "return old * 100 + x;\n"),
+            .exit_code = 20 * 100 + 13,
+        },
+        {
+            "atomic: load", __LINE__,
+            SV("int x = 42;\n"
+               "return __atomic_load_n(&x, __ATOMIC_SEQ_CST);\n"),
+            .exit_code = 42,
+        },
+        {
+            "atomic: store", __LINE__,
+            SV("int x = 0;\n"
+               "__atomic_store_n(&x, 99, __ATOMIC_SEQ_CST);\n"
+               "return x;\n"),
+            .exit_code = 99,
+        },
+        {
+            "atomic: exchange", __LINE__,
+            SV("int x = 10;\n"
+               "int old = __atomic_exchange_n(&x, 20, __ATOMIC_SEQ_CST);\n"
+               "return old * 100 + x;\n"),
+            .exit_code = 10 * 100 + 20,
+        },
+        {
+            "atomic: compare_exchange success", __LINE__,
+            SV("int x = 10;\n"
+               "int expected = 10;\n"
+               "_Bool ok = __atomic_compare_exchange_n(&x, &expected, 20, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
+               "return ok * 100 + x;\n"),
+            .exit_code = 1 * 100 + 20,
+        },
+        {
+            "atomic: compare_exchange failure", __LINE__,
+            SV("int x = 10;\n"
+               "int expected = 99;\n"
+               "_Bool ok = __atomic_compare_exchange_n(&x, &expected, 20, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
+               "return ok * 1000 + expected * 10 + x;\n"),
+            .exit_code = 0 * 1000 + 10 * 10 + 10,
+        },
+        {
+            "atomic: fetch_add char", __LINE__,
+            SV("char x = 10;\n"
+               "char old = __atomic_fetch_add(&x, 3, __ATOMIC_SEQ_CST);\n"
+               "return old * 100 + x;\n"),
+            .exit_code = 10 * 100 + 13,
+        },
     };
     int err;
     static int idx = 0;

@@ -14,6 +14,7 @@
 #include "cpp_preprocessor.h"
 #include "cpp_tok.h"
 #include "cc_errors.h"
+#include "cc_memory_order.h"
 #include "../Drp/msb_sprintf.h"
 #include "../Drp/path_util.h"
 #include "../Drp/parse_numbers.h"
@@ -4007,6 +4008,14 @@ cpp_define_target_macros(CppPreprocessor* cpp){
 
     DEFINT("__CHAR_BIT__", 8);
 
+    // Atomic memory order constants (GCC/Clang compatible)
+    DEFINT("__ATOMIC_RELAXED", CC_MO_RELAXED);
+    DEFINT("__ATOMIC_CONSUME", CC_MO_CONSUME);
+    DEFINT("__ATOMIC_ACQUIRE", CC_MO_ACQUIRE);
+    DEFINT("__ATOMIC_RELEASE", CC_MO_RELEASE);
+    DEFINT("__ATOMIC_ACQ_REL", CC_MO_ACQ_REL);
+    DEFINT("__ATOMIC_SEQ_CST", CC_MO_SEQ_CST);
+
     if(t.is_lp64){
         DEF1("__LP64__");
         DEF1("_LP64");
@@ -4248,14 +4257,19 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFNUM("__BYTE_ORDER__",       "1234");
     DEFNUM("__FLOAT_WORD_ORDER__", "1234");
 
-    // GCC sync builtins
-    if(0){ // we don't support these yet
-        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
-        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
-        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
-        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
-        DEF1("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
-    }
+    // Atomic lock-free macros based on target's max lock-free size.
+    #define ATOMIC_LF(sz) ((sz) <= t.atomic_lock_free_max ? 2 : 0)
+    DEFINT("__GCC_ATOMIC_BOOL_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_bool]));
+    DEFINT("__GCC_ATOMIC_CHAR_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_char]));
+    DEFINT("__GCC_ATOMIC_CHAR16_T_LOCK_FREE", ATOMIC_LF(t.sizeof_[t.char16_type]));
+    DEFINT("__GCC_ATOMIC_CHAR32_T_LOCK_FREE", ATOMIC_LF(t.sizeof_[t.char32_type]));
+    DEFINT("__GCC_ATOMIC_WCHAR_T_LOCK_FREE",  ATOMIC_LF(t.sizeof_[t.wchar_type]));
+    DEFINT("__GCC_ATOMIC_SHORT_LOCK_FREE",    ATOMIC_LF(t.sizeof_[CCBT_short]));
+    DEFINT("__GCC_ATOMIC_INT_LOCK_FREE",      ATOMIC_LF(t.sizeof_[CCBT_int]));
+    DEFINT("__GCC_ATOMIC_LONG_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_long]));
+    DEFINT("__GCC_ATOMIC_LLONG_LOCK_FREE",    ATOMIC_LF(t.sizeof_[CCBT_long_long]));
+    DEFINT("__GCC_ATOMIC_POINTER_LOCK_FREE",  ATOMIC_LF(t.sizeof_[CCBT_nullptr_t]));
+    #undef ATOMIC_LF
 
     // Platform macros from target config.
     // Format: nul-separated entries. "NAME" defines as 1, "NAME=VAL" defines as VAL.
@@ -4392,34 +4406,44 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                             )},
         {SV("stdatomic.h"), SV("#pragma once\n"
                               "typedef enum {\n"
-                              "    memory_order_relaxed,\n"
-                              "    memory_order_consume,\n"
-                              "    memory_order_acquire,\n"
-                              "    memory_order_release,\n"
-                              "    memory_order_acq_rel,\n"
-                              "    memory_order_seq_cst\n"
+                              "    memory_order_relaxed = __ATOMIC_RELAXED,\n"
+                              "    memory_order_consume = __ATOMIC_CONSUME,\n"
+                              "    memory_order_acquire = __ATOMIC_ACQUIRE,\n"
+                              "    memory_order_release = __ATOMIC_RELEASE,\n"
+                              "    memory_order_acq_rel = __ATOMIC_ACQ_REL,\n"
+                              "    memory_order_seq_cst = __ATOMIC_SEQ_CST\n"
                               "} memory_order;\n"
+                              "#define ATOMIC_BOOL_LOCK_FREE __GCC_ATOMIC_BOOL_LOCK_FREE\n"
+                              "#define ATOMIC_CHAR_LOCK_FREE __GCC_ATOMIC_CHAR_LOCK_FREE\n"
+                              "#define ATOMIC_CHAR16_T_LOCK_FREE __GCC_ATOMIC_CHAR16_T_LOCK_FREE\n"
+                              "#define ATOMIC_CHAR32_T_LOCK_FREE __GCC_ATOMIC_CHAR32_T_LOCK_FREE\n"
+                              "#define ATOMIC_WCHAR_T_LOCK_FREE __GCC_ATOMIC_WCHAR_T_LOCK_FREE\n"
+                              "#define ATOMIC_SHORT_LOCK_FREE __GCC_ATOMIC_SHORT_LOCK_FREE\n"
+                              "#define ATOMIC_INT_LOCK_FREE __GCC_ATOMIC_INT_LOCK_FREE\n"
+                              "#define ATOMIC_LONG_LOCK_FREE __GCC_ATOMIC_LONG_LOCK_FREE\n"
+                              "#define ATOMIC_LLONG_LOCK_FREE __GCC_ATOMIC_LLONG_LOCK_FREE\n"
+                              "#define ATOMIC_POINTER_LOCK_FREE __GCC_ATOMIC_POINTER_LOCK_FREE\n"
                               "#define _Atomic(tp) tp\n"
                               "#define ATOMIC_VAR_INIT(value) (value)\n"
-                              "#define atomic_init(obj, value) (*(obj) = (value))\n"
-                              "#define atomic_store(obj, value) (*(obj) = (value))\n"
-                              "#define atomic_store_explicit(obj, value, order) (*(obj) = (value))\n"
-                              "#define atomic_load(obj) (*(obj))\n"
-                              "#define atomic_load_explicit(obj, order) (*(obj))\n"
-                              "#define atomic_exchange(obj, value) ({typeof(*(obj)) _old = *(obj); *(obj) = (value); _old;})\n"
-                              "#define atomic_exchange_explicit(obj, value, order) atomic_exchange(obj, value)\n"
-                              "#define atomic_compare_exchange_strong(obj, expected, desired) \\\n"
-                              "    ({_Bool _r = (*(obj) == *(expected)); if(_r) *(obj) = (desired); else *(expected) = *(obj); _r;})\n"
-                              "#define atomic_compare_exchange_strong_explicit(obj, expected, desired, s, f) \\\n"
-                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
-                              "#define atomic_compare_exchange_weak(obj, expected, desired) \\\n"
-                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
-                              "#define atomic_compare_exchange_weak_explicit(obj, expected, desired, s, f) \\\n"
-                              "    atomic_compare_exchange_strong(obj, expected, desired)\n"
-                              "#define atomic_fetch_add(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) += (arg); _old;})\n"
-                              "#define atomic_fetch_add_explicit(obj, arg, order) atomic_fetch_add(obj, arg)\n"
-                              "#define atomic_fetch_sub(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) -= (arg); _old;})\n"
-                              "#define atomic_fetch_sub_explicit(obj, arg, order) atomic_fetch_sub(obj, arg)\n"
+                              "#define atomic_init(obj, value) __atomic_store_n(obj, value, __ATOMIC_RELAXED)\n"
+                              "#define atomic_store(obj, value) __atomic_store_n(obj, value, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_store_explicit(obj, value, order) __atomic_store_n(obj, value, order)\n"
+                              "#define atomic_load(obj) __atomic_load_n(obj, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_load_explicit(obj, order) __atomic_load_n(obj, order)\n"
+                              "#define atomic_exchange(obj, value) __atomic_exchange_n(obj, value, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_exchange_explicit(obj, value, order) __atomic_exchange_n(obj, value, order)\n"
+                              "#define atomic_compare_exchange_strong(obj, expected, desired) "
+                              "    __atomic_compare_exchange_n(obj, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_compare_exchange_strong_explicit(obj, expected, desired, s, f) "
+                              "    __atomic_compare_exchange_n(obj, expected, desired, 0, s, f)\n"
+                              "#define atomic_compare_exchange_weak(obj, expected, desired) "
+                              "    __atomic_compare_exchange_n(obj, expected, desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_compare_exchange_weak_explicit(obj, expected, desired, s, f) "
+                              "    __atomic_compare_exchange_n(obj, expected, desired, 1, s, f)\n"
+                              "#define atomic_fetch_add(obj, arg) __atomic_fetch_add(obj, arg, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_fetch_add_explicit(obj, arg, order) __atomic_fetch_add(obj, arg, order)\n"
+                              "#define atomic_fetch_sub(obj, arg) __atomic_fetch_sub(obj, arg, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_fetch_sub_explicit(obj, arg, order) __atomic_fetch_sub(obj, arg, order)\n"
                               "#define atomic_fetch_or(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) |= (arg); _old;})\n"
                               "#define atomic_fetch_or_explicit(obj, arg, order) atomic_fetch_or(obj, arg)\n"
                               "#define atomic_fetch_and(obj, arg) ({typeof(*(obj)) _old = *(obj); *(obj) &= (arg); _old;})\n"
@@ -4428,10 +4452,10 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define atomic_fetch_xor_explicit(obj, arg, order) atomic_fetch_xor(obj, arg)\n"
                               "#define atomic_thread_fence(order) ((void)0)\n"
                               "#define atomic_signal_fence(order) ((void)0)\n"
-                              "#define atomic_flag_test_and_set(obj) ({_Bool _old = *(obj); *(obj) = 1; _old;})\n"
-                              "#define atomic_flag_test_and_set_explicit(obj, order) atomic_flag_test_and_set(obj)\n"
-                              "#define atomic_flag_clear(obj) (*(obj) = 0)\n"
-                              "#define atomic_flag_clear_explicit(obj, order) (*(obj) = 0)\n"
+                              "#define atomic_flag_test_and_set(obj) __atomic_exchange_n(obj, 1, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_flag_test_and_set_explicit(obj, order) __atomic_exchange_n(obj, 1, order)\n"
+                              "#define atomic_flag_clear(obj) __atomic_store_n(obj, 0, __ATOMIC_SEQ_CST)\n"
+                              "#define atomic_flag_clear_explicit(obj, order) __atomic_store_n(obj, 0, order)\n"
                               "typedef _Bool atomic_flag;\n"
                               "#define ATOMIC_FLAG_INIT 0\n"
                            )},

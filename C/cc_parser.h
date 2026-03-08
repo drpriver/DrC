@@ -75,6 +75,14 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__is_implicitly_castable_to, // (expr-or-type, type)
     CC__has_quals, // (expr-or-type, qualifier)
     CC__is_const, // (expr-or-type)
+    CC__atomic_fetch_add, // (ptr, val, memorder)
+    CC__atomic_fetch_sub, // (ptr, val, memorder)
+    CC__atomic_load_n,    // (ptr, memorder)
+    CC__atomic_store_n,   // (ptr, val, memorder)
+    CC__atomic_exchange_n,// (ptr, val, memorder)
+    CC__atomic_compare_exchange_n, // (ptr, expected, desired, weak, success_order, failure_order)
+    CC__atomic_thread_fence,  // (memorder)
+    CC__atomic_signal_fence,  // (memorder)
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 
