@@ -1188,19 +1188,23 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             Allocator_free(ci_allocator(ci), buf, total);
             return ci_error(ci, expr->loc, "ICE: ffi_cache not populated for call type");
         }
-        uint64_t rval = 0;
-        native_call(cache, fn, args, &rval);
-        Allocator_free(ci_allocator(ci), buf, total);
         CcQualType ret_type = ftype->return_type;
-        if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void)
+        if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void){
+            native_call(cache, fn, args, ci_discard_buf);
+            Allocator_free(ci_allocator(ci), buf, total);
             return 0;
-        if(result == ci_discard_buf) return 0;
+        }
         uint32_t ret_sz;
-        int err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
-        if(err) return err;
-        if(ret_sz > size)
+        {
+            int err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
+            if(err){ Allocator_free(ci_allocator(ci), buf, total); return err; }
+        }
+        if(ret_sz > size){
+            Allocator_free(ci_allocator(ci), buf, total);
             return ci_error(ci, expr->loc, "interpreter: result buffer too small");
-        memcpy(result, &rval, ret_sz);
+        }
+        native_call(cache, fn, args, result);
+        Allocator_free(ci_allocator(ci), buf, total);
         return 0;
     }
     case CC_EXPR_COMPOUND_LITERAL:
