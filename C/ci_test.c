@@ -1667,6 +1667,17 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "varargs no extra args", __LINE__,
+            SV("int f(int x, ...){\n"
+                "  __builtin_va_list va;\n"
+                "  __builtin_va_start(va, x);\n"
+                "  __builtin_va_end(va);\n"
+                "  return x;\n"
+                "}\n"
+                "return f(42);\n"),
+            .exit_code = 42,
+        },
+        {
             "cpy really fake fla", __LINE__,
             SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"

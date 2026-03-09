@@ -1798,7 +1798,7 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
         .return_buf = result,
         .return_size = size,
         .data_length = func->frame_size + varargs_size,
-        .varargs_buf = varargs_size ? (char*)(frame + 1) + func->frame_size : NULL,
+        .varargs_buf = ftype->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL,
     };
     // Evaluate fixed args into param storage in the frame's trailing data.
     // We must evaluate in the CALLER's frame context.

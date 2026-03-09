@@ -16,5 +16,6 @@ log_twice("Hello %s\n", "world");
 log_twice("1. + 2. = %f\n", 1.+2.);
 log_twice("%s %f %s\n", "hi", 2.f, "you");
 log_twice("Goodbye %s\n", "world");
+log_twice("hello");
 
 
