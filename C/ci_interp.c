@@ -1613,6 +1613,34 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return 0;
     }
+    case CC_EXPR_CTZ:
+    case CC_EXPR_CLZ: {
+        uint64_t val = 0;
+        uint32_t sz;
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
+        if(err) return err;
+        val = ci_read_uint(&val, sz);
+        int count;
+        if(val == 0){
+            // UB per the spec, but common behavior is to return the bit width
+            count = (int)(sz * 8);
+        }
+        else if(expr->kind == CC_EXPR_CTZ)
+            count = ctz_64(val);
+        else
+            count = clz_64(val) - (int)(64 - sz * 8);
+        if(result != ci_discard_buf){
+            uint32_t rsz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
+            if(err) return err;
+            if(rsz > size)
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+            ci_write_uint(result, rsz, (uint64_t)count);
+        }
+        return 0;
+    }
     case CC_EXPR_SIZEOF_VMT:
     case CC_EXPR_STATEMENT_EXPRESSION:
         return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");

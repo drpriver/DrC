@@ -98,6 +98,12 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_popcount,
     CC__builtin_popcountl,
     CC__builtin_popcountll,
+    CC__builtin_ctz,
+    CC__builtin_ctzl,
+    CC__builtin_ctzll,
+    CC__builtin_clz,
+    CC__builtin_clzl,
+    CC__builtin_clzll,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

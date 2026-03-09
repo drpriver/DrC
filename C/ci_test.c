@@ -1542,6 +1542,48 @@ TestFunction(test_interpreter){
             SV("return __builtin_popcountll(0xFFFFFFFFull);\n"),
             .exit_code = 32,
         },
+        // __builtin_ctz
+        {
+            "ctz: 1", __LINE__,
+            SV("return __builtin_ctz(1);\n"),
+            .exit_code = 0,
+        },
+        {
+            "ctz: power of two", __LINE__,
+            SV("return __builtin_ctz(8);\n"),
+            .exit_code = 3,
+        },
+        {
+            "ctz: trailing zeros", __LINE__,
+            SV("return __builtin_ctz(0x100);\n"),
+            .exit_code = 8,
+        },
+        {
+            "ctzll", __LINE__,
+            SV("return __builtin_ctzll(1ull << 32);\n"),
+            .exit_code = 32,
+        },
+        // __builtin_clz
+        {
+            "clz: 1", __LINE__,
+            SV("return __builtin_clz(1);\n"),
+            .exit_code = 31,
+        },
+        {
+            "clz: high bit", __LINE__,
+            SV("return __builtin_clz(0x80000000u);\n"),
+            .exit_code = 0,
+        },
+        {
+            "clz: 16", __LINE__,
+            SV("return __builtin_clz(16);\n"),
+            .exit_code = 27,
+        },
+        {
+            "clzll", __LINE__,
+            SV("return __builtin_clzll(1ull << 32);\n"),
+            .exit_code = 31,
+        },
     };
     int err;
     static int idx = 0;
