@@ -1,11 +1,8 @@
 // Snek game
 #ifdef __linux__
-#error "FIXME: pragma pkg_config or something?"
-#elif defined __APPLE__
-#pragma lib "SDL2"
-#else
-#warning "FIXME: idk how to find sdl on windows, maybe user has to call cli args?"
+#pragma pkg_config "sdl2"
 #endif
+#pragma lib "SDL2"
 #include <SDL2/SDL.h>
 #include <stdlib.h>
 #include <string.h>

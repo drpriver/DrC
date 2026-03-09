@@ -1,3 +1,6 @@
+#ifdef __linux__
+#pragma pkg_config "sdl2"
+#endif
 #pragma lib "SDL2"
 #include <SDL2/SDL.h>
 
