@@ -2058,6 +2058,24 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_popcount:
+                case CC__builtin_popcountl:
+                case CC__builtin_popcountll:{
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, &arg);
+                    if(err) return err;
+                    if(!ccqt_is_basic(arg->type) || !ccbt_is_integer(arg->type.basic.kind))
+                        return cc_error(p, arg->loc, "argument to popcount must be an integer type");
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_POPCOUNT, tok.loc, ccqt_basic(CCBT_int), 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = arg;
+                    *out = node;
+                    return 0;
+                }
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -3026,6 +3044,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_POPCOUNT:
             msb_write_literal(sb, "<unimpl>");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
@@ -7761,6 +7780,9 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_mul_overflow"), CC__builtin_mul_overflow},
             {SV("__builtin_add_overflow"), CC__builtin_add_overflow},
             {SV("__builtin_sub_overflow"), CC__builtin_sub_overflow},
+            {SV("__builtin_popcount"), CC__builtin_popcount},
+            {SV("__builtin_popcountl"), CC__builtin_popcountl},
+            {SV("__builtin_popcountll"), CC__builtin_popcountll},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);

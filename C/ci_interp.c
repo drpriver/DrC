@@ -25,6 +25,7 @@
 #include "../Drp/cmd_run.h"
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
+#include "../Drp/bit_util.h"
 #include "native_call.h"
 #include "ci_softnum.h"
 #ifdef __clang__
@@ -1590,6 +1591,25 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(rsz > size)
                 return ci_error(ci, expr->loc, "interpreter: result buffer too small");
             ci_write_uint(result, rsz, overflowed);
+        }
+        return 0;
+    }
+    case CC_EXPR_POPCOUNT: {
+        uint64_t val = 0;
+        uint32_t sz;
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
+        if(err) return err;
+        val = ci_read_uint(&val, sz);
+        int count = popcount_64(val);
+        if(result != ci_discard_buf){
+            uint32_t rsz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
+            if(err) return err;
+            if(rsz > size)
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+            ci_write_uint(result, rsz, (uint64_t)count);
         }
         return 0;
     }

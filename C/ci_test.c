@@ -1511,6 +1511,37 @@ TestFunction(test_interpreter){
                "return ov * 1000 + (int)r;\n"),
             .exit_code = 300,
         },
+        // __builtin_popcount
+        {
+            "popcount: zero", __LINE__,
+            SV("return __builtin_popcount(0);\n"),
+            .exit_code = 0,
+        },
+        {
+            "popcount: one", __LINE__,
+            SV("return __builtin_popcount(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "popcount: power of two", __LINE__,
+            SV("return __builtin_popcount(1024);\n"),
+            .exit_code = 1,
+        },
+        {
+            "popcount: all bits", __LINE__,
+            SV("return __builtin_popcount(0xFFu);\n"),
+            .exit_code = 8,
+        },
+        {
+            "popcount: mixed bits", __LINE__,
+            SV("return __builtin_popcount(0b10101010);\n"),
+            .exit_code = 4,
+        },
+        {
+            "popcountll", __LINE__,
+            SV("return __builtin_popcountll(0xFFFFFFFFull);\n"),
+            .exit_code = 32,
+        },
     };
     int err;
     static int idx = 0;

@@ -95,6 +95,9 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_mul_overflow,
     CC__builtin_add_overflow,
     CC__builtin_sub_overflow,
+    CC__builtin_popcount,
+    CC__builtin_popcountl,
+    CC__builtin_popcountll,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 
