@@ -2101,6 +2101,58 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_huge_val:
+                case CC__builtin_huge_valf:
+                case CC__builtin_huge_vall:{
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_alloc_expr(p, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->kind = CC_EXPR_VALUE;
+                    node->loc = tok.loc;
+                    if(builtin == CC__builtin_huge_valf){
+                        node->type = ccqt_basic(CCBT_float);
+                        node->float_ = (float)(1.0/0.0);
+                    }
+                    else if(builtin == CC__builtin_huge_val){
+                        node->type = ccqt_basic(CCBT_double);
+                        node->double_ = 1.0/0.0;
+                    }
+                    else {
+                        node->type = ccqt_basic(CCBT_long_double);
+                        node->double_ = 1.0/0.0;
+                    }
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_nanf:
+                case CC__builtin_nan:
+                case CC__nan:{
+                    // nanf("") / nan("") — ignore the string arg
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, &arg);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_alloc_expr(p, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->kind = CC_EXPR_VALUE;
+                    node->loc = tok.loc;
+                    if(builtin == CC__builtin_nanf){
+                        node->type = ccqt_basic(CCBT_float);
+                        node->float_ = (float)(0.0/0.0);
+                    }
+                    else {
+                        node->type = ccqt_basic(CCBT_double);
+                        node->double_ = 0.0/0.0;
+                    }
+                    *out = node;
+                    return 0;
+                }
             }
             CcSymbol sym;
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
@@ -7816,6 +7868,12 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_clz"), CC__builtin_clz},
             {SV("__builtin_clzl"), CC__builtin_clzl},
             {SV("__builtin_clzll"), CC__builtin_clzll},
+            {SV("__builtin_huge_val"), CC__builtin_huge_val},
+            {SV("__builtin_huge_valf"), CC__builtin_huge_valf},
+            {SV("__builtin_huge_vall"), CC__builtin_huge_vall},
+            {SV("__builtin_nan"), CC__builtin_nan},
+            {SV("__builtin_nanf"), CC__builtin_nanf},
+            {SV("__nan"), CC__nan},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);

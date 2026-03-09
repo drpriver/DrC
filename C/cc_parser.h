@@ -104,6 +104,12 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_clz,
     CC__builtin_clzl,
     CC__builtin_clzll,
+    CC__builtin_huge_val,
+    CC__builtin_huge_valf,
+    CC__builtin_huge_vall,
+    CC__builtin_nan,
+    CC__builtin_nanf,
+    CC__nan,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 
