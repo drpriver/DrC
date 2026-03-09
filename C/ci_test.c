@@ -1667,6 +1667,145 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "struct with union copy", __LINE__,
+            SV("typedef struct {\n"
+                "  union { unsigned long _bits; struct { unsigned type: 4; unsigned long _pad: 60; }; };\n"
+                "  union { struct { const char* text; unsigned long len; }; };\n"
+                "  unsigned long loc;\n"
+                "} Tok;\n"
+                "Tok arr[2] = {{._bits=1, .text=\"hi\", .len=2, .loc=10},\n"
+                "              {._bits=2, .text=\"yo\", .len=2, .loc=20}};\n"
+                "Tok t = arr[1];\n"
+                "return (int)t.loc;\n"),
+            .exit_code = 20,
+        },
+        {
+            "struct copy from pointer subscript", __LINE__,
+            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+                "Big g[2] = {{1,2,3,4},{5,6,7,8}};\n"
+                "int f(const Big* p){\n"
+                "  Big t = p[1];\n"
+                "  return (int)(t.a + t.d);\n"
+                "}\n"
+                "return f(g);\n"),
+            .exit_code = 13,
+        },
+        {
+            "struct copy from array", __LINE__,
+            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+                "Big arr[2] = {{1,2,3,4},{5,6,7,8}};\n"
+                "Big t = arr[1];\n"
+                "return (int)(t.a + t.d);\n"),
+            .exit_code = 13,
+        },
+        {
+            "struct with union alignment", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned file_id;\n"
+                "  union {\n"
+                "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
+                "  };\n"
+                "} Frame;\n"
+                "Frame f = {0};\n"
+                "f.cursor = 10;\n"
+                "f.cursor++;\n"
+                "return (int)f.cursor;\n"),
+            .exit_code = 11,
+        },
+        {
+            "struct union cursor via pointer", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned file_id;\n"
+                "  union {\n"
+                "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
+                "  };\n"
+                "} Frame;\n"
+                "void advance(Frame* f){ f->cursor++; f->column++; }\n"
+                "Frame f = {0};\n"
+                "f.cursor = 10;\n"
+                "advance(&f);\n"
+                "advance(&f);\n"
+                "return (int)f.cursor;\n"),
+            .exit_code = 12,
+        },
+        {
+            "tokenizer loop pattern", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned file_id;\n"
+                "  union {\n"
+                "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
+                "  };\n"
+                "  const char* text;\n"
+                "  __SIZE_TYPE__ length;\n"
+                "} Frame;\n"
+                "int next(Frame* f){\n"
+                "  if(f->cursor == f->length) return -1;\n"
+                "  int c = (int)(unsigned char)f->text[f->cursor++];\n"
+                "  f->column++;\n"
+                "  return c;\n"
+                "}\n"
+                "Frame f = {.text = \"hello\", .length = 5};\n"
+                "int sum = 0;\n"
+                "int c;\n"
+                "while((c = next(&f)) != -1) sum += c;\n"
+                "return sum == ('h'+'e'+'l'+'l'+'o');\n"),
+            .exit_code = 1,
+        },
+        {
+            "cppframe layout", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned file_id;\n"
+                "  union {\n"
+                "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
+                "  };\n"
+                "  struct { __SIZE_TYPE__ length; const char* text; } txt;\n"
+                "} Frame;\n"
+                "Frame f = {0};\n"
+                "f.txt.length = 99;\n"
+                "f.txt.text = \"hello\";\n"
+                "// Check that file_id doesn't alias txt.length\n"
+                "f.file_id = 4;\n"
+                "return (int)f.txt.length;\n"),
+            .exit_code = 99,
+        },
+        {
+            "switch negative case", __LINE__,
+            SV("int x = -1;\n"
+                "switch(x){\n"
+                "  case -1: return 1;\n"
+                "  default: return 0;\n"
+                "}\n"),
+            .exit_code = 1,
+        },
+        {
+            "struct union field write", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned file_id;\n"
+                "  union {\n"
+                "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
+                "  };\n"
+                "} Frame;\n"
+                "Frame f = {0};\n"
+                "f.file_id = 99;\n"
+                "f.line = 1;\n"
+                "f.column = 5;\n"
+                "f.cursor = 42;\n"
+                "return (int)(f.file_id + f.line + f.column + f.cursor);\n"),
+            .exit_code = 147,
+        },
+        {
+            "struct copy in loop", __LINE__,
+            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+                "Big arr[3] = {{1,2,3,4},{5,6,7,8},{9,10,11,12}};\n"
+                "int sum = 0;\n"
+                "for(int i = 0; i < 3; i++){\n"
+                "  Big t = arr[i];\n"
+                "  sum += (int)t.a;\n"
+                "}\n"
+                "return sum;\n"),
+            .exit_code = 15,
+        },
+        {
             "varargs no extra args", __LINE__,
             SV("int f(int x, ...){\n"
                 "  __builtin_va_list va;\n"

@@ -1858,7 +1858,10 @@ TestFunction(test_include){
             {0}, SV("\n\nfirst")},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
-        if(test_cases[i].disabled) continue;
+        if(test_cases[i].disabled){
+            TEST_stats.skipped++;
+            continue;
+        }
         IncludeTestFile files[] = {
             {test_cases[i].path0, test_cases[i].content0},
             {test_cases[i].path1, test_cases[i].content1},
@@ -1880,7 +1883,9 @@ TestFunction(test_include){
 }
 
 int main(int argc, char** argv){
+    #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
+    #endif
     RegisterTest(test_obj_macros);
     RegisterTest(test_func_macros);
     RegisterTest(test_func_macros_extensions);
@@ -1895,7 +1900,9 @@ int main(int argc, char** argv){
     RegisterTest(test_if_eval);
     RegisterTest(test_include);
     int err = test_main(argc, argv, NULL);
+    #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();
+    #endif
     return err;
 }
 
