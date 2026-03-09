@@ -1735,6 +1735,106 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__atomic_load: {
+                    // __atomic_load(ptr, ret, memorder)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ptr_expr;
+                    err = cc_parse_assignment_expr(p, &ptr_expr);
+                    if(err) return err;
+                    CcQualType ptr_type = ptr_expr->type;
+                    if(ccqt_kind(ptr_type) != CC_POINTER)
+                        return cc_error(p, tok.loc, "first argument to __atomic_load must be a pointer");
+                    CcQualType pointee = ccqt_as_ptr(ptr_type)->pointee;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* ret_expr;
+                    err = cc_parse_assignment_expr(p, &ret_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    // memorder (discard)
+                    CcExpr* mo;
+                    err = cc_parse_assignment_expr(p, &mo);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    uint32_t pointee_sz;
+                    err = cc_sizeof_as_uint(p, pointee, tok.loc, &pointee_sz);
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 2);
+                    if(!node) return CC_OOM_ERROR;
+                    node->atomic.op = CC_ATOMIC_LOAD;
+                    node->lhs = ptr_expr;
+                    node->values[0] = ret_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__atomic_store: {
+                    // __atomic_store(ptr, val_ptr, memorder)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ptr_expr;
+                    err = cc_parse_assignment_expr(p, &ptr_expr);
+                    if(err) return err;
+                    if(ccqt_kind(ptr_expr->type) != CC_POINTER)
+                        return cc_error(p, tok.loc, "first argument to __atomic_store must be a pointer");
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* val_expr;
+                    err = cc_parse_assignment_expr(p, &val_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* mo;
+                    err = cc_parse_assignment_expr(p, &mo);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->atomic.op = CC_ATOMIC_STORE;
+                    node->lhs = ptr_expr;
+                    node->values[0] = val_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__atomic_exchange: {
+                    // __atomic_exchange(ptr, val_ptr, ret_ptr, memorder)
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* ptr_expr;
+                    err = cc_parse_assignment_expr(p, &ptr_expr);
+                    if(err) return err;
+                    if(ccqt_kind(ptr_expr->type) != CC_POINTER)
+                        return cc_error(p, tok.loc, "first argument to __atomic_exchange must be a pointer");
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* val_expr;
+                    err = cc_parse_assignment_expr(p, &val_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* ret_expr;
+                    err = cc_parse_assignment_expr(p, &ret_expr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* mo;
+                    err = cc_parse_assignment_expr(p, &mo);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 2);
+                    if(!node) return CC_OOM_ERROR;
+                    node->atomic.op = CC_ATOMIC_EXCHANGE;
+                    node->lhs = ptr_expr;
+                    node->values[0] = val_expr;
+                    node->values[1] = ret_expr;
+                    *out = node;
+                    return 0;
+                }
+                case CC__atomic_compare_exchange:
                 case CC__atomic_fetch_add:
                 case CC__atomic_fetch_sub:
                 case CC__atomic_load_n:
@@ -1745,10 +1845,11 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     switch(builtin){
                         case CC__atomic_fetch_add: op = CC_ATOMIC_FETCH_ADD; break;
                         case CC__atomic_fetch_sub: op = CC_ATOMIC_FETCH_SUB; break;
-                        case CC__atomic_load_n:    op = CC_ATOMIC_LOAD;      break;
-                        case CC__atomic_store_n:   op = CC_ATOMIC_STORE;     break;
-                        case CC__atomic_exchange_n:op = CC_ATOMIC_EXCHANGE;  break;
-                        case CC__atomic_compare_exchange_n: op = CC_ATOMIC_COMPARE_EXCHANGE; break;
+                        case CC__atomic_load_n:    op = CC_ATOMIC_LOAD_N;    break;
+                        case CC__atomic_store_n:   op = CC_ATOMIC_STORE_N;   break;
+                        case CC__atomic_exchange_n:op = CC_ATOMIC_EXCHANGE_N; break;
+                        case CC__atomic_compare_exchange_n: op = CC_ATOMIC_COMPARE_EXCHANGE_N; break;
+                        case CC__atomic_compare_exchange:   op = CC_ATOMIC_COMPARE_EXCHANGE;   break;
                         default: return cc_unreachable(p, "compiler broken??");
                     }
                     err = cc_expect_punct(p, '(');
@@ -1776,13 +1877,13 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     int nargs; // number of runtime value args (excludes memorder/weak)
                     int nconst; // number of trailing constant args (memorder, weak, etc.)
                     switch(op){
-                        case CC_ATOMIC_LOAD:
+                        case CC_ATOMIC_LOAD_N:
                             // __atomic_load_n(ptr, memorder)
                             result_type = pointee;
                             nargs = 0;
                             nconst = 1;
                             break;
-                        case CC_ATOMIC_STORE:
+                        case CC_ATOMIC_STORE_N:
                             // __atomic_store_n(ptr, val, memorder)
                             result_type = ccqt_basic(CCBT_void);
                             arg_types[0] = pointee;
@@ -1791,21 +1892,32 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             break;
                         case CC_ATOMIC_FETCH_ADD:
                         case CC_ATOMIC_FETCH_SUB:
-                        case CC_ATOMIC_EXCHANGE:
+                        case CC_ATOMIC_EXCHANGE_N:
                             // (ptr, val, memorder)
                             result_type = pointee;
                             arg_types[0] = pointee;
                             nargs = 1;
                             nconst = 1;
                             break;
-                        case CC_ATOMIC_COMPARE_EXCHANGE:
+                        case CC_ATOMIC_COMPARE_EXCHANGE_N:
                             // (ptr, expected, desired, weak, success_order, fail_order)
                             result_type = ccqt_basic(CCBT_bool);
                             arg_types[0] = ptr_type; // expected is same pointer type
-                            arg_types[1] = pointee;  // desired
+                            arg_types[1] = pointee;  // desired is value
                             nargs = 2;
                             nconst = 3;
                             break;
+                        case CC_ATOMIC_COMPARE_EXCHANGE:
+                            // (ptr, expected, desired_ptr, weak, success_order, fail_order)
+                            result_type = ccqt_basic(CCBT_bool);
+                            arg_types[0] = ptr_type; // expected is same pointer type
+                            arg_types[1] = ptr_type; // desired is pointer
+                            nargs = 2;
+                            nconst = 3;
+                            break;
+                        case CC_ATOMIC_LOAD:
+                        case CC_ATOMIC_STORE:
+                        case CC_ATOMIC_EXCHANGE:
                         case CC_ATOMIC_THREAD_FENCE:
                         case CC_ATOMIC_SIGNAL_FENCE:
                             return CC_UNREACHABLE_ERROR;
@@ -7862,9 +7974,13 @@ cc_define_builtin_types(CcParser* p){
             {SV("__atomic_fetch_add"), CC__atomic_fetch_add},
             {SV("__atomic_fetch_sub"), CC__atomic_fetch_sub},
             {SV("__atomic_load_n"), CC__atomic_load_n},
+            {SV("__atomic_load"), CC__atomic_load},
             {SV("__atomic_store_n"), CC__atomic_store_n},
             {SV("__atomic_exchange_n"), CC__atomic_exchange_n},
             {SV("__atomic_compare_exchange_n"), CC__atomic_compare_exchange_n},
+            {SV("__atomic_compare_exchange"), CC__atomic_compare_exchange},
+            {SV("__atomic_store"), CC__atomic_store},
+            {SV("__atomic_exchange"), CC__atomic_exchange},
             {SV("__atomic_thread_fence"), CC__atomic_thread_fence},
             {SV("__atomic_signal_fence"), CC__atomic_signal_fence},
             {SV("__builtin_va_start"), CC__builtin_va_start},

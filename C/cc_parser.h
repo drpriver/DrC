@@ -78,9 +78,13 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__atomic_fetch_add, // (ptr, val, memorder)
     CC__atomic_fetch_sub, // (ptr, val, memorder)
     CC__atomic_load_n,    // (ptr, memorder)
+    CC__atomic_load,      // (ptr, ret, memorder)
     CC__atomic_store_n,   // (ptr, val, memorder)
     CC__atomic_exchange_n,// (ptr, val, memorder)
     CC__atomic_compare_exchange_n, // (ptr, expected, desired, weak, success_order, failure_order)
+    CC__atomic_compare_exchange,   // (ptr, expected, desired_ptr, weak, success_order, failure_order)
+    CC__atomic_store,         // (ptr, val_ptr, memorder)
+    CC__atomic_exchange,      // (ptr, val_ptr, ret_ptr, memorder)
     CC__atomic_thread_fence,  // (memorder)
     CC__atomic_signal_fence,  // (memorder)
     CC__builtin_va_start,
