@@ -676,7 +676,3 @@ repl_builtin_command(CcParser* parser, StringView input){
 #include "C/native_call.c"
 #include "C/ci_interp.c"
 #include "Drp/dre.c"
-
-#if defined __DVM_CC__ && __INCLUDE_LEVEL__ == 1
-main(3, (char*[]){"cc", "cc.c", "--repl", NULL}, (char*[]){NULL});
-#endif

@@ -115,6 +115,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_nanf,
     CC__nan,
     CC__builtin_alloca,
+    CC__bt,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

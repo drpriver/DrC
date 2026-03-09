@@ -1007,6 +1007,44 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "self-referential struct typedef", __LINE__,
+            SV("typedef struct _ffi_type {\n"
+               "  int size;\n"
+               "  struct _ffi_type **elements;\n"
+               "} ffi_type;\n"
+               "ffi_type t;\n"
+               "ffi_type *p;\n"
+               "struct _ffi_type *q;\n"
+              ),
+            .vars = {
+                { SV("t"), SV("struct _ffi_type") },
+                { SV("p"), SV("struct _ffi_type *") },
+                { SV("q"), SV("struct _ffi_type *") },
+            },
+            .typedefs = {
+                { SV("ffi_type"), SV("struct _ffi_type") },
+            },
+        },
+        {
+            "self-referential struct assignment", __LINE__,
+            SV("typedef struct _node {\n"
+               "  int val;\n"
+               "  struct _node *next;\n"
+               "} Node;\n"
+               "Node n;\n"
+               "Node *p = &n;\n"
+               "struct _node *q = &n;\n"
+              ),
+            .vars = {
+                { SV("n"), SV("struct _node") },
+                { SV("p"), SV("struct _node *"), SV("&n") },
+                { SV("q"), SV("struct _node *"), SV("&n") },
+            },
+            .typedefs = {
+                { SV("Node"), SV("struct _node") },
+            },
+        },
+        {
             "type defined in struct body is visible outside", __LINE__,
             SV("struct S { enum Color { RED, GREEN, BLUE }; enum Color c; };\n"
                "enum Color x;\n"

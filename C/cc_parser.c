@@ -2107,7 +2107,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 case CC__builtin_unreachable:
                 case CC__builtin_trap:
                 case CC__builtin_debugtrap:
-                case CC__builtin_abort:{
+                case CC__builtin_abort:
+                case CC__bt:{
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
@@ -2118,6 +2119,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         case CC__builtin_trap:        op = CC_BUILTIN_TRAP; break;
                         case CC__builtin_debugtrap:   op = CC_BUILTIN_DEBUGTRAP; break;
                         case CC__builtin_abort:       op = CC_BUILTIN_ABORT; break;
+                        case CC__bt:                  op = CC_BUILTIN_BACKTRACE; break;
                         default: return CC_UNREACHABLE_ERROR;
                     }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ccqt_basic(CCBT_void), 0);
@@ -5306,10 +5308,28 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
             if(is_union){
                 CcUnion* u = existing = cc_scope_lookup_union_tag(p->current, name, CC_SCOPE_NO_WALK);
                 if(u && !u->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                if(!u){
+                    // Register incomplete tag before parsing body so self-references resolve.
+                    u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                    if(!u) return CC_OOM_ERROR;
+                    *u = (CcUnion){.kind = CC_UNION, .name = name, .loc = loc, .is_incomplete = 1};
+                    err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+                    if(err) return CC_OOM_ERROR;
+                    existing = u;
+                }
             }
             else {
                 CcStruct* s = existing = cc_scope_lookup_struct_tag(p->current, name, CC_SCOPE_NO_WALK);
                 if(s && !s->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                if(!s){
+                    // Register incomplete tag before parsing body so self-references resolve.
+                    s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                    if(!s) return CC_OOM_ERROR;
+                    *s = (CcStruct){.kind = CC_STRUCT, .name = name, .loc = loc, .is_incomplete = 1};
+                    err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+                    if(err) return CC_OOM_ERROR;
+                    existing = s;
+                }
             }
         }
         Marray(CcField) fields_arr = {0};
@@ -8013,6 +8033,7 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_alloca"), CC__builtin_alloca},
             {SV("_alloca"), CC__builtin_alloca},
             {SV("alloca"), CC__builtin_alloca},
+            {SV("__bt"), CC__bt},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);

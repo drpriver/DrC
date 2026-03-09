@@ -497,46 +497,84 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         if(!ccqt_is_basic(from) && ccqt_kind(from) != CC_POINTER && ccqt_kind(from) != CC_ENUM)
             return ci_error(ci, expr->loc, "interpreter:%s:%d: cast from non-scalar type", __FILE__, __LINE__);
-        uint64_t val = 0;
-        int err = ci_interp_expr(ci, frame, operand, &val, sizeof val);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
         uint32_t from_sz;
-        err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
+        int err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
         if(err) return err;
         uint32_t to_sz;
         err = cc_sizeof_as_uint(&ci->parser, to, expr->loc, &to_sz);
         if(err) return err;
+        CiUint128 val128 = {0};
+        void* valp = &val128;
+        size_t val_cap = sizeof val128;
+        err = ci_interp_expr(ci, frame, operand, valp, val_cap);
+        if(err) return err;
+        if(result == ci_discard_buf) return 0;
         if(to_sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, to_sz, size);
         _Bool from_is_float = ccqt_is_basic(from) && ccbt_is_float(from.basic.kind);
         _Bool to_is_float = ccqt_is_basic(to) && ccbt_is_float(to.basic.kind);
         if(from_is_float && to_is_float){
-            double d = ci_read_float(&val, from.basic.kind);
+            double d = ci_read_float(valp, from.basic.kind);
             ci_write_float(result, to.basic.kind, d);
         }
         else if(from_is_float && !to_is_float){
-            double d = ci_read_float(&val, from.basic.kind);
-            if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind))
-                ci_write_uint(result, to_sz, (uint64_t)d);
-            else
-                ci_write_uint(result, to_sz, (uint64_t)(int64_t)d);
+            double d = ci_read_float(valp, from.basic.kind);
+            if(to_sz > 8){
+                // float to 128-bit int
+                CiUint128 v;
+                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind))
+                    v = ci_uint128_from_uint64((uint64_t)d);
+                else
+                    v = ci_uint128_from_int64((int64_t)d);
+                ci_uint128_write(result, to_sz, v);
+            }
+            else {
+                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind))
+                    ci_write_uint(result, to_sz, (uint64_t)d);
+                else
+                    ci_write_uint(result, to_sz, (uint64_t)(int64_t)d);
+            }
         }
         else if(!from_is_float && to_is_float){
             _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
             double d;
-            if(from_unsigned)
-                d = (double)ci_read_uint(&val, from_sz);
+            if(from_sz > 8){
+                CiUint128 v;
+                ci_uint128_read(&v, valp, from_sz);
+                d = (double)ci_uint128_lo(v); // best effort
+            }
+            else if(from_unsigned)
+                d = (double)ci_read_uint(valp, from_sz);
             else
-                d = (double)ci_read_int(&val, from_sz);
+                d = (double)ci_read_int(valp, from_sz);
             ci_write_float(result, to.basic.kind, d);
         }
         else {
-            _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
-            if(from_unsigned)
-                ci_write_uint(result, to_sz, ci_read_uint(&val, from_sz));
-            else
-                ci_write_uint(result, to_sz, (uint64_t)ci_read_int(&val, from_sz));
+            if(from_sz > 8 || to_sz > 8){
+                // 128-bit path
+                CiUint128 v;
+                ci_uint128_read(&v, valp, from_sz);
+                if(from_sz <= 8){
+                    _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+                    if(from_unsigned)
+                        v = ci_uint128_from_uint64(ci_read_uint(valp, from_sz));
+                    else
+                        v = ci_uint128_from_int64(ci_read_int(valp, from_sz));
+                }
+                if(to_sz <= 8){
+                    ci_write_uint(result, to_sz, ci_uint128_lo(v));
+                }
+                else {
+                    ci_uint128_write(result, to_sz, v);
+                }
+            }
+            else {
+                _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+                if(from_unsigned)
+                    ci_write_uint(result, to_sz, ci_read_uint(valp, from_sz));
+                else
+                    ci_write_uint(result, to_sz, (uint64_t)ci_read_int(valp, from_sz));
+            }
         }
         return 0;
     }
@@ -841,7 +879,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: {
         CcExpr* lhs = expr->lhs;
         CcExpr* rhs = expr->values[0];
-        uint64_t lbuf = 0, rbuf = 0;
+        CiUint128 lbuf128 = {0}, rbuf128 = {0};
         uint32_t lsz, rsz, result_sz;
         int err = cc_sizeof_as_uint(&ci->parser, lhs->type, expr->loc, &lsz);
         if(err) return err;
@@ -852,32 +890,44 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(result_sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, result_sz, size);
         if(expr->kind == CC_EXPR_LOGAND){
-            err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
+            err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
             if(err) return err;
-            if(!ci_read_uint(&lbuf, lsz)){
+            _Bool lnz;
+            if(lsz > 8){ CiUint128 v; ci_uint128_read(&v, &lbuf128, lsz); lnz = ci_uint128_nonzero(v); }
+            else lnz = ci_read_uint(&lbuf128, lsz) != 0;
+            if(!lnz){
                 ci_write_uint(result, result_sz, 0);
                 return 0;
             }
-            err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
+            err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
             if(err) return err;
-            ci_write_uint(result, result_sz, ci_read_uint(&rbuf, rsz) ? 1 : 0);
+            _Bool rnz;
+            if(rsz > 8){ CiUint128 v; ci_uint128_read(&v, &rbuf128, rsz); rnz = ci_uint128_nonzero(v); }
+            else rnz = ci_read_uint(&rbuf128, rsz) != 0;
+            ci_write_uint(result, result_sz, rnz ? 1 : 0);
             return 0;
         }
         if(expr->kind == CC_EXPR_LOGOR){
-            err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
+            err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
             if(err) return err;
-            if(ci_read_uint(&lbuf, lsz)){
+            _Bool lnz;
+            if(lsz > 8){ CiUint128 v; ci_uint128_read(&v, &lbuf128, lsz); lnz = ci_uint128_nonzero(v); }
+            else lnz = ci_read_uint(&lbuf128, lsz) != 0;
+            if(lnz){
                 ci_write_uint(result, result_sz, 1);
                 return 0;
             }
-            err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
+            err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
             if(err) return err;
-            ci_write_uint(result, result_sz, ci_read_uint(&rbuf, rsz) ? 1 : 0);
+            _Bool rnz;
+            if(rsz > 8){ CiUint128 v; ci_uint128_read(&v, &rbuf128, rsz); rnz = ci_uint128_nonzero(v); }
+            else rnz = ci_read_uint(&rbuf128, rsz) != 0;
+            ci_write_uint(result, result_sz, rnz ? 1 : 0);
             return 0;
         }
-        err = ci_interp_expr(ci, frame,lhs, &lbuf, sizeof lbuf);
+        err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
         if(err) return err;
-        err = ci_interp_expr(ci, frame,rhs, &rbuf, sizeof rbuf);
+        err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
         if(err) return err;
         _Bool lhs_ptr = ccqt_kind(lhs->type) == CC_POINTER || ccqt_kind(lhs->type) == CC_ARRAY;
         _Bool rhs_ptr = ccqt_kind(rhs->type) == CC_POINTER || ccqt_kind(rhs->type) == CC_ARRAY;
@@ -892,8 +942,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
                 if(err) return err;
                 char* ptr = NULL;
-                memcpy(&ptr, &lbuf, sizeof ptr);
-                int64_t idx = ci_read_int(&rbuf, rsz);
+                memcpy(&ptr, &lbuf128, sizeof ptr);
+                int64_t idx = ci_read_int(&rbuf128, rsz);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -908,8 +958,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
                 if(err) return err;
                 char* ptr = NULL;
-                memcpy(&ptr, &rbuf, sizeof ptr);
-                int64_t idx = ci_read_int(&lbuf, lsz);
+                memcpy(&ptr, &rbuf128, sizeof ptr);
+                int64_t idx = ci_read_int(&lbuf128, lsz);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -924,8 +974,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
                 if(err) return err;
                 char* ptr = NULL;
-                memcpy(&ptr, &lbuf, sizeof ptr);
-                int64_t idx = ci_read_int(&rbuf, rsz);
+                memcpy(&ptr, &lbuf128, sizeof ptr);
+                int64_t idx = ci_read_int(&rbuf128, rsz);
                 ptr -= idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -940,15 +990,15 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
                 if(err) return err;
                 char* lp = NULL, *rp = NULL;
-                memcpy(&lp, &lbuf, sizeof lp);
-                memcpy(&rp, &rbuf, sizeof rp);
+                memcpy(&lp, &lbuf128, sizeof lp);
+                memcpy(&rp, &rbuf128, sizeof rp);
                 int64_t diff = (lp - rp) / (int64_t)elem_sz;
                 ci_write_uint(result, result_sz, (uint64_t)diff);
                 return 0;
             }
             char* lp = NULL, *rp = NULL;
-            memcpy(&lp, &lbuf, sizeof lp);
-            memcpy(&rp, &rbuf, sizeof rp);
+            memcpy(&lp, &lbuf128, sizeof lp);
+            memcpy(&rp, &rbuf128, sizeof rp);
             _Bool cmp;
             switch(expr->kind){
                 case CC_EXPR_EQ: cmp = lp == rp; break;
@@ -965,8 +1015,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         _Bool is_float = ccqt_is_basic(lhs->type) && ccbt_is_float(lhs->type.basic.kind);
         if(is_float){
-            double ld = ci_read_float(&lbuf, lhs->type.basic.kind);
-            double rd = ci_read_float(&rbuf, rhs->type.basic.kind);
+            double ld = ci_read_float(&lbuf128, lhs->type.basic.kind);
+            double rd = ci_read_float(&rbuf128, rhs->type.basic.kind);
             double res;
             switch(expr->kind){
                 case CC_EXPR_ADD: res = ld + rd; break;
@@ -996,14 +1046,64 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return 0;
         }
         _Bool is_unsigned = ccqt_is_basic(lhs->type) && ccbt_is_unsigned(lhs->type.basic.kind);
+        if(lsz > 8 || rsz > 8 || result_sz > 8){
+            // 128-bit integer path
+            CiUint128 lu, ru;
+            if(is_unsigned){
+                ci_uint128_read(&lu, &lbuf128, lsz);
+                ci_uint128_read(&ru, &rbuf128, rsz);
+            }
+            else {
+                if(lsz <= 8)
+                    lu = ci_uint128_from_int64(ci_read_int(&lbuf128, lsz));
+                else
+                    ci_uint128_read(&lu, &lbuf128, lsz);
+                if(rsz <= 8)
+                    ru = ci_uint128_from_int64(ci_read_int(&rbuf128, rsz));
+                else
+                    ci_uint128_read(&ru, &rbuf128, rsz);
+            }
+            CiUint128 res;
+            switch(expr->kind){
+                case CC_EXPR_ADD: res = ci_uint128_add(lu, ru); break;
+                case CC_EXPR_SUB: res = ci_uint128_sub(lu, ru); break;
+                case CC_EXPR_MUL: res = ci_uint128_mul(lu, ru); break;
+                case CC_EXPR_DIV:
+                    if(is_unsigned)
+                        res = ci_uint128_div(lu, ru);
+                    else
+                        res = ci_uint128_div(lu, ru); // TODO: signed 128-bit division
+                    break;
+                case CC_EXPR_MOD:
+                    if(is_unsigned)
+                        res = ci_uint128_mod(lu, ru);
+                    else
+                        res = ci_uint128_mod(lu, ru); // TODO: signed 128-bit modulo
+                    break;
+                case CC_EXPR_BITAND: res = ci_uint128_and(lu, ru); break;
+                case CC_EXPR_BITOR:  res = ci_uint128_or(lu, ru); break;
+                case CC_EXPR_BITXOR: res = ci_uint128_xor(lu, ru); break;
+                case CC_EXPR_LSHIFT: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
+                case CC_EXPR_RSHIFT: res = ci_uint128_shr(lu, ci_uint128_lo(ru)); break;
+                case CC_EXPR_EQ: ci_write_uint(result, result_sz, ci_uint128_eq(lu, ru)); return 0;
+                case CC_EXPR_NE: ci_write_uint(result, result_sz, ci_uint128_ne(lu, ru)); return 0;
+                case CC_EXPR_LT: ci_write_uint(result, result_sz, ci_uint128_lt(lu, ru)); return 0;
+                case CC_EXPR_GT: ci_write_uint(result, result_sz, ci_uint128_gt(lu, ru)); return 0;
+                case CC_EXPR_LE: ci_write_uint(result, result_sz, ci_uint128_le(lu, ru)); return 0;
+                case CC_EXPR_GE: ci_write_uint(result, result_sz, ci_uint128_ge(lu, ru)); return 0;
+                default: res = ci_uint128_from_uint64(0); break;
+            }
+            ci_uint128_write(result, result_sz, res);
+            return 0;
+        }
         uint64_t lu, ru;
         if(is_unsigned){
-            lu = ci_read_uint(&lbuf, lsz);
-            ru = ci_read_uint(&rbuf, rsz);
+            lu = ci_read_uint(&lbuf128, lsz);
+            ru = ci_read_uint(&rbuf128, rsz);
         }
         else {
-            lu = (uint64_t)ci_read_int(&lbuf, lsz);
-            ru = (uint64_t)ci_read_int(&rbuf, rsz);
+            lu = (uint64_t)ci_read_int(&lbuf128, lsz);
+            ru = (uint64_t)ci_read_int(&rbuf128, rsz);
         }
         uint64_t res;
         switch(expr->kind){
@@ -1637,6 +1737,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 return 0;
             case CC_BUILTIN_ABORT:
                 return ci_error(ci, expr->loc, "__builtin_abort called");
+            case CC_BUILTIN_BACKTRACE:
+                return ci_backtrace(ci, frame, 0);
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
     }
@@ -1926,6 +2028,7 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
+        .parent = caller,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = result,
@@ -2724,6 +2827,18 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     };
     err = cpp_push_tok(cpp, outtoks, result);
     return err;
+}
+
+static
+int
+ci_backtrace(CiInterpreter* ci, CiInterpFrame* f, int level){
+    if(!f) return 1;
+    if(!f->stmts) return 1;
+    if(f->pc >= f->stmt_count) return 1;
+    CcStatement* stmt = &f->stmts[f->pc];
+    ci_error(ci, stmt->loc, "%d", level);
+    if(!f->parent) return 0;
+    return ci_backtrace(ci, f->parent, level+1);
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

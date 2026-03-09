@@ -203,7 +203,17 @@ native_call_cache_create(Allocator a, CcFunction* func_type, uint32_t nvarargs, 
 static
 void
 native_call(NativeCallCache* c, void (*fn)(void), void*_Nonnull*_Nonnull args, void* rvalue){
-    ffi_call(&c->cif, fn, rvalue, args);
+    // libffi writes at least sizeof(ffi_arg) bytes for the return value,
+    // even for smaller types (int, short, etc.). Use a temp buffer to
+    // prevent overwriting past the caller's rvalue buffer.
+    if(c->cif.rtype->size < sizeof(ffi_arg)){
+        ffi_arg tmp = 0;
+        ffi_call(&c->cif, fn, &tmp, args);
+        memcpy(rvalue, &tmp, c->cif.rtype->size);
+    }
+    else {
+        ffi_call(&c->cif, fn, rvalue, args);
+    }
 }
 
 static

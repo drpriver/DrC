@@ -116,6 +116,7 @@ enum CcBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BUILTIN_TRAP,
     CC_BUILTIN_DEBUGTRAP,
     CC_BUILTIN_ABORT,
+    CC_BUILTIN_BACKTRACE,
 };
 TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
 

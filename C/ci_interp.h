@@ -27,6 +27,7 @@ struct CiAllocaBlock {
 
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
+    CiInterpFrame*_Null_unspecified parent;
     size_t pc;
     size_t stmt_count;
     CcStatement*_Null_unspecified stmts;
@@ -70,6 +71,7 @@ static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_u
 // Parse bodies of all reachable functions and resolve extern symbols.
 // Call after cc_parse_all and before execution.
 static int ci_resolve_refs(CiInterpreter*);
+static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 
 
 #ifdef __clang__
