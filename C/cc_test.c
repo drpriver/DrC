@@ -3067,6 +3067,33 @@ TestFunction(test_parse_errors){
                "int* p = &s.a;\n"),
             SV("(test):3:10: error: cannot take address of bitfield\n"),
         },
+
+        //
+        {
+            "self sizeof auto var", __LINE__,
+            SV("auto x = sizeof x;\n"),
+            SV("(test):1:10: error: cannot take sizeof incomplete type\n"),
+        },
+        {
+            "self sizeof const var", __LINE__,
+            SV("const x = sizeof x;\n"),
+            SV("(test):1:11: error: cannot take sizeof incomplete type\n"),
+        },
+        {
+            "self sizeof constexpr var", __LINE__,
+            SV("constexpr x = sizeof x;\n"),
+            SV("(test):1:15: error: cannot take sizeof incomplete type\n"),
+        },
+        {
+            "self sizeof __auto_type var", __LINE__,
+            SV("__auto_type x = sizeof x;\n"),
+            SV("(test):1:17: error: cannot take sizeof incomplete type\n"),
+        },
+        {
+            "self sizeof inferred array", __LINE__,
+            SV("int x[] = {sizeof x};\n"),
+            SV("(test):1:12: error: sizeof applied to incomplete array type\n"),
+        },
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         ArenaAllocator aa = {0};

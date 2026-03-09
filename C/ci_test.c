@@ -1584,6 +1584,103 @@ TestFunction(test_interpreter){
             SV("return __builtin_clzll(1ull << 32);\n"),
             .exit_code = 31,
         },
+        {
+            "typdef func forward decl", __LINE__,
+            SV("typedef int f(void);\n"
+                "f fn;\n"
+                "int x = fn();\n"
+                "int fn(void){return 3;}\n"
+                "return x;\n"),
+            .exit_code = 3,
+        },
+        {
+            "cpy", __LINE__,
+            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+                "char *dst = d, *src = s;\n"
+                "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
+                "   dst[i] = src[i];\n"
+                "}\n"
+                "int x = 4, y = 9;\n"
+                "cpy(&x, &y, sizeof y);\n"
+                "return x;\n"),
+            .exit_code = 9,
+        },
+        {
+            "assign to fla", __LINE__,
+            SV( "typedef struct FLA {int x; int vals[];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 8;\n"
+                "fla->vals[0] = y;\n"
+                "return fla->vals[0];\n"),
+            .exit_code = 8,
+        },
+        {
+            "assign to fake fla", __LINE__,
+            SV(
+                "typedef struct FLA {int x; int vals[0];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 8;\n"
+                "fla->vals[0] = y;\n"
+                "return fla->vals[0];\n"),
+            .exit_code = 8,
+        },
+        {
+            "assign to really fake fla", __LINE__,
+            SV( "typedef struct FLA {int x; int vals[1];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 8;\n"
+                "fla->vals[1] = y;\n"
+                "return fla->vals[1];\n"),
+            .exit_code = 8,
+        },
+        {
+            "cpy fla", __LINE__,
+            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+                "char *dst = d, *src = s;\n"
+                "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
+                "   dst[i] = src[i];\n"
+                "}\n"
+                "typedef struct FLA {int x; int vals[];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 7;\n"
+                "cpy(fla->vals, &y, sizeof y);\n"
+                "return fla->vals[0];\n"),
+            .exit_code = 7,
+        },
+        {
+            "cpy fake fla", __LINE__,
+            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+                "char *dst = d, *src = s;\n"
+                "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
+                "   dst[i] = src[i];\n"
+                "}\n"
+                "typedef struct FLA {int x; int vals[0];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 7;\n"
+                "cpy(fla->vals, &y, sizeof y);\n"
+                "return fla->vals[0];\n"),
+            .exit_code = 7,
+        },
+        {
+            "cpy really fake fla", __LINE__,
+            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+                "char *dst = d, *src = s;\n"
+                "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
+                "   dst[i] = src[i];\n"
+                "}\n"
+                "typedef struct FLA {int x; int vals[1];} FLA;\n"
+                "char buff[32];\n"
+                "FLA* fla = (FLA*)buff;\n"
+                "int y = 7;\n"
+                "cpy(fla->vals+1, &y, sizeof y);\n"
+                "return fla->vals[1];\n"),
+            .exit_code = 7,
+        },
     };
     int err;
     static int idx = 0;

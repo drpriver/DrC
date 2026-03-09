@@ -2249,6 +2249,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 CcExpr* operand;
                 err = cc_parse_prefix(p, &operand);
                 if(err) return err;
+                if(!operand->type.ptr)
+                    return cc_error(p, tok.loc, "cannot take sizeof incomplete type");
                 CcExpr* sz;
                 err = cc_sizeof_as_expr(p, operand->type, tok.loc, &sz);
                 if(err) return err;
@@ -7468,7 +7470,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         // the variable into scope before parsing the initializer so that
         // self-referential expressions like sizeof(*var) work.
         CcVariable* _Null_unspecified var = NULL;
-        if(name && !declbase->spec.sp_typedef && !is_fndef){
+        _Bool is_func_decl = is_fndef || (type.ptr && ccqt_kind(type) == CC_FUNCTION);
+        if(name && !declbase->spec.sp_typedef && !is_func_decl){
             if(declbase->spec.sp_inline)
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
             if(declbase->spec.sp_noreturn)
@@ -7563,7 +7566,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type);
             if(err) return err;
         }
-        else if(is_fndef){
+        else if(is_func_decl){
             CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
             if(func){
                 err = cc_check_func_compat(p, func, declbase, type, tok.loc);
@@ -7879,6 +7882,36 @@ cc_define_builtin_types(CcParser* p){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
             if(!a) return CC_OOM_ERROR;
             err = AM_put(&p->builtins, al, a, (void*)builtins[i].id);
+            if(err) return CC_OOM_ERROR;
+        }
+    }
+    // Register __builtin_ libc functions as synthetic CcFuncs.
+    {
+        CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
+        if(!void_ptr) return CC_OOM_ERROR;
+        CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
+        CcQualType const_void = ccqt_basic(CCBT_void);
+        const_void.is_const = 1;
+        CcPointer* const_void_ptr = cc_intern_pointer(&p->type_cache, al, const_void, 0);
+        if(!const_void_ptr) return CC_OOM_ERROR;
+        CcQualType const_void_ptr_type = {.bits = (uintptr_t)const_void_ptr};
+        CcQualType size_type = ccqt_basic(t.size_type);
+
+        // void *__builtin_memcpy(void *dest, const void *src, size_t n)
+        {
+            CcQualType params[] = {void_ptr_type, const_void_ptr_type, size_type};
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, void_ptr_type, params, 3, 0, 0);
+            if(!ftype) return CC_OOM_ERROR;
+            CcFunc* func = Allocator_zalloc(al, sizeof *func);
+            if(!func) return CC_OOM_ERROR;
+            Atom key = AT_ATOMIZE(p->cpp.at, "__builtin_memcpy");
+            if(!key) return CC_OOM_ERROR;
+            Atom name = AT_ATOMIZE(p->cpp.at, "memcpy");
+            if(!name) return CC_OOM_ERROR;
+            func->name = name;
+            func->type = ftype;
+            func->extern_ = 1;
+            err = cc_scope_insert_func(al, &p->global, key, func);
             if(err) return CC_OOM_ERROR;
         }
     }

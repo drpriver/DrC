@@ -167,8 +167,14 @@ static
 int
 ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
     uint32_t _type_sz;
-    int _serr = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &_type_sz);
-    if(_serr) return _serr;
+    // Incomplete arrays (FLA, zero-length arrays) have unknown size.
+    if(ccqt_kind(expr->type) == CC_ARRAY && ccqt_as_array(expr->type)->is_incomplete){
+        _type_sz = 0;
+    }
+    else {
+        int _serr = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &_type_sz);
+        if(_serr) return _serr;
+    }
     *size = _type_sz;
     switch(expr->kind){
         case CC_EXPR_VARIABLE: {
@@ -230,7 +236,12 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
                 size_t base_size;
                 err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);
                 if(err) return err;
-                if(idx * elem_sz + elem_sz > base_size)
+                // Skip bounds check when size is unknown (incomplete/zero-length
+                // arrays) or when base is a struct member (FLA patterns).
+                _Bool skip_check = !base_size
+                    || base_expr->kind == CC_EXPR_ARROW
+                    || base_expr->kind == CC_EXPR_DOT;
+                if(!skip_check && idx * elem_sz + elem_sz > base_size)
                     return ci_error(ci, expr->loc, "array subscript out of bounds");
                 *out = (char*)base + idx * elem_sz;
             }
