@@ -740,7 +740,9 @@ TestFunction(test_cc_lex_multi_token){
 }
 
 int main(int argc, char** argv){
+    #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
+    #endif
     RegisterTest(test_cc_lex_integers);
     RegisterTest(test_cc_lex_floats);
     RegisterTest(test_cc_lex_chars);
@@ -749,7 +751,9 @@ int main(int argc, char** argv){
     RegisterTest(test_cc_lex_keywords);
     RegisterTest(test_cc_lex_multi_token);
     int err = test_main(argc, argv, NULL);
+    #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();
+    #endif
     return err;
 }
 

@@ -82,6 +82,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_POPCOUNT,
     CC_EXPR_CLZ,
     CC_EXPR_CTZ,
+    CC_EXPR_ALLOCA,
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);

@@ -18,6 +18,13 @@
 #pragma clang assume_nonnull begin
 #endif
 
+typedef struct CiAllocaBlock CiAllocaBlock;
+struct CiAllocaBlock {
+    CiAllocaBlock*_Null_unspecified next;
+    size_t size;
+    // data follows
+};
+
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
     size_t pc;
@@ -27,6 +34,7 @@ struct CiInterpFrame {
     size_t return_size;
     size_t data_length; // after this is the data, but we can't use a FLA and also embed in CcInterpreter
     void*_Null_unspecified varargs_buf; // points into trailing data, past frame_size
+    CiAllocaBlock*_Null_unspecified alloca_list;
 };
 
 typedef struct CiInterpreter CiInterpreter;

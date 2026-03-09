@@ -1831,6 +1831,49 @@ TestFunction(test_interpreter){
                 "return fla->vals[1];\n"),
             .exit_code = 7,
         },
+        {
+            "negative subscript bitfield", __LINE__,
+            SV("typedef struct {\n"
+                "  unsigned type: 4;\n"
+                "  unsigned pad: 28;\n"
+                "} Tok;\n"
+                "Tok arr[3];\n"
+                "arr[0].type = 1;\n"
+                "arr[1].type = 2;\n"
+                "arr[2].type = 3;\n"
+                "Tok* end = arr + 3;\n"
+                "return end[-1].type;\n"),
+            .exit_code = 3,
+        },
+        {
+            "negative subscript no bitfield", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+                "int* end = arr + 3;\n"
+                "return end[-1];\n"),
+            .exit_code = 30,
+        },
+        {
+            "alloca basic", __LINE__,
+            SV("void* __builtin_alloca(__SIZE_TYPE__);\n"
+                "void* p = __builtin_alloca(16);\n"
+                "int* ip = (int*)p;\n"
+                "ip[0] = 42;\n"
+                "ip[1] = 58;\n"
+                "return ip[0] + ip[1];\n"),
+            .exit_code = 100,
+        },
+        {
+            "alloca in loop", __LINE__,
+            SV("void* __builtin_alloca(__SIZE_TYPE__);\n"
+                "int sum = 0;\n"
+                "for(int i = 0; i < 5; i++){\n"
+                "  int* p = (int*)__builtin_alloca(sizeof(int));\n"
+                "  *p = i;\n"
+                "  sum += *p;\n"
+                "}\n"
+                "return sum;\n"),
+            .exit_code = 10,
+        },
     };
     int err;
     static int idx = 0;

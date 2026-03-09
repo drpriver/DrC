@@ -69,6 +69,16 @@ struct CiAapcs64VaList {
 };
 static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
+
+static
+void
+ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
+    while(list){
+        CiAllocaBlock* next = list->next;
+        Allocator_free(al, list, sizeof(CiAllocaBlock) + list->size);
+        list = next;
+    }
+}
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
@@ -226,13 +236,17 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             uint32_t elem_sz;
             int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &elem_sz);
             if(err) return err;
-            uint64_t idx = 0;
+            int64_t idx = 0;
             uint32_t idx_sz;
             err = cc_sizeof_as_uint(&ci->parser, idx_expr->type, expr->loc, &idx_sz);
             if(err) return err;
             err = ci_interp_expr(ci, frame,idx_expr, &idx, sizeof idx);
             if(err) return err;
-            idx = ci_read_uint(&idx, idx_sz);
+            _Bool idx_unsigned = ccqt_is_basic(idx_expr->type) && ccbt_is_unsigned(idx_expr->type.basic.kind);
+            if(idx_unsigned)
+                idx = (int64_t)ci_read_uint(&idx, idx_sz);
+            else
+                idx = ci_read_int(&idx, idx_sz);
             if(ccqt_kind(base_type) == CC_ARRAY){
                 // Array: get lvalue of base, index into it
                 void* base;
@@ -244,7 +258,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
                 _Bool skip_check = !base_size
                     || base_expr->kind == CC_EXPR_ARROW
                     || base_expr->kind == CC_EXPR_DOT;
-                if(!skip_check && idx * elem_sz + elem_sz > base_size)
+                if(!skip_check && (idx < 0 || (uint64_t)idx * elem_sz + elem_sz > base_size))
                     return ci_error(ci, expr->loc, "array subscript out of bounds");
                 *out = (char*)base + idx * elem_sz;
             }
@@ -371,6 +385,7 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
         int err = ci_interp_step(ci, frame);
         if(err) break;
     }
+    ci_free_alloca_list(ci_allocator(ci), frame->alloca_list);
     Allocator_free(ci_allocator(ci), frame, alloc_size);
 }
 
@@ -609,18 +624,41 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     }
     case CC_EXPR_DOT: {
         if(result == ci_discard_buf) return 0;
-        void* base;
-        size_t base_size;
-        int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
-        if(err) return err;
         uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+        if(err) return err;
+        if(sz > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
+        CcExpr* base_expr = expr->values[0];
+        // Check if base is an rvalue (e.g. function call): evaluate into
+        // a temp buffer and read the field from there.
+        if(base_expr->kind == CC_EXPR_CALL){
+            uint32_t base_sz;
+            err = cc_sizeof_as_uint(&ci->parser, base_expr->type, expr->loc, &base_sz);
+            if(err) return err;
+            char* temp = Allocator_alloc(ci_allocator(ci), base_sz);
+            if(!temp) return CI_OOM_ERROR;
+            err = ci_interp_expr(ci, frame, base_expr, temp, base_sz);
+            if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
+            if(expr->field_loc.bit_width){
+                uint64_t val = ci_bitfield_read(temp + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+                memset(result, 0, size);
+                memcpy(result, &val, sz < size ? sz : size);
+            }
+            else {
+                memcpy(result, temp + off, sz);
+            }
+            Allocator_free(ci_allocator(ci), temp, base_sz);
+            return 0;
+        }
+        // Lvalue path: base has an address we can read from.
+        void* base;
+        size_t base_size;
+        err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);
         if(err) return err;
         if(off + sz > base_size)
             return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
         if(expr->field_loc.bit_width){
             uint64_t val = ci_bitfield_read((char*)base + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
             memset(result, 0, size);
@@ -1128,10 +1166,12 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 while(callee_frame->pc < callee_frame->stmt_count){
                     err = ci_interp_step(ci, callee_frame);
                     if(err){
+                        ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
                         Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
                         return err;
                     }
                 }
+                ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
                 Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
                 return 0;
             }
@@ -1545,6 +1585,23 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
     }
+    case CC_EXPR_ALLOCA: {
+        uint64_t sz = 0;
+        int err = ci_interp_expr(ci, frame, expr->values[0], &sz, sizeof sz);
+        if(err) return err;
+        sz = ci_read_uint(&sz, sizeof(size_t));
+        CiAllocaBlock* block = Allocator_alloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
+        if(!block) return CI_OOM_ERROR;
+        memset(block + 1, 0, sz);
+        block->size = sz;
+        block->next = frame->alloca_list;
+        frame->alloca_list = block;
+        void* ptr = block + 1;
+        if(sizeof(void*) > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
+        memcpy(result, &ptr, sizeof(void*));
+        return 0;
+    }
     case CC_EXPR_ADD_OVERFLOW:
     case CC_EXPR_SUB_OVERFLOW:
     case CC_EXPR_MUL_OVERFLOW: {
@@ -1901,6 +1958,7 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
         err = ci_interp_step(ci, frame);
         if(err) break;
     }
+    ci_free_alloca_list(ci_allocator(ci), frame->alloca_list);
     Allocator_free(ci_allocator(ci), frame, alloc_size);
     return err;
 }

@@ -619,10 +619,10 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
     // Pointer <-> pointer.
     if(from_ptr && to_ptr)
         return 0;
-    // Pointer <-> integer (includes bool).
-    if(from_ptr && to_arith && ccbt_is_integer(to.basic.kind))
+    // Pointer <-> integer (includes bool and enum).
+    if(from_ptr && to_arith && (to_kind == CC_ENUM || ccbt_is_integer(to.basic.kind)))
         return 0;
-    if(from_arith && ccbt_is_integer(from.basic.kind) && to_ptr)
+    if(from_arith && (from_kind == CC_ENUM || ccbt_is_integer(from.basic.kind)) && to_ptr)
         return 0;
     // Pointer <-> float is not allowed.
     return cc_error(p, loc, "invalid cast");
@@ -2127,6 +2127,22 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_alloca: {
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* sz;
+                    err = cc_parse_assignment_expr(p, &sz);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcPointer* vp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_void), 0);
+                    if(!vp) return CC_OOM_ERROR;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, (CcQualType){.bits=(uintptr_t)vp}, 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->values[0] = sz;
+                    *out = node;
+                    return 0;
+                }
                 case CC__builtin_nanf:
                 case CC__builtin_nan:
                 case CC__nan:{
@@ -3126,6 +3142,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_POPCOUNT:
         case CC_EXPR_CTZ:
         case CC_EXPR_CLZ:
+        case CC_EXPR_ALLOCA:
             msb_write_literal(sb, "<unimpl>");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
@@ -7877,6 +7894,9 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_nan"), CC__builtin_nan},
             {SV("__builtin_nanf"), CC__builtin_nanf},
             {SV("__nan"), CC__nan},
+            {SV("__builtin_alloca"), CC__builtin_alloca},
+            {SV("_alloca"), CC__builtin_alloca},
+            {SV("alloca"), CC__builtin_alloca},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
