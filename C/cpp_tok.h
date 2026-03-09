@@ -29,18 +29,18 @@ enum CppTokenType TYPED_ENUM(uint64_t) {
 };
 TYPEDEF_ENUM(CppTokenType, uint64_t);
 static const StringView CppTokenTypeSV[] = {
-    [CPP_EOF        ] = SV("EOF"),
-    [CPP_HEADER_NAME] = SV("HEADER_NAME"),
-    [CPP_IDENTIFIER ] = SV("IDENTIFIER"),
-    [CPP_NUMBER     ] = SV("NUMBER"),
-    [CPP_CHAR       ] = SV("CHAR"),
-    [CPP_STRING     ] = SV("STRING"),
-    [CPP_PUNCTUATOR ] = SV("PUNCTUATOR"),
-    [CPP_WHITESPACE ] = SV("WHITESPACE"),
-    [CPP_NEWLINE    ] = SV("NEWLINE"),
-    [CPP_OTHER      ] = SV("OTHER"),
-    [CPP_PLACEMARKER] = SV("PLACEMARKER"),
-    [CPP_REENABLE   ] = SV("REENABLE"),
+    [CPP_EOF        ] = SVI("EOF"),
+    [CPP_HEADER_NAME] = SVI("HEADER_NAME"),
+    [CPP_IDENTIFIER ] = SVI("IDENTIFIER"),
+    [CPP_NUMBER     ] = SVI("NUMBER"),
+    [CPP_CHAR       ] = SVI("CHAR"),
+    [CPP_STRING     ] = SVI("STRING"),
+    [CPP_PUNCTUATOR ] = SVI("PUNCTUATOR"),
+    [CPP_WHITESPACE ] = SVI("WHITESPACE"),
+    [CPP_NEWLINE    ] = SVI("NEWLINE"),
+    [CPP_OTHER      ] = SVI("OTHER"),
+    [CPP_PLACEMARKER] = SVI("PLACEMARKER"),
+    [CPP_REENABLE   ] = SVI("REENABLE"),
 };
 
 

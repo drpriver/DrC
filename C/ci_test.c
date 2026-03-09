@@ -218,6 +218,12 @@ TestFunction(test_interpreter){
             SV("return 0 ? 10 : 20;\n"),
             .exit_code = 20,
         },
+        {
+            "ternary: compound literal", __LINE__,
+            SV("typedef struct Foo { int x; } Foo;\n"
+               "return (1 ? (Foo){1} : (Foo){2}).x;\n"),
+            .exit_code = 1,
+        },
         // Comma
         {
             "comma", __LINE__,
@@ -1371,6 +1377,139 @@ TestFunction(test_interpreter){
                "return x;\n"
                ),
             .exit_code = 4+5+6+8+9+8+9,
+        },
+        // _Generic
+        {
+            "_Generic: basic int", __LINE__,
+            SV("int x = 1;\n"
+               "return _Generic(x, int: 10, float: 20, default: 30);\n"),
+            .exit_code = 10,
+        },
+        {
+            "_Generic: basic float", __LINE__,
+            SV("float x = 1.0f;\n"
+               "return _Generic(x, int: 10, float: 20, default: 30);\n"),
+            .exit_code = 20,
+        },
+        {
+            "_Generic: default", __LINE__,
+            SV("double x = 1.0;\n"
+               "return _Generic(x, int: 10, float: 20, default: 30);\n"),
+            .exit_code = 30,
+        },
+        {
+            "_Generic: lvalue conversion strips const", __LINE__,
+            SV("const int x = 1;\n"
+               "return _Generic(x, int: 10, default: 20);\n"),
+            .exit_code = 10,
+        },
+        {
+            "_Generic: pointer type", __LINE__,
+            SV("int* p = 0;\n"
+               "return _Generic(p, int*: 10, float*: 20, default: 30);\n"),
+            .exit_code = 10,
+        },
+        {
+            "_Generic: expression result used", __LINE__,
+            SV("int x = 5;\n"
+               "int y = _Generic(x, int: x * 3, default: 0);\n"
+               "return y;\n"),
+            .exit_code = 15,
+        },
+        {
+            "_Generic: default comes first", __LINE__,
+            SV("int x = 1;\n"
+               "return _Generic(x, default: 0, int: 42);\n"),
+            .exit_code = 42,
+        },
+        {
+            "_Generic: type-name operand (C23)", __LINE__,
+            SV("return _Generic(int, int: 10, float: 20, default: 30);\n"),
+            .exit_code = 10,
+        },
+        {
+            "_Generic: type-name preserves const", __LINE__,
+            SV("return _Generic(const int, int: 10, const int: 20, default: 30);\n"),
+            .exit_code = 20,
+        },
+        {
+            "_Generic: nested in expression", __LINE__,
+            SV("int x = 1;\n"
+               "return _Generic(x, int: 3, default: 0) + _Generic(x, int: 7, default: 0);\n"),
+            .exit_code = 10,
+        },
+        // __builtin_add_overflow
+        {
+            "add_overflow: no overflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_add_overflow(3, 4, &r);\n"
+               "return ov * 100 + r;\n"),
+            .exit_code = 7,
+        },
+        {
+            "add_overflow: signed overflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_add_overflow(2147483647, 1, &r);\n"
+               "return ov;\n"),
+            .exit_code = 1,
+        },
+        {
+            "add_overflow: unsigned no overflow", __LINE__,
+            SV("unsigned r;\n"
+               "int ov = __builtin_add_overflow(3u, 4u, &r);\n"
+               "return ov * 100 + r;\n"),
+            .exit_code = 7,
+        },
+        {
+            "add_overflow: unsigned overflow", __LINE__,
+            SV("unsigned char r;\n"
+               "int ov = __builtin_add_overflow(200, 200, &r);\n"
+               "return ov;\n"),
+            .exit_code = 1,
+        },
+        // __builtin_sub_overflow
+        {
+            "sub_overflow: no overflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_sub_overflow(10, 3, &r);\n"
+               "return ov * 100 + r;\n"),
+            .exit_code = 7,
+        },
+        {
+            "sub_overflow: signed underflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_sub_overflow(-2147483647 - 1, 1, &r);\n"
+               "return ov;\n"),
+            .exit_code = 1,
+        },
+        // __builtin_mul_overflow
+        {
+            "mul_overflow: no overflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_mul_overflow(6, 7, &r);\n"
+               "return ov * 100 + r;\n"),
+            .exit_code = 42,
+        },
+        {
+            "mul_overflow: overflow", __LINE__,
+            SV("int r;\n"
+               "int ov = __builtin_mul_overflow(2147483647, 2, &r);\n"
+               "return ov;\n"),
+            .exit_code = 1,
+        },
+        {
+            "add_overflow: negative into unsigned", __LINE__,
+            SV("unsigned r;\n"
+               "int ov = __builtin_add_overflow(-1, 0, &r);\n"
+               "return ov;\n"),
+            .exit_code = 1,
+        },
+        {
+            "add_overflow: mixed types no overflow", __LINE__,
+            SV("long r;\n"
+               "int ov = __builtin_add_overflow((short)100, 200u, &r);\n"
+               "return ov * 1000 + (int)r;\n"),
+            .exit_code = 300,
         },
     };
     int err;

@@ -87,6 +87,14 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_va_end,
     CC__builtin_va_arg,
     CC__builtin_va_copy,
+    CC__builtin_expect,
+    CC__builtin_unreachable,
+    CC__builtin_trap,
+    CC__builtin_debugtrap,
+    CC__builtin_abort,
+    CC__builtin_mul_overflow,
+    CC__builtin_add_overflow,
+    CC__builtin_sub_overflow,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

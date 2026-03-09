@@ -75,6 +75,10 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_STATEMENT_EXPRESSION, // gnu statement expression
     CC_EXPR_ATOMIC, // atomic builtin operation, op in extra field
     CC_EXPR_VA, // va_start, va_end, va_arg, va_copy; op in extra field
+    CC_EXPR_BUILTIN, // __builtin_unreachable, etc.; op in extra field
+    CC_EXPR_ADD_OVERFLOW,
+    CC_EXPR_MUL_OVERFLOW,
+    CC_EXPR_SUB_OVERFLOW,
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
@@ -98,6 +102,14 @@ enum CcVaOp TYPED_ENUM(uint32_t) {
     CC_VA_COPY,
 };
 TYPEDEF_ENUM(CcVaOp, uint32_t);
+
+enum CcBuiltinOp TYPED_ENUM(uint32_t) {
+    CC_BUILTIN_UNREACHABLE,
+    CC_BUILTIN_TRAP,
+    CC_BUILTIN_DEBUGTRAP,
+    CC_BUILTIN_ABORT,
+};
+TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
 
 typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;
@@ -127,31 +139,43 @@ struct CcInitList {
 
 struct CcExpr {
     union {
-        uint32_t bits;
+        uint32_t bits[2];
         struct {
-            CcExprKind kind: 6;
-            uint32_t extra: 26;
+            CcExprKind kind: 8;
+            uint32_t _extra: 24;
             uint32_t _pad;
         };
         struct {
-            CcExprKind kind: 6;
-            uint32_t _pad: 26; // number of args
+            CcExprKind kind: 8;
+            CcVaOp op: 8;
+            uint32_t _bitpadding: 16;
+            uint32_t _pad;
+        } va;
+        struct {
+            CcExprKind kind: 8;
+            uint32_t _pad: 24;
             uint32_t nargs;
         } call;
         struct {
-            CcExprKind kind: 6;
-            uint32_t _pad: 26;
+            CcExprKind kind: 8;
+            uint32_t _pad: 24;
             uint32_t length; //
         } str;
         struct {
-            CcExprKind kind: 6;
-            uint32_t _pad: 2;
+            CcExprKind kind: 8;
             CcAtomicOp op: 8;
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4; // compare_exchange only
             uint32_t weak: 1;          // weak flag (compare_exchange only)
-            uint32_t _pad2: 7;
+            uint32_t _bitpadding: 7;
+            uint32_t _pad;
         } atomic;
+        struct {
+            CcExprKind kind: 8;
+            CcBuiltinOp op: 8;
+            uint32_t _padding:16;
+            uint32_t _pad;
+        } builtin;
     };
     SrcLoc loc;
     CcQualType type;

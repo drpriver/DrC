@@ -26,6 +26,7 @@
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
 #include "native_call.h"
+#include "ci_softnum.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -33,6 +34,7 @@
 enum {
     CI_NO_ERROR = _cc_no_error,
     CI_OOM_ERROR = _cc_oom_error,
+    CI_UNREACHABLE_ERROR = _cc_unreachable_error,
     CI_UNIMPLEMENTED_ERROR = _cc_unimplemented_error,
     CI_RUNTIME_ERROR = _cc_runtime_error,
     CI_INVALID_VALUE_ERROR = _cc_invalid_value_error,
@@ -117,6 +119,7 @@ void
 ci_write_uint(void* buf, uint32_t sz, uint64_t val){
     memcpy(buf, &val, sz);
 }
+
 
 static inline
 double
@@ -245,6 +248,16 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
             if(err) return err;
             return ci_interp_lvalue(ci, frame, expr->values[0], out, size);
+        }
+        case CC_EXPR_TERNARY: {
+            uint64_t cond = 0;
+            uint32_t cond_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
+            if(err) return err;
+            err = ci_interp_expr(ci, frame, expr->lhs, &cond, sizeof cond);
+            if(err) return err;
+            cond = ci_read_uint(&cond, cond_sz);
+            return ci_interp_lvalue(ci, frame, cond ? expr->values[0] : expr->values[1], out, size);
         }
         case CC_EXPR_VALUE:
             if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
@@ -1314,7 +1327,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return 0;
     }
     case CC_EXPR_VA: {
-        CcVaOp op = (CcVaOp)expr->extra;
+        CcVaOp op = expr->va.op;
         switch(op){
         case CC_VA_START: {
             void* ap_addr;
@@ -1493,9 +1506,98 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported va operation");
     }
-    default:
+    case CC_EXPR_BUILTIN: {
+        CcBuiltinOp op = expr->builtin.op;
+        switch(op){
+            case CC_BUILTIN_UNREACHABLE:
+                return ci_error(ci, expr->loc, "__builtin_unreachable reached");
+            case CC_BUILTIN_TRAP:
+                return ci_error(ci, expr->loc, "__builtin_trap");
+            case CC_BUILTIN_DEBUGTRAP:
+                return 0;
+            case CC_BUILTIN_ABORT:
+                return ci_error(ci, expr->loc, "__builtin_abort called");
+        }
+        return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
+    }
+    case CC_EXPR_ADD_OVERFLOW:
+    case CC_EXPR_SUB_OVERFLOW:
+    case CC_EXPR_MUL_OVERFLOW: {
+        // Read a
+        uint64_t abuf = 0;
+        uint32_t asz;
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &asz);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->lhs, &abuf, sizeof abuf);
+        if(err) return err;
+        _Bool a_unsigned = ccqt_is_basic(expr->lhs->type) && ccbt_is_unsigned(expr->lhs->type.basic.kind);
+        CiInt128 a = a_unsigned ? ci_int128_from_uint64(ci_read_uint(&abuf, asz))
+                              : ci_int128_from_int64(ci_read_int(&abuf, asz));
+        // Read b
+        uint64_t bbuf = 0;
+        uint32_t bsz;
+        err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &bsz);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->values[0], &bbuf, sizeof bbuf);
+        if(err) return err;
+        _Bool b_unsigned = ccqt_is_basic(expr->values[0]->type) && ccbt_is_unsigned(expr->values[0]->type.basic.kind);
+        CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz))
+                              : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
+        // Compute in infinite precision
+        CiInt128 r;
+        switch(expr->kind){
+            case CC_EXPR_ADD_OVERFLOW: r = ci_int128_add(a, b); break;
+            case CC_EXPR_SUB_OVERFLOW: r = ci_int128_sub(a, b); break;
+            case CC_EXPR_MUL_OVERFLOW: r = ci_int128_mul(a, b); break;
+            default: return CI_UNREACHABLE_ERROR;
+        }
+        // Get result pointer and destination type
+        void* res_ptr = NULL;
+        err = ci_interp_expr(ci, frame, expr->values[1], &res_ptr, sizeof res_ptr);
+        if(err) return err;
+        CcQualType dest_type = ccqt_as_ptr(expr->values[1]->type)->pointee;
+        uint32_t dsz;
+        err = cc_sizeof_as_uint(&ci->parser, dest_type, expr->loc, &dsz);
+        if(err) return err;
+        // Truncate and store
+        uint64_t truncated = ci_int128_lo(r);
+        ci_write_uint(res_ptr, dsz, truncated);
+        // Check for overflow: sign/zero-extend the truncated value
+        // back to CiInt128 and compare with the infinite precision result.
+        _Bool dest_unsigned = ccqt_is_basic(dest_type) && ccbt_is_unsigned(dest_type.basic.kind);
+        CiInt128 back;
+        if(dest_unsigned){
+            if(dsz >= 8)
+                back = ci_int128_from_uint64(truncated);
+            else
+                back = ci_int128_from_uint64(truncated & (((uint64_t)1 << (dsz * 8)) - 1));
+        }
+        else {
+            int64_t sval;
+            switch(dsz){
+                case 1: sval = (int8_t)truncated; break;
+                case 2: sval = (int16_t)truncated; break;
+                case 4: sval = (int32_t)truncated; break;
+                default: sval = (int64_t)truncated; break;
+            }
+            back = ci_int128_from_int64(sval);
+        }
+        _Bool overflowed = !ci_int128_eq(r, back);
+        if(result != ci_discard_buf){
+            uint32_t rsz;
+            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
+            if(err) return err;
+            if(rsz > size)
+                return ci_error(ci, expr->loc, "interpreter: result buffer too small");
+            ci_write_uint(result, rsz, overflowed);
+        }
+        return 0;
+    }
+    case CC_EXPR_SIZEOF_VMT:
+    case CC_EXPR_STATEMENT_EXPRESSION:
         return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
     }
+    return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
 }
 
 static
@@ -1593,9 +1695,13 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc = stmt->targets[1];
             return 0;
         }
-        default:
-            return ci_unimplemented(ci, stmt->loc, "unsupported statement kind");
+        case CC_STMT_CASE:
+        case CC_STMT_DEFAULT:
+        case CC_STMT_BREAK:
+        case CC_STMT_CONTINUE:
+            return CI_UNREACHABLE_ERROR;
     }
+    return ci_unimplemented(ci, stmt->loc, "unsupported statement kind");
 }
 
 // Push a new frame for an interpreted function call.

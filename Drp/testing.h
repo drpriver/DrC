@@ -40,7 +40,9 @@
 
 static void diff_print(void*_Null_unspecified up, const char* fmt, ...);
 static DbgDiffPrinter TEST_DIFF_PRINTER = {
+#ifndef __DVM_CC__
     .printer=diff_print,
+#endif
     .escape_on    = "\033[4m",
     .escape_reset = "\033[24m",
     .deleted      = "\033[94m- ",
@@ -50,15 +52,17 @@ static DbgDiffPrinter TEST_DIFF_PRINTER = {
 };
 
 #ifndef TestDebugBreak
-    #if defined(__clang__)
+    #if defined __DVM_CC__
         #define TestDebugBreak() __builtin_debugtrap()
-    #elif defined(_MSC_VER)
+    #elif defined __clang__
+        #define TestDebugBreak() __builtin_debugtrap()
+    #elif defined _MSC_VER
         #define __builtin_debugtrap() __debugbreak()
-    #elif defined(__GNUC__)
-        #if defined(__x86_64__) || defined(__i386__)
+    #elif defined __GNUC__
+        #if defined __x86_64__ || defined __i386__
             #define TestDebugBreak() asm("int $3")
         // This is untested, as it requires gcc + arm64
-        #elif defined(__aarch64__ )
+        #elif defined __aarch64__
             #define TestDebugBreak() asm("brk #0xf000")
         #else
             #define TestDebugBreak() __builtin_trap()
