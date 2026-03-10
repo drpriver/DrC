@@ -440,7 +440,7 @@ cc_target_aarch64_macos(void){
         .max_align = 16,
         .is_lp64 = 1,
         .user_label_prefix = 1,
-        .char_is_signed = 0,
+        .char_is_signed = 1,
         .atomic_lock_free_max = 16,
         .platform_macros = SV(
             "__APPLE__\0"

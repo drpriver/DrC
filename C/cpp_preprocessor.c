@@ -4063,7 +4063,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEF1("_CHAR_UNSIGNED");
     }
 
-    if(ccbt_is_unsigned(t.wchar_type))
+    if(ccbt_is_unsigned(t.wchar_type, !t.char_is_signed))
         DEF1("__WCHAR_UNSIGNED__");
 
     // __USER_LABEL_PREFIX__
@@ -4196,7 +4196,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEFUMAX("__SIZE_MAX__",    t.size_type);
         DEFSMAX("__PTRDIFF_MAX__", t.ptrdiff_type);
 
-        if(ccbt_is_unsigned(t.wchar_type)){
+        if(ccbt_is_unsigned(t.wchar_type, !t.char_is_signed)){
             DEFUMAX("__WCHAR_MAX__", t.wchar_type);
             DEFNUM("__WCHAR_MIN__", "0");
         }
@@ -4207,7 +4207,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             else
                 DEFNUM("__WCHAR_MIN__", "(-32767-1)");
         }
-        if(ccbt_is_unsigned(t.wint_type)){
+        if(ccbt_is_unsigned(t.wint_type, !t.char_is_signed)){
             DEFUMAX("__WINT_MAX__", t.wint_type);
             DEFNUM("__WINT_MIN__", "0");
         }

@@ -3798,13 +3798,13 @@ TestFunction(test_bitfield_abi){
             },
         },
         {
-            "sysv: different sizes don't share", __LINE__,
+            "sysv: different sizes pack", __LINE__,
             SV("struct S { int a : 3; short b : 5; };\n"),
             SV("S"), CC_BITFIELD_SYSV,
-            .size = 8, .alignment = 4,
+            .size = 4, .alignment = 4,
             .fields = {
                 { SV("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
-                { SV("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+                { SV("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
             },
         },
         {

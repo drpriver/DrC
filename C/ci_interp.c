@@ -84,6 +84,8 @@ static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+// Evaluate an expression as an lvalue, returning pointer to its storage.
+static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 
 static CppFuncMacroFn ci_shell;
 
@@ -242,7 +244,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             if(err) return err;
             err = ci_interp_expr(ci, frame,idx_expr, &idx, sizeof idx);
             if(err) return err;
-            _Bool idx_unsigned = ccqt_is_basic(idx_expr->type) && ccbt_is_unsigned(idx_expr->type.basic.kind);
+            _Bool idx_unsigned = ccqt_is_basic(idx_expr->type) && ccbt_is_unsigned(idx_expr->type.basic.kind, !ci_target(ci)->char_is_signed);
             if(idx_unsigned)
                 idx = (int64_t)ci_read_uint(&idx, idx_sz);
             else
@@ -394,18 +396,29 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
 static
 int
 ci_create_closure(CiInterpreter* ci, CcFunc* func){
-    CiClosureData* cd = Allocator_zalloc(ci_allocator(ci), sizeof *cd);
-    if(!cd) return CI_OOM_ERROR;
-    cd->ci = ci;
-    cd->func = func;
-    NativeClosure* nc = NULL;
-    int err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
-    if(err){
-        Allocator_free(ci_allocator(ci), cd, sizeof *cd);
-        return err;
-    }
-    func->native_func = native_closure_fn(nc);
-    func->native_closure = nc;
+    #ifdef NO_NATIVE_CALL
+        // No native code can call this, so just use the CcFunc* itself as a
+        // fake function pointer. The closure_map reverse lookup will catch it
+        // at interpreted call sites.
+        func->native_func = (void(*)(void))(uintptr_t)func;
+    #else
+        if(func->type->is_variadic)
+            return ci_error(ci, func->loc, "cannot take address of variadic interpreted function");
+        CiClosureData* cd = Allocator_zalloc(ci_allocator(ci), sizeof *cd);
+        if(!cd) return CI_OOM_ERROR;
+        cd->ci = ci;
+        cd->func = func;
+        NativeClosure* nc = NULL;
+        int err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
+        if(err){
+            Allocator_free(ci_allocator(ci), cd, sizeof *cd);
+            return err;
+        }
+        func->native_func = native_closure_fn(nc);
+        func->native_closure = nc;
+    #endif
+    int e = BPM_put(&ci->closure_map, ci_allocator(ci), func, (void*)func->native_func);
+    if(e) return e == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
     return 0;
 }
 
@@ -522,21 +535,21 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(to_sz > 8){
                 // float to 128-bit int
                 CiUint128 v;
-                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind))
+                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind, !ci_target(ci)->char_is_signed))
                     v = ci_uint128_from_uint64((uint64_t)d);
                 else
                     v = ci_uint128_from_int64((int64_t)d);
                 ci_uint128_write(result, to_sz, v);
             }
             else {
-                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind))
+                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind, !ci_target(ci)->char_is_signed))
                     ci_write_uint(result, to_sz, (uint64_t)d);
                 else
                     ci_write_uint(result, to_sz, (uint64_t)(int64_t)d);
             }
         }
         else if(!from_is_float && to_is_float){
-            _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+            _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
             double d;
             if(from_sz > 8){
                 CiUint128 v;
@@ -555,7 +568,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 CiUint128 v;
                 ci_uint128_read(&v, valp, from_sz);
                 if(from_sz <= 8){
-                    _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+                    _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
                     if(from_unsigned)
                         v = ci_uint128_from_uint64(ci_read_uint(valp, from_sz));
                     else
@@ -569,7 +582,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 }
             }
             else {
-                _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind);
+                _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
                 if(from_unsigned)
                     ci_write_uint(result, to_sz, ci_read_uint(valp, from_sz));
                 else
@@ -1042,7 +1055,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
             return 0;
         }
-        _Bool is_unsigned = ccqt_is_basic(lhs->type) && ccbt_is_unsigned(lhs->type.basic.kind);
+        _Bool is_unsigned = ccqt_is_basic(lhs->type) && ccbt_is_unsigned(lhs->type.basic.kind, !ci_target(ci)->char_is_signed);
         if(lsz > 8 || rsz > 8 || result_sz > 8){
             // 128-bit integer path
             CiUint128 lu, ru;
@@ -1293,6 +1306,26 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             else {
                 return ci_error(ci, expr->loc, "Called object is not a function pointer");
+            }
+        }
+        // Check if this is a closure wrapping an interpreted function.
+        {
+            CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
+            if(interp_func){
+                CiInterpFrame* callee_frame = NULL;
+                int err = ci_interp_call(ci, frame, interp_func, expr->values, nargs, result, size, &callee_frame);
+                if(err) return err;
+                while(callee_frame->pc < callee_frame->stmt_count){
+                    err = ci_interp_step(ci, callee_frame);
+                    if(err){
+                        ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
+                        Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+                        return err;
+                    }
+                }
+                ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
+                Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+                return 0;
             }
         }
         // Native call path: build args, look up CIF, call.
@@ -1766,7 +1799,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame, expr->lhs, &abuf, sizeof abuf);
         if(err) return err;
-        _Bool a_unsigned = ccqt_is_basic(expr->lhs->type) && ccbt_is_unsigned(expr->lhs->type.basic.kind);
+        _Bool a_unsigned = ccqt_is_basic(expr->lhs->type) && ccbt_is_unsigned(expr->lhs->type.basic.kind, !ci_target(ci)->char_is_signed);
         CiInt128 a = a_unsigned ? ci_int128_from_uint64(ci_read_uint(&abuf, asz))
                               : ci_int128_from_int64(ci_read_int(&abuf, asz));
         // Read b
@@ -1776,7 +1809,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame, expr->values[0], &bbuf, sizeof bbuf);
         if(err) return err;
-        _Bool b_unsigned = ccqt_is_basic(expr->values[0]->type) && ccbt_is_unsigned(expr->values[0]->type.basic.kind);
+        _Bool b_unsigned = ccqt_is_basic(expr->values[0]->type) && ccbt_is_unsigned(expr->values[0]->type.basic.kind, !ci_target(ci)->char_is_signed);
         CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz))
                               : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
         // Compute in infinite precision
@@ -1800,7 +1833,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         ci_write_uint(res_ptr, dsz, truncated);
         // Check for overflow: sign/zero-extend the truncated value
         // back to CiInt128 and compare with the infinite precision result.
-        _Bool dest_unsigned = ccqt_is_basic(dest_type) && ccbt_is_unsigned(dest_type.basic.kind);
+        _Bool dest_unsigned = ccqt_is_basic(dest_type) && ccbt_is_unsigned(dest_type.basic.kind, !ci_target(ci)->char_is_signed);
         CiInt128 back;
         if(dest_unsigned){
             if(dsz >= 8)
@@ -1965,7 +1998,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 uint32_t ssz;
                 err = cc_sizeof_as_uint(&ci->parser, st, stmt->loc, &ssz);
                 if(err) return err;
-                _Bool is_unsigned = ccqt_is_basic(st) && ccbt_is_unsigned(st.basic.kind);
+                _Bool is_unsigned = ccqt_is_basic(st) && ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
                 if(is_unsigned)
                     val = ci_read_uint(&val, ssz);
                 else
@@ -2190,8 +2223,6 @@ ci_resolve_refs(CiInterpreter* ci){
         }
         // Create a native closure only if the function's address is taken.
         if(!func->native_func && func->addr_taken){
-            if(func->type->is_variadic)
-                return ci_error(ci, func->loc, "cannot take address of variadic interpreted function");
             int err = ci_create_closure(ci, func);
             if(err) return err;
         }
@@ -2242,6 +2273,7 @@ ci_resolve_refs(CiInterpreter* ci){
             var->interp_initialized = 1;
         }
     }
+    #ifndef NO_NATIVE_CALL
     // Pre-populate ffi_cache for non-variadic call types.
     // Collect all CcFunction* that need a CIF: extern funcs + indirect call types.
     {
@@ -2297,6 +2329,7 @@ ci_resolve_refs(CiInterpreter* ci){
             if(err) return CI_OOM_ERROR;
         }
     }
+    #endif
     return 0;
 }
 
@@ -2354,6 +2387,7 @@ ci_register_macros(CiInterpreter* ci){
 static
 int
 ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
+    if(!ci->can_dlopen) return CI_RUNTIME_ERROR;
     #ifdef NO_NATIVE_CALL
         (void)ci; (void)lib;
         *success = 0;
@@ -2396,6 +2430,7 @@ ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
 static
 int
 ci_load_library(CiInterpreter* ci, StringView sv){
+    if(!ci->can_dlopen) return CI_RUNTIME_ERROR;
     MStringBuilder sb = {.allocator=ci_scratch_allocator(ci)};
     int err = 0;
     _Bool success = 0;
@@ -2495,6 +2530,8 @@ static
 int
 ci_pragma_lib(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     CiInterpreter* ci = ctx;
+    if(!ci->can_dlopen)
+        return cpp_error(cpp, loc, "Loading libraries is disabled");
     CppTokens* expanded = cpp_get_scratch(cpp);
     if(!expanded) return CI_OOM_ERROR;
     int err = 0;
@@ -2715,6 +2752,8 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             err = ci_load_library(ci, pkg_l[i]);
             if(err == CI_LIBRARY_NOT_FOUND_ERROR)
                 err = cpp_error(cpp, loc, "pkg-config: failed to load library '%.*s'", (int)pkg_l[i].length, pkg_l[i].text);
+            if(err == CI_RUNTIME_ERROR)
+                err = cpp_error(cpp, loc, "pkg-config: Loading libraries is disabled");
             if(err) goto finally;
         }
         for(size_t i = 0; i < npkg_F; i++){
@@ -2742,6 +2781,8 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             err = ci_load_library(ci, pkg_fw[i]);
             if(err == CI_LIBRARY_NOT_FOUND_ERROR)
                 err = cpp_error(cpp, loc, "pkg-config: failed to load framework '%.*s'", (int)pkg_fw[i].length, pkg_fw[i].text);
+            if(err == CI_RUNTIME_ERROR)
+                err = cpp_error(cpp, loc, "pkg-config: Loading libraries is disabled");
             if(err) goto finally;
         }
     }
@@ -2759,6 +2800,19 @@ ci_target(const CiInterpreter* ci){
 static
 int
 ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
+    // Try virtual libs first.
+    Atom a = AT_get_atom(ci->parser.cpp.at, sym.text, sym.length);
+    if(a){
+        AtomMapItems vlibs = AM_items(&ci->virtual_libs);
+        for(size_t i = 0; i < vlibs.count; i++){
+            AtomMap(void*)* symbols = vlibs.data[i].p;
+            void* p = AM_get(symbols, a);
+            if(p){
+                *out = p;
+                return 0;
+            }
+        }
+    }
     #ifdef NO_NATIVE_CALL
         (void)out;
         return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
@@ -2857,6 +2911,28 @@ ci_backtrace(CiInterpreter* ci, CiInterpFrame* f, int level){
     ci_error(ci, stmt->loc, "%d", level);
     if(!f->parent) return 0;
     return ci_backtrace(ci, f->parent, level+1);
+}
+static
+int
+ci_register_sym(CiInterpreter*ci, StringView libname, StringView symname, void* sym){
+    int err;
+    Atom lname = AT_atomize(ci->parser.cpp.at, libname.text, libname.length);
+    if(!lname) return CI_OOM_ERROR;
+    Atom name = AT_atomize(ci->parser.cpp.at, symname.text, symname.length);
+    if(!name) return CI_OOM_ERROR;
+    CiVirtualLib* lib = AM_get(&ci->virtual_libs, lname);
+    if(!lib){
+        lib = Allocator_zalloc(ci_allocator(ci), sizeof *lib);
+        if(!lib) return CI_OOM_ERROR;
+        err = AM_put(&ci->virtual_libs, ci_allocator(ci), lname, lib);
+        if(err){
+            Allocator_free(ci_allocator(ci), lib, sizeof *lib);
+            return CI_OOM_ERROR;
+        }
+    }
+    err = AM_put(&lib->symbols, ci_allocator(ci), name, sym);
+    if(err) return CI_OOM_ERROR;
+    return 0;
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

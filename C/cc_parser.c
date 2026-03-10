@@ -40,7 +40,7 @@ struct CcEvalResult {
     enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR } kind;
     union { int64_t i; uint64_t u; float f; double d; };
 };
-static CcEvalResult cc_eval_expr(CcExpr* e);
+static CcEvalResult cc_eval_expr(CcParser* p, CcExpr* e);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
 static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
 static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
@@ -267,8 +267,9 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     ak = ap.basic.kind;
     bk = bp.basic.kind;
     if(ak == bk){ *out = ap; return 0; }
-    _Bool a_unsigned = ccbt_is_unsigned(ak);
-    _Bool b_unsigned = ccbt_is_unsigned(bk);
+    _Bool char_is_unsigned = !cc_target(p)->char_is_signed;
+    _Bool a_unsigned = ccbt_is_unsigned(ak, char_is_unsigned);
+    _Bool b_unsigned = ccbt_is_unsigned(bk, char_is_unsigned);
     if(a_unsigned == b_unsigned){
         *out = ccbt_int_rank(ak) >= ccbt_int_rank(bk) ? ap : bp;
         return 0;
@@ -1570,7 +1571,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, CC_rparen);
                     if(err) return err;
-                    CcEvalResult ev = cc_eval_expr(arg);
+                    CcEvalResult ev = cc_eval_expr(p,arg);
                     CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
                     if(!node) return CC_OOM_ERROR;
                     node->integer = (ev.kind != CC_EVAL_ERROR) ? 1 : 0;
@@ -1626,7 +1627,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             CcExpr* idx_expr = NULL;
                             err = cc_parse_assignment_expr(p, &idx_expr);
                             if(err) return err;
-                            CcEvalResult idx_val = cc_eval_expr(idx_expr);
+                            CcEvalResult idx_val = cc_eval_expr(p,idx_expr);
                             int64_t idx;
                             switch(idx_val.kind){
                                 case CC_EVAL_INT:    idx = idx_val.i; break;
@@ -1964,7 +1965,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         CcExpr* const_expr;
                         err = cc_parse_assignment_expr(p, &const_expr);
                         if(err) return err;
-                        CcEvalResult ev = cc_eval_expr(const_expr);
+                        CcEvalResult ev = cc_eval_expr(p,const_expr);
                         if(ev.kind == CC_EVAL_ERROR)
                             return cc_error(p, const_expr->loc, "memory order must be a constant expression");
                         const_vals[i] = (unsigned)ev.i;
@@ -1992,7 +1993,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* const_expr;
                     err = cc_parse_assignment_expr(p, &const_expr);
                     if(err) return err;
-                    CcEvalResult ev = cc_eval_expr(const_expr);
+                    CcEvalResult ev = cc_eval_expr(p,const_expr);
                     if(ev.kind == CC_EVAL_ERROR)
                         return cc_error(p, const_expr->loc, "memory order must be a constant expression");
                     unsigned order = (unsigned)ev.i;
@@ -2932,7 +2933,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         CcExpr* idx_expr;
                         err = cc_parse_assignment_expr(p, &idx_expr);
                         if(err) goto call_cleanup;
-                        CcEvalResult ev = cc_eval_expr(idx_expr);
+                        CcEvalResult ev = cc_eval_expr(p,idx_expr);
                         int64_t idx_signed;
                         switch(ev.kind){
                             case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -3449,7 +3450,7 @@ cc_eval_promote(CcEvalResult* a, CcEvalResult* b){
 
 static
 CcEvalResult
-cc_eval_expr(CcExpr* e){
+cc_eval_expr(CcParser* p, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_VALUE:
             if(e->str.length && e->text)
@@ -3465,7 +3466,11 @@ cc_eval_expr(CcExpr* e){
                     case CCBT_unsigned_long_long: case CCBT_unsigned_char:
                     case CCBT_unsigned_short: case CCBT_bool:
                         return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
-                    case CCBT_char: case CCBT_signed_char:
+                    case CCBT_char:
+                        if(!cc_target(p)->char_is_signed)
+                            return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
+                        return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
+                    case CCBT_signed_char:
                     case CCBT_short: case CCBT_int:
                     case CCBT_long: case CCBT_long_long:
                         return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
@@ -3484,7 +3489,7 @@ cc_eval_expr(CcExpr* e){
 
             }
         case CC_EXPR_NEG: {
-            CcEvalResult v = cc_eval_expr(e->lhs);
+            CcEvalResult v = cc_eval_expr(p,e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
                 case CC_EVAL_INT:    v.i = -v.i; return v;
@@ -3494,9 +3499,9 @@ cc_eval_expr(CcExpr* e){
                 default: return cc_eval_error();
             }
         }
-        case CC_EXPR_POS: return cc_eval_expr(e->lhs);
+        case CC_EXPR_POS: return cc_eval_expr(p,e->lhs);
         case CC_EXPR_BITNOT: {
-            CcEvalResult v = cc_eval_expr(e->lhs);
+            CcEvalResult v = cc_eval_expr(p,e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
                 case CC_EVAL_INT:  v.i = ~v.i; return v;
@@ -3505,7 +3510,7 @@ cc_eval_expr(CcExpr* e){
             }
         }
         case CC_EXPR_LOGNOT: {
-            CcEvalResult v = cc_eval_expr(e->lhs);
+            CcEvalResult v = cc_eval_expr(p,e->lhs);
             switch(v.kind){
                 case CC_EVAL_INT:    return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.i};
                 case CC_EVAL_UINT:   return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.u};
@@ -3516,11 +3521,11 @@ cc_eval_expr(CcExpr* e){
             return cc_eval_error();
         }
         case CC_EXPR_COMMA: {
-            cc_eval_expr(e->lhs); // discard
-            return cc_eval_expr(e->values[0]);
+            cc_eval_expr(p,e->lhs); // discard
+            return cc_eval_expr(p,e->values[0]);
         }
         case CC_EXPR_TERNARY: {
-            CcEvalResult cond = cc_eval_expr(e->lhs);
+            CcEvalResult cond = cc_eval_expr(p,e->lhs);
             _Bool truthy;
             switch(cond.kind){
                 case CC_EVAL_INT:    truthy = cond.i != 0; break;
@@ -3529,7 +3534,7 @@ cc_eval_expr(CcExpr* e){
                 case CC_EVAL_DOUBLE: truthy = cond.d != 0; break;
                 case CC_EVAL_ERROR:  return cond;
             }
-            return cc_eval_expr(e->values[truthy ? 0 : 1]);
+            return cc_eval_expr(p,e->values[truthy ? 0 : 1]);
         }
         // Binary arithmetic
         case CC_EXPR_ADD: case CC_EXPR_SUB: case CC_EXPR_MUL:
@@ -3540,8 +3545,8 @@ cc_eval_expr(CcExpr* e){
         case CC_EXPR_EQ: case CC_EXPR_NE:
         case CC_EXPR_LT: case CC_EXPR_GT: case CC_EXPR_LE: case CC_EXPR_GE:
         {
-            CcEvalResult L = cc_eval_expr(e->lhs);
-            CcEvalResult R = cc_eval_expr(e->values[0]);
+            CcEvalResult L = cc_eval_expr(p,e->lhs);
+            CcEvalResult R = cc_eval_expr(p,e->values[0]);
             if(L.kind == CC_EVAL_ERROR || R.kind == CC_EVAL_ERROR)
                 return cc_eval_error();
             cc_eval_promote(&L, &R);
@@ -3614,7 +3619,7 @@ cc_eval_expr(CcExpr* e){
             #undef ICMPOP
         }
         case CC_EXPR_CAST: {
-            CcEvalResult v = cc_eval_expr(e->lhs);
+            CcEvalResult v = cc_eval_expr(p,e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             if(!ccqt_is_basic(e->type)) return v;
             CcBasicTypeKind tk = e->type.basic.kind;
@@ -3632,7 +3637,7 @@ cc_eval_expr(CcExpr* e){
                 return (CcEvalResult){.kind = CC_EVAL_DOUBLE, .d = d};
             }
             if(ccbt_is_integer(tk)){
-                if(ccbt_is_unsigned(tk)){
+                if(ccbt_is_unsigned(tk, !cc_target(p)->char_is_signed)){
                     switch(v.kind){
                         case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.i};
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_UINT, .u=v.u};
@@ -4074,7 +4079,7 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                     if(err) return err;
                     if(!expr)
                         return cc_error(p, tok.loc, "expected constant expression for aligned attribute");
-                    CcEvalResult val = cc_eval_expr(expr);
+                    CcEvalResult val = cc_eval_expr(p,expr);
                     if(val.kind == CC_EVAL_ERROR)
                         return cc_error(p, tok.loc, "aligned attribute requires a constant expression");
                     if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
@@ -4101,7 +4106,7 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                 if(err) return err;
                 if(!expr)
                     return cc_error(p, tok.loc, "expected constant expression for vector_size attribute");
-                CcEvalResult val = cc_eval_expr(expr);
+                CcEvalResult val = cc_eval_expr(p,expr);
                 if(val.kind == CC_EVAL_ERROR)
                     return cc_error(p, tok.loc, "vector_size attribute requires a constant expression");
                 if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
@@ -4171,7 +4176,6 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     uint32_t bitfield_offset = 0; // bit offset within current storage unit
     uint32_t bitfield_storage_end = 0; // byte offset of end of current storage unit
     uint32_t bitfield_storage_start = 0; // byte offset of start of current storage unit
-    uint32_t bitfield_storage_size = 0; // size of current storage unit in bytes
     CcQualType bitfield_type = {0}; // type of current bitfield run (for MSVC ABI)
     CcBitfieldABI bf_abi = cc_target(p)->bitfield_abi;
     for(uint32_t i = 0; i < s->field_count; i++){
@@ -4246,7 +4250,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                     offset = bitfield_storage_end;
                     bitfield_offset = 0;
                     bitfield_storage_end = 0;
-                    bitfield_storage_size = 0;
+
                     bitfield_type = (CcQualType){0};
                 }
                 f->offset = offset;
@@ -4255,15 +4259,32 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             }
             // Can we pack into the current storage unit?
             _Bool fits;
-            if(bf_abi == CC_BITFIELD_MSVC)
+            uint32_t f_offset = 0, f_bitoffset = 0;
+            if(bf_abi == CC_BITFIELD_MSVC){
                 fits = bitfield_type.bits == f->type.bits && bitfield_offset + bw <= storage_bits;
-            else
-                fits = bitfield_storage_size == field_size && bitfield_offset + bw <= storage_bits;
+                f_offset = bitfield_storage_start;
+                f_bitoffset = bitfield_offset;
+            }
+            else if(!bitfield_storage_end){
+                fits = 0;
+            }
+            else {
+                // SysV/Itanium: pack across different underlying types.
+                // Check if the bits fit within this field's own
+                // naturally-aligned storage unit at the current position.
+                uint32_t abs_bit = bitfield_storage_start * 8 + bitfield_offset;
+                uint32_t su_start = ((abs_bit / 8) / field_align) * field_align;
+                uint32_t bit_in_su = abs_bit - su_start * 8;
+                fits = bit_in_su + bw <= field_size * 8;
+                f_offset = su_start;
+                f_bitoffset = bit_in_su;
+            }
             if(fits){
-                // Fits in current storage unit
-                f->offset = bitfield_storage_start;
-                f->bitoffset = bitfield_offset;
+                f->offset = f_offset;
+                f->bitoffset = f_bitoffset;
                 bitfield_offset += bw;
+                if(f_offset + field_size > bitfield_storage_end)
+                    bitfield_storage_end = f_offset + field_size;
             }
             else {
                 // Start new storage unit
@@ -4275,7 +4296,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                 bitfield_offset = bw;
                 bitfield_storage_start = offset;
                 bitfield_storage_end = offset + field_size;
-                bitfield_storage_size = field_size;
+
                 bitfield_type = f->type;
             }
             if(field_align > max_align)
@@ -4287,7 +4308,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             offset = bitfield_storage_end;
             bitfield_offset = 0;
             bitfield_storage_end = 0;
-            bitfield_storage_size = 0;
+
             bitfield_type = (CcQualType){0};
         }
         offset = cc_align_to(offset, field_align);
@@ -4723,7 +4744,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
             CcExpr* idx_expr;
             err = cc_parse_assignment_expr(p, &idx_expr);
             if(err) return err;
-            CcEvalResult ev = cc_eval_expr(idx_expr);
+            CcEvalResult ev = cc_eval_expr(p,idx_expr);
             int64_t idx_signed;
             switch(ev.kind){
                 case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -5071,7 +5092,7 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                     CcExpr* idx_expr;
                     err = cc_parse_assignment_expr(p, &idx_expr);
                     if(err) return err;
-                    CcEvalResult ev = cc_eval_expr(idx_expr);
+                    CcEvalResult ev = cc_eval_expr(p,idx_expr);
                     int64_t idx_signed;
                     switch(ev.kind){
                         case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -5451,7 +5472,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
                         goto struct_err;
                     }
-                    CcEvalResult bw_val = cc_eval_expr(bw_expr);
+                    CcEvalResult bw_val = cc_eval_expr(p,bw_expr);
                     if(bw_val.kind == CC_EVAL_ERROR){
                         err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
                         goto struct_err;
@@ -5576,7 +5597,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                             err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
                             goto struct_err;
                         }
-                        CcEvalResult bw_val = cc_eval_expr(bw_expr);
+                        CcEvalResult bw_val = cc_eval_expr(p,bw_expr);
                         if(bw_val.kind == CC_EVAL_ERROR){
                             err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
                             goto struct_err;
@@ -5846,7 +5867,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                     err = cc_error(p, tok.loc, "expected constant expression");
                     goto enum_err;
                 }
-                CcEvalResult val = cc_eval_expr(expr);
+                CcEvalResult val = cc_eval_expr(p,expr);
                 switch(val.kind){
                     case CC_EVAL_INT:  next_value = val.i; break;
                     case CC_EVAL_UINT: next_value = (int64_t)val.u; break;
@@ -6194,7 +6215,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             if(err) return err;
                             if(!expr)
                                 return cc_error(p, tok.loc, "expected expression in _Alignas");
-                            CcEvalResult val = cc_eval_expr(expr);
+                            CcEvalResult val = cc_eval_expr(p,expr);
                             int64_t av;
                             switch(val.kind){
                                 case CC_EVAL_INT:    av = val.i; break;
@@ -6531,7 +6552,7 @@ cc_eval_static_if_cond(CcParser* p, _Bool* out){
     if(err) return err;
     err = cc_expect_punct(p, ')');
     if(err) return err;
-    CcEvalResult ev = cc_eval_expr(cond);
+    CcEvalResult ev = cc_eval_expr(p,cond);
     switch(ev.kind){
         case CC_EVAL_INT:    *out = ev.i != 0; return 0;
         case CC_EVAL_UINT:   *out = ev.u != 0; return 0;
@@ -6936,7 +6957,7 @@ cc_parse_statement(CcParser* p){
                     if(err) return err;
                     err = cc_expect_punct(p, ':');
                     if(err) return err;
-                    CcEvalResult ev = cc_eval_expr(case_expr);
+                    CcEvalResult ev = cc_eval_expr(p,case_expr);
                     if(ev.kind == CC_EVAL_ERROR)
                         return cc_error(p, tok.loc, "case label must be a constant expression");
                     uint64_t case_val;
@@ -7304,7 +7325,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 err = cc_parse_assignment_expr(p, &dim);
                 if(err) return err;
                 if(!dim) return cc_error(p, tok.loc, "Expected array dimension");
-                CcEvalResult val = cc_eval_expr(dim);
+                CcEvalResult val = cc_eval_expr(p,dim);
                 int64_t length;
                 switch(val.kind){
                     case CC_EVAL_INT:    length = val.i; break;
@@ -7870,7 +7891,7 @@ cc_handle_static_asssert(CcParser* p){
     if(err) return err;
     if(!expr)
         return cc_error(p, assert_loc, "expected expression in static_assert");
-    CcEvalResult val = cc_eval_expr(expr);
+    CcEvalResult val = cc_eval_expr(p,expr);
     _Bool sa_truthy;
     switch(val.kind){
         case CC_EVAL_INT:    sa_truthy = val.i != 0; break;
@@ -8121,6 +8142,31 @@ cc_define_builtin_types(CcParser* p){
             Atom key = AT_ATOMIZE(p->cpp.at, "__builtin_memcpy");
             if(!key) return CC_OOM_ERROR;
             Atom name = AT_ATOMIZE(p->cpp.at, "memcpy");
+            if(!name) return CC_OOM_ERROR;
+            func->name = name;
+            func->type = ftype;
+            func->extern_ = 1;
+            err = cc_scope_insert_func(al, &p->global, key, func);
+            if(err) return CC_OOM_ERROR;
+            func = Allocator_dupe(al, func, sizeof *func);
+            if(!func) return CC_OOM_ERROR;
+            key = AT_ATOMIZE(p->cpp.at, "__builtin_memmove");
+            name = AT_ATOMIZE(p->cpp.at, "memmove");
+            if(!key || !name) return CC_OOM_ERROR;
+            func->name = name;
+            err = cc_scope_insert_func(al, &p->global, key, func);
+            if(err) return CC_OOM_ERROR;
+        }
+        // void *__builtin_memcpy(void *dest, const void *src, size_t n)
+        {
+            CcQualType params[] = {void_ptr_type, ccqt_basic(CCBT_int), size_type};
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, void_ptr_type, params, 3, 0, 0);
+            if(!ftype) return CC_OOM_ERROR;
+            CcFunc* func = Allocator_zalloc(al, sizeof *func);
+            if(!func) return CC_OOM_ERROR;
+            Atom key = AT_ATOMIZE(p->cpp.at, "__builtin_memset");
+            if(!key) return CC_OOM_ERROR;
+            Atom name = AT_ATOMIZE(p->cpp.at, "memset");
             if(!name) return CC_OOM_ERROR;
             func->name = name;
             func->type = ftype;

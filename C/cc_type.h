@@ -252,8 +252,10 @@ ccbt_is_arithmetic(CcBasicTypeKind k){
 
 static inline
 _Bool
-ccbt_is_unsigned(CcBasicTypeKind k){
+ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
     switch(k){
+        case CCBT_char:
+            return char_is_unsigned;
         case CCBT_bool:
         case CCBT_unsigned_char:
         case CCBT_unsigned_short:

@@ -68,6 +68,7 @@ int main(int argc, char** argv, char** envp){
             .return_buf = &interp.exit_code,
             .return_size = sizeof interp.exit_code,
         },
+        .can_dlopen = 1,
     };
     LOCK_T_init(&interp.error_lock);
     Marray(StringView) libs = {0}, lib_paths = {0};

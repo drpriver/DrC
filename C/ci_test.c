@@ -29,6 +29,7 @@
 #pragma clang assume_nonnull begin
 #endif
 
+
 TestFunction(test_interpreter){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -662,7 +663,7 @@ TestFunction(test_interpreter){
                "int (*fp)(int, int) = add;\n"
                "return fp(3, 4);\n"),
             .exit_code = 7,
-            .skip = 1, // requires native call support (libffi)
+            .skip = 0,
         },
         // Static locals
         {
@@ -1962,16 +1963,15 @@ TestFunction(test_interpreter){
     }
     TESTEND();
 }
-
 int main(int argc, char** argv){
-#ifdef USE_TESTING_ALLOCATOR
-    testing_allocator_init();
-#endif
+    #ifdef USE_TESTING_ALLOCATOR
+        testing_allocator_init();
+    #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
-#ifdef USE_TESTING_ALLOCATOR
-    testing_assert_all_freed();
-#endif
+    #ifdef USE_TESTING_ALLOCATOR
+        testing_assert_all_freed();
+    #endif
     return err;
 }
 

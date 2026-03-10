@@ -24,9 +24,9 @@ int main(int argc, char** argv, char** envp){
 
     BuildTarget* cc = exe_target(ctx, "cc", "cc.c", ctx->target.os);
     if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
-        cmd_cargs(&cc->cmd, "-ldl");
+        cmd_carg(&cc->cmd, "-ldl");
     }
-    cmd_cargs(&cc->cmd, "-lffi");
+    cmd_carg(&cc->cmd, "-lffi");
     add_dep(ctx, all, cc);
 
     BuildTarget* tests = phony_target(ctx, "tests");
@@ -37,17 +37,24 @@ int main(int argc, char** argv, char** envp){
             const char* file;
             const char* name;
             const char* cmd_name;
+            _Bool needs_lffi;
         } test_files[] = {
-            {"C/cpp_test.c", "cpp_test", "run_cpp_test"},
-            {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test"},
-            {"C/cc_test.c", "cc_test", "run_cc_test"},
-            {"C/ci_test.c", "ci_test", "run_ci_test"},
+            {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0},
+            {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0},
+            {"C/cc_test.c", "cc_test", "run_cc_test", 0},
+            {"C/ci_test.c", "ci_test", "run_ci_test", 0},
+            {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1},
         };
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
             const char* name = test_files[i].name;
             const char* cmd_name = test_files[i].cmd_name;
             BuildTarget* bin = exe_target(ctx, name, file, OS_NATIVE);
+            if(test_files[i].needs_lffi){
+                if(BUILD_OS == OS_LINUX)
+                    cmd_carg(&cc->cmd, "-ldl");
+                cmd_carg(&bin->cmd, "-lffi");
+            }
             add_dep(ctx, all, bin);
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
@@ -132,9 +139,9 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         if(sv_equals(name, (SV("fish-completions"))))
             continue;
         if(tgt == _tgt) continue;
-        if(len > 80){
-            msb_write_literal(&sb, "\\\n    ");
-            len = 4;
+        if(len + tgt->name->length + 1 > 60){
+            msb_write_literal(&sb, "\\\n  ");
+            len = 2;
         }
         msb_write_str(&sb, tgt->name->data, tgt->name->length);
         msb_write_char(&sb, ' ');

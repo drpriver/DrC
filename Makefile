@@ -1,6 +1,8 @@
-BUILDTARGETS:=clean list print compile_commands.json all cpp cc tests test cpp_test \
-    run_cpp_test cc_lex_test run_cc_lex_test cc_test run_cc_test ci_test run_ci_test \
-    run_cpp debug_cpp run_cc debug_cc repl tags
+BUILDTARGETS:=clean list print compile_commands.json all \
+  cpp cc tests test cpp_test run_cpp_test cc_lex_test \
+  run_cc_lex_test cc_test run_cc_test ci_test run_ci_test \
+  ci_native_test run_ci_native_test run_cpp debug_cpp \
+  run_cc debug_cc repl tags
 .PHONY: $(BUILDTARGETS)
 
 ifeq ($(OS),Windows_NT)

@@ -33,7 +33,7 @@ struct PointerMap {
     uint32_t cap;
 };
 
-#define PointerMap(T) PointerMap
+#define PointerMap(K, V) PointerMap
 
 typedef struct PointerMapItem PointerMapItem;
 struct PointerMapItem {
