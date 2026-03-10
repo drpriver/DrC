@@ -3439,7 +3439,7 @@ cc_eval_expr(CcExpr* e){
                     case CCBT_void: case CCBT_nullptr_t:
                     case CCBT_INVALID: case CCBT_COUNT:
                         return cc_eval_error();
-                }
+                } return cc_eval_error();
                 case CC_ENUM:
                     return (CcEvalResult){.kind = CC_EVAL_UINT, .u = e->uinteger};
                 default:
