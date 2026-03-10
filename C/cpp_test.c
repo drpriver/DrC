@@ -3,9 +3,11 @@
 //
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
+#if 1
 #define USE_TESTING_ALLOCATOR
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
+#endif
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
@@ -341,7 +343,8 @@ TestFunction(test_func_macros){
         {"va_arg_expr", SV("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SV("\nc"), __LINE__},
         {"va_arg_expand", SV("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SV("\n\n42"), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -369,7 +372,8 @@ TestFunction(test_func_macros_extensions){
         {"gnu gnu va args comma2",SV("#define F(args...) f(1, ## args)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
         {"gnu gnu va args nocomma",SV("#define F(args...) f(1 ##args)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -404,7 +408,8 @@ TestFunction(test_obj_macros){
         {"obj_paste_hash", SV("#define HH # ## #\nHH"), SV("\n##"), __LINE__},
         {"obj_paste_multi", SV("#define XYZ x ## y ## z\nXYZ"), SV("\nxyz"), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -669,7 +674,8 @@ TestFunction(test_c23){
                 "((x>y)?puts(\"x>y\"): printf(\"x is %d but y is %d\", x, y));\n"),
         },
     };
-    for(size_t i = 0; i < sizeof test_cases / sizeof test_cases[0]; i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof test_cases / sizeof test_cases[0]; i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         err = cpp_expand_string(test_cases[i].input, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
@@ -782,7 +788,8 @@ TestFunction(test_torture){
                "no\n"),
         },
     };
-    for(size_t i = 0; i < sizeof test_cases / sizeof test_cases[0]; i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof test_cases / sizeof test_cases[0]; i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView in = test_cases[i].in;
         StringView out = test_cases[i].out;
@@ -994,7 +1001,8 @@ TestFunction(test_builtin_macros){
             "const char* names[] = { [RED] = \"RED\",[GREEN] = \"GREEN\",[BLUE] = \"BLUE\", };"), __LINE__, 0},
 
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -1055,7 +1063,8 @@ TestFunction(test_error_locations){
             SV("(test):3:19: error: Too many arguments to function-like macro FF()\n"
                "(test):4:1: ... expanded from here\n")},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
@@ -1392,7 +1401,8 @@ TestFunction(test_condition){
         },
 
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -1475,7 +1485,8 @@ TestFunction(test_erroneous_condition){
                "stuff"),
             SV("(test):3:2: error: Unterminated conditional directive\n")},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
@@ -1777,7 +1788,8 @@ TestFunction(test_if_eval){
             SV("#if ((0x0F & 0xFF) ^ 0x05 | 0x10) == 0x1A\nyes\n#endif"),
             SV("\nyes\n")},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -1857,7 +1869,8 @@ TestFunction(test_include){
             SV("test/header.h"), SV("#define RESULT first\n"),
             {0}, SV("\n\nfirst")},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled){
             TEST_stats.skipped++;
             continue;
@@ -1886,19 +1899,19 @@ int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
     #endif
-    RegisterTest(test_obj_macros);
-    RegisterTest(test_func_macros);
-    RegisterTest(test_func_macros_extensions);
+    RegisterTestFlags(test_obj_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_func_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_func_macros_extensions, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTest(test_for_each);
     RegisterTest(test_for_each_empty);
-    RegisterTest(test_c23);
-    RegisterTest(test_torture);
-    RegisterTest(test_builtin_macros);
-    RegisterTest(test_error_locations);
-    RegisterTest(test_condition);
-    RegisterTest(test_erroneous_condition);
-    RegisterTest(test_if_eval);
-    RegisterTest(test_include);
+    RegisterTestFlags(test_c23, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_torture, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_builtin_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_error_locations, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_erroneous_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_if_eval, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_include, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();

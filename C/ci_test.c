@@ -3,9 +3,11 @@
 //
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
+#if 1
 #define USE_TESTING_ALLOCATOR
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
+#endif
 #define NO_NATIVE_CALL
 #define CI_THREAD_UNSAFE_ALLOCATOR
 #include "../Drp/Allocators/testing_allocator.h"
@@ -1867,11 +1869,18 @@ TestFunction(test_interpreter){
                 "return sum;\n"),
             .exit_code = 10,
         },
+        {
+            "struct return dot", __LINE__,
+            SV("typedef struct Foo Foo;\n"
+               "struct Foo {struct { struct { struct { int x;} c;} b; } a;} ;\n"
+               "Foo foo(){ return (Foo){3};}\n"
+               "return foo().a.b.c.x;\n"),
+            .exit_code = 3,
+        },
     };
     int err;
     static int idx = 0;
-    size_t i = test_atomic_increment(&idx);
-    for(; i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
         if(tc->skip){
             TEST_stats.skipped++;
@@ -1955,10 +1964,14 @@ TestFunction(test_interpreter){
 }
 
 int main(int argc, char** argv){
+#ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
+#endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
+#ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();
+#endif
     return err;
 }
 

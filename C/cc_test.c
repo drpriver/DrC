@@ -3,9 +3,11 @@
 //
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
+#if 1
 #define USE_TESTING_ALLOCATOR
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
+#endif
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
@@ -2530,8 +2532,19 @@ TestFunction(test_parse_decls){
                "char* args[64];\n"
                "f(args);\n"),
         },
+        {
+            "sizeof compound literal of unspecified length", __LINE__,
+            SV("unsigned long x = sizeof (const char*[]){\"hello\", \"world\"};\n"),
+            .vars = {{SV("x"), SV("unsigned long"), SV("16")}},
+        },
+        {
+            "sizeof compound literal of unspecified length with parens", __LINE__,
+            SV("unsigned long x = sizeof((const char*[]){\"hello\", \"world\"});\n"),
+            .vars = {{SV("x"), SV("unsigned long"), SV("16")}},
+        },
     };
-    for(size_t i = 0; i < arrlen(testcases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
         if(testcases[i].skip){
             continue;
         }
@@ -3132,8 +3145,29 @@ TestFunction(test_parse_errors){
             SV("int x[] = {sizeof x};\n"),
             SV("(test):1:12: error: sizeof applied to incomplete array type\n"),
         },
+        {
+            "assign to rvalue", __LINE__,
+            SV("int foo(void); void bar(void){ foo() = 1; }\n"),
+            SV("(test):1:38: error: expression is not assignable\n"),
+        },
+        {
+            "prefix inc rvalue", __LINE__,
+            SV("int foo(void); void bar(void){ ++foo(); }\n"),
+            SV("(test):1:32: error: expression is not an lvalue\n"),
+        },
+        {
+            "postfix inc rvalue", __LINE__,
+            SV("int foo(void); void bar(void){ foo()++; }\n"),
+            SV("(test):1:37: error: expression is not an lvalue\n"),
+        },
+        {
+            "address of rvalue", __LINE__,
+            SV("int foo(void); void bar(void){ int* p = &foo(); }\n"),
+            SV("(test):1:41: error: cannot take address of rvalue\n"),
+        },
     };
-    for(size_t i = 0; i < arrlen(cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         FileCache* fc = fc_create(al);
@@ -3152,6 +3186,7 @@ TestFunction(test_parse_errors){
                 .target = cc_target_test(),
             },
             .current = &cc.global,
+            .eager_parsing = 1,
         };
         struct ErrorCase* c = &cases[i];
         fc_write_path(fc, "(test)", 6);
@@ -3578,7 +3613,8 @@ TestFunction(test_struct_layout){
         },
     };
     MStringBuilder sb = {0};
-    for(size_t i = 0; i < arrlen(cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
@@ -3847,7 +3883,8 @@ TestFunction(test_bitfield_abi){
         },
     };
     MStringBuilder sb = {0};
-    for(size_t i = 0; i < arrlen(cases); i++){
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
@@ -3943,13 +3980,17 @@ TestFunction(test_bitfield_abi){
 }
 
 int main(int argc, char** argv){
+#ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
-    RegisterTest(test_parse_decls);
-    RegisterTest(test_parse_errors);
-    RegisterTest(test_struct_layout);
-    RegisterTest(test_bitfield_abi);
+#endif
+    RegisterTestFlags(test_parse_decls, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_bitfield_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
+#ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();
+#endif
     return err;
 }
 

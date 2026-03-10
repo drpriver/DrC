@@ -669,9 +669,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
         CcExpr* base_expr = expr->values[0];
-        // Check if base is an rvalue (e.g. function call): evaluate into
-        // a temp buffer and read the field from there.
-        if(base_expr->kind == CC_EXPR_CALL){
+        if(!expr->is_lvalue){
             uint32_t base_sz;
             err = cc_sizeof_as_uint(&ci->parser, base_expr->type, expr->loc, &base_sz);
             if(err) return err;
@@ -690,7 +688,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             Allocator_free(ci_allocator(ci), temp, base_sz);
             return 0;
         }
-        // Lvalue path: base has an address we can read from.
         void* base;
         size_t base_size;
         err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);

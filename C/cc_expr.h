@@ -151,23 +151,27 @@ struct CcExpr {
         uint32_t bits[2];
         struct {
             CcExprKind kind: 8;
-            uint32_t _extra: 24;
+            uint32_t _padding: 23;
+            uint32_t is_lvalue: 1;
             uint32_t _pad;
         };
         struct {
             CcExprKind kind: 8;
             CcVaOp op: 8;
-            uint32_t _bitpadding: 16;
+            uint32_t _bitpadding: 15;
+            uint32_t is_lvalue: 1;
             uint32_t _pad;
         } va;
         struct {
             CcExprKind kind: 8;
-            uint32_t _pad: 24;
+            uint32_t _pad: 23;
+            uint32_t is_lvalue: 1;
             uint32_t nargs;
         } call;
         struct {
             CcExprKind kind: 8;
-            uint32_t _pad: 24;
+            uint32_t _pad: 23;
+            uint32_t is_lvalue: 1;
             uint32_t length; //
         } str;
         struct {
@@ -176,13 +180,15 @@ struct CcExpr {
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4; // compare_exchange only
             uint32_t weak: 1;          // weak flag (compare_exchange only)
-            uint32_t _bitpadding: 7;
+            uint32_t _bitpadding: 6;
+            uint32_t is_lvalue: 1;
             uint32_t _pad;
         } atomic;
         struct {
             CcExprKind kind: 8;
             CcBuiltinOp op: 8;
-            uint32_t _padding:16;
+            uint32_t _padding:15;
+            uint32_t is_lvalue: 1;
             uint32_t _pad;
         } builtin;
     };
@@ -207,6 +213,7 @@ struct CcExpr {
     };
     CcExpr*_Nonnull values[];
 };
+_Static_assert(__builtin_offsetof(CcExpr, loc) ==8, "");
 
 
 #ifdef __clang__

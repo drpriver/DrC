@@ -566,6 +566,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     CcExpr* var_ref = cc_alloc_expr(p, 0);
     if(!var_ref) return CC_OOM_ERROR;
     var_ref->kind = CC_EXPR_VARIABLE;
+    var_ref->is_lvalue = 1;
     var_ref->loc = loc;
     var_ref->type = type;
     var_ref->var = anon;
@@ -574,11 +575,13 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     CcExpr* var_ref2 = cc_alloc_expr(p, 0);
     if(!var_ref2) return CC_OOM_ERROR;
     var_ref2->kind = CC_EXPR_VARIABLE;
+    var_ref2->is_lvalue = 1;
     var_ref2->loc = loc;
     var_ref2->type = type;
     var_ref2->var = anon;
     CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, loc, type, assign, var_ref2);
     if(!comma) return CC_OOM_ERROR;
+    comma->is_lvalue = var_ref2->is_lvalue;
     *out = comma;
     return 0;
 }
@@ -1002,6 +1005,7 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             CcExpr* node = cc_alloc_expr(p, 1);
             if(!node) return CC_OOM_ERROR;
             node->kind = CC_EXPR_COMMA;
+            node->is_lvalue = right->is_lvalue;
             node->loc = tok.loc;
             node->lhs = left;
             node->values[0] = right;
@@ -1030,6 +1034,8 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
         if(cc_assign_lookup(tok.punct.punct, &kind)){
+            if(!left->is_lvalue)
+                return cc_error(p, tok.loc, "expression is not assignable");
             if(left->type.is_const)
                 return cc_error(p, tok.loc, "cannot assign to variable with const-qualified type");
             CcExpr* right;
@@ -1424,12 +1430,18 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     }
                     if((operand->kind == CC_EXPR_DOT || operand->kind == CC_EXPR_ARROW) && operand->field_loc.bit_width)
                         return cc_error(p, tok.loc, "cannot take address of bitfield");
+                    // &func is the same as function-to-pointer decay: just cast.
+                    if(ccqt_kind(operand->type) == CC_FUNCTION){
+                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
+                        if(!ptr) return CC_OOM_ERROR;
+                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        return cc_implicit_cast(p, operand, result_type, out);
+                    }
+                    if(!operand->is_lvalue)
+                        return cc_error(p, tok.loc, "cannot take address of rvalue");
                     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                     if(!ptr) return CC_OOM_ERROR;
                     result_type = (CcQualType){.bits = (uintptr_t)ptr};
-                    // &func is the same as function-to-pointer decay: just cast.
-                    if(ccqt_kind(operand->type) == CC_FUNCTION)
-                        return cc_implicit_cast(p, operand, result_type, out);
                     break;
                 }
                 default: // PREINC, PREDEC
@@ -1437,12 +1449,15 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
                     }
+                    if(!operand->is_lvalue)
+                        return cc_error(p, tok.loc, "expression is not an lvalue");
                     result_type = operand->type;
                     break;
             }
             CcExpr* node = cc_alloc_expr(p, 0);
             if(!node) return CC_OOM_ERROR;
             node->kind = kind;
+            node->is_lvalue = kind == CC_EXPR_DEREF;
             node->loc = tok.loc;
             node->type = result_type;
             node->lhs = operand;
@@ -2300,6 +2315,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* node = cc_alloc_expr(p, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->kind = CC_EXPR_VARIABLE;
+                    node->is_lvalue = 1;
                     node->loc = tok.loc;
                     node->type = sym.var->type;
                     node->var = sym.var;
@@ -2371,6 +2387,21 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         if(err) return err;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
+                        // Check for compound literal: sizeof(type){...}
+                        CcToken peek3;
+                        err = cc_peek(p, &peek3);
+                        if(err) return err;
+                        if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
+                            CcExpr* result;
+                            err = cc_parse_init_list(p, &result, type);
+                            if(err) return err;
+                            result->kind = CC_EXPR_COMPOUND_LITERAL;
+                            CcExpr* sz;
+                            err = cc_sizeof_as_expr(p, result->type, tok.loc, &sz);
+                            if(err) return err;
+                            *out = sz;
+                            return 0;
+                        }
                         CcExpr* sz;
                         err = cc_sizeof_as_expr(p, type, tok.loc, &sz);
                         if(err) return err;
@@ -2661,6 +2692,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
         }
         switch((uint32_t)tok.punct.punct){
             case CC_plusplus: {
+                if(!operand->is_lvalue)
+                    return cc_error(p, tok.loc, "expression is not an lvalue");
                 CcExpr* node = cc_alloc_expr(p, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_POSTINC;
@@ -2671,6 +2704,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 continue;
             }
             case CC_minusminus: {
+                if(!operand->is_lvalue)
+                    return cc_error(p, tok.loc, "expression is not an lvalue");
                 CcExpr* node = cc_alloc_expr(p, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_POSTDEC;
@@ -2690,6 +2725,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 CcExpr* node = cc_alloc_expr(p, 1);
                 if(!node) return CC_OOM_ERROR;
                 node->kind = CC_EXPR_SUBSCRIPT;
+                node->is_lvalue = 1;
                 node->loc = tok.loc;
                 CcQualType elem_type;
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
@@ -2767,6 +2803,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 CcExpr* mnode = cc_alloc_expr(p, 1);
                 if(!mnode) return CC_OOM_ERROR;
                 mnode->kind = mkind;
+                mnode->is_lvalue = mkind == CC_EXPR_ARROW || operand->is_lvalue;
                 mnode->loc = tok.loc;
                 mnode->type = member_type;
                 mnode->field_loc = floc;
@@ -7789,6 +7826,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     CcExpr* var_ref = cc_alloc_expr(p, 0);
                     if(!var_ref) return CC_OOM_ERROR;
                     var_ref->kind = CC_EXPR_VARIABLE;
+                    var_ref->is_lvalue = 1;
                     var_ref->loc = tok.loc;
                     var_ref->type = type;
                     var_ref->var = var;

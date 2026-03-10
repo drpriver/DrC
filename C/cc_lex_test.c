@@ -3,9 +3,11 @@
 //
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
+#if 1
 #define USE_TESTING_ALLOCATOR
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
+#endif
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
