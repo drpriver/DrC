@@ -7,6 +7,11 @@
 //
 // Usage: Bin/cc Samples/textedit.c
 
+#ifndef __APPLE__
+#error "This only works on macos"
+__builtin_abort();
+#endif
+
 #pragma lib "Cocoa"
 #include <std.h>
 #include <objc/objc.h>

@@ -1,5 +1,9 @@
 // macOS File Picker using Objective-C Runtime C API
 // Demonstrates calling native macOS frameworks from interpreted C
+#ifndef __APPLE__
+#error "This only works on macos"
+__builtin_abort();
+#endif
 #pragma lib "Cocoa"
 #include <objc/objc.h>
 #include <objc/runtime.h>

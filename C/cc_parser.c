@@ -1013,8 +1013,6 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             break;
         }
     }
-    if(left->kind == CC_EXPR_COMPOUND_LITERAL)
-        return cc_desugar_compound_literal(p, left, out);
     *out = left;
     return 0;
 }
@@ -7761,29 +7759,37 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     p->current_func->frame_size += sz;
                 }
             }
-            // In interpreted (non-function) context, emit an assignment
-            // statement so the interpreter evaluates the initializer.
             if(initializer){
-                CcExpr* var_ref = cc_alloc_expr(p, 0);
-                if(!var_ref) return CC_OOM_ERROR;
-                var_ref->kind = CC_EXPR_VARIABLE;
-                var_ref->loc = tok.loc;
-                var_ref->type = type;
-                var_ref->var = var;
                 if(var && !var->automatic){
                     int perr = PM_put(&p->used_vars, cc_allocator(p), var, var);
                     if(perr) return CC_OOM_ERROR;
                 }
-                if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
-                    initializer->kind = CC_EXPR_INIT_LIST;
-                CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, tok.loc, type, var_ref, initializer);
-                if(!assign) return CC_OOM_ERROR;
-                size_t si;
-                err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &si);
-                if(err) return err;
-                CcStatement* s = cc_get_stmt(p, si);
-                if(!s) return CC_UNREACHABLE_ERROR;
-                s->exprs[0] = assign;
+                // Function-scope statics: ci_resolve_refs evaluates
+                // the initializer once before execution (no re-init,
+                // no thread races). Everything else: runtime assign.
+                if(var && var->static_ && p->current_func){
+                    var->interp_preinit = 1;
+                    if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
+                        initializer->kind = CC_EXPR_INIT_LIST;
+                }
+                else {
+                    CcExpr* var_ref = cc_alloc_expr(p, 0);
+                    if(!var_ref) return CC_OOM_ERROR;
+                    var_ref->kind = CC_EXPR_VARIABLE;
+                    var_ref->loc = tok.loc;
+                    var_ref->type = type;
+                    var_ref->var = var;
+                    if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
+                        initializer->kind = CC_EXPR_INIT_LIST;
+                    CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, tok.loc, type, var_ref, initializer);
+                    if(!assign) return CC_OOM_ERROR;
+                    size_t si;
+                    err = cc_stmt(p, CC_STMT_EXPR, tok.loc, &si);
+                    if(err) return err;
+                    CcStatement* s = cc_get_stmt(p, si);
+                    if(!s) return CC_UNREACHABLE_ERROR;
+                    s->exprs[0] = assign;
+                }
             }
         }
         if(stop) break;

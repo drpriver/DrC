@@ -2205,7 +2205,7 @@ ci_resolve_refs(CiInterpreter* ci){
         for(size_t i = 0; i < items.count; i++){
             CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
             if(var->interp_val) continue;
-            if(var->extern_){
+            if(var->extern_ && !var->initializer){
                 LongString sym = var->mangle
                     ? (LongString){var->mangle->length, var->mangle->data}
                     : (LongString){var->name->length, var->name->data};
@@ -2222,6 +2222,27 @@ ci_resolve_refs(CiInterpreter* ci){
                 if(!storage) return CI_OOM_ERROR;
                 var->interp_val = storage;
             }
+        }
+    }
+    // Evaluate initializers for non-automatic variables.
+    // This must happen after all storage is allocated (initializers may
+    // reference other globals). Running this here (single-threaded, before
+    // execution) avoids re-initialization and thread races.
+    {
+        PointerMapItems items = PM_items(&p->used_vars);
+        CiInterpFrame dummy_frame = {0};
+        for(size_t i = 0; i < items.count; i++){
+            CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
+            if(!var->interp_preinit) continue;
+            if(!var->initializer) continue;
+            if(!var->interp_val) continue;
+            if(var->interp_initialized) continue;
+            uint32_t sz;
+            int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
+            if(err) return err;
+            err = ci_interp_expr(ci, &dummy_frame, var->initializer, var->interp_val, sz);
+            if(err) return err;
+            var->interp_initialized = 1;
         }
     }
     // Pre-populate ffi_cache for non-variadic call types.

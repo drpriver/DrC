@@ -1,14 +1,21 @@
+//
+// Combines methods, defblock, __ident, static if
+// to generate something that looks like templates if you squint.
+//
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #define S_(x) #x
 #define S(x) S_(x)
-#define DA(T) __ident("DA." S(T))
-#defblock DA_DEF(T)
+#define DA(T) __ident("DA." S(T)) // unique name for any type.
+#defblock DA_DEF(T) // multiline macro
 typedef struct DA(T) DA(T);
 struct DA(T) {
     T* data;
     size_t count, capacity;
+
+    // Methods
     int push(DA(T) *self, T value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:2;
@@ -67,6 +74,7 @@ for(size_t i = 0; i < strings.count; i++){
 #define Optional(T) __ident("Optional(" S(T) ")")
 #defblock OPTIONAL_DEF(T)
 typedef struct Optional(T) Optional(T);
+// static if provides introspection
 static if(__is_pointer(T)){
     struct Optional(T){
         T value;

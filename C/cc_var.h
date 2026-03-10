@@ -22,11 +22,13 @@ struct CcVariable {
              static_: 1,
              tenative: 1,
              automatic: 1,
-             _padding: 12,
+             interp_initialized: 1,
+             interp_preinit: 1,
+             _padding: 10,
              alignment: 16; // 0 means default alignment
-    CcExpr* _Nullable initializer;
+    CcExpr* _Null_unspecified initializer;
     union {
-        void* _Nullable interp_val; // runtime storage for extern/static vars
+        void* _Null_unspecified interp_val; // runtime storage for extern/static vars
         uintptr_t frame_offset;      // offset into CiInterpFrame trailing data (automatic vars)
     };
 };

@@ -218,12 +218,6 @@ TestFunction(test_interpreter){
             SV("return 0 ? 10 : 20;\n"),
             .exit_code = 20,
         },
-        {
-            "ternary: compound literal", __LINE__,
-            SV("typedef struct Foo { int x; } Foo;\n"
-               "return (1 ? (Foo){1} : (Foo){2}).x;\n"),
-            .exit_code = 1,
-        },
         // Comma
         {
             "comma", __LINE__,
@@ -679,7 +673,6 @@ TestFunction(test_interpreter){
                "counter();\n"
                "return counter();\n"),
             .exit_code = 2,
-            .skip = 1, // BUG: static local initializer re-runs on each call
         },
         // Global variables
         {

@@ -1585,7 +1585,7 @@ init_textures(void){
 #ifdef __DIR__
 #define SND_DIR __DIR__ "/BjAudio/"
 #else
-#define SND_DIR "Samples/BjAudio/"
+#define SND_DIR "Samples/SDL2/BjAudio/"
 #endif
 
 

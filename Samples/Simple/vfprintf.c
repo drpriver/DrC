@@ -1,3 +1,7 @@
+// 
+// Demonstrates the usage of var args
+// and that we can create a va_list that native code handles.
+//
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -16,6 +20,6 @@ log_twice("Hello %s\n", "world");
 log_twice("1. + 2. = %f\n", 1.+2.);
 log_twice("%s %f %s\n", "hi", 2.f, "you");
 log_twice("Goodbye %s\n", "world");
-log_twice("hello");
+log_twice("hello\n");
 
 
