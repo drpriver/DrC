@@ -17,6 +17,8 @@
 #include "cc_expr.h"
 #include "cc_target.h"
 #include "cpp_preprocessor.h"
+#include "native_call.h"
+#include "ci_softnum.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/Allocators/mallocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
@@ -26,8 +28,6 @@
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
 #include "../Drp/bit_util.h"
-#include "native_call.h"
-#include "ci_softnum.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -86,8 +86,9 @@ static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
 static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
+static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
 
-static CppFuncMacroFn ci_shell;
+static CppFuncMacroFn ci_shell, ci_procmacro_expand;
 
 static
 int
@@ -358,12 +359,15 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
     CcFunc* func = cd->func;
     CcFunction* ftype = func->type;
     if(!func->parsed){
-        // ICE: should have been resolved before execution.
+        ci_error(ci, func->loc, "ICE: Calling function that hasn't been parsed");
         return;
     }
     size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
-    if(!frame) return;
+    if(!frame){
+        ci_error(ci, func->loc, "interpreter: OOM allocating frame");
+        return;
+    }
     uint32_t ret_sz = 0;
     if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void))
         cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
@@ -453,8 +457,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(!storage)
             return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
         CcQualType var_type = var->type;
-        // Array variables decay to pointer
-        if(ccqt_kind(var_type) == CC_ARRAY){
+        // Array variables decay to pointer (but not vectors)
+        if(ccqt_kind(var_type) == CC_ARRAY && !ccqt_as_array(var_type)->is_vector){
             if(sizeof storage > size)
                 return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof storage, size);
             memcpy(result, &storage, sizeof storage);
@@ -496,8 +500,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7)){
             return ci_interp_expr(ci, frame, operand, result, size);
         }
-        // Array-to-pointer decay: get address of array data.
-        if(ccqt_kind(from) == CC_ARRAY){
+        // Array-to-pointer decay: get address of array data (not vectors).
+        if(ccqt_kind(from) == CC_ARRAY && !ccqt_as_array(from)->is_vector){
             if(result == ci_discard_buf) return 0;
             if(sizeof(void*) > size)
                 return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
@@ -939,8 +943,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
         if(err) return err;
-        _Bool lhs_ptr = ccqt_kind(lhs->type) == CC_POINTER || ccqt_kind(lhs->type) == CC_ARRAY;
-        _Bool rhs_ptr = ccqt_kind(rhs->type) == CC_POINTER || ccqt_kind(rhs->type) == CC_ARRAY;
+        _Bool lhs_ptr = ccqt_is_pointer_like(lhs->type);
+        _Bool rhs_ptr = ccqt_is_pointer_like(rhs->type);
         if(lhs_ptr || rhs_ptr){
             if(expr->kind == CC_EXPR_ADD && lhs_ptr && !rhs_ptr){
                 CcQualType pointee;
@@ -2360,7 +2364,7 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_pkg_config;
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_pkg_config, ci_pragma_procmacro;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
@@ -2370,7 +2374,12 @@ ci_register_pragmas(CiInterpreter*ci){
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib_path"), ci_pragma_lib_path, ci);
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("pkg_config"), ci_pragma_pkg_config, ci);
-    return err;
+    if(err) return err;
+    if(ci->procedural_macros){
+        err = cpp_register_pragma(&ci->parser.cpp, SV("procmacro"), ci_pragma_procmacro, ci);
+        if(err) return err;
+    }
+    return 0;
 }
 
 static
@@ -2790,6 +2799,229 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     if(output.text) Allocator_free(scratch, output.text, output.length+1);
     cpp_release_scratch(cpp, expanded);
     return err;
+}
+static CiInterpreter*
+ci_from_cpp(CppPreprocessor* cpp){
+    return (CiInterpreter*)((char*)cpp - offsetof(CcParser, cpp) - offsetof(CiInterpreter, parser));
+}
+
+static Marray(CcToken)* cc_get_scratch(CcParser* p);
+static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
+
+static
+int
+ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    (void)arg_seps;
+    CcFunc* func = ctx;
+    CiInterpreter* ci = ci_from_cpp(cpp);
+    CcParser* p = &ci->parser;
+    CcFunction* ftype = func->type;
+    CcExpr* expr = NULL;
+    int err = 0;
+    Allocator al = p->cpp.allocator;
+    Marray(CcToken)* scratch = cc_get_scratch(p);
+    Marray(CcToken) pending = p->pending;
+    // Build tokens: EOF funcname ( arg0 , arg1 , ... argN ) in reverse onto pending.
+    CcToken eof = {.type = CC_EOF, .loc = loc};
+    err = ma_push(CcToken)(scratch, al, eof);
+    if(err) goto restore;
+    // Push ')'.
+    CcToken rparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_rparen}, .loc = loc};
+    err = ma_push(CcToken)(scratch, al, rparen);
+    if(err) goto restore;
+    size_t idx = scratch->count;
+    {
+        const CppToken* arg_toks = args->data;
+        const CppToken* end = args->data + args->count;
+        while(arg_toks < end){
+            CcToken tok;
+            err = cpp_next_c_token_array(cpp, &arg_toks, end, &tok);
+            if(err) goto restore;
+            if(tok.type == CC_EOF)
+                break;
+            err = ma_push(CcToken)(scratch, al, tok);
+            if(err) goto restore;
+        }
+    }
+    // reverse
+    for(size_t i = idx, j = scratch->count - 1; i < j; i++, j--){
+        CcToken tok = scratch->data[j];
+        scratch->data[j] = scratch->data[i];
+        scratch->data[i] = tok;
+    }
+    // Push '('.
+    CcToken lparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_lparen}, .loc = loc};
+    err = ma_push(CcToken)(scratch, al, lparen);
+    if(err) goto restore;
+    // Push function name identifier.
+    CcToken name_tok = {.ident = {.type = CC_IDENTIFIER, .ident = func->name}, .loc = loc};
+    err = ma_push(CcToken)(scratch, al, name_tok);
+    if(err)goto restore;
+    // Parse as expression — the parser will type-check the call.
+    p->pending = *scratch;
+    err = cc_parse_expr(p, &expr);
+    {
+        restore:
+        *scratch = p->pending;
+        p->pending = pending;
+        cc_release_scratch(p, scratch);
+        if(err) return err;
+    }
+    uint32_t result_sz;
+    err = cc_sizeof_as_uint(p, ftype->return_type, loc, &result_sz);
+    if(err) return err;
+    _Alignas(16) char result_buf[16];
+    char* result = result_buf;
+    if(result_sz > 16){
+        result = Allocator_zalloc(ci_scratch_allocator(ci), result_sz);
+        if(!result){
+            return CI_OOM_ERROR;
+        }
+    }
+    err = ci_interp_expr(ci, &ci->top_frame, expr, result, result_sz);
+    if(err) goto cleanup;
+    CcQualType rt = ftype->return_type;
+    Atom a = NULL;
+    int tok_type = CPP_NUMBER;
+    while(ccqt_kind(rt) == CC_ENUM)
+        rt = ccqt_as_enum(rt)->underlying;
+    switch(ccqt_kind(rt)){
+        case CC_BASIC:
+            switch(rt.basic.kind){
+                case CCBT_COUNT:
+                case CCBT_INVALID:
+                case CCBT_nullptr_t:
+                    err = ci_error(ci, loc, "Invalid return type");
+                    goto cleanup;
+                case CCBT_void:
+                    goto cleanup; // output nothing
+                case CCBT_bool:
+                    a = *(_Bool*)result?AT_ATOMIZE(cpp->at, "true"):AT_ATOMIZE(cpp->at, "false");
+                    tok_type = CPP_IDENTIFIER;
+                    break;
+                case CCBT_char:
+                    if(ci_target(ci)->char_is_signed)
+                        goto signed_char;
+                    else goto unsigned_char;
+                case CCBT_signed_char:
+                    signed_char:
+                    a = cpp_atomizef(cpp, "%d", (int)*(signed char*)result);
+                    break;
+                case CCBT_unsigned_char:
+                    unsigned_char:
+                    a = cpp_atomizef(cpp, "%d", (int)*(unsigned char*)result);
+                    break;
+                case CCBT_short:
+                    a = cpp_atomizef(cpp, "%d", (int)*(short*)result);
+                    break;
+                case CCBT_unsigned_short:
+                    a = cpp_atomizef(cpp, "%d", (int)*(unsigned short*)result);
+                    break;
+                case CCBT_int:
+                    a = cpp_atomizef(cpp, "%d", (int)*(int*)result);
+                    break;
+                case CCBT_unsigned:
+                    a = cpp_atomizef(cpp, "%uu", (unsigned)*(unsigned*)result);
+                    break;
+                case CCBT_long:
+                    a = cpp_atomizef(cpp, "%ldl", (long)*(long*)result);
+                    break;
+                case CCBT_unsigned_long:
+                    a = cpp_atomizef(cpp, "%lulu", (unsigned long)*(unsigned long*)result);
+                    break;
+                case CCBT_long_long:
+                    a = cpp_atomizef(cpp, "%lldll", (long long)*(long long*)result);
+                    break;
+                case CCBT_unsigned_long_long:
+                    a = cpp_atomizef(cpp, "%llullu", (unsigned long long)*(unsigned long long*)result);
+                    break;
+                case CCBT_int128:
+                case CCBT_unsigned_int128:
+                    err = ci_error(ci, loc, "Invalid return type");
+                    goto cleanup;
+                case CCBT_float16:
+                    err = ci_unimplemented(ci, loc, "TODO");
+                    goto cleanup;
+                case CCBT_float:
+                    a = cpp_atomizef(cpp, "%.9gf", (double)*(float*)result);
+                    break;
+                case CCBT_double:
+                    a = cpp_atomizef(cpp, "%.17g", (double)*(double*)result);
+                    break;
+                case CCBT_long_double:
+                case CCBT_float128:
+                case CCBT_float_complex:
+                case CCBT_double_complex:
+                case CCBT_long_double_complex:
+                    err = ci_error(ci, loc, "Invalid return type");
+                    goto cleanup;
+            }
+            break;
+        case CC_ENUM:
+            return CI_UNREACHABLE_ERROR;
+        case CC_POINTER:{
+            CcPointer* ptr = ccqt_as_ptr(rt);
+            if(ccqt_is_basic(ptr->pointee) && ptr->pointee.basic.kind == CCBT_char){
+                // string literal
+                const char* s = *(const char**)result;
+                if(!s){
+                    a = AT_ATOMIZE(cpp->at, "NULL");
+                    tok_type = CPP_IDENTIFIER;
+                }
+                else {
+                    a = cpp_atomizef(cpp, "\"%.*s\"", (int)strlen(s), s); // FIXME: escape sequences, UCNS
+                    tok_type = CPP_STRING;
+                }
+                if(!a){
+                    err = CI_OOM_ERROR;
+                    goto cleanup;
+                }
+                break;
+            }
+            err = ci_unimplemented(ci, loc, "Unsupported return type pointer");
+            goto cleanup;
+        }
+        case CC_STRUCT:
+        case CC_UNION:
+        case CC_FUNCTION:
+        case CC_ARRAY:
+            err = ci_unimplemented(ci, loc, "Unsupported return type");
+            goto cleanup;
+    }
+    if(!a) {err = CI_OOM_ERROR; goto cleanup;}
+    CppToken tok = {
+        .type = tok_type,
+        .txt = {a->length, a->data},
+        .loc = loc,
+    };
+    err = cpp_push_tok(cpp, outtoks, tok);
+    goto cleanup;
+    cleanup:
+    if(result != result_buf) Allocator_free(ci_scratch_allocator(ci), result, result_sz);
+    return err;
+}
+
+static
+int
+ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CiInterpreter* ci = ctx;
+    // Skip whitespace.
+    while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
+    if(!ntoks || toks->type != CPP_IDENTIFIER)
+        return cpp_error(cpp, loc, "#pragma procmacro: expected function name");
+    StringView name = toks->txt;
+    // Look up the function.
+    Atom atom = AT_get_atom(cpp->at, name.text, name.length);
+    if(!atom)
+        return cpp_error(cpp, loc, "#pragma procmacro: unknown function '%.*s'", (int)name.length, name.text);
+    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    if(!func || !func->defined)
+        return cpp_error(cpp, loc, "#pragma procmacro: function '%.*s' not defined", (int)name.length, name.text);
+    if(!func->parsed){
+        int err = cc_parse_func_body(&ci->parser, func);
+        if(err) return err;
+    }
+    return cpp_define_builtin_func_macro(cpp, name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
 }
 
 static

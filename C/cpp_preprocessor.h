@@ -228,13 +228,14 @@ LOG_PRINTF(2, 3)
 static Atom _Nullable
 cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
 
-static
-_Bool
-cpp_has_include(CppPreprocessor* cpp, _Bool quote, StringView header_name);
+static _Bool cpp_has_include(CppPreprocessor* cpp, _Bool quote, StringView header_name);
 
-static
-int
-cpp_next_c_token(CppPreprocessor* cpp, CcToken* tok);
+// phase 5, phase 6, part of 7
+static int cpp_next_c_token(CppPreprocessor* cpp, CcToken* tok);
+
+// phase 5, phase 6, part of 7, but on an array
+// toks should already have gone through phase 1-4
+static int cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull toks, const CppToken* end, CcToken* ctok);
 
 static int cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok);
 

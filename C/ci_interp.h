@@ -53,7 +53,8 @@ struct CiInterpreter {
         uint32_t flags;
         struct {
             uint32_t can_dlopen: 1,
-                    _padding:31;
+                     procedural_macros: 1,
+                    _padding:30;
         };
     };
     int exit_code;

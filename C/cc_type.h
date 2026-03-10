@@ -20,7 +20,6 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_UNION,
     CC_FUNCTION,
     CC_ARRAY,
-    CC_VECTOR,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -110,9 +109,11 @@ struct CcArray {
             uint32_t is_static:     1;
             uint32_t is_vla:        1;
             uint32_t is_incomplete: 1;
-            uint32_t _padding:      25;
+            uint32_t is_vector:     1;
+            uint32_t _padding:      24;
         };
     };
+    uint32_t vector_size; // in bytes
     CcQualType element;
     union {
         size_t length;
@@ -218,18 +219,6 @@ struct CcEnum {
     CcEnumerator*_Nonnull* _Nullable enumerators;
 };
 
-typedef struct CcVector CcVector;
-struct CcVector {
-    _Alignas(8) union {
-        uint32_t _bits;
-        struct {
-            CcTypeKind kind:  4;
-            uint32_t _padding: 28;
-        };
-    };
-    CcQualType element;
-    uint32_t vector_size; // total size in bytes (attribute value)
-};
 
 static inline
 _Bool
@@ -332,7 +321,7 @@ static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || k == CC_ARRAY;
+    return k == CC_POINTER || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
 }
 
 static inline CcEnum*     ccqt_as_enum    (CcQualType t){ return _ccqt_to_type_ptr(t); }
@@ -341,7 +330,6 @@ static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_p
 static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
-static inline CcVector*   ccqt_as_vector  (CcQualType t){ return _ccqt_to_type_ptr(t); }
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -731,6 +731,234 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
     }
 }
 
+// Like cpp_next_token, but works with an array of tokens
+static
+int
+cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull toks, const CppToken* end, CcToken* ctok){
+    CppToken tok;
+    int err = 0;
+    // phase 5, phase 6, part of 7
+    while(*toks < end){
+        tok = *(*toks)++;
+        switch(tok.type){
+            // whitespace no longer significant, remove
+            case CPP_WHITESPACE:
+            case CPP_NEWLINE:
+                continue;
+            case CPP_PLACEMARKER:
+            case CPP_REENABLE:
+            case CPP_HEADER_NAME:
+                return CPP_UNREACHABLE_ERROR;
+            case CPP_PUNCTUATOR:
+                return cpp_punct_to_cc_tok(cpp, &tok, ctok);
+            case CPP_EOF:
+                *ctok = (CcToken){.type=CC_EOF};
+                return 0;
+            case CPP_OTHER:
+                return cpp_error(cpp, tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(tok.txt));
+            case CPP_NUMBER:
+                return cpp_number_to_cc_tok(cpp, &tok, ctok);
+            case CPP_IDENTIFIER:
+                if(sv_equals(tok.txt, SV("__extension__"))) continue;
+                return cpp_ident_to_cc_tok(cpp, &tok, ctok);
+            case CPP_CHAR:
+                return cpp_char_to_cc_tok(cpp, &tok, ctok);
+            case CPP_STRING:{
+                CppTokens* strings = cpp_get_scratch(cpp);
+                if(!strings) return CPP_OOM_ERROR;
+                err = cpp_push_tok(cpp, strings, tok);
+                StringView prefix = cpp_str_prefix(tok.txt);
+                if(err) goto string_finally;
+                // concatenate adjacent strings
+                for(;;){
+                    if(*toks >= end) break;
+                    const CppToken* save = *toks;
+                    CppToken next;
+                    do {
+                        next = *(*toks)++;
+                    }while(*toks < end && (next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE));
+                    if(next.type != CPP_STRING){
+                        *toks = save; // put it all back
+                        break;
+                    }
+                    err = cpp_merge_str_prefix(next.txt, &prefix);
+                    if(err){
+                        err = cpp_error(cpp, next.loc, "Invalid string concatenation (different prefixes)");
+                        goto string_finally;
+                    }
+                    err = cpp_push_tok(cpp, strings, next);
+                    if(err) goto string_finally;
+                }
+                if(!prefix.length || sv_equals(prefix, SV("u8"))){ // utf-8 strings
+                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+                    for(size_t i = 0; i < strings->count; i++){
+                        StringView s = strings->data[i].txt;
+                        while(s.text[0] != '"'){
+                            s.text++;
+                            s.length--;
+                        }
+                        s.text++;
+                        s.length--;
+                        s.length--;
+                        for(size_t c = 0; c < s.length;){
+                            const char* b = memchr(s.text+c, '\\', s.length-c);
+                            if(!b){
+                                msb_write_str(&sb, s.text+c, s.length-c);
+                                break;
+                            }
+                            size_t bpos = (size_t)(b - s.text);
+                            if(bpos > c)
+                                msb_write_str(&sb, s.text+c, bpos - c);
+                            c = bpos + 1; // skip backslash
+                            if(c >= s.length) break;
+                            switch(s.text[c++]){
+                                case 'n':  msb_write_char(&sb, '\n'); continue;
+                                case 't':  msb_write_char(&sb, '\t'); continue;
+                                case 'r':  msb_write_char(&sb, '\r'); continue;
+                                case '\\': msb_write_char(&sb, '\\'); continue;
+                                case '\'': msb_write_char(&sb, '\''); continue;
+                                case '"':  msb_write_char(&sb, '"');  continue;
+                                case 'a':  msb_write_char(&sb, '\a'); continue;
+                                case 'b':  msb_write_char(&sb, '\b'); continue;
+                                case 'f':  msb_write_char(&sb, '\f'); continue;
+                                case 'v':  msb_write_char(&sb, '\v'); continue;
+                                case '?':  msb_write_char(&sb, '?');  continue;
+                                case '0': case '1': case '2': case '3':
+                                case '4': case '5': case '6': case '7': {
+                                    c--; // back up to re-read first octal digit
+                                    unsigned char ch = 0;
+                                    for(int ii = 0; ii < 3 && c < s.length && s.text[c] >= '0' && s.text[c] <= '7'; ii++, c++)
+                                        ch = (unsigned char)((ch << 3) | (s.text[c] - '0'));
+                                    msb_write_char(&sb, (char)ch);
+                                    continue;
+                                }
+                                case 'x': {
+                                    unsigned char ch = 0;
+                                    while(c < s.length){
+                                        if(s.text[c] >= '0' && s.text[c] <= '9')      ch = (unsigned char)((ch << 4) | (s.text[c] - '0'));
+                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') ch = (unsigned char)((ch << 4) | (s.text[c] - 'a' + 10));
+                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') ch = (unsigned char)((ch << 4) | (s.text[c] - 'A' + 10));
+                                        else break;
+                                        c++;
+                                    }
+                                    msb_write_char(&sb, (char)ch);
+                                    continue;
+                                }
+                                case 'u': case 'U': {
+                                    int ndigits = s.text[c-1] == 'u' ? 4 : 8;
+                                    uint32_t cp = 0;
+                                    for(int ii = 0; ii < ndigits && c < s.length; ii++, c++){
+                                        uint32_t d;
+                                        if(s.text[c] >= '0' && s.text[c] <= '9')      d = (uint32_t)(s.text[c] - '0');
+                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') d = (uint32_t)(s.text[c] - 'a' + 10);
+                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') d = (uint32_t)(s.text[c] - 'A' + 10);
+                                        else break;
+                                        cp = (cp << 4) | d;
+                                    }
+                                    msb_write_utf32(&sb, cp);
+                                    continue;
+                                }
+                                default:
+                                    msb_write_char(&sb, s.text[c-1]);
+                                    continue;
+                            }
+                        }
+                    }
+                    msb_write_char(&sb, 0);
+                    if(sb.errored || sb.cursor > UINT32_MAX){
+                        msb_destroy(&sb);
+                        err = CPP_OOM_ERROR;
+                        goto string_finally;
+                    }
+                    *ctok = (CcToken){
+                        .str = {
+                            .type = CC_STRING_LITERAL,
+                            .stype = prefix.length ? CC_U8STRING : CC_STRING,
+                            .length = (uint32_t)sb.cursor,
+                            .utf8 = msb_detach_sv(&sb).text,
+                        },
+                        .loc = tok.loc,
+                    };
+                }
+                else if(sv_equals(prefix, SV("u")) || (cpp->target.wchar_type == CCBT_unsigned_short && sv_equals(prefix, SV("L")))){ // utf-16
+                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+                    for(size_t i = 0; i < strings->count; i++){
+                        StringView s = strings->data[i].txt;
+                        while(s.text[0] != '"'){ s.text++; s.length--; }
+                        s.text++; s.length--; s.length--;
+                        for(size_t c = 0; c < s.length;){
+                            uint32_t cp = cpp_decode_str_char(s, &c);
+                            if(cp <= 0xFFFF){
+                                uint16_t v = (uint16_t)cp;
+                                msb_write_str(&sb, (const char*)&v, 2);
+                            }
+                            else {
+                                uint32_t adj = cp - 0x10000;
+                                uint16_t hi = (uint16_t)(0xD800 | (adj >> 10));
+                                uint16_t lo = (uint16_t)(0xDC00 | (adj & 0x3FF));
+                                msb_write_str(&sb, (const char*)&hi, 2);
+                                msb_write_str(&sb, (const char*)&lo, 2);
+                            }
+                        }
+                    }
+                    uint16_t nul16 = 0;
+                    msb_write_str(&sb, (const char*)&nul16, 2);
+                    if(sb.errored || sb.cursor / 2 > UINT32_MAX){
+                        msb_destroy(&sb);
+                        err = CPP_OOM_ERROR;
+                        goto string_finally;
+                    }
+                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_uSTRING;
+                    *ctok = (CcToken){
+                        .str = {
+                            .type = CC_STRING_LITERAL,
+                            .stype = stype,
+                            .length = (uint32_t)(sb.cursor / 2),
+                            .utf16 = (const unsigned short*)msb_detach_sv(&sb).text,
+                        },
+                        .loc = tok.loc,
+                    };
+                }
+                else { // utf-32 (U"..." or L"..." when wchar is 32-bit)
+                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+                    for(size_t i = 0; i < strings->count; i++){
+                        StringView s = strings->data[i].txt;
+                        while(s.text[0] != '"'){ s.text++; s.length--; }
+                        s.text++; s.length--; s.length--;
+                        for(size_t c = 0; c < s.length;){
+                            uint32_t cp = cpp_decode_str_char(s, &c);
+                            msb_write_str(&sb, (const char*)&cp, 4);
+                        }
+                    }
+                    uint32_t nul32 = 0;
+                    msb_write_str(&sb, (const char*)&nul32, 4);
+                    if(sb.errored || sb.cursor / 4 > UINT32_MAX){
+                        msb_destroy(&sb);
+                        err = CPP_OOM_ERROR;
+                        goto string_finally;
+                    }
+                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_USTRING;
+                    *ctok = (CcToken){
+                        .str = {
+                            .type = CC_STRING_LITERAL,
+                            .stype = stype,
+                            .length = (uint32_t)(sb.cursor / 4),
+                            .utf32 = (const unsigned int*)msb_detach_sv(&sb).text,
+                        },
+                        .loc = tok.loc,
+                    };
+                }
+                string_finally:
+                cpp_release_scratch(cpp, strings);
+                return err;
+            }
+        }
+        return 0;
+    }
+    *ctok = (CcToken){.type=CC_EOF};
+    return 0;
+}
+
 static
 int
 cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){

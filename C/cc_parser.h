@@ -153,6 +153,7 @@ struct CcParser {
     PointerMap used_var_calls;  // CcExpr* set, variadic call expressions (value = key)
 };
 
+
 static int cc_parse_all(CcParser*);
 static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);

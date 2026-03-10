@@ -41,8 +41,11 @@ int
 cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
         case CC_POINTER:
-        case CC_ARRAY:
         case CC_FUNCTION:
+            *out = &ffi_type_pointer;
+            return NC_NO_ERROR;
+        case CC_ARRAY:
+            if(ccqt_as_array(t)->is_vector) return NC_UNSUPPORTED_TYPE;
             *out = &ffi_type_pointer;
             return NC_NO_ERROR;
         case CC_ENUM:{
@@ -83,8 +86,6 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
             *out = st;
             return NC_NO_ERROR;
         }
-        case CC_VECTOR:
-            return NC_UNSUPPORTED_TYPE;
         case CC_BASIC:
             switch(t.basic.kind){
                 case CCBT_void:

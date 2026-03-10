@@ -30,13 +30,15 @@
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
 
-typedef struct {
+typedef struct ProgArgvCtx ProgArgvCtx;
+struct ProgArgvCtx {
     const char*const* args;
     size_t count;
     const char* filename;
-} ProgArgvCtx;
+};
 
-static int
+static
+int
 cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
 
 int main(int argc, char** argv, char** envp){
@@ -69,6 +71,7 @@ int main(int argc, char** argv, char** envp){
             .return_size = sizeof interp.exit_code,
         },
         .can_dlopen = 1,
+        .procedural_macros = 1,
     };
     LOCK_T_init(&interp.error_lock);
     Marray(StringView) libs = {0}, lib_paths = {0};
@@ -80,7 +83,7 @@ int main(int argc, char** argv, char** envp){
         .type_name = SV("lib"),
         .user_data = &interp.parser.cpp,
     };
-    const char* filename = NULL;
+    StringView filename = {0};
     enum { MAX_PROG_ARGS = 128 };
     const char* prog_args[MAX_PROG_ARGS];
     size_t num_prog_args = 0;
@@ -201,7 +204,7 @@ int main(int argc, char** argv, char** envp){
     ProgArgvCtx argv_ctx = {
         .args = prog_args,
         .count = num_prog_args,
-        .filename = filename,
+        .filename = filename.text,
     };
     err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__ARGV__"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
     if(err) return err;
@@ -239,7 +242,9 @@ int main(int argc, char** argv, char** envp){
             return err;
         }
     }
-    if(!filename && !repl){
+    if(filename.length && (sv_equals(filename, SV("-")) || sv_equals(filename, SV("/dev/stdin"))))
+        filename = (StringView){0};
+    if(!filename.length && !repl){
         LongString txt;
         #ifdef _WIN32
         HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
@@ -249,8 +254,8 @@ int main(int argc, char** argv, char** envp){
         FileError fe = read_file_handle(handle, MALLOCATOR, &txt);
         if(fe.errored)
             return 1;
-        filename = "(stdin)";
-        fc_write_path(fc, filename, strlen(filename));
+        filename = SV("(stdin)");
+        fc_write_path(fc, filename.text, filename.length);
         err = fc_cache_file(fc, LS_to_SV(txt));
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
@@ -258,10 +263,10 @@ int main(int argc, char** argv, char** envp){
     err = cpp_cli_defines(&interp.parser.cpp);
     if(err) return err;
     fc->may_read_real_files = 1;
-    if(filename){
-        err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){strlen(filename), filename});
+    if(filename.length){
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){filename.length, filename.text});
         if(err){
-            log_error(logger, "Unable to read '%s'", filename);
+            log_error(logger, "Unable to read '%s'", filename.text);
             return err;
         }
     }
@@ -357,7 +362,7 @@ int main(int argc, char** argv, char** envp){
             int main_argc = 1 + (int)num_prog_args;
             char** main_argv = Allocator_zalloc(MALLOCATOR, (main_argc+1)*sizeof *main_argv);
             if(!main_argv) return 1;
-            main_argv[0] = Allocator_strndup(MALLOCATOR, filename, strlen(filename));
+            main_argv[0] = Allocator_strndup(MALLOCATOR, filename.text, filename.length);
             for(size_t i = 0; i < num_prog_args; i++)
                 main_argv[1+i] = Allocator_strndup(MALLOCATOR, prog_args[i], strlen(prog_args[i]));
             err = ci_call_main(&interp, main_argc, main_argv, envp, &main_ret);
@@ -369,7 +374,8 @@ int main(int argc, char** argv, char** envp){
     return 0;
 }
 
-static int
+static
+int
 cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
     ProgArgvCtx* pctx = ctx;
     // Parse the index from arg 0
