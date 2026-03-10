@@ -2,9 +2,11 @@
 #pragma pkg_config "sdl2"
 #endif
 #pragma lib "SDL2"
-#include <std.h>
 #include <SDL2/SDL.h>
 
+// This is AI slop but I am too lazy to write one of these myself.
+// I didn't feel like cleaning it up.
+//
 // Interactive Mandelbrot set explorer.
 // Scroll to zoom, click and drag to pan. Press r to reset, q/Escape to quit.
 // Rendering is multithreaded using a pool of SDL threads + semaphores.
@@ -150,7 +152,6 @@ int render_worker(void* arg){
     for(;;){
         SDL_SemWait(w->work_ready);
         if(w->quit) return 0;
-        SDL_Log("worker %d running on thread %lu (rows %d-%d)", w->id, (unsigned long)SDL_ThreadID(), w->y_start, w->y_end - 1);
         fill_rect(w->y_start, 0, w->y_end, RW, w->cx, w->cy, w->vscale);
         SDL_SemPost(w->work_done);
     }
@@ -247,7 +248,7 @@ while(running){
     if(dirty){
         dirty = 0;
         // Clear iteration cache
-        memset(iters, -1, sizeof iters);
+        SDL_memset(iters, -1, sizeof iters);
         // Dispatch work to pool
         for(int i = 0; i < NTHREADS; i++){
             workers[i].cx = cx;

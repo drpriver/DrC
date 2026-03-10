@@ -37,8 +37,6 @@ if __name__  == '__main__':
             continue
         if 'Fetched' in p:
             continue
-        if any(pt.startswith('SDL') for pt in p.split('/')):
-            continue
         if 'pymodules' in p:
             continue
         if '.app' in p:

@@ -1033,8 +1033,16 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             if(left->type.is_const)
                 return cc_error(p, tok.loc, "cannot assign to variable with const-qualified type");
             CcExpr* right;
-            // right-associative: recurse into assignment_expr
-            err = cc_parse_assignment_expr(p, &right);
+            CcToken peek_assign;
+            err = cc_peek(p, &peek_assign);
+            if(err) return err;
+            if(kind == CC_EXPR_ASSIGN && peek_assign.type == CC_PUNCTUATOR && peek_assign.punct.punct == CC_lbrace){
+                err = cc_parse_init_list(p, &right, left->type);
+            }
+            else {
+                // right-associative: recurse into assignment_expr
+                err = cc_parse_assignment_expr(p, &right);
+            }
             if(err) return err;
             // For += and -=, pointer +/- integer is valid pointer arithmetic.
             if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN)
@@ -6932,7 +6940,12 @@ cc_parse_statement(CcParser* p){
                         ret_type = p->current_func->type->return_type;
 
                     if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
-                        err = cc_parse_expr(p, &ret_expr);
+                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
+                            err = cc_parse_init_list(p, &ret_expr, ret_type);
+                        }
+                        else {
+                            err = cc_parse_expr(p, &ret_expr);
+                        }
                         if(err) return err;
                         err = cc_implicit_cast(p, ret_expr, ret_type, &ret_expr); // technically this casts to void if returning from void func, but that's an ok extension
                         if(err) return err;
