@@ -6965,6 +6965,7 @@ cpp_lex_str_to_keyword(StringView txt){
         default:
             return (uint32_t)-1;
     }
+#undef X
 }
 static
 int

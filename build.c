@@ -27,9 +27,20 @@
 //
 // and in ~/.config/fish/completions/mk.fish:
 // ```fish
+// set -g __mk_trusted_dirs "$HOME/<safe>"
+//
+// function __mk_is_trusted
+//     for d in $__mk_trusted_dirs
+//         if string match -q "$d/*" "$PWD"
+//             return 0
+//         end
+//     end
+//     return 1
+// end
+//
 // function __mk_update_completions --on-variable PWD
 //     complete -c mk -e
-//     if test -f ./build -a -x ./build
+//     if __mk_is_trusted; and test -f ./build.c; and git ls-files --error-unmatch build.c &>/dev/null; and test -f ./build -a -x ./build
 //         ./build --no-rebuild --fish-completions 2>/dev/null | string replace -r '^complete -c \\S+' 'complete -c mk' | while read -l line
 //             eval $line
 //         end
@@ -43,9 +54,6 @@
 // __mk_update_completions
 // ```
 // So I can just type `mk` in my terminal and it just werks even when I go to other nobuild projects.
-//
-// Yeah you can probably pwn me by putting a ./build script in an arbitrary
-// directory, oh well.
 //
 #include "Drp/compiler_warnings.h"
 #include "Drp/drbuild.h"

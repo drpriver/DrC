@@ -92,6 +92,7 @@ static _Bool cc_explicit_castable(CcQualType from, CcQualType to);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
 static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
+static void cc_release_expr(CcParser* p, CcExpr* e);
 
 static CppFuncMacroFn ci_shell, ci_procmacro_expand;
 
@@ -3312,6 +3313,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     err = cpp_push_tok(cpp, outtoks, tok);
     goto cleanup;
     cleanup:
+    if(expr) cc_release_expr(&ci->parser, expr);
     if(result != result_buf) Allocator_free(ci_scratch_allocator(ci), result, result_sz);
     return err;
 }

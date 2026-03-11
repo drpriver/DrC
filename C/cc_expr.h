@@ -256,7 +256,7 @@ struct CcExpr {
         float float_;
         double double_;
         const char* text;
-        CcStatement* stmt;
+        // CcStatement* stmt;
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;

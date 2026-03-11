@@ -25,7 +25,9 @@ static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
-static CcExpr* _Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
+static void _cc_release_expr(CcParser* p, CcExpr*, size_t nvalues);
+static void cc_release_expr(CcParser* p, CcExpr*);
+static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
 warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
@@ -1718,6 +1720,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, CC_rparen);
                     if(err) return err;
                     CcEvalResult ev = cc_eval_expr(p,arg);
+                    cc_release_expr(p, arg);
                     CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
                     if(!node) return CC_OOM_ERROR;
                     node->integer = (ev.kind != CC_EVAL_ERROR) ? 1 : 0;
@@ -1774,6 +1777,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             err = cc_parse_assignment_expr(p, &idx_expr);
                             if(err) return err;
                             CcEvalResult idx_val = cc_eval_expr(p,idx_expr);
+                            cc_release_expr(p, idx_expr);
                             int64_t idx;
                             switch(idx_val.kind){
                                 case CC_EVAL_INT:    idx = idx_val.i; break;
@@ -1843,6 +1847,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* mo;
                     err = cc_parse_assignment_expr(p, &mo);
                     if(err) return err;
+                    cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     uint32_t pointee_sz;
@@ -1875,6 +1880,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* mo;
                     err = cc_parse_assignment_expr(p, &mo);
                     if(err) return err;
+                    cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 1);
@@ -1909,6 +1915,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* mo;
                     err = cc_parse_assignment_expr(p, &mo);
                     if(err) return err;
+                    cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 2);
@@ -2035,6 +2042,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         const_vals[i] = (unsigned)ev.i;
                         if(const_vals[i] >= CC_MO_COUNT)
                             return cc_error(p, const_expr->loc, "invalid memory order value %u", const_vals[i]);
+                        cc_release_expr(p, const_expr);
                     }
                     if(op == CC_ATOMIC_COMPARE_EXCHANGE){
                         node->atomic.weak = const_vals[0];
@@ -2063,6 +2071,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     unsigned order = (unsigned)ev.i;
                     if(order >= CC_MO_COUNT)
                         return cc_error(p, const_expr->loc, "invalid memory order value %u", order);
+                    cc_release_expr(p, const_expr);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 0);
@@ -2095,6 +2104,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         CcExpr* ignored;
                         err = cc_parse_assignment_expr(p, &ignored);
                         if(err) return err;
+                        cc_release_expr(p, ignored);
                     }
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -2186,6 +2196,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* unused;
                     err = cc_parse_assignment_expr(p, &unused);
                     if(err) return err;
+                    cc_release_expr(p, unused);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     return 0;
@@ -2366,6 +2377,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, &arg);
                     if(err) return err;
+                    cc_release_expr(p, arg);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node;
@@ -2468,6 +2480,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             CcExpr* sz;
                             err = cc_sizeof_as_expr(p, result->type, tok.loc, &sz);
                             if(err) return err;
+                            cc_release_expr(p, result);
                             *out = sz;
                             return 0;
                         }
@@ -2490,6 +2503,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 CcExpr* sz;
                 err = cc_sizeof_as_expr(p, operand->type, tok.loc, &sz);
                 if(err) return err;
+                cc_release_expr(p, operand);
                 *out = sz;
                 return 0;
             }
@@ -2534,6 +2548,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     err = cc_alignof_as_expr(p, operand->type, tok.loc, &al);
                     if(err) return err;
                 }
+                cc_release_expr(p, operand);
                 *out = al;
                 return 0;
             }
@@ -2553,6 +2568,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     err = cc_parse_expr(p, &expr);
                     if(err) return err;
                     arr_type = expr->type;
+                    cc_release_expr(p, expr);
                 }
                 err = cc_expect_punct(p, CC_rparen);
                 if(err) return err;
@@ -2626,6 +2642,7 @@ cc_parse_Generic(CcParser* p, CcExpr*_Nullable*_Nonnull out){
         err = cc_parse_assignment_expr(p, &condition);
         if(err) return err;
         tswitch = condition->type;
+        cc_release_expr(p, condition);
         tswitch.quals = 0;
         CcTypeKind tk = ccqt_kind(tswitch);
         switch(tk){
@@ -2888,6 +2905,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         else
                             return cc_error(p, func_expr->loc, "push_method: expected function");
                         func->name = method_name;
+                        cc_release_expr(p, func_expr);
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         CcStruct* s = ccqt_as_struct(qt);
@@ -2901,6 +2919,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                             .is_method = 1,
                             .loc = operand->loc,
                         };
+                        cc_release_expr(p, operand);
                         CcExpr* dummy = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_void));
                         if(!dummy) return CC_OOM_ERROR;
                         operand = dummy;
@@ -2992,6 +3011,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                                 err = cc_parse_assignment_expr(p, &arg_expr);
                                 if(err) return err;
                                 arg_type = arg_expr->type;
+                                cc_release_expr(p, arg_expr);
                             }
                             arg_val = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                             if(!arg_val) return CC_OOM_ERROR;
@@ -3209,6 +3229,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         err = cc_parse_assignment_expr(p, &idx_expr);
                         if(err) goto call_cleanup;
                         CcEvalResult ev = cc_eval_expr(p,idx_expr);
+                        cc_release_expr(p, idx_expr);
                         int64_t idx_signed;
                         switch(ev.kind){
                             case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -4512,7 +4533,164 @@ static
 CcExpr* _Nullable
 _cc_alloc_expr(CcParser* p, size_t nvalues){
     size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
+    #if CC_RECYCLE_EXPRS
+    if(nvalues < sizeof p->exprs / sizeof p->exprs[0]){
+        CcExpr* n = fl_pop(&p->exprs[nvalues]); 
+        if(n){
+            // cc_info(p, (SrcLoc){0}, "free list hit");
+            memset(n, 0, size);
+            return n;
+        }
+    }
+    #endif
     return Allocator_zalloc(cc_allocator(p), size);
+}
+static
+void
+_cc_release_expr(CcParser* p, CcExpr* e, size_t nvalues){
+    #if CC_RECYCLE_EXPRS
+    if(nvalues < sizeof p->exprs / sizeof p->exprs[0]){
+        fl_push(&p->exprs[nvalues], e);
+        return;
+    }
+    #endif
+    size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
+    Allocator_free(cc_allocator(p), e, size);
+}
+static
+size_t
+cc_expr_nvalues(CcExpr* e){
+    switch(e->kind){
+        // nvalues = 0, has lhs
+        case CC_EXPR_NEG:
+        case CC_EXPR_POS:
+        case CC_EXPR_BITNOT:
+        case CC_EXPR_LOGNOT:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ADDR:
+        case CC_EXPR_PREINC:
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_POSTDEC:
+        case CC_EXPR_CAST:
+        case CC_EXPR_SIZEOF_VMT:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_INTERN:
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            return 0;
+        // nvalues = 0, no children
+        case CC_EXPR_VALUE:
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_BUILTIN:
+            return 0;
+        // nvalues = 1
+        case CC_EXPR_ADD:
+        case CC_EXPR_SUB:
+        case CC_EXPR_MUL:
+        case CC_EXPR_DIV:
+        case CC_EXPR_MOD:
+        case CC_EXPR_BITAND:
+        case CC_EXPR_BITOR:
+        case CC_EXPR_BITXOR:
+        case CC_EXPR_LSHIFT:
+        case CC_EXPR_RSHIFT:
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR:
+        case CC_EXPR_EQ:
+        case CC_EXPR_NE:
+        case CC_EXPR_LT:
+        case CC_EXPR_GT:
+        case CC_EXPR_LE:
+        case CC_EXPR_GE:
+        case CC_EXPR_ASSIGN:
+        case CC_EXPR_ADDASSIGN:
+        case CC_EXPR_SUBASSIGN:
+        case CC_EXPR_MULASSIGN:
+        case CC_EXPR_DIVASSIGN:
+        case CC_EXPR_MODASSIGN:
+        case CC_EXPR_BITANDASSIGN:
+        case CC_EXPR_BITORASSIGN:
+        case CC_EXPR_BITXORASSIGN:
+        case CC_EXPR_LSHIFTASSIGN:
+        case CC_EXPR_RSHIFTASSIGN:
+        case CC_EXPR_COMMA:
+        case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
+            return 1;
+        // nvalues = 2
+        case CC_EXPR_TERNARY:
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_SUB_OVERFLOW:
+            return 2;
+        // variable
+        case CC_EXPR_CALL:
+            return e->call.nargs;
+        // these need case-by-case
+        case CC_EXPR_VA:
+            return (e->va.op == CC_VA_COPY) ? 1 : 0;
+        case CC_EXPR_ATOMIC:
+            switch(e->atomic.op){
+                case CC_ATOMIC_LOAD_N:
+                case CC_ATOMIC_THREAD_FENCE:
+                case CC_ATOMIC_SIGNAL_FENCE:
+                    return 0;
+                case CC_ATOMIC_STORE_N:
+                case CC_ATOMIC_FETCH_ADD:
+                case CC_ATOMIC_FETCH_SUB:
+                case CC_ATOMIC_EXCHANGE_N:
+                case CC_ATOMIC_LOAD:
+                case CC_ATOMIC_STORE:
+                    return 1;
+                case CC_ATOMIC_EXCHANGE:
+                case CC_ATOMIC_COMPARE_EXCHANGE_N:
+                case CC_ATOMIC_COMPARE_EXCHANGE:
+                    return 2;
+            }
+            return 0;
+        case CC_EXPR_TYPE_INTROSPECTION:
+            return (e->type_introspection.op >= CC_TYPE_IS_CALLABLE_WITH) ? 1 : 0;
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+            return 0;
+    }
+    return 0;
+}
+
+static
+void
+cc_release_expr(CcParser* p, CcExpr* e){
+    size_t nvalues = cc_expr_nvalues(e);
+    for(size_t i = 0; i < nvalues; i++)
+        cc_release_expr(p, e->values[i]);
+    // Release lhs child if this kind uses lhs as a CcExpr*
+    switch(e->kind){
+        case CC_EXPR_VALUE:
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_BUILTIN:
+            break;
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+            if(e->init_list){
+                for(uint32_t i = 0; i < e->init_list->count; i++){
+                    if(e->init_list->entries[i].value)
+                        cc_release_expr(p, e->init_list->entries[i].value);
+                }
+                Allocator_free(cc_allocator(p), e->init_list, sizeof(CcInitList) + e->init_list->count * sizeof(CcInitEntry));
+            }
+            break;
+        default:
+            if(e->lhs)
+                cc_release_expr(p, e->lhs);
+            break;
+    }
+    _cc_release_expr(p, e, nvalues);
 }
 
 static
@@ -4660,6 +4838,7 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                     if(!expr)
                         return cc_error(p, tok.loc, "expected constant expression for aligned attribute");
                     CcEvalResult val = cc_eval_expr(p,expr);
+                    cc_release_expr(p, expr);
                     if(val.kind == CC_EVAL_ERROR)
                         return cc_error(p, tok.loc, "aligned attribute requires a constant expression");
                     if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
@@ -4687,6 +4866,7 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                 if(!expr)
                     return cc_error(p, tok.loc, "expected constant expression for vector_size attribute");
                 CcEvalResult val = cc_eval_expr(p,expr);
+                cc_release_expr(p, expr);
                 if(val.kind == CC_EVAL_ERROR)
                     return cc_error(p, tok.loc, "vector_size attribute requires a constant expression");
                 if(val.kind != CC_EVAL_INT && val.kind != CC_EVAL_UINT)
@@ -5352,6 +5532,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
             err = cc_parse_assignment_expr(p, &idx_expr);
             if(err) return err;
             CcEvalResult ev = cc_eval_expr(p,idx_expr);
+            cc_release_expr(p, idx_expr);
             int64_t idx_signed;
             switch(ev.kind){
                 case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -5750,6 +5931,7 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                     err = cc_parse_assignment_expr(p, &idx_expr);
                     if(err) return err;
                     CcEvalResult ev = cc_eval_expr(p,idx_expr);
+                    cc_release_expr(p, idx_expr);
                     int64_t idx_signed;
                     switch(ev.kind){
                         case CC_EVAL_INT:    idx_signed = ev.i; break;
@@ -6077,6 +6259,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         goto struct_err;
                     }
                     CcEvalResult bw_val = cc_eval_expr(p,bw_expr);
+                    cc_release_expr(p, bw_expr);
                     if(bw_val.kind == CC_EVAL_ERROR){
                         err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
                         goto struct_err;
@@ -6202,6 +6385,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                             goto struct_err;
                         }
                         CcEvalResult bw_val = cc_eval_expr(p,bw_expr);
+                        cc_release_expr(p, bw_expr);
                         if(bw_val.kind == CC_EVAL_ERROR){
                             err = cc_error(p, tok.loc, "bitfield width must be a constant expression");
                             goto struct_err;
@@ -6472,6 +6656,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                     goto enum_err;
                 }
                 CcEvalResult val = cc_eval_expr(p,expr);
+                cc_release_expr(p, expr);
                 switch(val.kind){
                     case CC_EVAL_INT:  next_value = val.i; break;
                     case CC_EVAL_UINT: next_value = (int64_t)val.u; break;
@@ -6832,6 +7017,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             if(!expr)
                                 return cc_error(p, tok.loc, "expected expression in _Alignas");
                             CcEvalResult val = cc_eval_expr(p,expr);
+                            cc_release_expr(p, expr);
                             int64_t av;
                             switch(val.kind){
                                 case CC_EVAL_INT:    av = val.i; break;
@@ -7169,13 +7355,15 @@ cc_eval_static_if_cond(CcParser* p, _Bool* out){
     err = cc_expect_punct(p, ')');
     if(err) return err;
     CcEvalResult ev = cc_eval_expr(p,cond);
+    SrcLoc cond_loc = cond->loc;
+    cc_release_expr(p, cond);
     switch(ev.kind){
         case CC_EVAL_INT:    *out = ev.i != 0; return 0;
         case CC_EVAL_UINT:   *out = ev.u != 0; return 0;
         case CC_EVAL_FLOAT:  *out = ev.f != 0; return 0;
         case CC_EVAL_DOUBLE: *out = ev.d != 0; return 0;
         case CC_EVAL_TYPE: case CC_EVAL_ERROR:
-            return cc_error(p, cond->loc, "static if condition must be a constant expression");
+            return cc_error(p, cond_loc, "static if condition must be a constant expression");
     }
     return CC_UNREACHABLE_ERROR;
 }
@@ -7598,6 +7786,7 @@ cc_parse_statement(CcParser* p){
                     err = cc_expect_punct(p, ':');
                     if(err) return err;
                     CcEvalResult ev = cc_eval_expr(p,case_expr);
+                    cc_release_expr(p, case_expr);
                     if(ev.kind == CC_EVAL_ERROR)
                         return cc_error(p, tok.loc, "case label must be a constant expression");
                     uint64_t case_val;
@@ -7967,6 +8156,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 if(err) return err;
                 if(!dim) return cc_error(p, tok.loc, "Expected array dimension");
                 CcEvalResult val = cc_eval_expr(p,dim);
+                cc_release_expr(p, dim);
                 int64_t length;
                 switch(val.kind){
                     case CC_EVAL_INT:    length = val.i; break;
@@ -8614,6 +8804,7 @@ cc_handle_static_asssert(CcParser* p){
         case CC_EVAL_FLOAT:  sa_truthy = val.f != 0; break;
         case CC_EVAL_DOUBLE: sa_truthy = val.d != 0; break;
         case CC_EVAL_TYPE: case CC_EVAL_ERROR:
+            cc_release_expr(p, expr);
             return cc_error(p, assert_loc, "static_assert expression is not a constant expression");
     }
     // Check for optional message.
@@ -8638,6 +8829,7 @@ cc_handle_static_asssert(CcParser* p){
         MStringBuilder tmp = {.allocator = allocator_from_arena(&p->scratch_arena)};
         msb_write_literal(&tmp, "static assertion failed: ");
         cc_print_expr(&tmp, expr);
+        cc_release_expr(p, expr);
         if(msg){
             msb_write_literal(&tmp, ": \"");
             msb_write_str(&tmp, msg, msg_len - 1);
@@ -8647,6 +8839,7 @@ cc_handle_static_asssert(CcParser* p){
         cc_error(p, assert_loc, "%.*s", sv_p(sv));
         return CC_SYNTAX_ERROR;
     }
+    cc_release_expr(p, expr);
     return 0;
 }
 

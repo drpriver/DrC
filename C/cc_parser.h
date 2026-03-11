@@ -138,6 +138,10 @@ struct CcParser {
     CcFunc*_Nullable current_func;
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
+    #define CC_RECYCLE_EXPRS 1
+    #if CC_RECYCLE_EXPRS
+    FreeList(CcExpr) exprs[3];
+    #endif
     ArenaAllocator scratch_arena;
     uint32_t loop_depth;
     uint32_t switch_depth;
