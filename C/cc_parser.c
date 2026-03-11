@@ -25,7 +25,7 @@ static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
-static CcExpr* _Nullable cc_alloc_expr(CcParser* p, size_t nvalues);
+static CcExpr* _Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
@@ -407,11 +407,8 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         int err = cc_desugar_compound_literal(p, e, &e);
         if(err) return err;
     }
-    CcExpr* cast = cc_alloc_expr(p, 0);
+    CcExpr* cast = cc_make_expr(p, CC_EXPR_CAST, e->loc, target, 0);
     if(!cast) return CC_OOM_ERROR;
-    cast->kind = CC_EXPR_CAST;
-    cast->loc = e->loc;
-    cast->type = target;
     cast->lhs = e;
     *out = cast;
     return 0;
@@ -521,16 +518,11 @@ cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     err = cc_expect_punct(p, CC_rbrace);
     if(err) return err;
     // Build CC_EXPR_FUNCTION node
-    CcExpr* node = cc_alloc_expr(p, 0);
+    CcExpr* node = cc_make_expr(p, CC_EXPR_FUNCTION, loc, (CcQualType){.bits=(uintptr_t)func->type}, 0);
     if(!node) return CC_OOM_ERROR;
-    node->kind = CC_EXPR_FUNCTION;
-    node->loc = loc;
-    node->type = (CcQualType){.bits = (uintptr_t)func->type};
     node->func = func;
-    {
-        int perr = PM_put(&p->used_funcs, cc_allocator(p), func, func);
-        if(perr) return CC_OOM_ERROR;
-    }
+    err = PM_put(&p->used_funcs, cc_allocator(p), func, func);
+    if(err) return CC_OOM_ERROR;
     return cc_parse_postfix(p, node, out);
 }
 
@@ -562,25 +554,19 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         p->current_func->frame_size += sz;
     }
     else {
-        int perr = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
-        if(perr) return CC_OOM_ERROR;
+        int err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
+        if(err) return CC_OOM_ERROR;
     }
     cl->kind = CC_EXPR_INIT_LIST; // demote to plain init list for the assignment RHS
-    CcExpr* var_ref = cc_alloc_expr(p, 0);
+    CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
     if(!var_ref) return CC_OOM_ERROR;
-    var_ref->kind = CC_EXPR_VARIABLE;
     var_ref->is_lvalue = 1;
-    var_ref->loc = loc;
-    var_ref->type = type;
     var_ref->var = anon;
     CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, loc, type, var_ref, cl);
     if(!assign) return CC_OOM_ERROR;
-    CcExpr* var_ref2 = cc_alloc_expr(p, 0);
+    CcExpr* var_ref2 = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
     if(!var_ref2) return CC_OOM_ERROR;
-    var_ref2->kind = CC_EXPR_VARIABLE;
     var_ref2->is_lvalue = 1;
-    var_ref2->loc = loc;
-    var_ref2->type = type;
     var_ref2->var = anon;
     CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, loc, type, assign, var_ref2);
     if(!comma) return CC_OOM_ERROR;
@@ -1001,14 +987,11 @@ cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             CcExpr* right;
             err = cc_parse_assignment_expr(p, &right);
             if(err) return err;
-            CcExpr* node = cc_alloc_expr(p, 1);
+            CcExpr* node = cc_make_expr(p, CC_EXPR_COMMA, tok.loc, right->type, 1);
             if(!node) return CC_OOM_ERROR;
-            node->kind = CC_EXPR_COMMA;
             node->is_lvalue = right->is_lvalue;
-            node->loc = tok.loc;
             node->lhs = left;
             node->values[0] = right;
-            node->type = right->type;
             left = node;
         }
         else {
@@ -1050,11 +1033,8 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_type_name(p, &parsed_type);
                 if(err) return err;
                 if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
-                right = cc_alloc_expr(p, 0);
+                right = cc_value_expr(p, tok.loc, ccqt_basic(CCBT__Type));
                 if(!right) return CC_OOM_ERROR;
-                right->kind = CC_EXPR_VALUE;
-                right->loc = tok.loc;
-                right->type = ccqt_basic(CCBT__Type);
                 right->uinteger = parsed_type.bits;
             }
             else {
@@ -1074,11 +1054,8 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             }
             if(kind == CC_EXPR_ASSIGN && right->kind == CC_EXPR_COMPOUND_LITERAL)
                 right->kind = CC_EXPR_INIT_LIST;
-            CcExpr* node = cc_alloc_expr(p, 1);
+            CcExpr* node = cc_make_expr(p, kind, tok.loc, left->type, 1);
             if(!node) return CC_OOM_ERROR;
-            node->kind = kind;
-            node->loc = tok.loc;
-            node->type = left->type;
             node->lhs = left;
             node->values[0] = right;
             *out = node;
@@ -1201,11 +1178,8 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
         if(err) return err;
         err = cc_implicit_cast(p, else_expr, common, &else_expr);
         if(err) return err;
-        CcExpr* node = cc_alloc_expr(p, 2);
+        CcExpr* node = cc_make_expr(p, CC_EXPR_TERNARY, tok.loc, common, 2);
         if(!node) return CC_OOM_ERROR;
-        node->kind = CC_EXPR_TERNARY;
-        node->loc = tok.loc;
-        node->type = common;
         node->lhs = cond;
         node->values[0] = then_expr;
         node->values[1] = else_expr;
@@ -1345,11 +1319,8 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 break;
             }
         }
-        CcExpr* node = cc_alloc_expr(p, 1);
+        CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 1);
         if(!node) return CC_OOM_ERROR;
-        node->kind = kind;
-        node->loc = tok.loc;
-        node->type = result_type;
         node->lhs = left;
         node->values[0] = right;
         left = node;
@@ -1390,11 +1361,8 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 }
                 // (type).member → _Type value
                 if(peek2.type == CC_PUNCTUATOR && peek2.punct.punct == CC_dot){
-                    CcExpr* type_val = cc_alloc_expr(p, 0);
+                    CcExpr* type_val = cc_value_expr(p, tok.loc, ccqt_basic(CCBT__Type));
                     if(!type_val) return CC_OOM_ERROR;
-                    type_val->kind = CC_EXPR_VALUE;
-                    type_val->loc = tok.loc;
-                    type_val->type = ccqt_basic(CCBT__Type);
                     type_val->uinteger = cast_type.bits;
                     return cc_parse_postfix(p, type_val, out);
                 }
@@ -1476,12 +1444,9 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     result_type = operand->type;
                     break;
             }
-            CcExpr* node = cc_alloc_expr(p, 0);
+            CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 0);
             if(!node) return CC_OOM_ERROR;
-            node->kind = kind;
             node->is_lvalue = kind == CC_EXPR_DEREF;
-            node->loc = tok.loc;
-            node->type = result_type;
             node->lhs = operand;
             *out = node;
             return 0;
@@ -1504,10 +1469,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     if(err) return err;
     switch(tok.type){
         case CC_CONSTANT: {
-            CcExpr* node = cc_alloc_expr(p, 0);
+            CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, (CcQualType){0}, 0);
             if(!node) return CC_OOM_ERROR;
-            node->kind = CC_EXPR_VALUE;
-            node->loc = tok.loc;
             switch(tok.constant.ctype){
                 case CC_FLOAT:
                     node->type.basic.kind = CCBT_float;
@@ -1566,10 +1529,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             return 0;
         }
         case CC_STRING_LITERAL: {
-            CcExpr* node = cc_alloc_expr(p, 0);
+            CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, (CcQualType){0}, 0);
             if(!node) return CC_OOM_ERROR;
-            node->kind = CC_EXPR_VALUE;
-            node->loc = tok.loc;
             node->str.length = tok.str.length;
             node->text = tok.str.utf8;
             // Type: char[N] (array of char, length includes null terminator)
@@ -2265,20 +2226,20 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_alloc_expr(p, 0);
-                    if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_VALUE;
-                    node->loc = tok.loc;
+                    CcExpr* node;
                     if(builtin == CC__builtin_huge_valf){
-                        node->type = ccqt_basic(CCBT_float);
+                        node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_float), 0);
+                        if(!node) return CC_OOM_ERROR;
                         node->float_ = (float)(1.0/0.0);
                     }
                     else if(builtin == CC__builtin_huge_val){
-                        node->type = ccqt_basic(CCBT_double);
+                        node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_double), 0);
+                        if(!node) return CC_OOM_ERROR;
                         node->double_ = 1.0/0.0;
                     }
                     else {
-                        node->type = ccqt_basic(CCBT_long_double);
+                        node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_long_double), 0);
+                        if(!node) return CC_OOM_ERROR;
                         node->double_ = 1.0/0.0;
                     }
                     *out = node;
@@ -2325,16 +2286,15 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_alloc_expr(p, 0);
-                    if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_VALUE;
-                    node->loc = tok.loc;
+                    CcExpr* node;
                     if(builtin == CC__builtin_nanf){
-                        node->type = ccqt_basic(CCBT_float);
+                        node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_float), 0);
+                        if(!node) return CC_OOM_ERROR;
                         node->float_ = (float)(0.0/0.0);
                     }
                     else {
-                        node->type = ccqt_basic(CCBT_double);
+                        node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_double), 0);
+                        if(!node) return CC_OOM_ERROR;
                         node->double_ = 0.0/0.0;
                     }
                     *out = node;
@@ -2348,40 +2308,31 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             }
             switch(sym.kind){
                 case CC_SYM_VAR: {
-                    CcExpr* node = cc_alloc_expr(p, 0);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, sym.var->type, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_VARIABLE;
                     node->is_lvalue = 1;
-                    node->loc = tok.loc;
-                    node->type = sym.var->type;
                     node->var = sym.var;
                     if(!sym.var->automatic){
-                        int perr = PM_put(&p->used_vars, cc_allocator(p), sym.var, sym.var);
-                        if(perr) return CC_OOM_ERROR;
+                        err = PM_put(&p->used_vars, cc_allocator(p), sym.var, sym.var);
+                        if(err) return CC_OOM_ERROR;
                     }
                     *out = node;
                     return 0;
                 }
                 case CC_SYM_FUNC: {
-                    CcExpr* node = cc_alloc_expr(p, 0);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, (CcQualType){.bits = (uintptr_t)sym.func->type}, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_FUNCTION;
-                    node->loc = tok.loc;
-                    node->type = (CcQualType){.bits = (uintptr_t)sym.func->type};
                     node->func = sym.func;
                     {
-                        int perr = PM_put(&p->used_funcs, cc_allocator(p), sym.func, sym.func);
-                        if(perr) return CC_OOM_ERROR;
+                        err = PM_put(&p->used_funcs, cc_allocator(p), sym.func, sym.func);
+                        if(err) return CC_OOM_ERROR;
                     }
                     *out = node;
                     return 0;
                 }
                 case CC_SYM_ENUMERATOR: {
-                    CcExpr* node = cc_alloc_expr(p, 0);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, sym.enumerator->type, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_VALUE;
-                    node->loc = tok.loc;
-                    node->type = sym.enumerator->type;
                     node->integer = sym.enumerator->value;
                     *out = node;
                     return 0;
@@ -2731,11 +2682,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_plusplus: {
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
-                CcExpr* node = cc_alloc_expr(p, 0);
+                CcExpr* node = cc_make_expr(p, CC_EXPR_POSTINC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
-                node->kind = CC_EXPR_POSTINC;
-                node->loc = tok.loc;
-                node->type = operand->type;
                 node->lhs = operand;
                 operand = node;
                 continue;
@@ -2743,11 +2691,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_minusminus: {
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
-                CcExpr* node = cc_alloc_expr(p, 0);
+                CcExpr* node = cc_make_expr(p, CC_EXPR_POSTDEC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
-                node->kind = CC_EXPR_POSTDEC;
-                node->loc = tok.loc;
-                node->type = operand->type;
                 node->lhs = operand;
                 operand = node;
                 continue;
@@ -2759,15 +2704,12 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 err = cc_expect_punct(p, CC_rbracket);
                 if(err) return err;
-                CcExpr* node = cc_alloc_expr(p, 1);
-                if(!node) return CC_OOM_ERROR;
-                node->kind = CC_EXPR_SUBSCRIPT;
-                node->is_lvalue = 1;
-                node->loc = tok.loc;
                 CcQualType elem_type;
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                 if(err) return err;
-                node->type = elem_type;
+                CcExpr* node = cc_make_expr(p, CC_EXPR_SUBSCRIPT, tok.loc, elem_type, 1);
+                if(!node) return CC_OOM_ERROR;
+                node->is_lvalue = 1;
                 node->lhs = operand;
                 node->values[0] = index;
                 operand = node;
@@ -2862,29 +2804,20 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         }
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
-                        CcExpr* arg_val = cc_alloc_expr(p, 0);
+                        CcExpr* arg_val = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                         if(!arg_val) return CC_OOM_ERROR;
-                        arg_val->kind = CC_EXPR_VALUE;
-                        arg_val->loc = tok.loc;
-                        arg_val->type = ccqt_basic(CCBT__Type);
                         arg_val->uinteger = arg_type.bits;
-                        CcExpr* node = cc_alloc_expr(p, 1);
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_TYPE_INTROSPECTION, tok.loc, result_type, 1);
                         if(!node) return CC_OOM_ERROR;
-                        node->kind = CC_EXPR_TYPE_INTROSPECTION;
                         node->type_introspection.op = ti_op;
-                        node->loc = tok.loc;
-                        node->type = result_type;
                         node->lhs = operand;
                         node->values[0] = arg_val;
                         operand = node;
                     }
                     else {
-                        CcExpr* node = cc_alloc_expr(p, 0);
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_TYPE_INTROSPECTION, tok.loc, result_type, 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->kind = CC_EXPR_TYPE_INTROSPECTION;
                         node->type_introspection.op = ti_op;
-                        node->loc = tok.loc;
-                        node->type = result_type;
                         node->lhs = operand;
                         operand = node;
                     }
@@ -2896,14 +2829,11 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(!member_type.bits)
                     return cc_error(p, member.loc, "no member named '%s'", member_name->data);
                 if(method){
-                    CcExpr* mnode = cc_alloc_expr(p, 0);
+                    CcExpr* mnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, member_type, 0);
                     if(!mnode) return CC_OOM_ERROR;
-                    mnode->kind = CC_EXPR_FUNCTION;
-                    mnode->loc = tok.loc;
-                    mnode->type = member_type;
                     mnode->func = method;
-                    int perr = PM_put(&p->used_funcs, cc_allocator(p), method, method);
-                    if(perr) return CC_OOM_ERROR;
+                    err = PM_put(&p->used_funcs, cc_allocator(p), method, method);
+                    if(err) return CC_OOM_ERROR;
                     if(mkind == CC_EXPR_ARROW){
                         // Already a pointer
                         receiver = operand;
@@ -2912,23 +2842,17 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         // Take address of the object
                         CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
                         if(!ptr) return CC_OOM_ERROR;
-                        CcExpr* addr = cc_alloc_expr(p, 0);
+                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, (CcQualType){.bits = (uintptr_t)ptr}, 0);
                         if(!addr) return CC_OOM_ERROR;
-                        addr->kind = CC_EXPR_ADDR;
-                        addr->loc = tok.loc;
-                        addr->type = (CcQualType){.bits = (uintptr_t)ptr};
                         addr->lhs = operand;
                         receiver = addr;
                     }
                     operand = mnode;
                     continue;
                 }
-                CcExpr* mnode = cc_alloc_expr(p, 1);
+                CcExpr* mnode = cc_make_expr(p, mkind, tok.loc, member_type, 1);
                 if(!mnode) return CC_OOM_ERROR;
-                mnode->kind = mkind;
                 mnode->is_lvalue = mkind == CC_EXPR_ARROW || operand->is_lvalue;
-                mnode->loc = tok.loc;
-                mnode->type = member_type;
                 mnode->field_loc = floc;
                 mnode->values[0] = operand;
                 operand = mnode;
@@ -2955,16 +2879,12 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         return cc_error(p, tok.loc, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
                     }
                     if(operand->kind != CC_EXPR_FUNCTION){
-                        int perr = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
-                        if(perr) return CC_OOM_ERROR;
+                        err = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
+                        if(err) return CC_OOM_ERROR;
                     }
-                    CcExpr* node = cc_alloc_expr(p, 0);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->kind = CC_EXPR_CALL;
-                    node->loc = tok.loc;
-                    node->call.nargs = 0;
                     node->lhs = operand;
-                    node->type = ftype->return_type;
                     operand = node;
                     continue;
                 }
@@ -3112,11 +3032,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                                 err = cc_error(p, tok.loc, "Expected type name for _Type parameter");
                                 goto call_cleanup;
                             }
-                            arg = cc_alloc_expr(p, 0);
+                            arg = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                             if(!arg){ err = CC_OOM_ERROR; goto call_cleanup; }
-                            arg->kind = CC_EXPR_VALUE;
-                            arg->loc = tok.loc;
-                            arg->type = ccqt_basic(CCBT__Type);
                             arg->uinteger = parsed_type.bits;
                         }
                         else {
@@ -3210,20 +3127,17 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     }
                 }
                 if(operand->kind != CC_EXPR_FUNCTION){
-                    int perr = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
-                    if(perr){ err = CC_OOM_ERROR; goto call_cleanup; }
+                    err = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
+                    if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
                 }
-                CcExpr* node = cc_alloc_expr(p, nargs);
+                CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, nargs);
                 if(!node){ err = CC_OOM_ERROR; goto call_cleanup; }
-                node->kind = CC_EXPR_CALL;
-                node->loc = tok.loc;
                 node->call.nargs = nargs;
                 node->lhs = operand;
-                node->type = ftype->return_type;
                 memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
                 if(ftype->is_variadic && nargs > ftype->param_count){
-                    int perr = PM_put(&p->used_var_calls, cc_allocator(p), node, node);
-                    if(perr){ err = CC_OOM_ERROR; goto call_cleanup; }
+                    err = PM_put(&p->used_var_calls, cc_allocator(p), node, node);
+                    if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
                 }
                 operand = node;
                 err = 0;
@@ -4145,7 +4059,7 @@ cc_expect_punct(CcParser* p, CcPunct punct){
 
 static
 CcExpr* _Nullable
-cc_alloc_expr(CcParser* p, size_t nvalues){
+_cc_alloc_expr(CcParser* p, size_t nvalues){
     size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
     return Allocator_zalloc(cc_allocator(p), size);
 }
@@ -4153,7 +4067,7 @@ cc_alloc_expr(CcParser* p, size_t nvalues){
 static
 CcExpr*_Nullable
 cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues){
-    CcExpr* node = cc_alloc_expr(p, nvalues);
+    CcExpr* node = _cc_alloc_expr(p, nvalues);
     if(node){
         node->kind = kind;
         node->loc = loc;
@@ -4165,7 +4079,7 @@ cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t n
 static
 CcExpr* _Nullable
 cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type){
-    CcExpr* node = cc_alloc_expr(p, 0);
+    CcExpr* node = _cc_alloc_expr(p, 0);
     if(!node) return NULL;
     node->kind = CC_EXPR_VALUE;
     node->loc = loc;
@@ -4176,7 +4090,7 @@ cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type){
 static
 CcExpr* _Nullable
 cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* operand){
-    CcExpr* node = cc_alloc_expr(p, 0);
+    CcExpr* node = _cc_alloc_expr(p, 0);
     if(!node) return NULL;
     node->kind = kind;
     node->loc = loc;
@@ -4188,7 +4102,7 @@ cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr*
 static
 CcExpr* _Nullable
 cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* left, CcExpr* right){
-    CcExpr* node = cc_alloc_expr(p, 1);
+    CcExpr* node = _cc_alloc_expr(p, 1);
     if(!node) return NULL;
     node->kind = kind;
     node->loc = loc;
@@ -5497,11 +5411,8 @@ cc_parse_init_list(CcParser* p, CcExpr* _Nullable* _Nonnull out, CcQualType targ
             }
         }
     }
-    CcExpr* node = cc_alloc_expr(p, 0);
+    CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, loc, resolved_type, 0);
     if(!node) return CC_OOM_ERROR;
-    node->kind = CC_EXPR_INIT_LIST;
-    node->loc = loc;
-    node->type = resolved_type;
     node->init_list = list;
     *out = node;
     return 0;
@@ -7219,11 +7130,8 @@ cc_parse_statement(CcParser* p){
                             CcQualType parsed_type;
                             err = cc_parse_type_name(p, &parsed_type);
                             if(err) return err;
-                            ret_expr = cc_alloc_expr(p, 0);
+                            ret_expr = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                             if(!ret_expr) return CC_OOM_ERROR;
-                            ret_expr->kind = CC_EXPR_VALUE;
-                            ret_expr->loc = tok.loc;
-                            ret_expr->type = ccqt_basic(CCBT__Type);
                             ret_expr->uinteger = parsed_type.bits;
                         }
                         else {
@@ -7949,11 +7857,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 err = cc_parse_type_name(p, &parsed_type);
                 if(err) return err;
                 if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
-                initializer = cc_alloc_expr(p, 0);
+                initializer = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                 if(!initializer) return CC_OOM_ERROR;
-                initializer->kind = CC_EXPR_VALUE;
-                initializer->loc = tok.loc;
-                initializer->type = ccqt_basic(CCBT__Type);
                 initializer->uinteger = parsed_type.bits;
             }
             else {
@@ -8071,8 +7976,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             }
             if(initializer){
                 if(var && !var->automatic){
-                    int perr = PM_put(&p->used_vars, cc_allocator(p), var, var);
-                    if(perr) return CC_OOM_ERROR;
+                    err = PM_put(&p->used_vars, cc_allocator(p), var, var);
+                    if(err) return CC_OOM_ERROR;
                 }
                 // Function-scope statics: ci_resolve_refs evaluates
                 // the initializer once before execution (no re-init,
@@ -8083,12 +7988,9 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                         initializer->kind = CC_EXPR_INIT_LIST;
                 }
                 else {
-                    CcExpr* var_ref = cc_alloc_expr(p, 0);
+                    CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, type, 0);
                     if(!var_ref) return CC_OOM_ERROR;
-                    var_ref->kind = CC_EXPR_VARIABLE;
                     var_ref->is_lvalue = 1;
-                    var_ref->loc = tok.loc;
-                    var_ref->type = type;
                     var_ref->var = var;
                     if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
                         initializer->kind = CC_EXPR_INIT_LIST;
