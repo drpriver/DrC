@@ -210,6 +210,8 @@ cc_pop_scope(CcParser* p){
 static
 int
 cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
+    if(!ccqt_is_basic(t) && ccqt_kind(t) == CC_ENUM)
+        t = ccqt_as_enum(t)->underlying;
     if(!ccqt_is_basic(t))
         return cc_error(p, loc, "integer promotion requires arithmetic type");
     CcBasicTypeKind k = t.basic.kind;
@@ -290,6 +292,16 @@ cc_usual_arithmetic(CcParser* p, CcQualType a, CcQualType b, CcQualType* out, Sr
     return 0;
 }
 
+static
+int
+cc_require_scalar(CcParser* p, CcExpr* e, SrcLoc loc, const char* context){
+    CcTypeKind k = ccqt_kind(e->type);
+    if(k == CC_POINTER || k == CC_ENUM || k == CC_ARRAY)
+        return 0;
+    if(ccqt_is_basic(e->type))
+        return 0;
+    return cc_error(p, loc, "%s requires scalar type", context);
+}
 
 // Extract pointee type from pointer or element type from array
 // Returns 0 on success, non-zero if t is not a pointer or array.
@@ -1043,6 +1055,15 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_assignment_expr(p, &right);
             }
             if(err) return err;
+            // Integer-only compound assignments
+            if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
+            || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
+            || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
+                CcQualType lt = left->type;
+                if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
+                if(!ccqt_is_basic(lt) || !ccbt_is_integer(lt.basic.kind))
+                    return cc_error(p, tok.loc, "operator requires integer operands");
+            }
             // For += and -=, pointer +/- integer is valid pointer arithmetic.
             if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN)
                 && ccqt_kind(left->type) == CC_POINTER
@@ -1219,12 +1240,18 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
         CcQualType result_type = {0};
         switch(kind){
             case CC_EXPR_LOGAND: case CC_EXPR_LOGOR:
+                err = cc_require_scalar(p, left, tok.loc, kind == CC_EXPR_LOGAND ? "'&&'" : "'||'");
+                if(err) return err;
+                err = cc_require_scalar(p, right, tok.loc, kind == CC_EXPR_LOGAND ? "'&&'" : "'||'");
+                if(err) return err;
                 result_type = ccqt_basic(CCBT_int);
                 break;
             case CC_EXPR_EQ: case CC_EXPR_NE:
             case CC_EXPR_LT: case CC_EXPR_GT:
             case CC_EXPR_LE: case CC_EXPR_GE: {
-                if(!ccqt_is_pointer_like(left->type) && !ccqt_is_pointer_like(right->type)){
+                _Bool lp = ccqt_is_pointer_like(left->type);
+                _Bool rp = ccqt_is_pointer_like(right->type);
+                if(!lp && !rp){
                     CcQualType common;
                     err = cc_usual_arithmetic(p, left->type, right->type, &common, tok.loc);
                     if(err) return err;
@@ -1232,6 +1259,15 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     if(err) return err;
                     err = cc_implicit_cast(p, right, common, &right);
                     if(err) return err;
+                }
+                else if(lp && rp){
+                    CcQualType lpointee, rpointee;
+                    cc_deref_type(p, left->type, &lpointee, tok.loc);
+                    cc_deref_type(p, right->type, &rpointee, tok.loc);
+                    if(_ccqt_to_type_ptr(lpointee) != _ccqt_to_type_ptr(rpointee)
+                    && !(ccqt_is_basic(lpointee) && lpointee.basic.kind == CCBT_void)
+                    && !(ccqt_is_basic(rpointee) && rpointee.basic.kind == CCBT_void))
+                        return cc_error(p, tok.loc, "comparison of incompatible pointer types");
                 }
                 result_type = ccqt_basic(CCBT_int);
                 break;
@@ -1252,6 +1288,8 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
             case CC_EXPR_ADD: {
                 _Bool lptr = ccqt_is_pointer_like(left->type);
                 _Bool rptr = ccqt_is_pointer_like(right->type);
+                if(lptr && rptr)
+                    return cc_error(p, tok.loc, "addition of two pointers");
                 if(lptr || rptr) {
                     CcExpr** ptr_operand = lptr ? &left : &right;
                     if(ccqt_kind((*ptr_operand)->type) == CC_ARRAY){
@@ -1278,6 +1316,13 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 _Bool rptr = ccqt_is_pointer_like(right->type);
                 if(lptr && rptr){
                     // ptr - ptr = ptrdiff_t
+                    CcQualType lp, rp;
+                    cc_deref_type(p, left->type, &lp, tok.loc);
+                    cc_deref_type(p, right->type, &rp, tok.loc);
+                    if(_ccqt_to_type_ptr(lp) != _ccqt_to_type_ptr(rp)
+                    && !(ccqt_is_basic(lp) && lp.basic.kind == CCBT_void)
+                    && !(ccqt_is_basic(rp) && rp.basic.kind == CCBT_void))
+                        return cc_error(p, tok.loc, "pointer subtraction with incompatible types");
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
@@ -1304,6 +1349,11 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 // arithmetic/bitwise: *,/,%,&,|,^
                 err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                 if(err) return err;
+                if(kind == CC_EXPR_MOD || kind == CC_EXPR_BITAND
+                || kind == CC_EXPR_BITOR || kind == CC_EXPR_BITXOR){
+                    if(ccqt_is_basic(result_type) && ccbt_is_float(result_type.basic.kind))
+                        return cc_error(p, tok.loc, "operator requires integer operands");
+                }
                 err = cc_implicit_cast(p, left, result_type, &left);
                 if(err) return err;
                 err = cc_implicit_cast(p, right, result_type, &right);
@@ -1391,7 +1441,20 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             // Insert implicit casts and compute type
             CcQualType result_type;
             switch(kind){
-                case CC_EXPR_NEG: case CC_EXPR_POS: case CC_EXPR_BITNOT: {
+                case CC_EXPR_NEG: case CC_EXPR_POS: {
+                    err = cc_integer_promote(p, operand->type, &result_type, tok.loc);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, operand, result_type, &operand);
+                    if(err) return err;
+                    break;
+                }
+                case CC_EXPR_BITNOT: {
+                    if(!ccqt_is_basic(operand->type) && ccqt_kind(operand->type) == CC_ENUM)
+                        operand->type = ccqt_as_enum(operand->type)->underlying;
+                    if(!ccqt_is_basic(operand->type))
+                        return cc_error(p, tok.loc, "'~' requires integer type");
+                    if(ccbt_is_float(operand->type.basic.kind))
+                        return cc_error(p, tok.loc, "'~' requires integer type");
                     err = cc_integer_promote(p, operand->type, &result_type, tok.loc);
                     if(err) return err;
                     err = cc_implicit_cast(p, operand, result_type, &operand);
@@ -1399,6 +1462,8 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     break;
                 }
                 case CC_EXPR_LOGNOT:
+                    err = cc_require_scalar(p, operand, tok.loc, "'!'");
+                    if(err) return err;
                     result_type = ccqt_basic(CCBT_int);
                     break;
                 case CC_EXPR_DEREF:
@@ -1431,6 +1496,13 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     }
                     if(!operand->is_lvalue)
                         return cc_error(p, tok.loc, "expression is not an lvalue");
+                    if(operand->type.is_const)
+                        return cc_error(p, tok.loc, "cannot modify const-qualified variable");
+                    {
+                        CcTypeKind tk = ccqt_kind(operand->type);
+                        if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
+                            return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
+                    }
                     result_type = operand->type;
                     break;
             }
@@ -2670,6 +2742,13 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_plusplus: {
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
+                if(operand->type.is_const)
+                    return cc_error(p, tok.loc, "cannot modify const-qualified variable");
+                {
+                    CcTypeKind tk = ccqt_kind(operand->type);
+                    if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
+                        return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
+                }
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTINC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
@@ -2679,6 +2758,13 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
             case CC_minusminus: {
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
+                if(operand->type.is_const)
+                    return cc_error(p, tok.loc, "cannot modify const-qualified variable");
+                {
+                    CcTypeKind tk = ccqt_kind(operand->type);
+                    if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
+                        return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
+                }
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTDEC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
@@ -2692,6 +2778,15 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 err = cc_expect_punct(p, CC_rbracket);
                 if(err) return err;
+                {
+                    CcQualType idx_type = index->type;
+                    if(!ccqt_is_basic(idx_type) && ccqt_kind(idx_type) == CC_ENUM)
+                        idx_type = ccqt_as_enum(idx_type)->underlying;
+                    _Bool idx_int = ccqt_is_basic(idx_type) && ccbt_is_integer(idx_type.basic.kind);
+                    _Bool idx_ptr = ccqt_is_pointer_like(idx_type);
+                    if(!idx_int && !idx_ptr)
+                        return cc_error(p, tok.loc, "array subscript requires integer or pointer type");
+                }
                 CcQualType elem_type;
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                 if(err) return err;
@@ -6801,6 +6896,8 @@ cc_parse_statement(CcParser* p){
                         if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
                             err = cc_parse_expr(p, &cond_expr);
                             if(err) goto for_end;
+                            err = cc_require_scalar(p, (CcExpr*)cond_expr, tok.loc, "'for' condition");
+                            if(err) goto for_end;
                         }
                         err = cc_expect_punct(p, ';');
                         if(err) goto for_end;
@@ -6880,6 +6977,8 @@ cc_parse_statement(CcParser* p){
                     CcExpr* cond;
                     err = cc_parse_expr(p, &cond);
                     if(err) return err;
+                    err = cc_require_scalar(p, cond, tok.loc, "'while' condition");
+                    if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     size_t while_idx;
@@ -6940,6 +7039,8 @@ cc_parse_statement(CcParser* p){
                     CcExpr* cond;
                     err = cc_parse_expr(p, &cond);
                     if(err) return err;
+                    err = cc_require_scalar(p, cond, tok.loc, "'do-while' condition");
+                    if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     err = cc_expect_punct(p, ';');
@@ -6972,6 +7073,8 @@ cc_parse_statement(CcParser* p){
                     if(err) return err;
                     CcExpr* cond;
                     err = cc_parse_expr(p, &cond);
+                    if(err) return err;
+                    err = cc_require_scalar(p, cond, tok.loc, "'if' condition");
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -7037,7 +7140,7 @@ cc_parse_statement(CcParser* p){
                     return 0;
                 }
                 case CC_continue: {
-                    if(!p->loop_depth)
+                    if(p->loop_depth <= p->switch_depth)
                         return cc_error(p, tok.loc, "'continue' statement not in loop statement");
                     err = cc_expect_punct(p, ';');
                     if(err) return err;
@@ -7060,6 +7163,13 @@ cc_parse_statement(CcParser* p){
                     CcExpr* switch_expr;
                     err = cc_parse_expr(p, &switch_expr);
                     if(err) return err;
+                    {
+                        CcQualType st = switch_expr->type;
+                        if(!ccqt_is_basic(st) && ccqt_kind(st) == CC_ENUM)
+                            st = ccqt_as_enum(st)->underlying;
+                        if(!ccqt_is_basic(st) || !ccbt_is_integer(st.basic.kind))
+                            return cc_error(p, tok.loc, "switch requires integer expression");
+                    }
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     size_t switch_idx;
@@ -7076,7 +7186,9 @@ cc_parse_statement(CcParser* p){
                         CcSwitchCtx* prev_ctx = p->switch_ctx;
                         p->switch_ctx = &ctx;
                         p->loop_depth++; // for break
+                        p->switch_depth++;
                         err = cc_parse_statement(p);
+                        p->switch_depth--;
                         p->loop_depth--;
                         p->switch_ctx = prev_ctx;
                         if(err) goto switch_cleanup;
@@ -7086,6 +7198,13 @@ cc_parse_statement(CcParser* p){
                             if(!scratch && ctx.entries.count){ err = CC_OOM_ERROR; goto switch_cleanup; }
                             drp_merge_sort(scratch, ctx.entries.data, ctx.entries.count, sizeof(CcSwitchEntry), NULL, cc_cmp_switch_entry);
                             Allocator_free(cc_scratch_allocator(p), scratch, ctx.entries.count * sizeof(CcSwitchEntry));
+                        }
+                        // Check for duplicate case values
+                        for(uint32_t i = 1; i < ctx.entries.count; i++){
+                            if(ctx.entries.data[i].value == ctx.entries.data[i-1].value){
+                                err = cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)ctx.entries.data[i].value);
+                                goto switch_cleanup;
+                            }
                         }
                         // Shrink and steal the table
                         if(ctx.entries.count){
@@ -7714,6 +7833,27 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             is_fndef = tail != &head && ccqt_kind(head) == CC_FUNCTION;
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
+            // Validate type: no arrays of void/functions, no functions returning arrays/functions
+            {
+                CcTypeKind tk = ccqt_kind(type);
+                if(tk == CC_ARRAY){
+                    CcQualType elem = ccqt_as_array(type)->element;
+                    if(ccqt_is_basic(elem) && elem.basic.kind == CCBT_void)
+                        return cc_error(p, declbase->loc, "array of void is not allowed");
+                    if(!ccqt_is_basic(elem) && ccqt_kind(elem) == CC_FUNCTION)
+                        return cc_error(p, declbase->loc, "array of functions is not allowed");
+                }
+                if(tk == CC_FUNCTION){
+                    CcQualType ret = ccqt_as_function(type)->return_type;
+                    if(!ccqt_is_basic(ret)){
+                        CcTypeKind rk = ccqt_kind(ret);
+                        if(rk == CC_ARRAY)
+                            return cc_error(p, declbase->loc, "function cannot return array type");
+                        if(rk == CC_FUNCTION)
+                            return cc_error(p, declbase->loc, "function cannot return function type");
+                    }
+                }
+            }
         }
         // trailing __attribute__
         err = cc_parse_attributes(p, &p->attributes);
@@ -7866,6 +8006,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
             if(declbase->spec.sp_noreturn)
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
+            if(p->current_func || p->current != &p->global){
+                CcVariable* existing = cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK);
+                if(existing)
+                    return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
+            }
             var = Allocator_zalloc(cc_allocator(p), sizeof *var);
             if(!var) return CC_OOM_ERROR;
             *var = (CcVariable){
@@ -7991,11 +8136,15 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         }
         else {
             // var was already created and inserted into scope above.
-            // Reject incomplete array types without initializer in local scope.
-            if(!initializer && !declbase->spec.sp_extern && p->current_func && ccqt_kind(type) == CC_ARRAY){
-                CcArray* arr = ccqt_as_array(type);
-                if(arr->is_incomplete)
+            // Reject incomplete types without initializer.
+            if(!initializer && !declbase->spec.sp_extern){
+                CcTypeKind tk = ccqt_kind(type);
+                if(tk == CC_ARRAY && ccqt_as_array(type)->is_incomplete && p->current_func)
                     return cc_error(p, tok.loc, "variable '%.*s' has incomplete array type", name->length, name->data);
+                if(tk == CC_STRUCT && ccqt_as_struct(type)->is_incomplete)
+                    return cc_error(p, tok.loc, "variable has incomplete type 'struct %s'", ccqt_as_struct(type)->name ? ccqt_as_struct(type)->name->data : "(anonymous)");
+                if(tk == CC_UNION && ccqt_as_union(type)->is_incomplete)
+                    return cc_error(p, tok.loc, "variable has incomplete type 'union %s'", ccqt_as_union(type)->name ? ccqt_as_union(type)->name->data : "(anonymous)");
             }
             if(var){
                 var->type = type;

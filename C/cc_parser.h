@@ -146,6 +146,7 @@ struct CcParser {
     FreeList(Marray(CcToken)) scratch_tokens;
     ArenaAllocator scratch_arena;
     uint32_t loop_depth;
+    uint32_t switch_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;

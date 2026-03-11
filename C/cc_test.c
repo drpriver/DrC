@@ -2542,6 +2542,12 @@ TestFunction(test_parse_decls){
             SV("unsigned long x = sizeof((const char*[]){\"hello\", \"world\"});\n"),
             .vars = {{SV("x"), SV("unsigned long"), SV("16")}},
         },
+        {
+            "unary minus on enum", __LINE__,
+            SV("enum E { A = 1, B = 2 };\n"
+               "int x = -A;\n"),
+            .vars = {{SV("x"), SV("int"), SV("-1")}},
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -3165,6 +3171,195 @@ TestFunction(test_parse_errors){
             SV("int foo(void); void bar(void){ int* p = &foo(); }\n"),
             SV("(test):1:41: error: cannot take address of rvalue\n"),
         },
+        // Finding 1: continue in switch without enclosing loop
+        {
+            "continue in switch without loop", __LINE__,
+            SV("switch(1){ case 1: continue; }\n"),
+            SV("(test):1:20: error: 'continue' statement not in loop statement\n"),
+        },
+        // Finding 2: pointer + pointer
+        {
+            "pointer plus pointer", __LINE__,
+            SV("int* a; int* b; int* c = a + b;\n"),
+            SV("(test):1:28: error: addition of two pointers\n"),
+        },
+        // Finding 3: ++/-- on const
+        {
+            "prefix inc const", __LINE__,
+            SV("const int x = 1; int y = ++x;\n"),
+            SV("(test):1:26: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "postfix inc const", __LINE__,
+            SV("const int x = 1; int y = x++;\n"),
+            SV("(test):1:27: error: cannot modify const-qualified variable\n"),
+        },
+        // Finding 4: ~ on float
+        {
+            "bitnot float", __LINE__,
+            SV("int x = ~3.0f;\n"),
+            SV("(test):1:9: error: '~' requires integer type\n"),
+        },
+        // Finding 5: % on float
+        {
+            "modulo float", __LINE__,
+            SV("float x = 3.0f % 2.0f;\n"),
+            SV("(test):1:16: error: operator requires integer operands\n"),
+        },
+        {
+            "bitand float", __LINE__,
+            SV("float a; float b; int z = a & b;\n"),
+            SV("(test):1:29: error: operator requires integer operands\n"),
+        },
+        {
+            "bitor float", __LINE__,
+            SV("float a; float b; int z = a | b;\n"),
+            SV("(test):1:29: error: operator requires integer operands\n"),
+        },
+        {
+            "bitxor float", __LINE__,
+            SV("float a; float b; int z = a ^ b;\n"),
+            SV("(test):1:29: error: operator requires integer operands\n"),
+        },
+        // Finding 6: switch on float
+        {
+            "switch float", __LINE__,
+            SV("switch(1.0){}\n"),
+            SV("(test):1:1: error: switch requires integer expression\n"),
+        },
+        // Finding 7: duplicate case
+        {
+            "duplicate case", __LINE__,
+            SV("switch(1){ case 1: break; case 1: break; }\n"),
+            SV("(test):1:1: error: duplicate case value '1'\n"),
+        },
+        // Finding 8: if/while/do-while/for with struct condition
+        {
+            "if struct condition", __LINE__,
+            SV("struct S{int x;}; struct S s; if(s){}\n"),
+            SV("(test):1:31: error: 'if' condition requires scalar type\n"),
+        },
+        {
+            "while struct condition", __LINE__,
+            SV("struct S{int x;}; struct S s; while(s){}\n"),
+            SV("(test):1:31: error: 'while' condition requires scalar type\n"),
+        },
+        {
+            "do-while struct condition", __LINE__,
+            SV("struct S{int x;}; struct S s; do{}while(s);\n"),
+            SV("(test):1:31: error: 'do-while' condition requires scalar type\n"),
+        },
+        {
+            "for struct condition", __LINE__,
+            SV("struct S{int x;}; struct S s; for(;s;){}\n"),
+            SV("(test):1:31: error: 'for' condition requires scalar type\n"),
+        },
+        // Finding 9: && / || on struct
+        {
+            "logand struct", __LINE__,
+            SV("struct S{int x;}; struct S a; struct S b; int c = a && b;\n"),
+            SV("(test):1:53: error: '&&' requires scalar type\n"),
+        },
+        {
+            "logor struct", __LINE__,
+            SV("struct S{int x;}; struct S a; struct S b; int c = a || b;\n"),
+            SV("(test):1:53: error: '||' requires scalar type\n"),
+        },
+        // Finding 10: ! on struct
+        {
+            "lognot struct", __LINE__,
+            SV("struct S{int x;}; struct S s; int c = !s;\n"),
+            SV("(test):1:39: error: '!' requires scalar type\n"),
+        },
+        // Finding 11: subscript with float index
+        {
+            "subscript float index", __LINE__,
+            SV("int a[10]; int x = a[1.5];\n"),
+            SV("(test):1:21: error: array subscript requires integer or pointer type\n"),
+        },
+        // Finding 13: ++ on struct
+        {
+            "inc struct", __LINE__,
+            SV("struct S{int x;}; struct S s; struct S t = s++;\n"),
+            SV("(test):1:45: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "dec struct", __LINE__,
+            SV("struct S{int x;}; struct S s; struct S t = --s;\n"),
+            SV("(test):1:44: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        // Finding 14: incompatible pointer subtraction
+        {
+            "ptr sub incompatible", __LINE__,
+            SV("int* a; char* b; long d = a - b;\n"),
+            SV("(test):1:29: error: pointer subtraction with incompatible types\n"),
+        },
+        // Finding 15: incompatible pointer comparison
+        {
+            "ptr cmp incompatible", __LINE__,
+            SV("int* a; char* b; int c = a < b;\n"),
+            SV("(test):1:28: error: comparison of incompatible pointer types\n"),
+        },
+        // Finding 16: compound assignment requiring integer operands
+        {
+            "modassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x %= 2);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        {
+            "bitandassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x &= 1);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        {
+            "bitorassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x |= 1);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        {
+            "bitxorassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x ^= 1);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        {
+            "lshiftassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x <<= 1);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        {
+            "rshiftassign float", __LINE__,
+            SV("float x = 3.0f; float y = (x >>= 1);\n"),
+            SV("(test):1:30: error: operator requires integer operands\n"),
+        },
+        // Finding 17: duplicate local var
+        {
+            "duplicate local var", __LINE__,
+            SV("{ int x = 1; int x = 2; }\n"),
+            SV("(test):1:20: error: redefinition of 'x'\n"),
+        },
+        // Finding 18: incomplete struct variable
+        {
+            "incomplete struct var", __LINE__,
+            SV("struct S; struct S x;\n"),
+            SV("(test):1:21: error: variable has incomplete type 'struct S'\n"),
+        },
+        // Finding 19: array of void
+        {
+            "array of void", __LINE__,
+            SV("void a[10];\n"),
+            SV("(test):1:1: error: array of void is not allowed\n"),
+        },
+        // Finding 20: function returning array
+        {
+            "func returning array", __LINE__,
+            SV("int f(void)[10];\n"),
+            SV("(test):1:1: error: function cannot return array type\n"),
+        },
+        {
+            "func returning function", __LINE__,
+            SV("int f(void)(int);\n"),
+            SV("(test):1:1: error: function cannot return function type\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
@@ -3204,7 +3399,7 @@ TestFunction(test_parse_errors){
             TEST_stats.failures++;
             TestPrintf("%s:%d: %s: expected error but parsing succeeded\n", __FILE__, c->line, c->test);
         }
-        if(c->expected_msg.length){
+        if(1){
             StringView log = msb_borrow_sv(&log_sb);
             test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
         }
