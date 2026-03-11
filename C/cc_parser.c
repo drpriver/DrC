@@ -395,9 +395,6 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
     if(e->type.bits == target.bits){
         *out = e; return 0;
     }
-    if(e->type.basic.kind == CCBT_void && ccqt_is_basic(e->type)){
-        *out = e; return 0;
-    }
     // null pointer constant: integer literal 0 -> pointer
     _Bool is_npc = ccqt_kind(target) == CC_POINTER
         && e->kind == CC_EXPR_VALUE
@@ -1055,6 +1052,14 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_assignment_expr(p, &right);
             }
             if(err) return err;
+            // Compound assignments (other than += and -=) require arithmetic LHS.
+            if(kind != CC_EXPR_ASSIGN && kind != CC_EXPR_ADDASSIGN && kind != CC_EXPR_SUBASSIGN){
+                CcQualType lt = left->type;
+                if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
+                if(!ccqt_is_basic(lt) || !ccbt_is_arithmetic(lt.basic.kind)){
+                    return cc_error(p, tok.loc, "compound assignment requires arithmetic operands");
+                }
+            }
             // Integer-only compound assignments
             if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
             || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
@@ -1105,6 +1110,8 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
     err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_question){
+        err = cc_require_scalar(p, cond, tok.loc, "'?:'");
+        if(err) return err;
         CcExpr* then_expr;
         err = cc_parse_expr(p, &then_expr);
         if(err) return err;
@@ -1174,10 +1181,22 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             common.is_atomic   = ttype.is_atomic   | etype.is_atomic;
         }
         else if(tptr && ccqt_is_basic(else_expr->type)){
-            // pointer and integer (null pointer constant)
+            // pointer and null pointer constant or nullptr_t
+            _Bool is_npc = else_expr->kind == CC_EXPR_VALUE
+                && ccbt_is_integer(else_expr->type.basic.kind)
+                && else_expr->uinteger == 0;
+            _Bool is_nullptr = else_expr->type.basic.kind == CCBT_nullptr_t;
+            if(!is_npc && !is_nullptr)
+                return cc_error(p, tok.loc, "incompatible operand types for ternary");
             common = then_expr->type;
         }
         else if(eptr && ccqt_is_basic(then_expr->type)){
+            _Bool is_npc = then_expr->kind == CC_EXPR_VALUE
+                && ccbt_is_integer(then_expr->type.basic.kind)
+                && then_expr->uinteger == 0;
+            _Bool is_nullptr = then_expr->type.basic.kind == CCBT_nullptr_t;
+            if(!is_npc && !is_nullptr)
+                return cc_error(p, tok.loc, "incompatible operand types for ternary");
             common = else_expr->type;
         }
         else if(ccqt_is_basic(then_expr->type) && then_expr->type.basic.kind == CCBT_void
@@ -1269,6 +1288,17 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     && !(ccqt_is_basic(rpointee) && rpointee.basic.kind == CCBT_void))
                         return cc_error(p, tok.loc, "comparison of incompatible pointer types");
                 }
+                else {
+                    // One pointer, one non-pointer: only == and != with null pointer constant
+                    CcExpr* non_ptr = lp ? right : left;
+                    _Bool is_npc = non_ptr->kind == CC_EXPR_VALUE
+                        && ccqt_is_basic(non_ptr->type)
+                        && ccbt_is_integer(non_ptr->type.basic.kind)
+                        && non_ptr->uinteger == 0;
+                    _Bool is_nullptr = ccqt_is_basic(non_ptr->type) && non_ptr->type.basic.kind == CCBT_nullptr_t;
+                    if(!(is_npc || is_nullptr) || (kind != CC_EXPR_EQ && kind != CC_EXPR_NE))
+                        return cc_error(p, tok.loc, "comparison of pointer with non-pointer");
+                }
                 result_type = ccqt_basic(CCBT_int);
                 break;
             }
@@ -1278,6 +1308,9 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 if(err) return err;
                 err = cc_integer_promote(p, right->type, &rp, tok.loc);
                 if(err) return err;
+                if((ccqt_is_basic(lp) && ccbt_is_float(lp.basic.kind))
+                || (ccqt_is_basic(rp) && ccbt_is_float(rp.basic.kind)))
+                    return cc_error(p, tok.loc, "shift operands require integer type");
                 err = cc_implicit_cast(p, left, lp, &left);
                 if(err) return err;
                 err = cc_implicit_cast(p, right, rp, &right);
@@ -1292,6 +1325,13 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     return cc_error(p, tok.loc, "addition of two pointers");
                 if(lptr || rptr) {
                     CcExpr** ptr_operand = lptr ? &left : &right;
+                    CcExpr* int_operand = lptr ? right : left;
+                    {
+                        CcQualType it = int_operand->type;
+                        if(!ccqt_is_basic(it) && ccqt_kind(it) == CC_ENUM) it = ccqt_as_enum(it)->underlying;
+                        if(!ccqt_is_basic(it) || !ccbt_is_integer(it.basic.kind))
+                            return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    }
                     if(ccqt_kind((*ptr_operand)->type) == CC_ARRAY){
                         err = cc_pointer_of(p, ccqt_as_array((*ptr_operand)->type)->element, &result_type);
                         if(err) return err;
@@ -1326,6 +1366,12 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
+                    {
+                        CcQualType rt = right->type;
+                        if(!ccqt_is_basic(rt) && ccqt_kind(rt) == CC_ENUM) rt = ccqt_as_enum(rt)->underlying;
+                        if(!ccqt_is_basic(rt) || !ccbt_is_integer(rt.basic.kind))
+                            return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    }
                     if(ccqt_kind(left->type) == CC_ARRAY){
                         err = cc_pointer_of(p, ccqt_as_array(left->type)->element, &result_type);
                         if(err) return err;

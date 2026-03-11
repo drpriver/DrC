@@ -2822,7 +2822,6 @@ TestFunction(test_parse_errors){
             SV("enum E : { A };\n"),
             SV("(test):1:1: error: Expected type specifier for enum underlying type\n"),
         },
-        // --- Init list error tests ---
         {
             "excess elements in scalar init", __LINE__,
             SV("int x = {1, 2};\n"),
@@ -2861,7 +2860,6 @@ TestFunction(test_parse_errors){
             SV("int arr[3] = {[5] = 1};\n"),
             SV("(test):1:15: error: array index 5 out of bounds (size 3)\n"),
         },
-        // --- More init list error torture tests ---
         {
             "excess elements in array init", __LINE__,
             SV("int arr[2] = {1, 2, 3};\n"),
@@ -2999,7 +2997,6 @@ TestFunction(test_parse_errors){
             SV("typedef int tu __attribute__((transparent_union));\n"),
             SV("(test):1:1: error: transparent_union attribute on non-union type is not supported\n"),
         },
-        // --- Function call arg errors ---
         {
             "too few args", __LINE__,
             SV("void f(int a, int b);\n"
@@ -3030,7 +3027,6 @@ TestFunction(test_parse_errors){
                "int y = x(1);\n"),
             SV("(test):2:10: error: Called object is not a function or function pointer\n"),
         },
-        // --- Incompatible type errors ---
         {
             "call: struct arg to int param", __LINE__,
             SV("struct S { int x; };\n"
@@ -3055,7 +3051,6 @@ TestFunction(test_parse_errors){
                "int x = f(p);\n"),
             SV("(test):4:11: error: cannot implicitly convert from 'int *' to 'struct S'\n"),
         },
-        // --- Assignment implicit conversion errors ---
         {
             "assign struct to int", __LINE__,
             SV("struct S { int x; };\n"
@@ -3100,7 +3095,6 @@ TestFunction(test_parse_errors){
                "struct B b = a;\n"),
             SV("(test):4:14: error: cannot implicitly convert from 'struct A' to 'struct B'\n"),
         },
-        // --- Lambda error tests ---
         {
             "lambda: non-function type", __LINE__,
             SV("int r = int{1};\n"),
@@ -3171,19 +3165,16 @@ TestFunction(test_parse_errors){
             SV("int foo(void); void bar(void){ int* p = &foo(); }\n"),
             SV("(test):1:41: error: cannot take address of rvalue\n"),
         },
-        // Finding 1: continue in switch without enclosing loop
         {
             "continue in switch without loop", __LINE__,
             SV("switch(1){ case 1: continue; }\n"),
             SV("(test):1:20: error: 'continue' statement not in loop statement\n"),
         },
-        // Finding 2: pointer + pointer
         {
             "pointer plus pointer", __LINE__,
             SV("int* a; int* b; int* c = a + b;\n"),
             SV("(test):1:28: error: addition of two pointers\n"),
         },
-        // Finding 3: ++/-- on const
         {
             "prefix inc const", __LINE__,
             SV("const int x = 1; int y = ++x;\n"),
@@ -3194,13 +3185,11 @@ TestFunction(test_parse_errors){
             SV("const int x = 1; int y = x++;\n"),
             SV("(test):1:27: error: cannot modify const-qualified variable\n"),
         },
-        // Finding 4: ~ on float
         {
             "bitnot float", __LINE__,
             SV("int x = ~3.0f;\n"),
             SV("(test):1:9: error: '~' requires integer type\n"),
         },
-        // Finding 5: % on float
         {
             "modulo float", __LINE__,
             SV("float x = 3.0f % 2.0f;\n"),
@@ -3221,19 +3210,16 @@ TestFunction(test_parse_errors){
             SV("float a; float b; int z = a ^ b;\n"),
             SV("(test):1:29: error: operator requires integer operands\n"),
         },
-        // Finding 6: switch on float
         {
             "switch float", __LINE__,
             SV("switch(1.0){}\n"),
             SV("(test):1:1: error: switch requires integer expression\n"),
         },
-        // Finding 7: duplicate case
         {
             "duplicate case", __LINE__,
             SV("switch(1){ case 1: break; case 1: break; }\n"),
             SV("(test):1:1: error: duplicate case value '1'\n"),
         },
-        // Finding 8: if/while/do-while/for with struct condition
         {
             "if struct condition", __LINE__,
             SV("struct S{int x;}; struct S s; if(s){}\n"),
@@ -3254,7 +3240,6 @@ TestFunction(test_parse_errors){
             SV("struct S{int x;}; struct S s; for(;s;){}\n"),
             SV("(test):1:31: error: 'for' condition requires scalar type\n"),
         },
-        // Finding 9: && / || on struct
         {
             "logand struct", __LINE__,
             SV("struct S{int x;}; struct S a; struct S b; int c = a && b;\n"),
@@ -3265,19 +3250,16 @@ TestFunction(test_parse_errors){
             SV("struct S{int x;}; struct S a; struct S b; int c = a || b;\n"),
             SV("(test):1:53: error: '||' requires scalar type\n"),
         },
-        // Finding 10: ! on struct
         {
             "lognot struct", __LINE__,
             SV("struct S{int x;}; struct S s; int c = !s;\n"),
             SV("(test):1:39: error: '!' requires scalar type\n"),
         },
-        // Finding 11: subscript with float index
         {
             "subscript float index", __LINE__,
             SV("int a[10]; int x = a[1.5];\n"),
             SV("(test):1:21: error: array subscript requires integer or pointer type\n"),
         },
-        // Finding 13: ++ on struct
         {
             "inc struct", __LINE__,
             SV("struct S{int x;}; struct S s; struct S t = s++;\n"),
@@ -3288,19 +3270,16 @@ TestFunction(test_parse_errors){
             SV("struct S{int x;}; struct S s; struct S t = --s;\n"),
             SV("(test):1:44: error: increment/decrement requires arithmetic or pointer type\n"),
         },
-        // Finding 14: incompatible pointer subtraction
         {
             "ptr sub incompatible", __LINE__,
             SV("int* a; char* b; long d = a - b;\n"),
             SV("(test):1:29: error: pointer subtraction with incompatible types\n"),
         },
-        // Finding 15: incompatible pointer comparison
         {
             "ptr cmp incompatible", __LINE__,
             SV("int* a; char* b; int c = a < b;\n"),
             SV("(test):1:28: error: comparison of incompatible pointer types\n"),
         },
-        // Finding 16: compound assignment requiring integer operands
         {
             "modassign float", __LINE__,
             SV("float x = 3.0f; float y = (x %= 2);\n"),
@@ -3331,25 +3310,21 @@ TestFunction(test_parse_errors){
             SV("float x = 3.0f; float y = (x >>= 1);\n"),
             SV("(test):1:30: error: operator requires integer operands\n"),
         },
-        // Finding 17: duplicate local var
         {
             "duplicate local var", __LINE__,
             SV("{ int x = 1; int x = 2; }\n"),
             SV("(test):1:20: error: redefinition of 'x'\n"),
         },
-        // Finding 18: incomplete struct variable
         {
             "incomplete struct var", __LINE__,
             SV("struct S; struct S x;\n"),
             SV("(test):1:21: error: variable has incomplete type 'struct S'\n"),
         },
-        // Finding 19: array of void
         {
             "array of void", __LINE__,
             SV("void a[10];\n"),
             SV("(test):1:1: error: array of void is not allowed\n"),
         },
-        // Finding 20: function returning array
         {
             "func returning array", __LINE__,
             SV("int f(void)[10];\n"),
@@ -3359,6 +3334,62 @@ TestFunction(test_parse_errors){
             "func returning function", __LINE__,
             SV("int f(void)(int);\n"),
             SV("(test):1:1: error: function cannot return function type\n"),
+        },
+        {
+            "ptr < float", __LINE__,
+            SV("int *p; float f; int x = p < f;\n"),
+            SV("(test):1:28: error: comparison of pointer with non-pointer\n"),
+        },
+        {
+            "ptr > int", __LINE__,
+            SV("int *p; int x = p > 42;\n"),
+            SV("(test):1:19: error: comparison of pointer with non-pointer\n"),
+        },
+        {
+            "ptr + float", __LINE__,
+            SV("int *p; int *q = p + 3.14f;\n"),
+            SV("(test):1:20: error: pointer arithmetic requires integer operand\n"),
+        },
+        {
+            "ptr - float", __LINE__,
+            SV("int *p; int *q = p - 3.14f;\n"),
+            SV("(test):1:20: error: pointer arithmetic requires integer operand\n"),
+        },
+        {
+            "float lshift", __LINE__,
+            SV("int x = 3.0 << 2;\n"),
+            SV("(test):1:13: error: shift operands require integer type\n"),
+        },
+        {
+            "rshift float", __LINE__,
+            SV("int x = 1 >> 2.0;\n"),
+            SV("(test):1:11: error: shift operands require integer type\n"),
+        },
+        {
+            "ternary struct condition", __LINE__,
+            SV("struct S{int x;}; struct S s; int x = s ? 1 : 0;\n"),
+            SV("(test):1:41: error: '?:' requires scalar type\n"),
+        },
+        {
+            "void func assigned to int", __LINE__,
+            SV("void foo(void);\n"
+               "int x = foo();\n"),
+            SV("(test):2:12: error: cannot implicitly convert from 'void' to 'int'\n"),
+        },
+        {
+            "ternary ptr and float", __LINE__,
+            SV("int *p; int cond; void* q = cond ? p : 3.14;\n"),
+            SV("(test):1:34: error: incompatible operand types for ternary\n"),
+        },
+        {
+            "ptr mulassign", __LINE__,
+            SV("int *p; p *= 0;\n"),
+            SV("(test):1:11: error: compound assignment requires arithmetic operands\n"),
+        },
+        {
+            "ptr divassign", __LINE__,
+            SV("int *p; p /= 0;\n"),
+            SV("(test):1:11: error: compound assignment requires arithmetic operands\n"),
         },
     };
     static int idx = 0;
