@@ -2548,6 +2548,12 @@ TestFunction(test_parse_decls){
                "int x = -A;\n"),
             .vars = {{SV("x"), SV("int"), SV("-1")}},
         },
+        {
+            "string literal subscript as constant", __LINE__,
+            SV("enum { W = \"Wed\"[0] };\n"
+               "int a[\"Hello\"[4] - 'n'];\n"),
+            .vars = {{SV("a"), SV("int[1]")}},
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
