@@ -33,8 +33,7 @@ LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
-#define cc_unimp(p, msg) cc_unimplemented(p, (SrcLoc){0}, msg)
-#define cc_unreachable(p, msg) (cc_error(p, (SrcLoc){0}, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
+#define cc_unreachable(p, loc, msg) (cc_error(p, loc, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 typedef struct CcEvalResult CcEvalResult;
 struct CcEvalResult {
@@ -2020,7 +2019,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         case CC__atomic_exchange_n:op = CC_ATOMIC_EXCHANGE_N; break;
                         case CC__atomic_compare_exchange_n: op = CC_ATOMIC_COMPARE_EXCHANGE_N; break;
                         case CC__atomic_compare_exchange:   op = CC_ATOMIC_COMPARE_EXCHANGE;   break;
-                        default: return cc_unreachable(p, "compiler broken??");
+                        default: return cc_unreachable(p, tok.loc, "compiler broken??");
                     }
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
@@ -6606,8 +6605,8 @@ int
 cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
     CcSpecifier* spec = &base->spec;
     CcQualType* base_type = &base->type;
-    if(base_type->bits) return cc_unreachable(p, "parsing decl specifier with base type set");
-    if(spec->bits) return cc_unreachable(p, "parsing decl specifier with spec set");
+    if(base_type->bits) return cc_unreachable(p, base->loc, "parsing decl specifier with base type set");
+    if(spec->bits) return cc_unreachable(p, base->loc, "parsing decl specifier with spec set");
     int err = 0;
     CcToken tok;
     for(int i = 0; ; i++){
@@ -7861,16 +7860,16 @@ cc_parse_statement(CcParser* p){
             return 0;
         }
     }
-    return cc_unimp(p, "parse statement");
+    return CC_UNREACHABLE_ERROR;
 }
 
 static
 int
 cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     CcDeclBase b = *declbase;
-    if(!b.spec.bits && !b.type.bits) return cc_unreachable(p, "Resolving specifier with no spec and no type");
+    if(!b.spec.bits && !b.type.bits) return cc_unreachable(p, declbase->loc, "Resolving specifier with no spec and no type");
     if(!b.spec.sp_typebits && !b.type.bits && b.spec.sp_typedef)
-        return cc_unreachable(p, "typedef with no type in resolve_specifiers");
+        return cc_unreachable(p, declbase->loc, "typedef with no type in resolve_specifiers");
     if(!b.spec.sp_typebits && !b.type.bits)
         b.spec.sp_infer_type = 1;
     if(b.spec.sp___auto_type)
