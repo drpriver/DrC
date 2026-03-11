@@ -7941,8 +7941,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->extern_ = declbase->spec.sp_extern;
             func->static_ = declbase->spec.sp_static;
             func->inline_ = declbase->spec.sp_inline;
-            func->params.count = param_names.count;
-            func->params.data = param_names.data;
+            if(!func->defined){
+                func->params.count = param_names.count;
+                func->params.data = param_names.data;
+            }
         }
         else {
             // var was already created and inserted into scope above.

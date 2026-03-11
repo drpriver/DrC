@@ -1878,6 +1878,14 @@ TestFunction(test_interpreter){
                "return foo().a.b.c.x;\n"),
             .exit_code = 3,
         },
+        {
+            "redecl after def keeps param names", __LINE__,
+            SV("static int add(int, int);\n"
+               "static int add(int a, int b){ return a + b; }\n"
+               "static int add(int, int);\n"
+               "return add(17, 25);\n"),
+            .exit_code = 42,
+        },
     };
     int err;
     static int idx = 0;

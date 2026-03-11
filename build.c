@@ -31,20 +31,21 @@ int main(int argc, char** argv, char** envp){
 
     BuildTarget* tests = phony_target(ctx, "tests");
     BuildTarget* test = phony_target(ctx, "test");
+    BuildTarget* selftests = phony_target(ctx, "selftests");
     add_dep(ctx, test, tests);
+    static const struct {
+        const char* file;
+        const char* name;
+        const char* cmd_name;
+        _Bool needs_lffi;
+    } test_files[] = {
+        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0},
+        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0},
+        {"C/cc_test.c", "cc_test", "run_cc_test", 0},
+        {"C/ci_test.c", "ci_test", "run_ci_test", 0},
+        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1},
+    };
     {
-        static const struct {
-            const char* file;
-            const char* name;
-            const char* cmd_name;
-            _Bool needs_lffi;
-        } test_files[] = {
-            {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0},
-            {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0},
-            {"C/cc_test.c", "cc_test", "run_cc_test", 0},
-            {"C/ci_test.c", "ci_test", "run_ci_test", 0},
-            {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1},
-        };
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
             const char* name = test_files[i].name;
@@ -68,6 +69,44 @@ int main(int argc, char** argv, char** envp){
                 }
             add_dep(ctx, tests, cmd);
         }
+    }
+    BuildTarget* selfhost;
+    {
+        // Optimized cc without sanitizers for self-hosted tests
+        _Bool saved_ns = ctx->target.native_sanitize;
+        ctx->target.native_sanitize = 0;
+        BuildTarget* cc_opt = exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+        ctx->target.native_sanitize = saved_ns;
+        cmd_carg(&cc_opt->cmd, "-O2");
+        if(BUILD_OS == OS_LINUX)
+            cmd_carg(&cc_opt->cmd, "-ldl");
+        cmd_carg(&cc_opt->cmd, "-lffi");
+
+        selfhost = cmd_target(ctx, "selfhost");
+        selfhost->is_phony = 1;
+        add_dep(ctx, selfhost, cc_opt);
+        cmd_prog(&selfhost->cmd, (LongString){cc_opt->name->length, cc_opt->name->data});
+        cmd_cargs(&selfhost->cmd, "cc.c", "Samples/hello.c");
+        add_dep(ctx, selftests, selfhost);
+
+        for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
+            if(test_files[i].needs_lffi) continue;
+            Atom name = b_atomize_f(ctx, "self_%s", test_files[i].name);
+            BuildTarget* cmd = cmd_target(ctx, name->data);
+            cmd->is_phony = 1;
+            add_dep(ctx, cmd, cc_opt);
+            cmd_prog(&cmd->cmd, (LongString){cc_opt->name->length, cc_opt->name->data});
+            cmd_carg(&cmd->cmd, test_files[i].file);
+            if(!ctx->dash_dash_args.count)
+                cmd_carg(&cmd->cmd, "--multithreaded");
+            else
+                for(size_t j = 0; j < ctx->dash_dash_args.count; j++){
+                    Atom a = ctx->dash_dash_args.data[j];
+                    cmd_arg(&cmd->cmd, (LongString){a->length, a->data});
+                }
+            add_dep(ctx, selftests, cmd);
+        }
+        add_dep(ctx, test, selftests);
     }
 
     {
