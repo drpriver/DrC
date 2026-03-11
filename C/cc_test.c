@@ -3391,6 +3391,43 @@ TestFunction(test_parse_errors){
             SV("int *p; p /= 0;\n"),
             SV("(test):1:11: error: compound assignment requires arithmetic operands\n"),
         },
+        {
+            "global var redef", __LINE__,
+            SV("int x = 1;\n"
+               "int x = 2;\n"),
+            SV("(test):2:10: error: redefinition of 'x'\n"),
+        },
+        {
+            "void param with other", __LINE__,
+            SV("void foo(void, int);\n"),
+            SV("(test):1:10: error: parameter cannot have void type\n"),
+        },
+        {
+            "named void param", __LINE__,
+            SV("void foo(void x);\n"),
+            SV("(test):1:10: error: parameter cannot have void type\n"),
+        },
+        {
+            "duplicate param name", __LINE__,
+            SV("void f(int x, int x);\n"),
+            SV("(test):1:15: error: duplicate parameter name 'x'\n"),
+        },
+        {
+            "typedef redef diff type", __LINE__,
+            SV("typedef int foo;\n"
+               "typedef float foo;\n"),
+            SV("(test):2:18: error: redefinition of typedef 'foo' with different type\n"),
+        },
+        {
+            "ptr addassign float", __LINE__,
+            SV("int *p; p += 3.14;\n"),
+            SV("(test):1:11: error: pointer arithmetic requires integer operand\n"),
+        },
+        {
+            "ptr subassign float", __LINE__,
+            SV("int *p; p -= 3.14;\n"),
+            SV("(test):1:11: error: pointer arithmetic requires integer operand\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

@@ -1071,8 +1071,11 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             }
             // For += and -=, pointer +/- integer is valid pointer arithmetic.
             if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN)
-                && ccqt_kind(left->type) == CC_POINTER
-                && ccqt_is_basic(right->type) && ccbt_is_integer(right->type.basic.kind)){
+                && ccqt_kind(left->type) == CC_POINTER){
+                CcQualType rt = right->type;
+                if(!ccqt_is_basic(rt) && ccqt_kind(rt) == CC_ENUM) rt = ccqt_as_enum(rt)->underlying;
+                if(!ccqt_is_basic(rt) || !ccbt_is_integer(rt.basic.kind))
+                    return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
                 // no cast needed
             }
             else {
@@ -7833,6 +7836,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 err = cc_parse_declarator(p, &param_head, &param_tail, &param_name, NULL);
                 if(err) goto param_err;
                 *param_tail = param_base.type;
+                if(ccqt_is_basic(param_head) && param_head.basic.kind == CCBT_void){
+                    err = cc_error(p, peek.loc, "parameter cannot have void type");
+                    goto param_err;
+                }
                 // consume trailing __attribute__ on parameter (e.g. __attribute__((unused)))
                 {
                     CcAttributes param_attrs = {0};
@@ -7844,6 +7851,15 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
 
                 if(out_param_names){
+                    if(param_name){
+                        Marray(Atom)* pn = out_param_names;
+                        for(size_t j = 0; j < pn->count; j++){
+                            if(pn->data[j] == param_name){
+                                err = cc_error(p, peek.loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
+                                goto param_err;
+                            }
+                        }
+                    }
                     Marray(Atom)* pn = out_param_names;
                     err = ma_push(Atom)(pn, cc_allocator(p), param_name);
                     if(err){ err = CC_OOM_ERROR; goto param_err; }
@@ -8145,10 +8161,15 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
             if(declbase->spec.sp_noreturn)
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
-            if(p->current_func || p->current != &p->global){
+            {
                 CcVariable* existing = cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK);
-                if(existing)
-                    return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
+                if(existing){
+                    if(p->current != &p->global)
+                        return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
+                    // merge tentative definitions
+                    var = existing;
+                    goto skip_var_alloc;
+                }
             }
             var = Allocator_zalloc(cc_allocator(p), sizeof *var);
             if(!var) return CC_OOM_ERROR;
@@ -8164,6 +8185,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             };
             err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
             if(err) return err;
+            skip_var_alloc:;
         }
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
             CcToken peek_init;
@@ -8246,6 +8268,9 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             continue;
         }
         if(declbase->spec.sp_typedef){
+            CcQualType existing_td = cc_scope_lookup_typedef(p->current, name, CC_SCOPE_NO_WALK);
+            if(existing_td.bits && existing_td.bits != type.bits)
+                return cc_error(p, tok.loc, "redefinition of typedef '%.*s' with different type", name->length, name->data);
             err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type);
             if(err) return err;
         }
@@ -8286,8 +8311,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     return cc_error(p, tok.loc, "variable has incomplete type 'union %s'", ccqt_as_union(type)->name ? ccqt_as_union(type)->name->data : "(anonymous)");
             }
             if(var){
+                if(initializer && var->initializer)
+                    return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                 var->type = type;
-                var->initializer = initializer;
+                if(initializer)
+                    var->initializer = initializer;
                 if(var->automatic && p->current_func){
                     uint32_t sz, align;
                     err = cc_sizeof_as_uint(p, type, tok.loc, &sz);
