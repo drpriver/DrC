@@ -4674,6 +4674,8 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_VARIABLE:
         case CC_EXPR_FUNCTION:
         case CC_EXPR_BUILTIN:
+        case CC_EXPR_ARROW:
+        case CC_EXPR_DOT:
             break;
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
