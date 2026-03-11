@@ -1268,6 +1268,14 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
             case CC_EXPR_EQ: case CC_EXPR_NE:
             case CC_EXPR_LT: case CC_EXPR_GT:
             case CC_EXPR_LE: case CC_EXPR_GE: {
+                // _Type == _Type, _Type != _Type
+                if(ccqt_is_basic(left->type) && left->type.basic.kind == CCBT__Type
+                && ccqt_is_basic(right->type) && right->type.basic.kind == CCBT__Type){
+                    if(kind != CC_EXPR_EQ && kind != CC_EXPR_NE)
+                        return cc_error(p, tok.loc, "ordered comparison of _Type values");
+                    result_type = ccqt_basic(CCBT_int);
+                    break;
+                }
                 _Bool lp = ccqt_is_pointer_like(left->type);
                 _Bool rp = ccqt_is_pointer_like(right->type);
                 if(!lp && !rp){
@@ -1448,7 +1456,15 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     return cc_parse_postfix(p, result, out);
                 }
                 // (type).member → _Type value
-                if(peek2.type == CC_PUNCTUATOR && peek2.punct.punct == CC_dot){
+                // (type) as _Type value when followed by operator, ), ;, or ,
+                if(peek2.type == CC_PUNCTUATOR && (
+                    peek2.punct.punct == CC_dot
+                    || peek2.punct.punct == CC_rparen
+                    || peek2.punct.punct == CC_semi
+                    || peek2.punct.punct == CC_comma
+                    || peek2.punct.punct == CC_eq
+                    || peek2.punct.punct == CC_ne
+                )){
                     CcExpr* type_val = cc_value_expr(p, tok.loc, ccqt_basic(CCBT__Type));
                     if(!type_val) return CC_OOM_ERROR;
                     type_val->uinteger = cast_type.bits;
@@ -2882,7 +2898,63 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     switch(ti_op){
                     case CC_TYPE_NONE:
                         goto fucs;
-                        return cc_error(p, member.loc, "_Type has no member '%s'", member_name->data);
+                    case CC_TYPE_PUSH_METHOD: {
+                        if(p->current != &p->global)
+                            return cc_error(p, member.loc, "push method only allowed at global scope");
+                        // (type).push_method(func_name) — compile-time mutation
+                        CcEvalResult tv = cc_eval_expr(p, operand);
+                        if(tv.kind != CC_EVAL_TYPE)
+                            return cc_error(p, member.loc, "push_method requires a constant type");
+                        CcQualType qt = tv.type;
+                        CcTypeKind k = ccqt_kind(qt);
+                        if(k != CC_STRUCT && k != CC_UNION)
+                            return cc_error(p, member.loc, "push_method requires a struct or union type");
+                        err = cc_expect_punct(p, '(');
+                        if(err) return err;
+                        // First arg: method name
+                        CcToken mname_tok;
+                        err = cc_next_token(p, &mname_tok);
+                        if(err) return err;
+                        if(mname_tok.type != CC_IDENTIFIER)
+                            return cc_error(p, mname_tok.loc, "push_method: expected method name");
+                        Atom method_name = mname_tok.ident.ident;
+                        err = cc_expect_punct(p, CC_comma);
+                        if(err) return err;
+                        // Second arg: function (name or lambda)
+                        CcExpr* func_expr;
+                        err = cc_parse_assignment_expr(p, &func_expr);
+                        if(err) return err;
+                        CcFunc* func;
+                        if(func_expr->kind == CC_EXPR_FUNCTION)
+                            func = func_expr->func;
+                        else
+                            return cc_error(p, func_expr->loc, "push_method: expected function");
+                        func->name = method_name;
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        CcStruct* s = ccqt_as_struct(qt);
+                        Allocator al = cc_allocator(p);
+                        CcField* new_fields = Allocator_realloc(al, s->fields, s->field_count * sizeof *new_fields, (s->field_count + 1)*sizeof *new_fields);
+                        if(!new_fields) return CC_OOM_ERROR;
+                        s->fields = new_fields;
+                        s->fields[s->field_count++] = (CcField){
+                            .type = (CcQualType){.bits=(uintptr_t)func->type},
+                            .method = func,
+                            .is_method = 1,
+                            .loc = operand->loc,
+                        };
+                        CcExpr* dummy = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_void));
+                        if(!dummy) return CC_OOM_ERROR;
+                        operand = dummy;
+                        continue;
+                    }
+                    case CC_TYPE_FIELD:
+                        result_type = p->builtin_field;
+                        is_method = 1;
+                        break;
+                    case CC_TYPE_FIELDS:
+                        result_type = ccqt_basic(CCBT_unsigned_long);
+                        break;
                     case CC_TYPE_NAME:
                         result_type = p->const_char_star;
                         break;
@@ -2917,26 +2989,39 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     if(is_method){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
-                        // Parse type-or-expression argument.
-                        CcQualType arg_type;
-                        CcToken peek2;
-                        err = cc_peek(p, &peek2);
-                        if(err) return err;
-                        if(cc_is_type_start(p, &peek2)){
-                            err = cc_parse_type_name(p, &arg_type);
-                            if(err) return err;
-                        }
-                        else {
+                        CcExpr* arg_val;
+                        if(ti_op == CC_TYPE_FIELD){
+                            // Parse expression argument (index).
                             CcExpr* arg_expr;
                             err = cc_parse_assignment_expr(p, &arg_expr);
                             if(err) return err;
-                            arg_type = arg_expr->type;
+                            CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
+                            err = cc_implicit_cast(p, arg_expr, size_type, &arg_expr);
+                            if(err) return err;
+                            arg_val = arg_expr;
+                        }
+                        else {
+                            // Parse type-or-expression argument.
+                            CcQualType arg_type;
+                            CcToken peek2;
+                            err = cc_peek(p, &peek2);
+                            if(err) return err;
+                            if(cc_is_type_start(p, &peek2)){
+                                err = cc_parse_type_name(p, &arg_type);
+                                if(err) return err;
+                            }
+                            else {
+                                CcExpr* arg_expr;
+                                err = cc_parse_assignment_expr(p, &arg_expr);
+                                if(err) return err;
+                                arg_type = arg_expr->type;
+                            }
+                            arg_val = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
+                            if(!arg_val) return CC_OOM_ERROR;
+                            arg_val->uinteger = arg_type.bits;
                         }
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
-                        CcExpr* arg_val = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
-                        if(!arg_val) return CC_OOM_ERROR;
-                        arg_val->uinteger = arg_type.bits;
                         CcExpr* node = cc_make_expr(p, CC_EXPR_TYPE_INTROSPECTION, tok.loc, result_type, 1);
                         if(!node) return CC_OOM_ERROR;
                         node->type_introspection.op = ti_op;
@@ -3942,9 +4027,17 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     if(arg.kind != CC_EVAL_TYPE) return cc_eval_error();
                     return (CcEvalResult){.kind=CC_EVAL_INT, .i = cc_implicit_convertible(qt, arg.type)};
                 }
+                case CC_TYPE_FIELDS: {
+                    CcTypeKind k = ccqt_kind(qt);
+                    if(k != CC_STRUCT && k != CC_UNION) return cc_eval_error();
+                    CcStruct* s = ccqt_as_struct(qt);
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = s->field_count};
+                }
+                case CC_TYPE_PUSH_METHOD: // handled at parse time, shouldn't reach here
+                case CC_TYPE_FIELD:
                 case CC_TYPE_NAME:
                 case CC_TYPE_NONE:
-                    return cc_eval_error(); // can't constant-fold to a string
+                    return cc_eval_error(); // can't constant-fold
             }
             return cc_eval_error();
         }
@@ -8429,6 +8522,44 @@ cc_define_builtin_types(CcParser* p){
     err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type);
     if(err) return CC_OOM_ERROR;
 
+    {
+        struct f {StringView name; CcQualType type; size_t offset;} fieldinfos[] = {
+            {SV("type"), {.basic.kind=CCBT__Type}, offsetof(CiRtField, type)},
+            {SV("name"), p->const_char_star, offsetof(CiRtField, name)},
+            {SV("offset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, offset)},
+            {SV("bitwidth"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitwidth)},
+            {SV("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
+        };
+        CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]) * sizeof *fields);
+        if(!fields) return CC_OOM_ERROR;
+        for(size_t i = 0; i < sizeof fieldinfos / sizeof fieldinfos[0]; i++){
+            struct f* f = &fieldinfos[i];
+            Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
+            if(!a) return CC_OOM_ERROR;
+            CcField* field = &fields[i];
+            field->type = f->type;
+            field->name = a;
+            field->offset = (unsigned)f->offset;
+        }
+        Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Field");
+        if(!name) return CC_OOM_ERROR;
+        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        if(!s) return CC_OOM_ERROR;
+        *s = (CcStruct){
+            .kind = CC_STRUCT,
+            .name = name,
+            .field_count = sizeof fieldinfos / sizeof fieldinfos[0],
+            .fields = fields,
+        };
+        err = cc_compute_struct_layout(p, s, 0);
+        if(err) return err;
+        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        if(err) return CC_OOM_ERROR;
+        p->builtin_field = (CcQualType){.bits = (uintptr_t)s};
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_field);
+        if(err) return CC_OOM_ERROR;
+    }
+
     // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
     Atom int128_name = AT_atomize(p->cpp.at, "__int128_t", 10);
     Atom uint128_name = AT_atomize(p->cpp.at, "__uint128_t", 11);
@@ -8525,6 +8656,9 @@ cc_define_builtin_types(CcParser* p){
             {SV("count"), CC_TYPE_COUNT},
             {SV("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
             {SV("is_castable_to"), CC_TYPE_CASTABLE_TO},
+            {SV("field"), CC_TYPE_FIELD}, // field name or index;
+            {SV("fields"), CC_TYPE_FIELDS},
+            {SV("push_method"), CC_TYPE_PUSH_METHOD},
         };
         for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
             Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);

@@ -159,7 +159,8 @@ struct CcParser {
     CcQualType char_star,
                const_char_star,
                void_star,
-               const_void_star;
+               const_void_star,
+               builtin_field;
 };
 
 
@@ -171,6 +172,21 @@ static int cc_register_pragmas(CcParser*);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
+
+typedef struct CiRtField CiRtField; // return by _Type.fields
+struct CiRtField {
+    CcQualType type;
+    const char* name;
+    unsigned offset,
+             bitwidth,
+             bitoffset;
+};
+
+typedef struct CiRtFields CiRtFields;
+struct CiRtFields {
+    CiRtField * fields;
+    size_t count;
+};
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

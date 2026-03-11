@@ -145,6 +145,9 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     // Methods (with parens, lhs = _Type expr, values[0] = arg _Type expr)
     CC_TYPE_IS_CALLABLE_WITH,
     CC_TYPE_CASTABLE_TO,
+    CC_TYPE_FIELD,
+    CC_TYPE_FIELDS,
+    CC_TYPE_PUSH_METHOD,
 };
 TYPEDEF_ENUM(CcTypeIntrospectionOp, uint32_t);
 

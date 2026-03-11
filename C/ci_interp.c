@@ -45,6 +45,7 @@ enum {
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
+
 static char ci_discard_buf[8192];
 
 #define CI_RESULT_TOO_SMALL(ci, loc, sz, size) \
@@ -1787,95 +1788,79 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 return 0;
             }
             case CC_TYPE_IS_INTEGER: {
-                _Bool v = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind);
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind);
                 return 0;
             }
             case CC_TYPE_IS_FLOAT: {
-                _Bool v = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
                 return 0;
             }
             case CC_TYPE_IS_ARITHMETIC: {
-                _Bool v = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
                 return 0;
             }
             case CC_TYPE_IS_POINTER: {
-                _Bool v = ccqt_kind(qt) == CC_POINTER;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_POINTER;
                 return 0;
             }
             case CC_TYPE_IS_STRUCT: {
-                _Bool v = ccqt_kind(qt) == CC_STRUCT;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_STRUCT;
                 return 0;
             }
             case CC_TYPE_IS_UNION: {
-                _Bool v = ccqt_kind(qt) == CC_UNION;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_UNION;
                 return 0;
             }
             case CC_TYPE_IS_ARRAY: {
-                _Bool v = ccqt_kind(qt) == CC_ARRAY;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY;
                 return 0;
             }
             case CC_TYPE_IS_FUNCTION: {
-                _Bool v = ccqt_kind(qt) == CC_FUNCTION;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_FUNCTION;
                 return 0;
             }
             case CC_TYPE_IS_ENUM: {
-                _Bool v = ccqt_kind(qt) == CC_ENUM;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_kind(qt) == CC_ENUM;
                 return 0;
             }
             case CC_TYPE_IS_CONST: {
-                _Bool v = qt.is_const;
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = qt.is_const;
                 return 0;
             }
             case CC_TYPE_IS_UNSIGNED: {
-                _Bool v = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
                 return 0;
             }
             case CC_TYPE_SIZEOF: {
                 uint32_t sz;
                 err = cc_sizeof_as_uint(&ci->parser, qt, expr->loc, &sz);
                 if(err) return err;
-                unsigned long v = sz;
-                memcpy(result, &v, sizeof v);
+                *(unsigned long*)result = sz;
                 return 0;
             }
             case CC_TYPE_ALIGNOF: {
                 uint32_t al;
                 err = cc_alignof_as_uint(&ci->parser, qt, expr->loc, &al);
                 if(err) return err;
-                unsigned long v = al;
-                memcpy(result, &v, sizeof v);
+                *(unsigned long*)result = al;
                 return 0;
             }
             case CC_TYPE_POINTEE: {
                 if(ccqt_kind(qt) != CC_POINTER)
                     return ci_error(ci, expr->loc, "_Type.pointee: not a pointer type");
                 CcPointer* ptr = ccqt_as_ptr(qt);
-                uintptr_t v = ptr->pointee.bits;
-                memcpy(result, &v, sizeof v);
+                *(uintptr_t*)result = ptr->pointee.bits;
                 return 0;
             }
             case CC_TYPE_IS_CALLABLE: {
                 CcTypeKind k = ccqt_kind(qt);
-                _Bool v = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
                 return 0;
             }
             case CC_TYPE_COUNT: {
                 if(ccqt_kind(qt) != CC_ARRAY)
                     return ci_error(ci, expr->loc, "_Type.count: not an array type");
-                unsigned long v = ccqt_as_array(qt)->length;
-                memcpy(result, &v, sizeof v);
+                *(unsigned long*)result = ccqt_as_array(qt)->length;
                 return 0;
             }
             case CC_TYPE_IS_CALLABLE_WITH: {
@@ -1891,7 +1876,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     if(f->param_count == 1)
                         v = cc_implicit_convertible(arg_type, f->params[0]);
                 }
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = v;
                 return 0;
             }
             case CC_TYPE_CASTABLE_TO: {
@@ -1899,8 +1884,36 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
                 if(err) return err;
                 CcQualType target = {.bits = arg_bits};
-                _Bool v = cc_implicit_convertible(qt, target);
-                memcpy(result, &v, sizeof v);
+                *(_Bool*)result = cc_implicit_convertible(qt, target);
+                return 0;
+            }
+            case CC_TYPE_FIELD:{
+                CcTypeKind k = ccqt_kind(qt);
+                if(k != CC_STRUCT && k != CC_UNION)
+                    return ci_error(ci, expr->loc, "_Type.field: not a struct or union type");
+                CcStruct* s = ccqt_as_struct(qt);
+                uintptr_t idx = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
+                if(err) return err;
+                if(idx >= s->field_count)
+                    return ci_error(ci, expr->loc, "_Type.field: index out of range");
+                CcField* f = &s->fields[idx];
+                CiRtField* out = (CiRtField*)result;
+                out->type = f->type;
+                out->name = f->name ? f->name->data : "";
+                out->offset = f->offset;
+                out->bitwidth = f->bitwidth;
+                out->bitoffset = f->bitoffset;
+                return 0;
+            }
+            case CC_TYPE_PUSH_METHOD:
+                return ci_error(ci, expr->loc, "push_method should be handled at parse time");
+            case CC_TYPE_FIELDS:{
+                CcTypeKind k = ccqt_kind(qt);
+                if(k != CC_STRUCT && k != CC_UNION)
+                    return ci_error(ci, expr->loc, "_Type.fields: not a struct or union type");
+                CcStruct* s = ccqt_as_struct(qt);
+                *(unsigned long*)result = s->field_count;
                 return 0;
             }
         }
