@@ -469,6 +469,8 @@ cc_parse_type_name(CcParser* p, CcQualType* out){
     }
     err = cc_resolve_specifiers(p, &base);
     if(err) return err;
+    if(base.spec.sp_infer_type)
+        return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
     CcQualType head = {0};
     CcQualType* tail = &head;
     err = cc_parse_declarator(p, &head, &tail, NULL, NULL);
@@ -490,6 +492,8 @@ cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
         return cc_error(p, loc, "Expected type in lambda expression");
     err = cc_resolve_specifiers(p, &base);
     if(err) return err;
+    if(base.spec.sp_infer_type)
+        return cc_error(p, loc, "Expected type in expression, got only qualifiers/storage class");
     CcQualType head = {0};
     CcQualType* tail = &head;
     Marray(Atom) param_names = {0};
@@ -499,7 +503,15 @@ cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     CcQualType type = cc_intern_qualtype(p, head);
     if(ccqt_kind(type) != CC_FUNCTION){
         ma_cleanup(Atom)(&param_names, cc_allocator(p));
-        return cc_error(p, loc, "Lambda requires a function type, got non-function type");
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace)
+            return cc_error(p, loc, "Lambda requires a function type, got non-function type");
+        CcExpr* type_val = cc_value_expr(p, loc, ccqt_basic(CCBT__Type));
+        if(!type_val) return CC_OOM_ERROR;
+        type_val->uinteger = type.bits;
+        return cc_parse_postfix(p, type_val, out);
     }
     // Expect '{'
     CcToken peek;
@@ -1036,16 +1048,6 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             if(err) return err;
             if(kind == CC_EXPR_ASSIGN && peek_assign.type == CC_PUNCTUATOR && peek_assign.punct.punct == CC_lbrace){
                 err = cc_parse_init_list(p, &right, left->type);
-            }
-            else if(kind == CC_EXPR_ASSIGN && ccqt_is_basic(left->type) && left->type.basic.kind == CCBT__Type
-                    && cc_is_type_start(p, &peek_assign)){
-                CcQualType parsed_type;
-                err = cc_parse_type_name(p, &parsed_type);
-                if(err) return err;
-                if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
-                right = cc_value_expr(p, tok.loc, ccqt_basic(CCBT__Type));
-                if(!right) return CC_OOM_ERROR;
-                right->uinteger = parsed_type.bits;
             }
             else {
                 // right-associative: recurse into assignment_expr
@@ -3298,26 +3300,8 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                                 positional_index++;
                         }
                         CcExpr* arg;
-                        // If the parameter type is _Type and next token looks like a type, parse as type-name.
-                        if(positional_index < ftype->param_count
-                                && ccqt_is_basic(ftype->params[positional_index])
-                                && ftype->params[positional_index].basic.kind == CCBT__Type
-                                && cc_is_type_start(p, &dot)){
-                            CcQualType parsed_type;
-                            err = cc_parse_type_name(p, &parsed_type);
-                            if(err) goto call_cleanup;
-                            if(!parsed_type.bits){
-                                err = cc_error(p, tok.loc, "Expected type name for _Type parameter");
-                                goto call_cleanup;
-                            }
-                            arg = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
-                            if(!arg){ err = CC_OOM_ERROR; goto call_cleanup; }
-                            arg->uinteger = parsed_type.bits;
-                        }
-                        else {
-                            err = cc_parse_assignment_expr(p, &arg);
-                            if(err) goto call_cleanup;
-                        }
+                        err = cc_parse_assignment_expr(p, &arg);
+                        if(err) goto call_cleanup;
                         if(has_named){
                             while(args.count <= positional_index){
                                 err = pa_push(&args, call_al, NULL);
@@ -3596,6 +3580,11 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_VALUE:
             if(e->str.length && e->text){
                 msb_sprintf(sb, "\"%.*s\"", e->str.length - 1, e->text);
+            }
+            else if(ccqt_is_basic(e->type) && e->type.basic.kind == CCBT__Type){
+                msb_write_char(sb, '(');
+                cc_print_type(sb, (CcQualType){.bits = e->uinteger});
+                msb_write_char(sb, ')');
             }
             else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
                 if(e->type.basic.kind == CCBT_float)
@@ -3883,6 +3872,13 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             CcEvalResult R = cc_eval_expr(p,e->values[0]);
             if(L.kind == CC_EVAL_ERROR || R.kind == CC_EVAL_ERROR)
                 return cc_eval_error();
+            if(L.kind == CC_EVAL_TYPE && R.kind == CC_EVAL_TYPE){
+                if(e->kind == CC_EXPR_EQ)
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.type.bits == R.type.bits};
+                if(e->kind == CC_EXPR_NE)
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.type.bits != R.type.bits};
+                return cc_eval_error();
+            }
             cc_eval_promote(&L, &R);
             #define IBINOP(op) \
                 switch(L.kind){ \
@@ -4984,8 +4980,35 @@ cc_pragma_pack(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, co
 
 static
 int
+cc_pragma_typedef(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CcParser* p = (CcParser*)ctx;
+    (void)cpp;
+    const CppToken* end = toks+ntoks;
+    while(toks < end && toks->type == CPP_WHITESPACE) toks++;
+    while(toks < end && end[-1].type == CPP_WHITESPACE) end--;
+    if(toks == end || toks->type != CPP_IDENTIFIER){
+        return cc_error(p, loc, "#pragma typedef requires 'on' or 'off'");
+    }
+    if(sv_equals(toks->txt, SV("on"))){
+        p->auto_typedef = 1;
+    }
+    else if(sv_equals(toks->txt, SV("off"))){
+        p->auto_typedef = 0;
+    }
+    else {
+        return cc_error(p, loc, "#pragma typedef requires 'on' or 'off'");
+    }
+    return 0;
+}
+
+static
+int
 cc_register_pragmas(CcParser* p){
-    return cpp_register_pragma(&p->cpp, SV("pack"), cc_pragma_pack, p);
+    int err = cpp_register_pragma(&p->cpp, SV("pack"), cc_pragma_pack, p);
+    if(err) return err;
+    err = cpp_register_pragma(&p->cpp, SV("typedef"), cc_pragma_typedef, p);
+    if(err) return err;
+    return 0;
 }
 
 static
@@ -5881,6 +5904,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
             }
             err = cc_resolve_specifiers(p, &member_base);
             if(err) goto struct_err;
+            if(member_base.spec.sp_infer_type){
+                err = cc_error(p, tok.loc, "Expected type specifier in struct/union member");
+                goto struct_err;
+            }
             err = cc_peek(p, &tok);
             if(err) goto struct_err;
             if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
@@ -7494,14 +7521,6 @@ cc_parse_statement(CcParser* p){
                         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
                             err = cc_parse_init_list(p, &ret_expr, ret_type);
                         }
-                        else if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT__Type && cc_is_type_start(p, &peek)){
-                            CcQualType parsed_type;
-                            err = cc_parse_type_name(p, &parsed_type);
-                            if(err) return err;
-                            ret_expr = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
-                            if(!ret_expr) return CC_OOM_ERROR;
-                            ret_expr->uinteger = parsed_type.bits;
-                        }
                         else {
                             err = cc_parse_expr(p, &ret_expr);
                         }
@@ -7897,6 +7916,10 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 }
                 err = cc_resolve_specifiers(p, &param_base);
                 if(err) goto param_err;
+                if(param_base.spec.sp_infer_type){
+                    err = cc_error(p, peek.loc, "Expected type in function parameter");
+                    goto param_err;
+                }
 
                 CcQualType param_head = {0};
                 CcQualType* param_tail = &param_head;
@@ -8028,6 +8051,23 @@ int
 cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
     int err = 0;
     CcToken tok;
+    if(p->auto_typedef && !declbase->spec.sp_typedef){
+        Atom tag_name = NULL;
+        CcQualType base = declbase->type;
+        if(!ccqt_is_basic(base)){
+            CcTypeKind tk = ccqt_kind(base);
+            if(tk == CC_STRUCT) tag_name = ccqt_as_struct(base)->name;
+            else if(tk == CC_UNION) tag_name = ccqt_as_union(base)->name;
+            else if(tk == CC_ENUM) tag_name = ccqt_as_enum(base)->name;
+        }
+        if(tag_name){
+            CcQualType existing_td = cc_scope_lookup_typedef(p->current, tag_name, CC_SCOPE_NO_WALK);
+            if(!existing_td.bits){
+                err = cc_scope_insert_typedef(cc_allocator(p), p->current, tag_name, base);
+                if(err) return err;
+            }
+        }
+    }
     for(_Bool first = 1;;first=0){
         Atom name = NULL;
         CcQualType type;
@@ -8262,15 +8302,6 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(peek_init.type == CC_PUNCTUATOR && peek_init.punct.punct == CC_lbrace){
                 err = cc_parse_init_list(p, &initializer, type);
                 if(err) return err;
-            }
-            else if(ccqt_is_basic(type) && type.basic.kind == CCBT__Type && cc_is_type_start(p, &peek_init)){
-                CcQualType parsed_type;
-                err = cc_parse_type_name(p, &parsed_type);
-                if(err) return err;
-                if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
-                initializer = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
-                if(!initializer) return CC_OOM_ERROR;
-                initializer->uinteger = parsed_type.bits;
             }
             else {
                 err = cc_parse_assignment_expr(p, &initializer);

@@ -127,7 +127,8 @@ struct CcParser {
         struct {
             uint32_t repl:1, // repl mode, allow top level statements
                      eager_parsing: 1, // Parse function bodies upon definition instead of upon use.
-                    _padding:30;
+                     auto_typedef: 1, // automatically insert tagged types untagged into scope as typedef.
+                    _padding:29;
         };
     };
     Marray(CcStatement) toplevel_statements; // only allowed in repl/script mode.

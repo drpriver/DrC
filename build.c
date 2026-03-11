@@ -76,6 +76,7 @@ int main(int argc, char** argv, char** envp){
         _Bool saved_ns = ctx->target.native_sanitize;
         ctx->target.native_sanitize = 0;
         BuildTarget* cc_opt = exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+        add_dep(ctx, all, cc_opt);
         ctx->target.native_sanitize = saved_ns;
         cmd_carg(&cc_opt->cmd, "-O2");
         if(BUILD_OS == OS_LINUX)

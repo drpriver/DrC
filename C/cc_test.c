@@ -3428,6 +3428,26 @@ TestFunction(test_parse_errors){
             SV("int *p; p -= 3.14;\n"),
             SV("(test):1:11: error: pointer arithmetic requires integer operand\n"),
         },
+        {
+            "bare qualifier in expression", __LINE__,
+            SV("int x = const;\n"),
+            SV("(test):1:9: error: Expected type in expression, got only qualifiers/storage class\n"),
+        },
+        {
+            "bare qualifier in cast", __LINE__,
+            SV("int x = (const)3;\n"),
+            SV("(test):1:10: error: Expected type name, got only qualifiers/storage class\n"),
+        },
+        {
+            "bare qualifier in struct member", __LINE__,
+            SV("struct S { const; };\n"),
+            SV("(test):1:12: error: Expected type specifier in struct/union member\n"),
+        },
+        {
+            "bare qualifier in function param", __LINE__,
+            SV("void foo(const);\n"),
+            SV("(test):1:10: error: Expected type in function parameter\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

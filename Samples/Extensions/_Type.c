@@ -16,12 +16,10 @@ t = int[4];
 log("%s.count: %zu\n", t.name, t.count);
 log("%s.is_castable_to(int*): %s\n", t.name, t.is_castable_to(int*)?"true":"false");
 
-// parenthesized types can be used as values
-// disambiguate from compound literals and casts
-log("%s\n", (int).name);
+log("%s\n", int.name);
 
 // usable in static if: 
-static if((int[4]).is_castable_to(int*)){
+static if(int[4].is_castable_to(int*)){
     log("true!\n");
 }
 else {
@@ -30,7 +28,6 @@ else {
 
 _Type id(_Type T){ return T; }
 
-// we know id() takes type, so parse type-name instead of expression
 log("%s\n", id(int).name);
 
 _Type ty = _Type;

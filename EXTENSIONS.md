@@ -355,6 +355,134 @@ static if(__type_equals(typeof_unqual(T), int)){
 
 ### `_Type`
 
+Types are first-class values of type `_Type`. A type name used as an
+expression produces a `_Type` value. This is most useful inside proc macro
+functions where `_Type` parameters receive the type passed by the caller.
+
+```C
+_Type T = int;
+if(T.is_integer) printf("yes\n");
+```
+
+#### Properties
+
+ | Property           | Type          | Description                                   |
+ | ------------------ | ------------- | --------------------------------------------- |
+ | `.name`            | `const char*` | Name of the type (including `struct`, etc.)   |
+ | `.tag`             | `const char*` | Tag name only (e.g. `"Color"`)                |
+ | `.sizeof_`         | `size_t`      | Size in bytes                                 |
+ | `.alignof_`        | `size_t`      | Alignment in bytes                            |
+ | `.is_integer`      | `_Bool`       | True for integer types                        |
+ | `.is_float`        | `_Bool`       | True for floating-point types                 |
+ | `.is_arithmetic`   | `_Bool`       | True for arithmetic types                     |
+ | `.is_pointer`      | `_Bool`       | True for pointer types                        |
+ | `.is_struct`       | `_Bool`       | True for struct types                         |
+ | `.is_union`        | `_Bool`       | True for union types                          |
+ | `.is_array`        | `_Bool`       | True for array types                          |
+ | `.is_function`     | `_Bool`       | True for function types                       |
+ | `.is_enum`         | `_Bool`       | True for enum types                           |
+ | `.is_const`        | `_Bool`       | True if const-qualified                       |
+ | `.is_volatile`     | `_Bool`       | True if volatile-qualified                    |
+ | `.is_atomic`       | `_Bool`       | True if `_Atomic`-qualified                   |
+ | `.is_unsigned`     | `_Bool`       | True for unsigned integer types               |
+ | `.is_signed`       | `_Bool`       | True for signed integer types                 |
+ | `.is_callable`     | `_Bool`       | True for functions and function pointers      |
+ | `.is_variadic`     | `_Bool`       | True for variadic functions/function pointers |
+ | `.pointee`         | `_Type`       | Pointed-to type (pointers only)               |
+ | `.unqual`          | `_Type`       | Type with qualifiers  removed                 |
+ | `.count`           | `size_t`      | Element count (arrays only)                   |
+ | `.fields`          | `size_t`      | Number of fields (structs/unions)             |
+ | `.element_type`    | `_Type`       | Element type (arrays only)                    |
+ | `.return_type`     | `_Type`       | Return type (functions/function pointers)     |
+ | `.param_count`     | `size_t`      | Parameter count (functions/function pointers) |
+ | `.underlying_type` | `_Type`       | Underlying integer type (enums only)          |
+ | `.enumerators`     | `size_t`      | Number of enumerators (enums only)            |
+
+#### Methods
+
+ | Method                 | Description                              |
+ | ---------------------- | ---------------------------------------- |
+ | `.field(i)`            | Returns field info for the *i*th field   |
+ | `.param_type(i)`       | Returns the *i*th parameter type         |
+ | `.enumerator(i)`       | Returns the *i*th enumerator             |
+ | `.is_callable_with(T)` | True if callable with argument type `T`  |
+ | `.is_castable_to(T)`   | True if explicitly castable to type `T`  |
+
+#### `push_method`
+
+`push_method` is a compile-time mutation that adds a method to a struct or
+union type. It must be used at global scope. The syntax is:
+
+```
+(Type).push_method(method_name, function);
+```
+
+The first argument is the method name (an identifier). The second argument is
+a function — typically a lambda. After the call, instances of the type can
+call the method with `.method_name()` syntax, just like methods defined inline
+in the struct body.
+
+This is primarily useful with `__mixin` and proc macros to generate methods
+for types after their definition.
+
+```C
+#include <stdio.h>
+
+struct Point { int x, y; };
+
+// Add a print method to Point at compile time
+(struct Point).push_method(print, void(struct Point* self){
+    printf("(%d, %d)\n", self.x, self.y);
+});
+
+struct Point p = {3, 4};
+p.print(); // prints: (3, 4)
+```
+
+Combined with proc macros and `__mixin`, this enables auto-generated methods
+via type introspection:
+
+```C
+const char* gen_print(_Type T){
+    if(!T.is_struct) return "";
+    char buf[4096];
+    int off = 0;
+    off += snprintf(buf+off, sizeof buf-off,
+        "(%s).push_method(print, void (%s* v){\n"
+        "    printf(\"%s {\\n\");\n",
+        T.name, T.name, T.name);
+    for(int i = 0; i < (int)T.fields; i++){
+        auto f = T.field(i);
+        off += snprintf(buf+off, sizeof buf-off,
+            "    printf(\"    %s = %%d\\n\", v->%s);\n",
+            f.name, f.name);
+    }
+    off += snprintf(buf+off, sizeof buf-off,
+        "    printf(\"}\\n\");\n"
+        "});\n");
+    return __builtin_intern(buf);
+}
+#pragma procmacro gen_print
+
+struct Player { const char* name; int hp; };
+__mixin(gen_print(struct Player));
+
+struct Player p = {"Alice", 100};
+p.print();
+```
+
+#### Types as expressions
+Type names are parsed as `_Type` expressions in most positions.
+The exception is at the start of a declaration/statement where it is parsed as
+the start of a declaration. This can affect FUCS calls.
+
+```C
+void print(_Type t){printf("%s\n", t.name);}
+// doesn't work
+// int.print();
+// parens disambiguate.
+(int).print();
+
 ### Top-level statements
 
 Code at the top level of a file is executed as if it were in an implicit
@@ -422,6 +550,28 @@ const char* make_name(int id){
 }
 ```
 
+### `#pragma typedef`
+
+`#pragma typedef on` enables auto typedef mode and `#pragma typedef off` disables it.
+When typedef mode is enabled, tagged types (structs, enums and unions) automatically
+get their tags placed in the typedef table, so you don't have to typedef it yourself.
+
+This does not typedef tagged types declared within tagged types.
+
+```C
+#pragma typedef on
+struct Foo {
+    int x;
+};
+
+Foo f = {3};
+
+#pragma typedef off
+struct Bar {
+    int x;
+};
+Bar b = {2}; /// error
+```
 
 ## Interpreter-only
 
