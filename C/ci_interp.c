@@ -88,6 +88,7 @@ static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static _Bool cc_implicit_convertible(CcQualType from, CcQualType to);
+static _Bool cc_explicit_castable(CcQualType from, CcQualType to);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
 static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
@@ -1917,7 +1918,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
                 if(err) return err;
                 CcQualType target = {.bits = arg_bits};
-                *(_Bool*)result = cc_implicit_convertible(qt, target);
+                *(_Bool*)result = cc_explicit_castable(qt, target);
                 return 0;
             }
             case CC_TYPE_FIELD:{

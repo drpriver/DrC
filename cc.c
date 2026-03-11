@@ -276,9 +276,17 @@ int main(int argc, char** argv, char** envp){
     err = ci_resolve_refs(&interp, 0);
     if(err) return err;
     if(repl){
+        // Execute any statements from the initial file before entering REPL.
+        {
+            CiInterpFrame* frame = &interp.top_frame;
+            frame->stmts = interp.parser.toplevel_statements.data;
+            frame->stmt_count = interp.parser.toplevel_statements.count;
+            while(frame->pc < frame->stmt_count){
+                err = ci_interp_step(&interp, frame);
+                if(err) return err;
+            }
+        }
         interp.parser.repl = 1;
-        err = cpp_cli_defines(&interp.parser.cpp);
-        if(err) return err;
         fc->may_read_real_files = 1;
         struct ReplCompleterCtx completer_ctx = {.parser = &interp.parser};
         GetInputCtx gi = {
@@ -289,6 +297,7 @@ int main(int argc, char** argv, char** envp){
         MStringBuilder msb = {.allocator=MALLOCATOR};
         int input_num = 0;
         for(;;){
+            cc_parser_discard_input(&interp.parser);
             gi.prompt = msb.cursor ? SV("... ") : SV("cc> ");
             ssize_t n = gi_get_input(&gi);
             if(n < 0) break; // ctrl-d
@@ -299,9 +308,11 @@ int main(int argc, char** argv, char** envp){
                     continue;
             }
             if(n == 0){
-                log_sprintf(logger, "\r");
+                log_sprintf(logger, "\r\n");
+                log_flush(logger, LOG_PRINT);
                 // Empty line = double newline = submit.
                 if(!msb.cursor) continue; // nothing to submit
+                if(msb_peek(&msb) != ';') msb_write_char(&msb, ';'); // semicolon insertion
                 msb_write_char(&msb, '\n');
                 StringView src = msb_borrow_sv(&msb);
                 char name[32];
@@ -316,7 +327,7 @@ int main(int argc, char** argv, char** envp){
                     continue;
                 }
                 err = cc_parse_all(&interp.parser);
-                if(err){ cc_parser_discard_input(&interp.parser); msb.cursor = 0; continue; }
+                if(err){ msb.cursor = 0; continue; }
                 err = ci_resolve_refs(&interp, 0);
                 if(err){ msb.cursor = 0; continue; }
                 // Execute new statements
@@ -443,7 +454,6 @@ repl_builtin_command(CcParser* parser, StringView input){
     if(!input.length)
         input = SV("help");
     if(sv_iequals(input, SV("quit")) || sv_iequals(input, SV("exit")) || sv_iequals(input, SV("q"))){
-        log_printf(l, "\n");
         exit(0);
     }
     CcScope* scope = &parser->global;
@@ -619,10 +629,13 @@ repl_builtin_command(CcParser* parser, StringView input){
             if(v->mangle) log_sprintf(l, " asm(\"%.*s\")", (int)v->mangle->length, v->mangle->data);
             if(v->extern_) log_sprintf(l, " (extern)");
             if(v->static_) log_sprintf(l, " (static)");
-            if(v->initializer){
-                CcExpr* init = v->initializer;
+            if(v->interp_val){
                 log_sprintf(l, " = ");
-                cc_print_expr(&l->buff, init);
+                cc_print_runtime_value(parser, v->type, v->interp_val, &l->buff, 1);
+            }
+            else if(v->initializer){
+                log_sprintf(l, " = ");
+                cc_print_expr(&l->buff, v->initializer);
             }
             log_sprintf(l, "\n");
         }

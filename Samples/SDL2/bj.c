@@ -329,6 +329,9 @@ main(void){
     SDL_DestroyTexture(font_tex);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
+    #ifdef __APPLE__
+    SDL_PumpEvents();
+    #endif
     SDL_Quit();
     return 0;
 }

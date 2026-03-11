@@ -156,8 +156,11 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             max_candidates += mi.count;
             max_candidates += AM_items(&parser->global.typedefs).count;
             max_candidates += AM_items(&parser->global.variables).count;
+            max_candidates += AM_items(&parser->global.functions).count;
+            max_candidates += AM_items(&parser->global.enumerators).count;
             max_candidates += AM_items(&parser->global.structs).count;
             max_candidates += AM_items(&parser->global.unions).count;
+            max_candidates += AM_items(&parser->global.enums).count;
         }
 
         struct CompletionPair* pairs = malloc(max_candidates * sizeof *pairs);
@@ -171,8 +174,11 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             COLLECT_FROM_ATOMMAP(AM_items(&parser->cpp.macros));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.typedefs));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.variables));
+            COLLECT_FROM_ATOMMAP(AM_items(&parser->global.functions));
+            COLLECT_FROM_ATOMMAP(AM_items(&parser->global.enumerators));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.structs));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.unions));
+            COLLECT_FROM_ATOMMAP(AM_items(&parser->global.enums));
         }
 
         #undef COLLECT_FROM_TABLE

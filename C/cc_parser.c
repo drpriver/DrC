@@ -384,6 +384,36 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
     return 0;
 }
 
+static
+_Bool
+cc_explicit_castable(CcQualType from, CcQualType to){
+    if(from.bits == to.bits) return 1;
+    if(ccqt_is_basic(to) && to.basic.kind == CCBT_void) return 1;
+    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
+    if(fk == CC_ENUM){
+        from = ccqt_as_enum(from)->underlying;
+        fk = ccqt_kind(from);
+    }
+    if(tk == CC_ENUM){
+        to = ccqt_as_enum(to)->underlying;
+        tk = ccqt_kind(to);
+    }
+    if(tk == CC_ARRAY || tk == CC_FUNCTION) return 0;
+    if(tk == CC_STRUCT || tk == CC_UNION)
+        return from.ptr == to.ptr;
+    if(fk == CC_STRUCT || fk == CC_UNION) return 0;
+    if(fk == CC_BASIC && from.basic.kind == CCBT_void) return 0;
+    _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind));
+    _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(to.basic.kind));
+    if(f_arith && t_arith) return 1;
+    _Bool f_ptr = fk == CC_POINTER || (fk == CC_ARRAY && !ccqt_as_array(from)->is_vector) || fk == CC_FUNCTION || (fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t);
+    _Bool t_ptr = tk == CC_POINTER || (tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t);
+    if(f_ptr && t_ptr) return 1;
+    if(f_ptr && (tk == CC_BASIC && ccbt_is_integer(to.basic.kind))) return 1;
+    if(fk == CC_BASIC && ccbt_is_integer(from.basic.kind) && t_ptr) return 1;
+    return 0;
+}
+
 // Wrap an expression in an implicit cast if types differ.
 // Returns 0 on success, error on incompatible types or OOM.
 static
@@ -605,6 +635,14 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
     if(ccqt_is_basic(to) && to.basic.kind == CCBT_void) return 0;
     CcTypeKind to_kind = ccqt_kind(to);
     CcTypeKind from_kind = ccqt_kind(from);
+    if(to_kind == CC_ENUM){
+        to = ccqt_as_enum(to)->underlying;
+        to_kind = ccqt_kind(to);
+    }
+    if(from_kind == CC_ENUM){
+        from = ccqt_as_enum(from)->underlying;
+        from_kind = ccqt_kind(from);
+    }
     // Cannot cast to array, function, struct, or union.
     if(to_kind == CC_ARRAY)
         return cc_error(p, loc, "cannot cast to array type");
@@ -612,7 +650,7 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
         return cc_error(p, loc, "cannot cast to function type");
     if(to_kind == CC_STRUCT || to_kind == CC_UNION){
         // Same-type struct/union assignment is valid.
-        if(from_kind == to_kind && _ccqt_to_type_ptr(from) == _ccqt_to_type_ptr(to))
+        if(from.ptr == to.ptr)
             return 0;
         return cc_error(p, loc, "cannot cast to struct or union type");
     }
@@ -623,8 +661,8 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
         return cc_error(p, loc, "cannot cast from void");
     // Arithmetic <-> arithmetic is always valid.
     // (integer, float, complex, bool, enum underlying types)
-    _Bool from_arith = (from_kind == CC_BASIC && from.basic.kind != CCBT_nullptr_t) || from_kind == CC_ENUM;
-    _Bool to_arith = (to_kind == CC_BASIC && to.basic.kind != CCBT_nullptr_t) || to_kind == CC_ENUM;
+    _Bool from_arith = from_kind == CC_BASIC && ccbt_is_arithmetic(from.basic.kind);
+    _Bool to_arith = to_kind == CC_BASIC && ccbt_is_arithmetic(to.basic.kind);
     if(from_arith && to_arith)
         return 0;
     // Pointer/array/function sources are pointer-like for cast purposes.
@@ -634,9 +672,9 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
     if(from_ptr && to_ptr)
         return 0;
     // Pointer <-> integer (includes bool and enum).
-    if(from_ptr && to_arith && (to_kind == CC_ENUM || ccbt_is_integer(to.basic.kind)))
+    if(from_ptr && to_kind == CC_BASIC && ccbt_is_integer(to.basic.kind))
         return 0;
-    if(from_arith && (from_kind == CC_ENUM || ccbt_is_integer(from.basic.kind)) && to_ptr)
+    if(to_ptr && from_kind == CC_BASIC && ccbt_is_integer(from.basic.kind))
         return 0;
     // Pointer <-> float is not allowed.
     return cc_error(p, loc, "invalid cast");
@@ -1847,8 +1885,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             else if(which == CC__is_implicitly_castable_to)
                                 result = cc_implicit_convertible(first_type, second_type);
                             else if(which == CC__is_castable_to)
-                                // For now, same as implicit — explicit casts are always allowed between scalars
-                                result = cc_implicit_convertible(first_type, second_type);
+                                result = cc_explicit_castable(first_type, second_type);
                             else if(which == CC__has_quals){
                                 // second_type's qualifiers are treated as a mask
                                 if(second_type.is_const && !first_type.is_const) result = 0;
@@ -3575,6 +3612,147 @@ cc_print_type(MStringBuilder* sb, CcQualType t){
 
 static
 void
+cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBuilder* sb, int indent){
+    const CcTargetConfig* tgt = cc_target(p);
+    SrcLoc loc = {0};
+    switch(ccqt_kind(type)){
+        case CC_BASIC: {
+            CcBasicTypeKind k = type.basic.kind;
+            switch(k){
+                case CCBT_void:
+                    msb_write_literal(sb, "void");
+                    return;
+                case CCBT_bool:
+                    if(*(const uint8_t*)data) msb_write_literal(sb, "true");
+                    else msb_write_literal(sb, "false");
+                    return;
+                case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: {
+                    unsigned char c = *(const unsigned char*)data;
+                    if(c >= 0x20 && c < 0x7f)
+                        msb_sprintf(sb, "'%c' (%u)", c, c);
+                    else
+                        msb_sprintf(sb, "%u", c);
+                    return;
+                }
+                case CCBT_float:
+                    msb_sprintf(sb, "%g", (double)*(const float*)data);
+                    return;
+                case CCBT_double: case CCBT_long_double:
+                    msb_sprintf(sb, "%g", *(const double*)data);
+                    return;
+                case CCBT__Type:
+                    msb_write_char(sb, '(');
+                    cc_print_type(sb, (CcQualType){.bits = *(const uintptr_t*)data});
+                    msb_write_char(sb, ')');
+                    return;
+                case CCBT_nullptr_t:
+                    msb_write_literal(sb, "nullptr");
+                    return;
+                case CCBT_short: case CCBT_int: case CCBT_long: case CCBT_long_long: {
+                    int64_t v = 0;
+                    memcpy(&v, data, tgt->sizeof_[k]);
+                    unsigned sz = tgt->sizeof_[k];
+                    if(sz < 8 && (v & ((int64_t)1 << (sz*8-1))))
+                        v |= ~(((int64_t)1 << (sz*8)) - 1);
+                    msb_sprintf(sb, "%lld", (long long)v);
+                    return;
+                }
+                case CCBT_unsigned_short: case CCBT_unsigned: case CCBT_unsigned_long:
+                case CCBT_unsigned_long_long: {
+                    uint64_t v = 0;
+                    memcpy(&v, data, tgt->sizeof_[k]);
+                    msb_sprintf(sb, "%llu", (unsigned long long)v);
+                    return;
+                }
+                default:
+                    msb_write_literal(sb, "<unknown basic>");
+                    return;
+            }
+        }
+        case CC_POINTER: {
+            void* ptr;
+            memcpy(&ptr, data, tgt->sizeof_[CCBT_nullptr_t]);
+            msb_sprintf(sb, "%p", ptr);
+            return;
+        }
+        case CC_ENUM: {
+            CcEnum* e = ccqt_as_enum(type);
+            int64_t v = 0;
+            uint32_t sz = tgt->sizeof_[e->underlying.basic.kind];
+            memcpy(&v, data, sz);
+            if(sz < 8 && (v & ((int64_t)1 << (sz*8-1))))
+                v |= ~(((int64_t)1 << (sz*8)) - 1);
+            for(size_t i = 0; i < e->enumerator_count; i++){
+                if(e->enumerators[i]->value == v){
+                    msb_sprintf(sb, "%.*s (%lld)", (int)e->enumerators[i]->name->length, e->enumerators[i]->name->data, (long long)v);
+                    return;
+                }
+            }
+            msb_sprintf(sb, "%lld", (long long)v);
+            return;
+        }
+        case CC_ARRAY: {
+            CcArray* arr = ccqt_as_array(type);
+            if(arr->is_incomplete || arr->is_vla){ msb_write_literal(sb, "[...]"); return; }
+            uint32_t elem_sz;
+            if(cc_sizeof_as_uint(p, arr->element, loc, &elem_sz)){ msb_write_literal(sb, "[...]"); return; }
+            msb_write_char(sb, '{');
+            for(size_t i = 0; i < arr->length; i++){
+                if(i) msb_write_literal(sb, ", ");
+                if(i >= 16){ msb_write_literal(sb, "..."); break; }
+                cc_print_runtime_value(p, arr->element, (const char*)data + i * elem_sz, sb, indent);
+            }
+            msb_write_char(sb, '}');
+            return;
+        }
+        case CC_STRUCT: {
+            CcStruct* s = ccqt_as_struct(type);
+            if(s->is_incomplete){ msb_write_literal(sb, "{<incomplete>}"); return; }
+            msb_write_literal(sb, "{\n");
+            for(uint32_t i = 0; i < s->field_count; i++){
+                CcField* f = &s->fields[i];
+                if(f->is_method) continue;
+                for(int j = 0; j < indent + 1; j++) msb_write_literal(sb, "  ");
+                if(f->name)
+                    msb_sprintf(sb, ".%.*s = ", (int)f->name->length, f->name->data);
+                else
+                    msb_write_literal(sb, "<anon> = ");
+                if(f->is_bitfield){
+                    uint64_t storage = 0;
+                    memcpy(&storage, (const char*)data + f->offset, sizeof(uint32_t));
+                    uint64_t val = (storage >> f->bitoffset) & (((uint64_t)1 << f->bitwidth) - 1);
+                    msb_sprintf(sb, "%llu", (unsigned long long)val);
+                }
+                else {
+                    cc_print_runtime_value(p, f->type, (const char*)data + f->offset, sb, indent + 1);
+                }
+                msb_write_literal(sb, ",\n");
+            }
+            for(int j = 0; j < indent; j++) msb_write_literal(sb, "  ");
+            msb_write_char(sb, '}');
+            return;
+        }
+        case CC_UNION: {
+            CcUnion* u = ccqt_as_union(type);
+            if(u->is_incomplete){ msb_write_literal(sb, "{<incomplete>}"); return; }
+            msb_write_literal(sb, "{ /* union, ");
+            msb_sprintf(sb, "%u bytes: ", u->size);
+            for(uint32_t i = 0; i < u->size && i < 32; i++){
+                msb_sprintf(sb, "%02x", ((const unsigned char*)data)[i]);
+                if(i + 1 < u->size && i + 1 < 32) msb_write_char(sb, ' ');
+            }
+            if(u->size > 32) msb_write_literal(sb, " ...");
+            msb_write_literal(sb, " */ }");
+            return;
+        }
+        case CC_FUNCTION:
+            msb_write_literal(sb, "<function>");
+            return;
+    }
+}
+
+static
+void
 cc_print_expr(MStringBuilder*sb, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_VALUE:
@@ -4056,7 +4234,7 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_TYPE_CASTABLE_TO: {
                     CcEvalResult arg = cc_eval_expr(p, e->values[0]);
                     if(arg.kind != CC_EVAL_TYPE) return cc_eval_error();
-                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = cc_implicit_convertible(qt, arg.type)};
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = cc_explicit_castable(qt, arg.type)};
                 }
                 case CC_TYPE_FIELDS: {
                     CcTypeKind k = ccqt_kind(qt);

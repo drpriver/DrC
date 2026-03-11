@@ -174,6 +174,7 @@ static int cc_register_pragmas(CcParser*);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
+static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
 
 typedef struct CiRtField CiRtField; // return by _Type.fields
 struct CiRtField {
