@@ -228,10 +228,10 @@ the taken branch are injected into the enclosing scope (no new scope).
 Combos with type introspection:
 
 ```C
-static if(__is_pointer(T)){
+static if(T.is_pointer){
     // pointer specialization
 }
-else if(__type_equals(T, int)){
+else if(T == int){
     // int specialization
 }
 else {
@@ -332,25 +332,6 @@ struct Derived d = {.x = 1, .y = 2, .z = 3};
 struct Derived d2 = {1, 2, 3};
 
 struct Base* bp = &d; // implicit conversion
-```
-
-### Type introspection
-
-- `__type_equals(a, b)` — true if `a` and `b` are the same type
-- `__is_pointer(a)` — true if `a` is a pointer type
-- `__is_arithmetic(a)` — true if `a` is an arithmetic type
-- `__is_const(a)` — true if `a` is const-qualified
-- `__is_castable_to(a, b)` — true if `a` can be explicitly cast to `b`
-- `__is_implicitly_castable_to(a, b)` — true if `a` implicitly converts to `b`
-- `__has_quals(a, b)` — true if `a` has at least the qualifiers of `b`
-
-```C
-static if(__is_pointer(T)){
-    // ...
-}
-static if(__type_equals(typeof_unqual(T), int)){
-    // ...
-}
 ```
 
 ### `_Type`

@@ -3101,11 +3101,6 @@ TestFunction(test_parse_errors){
             SV("(test):1:9: error: Lambda requires a function type, got non-function type\n"),
         },
         {
-            "lambda: missing body", __LINE__,
-            SV("int r = int(int x);\n"),
-            SV("(test):1:9: error: Expected '{' for lambda body\n"),
-        },
-        {
             "static if: non-constant condition", __LINE__,
             SV("int x;\n"
                "static if(x) { int y; }\n"),

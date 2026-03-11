@@ -68,13 +68,6 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_constant_p,
     CC__builtin_offsetof,
     CC__func__,
-    CC__type_equals, // (expr-or-type, type)
-    CC__is_pointer, // (expr-or-type)
-    CC__is_arithmetic, // (expr-or-type)
-    CC__is_castable_to, // (expr-or-type, type)
-    CC__is_implicitly_castable_to, // (expr-or-type, type)
-    CC__has_quals, // (expr-or-type, qualifier)
-    CC__is_const, // (expr-or-type)
     CC__atomic_fetch_add, // (ptr, val, memorder)
     CC__atomic_fetch_sub, // (ptr, val, memorder)
     CC__atomic_load_n,    // (ptr, memorder)

@@ -530,25 +530,23 @@ cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
     *tail = base.type;
     CcQualType type = cc_intern_qualtype(p, head);
+    CcToken peek;
+    err = cc_peek(p, &peek);
+    f(err){
+        ma_cleanup(Atom)(&param_names, cc_allocator(p));
+        return err;
+    }
     if(ccqt_kind(type) != CC_FUNCTION){
         ma_cleanup(Atom)(&param_names, cc_allocator(p));
-        CcToken peek;
-        err = cc_peek(p, &peek);
-        if(err) return err;
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace)
             return cc_error(p, loc, "Lambda requires a function type, got non-function type");
+    }
+    if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_lbrace){
+        ma_cleanup(Atom)(&param_names, cc_allocator(p));
         CcExpr* type_val = cc_value_expr(p, loc, ccqt_basic(CCBT__Type));
         if(!type_val) return CC_OOM_ERROR;
         type_val->uinteger = type.bits;
         return cc_parse_postfix(p, type_val, out);
-    }
-    // Expect '{'
-    CcToken peek;
-    err = cc_peek(p, &peek);
-    if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
-    if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_lbrace){
-        ma_cleanup(Atom)(&param_names, cc_allocator(p));
-        return cc_error(p, loc, "Expected '{' for lambda body");
     }
     err = cc_next_token(p, &peek); // consume '{'
     if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
@@ -1820,87 +1818,6 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(!node) return CC_OOM_ERROR;
                     node->str.length = len + 1;
                     node->text = s;
-                    *out = node;
-                    return 0;
-                }
-                case CC__is_pointer:
-                case CC__is_arithmetic:
-                case CC__is_const:
-                case CC__type_equals:
-                case CC__is_castable_to:
-                case CC__is_implicitly_castable_to:
-                case CC__has_quals: {
-                    CcBuiltinFunc which = builtin;
-                    err = cc_expect_punct(p, '(');
-                    if(err) return err;
-                    // Parse first arg: type-or-expr
-                    CcQualType first_type;
-                    CcToken peek2;
-                    err = cc_peek(p, &peek2);
-                    if(err) return err;
-                    if(cc_is_type_start(p, &peek2)){
-                        err = cc_parse_type_name(p, &first_type);
-                        if(err) return err;
-                    }
-                    else {
-                        CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, &arg);
-                        if(err) return err;
-                        first_type = arg->type;
-                    }
-                    _Bool result = 0;
-                    CcTypeKind fk = ccqt_kind(first_type);
-                    switch(which){
-                        case CC__is_pointer:
-                            result = fk == CC_POINTER;
-                            break;
-                        case CC__is_arithmetic:
-                            result = (fk == CC_BASIC && ccbt_is_arithmetic(first_type.basic.kind)) || fk == CC_ENUM;
-                            break;
-                        case CC__is_const:
-                            result = first_type.is_const;
-                            break;
-                        case CC__type_equals:
-                        case CC__is_castable_to:
-                        case CC__is_implicitly_castable_to:
-                        case CC__has_quals: {
-                            err = cc_expect_punct(p, ',');
-                            if(err) return err;
-                            CcQualType second_type;
-                            err = cc_peek(p, &peek2);
-                            if(err) return err;
-                            if(cc_is_type_start(p, &peek2)){
-                                err = cc_parse_type_name(p, &second_type);
-                                if(err) return err;
-                            }
-                            else {
-                                CcExpr* arg2;
-                                err = cc_parse_assignment_expr(p, &arg2);
-                                if(err) return err;
-                                second_type = arg2->type;
-                            }
-                            if(which == CC__type_equals)
-                                result = first_type.bits == second_type.bits;
-                            else if(which == CC__is_implicitly_castable_to)
-                                result = cc_implicit_convertible(first_type, second_type);
-                            else if(which == CC__is_castable_to)
-                                result = cc_explicit_castable(first_type, second_type);
-                            else if(which == CC__has_quals){
-                                // second_type's qualifiers are treated as a mask
-                                if(second_type.is_const && !first_type.is_const) result = 0;
-                                else if(second_type.is_volatile && !first_type.is_volatile) result = 0;
-                                else if(second_type.is_atomic && !first_type.is_atomic) result = 0;
-                                else result = 1;
-                            }
-                            break;
-                        }
-                        default: break;
-                    }
-                    err = cc_expect_punct(p, ')');
-                    if(err) return err;
-                    CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
-                    if(!node) return CC_OOM_ERROR;
-                    node->integer = result ? 1 : 0;
                     *out = node;
                     return 0;
                 }
@@ -8915,12 +8832,6 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_offsetof"), CC__builtin_offsetof},
             {SV("__func__"), CC__func__},
             {SV("__FUNCTION__"), CC__func__},
-            {SV("__type_equals"), CC__type_equals},
-            {SV("__is_pointer"), CC__is_pointer},
-            {SV("__is_arithmetic"), CC__is_arithmetic},
-            {SV("__is_castable_to"), CC__is_castable_to},
-            {SV("__is_implicitly_castable_to"), CC__is_implicitly_castable_to},
-            {SV("__has_quals"), CC__has_quals},
             {SV("__atomic_fetch_add"), CC__atomic_fetch_add},
             {SV("__atomic_fetch_sub"), CC__atomic_fetch_sub},
             {SV("__atomic_load_n"), CC__atomic_load_n},
@@ -9030,6 +8941,7 @@ cc_define_builtin_types(CcParser* p){
             {SV("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
             {SV("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
             {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1},
+            {SV("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];

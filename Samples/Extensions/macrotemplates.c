@@ -75,7 +75,7 @@ for(size_t i = 0; i < strings.count; i++){
 #defblock OPTIONAL_DEF(T)
 typedef struct Optional(T) Optional(T);
 // static if provides introspection
-static if(__is_pointer(T)){
+static if(T.is_pointer){
     struct Optional(T){
         T value;
         _Bool has_value(Optional(T)* self){ return self.value; }
@@ -86,7 +86,7 @@ static if(__is_pointer(T)){
                 printf("%s: null\n", prefix);
                 return;
             }
-            static if(__type_equals(typeof_unqual(*self.value), char)){
+            static if(typeof_unqual(*self.value) == char){
                 printf("%s: '%s'\n", prefix, self.value);
             }
             else {
@@ -107,10 +107,10 @@ else {
                 printf("%s: null\n", prefix);
                 return;
             }
-            static if(__type_equals(typeof_unqual(T), int)){
+            static if(typeof_unqual(T) == int){
                 printf("%s: %d\n", prefix, self.value);
             }
-            else if(__type_equals(typeof_unqual(T), double)){
+            else if(typeof_unqual(T) == double){
                 printf("%s: %f\n", prefix, self.value);
             }
             else {
