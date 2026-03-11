@@ -148,6 +148,9 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 case CCBT_nullptr_t:
                     *out = &ffi_type_pointer;
                     return NC_NO_ERROR;
+                case CCBT__Type:
+                    *out = &ffi_type_pointer;
+                    return NC_NO_ERROR;
                 case CCBT_float128:
                 case CCBT_int128:
                 case CCBT_unsigned_int128:

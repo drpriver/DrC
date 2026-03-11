@@ -74,6 +74,7 @@ int main(int argc, char** argv, char** envp){
         .procedural_macros = 1,
     };
     LOCK_T_init(&interp.error_lock);
+    LOCK_T_init(&interp.atom_lock);
     Marray(StringView) libs = {0}, lib_paths = {0};
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),

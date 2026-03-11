@@ -328,6 +328,8 @@ static if(__type_equals(typeof_unqual(T), int)){
 }
 ```
 
+### `_Type`
+
 ### Top-level statements
 
 Code at the top level of a file is executed as if it were in an implicit
@@ -388,6 +390,13 @@ void outer(void){
 These extensions are only available when running under the interpreter, not
 when compiling to native code.
 
+### Native FFI
+Functions declared but not defined are automatically resolved against loaded
+native libraries at call time using libffi.
+
+This means you can write a script that `#include`s a library's headers and
+immediately start using it.
+
 ### `__ARGC__` / `__argv(n [, default])`
 `__ARGC__` expands to the number of command-line arguments passed to the
 script. `__argv(n)` expands to the nth argument as a string literal, with
@@ -410,9 +419,56 @@ Add a directory to the library search path.
 ### `#pragma pkg_config "package"`
 Use `pkg-config` to find include paths and libraries for a package.
 
-### Native FFI
-Functions declared but not defined are automatically resolved against loaded
-native libraries at call time using libffi.
+### `#pragma procmacro name`
 
-This means you can write a script that `#include`s a library's headers and
-immediately start using it.
+Registers a previously defined C function as a preprocessor macro.
+When invoked, the cpp tokens are expanded and converted to c tokens, then
+parsed as actual C arguments. This means this macro has C semantics (it can see enums),
+but because it runs in the preprocessor other functions are not defined yet and
+cannot be called and global variables can't be referenced.
+
+The return value is converted to a preprocessor token:
+integers/floats become pp-numbers, `const char*` becomes a string literal,
+`_Bool` becomes `true`/`false`, and `void` produces no output.
+
+This lets you write arbitrary compile-time computation in plain C.
+
+```C
+unsigned long hash(const char* s){
+    unsigned long h = 5381;
+    while(*s)
+        h = h * 33 + *s++;
+    return h;
+}
+#pragma procmacro hash
+
+// case labels must be constant expressions. The proc macro computes
+// hash("quit") etc. at compile time, while (hash)(cmd) runs at runtime.
+void handle(const char* cmd){
+    switch((hash)(cmd)){
+        case hash("quit"): exit(0);
+        case hash("help"): print_help(); break;
+        case hash("run"):  do_run(); break;
+    }
+}
+```
+
+The function must be defined (not just declared) before the pragma.
+The macro takes the same number of arguments as the function's parameter list.
+
+Use `(hash)(cmd)` to call the original function.
+
+Comboing this with `__mixin` allows you to generate code.
+
+```C
+const char* gen_vec(int n){
+    // n=3, ... build string: "typedef struct Vecn Vec3; struct Vec3 { float v0; float v1; float v2; };"
+}
+#pragma procmacro gen_vec
+
+__mixin(gen_vec(2))  // generates struct Vec2 with 2 float fields
+__mixin(gen_vec(3))  // generates struct Vec3 with 3 float fields
+__mixin(gen_vec(4))  // generates struct Vec4 with 4 float fields
+```
+
+Things can get even crazier with `_Type` (types as values).

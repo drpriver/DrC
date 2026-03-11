@@ -83,6 +83,8 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_CLZ,
     CC_EXPR_CTZ,
     CC_EXPR_ALLOCA,
+    CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
+    CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
@@ -119,6 +121,31 @@ enum CcBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BUILTIN_BACKTRACE,
 };
 TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
+
+enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
+    // Properties (no parens, lhs = _Type expr)
+    CC_TYPE_NAME,
+    CC_TYPE_IS_INTEGER,
+    CC_TYPE_IS_FLOAT,
+    CC_TYPE_IS_ARITHMETIC,
+    CC_TYPE_IS_POINTER,
+    CC_TYPE_IS_STRUCT,
+    CC_TYPE_IS_UNION,
+    CC_TYPE_IS_ARRAY,
+    CC_TYPE_IS_FUNCTION,
+    CC_TYPE_IS_ENUM,
+    CC_TYPE_IS_CONST,
+    CC_TYPE_IS_UNSIGNED,
+    CC_TYPE_IS_CALLABLE,
+    CC_TYPE_SIZEOF,
+    CC_TYPE_ALIGNOF,
+    CC_TYPE_POINTEE,
+    CC_TYPE_COUNT,
+    // Methods (with parens, lhs = _Type expr, values[0] = arg _Type expr)
+    CC_TYPE_IS_CALLABLE_WITH,
+    CC_TYPE_CASTABLE_TO,
+};
+TYPEDEF_ENUM(CcTypeIntrospectionOp, uint32_t);
 
 typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;
@@ -191,6 +218,13 @@ struct CcExpr {
             uint32_t is_lvalue: 1;
             uint32_t _pad;
         } builtin;
+        struct {
+            CcExprKind kind: 8;
+            CcTypeIntrospectionOp op: 8;
+            uint32_t _padding:15;
+            uint32_t is_lvalue: 1;
+            uint32_t _pad;
+        } type_introspection;
     };
     SrcLoc loc;
     CcQualType type;

@@ -115,6 +115,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_nanf,
     CC__nan,
     CC__builtin_alloca,
+    CC__builtin_intern,
     CC__bt,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
@@ -161,6 +162,7 @@ static void cc_pop_scope(CcParser*);
 static int cc_register_pragmas(CcParser*);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
+static void cc_print_type(MStringBuilder* sb, CcQualType t);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

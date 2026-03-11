@@ -64,6 +64,7 @@ struct CiInterpreter {
     PointerMap(CcFunction*, NativeCallCache*) ffi_cache;
     BidiPointerMap(CcFunc*, void(*)(void)) closure_map;
     LOCK_T error_lock;
+    LOCK_T atom_lock;
 };
 
 typedef struct CiArg CiArg;
@@ -84,6 +85,8 @@ static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_u
 static int ci_resolve_refs(CiInterpreter*);
 static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 static int ci_register_sym(CiInterpreter*, StringView libname, StringView symname, void* sym);
+static AtomTable* ci_lock_atoms(CiInterpreter*);
+static void ci_unlock_atoms(CiInterpreter*, AtomTable*);
 
 
 #ifdef __clang__

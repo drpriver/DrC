@@ -28,6 +28,7 @@
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
 #include "../Drp/bit_util.h"
+#include "../Drp/msb_atomize.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -84,6 +85,8 @@ static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+static _Bool cc_implicit_convertible(CcQualType from, CcQualType to);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
 static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
 static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
@@ -1760,6 +1763,147 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported va operation");
     }
+    case CC_EXPR_TYPE_INTROSPECTION: {
+        uintptr_t type_bits = 0;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &type_bits, sizeof type_bits);
+        if(err) return err;
+        CcQualType qt = {.bits = type_bits};
+        CcTypeIntrospectionOp op = expr->type_introspection.op;
+        switch(op){
+            case CC_TYPE_NAME: {
+                MStringBuilder sb = {.allocator = ci_allocator(ci)};
+                cc_print_type(&sb, qt);
+                Atom a;
+                {
+                    AtomTable* at = ci_lock_atoms(ci);
+                    a = msb_atomize(&sb, at);
+                    ci_unlock_atoms(ci, at);
+                }
+                msb_destroy(&sb);
+                if(!a) return CI_OOM_ERROR;
+                *(const char**)result = a->data;
+                return 0;
+            }
+            case CC_TYPE_IS_INTEGER: {
+                _Bool v = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind);
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_FLOAT: {
+                _Bool v = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_ARITHMETIC: {
+                _Bool v = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_POINTER: {
+                _Bool v = ccqt_kind(qt) == CC_POINTER;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_STRUCT: {
+                _Bool v = ccqt_kind(qt) == CC_STRUCT;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_UNION: {
+                _Bool v = ccqt_kind(qt) == CC_UNION;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_ARRAY: {
+                _Bool v = ccqt_kind(qt) == CC_ARRAY;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_FUNCTION: {
+                _Bool v = ccqt_kind(qt) == CC_FUNCTION;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_ENUM: {
+                _Bool v = ccqt_kind(qt) == CC_ENUM;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_CONST: {
+                _Bool v = qt.is_const;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_UNSIGNED: {
+                _Bool v = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_SIZEOF: {
+                uint32_t sz;
+                err = cc_sizeof_as_uint(&ci->parser, qt, expr->loc, &sz);
+                if(err) return err;
+                unsigned long v = sz;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_ALIGNOF: {
+                uint32_t al;
+                err = cc_alignof_as_uint(&ci->parser, qt, expr->loc, &al);
+                if(err) return err;
+                unsigned long v = al;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_POINTEE: {
+                if(ccqt_kind(qt) != CC_POINTER)
+                    return ci_error(ci, expr->loc, "_Type.pointee: not a pointer type");
+                CcPointer* ptr = ccqt_as_ptr(qt);
+                uintptr_t v = ptr->pointee.bits;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_CALLABLE: {
+                CcTypeKind k = ccqt_kind(qt);
+                _Bool v = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_COUNT: {
+                if(ccqt_kind(qt) != CC_ARRAY)
+                    return ci_error(ci, expr->loc, "_Type.count: not an array type");
+                unsigned long v = ccqt_as_array(qt)->length;
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_IS_CALLABLE_WITH: {
+                uintptr_t arg_bits = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
+                if(err) return err;
+                CcQualType arg_type = {.bits = arg_bits};
+                CcQualType ft = qt;
+                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                _Bool v = 0;
+                if(ccqt_kind(ft) == CC_FUNCTION){
+                    CcFunction* f = ccqt_as_function(ft);
+                    if(f->param_count == 1)
+                        v = cc_implicit_convertible(arg_type, f->params[0]);
+                }
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+            case CC_TYPE_CASTABLE_TO: {
+                uintptr_t arg_bits = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
+                if(err) return err;
+                CcQualType target = {.bits = arg_bits};
+                _Bool v = cc_implicit_convertible(qt, target);
+                memcpy(result, &v, sizeof v);
+                return 0;
+            }
+        }
+        return ci_error(ci, expr->loc, "interpreter: unsupported type introspection op");
+    }
     case CC_EXPR_BUILTIN: {
         CcBuiltinOp op = expr->builtin.op;
         switch(op){
@@ -1791,6 +1935,31 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(sizeof(void*) > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
         memcpy(result, &ptr, sizeof(void*));
+        return 0;
+    }
+    case CC_EXPR_INTERN: {
+        // Evaluate the argument to get a char pointer.
+        void* ptr = NULL;
+        int err = ci_interp_expr(ci, frame, expr->values[0], &ptr, sizeof ptr);
+        if(err) return err;
+        const char* s = ptr;
+        if(!s){
+            // NULL in, NULL out.
+            memset(result, 0, sizeof(void*));
+            return 0;
+        }
+        size_t len = strlen(s);
+        Atom a;
+        {
+            AtomTable* at = ci_lock_atoms(ci);
+            a = AT_atomize(at, s, len);
+            ci_unlock_atoms(ci, at);
+        }
+        if(!a) return CI_OOM_ERROR;
+        const char* interned = a->data;
+        if(sizeof(void*) > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
+        memcpy(result, &interned, sizeof(void*));
         return 0;
     }
     case CC_EXPR_ADD_OVERFLOW:
@@ -2102,7 +2271,9 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
 static
 int
 ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size){
-    Atom atom = AT_atomize(ci->parser.cpp.at, name.text, name.length);
+    AtomTable* at = ci_lock_atoms(ci);
+    Atom atom = AT_atomize(at, name.text, name.length);
+    ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
@@ -2158,7 +2329,9 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
 static
 int
 ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret){
-    Atom atom = AT_atomize(ci->parser.cpp.at, "main", 4);
+    AtomTable* at = ci_lock_atoms(ci);
+    Atom atom = AT_atomize(at, "main", 4);
+    ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
@@ -2891,6 +3064,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                 case CCBT_COUNT:
                 case CCBT_INVALID:
                 case CCBT_nullptr_t:
+                case CCBT__Type:
                     err = ci_error(ci, loc, "Invalid return type");
                     goto cleanup;
                 case CCBT_void:
@@ -3165,6 +3339,20 @@ ci_register_sym(CiInterpreter*ci, StringView libname, StringView symname, void* 
     err = AM_put(&lib->symbols, ci_allocator(ci), name, sym);
     if(err) return CI_OOM_ERROR;
     return 0;
+}
+static
+AtomTable*
+ci_lock_atoms(CiInterpreter* ci){
+    LOCK_T_lock(&ci->atom_lock);
+    AtomTable* at = ci->parser.cpp.at;
+    ci->parser.cpp.at = NULL;
+    return at;
+}
+static
+void
+ci_unlock_atoms(CiInterpreter* ci, AtomTable* at){
+    ci->parser.cpp.at = at;
+    LOCK_T_unlock(&ci->atom_lock);
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

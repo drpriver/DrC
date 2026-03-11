@@ -48,6 +48,7 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_double_complex,
     CCBT_long_double_complex,
     CCBT_nullptr_t,
+    CCBT__Type,
     CCBT_COUNT,
 };
 TYPEDEF_ENUM(CcBasicTypeKind, uintptr_t);

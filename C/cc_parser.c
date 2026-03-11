@@ -37,8 +37,8 @@ LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 typedef struct CcEvalResult CcEvalResult;
 struct CcEvalResult {
-    enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR } kind;
-    union { int64_t i; uint64_t u; float f; double d; };
+    enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR, CC_EVAL_TYPE} kind;
+    union { int64_t i; uint64_t u; float f; double d; CcQualType type; };
 };
 static CcEvalResult cc_eval_expr(CcParser* p, CcExpr* e);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
@@ -435,6 +435,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC__BitInt:
             case CC__Atomic:
             case CC_const: case CC_volatile: case CC_restrict:
+            case CC__Type:
                 return 1;
             default:
                 return 0;
@@ -1043,6 +1044,19 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             if(kind == CC_EXPR_ASSIGN && peek_assign.type == CC_PUNCTUATOR && peek_assign.punct.punct == CC_lbrace){
                 err = cc_parse_init_list(p, &right, left->type);
             }
+            else if(kind == CC_EXPR_ASSIGN && ccqt_is_basic(left->type) && left->type.basic.kind == CCBT__Type
+                    && cc_is_type_start(p, &peek_assign)){
+                CcQualType parsed_type;
+                err = cc_parse_type_name(p, &parsed_type);
+                if(err) return err;
+                if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
+                right = cc_alloc_expr(p, 0);
+                if(!right) return CC_OOM_ERROR;
+                right->kind = CC_EXPR_VALUE;
+                right->loc = tok.loc;
+                right->type = ccqt_basic(CCBT__Type);
+                right->uinteger = parsed_type.bits;
+            }
             else {
                 // right-associative: recurse into assignment_expr
                 err = cc_parse_assignment_expr(p, &right);
@@ -1373,6 +1387,16 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     result->kind = CC_EXPR_COMPOUND_LITERAL;
                     return cc_parse_postfix(p, result, out);
+                }
+                // (type).member → _Type value
+                if(peek2.type == CC_PUNCTUATOR && peek2.punct.punct == CC_dot){
+                    CcExpr* type_val = cc_alloc_expr(p, 0);
+                    if(!type_val) return CC_OOM_ERROR;
+                    type_val->kind = CC_EXPR_VALUE;
+                    type_val->loc = tok.loc;
+                    type_val->type = ccqt_basic(CCBT__Type);
+                    type_val->uinteger = cast_type.bits;
+                    return cc_parse_postfix(p, type_val, out);
                 }
                 // Cast expression: (type) operand
                 CcExpr* operand;
@@ -2276,6 +2300,27 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_intern: {
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, &arg);
+                    if(err) return err;
+                    CcQualType const_char_qt = ccqt_basic(CCBT_char);
+                    const_char_qt.is_const = 1;
+                    CcPointer* ccp = cc_intern_pointer(&p->type_cache, cc_allocator(p), const_char_qt, 0);
+                    if(!ccp) return CC_OOM_ERROR;
+                    CcQualType const_char_ptr = {.bits = (uintptr_t)ccp};
+                    if(!cc_implicit_convertible(arg->type, const_char_ptr))
+                        return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, const_char_ptr, 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->values[0] = arg;
+                    *out = node;
+                    return 0;
+                }
                 case CC__builtin_nanf:
                 case CC__builtin_nan:
                 case CC__nan:{
@@ -2766,6 +2811,123 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     CcUnion* u = ccqt_as_union(agg_type);
                     cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type, &method);
                 }
+                else if(tk == CC_BASIC && agg_type.basic.kind == CCBT__Type){
+                    CcTypeIntrospectionOp ti_op;
+                    CcQualType result_type;
+                    _Bool is_method = 0; // methods take a (type-or-expr) argument
+                    if(member_name == AT_ATOMIZE(p->cpp.at, "name")){
+                        ti_op = CC_TYPE_NAME;
+                        CcPointer* ccp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), 0);
+                        if(!ccp) return CC_OOM_ERROR;
+                        result_type = (CcQualType){.bits = (uintptr_t)ccp};
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_integer")){
+                        ti_op = CC_TYPE_IS_INTEGER; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_float")){
+                        ti_op = CC_TYPE_IS_FLOAT; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_arithmetic")){
+                        ti_op = CC_TYPE_IS_ARITHMETIC; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_pointer")){
+                        ti_op = CC_TYPE_IS_POINTER; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_struct")){
+                        ti_op = CC_TYPE_IS_STRUCT; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_union")){
+                        ti_op = CC_TYPE_IS_UNION; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_array")){
+                        ti_op = CC_TYPE_IS_ARRAY; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_function")){
+                        ti_op = CC_TYPE_IS_FUNCTION; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_callable")){
+                        ti_op = CC_TYPE_IS_CALLABLE; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_enum")){
+                        ti_op = CC_TYPE_IS_ENUM; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_const")){
+                        ti_op = CC_TYPE_IS_CONST; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_unsigned")){
+                        ti_op = CC_TYPE_IS_UNSIGNED; result_type = ccqt_basic(CCBT_bool);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "sizeof_")){
+                        ti_op = CC_TYPE_SIZEOF; result_type = ccqt_basic(CCBT_unsigned_long);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "alignof_")){
+                        ti_op = CC_TYPE_ALIGNOF; result_type = ccqt_basic(CCBT_unsigned_long);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "pointee")){
+                        ti_op = CC_TYPE_POINTEE; result_type = ccqt_basic(CCBT__Type);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "count")){
+                        ti_op = CC_TYPE_COUNT; result_type = ccqt_basic(CCBT_unsigned_long);
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_callable_with")){
+                        ti_op = CC_TYPE_IS_CALLABLE_WITH; result_type = ccqt_basic(CCBT_bool);
+                        is_method = 1;
+                    }
+                    else if(member_name == AT_ATOMIZE(p->cpp.at, "castable_to")){
+                        ti_op = CC_TYPE_CASTABLE_TO; result_type = ccqt_basic(CCBT_bool);
+                        is_method = 1;
+                    }
+                    else {
+                        return cc_error(p, member.loc, "_Type has no member '%s'", member_name->data);
+                    }
+                    if(is_method){
+                        err = cc_expect_punct(p, '(');
+                        if(err) return err;
+                        // Parse type-or-expression argument.
+                        CcQualType arg_type;
+                        CcToken peek2;
+                        err = cc_peek(p, &peek2);
+                        if(err) return err;
+                        if(cc_is_type_start(p, &peek2)){
+                            err = cc_parse_type_name(p, &arg_type);
+                            if(err) return err;
+                        }
+                        else {
+                            CcExpr* arg_expr;
+                            err = cc_parse_assignment_expr(p, &arg_expr);
+                            if(err) return err;
+                            arg_type = arg_expr->type;
+                        }
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        CcExpr* arg_val = cc_alloc_expr(p, 0);
+                        if(!arg_val) return CC_OOM_ERROR;
+                        arg_val->kind = CC_EXPR_VALUE;
+                        arg_val->loc = tok.loc;
+                        arg_val->type = ccqt_basic(CCBT__Type);
+                        arg_val->uinteger = arg_type.bits;
+                        CcExpr* node = cc_alloc_expr(p, 1);
+                        if(!node) return CC_OOM_ERROR;
+                        node->kind = CC_EXPR_TYPE_INTROSPECTION;
+                        node->type_introspection.op = ti_op;
+                        node->loc = tok.loc;
+                        node->type = result_type;
+                        node->lhs = operand;
+                        node->values[0] = arg_val;
+                        operand = node;
+                    }
+                    else {
+                        CcExpr* node = cc_alloc_expr(p, 0);
+                        if(!node) return CC_OOM_ERROR;
+                        node->kind = CC_EXPR_TYPE_INTROSPECTION;
+                        node->type_introspection.op = ti_op;
+                        node->loc = tok.loc;
+                        node->type = result_type;
+                        node->lhs = operand;
+                        operand = node;
+                    }
+                    continue;
+                }
                 else {
                     return cc_error(p, member.loc, "not a struct or union");
                 }
@@ -2938,7 +3100,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                             case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                             case CC_EVAL_FLOAT:
                             case CC_EVAL_DOUBLE: err = cc_error(p, dot.loc, "positional designator must be an integer"); goto call_cleanup;
-                            case CC_EVAL_ERROR:  err = cc_error(p, dot.loc, "positional designator must be a constant expression"); goto call_cleanup;
+                            case CC_EVAL_TYPE: case CC_EVAL_ERROR:  err = cc_error(p, dot.loc, "positional designator must be a constant expression"); goto call_cleanup;
                         }
                         if(idx_signed < 0 || idx_signed > UINT32_MAX){
                             err = cc_error(p, dot.loc, "positional designator value out of range");
@@ -2976,8 +3138,29 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                                 positional_index++;
                         }
                         CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, &arg);
-                        if(err) goto call_cleanup;
+                        // If the parameter type is _Type and next token looks like a type, parse as type-name.
+                        if(positional_index < ftype->param_count
+                                && ccqt_is_basic(ftype->params[positional_index])
+                                && ftype->params[positional_index].basic.kind == CCBT__Type
+                                && cc_is_type_start(p, &dot)){
+                            CcQualType parsed_type;
+                            err = cc_parse_type_name(p, &parsed_type);
+                            if(err) goto call_cleanup;
+                            if(!parsed_type.bits){
+                                err = cc_error(p, tok.loc, "Expected type name for _Type parameter");
+                                goto call_cleanup;
+                            }
+                            arg = cc_alloc_expr(p, 0);
+                            if(!arg){ err = CC_OOM_ERROR; goto call_cleanup; }
+                            arg->kind = CC_EXPR_VALUE;
+                            arg->loc = tok.loc;
+                            arg->type = ccqt_basic(CCBT__Type);
+                            arg->uinteger = parsed_type.bits;
+                        }
+                        else {
+                            err = cc_parse_assignment_expr(p, &arg);
+                            if(err) goto call_cleanup;
+                        }
                         if(has_named){
                             while(args.count <= positional_index){
                                 err = pa_push(&args, call_al, NULL);
@@ -3125,6 +3308,7 @@ static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_double_complex]     = "double _Complex",
     [CCBT_long_double_complex]= "long double _Complex",
     [CCBT_nullptr_t]          = "nullptr_t",
+    [CCBT__Type]              = "_Type",
 };
 
 static void cc_print_type_pre(MStringBuilder*, CcQualType t);
@@ -3290,6 +3474,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_CTZ:
         case CC_EXPR_CLZ:
         case CC_EXPR_ALLOCA:
+        case CC_EXPR_INTERN:
             msb_write_literal(sb, "<unimpl>");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
@@ -3402,6 +3587,10 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             }
             msb_write_char(sb, ')');
             return;
+        case CC_EXPR_TYPE_INTROSPECTION:
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, ".<type_introspection>()");
+            return;
     }
     msb_write_literal(sb, "<unknown>");
 }
@@ -3463,6 +3652,8 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     case CCBT_short: case CCBT_int:
                     case CCBT_long: case CCBT_long_long:
                         return (CcEvalResult){.kind = CC_EVAL_INT, .i = e->integer};
+                    case CCBT__Type:
+                        return (CcEvalResult){.kind = CC_EVAL_TYPE, .type = {.bits = e->uinteger}};
                     case CCBT_int128: case CCBT_unsigned_int128:
                     case CCBT_float16: case CCBT_float128:
                     case CCBT_float_complex: case CCBT_double_complex:
@@ -3505,7 +3696,7 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_EVAL_UINT:   return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.u};
                 case CC_EVAL_FLOAT:  return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.f};
                 case CC_EVAL_DOUBLE: return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.d};
-                case CC_EVAL_ERROR:  return v;
+                case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return v;
             }
             return cc_eval_error();
         }
@@ -3521,7 +3712,7 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_EVAL_UINT:   truthy = cond.u != 0; break;
                 case CC_EVAL_FLOAT:  truthy = cond.f != 0; break;
                 case CC_EVAL_DOUBLE: truthy = cond.d != 0; break;
-                case CC_EVAL_ERROR:  return cond;
+                case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cond;
             }
             return cc_eval_expr(p,e->values[truthy ? 0 : 1]);
         }
@@ -3647,6 +3838,68 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             }
             return v;
         }
+        case CC_EXPR_TYPE_INTROSPECTION: {
+            CcEvalResult lhs = cc_eval_expr(p, e->lhs);
+            if(lhs.kind != CC_EVAL_TYPE) return cc_eval_error();
+            CcQualType qt = lhs.type;
+            CcTypeIntrospectionOp op = e->type_introspection.op;
+            switch(op){
+                case CC_TYPE_IS_INTEGER:    return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind)};
+                case CC_TYPE_IS_FLOAT:      return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind)};
+                case CC_TYPE_IS_ARITHMETIC: return (CcEvalResult){.kind=CC_EVAL_INT, .i = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM};
+                case CC_TYPE_IS_POINTER:    return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_POINTER};
+                case CC_TYPE_IS_STRUCT:     return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_STRUCT};
+                case CC_TYPE_IS_UNION:      return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_UNION};
+                case CC_TYPE_IS_ARRAY:      return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_ARRAY};
+                case CC_TYPE_IS_FUNCTION:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_FUNCTION};
+                case CC_TYPE_IS_ENUM:       return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_ENUM};
+                case CC_TYPE_IS_CONST:      return (CcEvalResult){.kind=CC_EVAL_INT, .i = qt.is_const};
+                case CC_TYPE_IS_UNSIGNED:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !cc_target(p)->char_is_signed)};
+                case CC_TYPE_IS_CALLABLE: {
+                    CcTypeKind k = ccqt_kind(qt);
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION)};
+                }
+                case CC_TYPE_SIZEOF: {
+                    uint32_t sz;
+                    int err = cc_sizeof_as_uint(p, qt, e->loc, &sz);
+                    if(err) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_UINT, .u = sz};
+                }
+                case CC_TYPE_ALIGNOF: {
+                    uint32_t al;
+                    int err = cc_alignof_as_uint(p, qt, e->loc, &al);
+                    if(err) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_UINT, .u = al};
+                }
+                case CC_TYPE_POINTEE:
+                    if(ccqt_kind(qt) != CC_POINTER) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = ccqt_as_ptr(qt)->pointee};
+                case CC_TYPE_COUNT:
+                    if(ccqt_kind(qt) != CC_ARRAY) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_UINT, .u = ccqt_as_array(qt)->length};
+                case CC_TYPE_IS_CALLABLE_WITH: {
+                    CcEvalResult arg = cc_eval_expr(p, e->values[0]);
+                    if(arg.kind != CC_EVAL_TYPE) return cc_eval_error();
+                    CcQualType ft = qt;
+                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                    _Bool v = 0;
+                    if(ccqt_kind(ft) == CC_FUNCTION){
+                        CcFunction* f = ccqt_as_function(ft);
+                        if(f->param_count == 1)
+                            v = cc_implicit_convertible(arg.type, f->params[0]);
+                    }
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = v};
+                }
+                case CC_TYPE_CASTABLE_TO: {
+                    CcEvalResult arg = cc_eval_expr(p, e->values[0]);
+                    if(arg.kind != CC_EVAL_TYPE) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = cc_implicit_convertible(qt, arg.type)};
+                }
+                case CC_TYPE_NAME:
+                    return cc_eval_error(); // can't constant-fold to a string
+            }
+            return cc_eval_error();
+        }
         default:
             return cc_eval_error();
     }
@@ -3660,7 +3913,7 @@ cc_print_eval_result(MStringBuilder* sb, CcEvalResult r){
         case CC_EVAL_UINT:   msb_sprintf(sb, "%llu", (unsigned long long)r.u); break;
         case CC_EVAL_FLOAT:  msb_sprintf(sb, "%g", (double)r.f); break;
         case CC_EVAL_DOUBLE: msb_sprintf(sb, "%g", r.d); break;
-        case CC_EVAL_ERROR:  msb_write_literal(sb, "<cannot evaluate>"); break;
+        case CC_EVAL_TYPE: case CC_EVAL_ERROR:  msb_write_literal(sb, "<cannot evaluate>"); break;
     }
 }
 
@@ -4741,7 +4994,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
                 case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                 case CC_EVAL_FLOAT:
                 case CC_EVAL_DOUBLE: return cc_error(p, peek.loc, "array designator must be an integer");
-                case CC_EVAL_ERROR:  return cc_error(p, peek.loc, "array designator must be a constant expression");
+                case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cc_error(p, peek.loc, "array designator must be a constant expression");
             }
             if(idx_signed < 0 || idx_signed > UINT32_MAX)
                 return cc_error(p, peek.loc, "array designator value out of range");
@@ -5139,7 +5392,7 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                         case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                         case CC_EVAL_FLOAT:
                         case CC_EVAL_DOUBLE: return cc_error(p, desig_loc, "array designator must be an integer");
-                        case CC_EVAL_ERROR:  return cc_error(p, desig_loc, "array designator must be a constant expression");
+                        case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cc_error(p, desig_loc, "array designator must be a constant expression");
                     }
                     if(idx_signed < 0 || idx_signed > UINT32_MAX)
                         return cc_error(p, desig_loc, "array designator value out of range");
@@ -5861,7 +6114,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                     case CC_EVAL_DOUBLE:
                         err = cc_error(p, tok.loc, "Enumerator value is a floating point value");
                         goto enum_err;
-                    case CC_EVAL_ERROR:
+                    case CC_EVAL_TYPE: case CC_EVAL_ERROR:
                         err = cc_error(p, tok.loc, "enumerator value is not a constant expression");
                         goto enum_err;
                 }
@@ -6038,6 +6291,13 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "auto after typedef");
                         spec->sp_auto = 1;
                         continue;
+                    case CC__Type:
+                        if(base_type->bits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(spec->sp_typebits)
+                            return cc_error(p, tok.loc, "Second type in declaration");
+                        *base_type = ccqt_basic(CCBT__Type);
+                        continue;
                     case CC_bool:
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -6213,7 +6473,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                                 case CC_EVAL_UINT:   av = (int64_t)val.u; break;
                                 case CC_EVAL_FLOAT:
                                 case CC_EVAL_DOUBLE: return cc_error(p, tok.loc, "_Alignas requires an integer expression");
-                                case CC_EVAL_ERROR:  return cc_error(p, tok.loc, "_Alignas requires a constant expression");
+                                case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cc_error(p, tok.loc, "_Alignas requires a constant expression");
                             }
                             if(av < 0)
                                 return cc_error(p, tok.loc, "_Alignas value must be non-negative");
@@ -6549,7 +6809,7 @@ cc_eval_static_if_cond(CcParser* p, _Bool* out){
         case CC_EVAL_UINT:   *out = ev.u != 0; return 0;
         case CC_EVAL_FLOAT:  *out = ev.f != 0; return 0;
         case CC_EVAL_DOUBLE: *out = ev.d != 0; return 0;
-        case CC_EVAL_ERROR:
+        case CC_EVAL_TYPE: case CC_EVAL_ERROR:
             return cc_error(p, cond->loc, "static if condition must be a constant expression");
     }
     return CC_UNREACHABLE_ERROR;
@@ -6992,6 +7252,17 @@ cc_parse_statement(CcParser* p){
                         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
                             err = cc_parse_init_list(p, &ret_expr, ret_type);
                         }
+                        else if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT__Type && cc_is_type_start(p, &peek)){
+                            CcQualType parsed_type;
+                            err = cc_parse_type_name(p, &parsed_type);
+                            if(err) return err;
+                            ret_expr = cc_alloc_expr(p, 0);
+                            if(!ret_expr) return CC_OOM_ERROR;
+                            ret_expr->kind = CC_EXPR_VALUE;
+                            ret_expr->loc = tok.loc;
+                            ret_expr->type = ccqt_basic(CCBT__Type);
+                            ret_expr->uinteger = parsed_type.bits;
+                        }
                         else {
                             err = cc_parse_expr(p, &ret_expr);
                         }
@@ -7080,6 +7351,7 @@ cc_parse_statement(CcParser* p){
                 case CC_static_assert:
                 case CC_typeof_unqual:
                 case CC__Countof:
+                case CC__Type:
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");
                 case CC___attribute__:
                     return cc_unimplemented(p, tok.loc, "TODO: __attribute__ as statement"); // __attribute__((fallthrough))
@@ -7323,7 +7595,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     case CC_EVAL_UINT:   length = (int64_t)val.u; break;
                     case CC_EVAL_FLOAT:
                     case CC_EVAL_DOUBLE: return cc_error(p, tok.loc, "array length must be an integer");
-                    case CC_EVAL_ERROR:  return cc_unimplemented(p, tok.loc, "VLA array dimensions");
+                    case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cc_unimplemented(p, tok.loc, "VLA array dimensions");
                 }
                 if(length < 0) return cc_error(p, tok.loc, "Negative array length");
                 arr->length = (size_t)length;
@@ -7709,6 +7981,18 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 err = cc_parse_init_list(p, &initializer, type);
                 if(err) return err;
             }
+            else if(ccqt_is_basic(type) && type.basic.kind == CCBT__Type && cc_is_type_start(p, &peek_init)){
+                CcQualType parsed_type;
+                err = cc_parse_type_name(p, &parsed_type);
+                if(err) return err;
+                if(!parsed_type.bits) return cc_error(p, tok.loc, "Expected type name after '='");
+                initializer = cc_alloc_expr(p, 0);
+                if(!initializer) return CC_OOM_ERROR;
+                initializer->kind = CC_EXPR_VALUE;
+                initializer->loc = tok.loc;
+                initializer->type = ccqt_basic(CCBT__Type);
+                initializer->uinteger = parsed_type.bits;
+            }
             else {
                 err = cc_parse_assignment_expr(p, &initializer);
                 if(err) return err;
@@ -7890,7 +8174,7 @@ cc_handle_static_asssert(CcParser* p){
         case CC_EVAL_UINT:   sa_truthy = val.u != 0; break;
         case CC_EVAL_FLOAT:  sa_truthy = val.f != 0; break;
         case CC_EVAL_DOUBLE: sa_truthy = val.d != 0; break;
-        case CC_EVAL_ERROR:
+        case CC_EVAL_TYPE: case CC_EVAL_ERROR:
             return cc_error(p, assert_loc, "static_assert expression is not a constant expression");
     }
     // Check for optional message.
@@ -8103,6 +8387,7 @@ cc_define_builtin_types(CcParser* p){
             {SV("__builtin_alloca"), CC__builtin_alloca},
             {SV("_alloca"), CC__builtin_alloca},
             {SV("alloca"), CC__builtin_alloca},
+            {SV("__builtin_intern"), CC__builtin_intern},
             {SV("__bt"), CC__bt},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){

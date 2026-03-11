@@ -525,7 +525,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
             case CPP_PUNCTUATOR:
                 return cpp_punct_to_cc_tok(cpp, &tok, ctok);
             case CPP_EOF:
-                *ctok = (CcToken){.type=CC_EOF};
+                *ctok = (CcToken){.type=CC_EOF, .loc=tok.loc};
                 return 0;
             case CPP_OTHER:
                 return cpp_error(cpp, tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(tok.txt));
@@ -752,7 +752,7 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
             case CPP_PUNCTUATOR:
                 return cpp_punct_to_cc_tok(cpp, &tok, ctok);
             case CPP_EOF:
-                *ctok = (CcToken){.type=CC_EOF};
+                *ctok = (CcToken){.type=CC_EOF, .loc=tok.loc};
                 return 0;
             case CPP_OTHER:
                 return cpp_error(cpp, tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(tok.txt));
@@ -1621,7 +1621,7 @@ cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
     // phase 1-3
     again:;
     if(!cpp->frames.count){
-        *tok = (CppToken){.type = CPP_EOF};
+        *tok = (CppToken){.type = CPP_EOF, .loc = cpp->eof_loc};
         return 0;
     }
     CppFrame* f = &ma_tail(cpp->frames);
@@ -1630,6 +1630,8 @@ cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
         cpp->at_line_start = 1;
     cpp_handle_continuation(f);
     if(f->cursor == f->txt.length){
+        if(cpp->frames.count == 1)
+            cpp->eof_loc = (SrcLoc){.file_id = f->file_id, .line = f->line, .column = f->column};
         cpp->frames.count--;
         goto again;
     }
@@ -6814,6 +6816,7 @@ X(short, short) \
 X(union, union) \
 X(while, while) \
 X(_Bool, bool) \
+X(_Type, _Type) \
 
 #define CKWS6(X) \
 X(double, double) \
