@@ -2654,7 +2654,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) goto cleanup2;
             // Macro-expand the collected tokens
             CppTokens* expanded = cpp_get_scratch(cpp);
-            if(!expanded){ err = CPP_OOM_ERROR; goto cleanup2; } 
+            if(!expanded){ err = CPP_OOM_ERROR; goto cleanup2; }
             if(0){
                 cleanup3:
                 cpp_release_scratch(cpp, expanded);
@@ -4250,6 +4250,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     } while(0)
 
     DEFINT("__DVM_CC__", 1);
+    DEFINT("__FLT_EVAL_METHOD__", t.flt_eval_method);
 
     // __GNUC__ compatibility
     DEFINT("__GNUC__", 7);
@@ -4631,6 +4632,13 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
         {SV("<no source>"), SV("")},
+        {SV("assert.h"),   SV(
+                              "#undef assert\n"
+                              "#ifdef NDEBUG\n"
+                              "#define assert(x) ((void)0)\n"
+                              "#else\n"
+                              "#define assert(x) ((x)?(void)0:__builtin_trap())\n"
+                              "#endif\n")},
         {SV("stdarg.h"),   SV("#pragma once\n"
                               "#define va_start __builtin_va_start\n"
                               "#define va_copy __builtin_va_copy\n"
@@ -4663,6 +4671,9 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
         {SV("float.h"),    SV("#pragma once\n"
                               "#if __has_include_next(<float.h>)\n"
                               "#include_next <float.h>\n"
+                              "#endif\n"
+                              "#ifndef FLT_EVAL_METHOD\n"
+                              "#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n"
                               "#endif\n"
                             )},
         {SV("limits.h"),   SV("#pragma once\n"
