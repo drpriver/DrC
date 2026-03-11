@@ -27,6 +27,7 @@ static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
 static CcExpr* _Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
+warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
@@ -1100,32 +1101,26 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
             CcQualType ttype = then_expr->type;
             CcQualType etype = else_expr->type;
             if(tk == CC_ARRAY && !ccqt_as_array(ttype)->is_vector){
-                CcQualType elem = ccqt_as_array(ttype)->element;
-                CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
-                if(!ptr) return CC_OOM_ERROR;
-                ttype = (CcQualType){.bits = (uintptr_t)ptr};
+                err = cc_pointer_of(p, ccqt_as_array(ttype)->element, &ttype);
+                if(err) return err;
                 err = cc_implicit_cast(p, then_expr, ttype, &then_expr);
                 if(err) return err;
             }
             if(tk == CC_FUNCTION){
-                CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), ttype, 0);
-                if(!ptr) return CC_OOM_ERROR;
-                ttype = (CcQualType){.bits = (uintptr_t)ptr};
+                err = cc_pointer_of(p, ttype, &ttype);
+                if(err) return err;
                 err = cc_implicit_cast(p, then_expr, ttype, &then_expr);
                 if(err) return err;
             }
             if(ek == CC_ARRAY && !ccqt_as_array(etype)->is_vector){
-                CcQualType elem = ccqt_as_array(etype)->element;
-                CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
-                if(!ptr) return CC_OOM_ERROR;
-                etype = (CcQualType){.bits = (uintptr_t)ptr};
+                err = cc_pointer_of(p, ccqt_as_array(etype)->element, &etype);
+                if(err) return err;
                 err = cc_implicit_cast(p, else_expr, etype, &else_expr);
                 if(err) return err;
             }
             if(ek == CC_FUNCTION){
-                CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), etype, 0);
-                if(!ptr) return CC_OOM_ERROR;
-                etype = (CcQualType){.bits = (uintptr_t)ptr};
+                err = cc_pointer_of(p, etype, &etype);
+                if(err) return err;
                 err = cc_implicit_cast(p, else_expr, etype, &else_expr);
                 if(err) return err;
             }
@@ -1149,9 +1144,8 @@ cc_parse_ternary_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 pointee.is_volatile |= epointee.is_volatile;
                 pointee.is_atomic   |= epointee.is_atomic;
             }
-            CcPointer* rp = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0);
-            if(!rp) return CC_OOM_ERROR;
-            common = (CcQualType){.bits = (uintptr_t)rp};
+            err = cc_pointer_of(p, pointee, &common);
+            if(err) return err;
             common.is_const    = ttype.is_const    | etype.is_const;
             common.is_volatile = ttype.is_volatile | etype.is_volatile;
             common.is_atomic   = ttype.is_atomic   | etype.is_atomic;
@@ -1259,10 +1253,8 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 if(lptr || rptr) {
                     CcExpr** ptr_operand = lptr ? &left : &right;
                     if(ccqt_kind((*ptr_operand)->type) == CC_ARRAY){
-                        CcQualType elem = ccqt_as_array((*ptr_operand)->type)->element;
-                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
-                        if(!ptr) return CC_OOM_ERROR;
-                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        err = cc_pointer_of(p, ccqt_as_array((*ptr_operand)->type)->element, &result_type);
+                        if(err) return err;
                         err = cc_implicit_cast(p, *ptr_operand, result_type, ptr_operand);
                         if(err) return err;
                     }
@@ -1288,10 +1280,8 @@ cc_parse_infix(CcParser* p, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonn
                 }
                 else if(lptr){
                     if(ccqt_kind(left->type) == CC_ARRAY){
-                        CcQualType elem = ccqt_as_array(left->type)->element;
-                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
-                        if(!ptr) return CC_OOM_ERROR;
-                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        err = cc_pointer_of(p, ccqt_as_array(left->type)->element, &result_type);
+                        if(err) return err;
                         err = cc_implicit_cast(p, left, result_type, &left);
                         if(err) return err;
                     }
@@ -1422,16 +1412,14 @@ cc_parse_prefix(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         return cc_error(p, tok.loc, "cannot take address of bitfield");
                     // &func is the same as function-to-pointer decay: just cast.
                     if(ccqt_kind(operand->type) == CC_FUNCTION){
-                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
-                        if(!ptr) return CC_OOM_ERROR;
-                        result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                        err = cc_pointer_of(p, operand->type, &result_type);
+                        if(err) return err;
                         return cc_implicit_cast(p, operand, result_type, out);
                     }
                     if(!operand->is_lvalue)
                         return cc_error(p, tok.loc, "cannot take address of rvalue");
-                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
-                    if(!ptr) return CC_OOM_ERROR;
-                    result_type = (CcQualType){.bits = (uintptr_t)ptr};
+                    err = cc_pointer_of(p, operand->type, &result_type);
+                    if(err) return err;
                     break;
                 }
                 default: // PREINC, PREDEC
@@ -2550,16 +2538,14 @@ cc_parse_Generic(CcParser* p, CcExpr*_Nullable*_Nonnull out){
         case CC_ARRAY:{
             CcArray* arr = ccqt_as_array(tswitch);
             if(!arr->is_vector){
-                CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), arr->element, 0);
-                if(!ptr) return CC_OOM_ERROR;
-                tswitch = (CcQualType){.bits = (uintptr_t)ptr};
+                err = cc_pointer_of(p, arr->element, &tswitch);
+                if(err) return err;
             }
             break;
         }
         case CC_FUNCTION:{
-            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), tswitch, 0);
-            if(!ptr) return CC_OOM_ERROR;
-            tswitch = (CcQualType){.bits = (uintptr_t)ptr};
+            err = cc_pointer_of(p, tswitch, &tswitch);
+            if(err) return err;
             break;
         }
         case CC_BASIC:
@@ -2840,9 +2826,10 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     }
                     else {
                         // Take address of the object
-                        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), operand->type, 0);
-                        if(!ptr) return CC_OOM_ERROR;
-                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, (CcQualType){.bits = (uintptr_t)ptr}, 0);
+                        CcQualType addr_type;
+                        err = cc_pointer_of(p, operand->type, &addr_type);
+                        if(err) return err;
+                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, addr_type, 0);
                         if(!addr) return CC_OOM_ERROR;
                         addr->lhs = operand;
                         receiver = addr;
@@ -3107,10 +3094,10 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         CcQualType at = (*argp)->type;
                         if(ccqt_kind(at) == CC_ARRAY && !ccqt_as_array(at)->is_vector){
                             // Array decays to pointer to element
-                            CcQualType elem = ccqt_as_array(at)->element;
-                            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), elem, 0);
-                            if(!ptr){ err = CC_OOM_ERROR; goto call_cleanup; }
-                            err = cc_implicit_cast(p, *argp, (CcQualType){.bits = (uintptr_t)ptr}, argp);
+                            CcQualType ptr_type;
+                            err = cc_pointer_of(p, ccqt_as_array(at)->element, &ptr_type);
+                            if(err) goto call_cleanup;
+                            err = cc_implicit_cast(p, *argp, ptr_type, argp);
                             if(err) goto call_cleanup;
                         }
                         else if(ccqt_is_basic(at)){
@@ -4111,6 +4098,15 @@ cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr
     node->values[0] = right;
     return node;
 }
+static
+int
+cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
+    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0);
+    if(!ptr) return CC_OOM_ERROR;
+    *out = (CcQualType){.bits = (uintptr_t)ptr};
+    return 0;
+}
+
 static
 Marray(CcToken)*_Nullable
 cc_get_scratch(CcParser* p){
@@ -7603,9 +7599,10 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         case CC_POINTER: {
             CcPointer* old = ccqt_as_ptr(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
-            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0);
-            if(!ptr) return t;
-            return (CcQualType){.bits = (uintptr_t)ptr | quals};
+            CcQualType ptr_type;
+            if(cc_pointer_of(p, pointee, &ptr_type)) return t;
+            ptr_type.bits |= quals;
+            return ptr_type;
         }
         case CC_ARRAY: {
             CcArray* old = ccqt_as_array(t);
@@ -7621,16 +7618,13 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
                 CcQualType pt = old->params[i];
                 // C11 6.7.6.3p7: array params decay to pointers.
                 if(ccqt_kind(pt) == CC_ARRAY && !ccqt_as_array(pt)->is_vector){
-                    CcArray* arr = ccqt_as_array(pt);
-                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), arr->element, 0);
-                    if(!ptr) return t;
-                    pt = (CcQualType){.bits = (uintptr_t)ptr | pt.quals};
+                    uintptr_t pq = pt.quals;
+                    if(cc_pointer_of(p, ccqt_as_array(pt)->element, &pt)) return t;
+                    pt.bits |= pq;
                 }
                 // C11 6.7.6.3p7: function params decay to function pointers.
                 else if(ccqt_kind(pt) == CC_FUNCTION){
-                    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pt, 0);
-                    if(!ptr) return t;
-                    pt = (CcQualType){.bits = (uintptr_t)ptr};
+                    if(cc_pointer_of(p, pt, &pt)) return t;
                 }
                 old->params[i] = cc_intern_qualtype(p, pt);
             }
@@ -8083,27 +8077,19 @@ cc_define_builtin_types(CcParser* p){
     CcTargetConfig t = p->cpp.target;
 
     {
-        CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
-        if(!void_ptr) return CC_OOM_ERROR;
-        CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
-        p->void_star = void_ptr_type;
+        int err;
+        err = cc_pointer_of(p, ccqt_basic(CCBT_void), &p->void_star);
+        if(err) return err;
         CcQualType const_void = ccqt_basic(CCBT_void);
         const_void.is_const = 1;
-        CcPointer* const_void_ptr = cc_intern_pointer(&p->type_cache, al, const_void, 0);
-        if(!const_void_ptr) return CC_OOM_ERROR;
-        CcQualType const_void_ptr_type = {.bits = (uintptr_t)const_void_ptr};
-        p->const_void_star = const_void_ptr_type;
-
-        CcPointer* char_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_char), 0);
-        if(!char_ptr) return CC_OOM_ERROR;
-        CcQualType char_ptr_type = {.bits = (uintptr_t)char_ptr};
-        p->char_star = char_ptr_type;
+        err = cc_pointer_of(p, const_void, &p->const_void_star);
+        if(err) return err;
+        err = cc_pointer_of(p, ccqt_basic(CCBT_char), &p->char_star);
+        if(err) return err;
         CcQualType const_char = ccqt_basic(CCBT_char);
         const_char.is_const = 1;
-        CcPointer* const_char_ptr = cc_intern_pointer(&p->type_cache, al, const_char, 0);
-        if(!const_char_ptr) return CC_OOM_ERROR;
-        CcQualType const_char_ptr_type = {.bits = (uintptr_t)const_char_ptr};
-        p->const_char_star = const_char_ptr_type;
+        err = cc_pointer_of(p, const_char, &p->const_char_star);
+        if(err) return err;
     }
     CcQualType size_type = ccqt_basic(t.size_type);
 
@@ -8196,9 +8182,8 @@ cc_define_builtin_types(CcParser* p){
         }
         default: {
             // typedef void *__builtin_va_list;
-            CcPointer* ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
-            if(!ptr) return CC_OOM_ERROR;
-            va_list_type = (CcQualType){.bits = (uintptr_t)ptr};
+            int perr = cc_pointer_of(p, ccqt_basic(CCBT_void), &va_list_type);
+            if(perr) return perr;
             break;
         }
     }
