@@ -3151,7 +3151,29 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     tok_type = CPP_IDENTIFIER;
                 }
                 else {
-                    a = cpp_atomizef(cpp, "\"%.*s\"", (int)strlen(s), s); // FIXME: escape sequences, UCNS
+                    // Escape the string so cpp_mixin_string's
+                    // escape processing reconstructs the original bytes.
+                    MStringBuilder sb = {.allocator = ci_scratch_allocator(ci)};
+                    msb_write_char(&sb, '"');
+                    for(size_t i = 0, slen = strlen(s); i < slen; i++){
+                        unsigned char c = (unsigned char)s[i];
+                        switch(c){
+                            case '\\': msb_write_literal(&sb, "\\\\"); break;
+                            case '"':  msb_write_literal(&sb, "\\\""); break;
+                            case '\n': msb_write_literal(&sb, "\\n"); break;
+                            case '\t': msb_write_literal(&sb, "\\t"); break;
+                            case '\r': msb_write_literal(&sb, "\\r"); break;
+                            case '\a': msb_write_literal(&sb, "\\a"); break;
+                            case '\b': msb_write_literal(&sb, "\\b"); break;
+                            case '\f': msb_write_literal(&sb, "\\f"); break;
+                            case '\v': msb_write_literal(&sb, "\\v"); break;
+                            case '\0': msb_write_literal(&sb, "\\0"); break;
+                            default:   msb_write_char(&sb, c); break;
+                        }
+                    }
+                    msb_write_char(&sb, '"');
+                    a = msb_atomize(&sb, cpp->at);
+                    msb_destroy(&sb);
                     tok_type = CPP_STRING;
                 }
                 if(!a){
