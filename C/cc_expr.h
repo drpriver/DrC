@@ -123,6 +123,7 @@ enum CcBuiltinOp TYPED_ENUM(uint32_t) {
 TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
 
 enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
+    CC_TYPE_NONE = 0,
     // Properties (no parens, lhs = _Type expr)
     CC_TYPE_NAME,
     CC_TYPE_IS_INTEGER,

@@ -2292,9 +2292,7 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcPointer* vp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_void), 0);
-                    if(!vp) return CC_OOM_ERROR;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, (CcQualType){.bits=(uintptr_t)vp}, 1);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, p->void_star, 1);
                     if(!node) return CC_OOM_ERROR;
                     node->values[0] = sz;
                     *out = node;
@@ -2306,16 +2304,11 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, &arg);
                     if(err) return err;
-                    CcQualType const_char_qt = ccqt_basic(CCBT_char);
-                    const_char_qt.is_const = 1;
-                    CcPointer* ccp = cc_intern_pointer(&p->type_cache, cc_allocator(p), const_char_qt, 0);
-                    if(!ccp) return CC_OOM_ERROR;
-                    CcQualType const_char_ptr = {.bits = (uintptr_t)ccp};
-                    if(!cc_implicit_convertible(arg->type, const_char_ptr))
+                    if(!cc_implicit_convertible(arg->type, p->const_char_star))
                         return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, const_char_ptr, 1);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_star, 1);
                     if(!node) return CC_OOM_ERROR;
                     node->values[0] = arg;
                     *out = node;
@@ -2812,73 +2805,42 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     cc_lookup_field(u->fields, u->field_count, member_name, &floc, &member_type, &method);
                 }
                 else if(tk == CC_BASIC && agg_type.basic.kind == CCBT__Type){
-                    CcTypeIntrospectionOp ti_op;
                     CcQualType result_type;
                     _Bool is_method = 0; // methods take a (type-or-expr) argument
-                    if(member_name == AT_ATOMIZE(p->cpp.at, "name")){
-                        ti_op = CC_TYPE_NAME;
-                        CcPointer* ccp = cc_intern_pointer(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), 0);
-                        if(!ccp) return CC_OOM_ERROR;
-                        result_type = (CcQualType){.bits = (uintptr_t)ccp};
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_integer")){
-                        ti_op = CC_TYPE_IS_INTEGER; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_float")){
-                        ti_op = CC_TYPE_IS_FLOAT; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_arithmetic")){
-                        ti_op = CC_TYPE_IS_ARITHMETIC; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_pointer")){
-                        ti_op = CC_TYPE_IS_POINTER; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_struct")){
-                        ti_op = CC_TYPE_IS_STRUCT; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_union")){
-                        ti_op = CC_TYPE_IS_UNION; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_array")){
-                        ti_op = CC_TYPE_IS_ARRAY; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_function")){
-                        ti_op = CC_TYPE_IS_FUNCTION; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_callable")){
-                        ti_op = CC_TYPE_IS_CALLABLE; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_enum")){
-                        ti_op = CC_TYPE_IS_ENUM; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_const")){
-                        ti_op = CC_TYPE_IS_CONST; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_unsigned")){
-                        ti_op = CC_TYPE_IS_UNSIGNED; result_type = ccqt_basic(CCBT_bool);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "sizeof_")){
-                        ti_op = CC_TYPE_SIZEOF; result_type = ccqt_basic(CCBT_unsigned_long);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "alignof_")){
-                        ti_op = CC_TYPE_ALIGNOF; result_type = ccqt_basic(CCBT_unsigned_long);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "pointee")){
-                        ti_op = CC_TYPE_POINTEE; result_type = ccqt_basic(CCBT__Type);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "count")){
-                        ti_op = CC_TYPE_COUNT; result_type = ccqt_basic(CCBT_unsigned_long);
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "is_callable_with")){
-                        ti_op = CC_TYPE_IS_CALLABLE_WITH; result_type = ccqt_basic(CCBT_bool);
-                        is_method = 1;
-                    }
-                    else if(member_name == AT_ATOMIZE(p->cpp.at, "castable_to")){
-                        ti_op = CC_TYPE_CASTABLE_TO; result_type = ccqt_basic(CCBT_bool);
-                        is_method = 1;
-                    }
-                    else {
+                    CcTypeIntrospectionOp ti_op = (CcTypeIntrospectionOp)(uintptr_t)AM_get(&p->type_intro, member_name);
+                    switch(ti_op){
+                    case CC_TYPE_NONE:
                         return cc_error(p, member.loc, "_Type has no member '%s'", member_name->data);
+                    case CC_TYPE_NAME:
+                        result_type = p->const_char_star;
+                        break;
+                    case CC_TYPE_IS_INTEGER:
+                    case CC_TYPE_IS_FLOAT:
+                    case CC_TYPE_IS_ARITHMETIC:
+                    case CC_TYPE_IS_POINTER:
+                    case CC_TYPE_IS_STRUCT:
+                    case CC_TYPE_IS_UNION:
+                    case CC_TYPE_IS_ARRAY:
+                    case CC_TYPE_IS_FUNCTION:
+                    case CC_TYPE_IS_ENUM:
+                    case CC_TYPE_IS_CONST:
+                    case CC_TYPE_IS_UNSIGNED:
+                    case CC_TYPE_IS_CALLABLE:
+                        result_type = ccqt_basic(CCBT_bool);
+                        break;
+                    case CC_TYPE_SIZEOF:
+                    case CC_TYPE_ALIGNOF:
+                    case CC_TYPE_COUNT:
+                        result_type = ccqt_basic(CCBT_unsigned_long);
+                        break;
+                    case CC_TYPE_POINTEE:
+                        result_type = ccqt_basic(CCBT__Type);
+                        break;
+                    case CC_TYPE_IS_CALLABLE_WITH:
+                    case CC_TYPE_CASTABLE_TO:
+                        result_type = ccqt_basic(CCBT_bool);
+                        is_method = 1;
+                        break;
                     }
                     if(is_method){
                         err = cc_expect_punct(p, '(');
@@ -3896,6 +3858,7 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     return (CcEvalResult){.kind=CC_EVAL_INT, .i = cc_implicit_convertible(qt, arg.type)};
                 }
                 case CC_TYPE_NAME:
+                case CC_TYPE_NONE:
                     return cc_eval_error(); // can't constant-fold to a string
             }
             return cc_eval_error();
@@ -8216,6 +8179,33 @@ int
 cc_define_builtin_types(CcParser* p){
     Allocator al = cc_allocator(p);
     CcTargetConfig t = p->cpp.target;
+
+    {
+        CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
+        if(!void_ptr) return CC_OOM_ERROR;
+        CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
+        p->void_star = void_ptr_type;
+        CcQualType const_void = ccqt_basic(CCBT_void);
+        const_void.is_const = 1;
+        CcPointer* const_void_ptr = cc_intern_pointer(&p->type_cache, al, const_void, 0);
+        if(!const_void_ptr) return CC_OOM_ERROR;
+        CcQualType const_void_ptr_type = {.bits = (uintptr_t)const_void_ptr};
+        p->const_void_star = const_void_ptr_type;
+
+        CcPointer* char_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_char), 0);
+        if(!char_ptr) return CC_OOM_ERROR;
+        CcQualType char_ptr_type = {.bits = (uintptr_t)char_ptr};
+        p->char_star = char_ptr_type;
+        CcQualType const_char = ccqt_basic(CCBT_char);
+        const_char.is_const = 1;
+        CcPointer* const_char_ptr = cc_intern_pointer(&p->type_cache, al, const_char, 0);
+        if(!const_char_ptr) return CC_OOM_ERROR;
+        CcQualType const_char_ptr_type = {.bits = (uintptr_t)const_char_ptr};
+        p->const_char_star = const_char_ptr_type;
+    }
+    CcQualType size_type = ccqt_basic(t.size_type);
+
+
     Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", sizeof "__builtin_va_list"-1);
     if(!va_list_name) return CC_OOM_ERROR;
     Atom gnu_va_list = AT_atomize(p->cpp.at, "__gnuc_va_list", sizeof "__gnuc_va_list" - 1);
@@ -8236,16 +8226,12 @@ cc_define_builtin_types(CcParser* p){
             Atom rs_name = AT_atomize(p->cpp.at, "reg_save_area", sizeof "reg_save_area"-1);
             if(!gp_name || !fp_name || !oa_name || !rs_name) return CC_OOM_ERROR;
 
-            CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
-            if(!void_ptr) return CC_OOM_ERROR;
-            CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
-
             CcField* fields = Allocator_alloc(al, 4 * sizeof(CcField));
             if(!fields) return CC_OOM_ERROR;
             fields[0] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = gp_name};
             fields[1] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = fp_name};
-            fields[2] = (CcField){.type = void_ptr_type, .name = oa_name};
-            fields[3] = (CcField){.type = void_ptr_type, .name = rs_name};
+            fields[2] = (CcField){.type = p->void_star, .name = oa_name};
+            fields[3] = (CcField){.type = p->void_star, .name = rs_name};
 
             CcStruct* s = Allocator_zalloc(al, sizeof *s);
             if(!s) return CC_OOM_ERROR;
@@ -8281,15 +8267,11 @@ cc_define_builtin_types(CcParser* p){
             if(!stack_name || !gr_top_name || !vr_top_name || !gr_offs_name || !vr_offs_name)
                 return CC_OOM_ERROR;
 
-            CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
-            if(!void_ptr) return CC_OOM_ERROR;
-            CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
-
             CcField* fields = Allocator_alloc(al, 5 * sizeof(CcField));
             if(!fields) return CC_OOM_ERROR;
-            fields[0] = (CcField){.type = void_ptr_type, .name = stack_name};
-            fields[1] = (CcField){.type = void_ptr_type, .name = gr_top_name};
-            fields[2] = (CcField){.type = void_ptr_type, .name = vr_top_name};
+            fields[0] = (CcField){.type = p->void_star, .name = stack_name};
+            fields[1] = (CcField){.type = p->void_star, .name = gr_top_name};
+            fields[2] = (CcField){.type = p->void_star, .name = vr_top_name};
             fields[3] = (CcField){.type = ccqt_basic(CCBT_int), .name = gr_offs_name};
             fields[4] = (CcField){.type = ccqt_basic(CCBT_int), .name = vr_offs_name};
 
@@ -8397,22 +8379,42 @@ cc_define_builtin_types(CcParser* p){
             if(err) return CC_OOM_ERROR;
         }
     }
+    // Register type methods/fields
+    {
+        static const struct { StringView name; CcTypeIntrospectionOp op; } typeintro[] = {
+            {SV("name"), CC_TYPE_NAME},
+            {SV("is_integer"), CC_TYPE_IS_INTEGER},
+            {SV("is_float"), CC_TYPE_IS_FLOAT},
+            {SV("is_arithmetic"), CC_TYPE_IS_ARITHMETIC},
+            {SV("is_pointer"), CC_TYPE_IS_POINTER},
+            {SV("is_struct"), CC_TYPE_IS_STRUCT},
+            {SV("is_union"), CC_TYPE_IS_UNION},
+            {SV("is_array"), CC_TYPE_IS_ARRAY},
+            {SV("is_function"), CC_TYPE_IS_FUNCTION},
+            {SV("is_enum"), CC_TYPE_IS_ENUM},
+            {SV("is_const"), CC_TYPE_IS_CONST},
+            {SV("is_unsigned"), CC_TYPE_IS_UNSIGNED},
+            {SV("is_callable"), CC_TYPE_IS_CALLABLE},
+            {SV("sizeof_"), CC_TYPE_SIZEOF},
+            {SV("alignof_"), CC_TYPE_ALIGNOF},
+            {SV("pointee"), CC_TYPE_POINTEE},
+            {SV("count"), CC_TYPE_COUNT},
+            {SV("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
+            {SV("is_castable_to"), CC_TYPE_CASTABLE_TO},
+        };
+        for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
+            Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);
+            if(!a) return CC_OOM_ERROR;
+            err = AM_put(&p->type_intro, al, a, (void*)(uintptr_t)typeintro[i].op);
+            if(err) return CC_OOM_ERROR;
+        }
+    }
     // Register __builtin_ libc functions as synthetic CcFuncs.
     {
-        CcPointer* void_ptr = cc_intern_pointer(&p->type_cache, al, ccqt_basic(CCBT_void), 0);
-        if(!void_ptr) return CC_OOM_ERROR;
-        CcQualType void_ptr_type = {.bits = (uintptr_t)void_ptr};
-        CcQualType const_void = ccqt_basic(CCBT_void);
-        const_void.is_const = 1;
-        CcPointer* const_void_ptr = cc_intern_pointer(&p->type_cache, al, const_void, 0);
-        if(!const_void_ptr) return CC_OOM_ERROR;
-        CcQualType const_void_ptr_type = {.bits = (uintptr_t)const_void_ptr};
-        CcQualType size_type = ccqt_basic(t.size_type);
-
         // void *__builtin_memcpy(void *dest, const void *src, size_t n)
         {
-            CcQualType params[] = {void_ptr_type, const_void_ptr_type, size_type};
-            CcFunction* ftype = cc_intern_function(&p->type_cache, al, void_ptr_type, params, 3, 0, 0);
+            CcQualType params[] = {p->void_star, p->const_void_star, size_type};
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, p->void_star, params, 3, 0, 0);
             if(!ftype) return CC_OOM_ERROR;
             CcFunc* func = Allocator_zalloc(al, sizeof *func);
             if(!func) return CC_OOM_ERROR;
@@ -8436,8 +8438,8 @@ cc_define_builtin_types(CcParser* p){
         }
         // void *__builtin_memcpy(void *dest, const void *src, size_t n)
         {
-            CcQualType params[] = {void_ptr_type, ccqt_basic(CCBT_int), size_type};
-            CcFunction* ftype = cc_intern_function(&p->type_cache, al, void_ptr_type, params, 3, 0, 0);
+            CcQualType params[] = {p->void_star, ccqt_basic(CCBT_int), size_type};
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, p->void_star, params, 3, 0, 0);
             if(!ftype) return CC_OOM_ERROR;
             CcFunc* func = Allocator_zalloc(al, sizeof *func);
             if(!func) return CC_OOM_ERROR;

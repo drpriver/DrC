@@ -148,10 +148,17 @@ struct CcParser {
     uint32_t loop_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
     AtomMap(uintptr_t) builtins;
+    AtomMap(uintptr_t) type_intro;
     PointerMap used_funcs; // CcFunc* set (value = key)
     PointerMap used_vars;  // CcVariable* set, non-automatic only (value = key)
     PointerMap used_call_types; // CcFunction* set, function types used in indirect calls (value = key)
     PointerMap used_var_calls;  // CcExpr* set, variadic call expressions (value = key)
+
+    // common types
+    CcQualType char_star,
+               const_char_star,
+               void_star,
+               const_void_star;
 };
 
 

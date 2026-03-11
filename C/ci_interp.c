@@ -1770,6 +1770,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         CcQualType qt = {.bits = type_bits};
         CcTypeIntrospectionOp op = expr->type_introspection.op;
         switch(op){
+            case CC_TYPE_NONE:
+                return CI_UNREACHABLE_ERROR;
             case CC_TYPE_NAME: {
                 MStringBuilder sb = {.allocator = ci_allocator(ci)};
                 cc_print_type(&sb, qt);
