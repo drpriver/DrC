@@ -1053,8 +1053,10 @@ cc_parse_assignment_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                 err = cc_implicit_cast(p, right, left->type, &right);
                 if(err) return err;
             }
-            if(kind == CC_EXPR_ASSIGN && right->kind == CC_EXPR_COMPOUND_LITERAL)
-                right->kind = CC_EXPR_INIT_LIST;
+            if(kind == CC_EXPR_ASSIGN && right->kind == CC_EXPR_COMPOUND_LITERAL){
+                err = cc_desugar_compound_literal(p, right, &right);
+                if(err) return err;
+            }
             CcExpr* node = cc_make_expr(p, kind, tok.loc, left->type, 1);
             if(!node) return CC_OOM_ERROR;
             node->lhs = left;

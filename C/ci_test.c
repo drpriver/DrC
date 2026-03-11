@@ -1886,6 +1886,15 @@ TestFunction(test_interpreter){
                "return add(17, 25);\n"),
             .exit_code = 42,
         },
+        {
+            "compound literal self-assign", __LINE__,
+            SV("typedef struct v2f v2f;\n"
+               "struct v2f { float x; float y; };\n"
+               "v2f v = {1.0f, 2.0f};\n"
+               "v = (v2f){v.y, v.x};\n"
+               "return (int)(v.x * 10 + v.y);\n"),
+            .exit_code = 21,
+        },
     };
     int err;
     static int idx = 0;
