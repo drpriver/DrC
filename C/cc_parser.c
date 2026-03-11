@@ -2738,6 +2738,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     CcTypeIntrospectionOp ti_op = (CcTypeIntrospectionOp)(uintptr_t)AM_get(&p->type_intro, member_name);
                     switch(ti_op){
                     case CC_TYPE_NONE:
+                        goto fucs;
                         return cc_error(p, member.loc, "_Type has no member '%s'", member_name->data);
                     case CC_TYPE_NAME:
                         result_type = p->const_char_star;
@@ -2810,10 +2811,50 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     continue;
                 }
                 else {
-                    return cc_error(p, member.loc, "not a struct or union");
+                    // Not a struct/union — fall through to FUCS lookup.
                 }
-                if(!member_type.bits)
-                    return cc_error(p, member.loc, "no member named '%s'", member_name->data);
+                fucs:;
+                if(!member_type.bits){
+                    // FUCS: x.foo(args) -> foo(x, args)
+                    // Look up member_name as a free function.
+                    CcFunc* ufcs_func = cc_scope_lookup_func(p->current, member_name, CC_SCOPE_WALK_CHAIN);
+                    if(!ufcs_func){
+                        if(tk == CC_STRUCT || tk == CC_UNION)
+                            return cc_error(p, member.loc, "no member named '%s'", member_name->data);
+                        return cc_error(p, member.loc, "not a struct or union");
+                    }
+                    CcExpr* fnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, (CcQualType){.bits = (uintptr_t)ufcs_func->type}, 0);
+                    if(!fnode) return CC_OOM_ERROR;
+                    fnode->func = ufcs_func;
+                    err = PM_put(&p->used_funcs, cc_allocator(p), ufcs_func, ufcs_func);
+                    if(err) return CC_OOM_ERROR;
+                    // Auto-& if the first param is a pointer and operand is a non-pointer lvalue.
+                    if(ufcs_func->type->param_count > 0 && ccqt_kind(ufcs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
+                        CcQualType addr_type;
+                        err = cc_pointer_of(p, operand->type, &addr_type);
+                        if(err) return err;
+                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, addr_type, 0);
+                        if(!addr) return CC_OOM_ERROR;
+                        addr->lhs = operand;
+                        receiver = addr;
+                    }
+                    else if(ufcs_func->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(ufcs_func->type->params[0]) != CC_POINTER){
+                        // Auto-deref if operand is a pointer but first param wants a value.
+                        CcQualType deref_type;
+                        err = cc_deref_type(p, operand->type, &deref_type, tok.loc);
+                        if(err) return err;
+                        CcExpr* deref = cc_make_expr(p, CC_EXPR_DEREF, tok.loc, deref_type, 0);
+                        if(!deref) return CC_OOM_ERROR;
+                        deref->lhs = operand;
+                        deref->is_lvalue = 1;
+                        receiver = deref;
+                    }
+                    else {
+                        receiver = operand;
+                    }
+                    operand = fnode;
+                    continue;
+                }
                 if(method){
                     CcExpr* mnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, member_type, 0);
                     if(!mnode) return CC_OOM_ERROR;

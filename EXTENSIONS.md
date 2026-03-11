@@ -286,30 +286,55 @@ dp.push(99);   // equivalent to dp->push(99)
 dp.dump();
 ```
 
+### Function Uniform Call Syntax (FUCS)
+
+If `.member` doesn't find anything and there is a matching function
+in scope that either takes the first arg, pointer to first arg or deref of first arg,
+we rewrite it into a call to that function with the target of the dot expression
+as the first arg (with either `&` or `*` applied as need).
+
+```C
+#include <stdio.h>
+
+typedef struct v2f v2f;
+struct v2f { float x, y; };
+
+v2f add(v2f a, v2f b){ return (v2f){a.x+b.x, a.y+b.y}; }
+float dot(v2f a, v2f b){ return a.x*b.x + a.y*b.y; }
+void normalize(v2f* v){
+    float len = dot(*v, *v);
+    v->x /= len; v->y /= len;
+}
+
+v2f a = {1, 2}, b = {3, 4};
+v2f c = a.add(b);    // -> c = add(a, b)
+a.normalize();       // -> normalize(&a)
+v2f* p = &a;
+float d = p.dot(b);  // dot(*p, b)
+```
+
+Member functions are checked first.  FUCS is the fallback.
+
+It also works with `->`.
+
 ### Plan9 struct embedding
 
-An anonymous struct member (written as just a type name without a field name)
-embeds that struct's fields into the enclosing struct. The embedded fields
-can be accessed directly, designated initializers work through the embedding,
-and pointers to the outer struct implicitly convert to pointers to the
-embedded struct.
+An anonymous struct in a struct dumps its fields into the containing
+struct.
+
+Also pointers are implicitly convertible.
 
 ```C
 struct Base { int x; int y; };
 struct Derived { struct Base; int z; };
 
-struct Derived d = {.x = 1, .y = 2, .z = 3}; // designated through embed
-struct Derived d2 = {1, 2, 3};                // brace elision works too
+struct Derived d = {.x = 1, .y = 2, .z = 3};
+struct Derived d2 = {1, 2, 3};
 
 struct Base* bp = &d; // implicit conversion
 ```
 
 ### Type introspection
-
-Built-in operators for compile-time type queries. Each accepts either a type
-name or an expression (in which case its type is used). These produce integer
-constant expressions (0 or 1), so they work in `static if`, `_Static_assert`,
-etc.
 
 - `__type_equals(a, b)` — true if `a` and `b` are the same type
 - `__is_pointer(a)` — true if `a` is a pointer type
