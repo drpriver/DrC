@@ -205,7 +205,7 @@ TestFunction(test_interop){
             "char signedness", __LINE__,
             SV("char c = (char)200;\n"
                "return c < 0;\n"),
-            .exit_code = 1, // (char)200 is -56 when char is signed
+            .exit_code = cc_target_funcs[CC_TARGET_NATIVE]().char_is_signed,
         },
         {
             "mixed integer widths", __LINE__,
