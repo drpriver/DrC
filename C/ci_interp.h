@@ -65,6 +65,10 @@ struct CiInterpreter {
     BidiPointerMap(CcFunc*, void(*)(void)) closure_map;
     LOCK_T error_lock;
     LOCK_T atom_lock;
+    size_t resolved_variadic,
+           resolved_libc,
+           resolved_funcs,
+           resolved_vars;
 };
 
 typedef struct CiArg CiArg;
@@ -82,7 +86,7 @@ static int ci_register_macros(CiInterpreter*);
 static int ci_load_library(CiInterpreter*, StringView);
 static int ci_call_by_name(CiInterpreter*, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size);
 static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret);
-static int ci_resolve_refs(CiInterpreter*);
+static int ci_resolve_refs(CiInterpreter*, _Bool libc_only);
 static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 static int ci_register_sym(CiInterpreter*, StringView libname, StringView symname, void* sym);
 static AtomTable* ci_lock_atoms(CiInterpreter*);

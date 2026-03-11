@@ -40,7 +40,8 @@ struct CcFunc {
              parsed:  1, // If 0, then just an array of tokens instead of array of stmts and needs
                          // to be parsed on first use or codegen.
              addr_taken: 1, // address taken (used as value, not just called directly)
-             _padding: 26;
+             libc_builtin: 1,
+             _padding: 25;
     uint32_t frame_size; // size of params + automatic local vars
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body. 
                                       // Return to the parser's free list when done.

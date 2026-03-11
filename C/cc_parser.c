@@ -8091,9 +8091,6 @@ cc_define_builtin_types(CcParser* p){
         err = cc_pointer_of(p, const_char, &p->const_char_star);
         if(err) return err;
     }
-    CcQualType size_type = ccqt_basic(t.size_type);
-
-
     Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", sizeof "__builtin_va_list"-1);
     if(!va_list_name) return CC_OOM_ERROR;
     Atom gnu_va_list = AT_atomize(p->cpp.at, "__gnuc_va_list", sizeof "__gnuc_va_list" - 1);
@@ -8296,48 +8293,35 @@ cc_define_builtin_types(CcParser* p){
             if(err) return CC_OOM_ERROR;
         }
     }
-    // Register __builtin_ libc functions as synthetic CcFuncs.
+    // Register __builtin_ libc functions
     {
-        // void *__builtin_memcpy(void *dest, const void *src, size_t n)
-        {
-            CcQualType params[] = {p->void_star, p->const_void_star, size_type};
-            CcFunction* ftype = cc_intern_function(&p->type_cache, al, p->void_star, params, 3, 0, 0);
+        struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic;} builtins[] = {
+            {SV("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SV("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SV("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t.size_type}}, .variadic=0},
+            {SV("malloc"), p->void_star, 1, {{.basic.kind=t.size_type}}, .variadic=0},
+            {SV("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SV("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
+            {SV("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
+            {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1},
+        };
+        for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
+            struct b* b = &builtins[i];
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, b->ret, b->params, b->nargs, b->variadic, 0);
             if(!ftype) return CC_OOM_ERROR;
             CcFunc* func = Allocator_zalloc(al, sizeof *func);
             if(!func) return CC_OOM_ERROR;
-            Atom key = AT_ATOMIZE(p->cpp.at, "__builtin_memcpy");
+            Atom key = cpp_atomizef(&p->cpp, "__builtin_%.*s", (int)b->name.length, b->name.text);
             if(!key) return CC_OOM_ERROR;
-            Atom name = AT_ATOMIZE(p->cpp.at, "memcpy");
+            Atom name = AT_atomize(p->cpp.at, b->name.text, b->name.length);
             if(!name) return CC_OOM_ERROR;
             func->name = name;
             func->type = ftype;
             func->extern_ = 1;
+            func->libc_builtin = 1;
             err = cc_scope_insert_func(al, &p->global, key, func);
             if(err) return CC_OOM_ERROR;
-            func = Allocator_dupe(al, func, sizeof *func);
-            if(!func) return CC_OOM_ERROR;
-            key = AT_ATOMIZE(p->cpp.at, "__builtin_memmove");
-            name = AT_ATOMIZE(p->cpp.at, "memmove");
-            if(!key || !name) return CC_OOM_ERROR;
-            func->name = name;
-            err = cc_scope_insert_func(al, &p->global, key, func);
-            if(err) return CC_OOM_ERROR;
-        }
-        // void *__builtin_memcpy(void *dest, const void *src, size_t n)
-        {
-            CcQualType params[] = {p->void_star, ccqt_basic(CCBT_int), size_type};
-            CcFunction* ftype = cc_intern_function(&p->type_cache, al, p->void_star, params, 3, 0, 0);
-            if(!ftype) return CC_OOM_ERROR;
-            CcFunc* func = Allocator_zalloc(al, sizeof *func);
-            if(!func) return CC_OOM_ERROR;
-            Atom key = AT_ATOMIZE(p->cpp.at, "__builtin_memset");
-            if(!key) return CC_OOM_ERROR;
-            Atom name = AT_ATOMIZE(p->cpp.at, "memset");
-            if(!name) return CC_OOM_ERROR;
-            func->name = name;
-            func->type = ftype;
-            func->extern_ = 1;
-            err = cc_scope_insert_func(al, &p->global, key, func);
+            err = cc_scope_insert_func(al, &p->global, name, func);
             if(err) return CC_OOM_ERROR;
         }
     }

@@ -1935,7 +1935,7 @@ TestFunction(test_interpreter){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp);
+        err = ci_resolve_refs(&interp, 0);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;

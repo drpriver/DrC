@@ -2364,26 +2364,28 @@ ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecifi
 
 static
 int
-ci_resolve_refs(CiInterpreter* ci){
+ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
     CcParser* p = &ci->parser;
     Allocator al = ci_allocator(ci);
-    // Add main() as a root if it exists.
-    {
-        Atom main_atom = AT_atomize(p->cpp.at, "main", 4);
-        if(!main_atom) return CI_OOM_ERROR;
-        CcFunc* main_func = cc_scope_lookup_func(&p->global, main_atom, CC_SCOPE_NO_WALK);
-        if(main_func && main_func->defined){
-            int err = PM_put(&p->used_funcs, al, main_func, main_func);
-            if(err) return CI_OOM_ERROR;
+    if(!libc_only){
+        // Add main() as a root if it exists.
+        {
+            Atom main_atom = AT_atomize(p->cpp.at, "main", 4);
+            if(!main_atom) return CI_OOM_ERROR;
+            CcFunc* main_func = cc_scope_lookup_func(&p->global, main_atom, CC_SCOPE_NO_WALK);
+            if(main_func && main_func->defined){
+                int err = PM_put(&p->used_funcs, al, main_func, main_func);
+                if(err) return CI_OOM_ERROR;
+            }
         }
     }
-    // Worklist: iterate used_funcs. Parsing bodies may add new entries,
-    // so we re-check count each iteration.
-    for(size_t i = 0; i < p->used_funcs.count; i++){
+    // Resolve functions. When libc_only, only resolve libc builtins.
+    // Otherwise resolve all (parsing bodies, dlsym, closures).
+    for(size_t i = libc_only ? ci->resolved_libc : ci->resolved_funcs; i < p->used_funcs.count; i++){
         PointerMapItems items = PM_items(&p->used_funcs);
         CcFunc* func = (CcFunc*)(uintptr_t)items.data[i].key;
-        if(!func->defined) {
-            // Extern: resolve via dlsym.
+        if(libc_only && !func->libc_builtin) continue;
+        if(!func->defined){
             if(!func->native_func && func->name){
                 LongString sym = func->mangle
                     ? (LongString){func->mangle->length, func->mangle->data}
@@ -2395,68 +2397,73 @@ ci_resolve_refs(CiInterpreter* ci){
             }
             continue;
         }
-        if(!func->parsed){
-            int err = cc_parse_func_body(p, func);
-            if(err) return err;
-            // Parsing may have grown used_funcs/used_vars, loop will pick them up.
-        }
-        // Create a native closure only if the function's address is taken.
-        if(!func->native_func && func->addr_taken){
-            int err = ci_create_closure(ci, func);
-            if(err) return err;
+        if(!libc_only){
+            if(!func->parsed){
+                int err = cc_parse_func_body(p, func);
+                if(err) return err;
+            }
+            if(!func->native_func && func->addr_taken){
+                int err = ci_create_closure(ci, func);
+                if(err) return err;
+            }
         }
     }
+    if(libc_only)
+        ci->resolved_libc = p->used_funcs.count;
+    else
+        ci->resolved_funcs = p->used_funcs.count;
     // Resolve non-automatic variable storage.
-    {
-        PointerMapItems items = PM_items(&p->used_vars);
-        for(size_t i = 0; i < items.count; i++){
-            CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
-            if(var->interp_val) continue;
-            if(var->extern_ && !var->initializer){
-                LongString sym = var->mangle
-                    ? (LongString){var->mangle->length, var->mangle->data}
-                    : (LongString){var->name->length, var->name->data};
-                void* addr;
-                int err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
-                if(err) return err;
-                var->interp_val = addr;
+    if(!libc_only){
+        {
+            PointerMapItems items = PM_items(&p->used_vars);
+            for(size_t i = ci->resolved_vars; i < items.count; i++){
+                CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
+                if(var->interp_val) continue;
+                if(var->extern_ && !var->initializer){
+                    LongString sym = var->mangle
+                        ? (LongString){var->mangle->length, var->mangle->data}
+                        : (LongString){var->name->length, var->name->data};
+                    void* addr;
+                    int err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
+                    if(err) return err;
+                    var->interp_val = addr;
+                }
+                else {
+                    uint32_t sz;
+                    int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
+                    if(err) return err;
+                    void* storage = Allocator_zalloc(al, sz);
+                    if(!storage) return CI_OOM_ERROR;
+                    var->interp_val = storage;
+                }
             }
-            else {
+            ci->resolved_vars = p->used_vars.count;
+        }
+        // Evaluate initializers for non-automatic variables.
+        // This must happen after all storage is allocated (initializers may
+        // reference other globals). Running this here (single-threaded, before
+        // execution) avoids re-initialization and thread races.
+        {
+            PointerMapItems items = PM_items(&p->used_vars);
+            CiInterpFrame dummy_frame = {0};
+            for(size_t i = 0; i < items.count; i++){
+                CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
+                if(!var->interp_preinit) continue;
+                if(!var->initializer) continue;
+                if(!var->interp_val) continue;
+                if(var->interp_initialized) continue;
                 uint32_t sz;
                 int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
                 if(err) return err;
-                void* storage = Allocator_zalloc(al, sz);
-                if(!storage) return CI_OOM_ERROR;
-                var->interp_val = storage;
+                err = ci_interp_expr(ci, &dummy_frame, var->initializer, var->interp_val, sz);
+                if(err) return err;
+                var->interp_initialized = 1;
             }
-        }
-    }
-    // Evaluate initializers for non-automatic variables.
-    // This must happen after all storage is allocated (initializers may
-    // reference other globals). Running this here (single-threaded, before
-    // execution) avoids re-initialization and thread races.
-    {
-        PointerMapItems items = PM_items(&p->used_vars);
-        CiInterpFrame dummy_frame = {0};
-        for(size_t i = 0; i < items.count; i++){
-            CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
-            if(!var->interp_preinit) continue;
-            if(!var->initializer) continue;
-            if(!var->interp_val) continue;
-            if(var->interp_initialized) continue;
-            uint32_t sz;
-            int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
-            if(err) return err;
-            err = ci_interp_expr(ci, &dummy_frame, var->initializer, var->interp_val, sz);
-            if(err) return err;
-            var->interp_initialized = 1;
         }
     }
     #ifndef NO_NATIVE_CALL
     // Pre-populate ffi_cache for non-variadic call types.
-    // Collect all CcFunction* that need a CIF: extern funcs + indirect call types.
     {
-        // From extern functions.
         PointerMapItems funcs = PM_items(&p->used_funcs);
         for(size_t i = 0; i < funcs.count; i++){
             CcFunc* func = (CcFunc*)(uintptr_t)funcs.data[i].key;
@@ -2469,7 +2476,6 @@ ci_resolve_refs(CiInterpreter* ci){
             err = PM_put(&ci->ffi_cache, al, ftype, cache);
             if(err) return CI_OOM_ERROR;
         }
-        // From indirect call types.
         PointerMapItems ctypes = PM_items(&p->used_call_types);
         for(size_t i = 0; i < ctypes.count; i++){
             CcFunction* ftype = (CcFunction*)(uintptr_t)ctypes.data[i].key;
@@ -2481,11 +2487,10 @@ ci_resolve_refs(CiInterpreter* ci){
             if(err) return CI_OOM_ERROR;
         }
     }
-    // Pre-populate ffi_cache for variadic call expressions, keyed by CcExpr*.
-    // Skip calls to interpreted (defined) functions — they go through ci_interp_call.
+    // Pre-populate ffi_cache for variadic call expressions.
     {
         PointerMapItems vcalls = PM_items(&p->used_var_calls);
-        for(size_t i = 0; i < vcalls.count; i++){
+        for(size_t i = ci->resolved_variadic; i < vcalls.count; i++){
             CcExpr* call_expr = (CcExpr*)(uintptr_t)vcalls.data[i].key;
             if(call_expr->lhs->kind == CC_EXPR_FUNCTION && call_expr->lhs->func->defined)
                 continue;
@@ -2507,6 +2512,7 @@ ci_resolve_refs(CiInterpreter* ci){
             err = PM_put(&ci->ffi_cache, al, call_expr, cache);
             if(err) return CI_OOM_ERROR;
         }
+        ci->resolved_variadic = p->used_var_calls.count;
     }
     #endif
     return 0;
@@ -3180,6 +3186,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
 static
 int
 ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    int err;
     CiInterpreter* ci = ctx;
     // Skip whitespace.
     while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
@@ -3194,9 +3201,11 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(!func || !func->defined)
         return cpp_error(cpp, loc, "#pragma procmacro: function '%.*s' not defined", (int)name.length, name.text);
     if(!func->parsed){
-        int err = cc_parse_func_body(&ci->parser, func);
+        err = cc_parse_func_body(&ci->parser, func);
         if(err) return err;
     }
+    err = ci_resolve_refs(ci, 1);
+    if(err) return err;
     return cpp_define_builtin_func_macro(cpp, name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
 }
 

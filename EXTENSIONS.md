@@ -384,6 +384,19 @@ void outer(void){
 }
 ```
 
+### `__builtin_intern(s)`
+
+Returns a `const char*` that is deduplicated and valid for the lifetime
+of the program. Runtime version of string literals basically.
+
+```C
+const char* make_name(int id){
+    char buf[64];
+    snprintf(buf, sizeof buf, "item_%d", id);
+    return __builtin_intern(buf);
+}
+```
+
 
 ## Interpreter-only
 
@@ -462,7 +475,14 @@ Comboing this with `__mixin` allows you to generate code.
 
 ```C
 const char* gen_vec(int n){
-    // n=3, ... build string: "typedef struct Vecn Vec3; struct Vec3 { float v0; float v1; float v2; };"
+    char buf[4096];
+    int off = 0;
+    off += snprintf(buf + off, sizeof buf - off,
+        "typedef struct Vec%d Vec%d; struct Vec%d {", n, n, n);
+    for(int i = 0; i < n; i++)
+        off += snprintf(buf + off, sizeof buf - off, " float v%d;", i);
+    off += snprintf(buf + off, sizeof buf - off, " };");
+    return __builtin_intern(buf);
 }
 #pragma procmacro gen_vec
 

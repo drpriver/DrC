@@ -273,7 +273,7 @@ int main(int argc, char** argv, char** envp){
     }
     err = cc_parse_all(&interp.parser);
     if(err) return err;
-    err = ci_resolve_refs(&interp);
+    err = ci_resolve_refs(&interp, 0);
     if(err) return err;
     if(repl){
         interp.parser.repl = 1;
@@ -317,7 +317,7 @@ int main(int argc, char** argv, char** envp){
                 }
                 err = cc_parse_all(&interp.parser);
                 if(err){ cc_parser_discard_input(&interp.parser); msb.cursor = 0; continue; }
-                err = ci_resolve_refs(&interp);
+                err = ci_resolve_refs(&interp, 0);
                 if(err){ msb.cursor = 0; continue; }
                 // Execute new statements
                 {
