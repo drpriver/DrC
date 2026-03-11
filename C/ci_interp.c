@@ -2035,7 +2035,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     }
     case CC_EXPR_ALLOCA: {
         uint64_t sz = 0;
-        int err = ci_interp_expr(ci, frame, expr->values[0], &sz, sizeof sz);
+        int err = ci_interp_expr(ci, frame, expr->lhs, &sz, sizeof sz);
         if(err) return err;
         sz = ci_read_uint(&sz, sizeof(size_t));
         CiAllocaBlock* block = Allocator_alloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
@@ -2053,7 +2053,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_INTERN: {
         // Evaluate the argument to get a char pointer.
         void* ptr = NULL;
-        int err = ci_interp_expr(ci, frame, expr->values[0], &ptr, sizeof ptr);
+        int err = ci_interp_expr(ci, frame, expr->lhs, &ptr, sizeof ptr);
         if(err) return err;
         const char* s = ptr;
         if(!s){

@@ -532,7 +532,7 @@ cc_parse_lambda(CcParser* p, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     CcQualType type = cc_intern_qualtype(p, head);
     CcToken peek;
     err = cc_peek(p, &peek);
-    f(err){
+    if(err){
         ma_cleanup(Atom)(&param_names, cc_allocator(p));
         return err;
     }
@@ -2335,9 +2335,9 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, p->void_star, 1);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, p->void_star, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->values[0] = sz;
+                    node->lhs = sz;
                     *out = node;
                     return 0;
                 }
@@ -2351,9 +2351,9 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                         return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_star, 1);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_star, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->values[0] = arg;
+                    node->lhs = arg;
                     *out = node;
                     return 0;
                 }
@@ -3934,6 +3934,32 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_EVAL_FLOAT:  return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.f};
                 case CC_EVAL_DOUBLE: return (CcEvalResult){.kind = CC_EVAL_INT, .i = !v.d};
                 case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return v;
+            }
+            return cc_eval_error();
+        }
+        case CC_EXPR_SUBSCRIPT: {
+            // Handle string_literal[constant_index]
+            CcExpr* arr = e->lhs;
+            if(arr->kind == CC_EXPR_VALUE && arr->str.length && arr->text){
+                CcEvalResult idx = cc_eval_expr(p, e->values[0]);
+                uint64_t i;
+                switch(idx.kind){
+                    case CC_EVAL_INT:
+                        if(idx.i < 0 || (uint64_t)idx.i >= arr->str.length)
+                            return cc_eval_error();
+                        i = (uint64_t)idx.i;
+                        break;
+                    case CC_EVAL_UINT:
+                        if(idx.u >= arr->str.length)
+                            return cc_eval_error();
+                        i = idx.u;
+                        break;
+                    default: return cc_eval_error();
+                }
+                unsigned char c = (unsigned char)arr->text[i];
+                if(cc_target(p)->char_is_signed)
+                    return (CcEvalResult){.kind = CC_EVAL_INT, .i = (signed char)c};
+                return (CcEvalResult){.kind = CC_EVAL_UINT, .u = c};
             }
             return cc_eval_error();
         }
