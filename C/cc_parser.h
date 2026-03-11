@@ -160,7 +160,8 @@ struct CcParser {
                const_char_star,
                void_star,
                const_void_star,
-               builtin_field;
+               builtin_field,
+               builtin_enumerator;
 };
 
 
@@ -186,6 +187,12 @@ typedef struct CiRtFields CiRtFields;
 struct CiRtFields {
     CiRtField * fields;
     size_t count;
+};
+
+typedef struct CiRtEnumerator CiRtEnumerator;
+struct CiRtEnumerator {
+    const char* name;
+    long long value;
 };
 
 #ifdef __clang__

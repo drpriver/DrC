@@ -126,6 +126,7 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_NONE = 0,
     // Properties (no parens, lhs = _Type expr)
     CC_TYPE_NAME,
+    CC_TYPE_TAG,
     CC_TYPE_IS_INTEGER,
     CC_TYPE_IS_FLOAT,
     CC_TYPE_IS_ARITHMETIC,
@@ -136,11 +137,16 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_IS_FUNCTION,
     CC_TYPE_IS_ENUM,
     CC_TYPE_IS_CONST,
+    CC_TYPE_IS_VOLATILE,
+    CC_TYPE_IS_ATOMIC,
     CC_TYPE_IS_UNSIGNED,
+    CC_TYPE_IS_SIGNED,
     CC_TYPE_IS_CALLABLE,
+    CC_TYPE_IS_VARIADIC,
     CC_TYPE_SIZEOF,
     CC_TYPE_ALIGNOF,
     CC_TYPE_POINTEE,
+    CC_TYPE_UNQUAL,
     CC_TYPE_COUNT,
     // Methods (with parens, lhs = _Type expr, values[0] = arg _Type expr)
     CC_TYPE_IS_CALLABLE_WITH,
@@ -148,6 +154,13 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_FIELD,
     CC_TYPE_FIELDS,
     CC_TYPE_PUSH_METHOD,
+    CC_TYPE_ENUMERATORS,
+    CC_TYPE_ENUMERATOR,
+    CC_TYPE_RETURN_TYPE,
+    CC_TYPE_PARAM_COUNT,
+    CC_TYPE_PARAM_TYPE,
+    CC_TYPE_ELEMENT_TYPE,
+    CC_TYPE_UNDERLYING_TYPE,
 };
 TYPEDEF_ENUM(CcTypeIntrospectionOp, uint32_t);
 

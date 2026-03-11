@@ -2955,10 +2955,16 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         result_type = p->builtin_field;
                         is_method = 1;
                         break;
+                    case CC_TYPE_ENUMERATOR:
+                        result_type = p->builtin_enumerator;
+                        is_method = 1;
+                        break;
+                    case CC_TYPE_ENUMERATORS:
                     case CC_TYPE_FIELDS:
-                        result_type = ccqt_basic(CCBT_unsigned_long);
+                        result_type = ccqt_basic(cc_target(p)->size_type);
                         break;
                     case CC_TYPE_NAME:
+                    case CC_TYPE_TAG:
                         result_type = p->const_char_star;
                         break;
                     case CC_TYPE_IS_INTEGER:
@@ -2971,17 +2977,30 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     case CC_TYPE_IS_FUNCTION:
                     case CC_TYPE_IS_ENUM:
                     case CC_TYPE_IS_CONST:
+                    case CC_TYPE_IS_VOLATILE:
+                    case CC_TYPE_IS_ATOMIC:
                     case CC_TYPE_IS_UNSIGNED:
+                    case CC_TYPE_IS_SIGNED:
                     case CC_TYPE_IS_CALLABLE:
+                    case CC_TYPE_IS_VARIADIC:
                         result_type = ccqt_basic(CCBT_bool);
                         break;
                     case CC_TYPE_SIZEOF:
                     case CC_TYPE_ALIGNOF:
                     case CC_TYPE_COUNT:
-                        result_type = ccqt_basic(CCBT_unsigned_long);
+                    case CC_TYPE_PARAM_COUNT:
+                        result_type = ccqt_basic(cc_target(p)->size_type);
                         break;
                     case CC_TYPE_POINTEE:
+                    case CC_TYPE_UNQUAL:
+                    case CC_TYPE_RETURN_TYPE:
+                    case CC_TYPE_ELEMENT_TYPE:
+                    case CC_TYPE_UNDERLYING_TYPE:
                         result_type = ccqt_basic(CCBT__Type);
+                        break;
+                    case CC_TYPE_PARAM_TYPE:
+                        result_type = ccqt_basic(CCBT__Type);
+                        is_method = 1;
                         break;
                     case CC_TYPE_IS_CALLABLE_WITH:
                     case CC_TYPE_CASTABLE_TO:
@@ -2993,7 +3012,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         CcExpr* arg_val;
-                        if(ti_op == CC_TYPE_FIELD){
+                        if(ti_op == CC_TYPE_FIELD || ti_op == CC_TYPE_PARAM_TYPE || ti_op == CC_TYPE_ENUMERATOR){
                             // Parse expression argument (index).
                             CcExpr* arg_expr;
                             err = cc_parse_assignment_expr(p, &arg_expr);
@@ -3989,10 +4008,18 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_TYPE_IS_FUNCTION:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_FUNCTION};
                 case CC_TYPE_IS_ENUM:       return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(qt) == CC_ENUM};
                 case CC_TYPE_IS_CONST:      return (CcEvalResult){.kind=CC_EVAL_INT, .i = qt.is_const};
+                case CC_TYPE_IS_VOLATILE:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = qt.is_volatile};
+                case CC_TYPE_IS_ATOMIC:     return (CcEvalResult){.kind=CC_EVAL_INT, .i = qt.is_atomic};
                 case CC_TYPE_IS_UNSIGNED:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !cc_target(p)->char_is_signed)};
+                case CC_TYPE_IS_SIGNED:    return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind) && !ccbt_is_unsigned(qt.basic.kind, !cc_target(p)->char_is_signed)};
                 case CC_TYPE_IS_CALLABLE: {
                     CcTypeKind k = ccqt_kind(qt);
                     return (CcEvalResult){.kind=CC_EVAL_INT, .i = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION)};
+                }
+                case CC_TYPE_IS_VARIADIC: {
+                    CcQualType ft = qt;
+                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic};
                 }
                 case CC_TYPE_SIZEOF: {
                     uint32_t sz;
@@ -4009,6 +4036,11 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_TYPE_POINTEE:
                     if(ccqt_kind(qt) != CC_POINTER) return cc_eval_error();
                     return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = ccqt_as_ptr(qt)->pointee};
+                case CC_TYPE_UNQUAL: {
+                    CcQualType uq = qt;
+                    uq.quals = 0;
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = uq};
+                }
                 case CC_TYPE_COUNT:
                     if(ccqt_kind(qt) != CC_ARRAY) return cc_eval_error();
                     return (CcEvalResult){.kind=CC_EVAL_UINT, .u = ccqt_as_array(qt)->length};
@@ -4036,9 +4068,45 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     CcStruct* s = ccqt_as_struct(qt);
                     return (CcEvalResult){.kind=CC_EVAL_INT, .i = s->field_count};
                 }
+                case CC_TYPE_RETURN_TYPE: {
+                    CcQualType ft = qt;
+                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                    if(ccqt_kind(ft) != CC_FUNCTION) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = ccqt_as_function(ft)->return_type};
+                }
+                case CC_TYPE_PARAM_COUNT: {
+                    CcQualType ft = qt;
+                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                    if(ccqt_kind(ft) != CC_FUNCTION) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_UINT, .u = ccqt_as_function(ft)->param_count};
+                }
+                case CC_TYPE_PARAM_TYPE: {
+                    CcQualType ft = qt;
+                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                    if(ccqt_kind(ft) != CC_FUNCTION) return cc_eval_error();
+                    CcFunction* f = ccqt_as_function(ft);
+                    CcEvalResult idx = cc_eval_expr(p, e->values[0]);
+                    if(idx.kind != CC_EVAL_INT && idx.kind != CC_EVAL_UINT) return cc_eval_error();
+                    uint64_t i = idx.kind == CC_EVAL_UINT ? idx.u : (uint64_t)idx.i;
+                    if(i >= f->param_count) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = f->params[i]};
+                }
+                case CC_TYPE_ELEMENT_TYPE:
+                    if(ccqt_kind(qt) != CC_ARRAY) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = ccqt_as_array(qt)->element};
+                case CC_TYPE_UNDERLYING_TYPE:
+                    if(ccqt_kind(qt) != CC_ENUM) return cc_eval_error();
+                    return (CcEvalResult){.kind=CC_EVAL_TYPE, .type = ccqt_as_enum(qt)->underlying};
+                case CC_TYPE_ENUMERATORS: {
+                    if(ccqt_kind(qt) != CC_ENUM) return cc_eval_error();
+                    CcEnum* e2 = ccqt_as_enum(qt);
+                    return (CcEvalResult){.kind=CC_EVAL_UINT, .u = e2->enumerator_count};
+                }
                 case CC_TYPE_PUSH_METHOD: // handled at parse time, shouldn't reach here
+                case CC_TYPE_ENUMERATOR: // can't constant-fold (returns struct)
                 case CC_TYPE_FIELD:
                 case CC_TYPE_NAME:
+                case CC_TYPE_TAG:
                 case CC_TYPE_NONE:
                     return cc_eval_error(); // can't constant-fold
             }
@@ -8588,6 +8656,41 @@ cc_define_builtin_types(CcParser* p){
         if(err) return CC_OOM_ERROR;
     }
 
+    {
+        struct f {StringView name; CcQualType type; size_t offset;} enuminfos[] = {
+            {SV("name"), p->const_char_star, offsetof(CiRtEnumerator, name)},
+            {SV("value"), {.basic.kind=CCBT_long_long}, offsetof(CiRtEnumerator, value)},
+        };
+        CcField* fields = Allocator_zalloc(al, (sizeof enuminfos / sizeof enuminfos[0]) * sizeof *fields);
+        if(!fields) return CC_OOM_ERROR;
+        for(size_t i = 0; i < sizeof enuminfos / sizeof enuminfos[0]; i++){
+            struct f* f = &enuminfos[i];
+            Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
+            if(!a) return CC_OOM_ERROR;
+            CcField* field = &fields[i];
+            field->type = f->type;
+            field->name = a;
+            field->offset = (unsigned)f->offset;
+        }
+        Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Enumerator");
+        if(!name) return CC_OOM_ERROR;
+        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        if(!s) return CC_OOM_ERROR;
+        *s = (CcStruct){
+            .kind = CC_STRUCT,
+            .name = name,
+            .field_count = sizeof enuminfos / sizeof enuminfos[0],
+            .fields = fields,
+        };
+        err = cc_compute_struct_layout(p, s, 0);
+        if(err) return err;
+        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        if(err) return CC_OOM_ERROR;
+        p->builtin_enumerator = (CcQualType){.bits = (uintptr_t)s};
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_enumerator);
+        if(err) return CC_OOM_ERROR;
+    }
+
     // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
     Atom int128_name = AT_atomize(p->cpp.at, "__int128_t", 10);
     Atom uint128_name = AT_atomize(p->cpp.at, "__uint128_t", 11);
@@ -8666,6 +8769,7 @@ cc_define_builtin_types(CcParser* p){
     {
         static const struct { StringView name; CcTypeIntrospectionOp op; } typeintro[] = {
             {SV("name"), CC_TYPE_NAME},
+            {SV("tag"), CC_TYPE_TAG},
             {SV("is_integer"), CC_TYPE_IS_INTEGER},
             {SV("is_float"), CC_TYPE_IS_FLOAT},
             {SV("is_arithmetic"), CC_TYPE_IS_ARITHMETIC},
@@ -8676,17 +8780,29 @@ cc_define_builtin_types(CcParser* p){
             {SV("is_function"), CC_TYPE_IS_FUNCTION},
             {SV("is_enum"), CC_TYPE_IS_ENUM},
             {SV("is_const"), CC_TYPE_IS_CONST},
+            {SV("is_volatile"), CC_TYPE_IS_VOLATILE},
+            {SV("is_atomic"), CC_TYPE_IS_ATOMIC},
             {SV("is_unsigned"), CC_TYPE_IS_UNSIGNED},
+            {SV("is_signed"), CC_TYPE_IS_SIGNED},
             {SV("is_callable"), CC_TYPE_IS_CALLABLE},
+            {SV("is_variadic"), CC_TYPE_IS_VARIADIC},
             {SV("sizeof_"), CC_TYPE_SIZEOF},
             {SV("alignof_"), CC_TYPE_ALIGNOF},
             {SV("pointee"), CC_TYPE_POINTEE},
+            {SV("unqual"), CC_TYPE_UNQUAL},
             {SV("count"), CC_TYPE_COUNT},
             {SV("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
             {SV("is_castable_to"), CC_TYPE_CASTABLE_TO},
             {SV("field"), CC_TYPE_FIELD}, // field name or index;
             {SV("fields"), CC_TYPE_FIELDS},
             {SV("push_method"), CC_TYPE_PUSH_METHOD},
+            {SV("enumerators"), CC_TYPE_ENUMERATORS},
+            {SV("enumerator"), CC_TYPE_ENUMERATOR},
+            {SV("return_type"), CC_TYPE_RETURN_TYPE},
+            {SV("param_count"), CC_TYPE_PARAM_COUNT},
+            {SV("param_type"), CC_TYPE_PARAM_TYPE},
+            {SV("element_type"), CC_TYPE_ELEMENT_TYPE},
+            {SV("underlying_type"), CC_TYPE_UNDERLYING_TYPE},
         };
         for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
             Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);

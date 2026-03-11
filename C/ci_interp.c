@@ -1787,6 +1787,15 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 *(const char**)result = a->data;
                 return 0;
             }
+            case CC_TYPE_TAG: {
+                Atom tag = 0;
+                CcTypeKind k = ccqt_kind(qt);
+                if(k == CC_STRUCT)     tag = ccqt_as_struct(qt)->name;
+                else if(k == CC_UNION) tag = ccqt_as_union(qt)->name;
+                else if(k == CC_ENUM)  tag = ccqt_as_enum(qt)->name;
+                *(const char**)result = tag ? tag->data : "";
+                return 0;
+            }
             case CC_TYPE_IS_INTEGER: {
                 *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind);
                 return 0;
@@ -1827,8 +1836,20 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 *(_Bool*)result = qt.is_const;
                 return 0;
             }
+            case CC_TYPE_IS_VOLATILE: {
+                *(_Bool*)result = qt.is_volatile;
+                return 0;
+            }
+            case CC_TYPE_IS_ATOMIC: {
+                *(_Bool*)result = qt.is_atomic;
+                return 0;
+            }
             case CC_TYPE_IS_UNSIGNED: {
                 *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
+                return 0;
+            }
+            case CC_TYPE_IS_SIGNED: {
+                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind) && !ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
                 return 0;
             }
             case CC_TYPE_SIZEOF: {
@@ -1855,6 +1876,18 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_IS_CALLABLE: {
                 CcTypeKind k = ccqt_kind(qt);
                 *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
+                return 0;
+            }
+            case CC_TYPE_IS_VARIADIC: {
+                CcQualType ft = qt;
+                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                *(_Bool*)result = ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic;
+                return 0;
+            }
+            case CC_TYPE_UNQUAL: {
+                CcQualType uq = qt;
+                uq.quals = 0;
+                *(uintptr_t*)result = uq.bits;
                 return 0;
             }
             case CC_TYPE_COUNT: {
@@ -1908,6 +1941,70 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             case CC_TYPE_PUSH_METHOD:
                 return ci_error(ci, expr->loc, "push_method should be handled at parse time");
+            case CC_TYPE_ENUMERATORS: {
+                if(ccqt_kind(qt) != CC_ENUM)
+                    return ci_error(ci, expr->loc, "_Type.enumerators: not an enum type");
+                CcEnum* en = ccqt_as_enum(qt);
+                *(unsigned long*)result = en->enumerator_count;
+                return 0;
+            }
+            case CC_TYPE_ENUMERATOR: {
+                if(ccqt_kind(qt) != CC_ENUM)
+                    return ci_error(ci, expr->loc, "_Type.enumerator: not an enum type");
+                CcEnum* en = ccqt_as_enum(qt);
+                uintptr_t idx = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
+                if(err) return err;
+                if(idx >= en->enumerator_count)
+                    return ci_error(ci, expr->loc, "_Type.enumerator: index out of range");
+                CcEnumerator* e2 = en->enumerators[idx];
+                CiRtEnumerator* out = (CiRtEnumerator*)result;
+                out->name = e2->name ? e2->name->data : "";
+                out->value = (long long)e2->value;
+                return 0;
+            }
+            case CC_TYPE_RETURN_TYPE: {
+                CcQualType ft = qt;
+                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                if(ccqt_kind(ft) != CC_FUNCTION)
+                    return ci_error(ci, expr->loc, "_Type.return_type: not a function type");
+                *(uintptr_t*)result = ccqt_as_function(ft)->return_type.bits;
+                return 0;
+            }
+            case CC_TYPE_PARAM_COUNT: {
+                CcQualType ft = qt;
+                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                if(ccqt_kind(ft) != CC_FUNCTION)
+                    return ci_error(ci, expr->loc, "_Type.param_count: not a function type");
+                *(unsigned long*)result = ccqt_as_function(ft)->param_count;
+                return 0;
+            }
+            case CC_TYPE_PARAM_TYPE: {
+                CcQualType ft = qt;
+                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+                if(ccqt_kind(ft) != CC_FUNCTION)
+                    return ci_error(ci, expr->loc, "_Type.param_type: not a function type");
+                CcFunction* f = ccqt_as_function(ft);
+                uintptr_t idx = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
+                if(err) return err;
+                if(idx >= f->param_count)
+                    return ci_error(ci, expr->loc, "_Type.param_type: index out of range");
+                *(uintptr_t*)result = f->params[idx].bits;
+                return 0;
+            }
+            case CC_TYPE_ELEMENT_TYPE: {
+                if(ccqt_kind(qt) != CC_ARRAY)
+                    return ci_error(ci, expr->loc, "_Type.element_type: not an array type");
+                *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
+                return 0;
+            }
+            case CC_TYPE_UNDERLYING_TYPE: {
+                if(ccqt_kind(qt) != CC_ENUM)
+                    return ci_error(ci, expr->loc, "_Type.underlying_type: not an enum type");
+                *(uintptr_t*)result = ccqt_as_enum(qt)->underlying.bits;
+                return 0;
+            }
             case CC_TYPE_FIELDS:{
                 CcTypeKind k = ccqt_kind(qt);
                 if(k != CC_STRUCT && k != CC_UNION)
