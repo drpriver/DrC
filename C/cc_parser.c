@@ -2754,8 +2754,11 @@ cc_parse_Generic(CcParser* p, CcExpr*_Nullable*_Nonnull out){
         if(tok.type != CC_PUNCTUATOR || tok.punct.punct != ',')
             return cc_error(p, tok.loc, "expected ',' or ')' in _Generic");
     }
-    if(result)
+    if(result){
         *out = result;
+        if(default_result)
+            cc_release_expr(p, default_result);
+    }
     else if(default_result)
         *out = default_result;
     else
@@ -7291,6 +7294,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             if(!expr)
                                 return cc_error(p, tok.loc, "Expected expression in typeof");
                             *base_type = expr->type;
+                            cc_release_expr(p, expr);
                         }
                         if(unqual){
                             base_type->is_const = 0;
