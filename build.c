@@ -1,4 +1,52 @@
 //usr/bin/cc "$0" -o build && exec ./build "$@" -b Bin || exit
+//
+// Copyright © 2026-2026, David Priver <david@davidpriver.com>
+//
+// Nobuild build script.
+//
+// Bootstrap with `cc build.c -o build && ./build -b Bin`
+// and then just `./build` from then on.
+//
+// Do `./build --help` to see full options.
+//
+// There's some support for generating shell completions,
+// but you need an accompanying shell function.
+//
+// I have a fish function like:
+//
+// ```fish
+// function mk --description 'Runs ./build if it exists and is executable, otherwise runs make'
+//     if test -f ./build; and test -x ./build
+//
+//         ./build $argv
+//     else
+//         command make $argv
+//     end
+// end
+// ```
+//
+// and in ~/.config/fish/completions/mk.fish:
+// ```fish
+// function __mk_update_completions --on-variable PWD
+//     complete -c mk -e
+//     if test -f ./build -a -x ./build
+//         ./build --no-rebuild --fish-completions 2>/dev/null | string replace -r '^complete -c \\S+' 'complete -c mk' | while read -l line
+//             eval $line
+//         end
+//         ./build --no-rebuild fish-completions 2>/dev/null | string replace -r '^complete -c \\S+' 'complete -c mk' | while read -l line
+//             eval $line
+//         end
+//     else
+//         complete -c mk --wraps make
+//     end
+// end
+// __mk_update_completions
+// ```
+// So I can just type `mk` in my terminal and it just werks even when I go to other nobuild projects.
+//
+// Yeah you can probably pwn me by putting a ./build script in an arbitrary
+// directory, oh well.
+//
 #include "Drp/compiler_warnings.h"
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"

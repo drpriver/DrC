@@ -19,7 +19,10 @@ The cpp supports GNU named variadic parameters to support pre-historic C code.
 #define LOG(fmt, ...) fprintf(stderr, fmt, __VA_ARGS__)
 ```
 
-#### `#include_oneof`
+#### `, ## __VA_ARGS__`
+The comma is deleted if `__VA_ARGS__` is empty.
+
+### `#include_oneof`
 
 If you've ever written code like:
 ```C
@@ -41,13 +44,10 @@ Each one will be tried in sequence, emitting an error if none can be found.
 
 Actually, `#include` also works this way now, get wrecked standard committee.
 
-#### `, ## __VA_ARGS__`
-The comma is deleted if `__VA_ARGS__` is empty.
-
 ### `__VA_COUNT__`
 This special token expands in a variadic macro the number of args passed in the variadic slot.
 
-This makes it a lot easier to overload by arity if you need that
+This makes it a lot easier to overload by arity if you need that.
 
 ```C
 #include <stdio.h>
@@ -73,7 +73,7 @@ LAST(a, b, c)  // -> c
 
 Multiline macros can be ergonomically defined using `#defblock` instead of
 `#define`. `#defblock` is terminated by the next `#endblock`. Preprocessor
-directives within a defblock is undefined behavior (as the current
+directives within a defblock are undefined behavior, as the current
 implementation does not account for `#defblock` when scanning for `#endif` for
 example.
 
@@ -144,7 +144,7 @@ __if(0, bad, good)           // -> good
 ```
 
 ### `__ident(strings...)`
-`__ident()`, also spelled `__IDENT__()`, creates an identifier token that is formed by concating the given strings. This allows you to construct an identifier token that contains characters not normally allowed in identifiers, such as spaces or periods.
+`__ident()`, also spelled `__IDENT__()`, creates an identifier token that is formed by concatenating the given strings. This allows you to construct an identifier token that contains characters not normally allowed in identifiers, such as spaces or periods.
 
 ```C
 #define S_(x) #x
@@ -159,6 +159,7 @@ DA(int) // -> a single identifier token "DA.int"
 preprocessing time and returns a string literal.
 
 ```C
+__format("item_%d", 42) // -> "item_42"
 ```
 
 ### `__print(...)`
@@ -223,6 +224,12 @@ after parsing, so it works with `sizeof`, type queries, etc. Declarations in
 the taken branch are injected into the enclosing scope (no new scope).
 
 ```C
+static if(sizeof(void*) == 8){
+    typedef unsigned long uintptr;
+}
+else {
+    typedef unsigned int uintptr;
+}
 ```
 
 Combos with type introspection:
@@ -241,8 +248,8 @@ else {
 
 ### Methods
 
-Functions can be defined directly inside structs and unions. They do not affect the struct's size or layout. The first parameter
-is the receiver. Methods are called with `.` syntax and the receiver is
+Functions can be defined directly inside structs and unions. They do not
+affect the struct's size or layout. The first parameter is the receiver. Methods are called with `.` syntax and the receiver is
 passed automatically.
 
 ```C
@@ -291,7 +298,7 @@ dp.dump();
 If `.member` doesn't find anything and there is a matching function
 in scope that either takes the first arg, pointer to first arg or deref of first arg,
 we rewrite it into a call to that function with the target of the dot expression
-as the first arg (with either `&` or `*` applied as need).
+as the first arg (with either `&` or `*` applied as needed).
 
 ```C
 #include <stdio.h>
@@ -302,7 +309,7 @@ struct v2f { float x, y; };
 v2f add(v2f a, v2f b){ return (v2f){a.x+b.x, a.y+b.y}; }
 float dot(v2f a, v2f b){ return a.x*b.x + a.y*b.y; }
 void normalize(v2f* v){
-    float len = dot(*v, *v);
+    float len = sqrtf(dot(*v, *v));
     v->x /= len; v->y /= len;
 }
 
@@ -370,7 +377,7 @@ if(T.is_integer) printf("yes\n");
  | `.is_callable`     | `_Bool`       | True for functions and function pointers      |
  | `.is_variadic`     | `_Bool`       | True for variadic functions/function pointers |
  | `.pointee`         | `_Type`       | Pointed-to type (pointers only)               |
- | `.unqual`          | `_Type`       | Type with qualifiers  removed                 |
+ | `.unqual`          | `_Type`       | Type with qualifiers removed                  |
  | `.count`           | `size_t`      | Element count (arrays only)                   |
  | `.fields`          | `size_t`      | Number of fields (structs/unions)             |
  | `.element_type`    | `_Type`       | Element type (arrays only)                    |
@@ -445,11 +452,11 @@ const char* gen_print(_Type T){
 }
 #pragma procmacro gen_print
 
-struct Player { const char* name; int hp; };
-__mixin(gen_print(struct Player));
+struct Rect { int x, y, w, h; };
+__mixin(gen_print(struct Rect));
 
-struct Player p = {"Alice", 100};
-p.print();
+struct Rect r = {0, 0, 100, 200};
+r.print();
 ```
 
 #### Types as expressions
@@ -463,6 +470,7 @@ void print(_Type t){printf("%s\n", t.name);}
 // int.print();
 // parens disambiguate.
 (int).print();
+```
 
 ### Top-level statements
 
@@ -492,7 +500,7 @@ clamp([2] = 100, [1] = 0, [0] = 42);
 
 ### Lambdas
 
-Anonymous functions using `type(params){ body }` syntax. The return type
+Captureless anonymous functions using `type(params){ body }` syntax. The return type
 starts the expression, followed by the parameter list and a braced body.
 
 ```C
@@ -564,7 +572,7 @@ Functions declared but not defined are automatically resolved against loaded
 native libraries at call time using libffi.
 
 This means you can write a script that `#include`s a library's headers and
-immediately start using it.
+immediately starts using it.
 
 ### `__ARGC__` / `__argv(n [, default])`
 `__ARGC__` expands to the number of command-line arguments passed to the

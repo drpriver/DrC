@@ -1,0 +1,191 @@
+Table of Contents::md #noid
+  ::toc
+DrC::title
+
+DrC is a C Preprocessor/Parser/Interpreter targeting C2y with a boatload of
+[extensions | extensions].  It can interpret real C projects (including itself)
+and has seamless interfacing with native dynamic libraries.  `#include` a
+header and `#pragma lib` it and you can call native C functions from your
+interpreted C code.
+
+A [REPL mode] is also offered.
+
+After building, try it out with `Bin/cc [Samples/hello.c]` or peruse the other
+[Samples].
+
+Major Features Include:
+- [C Interpreter]
+- [Bindings-Free FFI]
+- [Native Threads]
+- [REPL mode]
+- [First Class Types]
+- [Static If]
+- [Procmacros]
+- [Methods and FUCS]
+- [Named Arguments]
+- [Crazy Preprocessor]
+- [Embeddable]
+- [Self Hosting]
+
+  ::links
+    extensions = EXTENSIONS.md
+    Samples = Samples
+    Samples/hello.c = Samples/hello.c
+
+Building::md
+  Nobuild::details
+    This project uses a "nobuild" build system. Bootstrap the build system by
+    doing something like:
+    ::pre
+      $ cc build.c -o build && ./build -b Bin && ./build tests
+    From then on, you can just build using the build program. If you edit it or
+    any of its deps, it will rebuild itself.
+
+    The build system remembers the previous flags, like <tt>-O</tt>. If you
+    change those or switch them off, it knows to rebuild any programs built
+    with those flags.
+
+    See [build.c] for more info.
+    ::links
+      build.c = build.c
+
+  Makefile::details
+    If you like using make, the makefile will bootstrap the build system for you.
+
+  build.bat::details
+    You can bootstrap the build system on windows using build.bat. This is purely convenience.
+
+  Dependencies::details
+    Depends on libffi. Assumes you can just do `-lffi` and that just works. If
+    you are on windows, that sucks. It will work there but getting it so it
+    "just werks" on windows is not worth the hassle.
+
+C Interpreter::md
+  C scripts, top level statements, no separate compile and run steps, no intermediate files.
+REPL mode::md
+  Run `Bin/cc` with `--repl` for a REPL experience, with interactive function calls etc.
+  ::pre
+    $ Bin/cc --repl
+    cc> #include <stdio.h>
+    ... int x = 3;
+    ... for(int i = 0; i < 4; i++) printf("x = %d\n", x);
+    ...
+    x = 3
+    x = 3
+    x = 3
+    x = 3
+    cc> ^D
+Bindings-Free FFI::md
+  `#include` real C headers, `#pragma lib` to load them. Also supports `#pragma pkg_config` to populate include paths, lib paths etc.
+  ::pre
+    #pragma pkg_config "sdl2" // could ifdef for non-pkg-config systems
+    #pragma lib "SDL2" // load the library
+    #include <SDL2/SDL.h> <SDL.h> // extension, tries each in order
+    // top level statements
+    SDL_Init(SDL_INIT_VIDEO);
+    // Call SDL funcs from your scripts now!
+Native Threads::md
+  Related to above, you can call actual system APIs to create threads with interpreted code.
+  ::pre
+    #include <stdio.h>
+    #include <pthread.h>
+    pthread_t t;
+    pthread_create(&t, NULL, void*(void* arg){
+      printf("Hello from a thread! %p\n", (void*)pthread_self());
+      return NULL;
+    }, NULL);
+    pthread_join(t, NULL);
+  This example also shows off our captureless-lambda extension.
+First Class Types::md
+  `_Type T = int; printf("%s\n", T.name)`, etc. Pass them as values, reflect over them, see the [json demo]
+  ::links
+    json demo = Samples/Extensions/json_parse.c
+Static If::md
+  Include or exclude statements/decls based on compile time expressions.
+  ::pre
+    static if(__shell("date")[0] == 'W'){
+      enum {IT_IS_WEDNESDAY=1};
+    }
+    printf("IT_IS_WEDNESDAY: %d\n", IT_IS_WEDNESDAY); // only compiles on wednesday
+  More seriously:
+  ::pre
+    #define S_(x) #x
+    #define S(x) S_(x)
+    // __ident produces a single identifier token
+    // from catted strings, even if it has non-identifier characters.
+    #define Optional(T) __ident("Optional." S(T))
+    #defblock OPTIONAL_DEF(T)
+    typedef struct Optional(T) Optional(T);
+    static if(T.is_pointer){
+        // use NULL as sentinel
+        struct Optional(T){
+            T value;
+            _Bool has_value(Optional(T)* self){ return self.value; }
+        };
+    }
+    else {
+        struct Optional(T){
+            T value;
+            _Bool _has_value;
+            _Bool has_value(Optional(T)* self){ return self._has_value; }
+        };
+    }
+    #endblock
+    OPTIONAL_DEF(const char*);
+    OPTIONAL_DEF(int);
+    _Static_assert(sizeof(Optional(const char*)) == sizeof(const char*));
+    _Static_assert(sizeof(Optional(int)) > sizeof(int));
+  Unlike `#if`, `static if` has access to C-level information without the boilerplate of a procmacro.
+
+Procmacros::md
+  Register a C function as a macro, call it as a macro, outputs get turned into pp-tokens, you can mix them into your source file for code generation and other things.
+
+  Also, [power up preprocessor conditionals]:
+  ::links
+    power up preprocessor conditionals = Samples/Extensions/procmacro-if.c
+  ::pre
+    _Bool IS_POINTER(_Type T){ return T.is_pointer;}
+    #pragma procmacro IS_POINTER
+
+    #define T void*
+    #if IS_POINTER(T)
+    #pragma message T "is a pointer"
+    #else
+    #pragma message T "is not a pointer"
+    #endif
+
+    #undef T
+    #define T int
+    #if IS_POINTER(T)
+    #pragma message T "is a pointer"
+    #else
+    #pragma message T "is not a pointer"
+    #endif
+Methods and FUCS::md
+  Define methods in struct body, auto deref, `.` and `->` merged, FUCS: Function Uniform Call Syntax to have `.func` notation with free functions.
+Named Arguments::md
+  Same syntax as designated initializers.
+  ::pre
+    int func_with_lotta_bools(_Bool jump, _Bool skip, _Bool hop);
+    func_with_lotta_bools(.hop = 1, .jump = 0, .skip = 1); // out of order
+
+  Numbered args are also supported, but honestly aren't that useful, but whatever.
+
+Crazy Preprocessor::md
+  There's a bunch of cool preprocessor macros like `__mixin`, `__map`, `#defblock`.
+  There's also an API for registering your own builtin macros if you are embedding this
+  interpreter.
+
+Embeddable::md
+  This will support being embedded. WIP. No global state.
+
+Self Hosting::md
+  The C interpreter is able to run itself.
+
+  ::pre
+    $ Bin/cc cc.c Samples/hello.c
+    Hello world
+    $ Bin/cc cc.c cc.c Samples/hello.c
+    Hello world
+::css #import
+  README.css
