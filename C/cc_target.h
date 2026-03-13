@@ -542,7 +542,7 @@ cc_target_x86_64_windows(void){
         .int64_type   = CCBT_long_long,
         .sig_atomic_type = CCBT_int,
         .int_fast8_type  = CCBT_signed_char,
-        .int_fast16_type = CCBT_short,
+        .int_fast16_type = CCBT_int,
         .int_fast32_type = CCBT_int,
         .int_fast64_type = CCBT_long_long,
         .max_align = 8,
