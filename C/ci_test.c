@@ -2175,6 +2175,13 @@ TestFunction(test_cross_target){
             .exit_code = 4, // both fit in one 4-byte unit
             .target = CC_TARGET_X86_64_LINUX,
         },
+        {
+            "enum", __LINE__,
+            SV("enum Foo { X } ; typedef struct { enum Foo f : 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // enum then both fit in one 4-byte unit
+            .target = CC_TARGET_X86_64_LINUX,
+        },
     };
     int err;
     static int idx = 0;

@@ -671,6 +671,7 @@ static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
     #error "Unknown native target"
 #endif
 
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

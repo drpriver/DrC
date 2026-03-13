@@ -155,6 +155,13 @@ struct CcField {
     SrcLoc loc;
 };
 
+// Should probably be in target, but target depends on this header.
+enum CcSysVEightByte TYPED_ENUM(uint32_t){
+    CC_SYSV_SSE,
+    CC_SYSV_INTEGER,
+};
+TYPEDEF_ENUM(CcSysVEightByte, uint32_t);
+
 typedef struct CcStruct CcStruct;
 struct CcStruct {
     _Alignas(8) union {
@@ -166,10 +173,30 @@ struct CcStruct {
                      has_fam:       1,
                      _padding:     25;
         };
+        struct {
+            CcTypeKind kind:        4;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     has_fam:       1,
+                     _padding:     22,
+                   is_memory_class: 1;
+            CcSysVEightByte class0: 1,
+                            class1: 1;
+        } sysv;
+        struct {
+            CcTypeKind kind:        4;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     has_fam:       1,
+                     _padding:     17,
+                     hfa_type:      5,
+                     hfa_count:     3; // 0-4, 0 means not hfa
+            _Static_assert(CCBT_COUNT <= (1<<5)-1, "");
+        } arm64;
     };
+    uint32_t size;
     Atom name;
     SrcLoc loc;
-    uint32_t size;
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Null_unspecified fields;
@@ -182,13 +209,33 @@ struct CcUnion {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1;
-            uint32_t _padding:      27;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     _padding:     28;
         };
+        struct {
+            CcTypeKind kind:        4;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     has_fam:       1,
+                     _padding:     22,
+                   is_memory_class: 1;
+            CcSysVEightByte class0: 1,
+                            class1: 1;
+        } sysv;
+        struct {
+            CcTypeKind kind:        4;
+            uint32_t is_incomplete: 1,
+                     packed:        1,
+                     _padding:     18,
+                     hfa_type:      5,
+                     hfa_count:     3; // 0-4, 0 means not hfa
+            _Static_assert(CCBT_COUNT <= (1<<5)-1, "");
+        } arm64;
     };
+    uint32_t size;
     Atom name;
     SrcLoc loc;
-    uint32_t size;
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Nullable fields;
