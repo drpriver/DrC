@@ -1590,9 +1590,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         CcVaOp op = expr->va.op;
         switch(op){
         case CC_VA_START: {
-            void* ap_addr;
-            size_t ap_size;
-            int err = ci_interp_lvalue(ci, frame, expr->lhs, &ap_addr, &ap_size);
+            // expr->lhs is a pointer to the va_list data.
+            void* ap_ptr = NULL;
+            int err = ci_interp_expr(ci, frame, expr->lhs, &ap_ptr, sizeof ap_ptr);
             if(err) return err;
             if(!frame->varargs_buf)
                 return ci_error(ci, expr->loc, "va_start used in non-variadic function");
@@ -1600,14 +1600,12 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TARGET_AARCH64_MACOS:
             case CC_TARGET_X86_64_WINDOWS:
             case CC_TARGET_TEST: {
-                // va_list is a pointer.
                 void* va_ptr = frame->varargs_buf;
-                memcpy(ap_addr, &va_ptr, sizeof(void*));
+                memcpy(ap_ptr, &va_ptr, sizeof(void*));
                 return 0;
             }
             case CC_TARGET_AARCH64_LINUX: {
-                // Mark all register slots as used so va_arg always reads from __stack.
-                CiAapcs64VaList* va = ap_addr;
+                CiAapcs64VaList* va = ap_ptr;
                 va->__stack = frame->varargs_buf;
                 va->__gr_top = NULL;
                 va->__vr_top = NULL;
@@ -1617,8 +1615,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             case CC_TARGET_X86_64_LINUX:
             case CC_TARGET_X86_64_MACOS: {
-                // Mark all register slots as used so va_arg always reads from overflow.
-                CiSysvVaListTag* tag = ap_addr;
+                CiSysvVaListTag* tag = ap_ptr;
                 tag->gp_offset = 48;
                 tag->fp_offset = 48 + 128;
                 tag->overflow_arg_area = frame->varargs_buf;
@@ -1633,9 +1630,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         case CC_VA_END:
             return 0;
         case CC_VA_ARG: {
-            void* ap_addr;
-            size_t ap_size;
-            int err = ci_interp_lvalue(ci, frame, expr->lhs, &ap_addr, &ap_size);
+            // expr->lhs is a pointer to the va_list data.
+            void* ap_ptr = NULL;
+            int err = ci_interp_expr(ci, frame, expr->lhs, &ap_ptr, sizeof ap_ptr);
             if(err) return err;
             uint32_t sz;
             err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -1645,20 +1642,19 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TARGET_AARCH64_MACOS:
             case CC_TARGET_X86_64_WINDOWS:
             case CC_TARGET_TEST: {
-                // va_list is a pointer.
                 void* cur;
-                memcpy(&cur, ap_addr, sizeof(void*));
+                memcpy(&cur, ap_ptr, sizeof(void*));
                 if(result != ci_discard_buf){
                     if(sz > size)
                         return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
                     memcpy(result, cur, sz);
                 }
                 cur = (char*)cur + advance;
-                memcpy(ap_addr, &cur, sizeof(void*));
+                memcpy(ap_ptr, &cur, sizeof(void*));
                 return 0;
             }
             case CC_TARGET_AARCH64_LINUX: {
-                CiAapcs64VaList* va = ap_addr;
+                CiAapcs64VaList* va = ap_ptr;
                 _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
                 const void* src;
                 if(is_fp){
@@ -1690,7 +1686,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             case CC_TARGET_X86_64_LINUX:
             case CC_TARGET_X86_64_MACOS: {
-                CiSysvVaListTag* tag = ap_addr;
+                CiSysvVaListTag* tag = ap_ptr;
                 _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
                 const void* src;
                 if(is_fp){
@@ -1726,38 +1722,26 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_error(ci, expr->loc, "va_arg: unsupported target");
         }
         case CC_VA_COPY: {
-            void* dest_addr;
-            size_t dest_size;
-            int err = ci_interp_lvalue(ci, frame, expr->lhs, &dest_addr, &dest_size);
+            // Both operands are pointers to va_list data.
+            void* dest_ptr = NULL;
+            int err = ci_interp_expr(ci, frame, expr->lhs, &dest_ptr, sizeof dest_ptr);
+            if(err) return err;
+            void* src_ptr = NULL;
+            err = ci_interp_expr(ci, frame, expr->values[0], &src_ptr, sizeof src_ptr);
             if(err) return err;
             switch(ci_target(ci)->target){
             case CC_TARGET_AARCH64_MACOS:
             case CC_TARGET_X86_64_WINDOWS:
-            case CC_TARGET_TEST: {
-                // va_list is a pointer.
-                void* src_val;
-                err = ci_interp_expr(ci, frame, expr->values[0], &src_val, sizeof src_val);
-                if(err) return err;
-                memcpy(dest_addr, &src_val, sizeof(void*));
+            case CC_TARGET_TEST:
+                memcpy(dest_ptr, src_ptr, sizeof(void*));
                 return 0;
-            }
-            case CC_TARGET_AARCH64_LINUX: {
-                void* src_addr;
-                size_t src_size;
-                err = ci_interp_lvalue(ci, frame, expr->values[0], &src_addr, &src_size);
-                if(err) return err;
-                *(CiAapcs64VaList*)dest_addr = *(CiAapcs64VaList*)src_addr;
+            case CC_TARGET_AARCH64_LINUX:
+                *(CiAapcs64VaList*)dest_ptr = *(CiAapcs64VaList*)src_ptr;
                 return 0;
-            }
             case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS: {
-                void* src_addr;
-                size_t src_size;
-                err = ci_interp_lvalue(ci, frame, expr->values[0], &src_addr, &src_size);
-                if(err) return err;
-                *(CiSysvVaListTag*)dest_addr = *(CiSysvVaListTag*)src_addr;
+            case CC_TARGET_X86_64_MACOS:
+                *(CiSysvVaListTag*)dest_ptr = *(CiSysvVaListTag*)src_ptr;
                 return 0;
-            }
             case CC_TARGET_COUNT:
                 break;
             }

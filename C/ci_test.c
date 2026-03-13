@@ -1895,6 +1895,14 @@ TestFunction(test_interpreter){
                "return (int)(v.x * 10 + v.y);\n"),
             .exit_code = 21,
         },
+        {
+            "array decay", __LINE__,
+            SV("typedef int I[1];\n"
+               "I i;\n"
+               "int* id(I i){ return i;}\n"
+               "return i == id(i);\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
@@ -1980,11 +1988,191 @@ TestFunction(test_interpreter){
     }
     TESTEND();
 }
+TestFunction(test_cross_target){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    struct tc {
+        const char* name; int line;
+        StringView program;
+        int exit_code;
+        _Bool skip;
+        CcTarget target;
+    } testcases[] = {
+        {
+            "sysv va_list param", __LINE__,
+            SV(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "#define va_copy __builtin_va_copy\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap, int);\n"
+               "    }\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "sysv va_copy param", __LINE__,
+            SV(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "#define va_copy __builtin_va_copy\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    va_list ap2;\n"
+               "    va_copy(ap2, ap);\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap2, int);\n"
+               "    }\n"
+               "    va_end(ap2);\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "aarch64 linux va_list param", __LINE__,
+            SV(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap, int);\n"
+               "    }\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = CC_TARGET_AARCH64_LINUX,
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        if(tc->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[tc->target](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
+        if(err) {TestReport("failed to include"); goto finally;}
+        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        CiInterpFrame* frame = &interp.top_frame;
+        frame->stmts = interp.parser.toplevel_statements.data;
+        frame->stmt_count = interp.parser.toplevel_statements.count;
+        while(frame->pc < frame->stmt_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) goto finally;
+        }
+        TEST_stats.executed++;
+        if(interp.exit_code != tc->exit_code){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
+        }
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();

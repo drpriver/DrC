@@ -38,6 +38,7 @@ LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
 #define cc_unreachable(p, loc, msg) (cc_error(p, loc, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
+static int cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e);
 typedef struct CcEvalResult CcEvalResult;
 struct CcEvalResult {
     enum { CC_EVAL_INT, CC_EVAL_UINT, CC_EVAL_FLOAT, CC_EVAL_DOUBLE, CC_EVAL_ERROR, CC_EVAL_TYPE} kind;
@@ -2104,12 +2105,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ap_expr;
                     err = cc_parse_assignment_expr(p, &ap_expr);
                     if(err) return err;
-                    {
-                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
-                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
-                        if(va_type.bits && _ccqt_to_type_ptr(ap_expr->type) != _ccqt_to_type_ptr(va_type))
-                            return cc_error(p, tok.loc, "first argument to va_start must have type va_list");
-                    }
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    if(err) return err;
                     // Optional second arg (last fixed param) — parse and ignore.
                     CcToken peek;
                     err = cc_peek(p, &peek);
@@ -2140,6 +2137,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 0);
                     if(!node) return CC_OOM_ERROR;
                     node->va.op = CC_VA_END;
@@ -2154,12 +2153,8 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ap_expr;
                     err = cc_parse_assignment_expr(p, &ap_expr);
                     if(err) return err;
-                    {
-                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
-                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
-                        if(va_type.bits && _ccqt_to_type_ptr(ap_expr->type) != _ccqt_to_type_ptr(va_type))
-                            return cc_error(p, tok.loc, "first argument to va_arg must have type va_list");
-                    }
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcQualType arg_type;
@@ -2181,18 +2176,16 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* dest_expr;
                     err = cc_parse_assignment_expr(p, &dest_expr);
                     if(err) return err;
-                    {
-                        Atom va_name = AT_atomize(p->cpp.at, "__builtin_va_list", 17);
-                        CcQualType va_type = cc_scope_lookup_typedef(&p->global, va_name, CC_SCOPE_NO_WALK);
-                        if(va_type.bits && _ccqt_to_type_ptr(dest_expr->type) != _ccqt_to_type_ptr(va_type))
-                            return cc_error(p, tok.loc, "first argument to va_copy must have type va_list");
-                    }
+                    err = cc_va_list_to_ptr(p, tok.loc, &dest_expr);
+                    if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* src_expr;
                     err = cc_parse_assignment_expr(p, &src_expr);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    err = cc_va_list_to_ptr(p, tok.loc, &src_expr);
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 1);
                     if(!node) return CC_OOM_ERROR;
@@ -4847,6 +4840,26 @@ cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0);
     if(!ptr) return CC_OOM_ERROR;
     *out = (CcQualType){.bits = (uintptr_t)ptr};
+    return 0;
+}
+
+static
+int
+cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e){
+    CcExpr* expr = *e;
+    if(expr->type.bits == p->builtin_va_list_ptr.bits)
+        return 0;
+    if(expr->type.bits != p->builtin_va_list.bits)
+        return cc_error(p, loc, "expression does not have type va_list");
+    if(ccqt_kind(expr->type) == CC_ARRAY && !ccqt_as_array(expr->type)->is_vector){
+        return cc_implicit_cast(p, expr, p->builtin_va_list_ptr, e);
+    }
+    if(!expr->is_lvalue)
+        return cc_error(p, loc, "va_list argument must be an lvalue");
+    CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, loc, p->builtin_va_list_ptr, 0);
+    if(!addr) return CC_OOM_ERROR;
+    addr->lhs = expr;
+    *e = addr;
     return 0;
 }
 
@@ -8931,11 +8944,11 @@ cc_handle_static_asssert(CcParser* p){
 static
 int
 cc_define_builtin_types(CcParser* p){
+    int err;
     Allocator al = cc_allocator(p);
     CcTargetConfig t = p->cpp.target;
 
     {
-        int err;
         err = cc_pointer_of(p, ccqt_basic(CCBT_void), &p->void_star);
         if(err) return err;
         CcQualType const_void = ccqt_basic(CCBT_void);
@@ -8984,7 +8997,7 @@ cc_define_builtin_types(CcParser* p){
                 .field_count = 4,
                 .fields = fields,
             };
-            int err = cc_compute_struct_layout(p, s, 0);
+            err = cc_compute_struct_layout(p, s, 0);
             if(err) return err;
             err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
             if(err) return CC_OOM_ERROR;
@@ -9026,7 +9039,7 @@ cc_define_builtin_types(CcParser* p){
                 .field_count = 5,
                 .fields = fields,
             };
-            int err = cc_compute_struct_layout(p, s, 0);
+            err = cc_compute_struct_layout(p, s, 0);
             if(err) return err;
             err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
             if(err) return CC_OOM_ERROR;
@@ -9037,15 +9050,26 @@ cc_define_builtin_types(CcParser* p){
         }
         default: {
             // typedef void *__builtin_va_list;
-            int perr = cc_pointer_of(p, ccqt_basic(CCBT_void), &va_list_type);
-            if(perr) return perr;
+            err = cc_pointer_of(p, ccqt_basic(CCBT_void), &va_list_type);
+            if(err) return err;
             break;
         }
     }
-    int err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
+    err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
     if(err) return CC_OOM_ERROR;
     err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type);
     if(err) return CC_OOM_ERROR;
+    p->builtin_va_list = va_list_type;
+    if(ccqt_kind(va_list_type) == CC_ARRAY){
+        // Array decays to pointer-to-element.
+        err = cc_pointer_of(p, ccqt_as_array(va_list_type)->element, &p->builtin_va_list_ptr);
+        if(err) return err;
+    }
+    else {
+        // Non-array: pointer to the va_list type.
+        err = cc_pointer_of(p, va_list_type, &p->builtin_va_list_ptr);
+        if(err) return err;
+    }
 
     {
         struct f {StringView name; CcQualType type; size_t offset;} fieldinfos[] = {

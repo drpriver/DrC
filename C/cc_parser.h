@@ -159,7 +159,9 @@ struct CcParser {
                void_star,
                const_void_star,
                builtin_field,
-               builtin_enumerator;
+               builtin_enumerator,
+               builtin_va_list,
+               builtin_va_list_ptr;
 };
 
 
