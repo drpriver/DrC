@@ -7,6 +7,7 @@
 #include "../Drp/bit_util.h"
 #include "../Drp/parray.h"
 #include "../Drp/merge_sort.h"
+#include "cc_expr.h"
 #include "cc_parser.h"
 #include "cpp_preprocessor.h"
 #include "cc_errors.h"
@@ -115,6 +116,16 @@ enum {
 #pragma clang assume_nonnull begin
 #endif
 
+#ifndef DEFAULT_UNREACHABLE
+#if defined __GNUC__ && !defined __clang__
+#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
+#elif defined _MSC_VER
+#define DEFAULT_UNREACHABLE default: __assume(0)
+#else
+#define DEFAULT_UNREACHABLE
+#endif
+#endif
+
 static int cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value);
 
 typedef struct CcSpecifier CcSpecifier;
@@ -182,7 +193,6 @@ static int cc_parse_statement(CcParser* p);
 static int cc_parse_one(CcParser* p);
 static int cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels);
 static int cc_skip_braced_block(CcParser* p);
-static int cc_eval_static_if_cond(CcParser* p, _Bool* out);
 
 static
 int
@@ -819,6 +829,7 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
     CcQualType size_type = ccqt_basic(cfg->size_type);
     uint64_t align;
     switch(ccqt_kind(t)){
+        DEFAULT_UNREACHABLE;
         case CC_BASIC:{
             if(t.basic.kind >= CCBT_COUNT)
                 return cc_error(p, loc, "alignof applied to invalid kind");
@@ -1780,9 +1791,14 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             cc_release_expr(p, idx_expr);
                             int64_t idx;
                             switch(idx_val.kind){
+                                DEFAULT_UNREACHABLE;
                                 case CC_EVAL_INT:    idx = idx_val.i; break;
                                 case CC_EVAL_UINT:   idx = (int64_t)idx_val.u; break;
-                                default: return cc_error(p, next.loc, "array index in __builtin_offsetof must be a constant integer");
+                                case CC_EVAL_ERROR:
+                                case CC_EVAL_TYPE:
+                                case CC_EVAL_FLOAT:
+                                case CC_EVAL_DOUBLE:
+                                return cc_error(p, next.loc, "array index in __builtin_offsetof must be a constant integer");
                             }
                             uint32_t elem_size;
                             err = cc_sizeof_as_uint(p, arr->element, next.loc, &elem_size);
@@ -3232,6 +3248,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                         cc_release_expr(p, idx_expr);
                         int64_t idx_signed;
                         switch(ev.kind){
+                            DEFAULT_UNREACHABLE;
                             case CC_EVAL_INT:    idx_signed = ev.i; break;
                             case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                             case CC_EVAL_FLOAT:
@@ -3888,6 +3905,7 @@ static
 CcEvalResult
 cc_eval_expr(CcParser* p, CcExpr* e){
     switch(e->kind){
+        DEFAULT_UNREACHABLE;
         case CC_EXPR_VALUE:
             if(e->str.length && e->text)
                 return cc_eval_error(); // can't eval strings to a number
@@ -3930,11 +3948,13 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             CcEvalResult v = cc_eval_expr(p,e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
+                DEFAULT_UNREACHABLE;
                 case CC_EVAL_INT:    v.i = -v.i; return v;
                 case CC_EVAL_UINT:   return (CcEvalResult){.kind = CC_EVAL_INT, .i = -(int64_t)v.u};
                 case CC_EVAL_FLOAT:  v.f = -v.f; return v;
                 case CC_EVAL_DOUBLE: v.d = -v.d; return v;
-                default: return cc_eval_error();
+                case CC_EVAL_TYPE:
+                case CC_EVAL_ERROR: return cc_eval_error();
             }
         }
         case CC_EXPR_POS: return cc_eval_expr(p,e->lhs);
@@ -3942,9 +3962,14 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             CcEvalResult v = cc_eval_expr(p,e->lhs);
             if(v.kind == CC_EVAL_ERROR) return v;
             switch(v.kind){
+                DEFAULT_UNREACHABLE;
                 case CC_EVAL_INT:  v.i = ~v.i; return v;
                 case CC_EVAL_UINT: v.u = ~v.u; return v;
-                default: return cc_eval_error();
+                case CC_EVAL_FLOAT:
+                case CC_EVAL_DOUBLE:
+                case CC_EVAL_TYPE:
+                case CC_EVAL_ERROR:
+                return cc_eval_error();
             }
         }
         case CC_EXPR_LOGNOT: {
@@ -3975,7 +4000,8 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                             return cc_eval_error();
                         i = idx.u;
                         break;
-                    default: return cc_eval_error();
+                    case CC_EVAL_FLOAT: case CC_EVAL_DOUBLE: case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error();
+                    DEFAULT_UNREACHABLE;
                 }
                 unsigned char c = (unsigned char)arr->text[i];
                 if(cc_target(p)->char_is_signed)
@@ -3997,6 +4023,7 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_EVAL_FLOAT:  truthy = cond.f != 0; break;
                 case CC_EVAL_DOUBLE: truthy = cond.d != 0; break;
                 case CC_EVAL_TYPE: case CC_EVAL_ERROR:  return cond;
+                DEFAULT_UNREACHABLE;
             }
             return cc_eval_expr(p,e->values[truthy ? 0 : 1]);
         }
@@ -4027,13 +4054,15 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_UINT, .u=L.u op R.u}; \
                     case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_FLOAT, .f=L.f op R.f}; \
                     case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_DOUBLE, .d=L.d op R.d}; \
-                    default: return cc_eval_error(); \
+                    case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error(); \
+                    DEFAULT_UNREACHABLE; \
                 }
             #define IINTOP(op) \
                 switch(L.kind){ \
                     case CC_EVAL_INT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.i op R.i}; \
                     case CC_EVAL_UINT: return (CcEvalResult){.kind=CC_EVAL_UINT, .u=L.u op R.u}; \
-                    default: return cc_eval_error(); \
+                    case CC_EVAL_FLOAT: case CC_EVAL_DOUBLE: case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error(); \
+                    DEFAULT_UNREACHABLE; \
                 }
             #define ICMPOP(op) \
                 switch(L.kind){ \
@@ -4041,7 +4070,8 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                     case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.u op R.u}; \
                     case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.f op R.f}; \
                     case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.d op R.d}; \
-                    default: return cc_eval_error(); \
+                    case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error(); \
+                    DEFAULT_UNREACHABLE; \
                 }
             switch(e->kind){
                 case CC_EXPR_ADD: IBINOP(+)
@@ -4067,7 +4097,8 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.u && R.u};
                         case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.f && R.f};
                         case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.d && R.d};
-                        default: return cc_eval_error();
+                        case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error();
+                        DEFAULT_UNREACHABLE;
                     }
                 case CC_EXPR_LOGOR:
                     switch(L.kind){
@@ -4075,7 +4106,8 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.u || R.u};
                         case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.f || R.f};
                         case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_INT, .i=L.d || R.d};
-                        default: return cc_eval_error();
+                        case CC_EVAL_ERROR: case CC_EVAL_TYPE: return cc_eval_error();
+                        DEFAULT_UNREACHABLE;
                     }
                 case CC_EXPR_EQ: ICMPOP(==)
                 case CC_EXPR_NE: ICMPOP(!=)
@@ -4097,11 +4129,14 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             if(ccbt_is_float(tk)){
                 double d;
                 switch(v.kind){
+                    DEFAULT_UNREACHABLE;
                     case CC_EVAL_INT:    d = (double)v.i; break;
                     case CC_EVAL_UINT:   d = (double)v.u; break;
                     case CC_EVAL_FLOAT:  d = (double)v.f; break;
                     case CC_EVAL_DOUBLE: d = v.d; break;
-                    default: return cc_eval_error();
+                    case CC_EVAL_TYPE:
+                    case CC_EVAL_ERROR:
+                    return cc_eval_error();
                 }
                 if(tk == CCBT_float)
                     return (CcEvalResult){.kind = CC_EVAL_FLOAT, .f = (float)d};
@@ -4110,20 +4145,26 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             if(ccbt_is_integer(tk)){
                 if(ccbt_is_unsigned(tk, !cc_target(p)->char_is_signed)){
                     switch(v.kind){
+                        DEFAULT_UNREACHABLE;
                         case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.i};
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_UINT, .u=v.u};
                         case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.f};
                         case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_UINT, .u=(uint64_t)v.d};
-                        default: return cc_eval_error();
+                        case CC_EVAL_ERROR:
+                        case CC_EVAL_TYPE:
+                        return cc_eval_error();
                     }
                 }
                 else {
                     switch(v.kind){
+                        DEFAULT_UNREACHABLE;
                         case CC_EVAL_INT:    return (CcEvalResult){.kind=CC_EVAL_INT, .i=v.i};
                         case CC_EVAL_UINT:   return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.u};
                         case CC_EVAL_FLOAT:  return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.f};
                         case CC_EVAL_DOUBLE: return (CcEvalResult){.kind=CC_EVAL_INT, .i=(int64_t)v.d};
-                        default: return cc_eval_error();
+                        case CC_EVAL_ERROR:
+                        case CC_EVAL_TYPE:
+                        return cc_eval_error();
                     }
                 }
             }
@@ -4249,7 +4290,43 @@ cc_eval_expr(CcParser* p, CcExpr* e){
             }
             return cc_eval_error();
         }
-        default:
+        case CC_EXPR_ATOMIC:
+        case CC_EXPR_SIZEOF_VMT:
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ADDR:
+        case CC_EXPR_PREINC:
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_POSTDEC:
+        case CC_EXPR_ASSIGN:
+        case CC_EXPR_ADDASSIGN:
+        case CC_EXPR_SUBASSIGN:
+        case CC_EXPR_MULASSIGN:
+        case CC_EXPR_DIVASSIGN:
+        case CC_EXPR_MODASSIGN:
+        case CC_EXPR_BITANDASSIGN:
+        case CC_EXPR_BITORASSIGN:
+        case CC_EXPR_BITXORASSIGN:
+        case CC_EXPR_LSHIFTASSIGN:
+        case CC_EXPR_RSHIFTASSIGN:
+        case CC_EXPR_CALL:
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
+        case CC_EXPR_STATEMENT_EXPRESSION:
+        case CC_EXPR_VA:
+        case CC_EXPR_BUILTIN:
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_INTERN:
             return cc_eval_error();
     }
 }
@@ -4333,10 +4410,29 @@ int
 cc_parse_static_if(CcParser* p, SrcLoc loc){
     int err;
     CcToken tok;
-    _Bool cond;
-    err = cc_eval_static_if_cond(p, &cond);
-    if(err) return err;
-    if(cond){
+    _Bool predicate;
+    {
+        err = cc_expect_punct(p, '(');
+        if(err) return err;
+        CcExpr* cond;
+        err = cc_parse_expr(p, &cond);
+        if(err) return err;
+        err = cc_expect_punct(p, ')');
+        if(err) return err;
+        CcEvalResult ev = cc_eval_expr(p,cond);
+        SrcLoc cond_loc = cond->loc;
+        cc_release_expr(p, cond);
+        switch(ev.kind){
+            case CC_EVAL_INT:    predicate = ev.i != 0; break;
+            case CC_EVAL_UINT:   predicate = ev.u != 0; break;
+            case CC_EVAL_FLOAT:  predicate = ev.f != 0; break;
+            case CC_EVAL_DOUBLE: predicate = ev.d != 0; break;
+            case CC_EVAL_TYPE: case CC_EVAL_ERROR:
+                return cc_error(p, cond_loc, "static if condition must be a constant expression");
+            DEFAULT_UNREACHABLE;
+        }
+    }
+    if(predicate){
         err = cc_parse_static_if_body(p, loc);
         if(err) return err;
         return cc_skip_static_else_chain(p);
@@ -4535,7 +4631,7 @@ _cc_alloc_expr(CcParser* p, size_t nvalues){
     size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
     #if CC_RECYCLE_EXPRS
     if(nvalues < sizeof p->exprs / sizeof p->exprs[0]){
-        CcExpr* n = fl_pop(&p->exprs[nvalues]); 
+        CcExpr* n = fl_pop(&p->exprs[nvalues]);
         if(n){
             // cc_info(p, (SrcLoc){0}, "free list hit");
             memset(n, 0, size);
@@ -5537,6 +5633,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
             cc_release_expr(p, idx_expr);
             int64_t idx_signed;
             switch(ev.kind){
+                DEFAULT_UNREACHABLE;
                 case CC_EVAL_INT:    idx_signed = ev.i; break;
                 case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                 case CC_EVAL_FLOAT:
@@ -5936,6 +6033,7 @@ cc_parse_init(CcParser* p, CcQualType target, uint64_t base_offset, _Bool braced
                     cc_release_expr(p, idx_expr);
                     int64_t idx_signed;
                     switch(ev.kind){
+                        DEFAULT_UNREACHABLE;
                         case CC_EVAL_INT:    idx_signed = ev.i; break;
                         case CC_EVAL_UINT:   idx_signed = (int64_t)ev.u; break;
                         case CC_EVAL_FLOAT:
@@ -7022,6 +7120,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             cc_release_expr(p, expr);
                             int64_t av;
                             switch(val.kind){
+                                DEFAULT_UNREACHABLE;
                                 case CC_EVAL_INT:    av = val.i; break;
                                 case CC_EVAL_UINT:   av = (int64_t)val.u; break;
                                 case CC_EVAL_FLOAT:
@@ -7341,33 +7440,6 @@ cc_skip_braced_block(CcParser* p){
         }
     }
     return 0;
-}
-
-// Parse the condition of `static if(expr)` — assumes `static` and `if`
-// have already been consumed. Evaluates the condition as a constant
-// expression and writes the boolean result to *out.
-static
-int
-cc_eval_static_if_cond(CcParser* p, _Bool* out){
-    int err = cc_expect_punct(p, '(');
-    if(err) return err;
-    CcExpr* cond;
-    err = cc_parse_expr(p, &cond);
-    if(err) return err;
-    err = cc_expect_punct(p, ')');
-    if(err) return err;
-    CcEvalResult ev = cc_eval_expr(p,cond);
-    SrcLoc cond_loc = cond->loc;
-    cc_release_expr(p, cond);
-    switch(ev.kind){
-        case CC_EVAL_INT:    *out = ev.i != 0; return 0;
-        case CC_EVAL_UINT:   *out = ev.u != 0; return 0;
-        case CC_EVAL_FLOAT:  *out = ev.f != 0; return 0;
-        case CC_EVAL_DOUBLE: *out = ev.d != 0; return 0;
-        case CC_EVAL_TYPE: case CC_EVAL_ERROR:
-            return cc_error(p, cond_loc, "static if condition must be a constant expression");
-    }
-    return CC_UNREACHABLE_ERROR;
 }
 
 static
@@ -7793,9 +7865,14 @@ cc_parse_statement(CcParser* p){
                         return cc_error(p, tok.loc, "case label must be a constant expression");
                     uint64_t case_val;
                     switch(ev.kind){
+                        DEFAULT_UNREACHABLE;
                         case CC_EVAL_INT:  case_val = (uint64_t)ev.i; break;
                         case CC_EVAL_UINT: case_val = ev.u; break;
-                        default: return cc_error(p, tok.loc, "case label must be an integer constant expression");
+                        case CC_EVAL_ERROR:
+                        case CC_EVAL_FLOAT:
+                        case CC_EVAL_DOUBLE:
+                        case CC_EVAL_TYPE:
+                        return cc_error(p, tok.loc, "case label must be an integer constant expression");
                     }
                     Marray(CcStatement)* stmts = p->current_func
                         ? &p->current_func->body
@@ -8161,6 +8238,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 cc_release_expr(p, dim);
                 int64_t length;
                 switch(val.kind){
+                    DEFAULT_UNREACHABLE;
                     case CC_EVAL_INT:    length = val.i; break;
                     case CC_EVAL_UINT:   length = (int64_t)val.u; break;
                     case CC_EVAL_FLOAT:
@@ -8808,6 +8886,7 @@ cc_handle_static_asssert(CcParser* p){
         case CC_EVAL_TYPE: case CC_EVAL_ERROR:
             cc_release_expr(p, expr);
             return cc_error(p, assert_loc, "static_assert expression is not a constant expression");
+        DEFAULT_UNREACHABLE;
     }
     // Check for optional message.
     const char* msg = NULL;

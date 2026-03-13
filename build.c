@@ -109,7 +109,7 @@ int main(int argc, char** argv, char** envp){
             BuildTarget* bin = exe_target(ctx, name, file, OS_NATIVE);
             if(test_files[i].needs_lffi){
                 if(BUILD_OS == OS_LINUX)
-                    cmd_carg(&cc->cmd, "-ldl");
+                    cmd_carg(&bin->cmd, "-ldl");
                 cmd_carg(&bin->cmd, "-lffi");
             }
             add_dep(ctx, all, bin);

@@ -30,7 +30,8 @@ static
 void
 log_posix(Logger* logger, LogLevel lvl, const void* data, size_t len){
     int fd = ((int*)(logger+1))[lvl==LOG_PRINT?0:1];
-    write(fd, data, len);
+    int err = write(fd, data, len);
+    (void)err;
 }
 #endif
 

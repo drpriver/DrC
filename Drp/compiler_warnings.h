@@ -79,6 +79,7 @@
 #pragma GCC diagnostic ignored "-Wmissing-braces"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wsuggest-attribute=noreturn"
+#pragma GCC diagnostic error "-Wswitch-enum"
 #endif
 
 #if defined(_MSC_VER) && !defined(__clang__)
