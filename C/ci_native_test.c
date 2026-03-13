@@ -146,6 +146,21 @@ static void test_sort_ints(int* arr, int n, int (*cmp)(const void*, const void*)
                 int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
             }
 }
+union U1 { int a, b, c, d, e, f, g;};
+static int test_u1(union U1 u, int x){return u.a + x;}
+union U2 {long a; int x;};
+static long test_u2(union U2 u, union U2 u2){return u.a + u2.a;}
+struct v2f { union {float v[2]; struct {float x, y;};};};
+int test_v2f_add(struct v2f v){ return (int)(v.x+v.y);}
+struct v2fi { union {float v[2]; struct {float x, y;}; int i[2];};};
+int test_v2fi_add(struct v2fi v){ return (int)(v.i[0]+v.i[1]);}
+struct v2fd { struct { union {float f; double d;} a, b;};};
+int test_v2fd_add(struct v2fd v){ return (int)(v.a.f+v.b.f);}
+struct HasUnion {
+    union { int a, b, c;};
+    int x, y;
+};
+static int test_has_union(struct HasUnion hs){ return hs.a+hs.x+hs.y; }
 
 TestFunction(test_interop){
     TESTBEGIN();
@@ -598,6 +613,61 @@ TestFunction(test_interop){
                "return arr[0]*10000 + arr[1]*1000 + arr[2]*100 + arr[3]*10 + arr[4];\n"),
             {{SV("sort_ints"), (void*)test_sort_ints},},
             .exit_code = 12345,
+        },
+        {
+            "HasUnion", __LINE__,
+            SV("struct HasUnion {\n"
+               "  union { int a, b, c;};\n"
+               "  int x, y;\n"
+               "};\n"
+               "int has_union(struct HasUnion);\n"
+               "struct HasUnion h = {\n"
+               "  .a=1, .x=2, .y=3,\n"
+               "};\n"
+               "return has_union(h);\n"),
+            {{SV("has_union"), (void*)test_has_union}},
+            .exit_code = 6,
+        },
+        {
+            "U1", __LINE__,
+            SV("union U1 { int a, b, c, d, e, f, g;};\n"
+               "static int u(union U1, long);\n"
+               "return u((union U1){.a=4}, 4);\n"),
+            {{SV("u"), (void*)test_u1}},
+            .exit_code=8,
+        },
+        {
+            "U2", __LINE__,
+            SV("union U { long a; int x;};\n"
+               "static int u(union U, union U);\n"
+               "return u((union U){.a=4}, (union U){.x=3});\n"),
+            {{SV("u"), (void*)test_u2}},
+            .exit_code=7,
+        },
+        {
+            "v2f", __LINE__,
+            SV("struct v2f { union {float v[2]; struct {float x, y;};};};\n"
+               "int add(struct v2f v);\n"
+               "return add((struct v2f){1,2});\n"),
+            {{SV("add"), (void*)test_v2f_add}},
+            .exit_code=3,
+        },
+        {
+            "v2fi", __LINE__,
+            SV("struct v2fi { union {float v[2]; struct {float x, y;}; int i[2];};};\n"
+               "int add(struct v2fi v);\n"
+               "return add((struct v2fi){.i={1,2}});\n"),
+            {{SV("add"), (void*)test_v2fi_add}},
+            .exit_code=3,
+        },
+        {
+            "v2fd", __LINE__,
+            SV("struct v2fd { struct { union {float f; double d;} a, b;};};\n"
+               "int add(struct v2fd v);\n"
+               "return add((struct v2fd){.a.f=1, .b.f=2});\n"),
+            {{SV("add"), (void*)test_v2fd_add}},
+            .exit_code=3,
+            .skip = 1,
         },
     };
     int err;

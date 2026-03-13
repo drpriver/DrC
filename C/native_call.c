@@ -37,6 +37,32 @@ enum {
 #ifndef NO_NATIVE_CALL
 
 static
+_Bool
+cctype_is_all_float(CcQualType t){
+    switch(ccqt_kind(t)){
+        case CC_BASIC:
+            return t.basic.kind == CCBT_float
+                || t.basic.kind == CCBT_double
+                || t.basic.kind == CCBT_long_double;
+        case CC_ARRAY:
+            return cctype_is_all_float(ccqt_as_array(t)->element);
+        case CC_STRUCT:{
+            CcStruct* s = ccqt_as_struct(t);
+            for(uint32_t i = 0; i < s->field_count; i++)
+                if(!cctype_is_all_float(s->fields[i].type)) return 0;
+            return s->field_count > 0;
+        }
+        case CC_UNION:{
+            CcUnion* u = ccqt_as_union(t);
+            for(uint32_t i = 0; i < u->field_count; i++)
+                if(!cctype_is_all_float(u->fields[i].type)) return 0;
+            return u->field_count > 0;
+        }
+        default: return 0;
+    }
+}
+
+static
 int
 cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
@@ -44,10 +70,23 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
         case CC_FUNCTION:
             *out = &ffi_type_pointer;
             return NC_NO_ERROR;
-        case CC_ARRAY:
-            if(ccqt_as_array(t)->is_vector) return NC_UNSUPPORTED_TYPE;
-            *out = &ffi_type_pointer;
+        case CC_ARRAY:{
+            CcArray* arr = ccqt_as_array(t);
+            if(arr->is_vector) return NC_UNSUPPORTED_TYPE;
+            uint32_t n = (uint32_t)arr->length;
+            ffi_type* elem;
+            int err = cctype_to_ffi_type(a, arr->element, &elem);
+            if(err) return err;
+            ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
+            if(!st) return NC_OOM_ERROR;
+            ffi_type** elements = (ffi_type**)(st + 1);
+            *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
+            for(uint32_t i = 0; i < n; i++)
+                elements[i] = elem;
+            elements[n] = NULL;
+            *out = st;
             return NC_NO_ERROR;
+        }
         case CC_ENUM:{
             CcEnum* e = ccqt_as_enum(t);
             return cctype_to_ffi_type(a, e->underlying, out);
@@ -72,16 +111,60 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
         case CC_UNION:{
             CcUnion* u = ccqt_as_union(t);
             if(u->ffi_cache){ *out = u->ffi_cache; return NC_NO_ERROR; }
+            // HACK:
+            //    There are cases where this is wrong, but libffi leaves us no
+            //    choice. The real fix is to do classification when laying out
+            //    the structs based on the target.
+            //
+            //    Also this is too much work for windows, where you just
+            //    always pass aggregates > 8 the same way.
+
+            // If all fields are purely float, use the largest field's
+            // ffi_type to preserve float classification (HFA/SSE).
+            // Otherwise, use integer elements — any non-float field
+            // forces integer classification on all common ABIs.
             uint32_t n = u->field_count;
-            ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
+            _Bool all_float = n > 0;
+            ffi_type* largest = NULL;
+            uint32_t largest_sz = 0;
+            for(uint32_t i = 0; i < n; i++){
+                if(all_float && !cctype_is_all_float(u->fields[i].type))
+                    all_float = 0;
+                ffi_type* ft;
+                int err = cctype_to_ffi_type(a, u->fields[i].type, &ft);
+                if(err) return err;
+                uint32_t fsz;
+                CcTypeKind fk = ccqt_kind(u->fields[i].type);
+                if(fk == CC_STRUCT) fsz = ccqt_as_struct(u->fields[i].type)->size;
+                else if(fk == CC_UNION) fsz = ccqt_as_union(u->fields[i].type)->size;
+                else fsz = (uint32_t)ft->size;
+                if(!largest || fsz > largest_sz){
+                    largest = ft;
+                    largest_sz = fsz;
+                }
+            }
+            ffi_type* rep_elem;
+            uint32_t rep_count;
+            if(all_float){
+                rep_elem = largest;
+                rep_count = 1;
+            }
+            else {
+                uint32_t sz = u->size;
+                uint32_t al = u->alignment;
+                if(al >= 8 && sz % 8 == 0){       rep_elem = &ffi_type_uint64; rep_count = sz / 8; }
+                else if(al >= 4 && sz % 4 == 0){  rep_elem = &ffi_type_uint32; rep_count = sz / 4; }
+                else if(al >= 2 && sz % 2 == 0){  rep_elem = &ffi_type_uint16; rep_count = sz / 2; }
+                else {                             rep_elem = &ffi_type_uint8;  rep_count = sz; }
+                if(!rep_count) rep_count = 1;
+            }
+            ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (rep_count + 1));
             if(!st) return NC_OOM_ERROR;
             ffi_type** elements = (ffi_type**)(st + 1);
             *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
-            for(uint32_t i = 0; i < n; i++){
-                int err = cctype_to_ffi_type(a, u->fields[i].type, &elements[i]);
-                if(err){ Allocator_free(a, st, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1)); return err; }
-            }
-            elements[n] = NULL;
+            for(uint32_t i = 0; i < rep_count; i++)
+                elements[i] = rep_elem;
+            elements[rep_count] = NULL;
             u->ffi_cache = st;
             *out = st;
             return NC_NO_ERROR;
