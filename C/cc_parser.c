@@ -8441,7 +8441,7 @@ int
 cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
     int err = 0;
     CcToken tok;
-    if(p->auto_typedef && !declbase->spec.sp_typedef){
+    if(p->auto_typedef && !declbase->spec.sp_typedef && !declbase->spec.sp_infer_type){
         Atom tag_name = NULL;
         CcQualType base = declbase->type;
         if(!ccqt_is_basic(base)){
