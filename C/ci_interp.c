@@ -3183,35 +3183,35 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     else goto unsigned_char;
                 case CCBT_signed_char:
                     signed_char:
-                    a = cpp_atomizef(cpp, "%d", (int)*(signed char*)result);
+                    a = cpp_atomizef(cpp, "%d", (int)ci_read_int(result, 1));
                     break;
                 case CCBT_unsigned_char:
                     unsigned_char:
-                    a = cpp_atomizef(cpp, "%d", (int)*(unsigned char*)result);
+                    a = cpp_atomizef(cpp, "%d", (int)ci_read_uint(result, 1));
                     break;
                 case CCBT_short:
-                    a = cpp_atomizef(cpp, "%d", (int)*(short*)result);
+                    a = cpp_atomizef(cpp, "%d", (int)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_short]));
                     break;
                 case CCBT_unsigned_short:
-                    a = cpp_atomizef(cpp, "%d", (int)*(unsigned short*)result);
+                    a = cpp_atomizef(cpp, "%d", (int)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_short]));
                     break;
                 case CCBT_int:
-                    a = cpp_atomizef(cpp, "%d", (int)*(int*)result);
+                    a = cpp_atomizef(cpp, "%d", (int)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_int]));
                     break;
                 case CCBT_unsigned:
-                    a = cpp_atomizef(cpp, "%uu", (unsigned)*(unsigned*)result);
+                    a = cpp_atomizef(cpp, "%uu", (unsigned)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned]));
                     break;
                 case CCBT_long:
-                    a = cpp_atomizef(cpp, "%ldl", (long)*(long*)result);
+                    a = cpp_atomizef(cpp, "%lldl", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long]));
                     break;
                 case CCBT_unsigned_long:
-                    a = cpp_atomizef(cpp, "%lulu", (unsigned long)*(unsigned long*)result);
+                    a = cpp_atomizef(cpp, "%llulu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long]));
                     break;
                 case CCBT_long_long:
-                    a = cpp_atomizef(cpp, "%lldll", (long long)*(long long*)result);
+                    a = cpp_atomizef(cpp, "%lldll", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long_long]));
                     break;
                 case CCBT_unsigned_long_long:
-                    a = cpp_atomizef(cpp, "%llullu", (unsigned long long)*(unsigned long long*)result);
+                    a = cpp_atomizef(cpp, "%llullu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long_long]));
                     break;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
@@ -3349,6 +3349,8 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
             }
         }
     }
+    if(ci_target(ci)->target != CC_TARGET_NATIVE)
+        return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
     #ifdef NO_NATIVE_CALL
         (void)out;
         return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
