@@ -2082,6 +2082,99 @@ TestFunction(test_cross_target){
             .exit_code = 15,
             .target = CC_TARGET_AARCH64_LINUX,
         },
+        // sizeof(long) differs: 4 on windows, 8 on linux/macos
+        {
+            "windows sizeof long", __LINE__,
+            SV("return sizeof(long);\n"),
+            .exit_code = 4,
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "linux sizeof long", __LINE__,
+            SV("return sizeof(long);\n"),
+            .exit_code = 8,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        // struct layout with long: padding differs
+        {
+            "windows struct layout with long", __LINE__,
+            SV("typedef struct { char c; long x; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // 1 + 3 pad + 4
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "linux struct layout with long", __LINE__,
+            SV("typedef struct { char c; long x; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 16, // 1 + 7 pad + 8
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        // char signedness: unsigned on aarch64 linux, signed elsewhere
+        {
+            "aarch64 linux char unsigned", __LINE__,
+            SV("char c = 255;\n"
+               "return c > 0;\n"),
+            .exit_code = 1,
+            .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "x86_64 linux char signed", __LINE__,
+            SV("char c = 255;\n"
+               "return c < 0;\n"),
+            .exit_code = 1,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        // long arithmetic: ensure values computed with target long size
+        {
+            "windows long overflow", __LINE__,
+            SV("unsigned long x = 0xFFFFFFFF;\n"
+               "return (x + 1) == 0;\n"),
+            .exit_code = 1, // 32-bit wraps
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "linux long no overflow", __LINE__,
+            SV("unsigned long x = 0xFFFFFFFF;\n"
+               "return (x + 1) == 0x100000000;\n"),
+            .exit_code = 1, // 64-bit doesn't wrap
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        // sizeof(long double) differs
+        {
+            "aarch64 macos sizeof long double", __LINE__,
+            SV("return sizeof(long double);\n"),
+            .exit_code = 8,
+            .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "x86_64 linux sizeof long double", __LINE__,
+            SV("return sizeof(long double);\n"),
+            .exit_code = 16,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        // size_t type differs: unsigned long on LP64, unsigned long long on windows
+        {
+            "windows sizeof size_t", __LINE__,
+            SV("return sizeof(__SIZE_TYPE__);\n"),
+            .exit_code = 8, // unsigned long long is 8
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        // MSVC bitfield: different types don't share storage units
+        {
+            "msvc bitfield layout", __LINE__,
+            SV("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // short unit (2) + pad(2) + int unit (4)
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "sysv bitfield layout", __LINE__,
+            SV("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // both fit in one 4-byte unit
+            .target = CC_TARGET_X86_64_LINUX,
+        },
     };
     int err;
     static int idx = 0;
