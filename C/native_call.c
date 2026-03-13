@@ -99,11 +99,18 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
             if(!st) return NC_OOM_ERROR;
             ffi_type** elements = (ffi_type**)(st + 1);
             *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
+            uint32_t j = 0;
             for(uint32_t i = 0; i < n; i++){
-                int err = cctype_to_ffi_type(a, s->fields[i].type, &elements[i]);
+                if(s->fields[i].is_method) continue;
+                // HACK: only emit one element per storage unit.
+                // Not actually correct as bitfields can get packed
+                // and so the first one can be smaller, but whatever.
+                if(s->fields[i].is_bitfield && s->fields[i].bitoffset) continue;
+                int err = cctype_to_ffi_type(a, s->fields[i].type, &elements[j]);
                 if(err){ Allocator_free(a, st, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1)); return err; }
+                j++;
             }
-            elements[n] = NULL;
+            elements[j] = NULL;
             s->ffi_cache = st;
             *out = st;
             return NC_NO_ERROR;
@@ -128,6 +135,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
             ffi_type* largest = NULL;
             uint32_t largest_sz = 0;
             for(uint32_t i = 0; i < n; i++){
+                if(u->fields[i].is_method) continue;
                 if(all_float && !cctype_is_all_float(u->fields[i].type))
                     all_float = 0;
                 ffi_type* ft;
