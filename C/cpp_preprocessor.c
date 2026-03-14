@@ -4586,6 +4586,56 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__INT_FAST32_WIDTH__", t.sizeof_[t.int_fast32_type] * 8);
     DEFINT("__INT_FAST64_WIDTH__", t.sizeof_[t.int_fast64_type] * 8);
 
+    // Floating-point property macros (GCC/Clang compatible)
+    // float
+    DEFNUM("__FLT_MAX__",        "3.40282346638528859811704183484516925440e+38F");
+    DEFNUM("__FLT_MIN__",        "1.17549435082228750796873653722224567781e-38F");
+    DEFNUM("__FLT_EPSILON__",    "1.19209289550781250000000000000000000000e-7F");
+    DEFNUM("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613128e-45F");
+    DEFINT("__FLT_MANT_DIG__",   24);
+    DEFINT("__FLT_DIG__",        6);
+    DEFINT("__FLT_MIN_EXP__",    -125);
+    DEFINT("__FLT_MAX_EXP__",    128);
+    DEFINT("__FLT_MIN_10_EXP__", -37);
+    DEFINT("__FLT_MAX_10_EXP__", 38);
+    DEFINT("__FLT_HAS_DENORM__", 1);
+    DEFINT("__FLT_HAS_INFINITY__", 1);
+    DEFINT("__FLT_HAS_QUIET_NAN__", 1);
+    DEFINT("__FLT_RADIX__", 2);
+    DEFINT("__FLT_ROUNDS__", 1); // round to nearest
+    // double
+    DEFNUM("__DBL_MAX__",        "1.7976931348623157e+308");
+    DEFNUM("__DBL_MIN__",        "2.2250738585072014e-308");
+    DEFNUM("__DBL_EPSILON__",    "2.2204460492503131e-16");
+    DEFNUM("__DBL_DENORM_MIN__", "4.9406564584124654e-324");
+    DEFINT("__DBL_MANT_DIG__",   53);
+    DEFINT("__DBL_DIG__",        15);
+    DEFINT("__DBL_MIN_EXP__",    -1021);
+    DEFINT("__DBL_MAX_EXP__",    1024);
+    DEFINT("__DBL_MIN_10_EXP__", -307);
+    DEFINT("__DBL_MAX_10_EXP__", 308);
+    DEFINT("__DBL_HAS_DENORM__", 1);
+    DEFINT("__DBL_HAS_INFINITY__", 1);
+    DEFINT("__DBL_HAS_QUIET_NAN__", 1);
+    // TODO: long double properties are target-dependent
+    // (64-bit, 80-bit x87 extended, or 128-bit quad)
+    if(0){
+        // These values are for long double == double
+        DEFNUM("__LDBL_MAX__",        "1.7976931348623157e+308L");
+        DEFNUM("__LDBL_MIN__",        "2.2250738585072014e-308L");
+        DEFNUM("__LDBL_EPSILON__",    "2.2204460492503131e-16L");
+        DEFNUM("__LDBL_DENORM_MIN__", "4.9406564584124654e-324L");
+        DEFINT("__LDBL_MANT_DIG__",   53);
+        DEFINT("__LDBL_DIG__",        15);
+        DEFINT("__LDBL_MIN_EXP__",    -1021);
+        DEFINT("__LDBL_MAX_EXP__",    1024);
+        DEFINT("__LDBL_MIN_10_EXP__", -307);
+        DEFINT("__LDBL_MAX_10_EXP__", 308);
+        DEFINT("__LDBL_HAS_DENORM__", 1);
+        DEFINT("__LDBL_HAS_INFINITY__", 1);
+        DEFINT("__LDBL_HAS_QUIET_NAN__", 1);
+        DEFINT("__DECIMAL_DIG__", 17); // depends on widest float type
+    }
     // __*_C function-like macros (token pasting)
     {
         // Suffix for 64-bit literal depends on whether long is 64-bit
@@ -4755,10 +4805,48 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#endif\n")},
         {SV("float.h"),    SV("#pragma once\n"
                               "#if __has_include_next(<float.h>)\n"
-                              "#include_next <float.h>\n"
+                                   "#include_next <float.h>\n"
                               "#endif\n"
-                              "#ifndef FLT_EVAL_METHOD\n"
-                              "#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n"
+                              "#defifndef FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n"
+                              "#defifndef FLT_RADIX __FLT_RADIX__\n"
+                              "#defifndef FLT_ROUNDS __FLT_ROUNDS__\n"
+                              "#defifndef FLT_MAX __FLT_MAX__\n"
+                              "#defifndef FLT_MIN __FLT_MIN__\n"
+                              "#defifndef FLT_EPSILON __FLT_EPSILON__\n"
+                              "#defifndef FLT_TRUE_MIN __FLT_DENORM_MIN__\n"
+                              "#defifndef FLT_MANT_DIG __FLT_MANT_DIG__\n"
+                              "#defifndef FLT_DIG __FLT_DIG__\n"
+                              "#defifndef FLT_MIN_EXP __FLT_MIN_EXP__\n"
+                              "#defifndef FLT_MAX_EXP __FLT_MAX_EXP__\n"
+                              "#defifndef FLT_MIN_10_EXP __FLT_MIN_10_EXP__\n"
+                              "#defifndef FLT_MAX_10_EXP __FLT_MAX_10_EXP__\n"
+                              "#defifndef FLT_HAS_SUBNORM __FLT_HAS_DENORM__\n"
+                              "#defifndef DBL_MAX __DBL_MAX__\n"
+                              "#defifndef DBL_MIN __DBL_MIN__\n"
+                              "#defifndef DBL_EPSILON __DBL_EPSILON__\n"
+                              "#defifndef DBL_TRUE_MIN __DBL_DENORM_MIN__\n"
+                              "#defifndef DBL_MANT_DIG __DBL_MANT_DIG__\n"
+                              "#defifndef DBL_DIG __DBL_DIG__\n"
+                              "#defifndef DBL_MIN_EXP __DBL_MIN_EXP__\n"
+                              "#defifndef DBL_MAX_EXP __DBL_MAX_EXP__\n"
+                              "#defifndef DBL_MIN_10_EXP __DBL_MIN_10_EXP__\n"
+                              "#defifndef DBL_MAX_10_EXP __DBL_MAX_10_EXP__\n"
+                              "#defifndef DBL_HAS_SUBNORM __DBL_HAS_DENORM__\n"
+                              "#ifdef __LDBL_MAX__\n"
+                                  "#defifndef LDBL_MAX __LDBL_MAX__\n"
+                                  "#defifndef LDBL_MIN __LDBL_MIN__\n"
+                                  "#defifndef LDBL_EPSILON __LDBL_EPSILON__\n"
+                                  "#defifndef LDBL_TRUE_MIN __LDBL_DENORM_MIN__\n"
+                                  "#defifndef LDBL_MANT_DIG __LDBL_MANT_DIG__\n"
+                                  "#defifndef LDBL_DIG __LDBL_DIG__\n"
+                                  "#defifndef LDBL_MIN_EXP __LDBL_MIN_EXP__\n"
+                                  "#defifndef LDBL_MAX_EXP __LDBL_MAX_EXP__\n"
+                                  "#defifndef LDBL_MIN_10_EXP __LDBL_MIN_10_EXP__\n"
+                                  "#defifndef LDBL_MAX_10_EXP __LDBL_MAX_10_EXP__\n"
+                                  "#defifndef LDBL_HAS_SUBNORM __LDBL_HAS_DENORM__\n"
+                              "#endif\n"
+                              "#ifdef __DECIMAL_DIG__\n"
+                                  "#defifndef DECIMAL_DIG __DECIMAL_DIG__\n"
                               "#endif\n"
                             )},
         {SV("iso646.h"), SV("#pragma once\n"
