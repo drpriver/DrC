@@ -68,9 +68,27 @@ FIRST(a, b, c) // -> a
 LAST(a, b, c)  // -> c
 ```
 
-### `defifndef`
+### `#try_include`
 
-### `defblock`
+Like `#include`, but doesn't error if the file can't be found.
+
+```C
+#try_include <optional_lib.h>
+```
+
+### `#defifndef`
+
+Defines the macro only if not already defined.
+
+```C
+#defifndef X 42
+// equivalent to:
+// #ifndef X
+// #define X 42
+// #endif
+```
+
+### `#defblock`
 
 Multiline macros can be ergonomically defined using `#defblock` instead of
 `#define`. `#defblock` is terminated by the next `#endblock`. Preprocessor
@@ -376,6 +394,7 @@ if(T.is_integer) printf("yes\n");
  | `.is_unsigned`     | `_Bool`       | True for unsigned integer types               |
  | `.is_signed`       | `_Bool`       | True for signed integer types                 |
  | `.is_callable`     | `_Bool`       | True for functions and function pointers      |
+ | `.is_incomplete`   | `_Bool`       | True for incomplete types                     |
  | `.is_variadic`     | `_Bool`       | True for variadic functions/function pointers |
  | `.pointee`         | `_Type`       | Pointed-to type (pointers only)               |
  | `.unqual`          | `_Type`       | Type with qualifiers removed                  |
