@@ -2584,6 +2584,251 @@ TestFunction(test_parse_decls){
                "int a[\"Hello\"[4] - 'n'];\n"),
             .vars = {{SV("a"), SV("int[1]")}},
         },
+        {
+            "constexpr struct predecl", __LINE__,
+            SV("struct foo {int x;};\n"
+               "constexpr struct foo foo = {1};\n"
+               "constexpr int x = foo.x;\n"
+               "_Static_assert(x);\n"),
+            .vars = {
+                {SV("foo"), SV("const struct foo"), SV("{1}")},
+                {SV("x"), SV("const int"), SV("foo.@0")},
+            },
+        },
+        {
+            "constexpr struct", __LINE__,
+            SV("constexpr struct foo {int x;} foo = {1};\n"
+               "constexpr int x = foo.x;\n"
+               "_Static_assert(x);\n"),
+            .vars = {
+                {SV("foo"), SV("const struct foo"), SV("{1}")},
+                {SV("x"), SV("const int"), SV("foo.@0")},
+            },
+        },
+        {
+            "constexpr struct init", __LINE__,
+            SV("constexpr struct foo {int x;} foo = {1};\n"
+               "constexpr struct foo b = foo;\n"
+               "_Static_assert(b.x);\n"),
+            .vars = {
+                {SV("foo"), SV("const struct foo"), SV("{1}")},
+                {SV("b"), SV("const struct foo"), SV("(struct foo)foo")},
+            },
+        },
+        {
+            "constexpr array init", __LINE__,
+            SV("constexpr int arr[] = {1};\n"
+               "constexpr int x = arr[0];\n"
+               "_Static_assert(x);\n"),
+            .vars = {
+                {SV("arr"), SV("const int[1]"), SV("{1}")},
+                {SV("x"), SV("const int"), SV("(int)arr[0]")},
+            },
+        },
+        // ---- constexpr/value class torture tests ----
+        {
+            "constexpr: sizeof in constexpr context", __LINE__,
+            SV("int y;\n"
+               "constexpr int x = sizeof(y);\n"
+               "_Static_assert(x == 4);\n"),
+            .vars = {
+                {SV("y"), SV("int")},
+                {SV("x"), SV("const int"), SV("(int)4")},
+            },
+        },
+        {
+            "constexpr: alignof in constexpr context", __LINE__,
+            SV("int y;\n"
+               "constexpr int x = _Alignof(y);\n"
+               "_Static_assert(x == 4);\n"),
+            .vars = {
+                {SV("y"), SV("int")},
+                {SV("x"), SV("const int"), SV("(int)4")},
+            },
+        },
+        {
+            "constexpr: nested constexpr", __LINE__,
+            SV("constexpr int a = 2;\n"
+               "constexpr int b = a * 3;\n"
+               "constexpr int c = a + b;\n"
+               "_Static_assert(c == 8);\n"),
+            .vars = {
+                {SV("a"), SV("const int"), SV("2")},
+                {SV("b"), SV("const int"), SV("(int)(a * (const int)3)")},
+                {SV("c"), SV("const int"), SV("(int)(a + b)")},
+            },
+        },
+        {
+            "constexpr: ternary", __LINE__,
+            SV("constexpr int x = 1 ? 42 : 0;\n"
+               "_Static_assert(x == 42);\n"),
+            .vars = {
+                {SV("x"), SV("const int")},
+            },
+        },
+        {
+            "constexpr: cast", __LINE__,
+            SV("constexpr int x = (int)3.14;\n"
+               "_Static_assert(x == 3);\n"),
+            .vars = {
+                {SV("x"), SV("const int"), SV("(int)3.14")},
+            },
+        },
+        {
+            "constexpr: logical ops", __LINE__,
+            SV("constexpr int a = 1 && 0;\n"
+               "constexpr int b = 1 || 0;\n"
+               "constexpr int c = !0;\n"
+               "_Static_assert(!a);\n"
+               "_Static_assert(b);\n"
+               "_Static_assert(c);\n"),
+            .vars = {
+                {SV("a"), SV("const int")},
+                {SV("b"), SV("const int")},
+                {SV("c"), SV("const int")},
+            },
+        },
+        {
+            "constexpr: string subscript", __LINE__,
+            SV("constexpr int x = \"abc\"[1];\n"
+               "_Static_assert(x == 'b');\n"),
+            .vars = {
+                {SV("x"), SV("const int")},
+            },
+        },
+        {
+            "constexpr: enum value in constexpr", __LINE__,
+            SV("enum { A = 10, B = A + 5 };\n"
+               "constexpr int x = B;\n"
+               "_Static_assert(x == 15);\n"),
+            .vars = {
+                {SV("x"), SV("const int"), SV("15")},
+            },
+        },
+        {
+            "constexpr: bitfield width from constexpr", __LINE__,
+            SV("constexpr int W = 5;\n"
+               "struct S { int x : W; };\n"
+               "int a[sizeof(struct S)];\n"),
+            .vars = {
+                {SV("a"), SV("int[4]")},
+            },
+        },
+        {
+            "constexpr: array dim from constexpr", __LINE__,
+            SV("constexpr int N = 3;\n"
+               "int arr[N];\n"
+               "_Static_assert(sizeof(arr) == 12);\n"),
+            .vars = {
+                {SV("arr"), SV("int[3]")},
+            },
+        },
+        {
+            "constexpr: case label from constexpr arithmetic", __LINE__,
+            SV("constexpr int BASE = 100;\n"
+               "int f(int x) {\n"
+               "    switch(x) {\n"
+               "        case BASE + 1: return 1;\n"
+               "        case BASE + 2: return 2;\n"
+               "        default: return 0;\n"
+               "    }\n"
+               "}\n"),
+            .funcs = { {SV("f"), SV("int(int)")} },
+        },
+        {
+            "static local: literal init", __LINE__,
+            SV("void f(void) { static int x = 42; }\n"),
+            .funcs = { {SV("f"), SV("void(void)")} },
+        },
+        {
+            "static local: address of global via array decay", __LINE__,
+            SV("int arr[3];\n"
+               "void f(void) { static int* p = arr; }\n"),
+            .funcs = { {SV("f"), SV("void(void)")} },
+        },
+        {
+            "static local: string literal", __LINE__,
+            SV("void f(void) { static const char* s = \"hello\"; }\n"),
+            .funcs = { {SV("f"), SV("void(void)")} },
+        },
+        {
+            "static local: constexpr value", __LINE__,
+            SV("constexpr int N = 42;\n"
+               "void f(void) { static int x = N; }\n"),
+            .funcs = { {SV("f"), SV("void(void)")} },
+        },
+        {
+            "constexpr: nested struct member", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { struct Inner i; int c; };\n"
+               "constexpr struct Outer o = {{1, 2}, 3};\n"
+               "_Static_assert(o.c == 3);\n"
+               "_Static_assert(o.i.a == 1);\n"
+               "_Static_assert(o.i.b == 2);\n"),
+            .vars = {
+                {SV("o"), SV("const struct Outer")},
+            },
+        },
+        {
+            "constexpr: array of structs", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "constexpr struct P pts[] = {{1,2},{3,4}};\n"
+               "_Static_assert(pts[0].x == 1);\n"
+               "_Static_assert(pts[1].y == 4);\n"),
+            .vars = {
+                {SV("pts"), SV("const struct P[2]")},
+            },
+        },
+        {
+            "constexpr: char array from string literal", __LINE__,
+            SV("constexpr char s[] = \"hello\";\n"
+               "_Static_assert(s[0] == 'h');\n"
+               "_Static_assert(s[4] == 'o');\n"
+               "_Static_assert(s[5] == 0);\n"),
+            .vars = {
+                {SV("s"), SV("const char[6]")},
+            },
+        },
+        {
+            "constexpr: struct with char array from string", __LINE__,
+            SV("struct Name { char data[4]; };\n"
+               "constexpr struct Name names[] = {{\"abc\"}, {\"xyz\"}};\n"
+               "_Static_assert(names[0].data[0] == 'a');\n"
+               "_Static_assert(names[0].data[2] == 'c');\n"
+               "_Static_assert(names[1].data[0] == 'x');\n"
+               "_Static_assert(names[1].data[2] == 'z');\n"),
+            .vars = {
+                {SV("names"), SV("const struct Name[2]")},
+            },
+        },
+        {
+            "constexpr: nested arrays", __LINE__,
+            SV("constexpr int m[2][3] = {{1,2,3},{4,5,6}};\n"
+               "_Static_assert(m[0][0] == 1);\n"
+               "_Static_assert(m[0][2] == 3);\n"
+               "_Static_assert(m[1][0] == 4);\n"
+               "_Static_assert(m[1][2] == 6);\n"),
+            .vars = {
+                {SV("m"), SV("const int[2][3]")},
+            },
+        },
+        {
+            "constexpr: deep chained access", __LINE__,
+            SV("struct V { int v[2]; };\n"
+               "struct Row { struct V cols[2]; };\n"
+               "constexpr struct Row grid[] = {\n"
+               "    {{{10, 11}, {12, 13}}},\n"
+               "    {{{20, 21}, {22, 23}}},\n"
+               "};\n"
+               "_Static_assert(grid[0].cols[0].v[0] == 10);\n"
+               "_Static_assert(grid[0].cols[0].v[1] == 11);\n"
+               "_Static_assert(grid[0].cols[1].v[0] == 12);\n"
+               "_Static_assert(grid[1].cols[0].v[0] == 20);\n"
+               "_Static_assert(grid[1].cols[1].v[1] == 23);\n"),
+            .vars = {
+                {SV("grid"), SV("const struct Row[2]")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -2610,6 +2855,7 @@ TestFunction(test_parse_decls){
                 .target = cc_target_test(),
             },
             .current = &cc.global,
+            .eager_parsing = 1,
         };
         struct Case* c = &testcases[i];
         fc_write_path(fc, "(test)", 6);
@@ -2744,7 +2990,7 @@ TestFunction(test_parse_errors){
             "constexpr with non-constant init", __LINE__,
             SV("int y;\n"
                "constexpr int x = y;\n"),
-            SV("(test):2:19: error: constexpr initializer is not a constant expression\n"),
+            SV("(test):2:19: error: expression is not a constant expression\n"),
         },
         {
             "FAM in middle of struct", __LINE__,
@@ -3146,7 +3392,7 @@ TestFunction(test_parse_errors){
             "static if: non-constant condition", __LINE__,
             SV("int x;\n"
                "static if(x) { int y; }\n"),
-            SV("(test):2:11: error: static if condition must be a constant expression\n"),
+            SV("(test):2:11: error: expression is not a constant expression\n"),
         },
         {
             "address of bitfield", __LINE__,
@@ -3484,6 +3730,142 @@ TestFunction(test_parse_errors){
             "bare qualifier in function param", __LINE__,
             SV("void foo(const);\n"),
             SV("(test):1:10: error: Expected type in function parameter\n"),
+        },
+        {
+            "case label: variable not constexpr", __LINE__,
+            SV("int n = 3;\n"
+               "int f(int x) { switch(x) { case n: return 1; default: return 0; } }\n"),
+            SV("(test):2:33: error: expression is not a constant expression\n"),
+        },
+        {
+            "case label: function call", __LINE__,
+            SV("int g(void);\n"
+               "int f(int x) { switch(x) { case g(): return 1; default: return 0; } }\n"),
+            SV("(test):2:34: error: function call in constant expression\n"),
+        },
+        {
+            "enum value: variable", __LINE__,
+            SV("int x = 5;\n"
+               "enum E { A = x };\n"),
+            SV("(test):2:14: error: expression is not a constant expression\n"),
+        },
+        {
+            "bitfield width: variable", __LINE__,
+            SV("int w = 3;\n"
+               "struct S { int x : w; };\n"),
+            SV("(test):2:20: error: expression is not a constant expression\n"),
+        },
+        {
+            "static_assert: variable", __LINE__,
+            SV("int x = 1;\n"
+               "static_assert(x);\n"),
+            SV("(test):2:15: error: expression is not a constant expression\n"),
+        },
+        {
+            "constexpr init: variable", __LINE__,
+            SV("int y = 5;\n"
+               "constexpr int x = y;\n"),
+            SV("(test):2:19: error: expression is not a constant expression\n"),
+        },
+        {
+            "constexpr init: function call", __LINE__,
+            SV("int f(void);\n"
+               "constexpr int x = f();\n"),
+            SV("(test):2:20: error: function call in constant expression\n"),
+        },
+        {
+            "static local init: variable", __LINE__,
+            SV("void f(int y) { static int x = y; }\n"),
+            SV("(test):1:32: error: expression is not a constant expression\n"),
+        },
+        {
+            "case label: assignment", __LINE__,
+            SV("int x;\n"
+               "int f(int v) { switch(v) { case (x=1): return 1; default: return 0; } }\n"),
+            SV("(test):2:34: error: expression is not a constant expression\n"),
+        },
+        {
+            "case label: pre-increment", __LINE__,
+            SV("int x;\n"
+               "int f(int v) { switch(v) { case ++x: return 1; default: return 0; } }\n"),
+            SV("(test):2:33: error: increment/decrement in constant expression\n"),
+        },
+        // ---- constexpr/value class error torture tests ----
+        {
+            "enum value: function call", __LINE__,
+            SV("int f(void);\n"
+               "enum E { A = f() };\n"),
+            SV("(test):2:15: error: function call in constant expression\n"),
+        },
+        {
+            "bitfield width: function call", __LINE__,
+            SV("int f(void);\n"
+               "struct S { int x : f(); };\n"),
+            SV("(test):2:21: error: function call in constant expression\n"),
+        },
+        {
+            "array dim: non-constexpr variable", __LINE__,
+            SV("int n = 10;\n"
+               "int arr[n];\n"),
+            SV("(test):2:9: error: expression is not a constant expression\n"),
+        },
+        {
+            "array dim: function call", __LINE__,
+            SV("int f(void);\n"
+               "int arr[f()];\n"),
+            SV("(test):2:10: error: function call in constant expression\n"),
+        },
+        {
+            "constexpr: post-increment", __LINE__,
+            SV("int x;\n"
+               "constexpr int y = x++;\n"),
+            SV("(test):2:19: error: expression is not a constant expression\n"),
+        },
+        {
+            "constexpr: address-of", __LINE__,
+            SV("int x;\n"
+               "constexpr int* p = &x;\n"),
+            SV("(test):2:20: error: address-of in constant expression\n"),
+        },
+        {
+            "static local: automatic variable", __LINE__,
+            SV("void f(int y) { static int x = y; }\n"),
+            SV("(test):1:32: error: expression is not a constant expression\n"),
+        },
+        {
+            "static local: function call", __LINE__,
+            SV("int g(void);\n"
+               "void f(void) { static int x = g(); }\n"),
+            SV("(test):2:32: error: function call in constant expression\n"),
+        },
+        {
+            "static local: parameter in expr", __LINE__,
+            SV("void f(int a, int b) { static int x = a + b; }\n"),
+            SV("(test):1:39: error: expression is not a constant expression\n"),
+        },
+        {
+            "case label: post-decrement", __LINE__,
+            SV("int x;\n"
+               "int f(int v) { switch(v) { case x--: return 1; default: return 0; } }\n"),
+            SV("(test):2:33: error: expression is not a constant expression\n"),
+        },
+        {
+            "enum value: assignment", __LINE__,
+            SV("int x;\n"
+               "enum E { A = (x = 5) };\n"),
+            SV("(test):2:15: error: expression is not a constant expression\n"),
+        },
+        {
+            "constexpr: compound assignment", __LINE__,
+            SV("int x = 1;\n"
+               "constexpr int y = (x += 1);\n"),
+            SV("(test):2:20: error: expression is not a constant expression\n"),
+        },
+        {
+            "_Alignas: non-constexpr", __LINE__,
+            SV("int n = 16;\n"
+               "_Alignas(n) int x;\n"),
+            SV("(test):2:10: error: expression is not a constant expression\n"),
         },
     };
     static int idx = 0;

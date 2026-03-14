@@ -1209,7 +1209,12 @@ run_the_tests_multithreaded(size_t*_Nonnull which_tests, int test_count, struct 
         result->assert_failures += r->assert_failures;
         result->skips += r->skips;
         for(size_t n = 0; n < r->n_failed_tests; n++){
-            result->failed_tests[result->n_failed_tests++] = r->failed_tests[n];
+            size_t ft = r->failed_tests[n];
+            for(size_t m = 0; m < result->n_failed_tests; m++)
+                if(result->failed_tests[m] == ft)
+                    goto already;
+            result->failed_tests[result->n_failed_tests++] = ft;
+            already:;
         }
     }
 }

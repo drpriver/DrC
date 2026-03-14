@@ -101,7 +101,7 @@ static _Bool cc_implicit_convertible(CcQualType from, CcQualType to);
 static _Bool cc_explicit_castable(CcQualType from, CcQualType to);
 // Evaluate an expression as an lvalue, returning pointer to its storage.
 static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
-static int cc_parse_expr(CcParser* p, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
 
 static CppFuncMacroFn ci_shell, ci_procmacro_expand;
@@ -3194,7 +3194,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(err)goto restore;
     // Parse as expression — the parser will type-check the call.
     p->pending = *scratch;
-    err = cc_parse_expr(p, &expr);
+    err = cc_parse_expr(p, CC_RUNTIME_VALUE, &expr);
     {
         restore:
         *scratch = p->pending;
