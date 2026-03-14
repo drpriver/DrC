@@ -148,7 +148,8 @@ cpp_kwargs(CppPreprocessor* cpp){
             .min_num = 0, .max_num = 1,
         },
         [7] = {
-            .name = SV("-nostdinc"),
+            .name = SV("--nostdinc"),
+            .altname1 = SV("-nostdinc"),
             .dest = ARGDEST(&cpp_nostdinc),
             .help = "Do not search standard system include paths.",
         },

@@ -15,11 +15,22 @@
 #include "cpp_tok.h"
 #include "cc_errors.h"
 #include "cc_memory_order.h"
+#include "cc_keywords.h"
 #include "../Drp/msb_sprintf.h"
 #include "../Drp/path_util.h"
 #include "../Drp/parse_numbers.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#endif
+
+#ifndef DEFAULT_UNREACHABLE
+#if defined __GNUC__ && !defined __clang__
+#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
+#elif defined _MSC_VER
+#define DEFAULT_UNREACHABLE default: __assume(0)
+#else
+#define DEFAULT_UNREACHABLE
+#endif
 #endif
 
 #ifdef __GNUC__
@@ -1728,7 +1739,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
-    if(sv_equals(tok.txt, SV("define"))){
+    if(sv_equals(tok.txt, SV("define")) || sv_equals(tok.txt, SV("defifndef"))){
+        _Bool ifndef = tok.txt.length > 6;
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
@@ -1736,6 +1748,22 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return err;
         if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
+        if(ifndef){
+            Atom a = AT_get_atom(cpp->at, name.text, name.length);
+            if(a && AM_get(&cpp->macros, a)){
+                // would redef, but we're in defifndef, so skip to end of line.
+                for(;;){
+                    err = cpp_next_raw_token(cpp, &tok);
+                    if(err) return err;
+                    if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
+                        // push it back so dispatch loop sees newline
+                        err = cpp_push_tok(cpp, &cpp->pending, tok);
+                        if(err) return err;
+                        return 0;
+                    }
+                }
+            }
+        }
         err = cpp_next_raw_token(cpp, &tok);
         if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
             // #define foo
@@ -2554,8 +2582,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         cpp_release_scratch(cpp, prag_toks);
         if(err) return err;
     }
-    else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next")) || sv_equals(tok.txt, SV("include_oneof"))){
+    else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next")) || sv_equals(tok.txt, SV("include_oneof")) || sv_equals(tok.txt, SV("import")) || sv_equals(tok.txt, SV("try_include"))){
         _Bool is_next = sv_equals(tok.txt, SV("include_next"));
+        _Bool is_import = sv_equals(tok.txt, SV("import"));
+        _Bool is_optional = sv_equals(tok.txt, SV("try_include"));
         SrcLoc directive_loc = tok.loc;
         // Skip whitespace after directive name
         do {
@@ -2701,12 +2731,20 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
             err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
             if(err){
+                if(is_optional){
+                    msb_destroy(&header_sb);
+                    return 0;
+                }
                 err = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
                 goto cleanup;
             }
             goto include_found;
         }
         {
+            if(is_optional){
+                msb_destroy(&header_sb);
+                return 0;
+            }
             err = header_name.length
                 ? cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text)
                 : cpp_error(cpp, directive_loc, "Empty #include");
@@ -2732,6 +2770,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
         // Check pragma once - skip if already included with #pragma once
         if(cpp_is_pragma_once(cpp, file_id))
             goto cleanup;
+        // #import implies #pragma once
+        if(is_import){
+            err = cpp_add_pragma_once(cpp, file_id);
+            if(err) goto cleanup;
+        }
         // Check include guard - skip if guard macro is still defined
         {
             Atom guard = cpp_get_include_guard(cpp, file_id);
@@ -2811,14 +2854,22 @@ cpp_handle_directive(CppPreprocessor* cpp){
             return err;
         }
     }
+    else if(sv_equals(tok.txt, SV("line"))){
+        // just ignore it
+        do {
+            err = cpp_next_raw_token(cpp, &tok);
+            if(err) return err;
+        } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        // push it back so dispatch loop sees newline
+        return cpp_push_tok(cpp, &cpp->pending, tok);
+    }
     else {
         cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
         // unknown or unhandled directive
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
-        }
-        while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
+        } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
         // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
@@ -4157,6 +4208,19 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
             toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
             break;
+        case CCBT_long_double:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
+            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
+            break;
+        case CCBT_int128:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__int128")};
+            break;
+        case CCBT_unsigned_int128:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
+            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__int128")};
+            break;
         default:
             return -1;
     }
@@ -4312,6 +4376,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFTYPE("__SIZE_TYPE__",       t.size_type);
     DEFTYPE("__PTRDIFF_TYPE__",    t.ptrdiff_type);
     DEFTYPE("__WCHAR_TYPE__",      t.wchar_type);
+    DEFTYPE("__MAX_ALIGN_TYPE__",  t.max_align_type);
     DEFTYPE("__WINT_TYPE__",       t.wint_type);
     DEFTYPE("__INTMAX_TYPE__",     t.intmax_type);
     DEFTYPE("__UINTMAX_TYPE__",    ccbt_unsigned_of(t.intmax_type));
@@ -4320,10 +4385,12 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFTYPE("__INT16_TYPE__",      CCBT_short);
     DEFTYPE("__INT32_TYPE__",      CCBT_int);
     DEFTYPE("__INT64_TYPE__",      t.int64_type);
+    DEFTYPE("__INT128_TYPE__",     CCBT_int128);
     DEFTYPE("__UINT8_TYPE__",      CCBT_unsigned_char);
     DEFTYPE("__UINT16_TYPE__",     CCBT_unsigned_short);
     DEFTYPE("__UINT32_TYPE__",     CCBT_unsigned);
     DEFTYPE("__UINT64_TYPE__",     ccbt_unsigned_of(t.int64_type));
+    DEFTYPE("__UINT128_TYPE__",     CCBT_unsigned_int128);
     DEFTYPE("__INT_LEAST8_TYPE__",  CCBT_signed_char);
     DEFTYPE("__INT_LEAST16_TYPE__", CCBT_short);
     DEFTYPE("__INT_LEAST32_TYPE__", CCBT_int);
@@ -4632,42 +4699,16 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
         {SV("<no source>"), SV("")},
-        {SV("assert.h"),   SV(
+        {SV("assert.h"),   SV(// Note: no pragma once, can be included multiple times
+                              "#defifndef __STDC_VERSION_ASSERT_H__ 202311L\n"
                               "#undef assert\n"
                               "#ifdef NDEBUG\n"
-                              "#define assert(x) ((void)0)\n"
+                              // ... is for compound literal support etc.
+                              "#define assert(...) ((void)0)\n"
                               "#else\n"
-                              "#define assert(x) ((x)?(void)0:__builtin_trap())\n"
+                              // FIXME: diagnose assert(1,1)
+                              "#define assert(...) ((__VA_ARGS__)?(void)0:__builtin_trap())\n"
                               "#endif\n")},
-        {SV("stdarg.h"),   SV("#pragma once\n"
-                              "#define va_start __builtin_va_start\n"
-                              "#define va_copy __builtin_va_copy\n"
-                              "#define va_arg __builtin_va_arg\n"
-                              "#define va_end __builtin_va_end\n"
-                              "typedef __builtin_va_list va_list;\n"
-                            )},
-        {SV("stddef.h"),   SV("#pragma once\n"
-                              "typedef __SIZE_TYPE__ size_t;\n"
-                              "typedef __PTRDIFF_TYPE__ ptrdiff_t;\n"
-                              "typedef __WCHAR_TYPE__ wchar_t;\n"
-                              "typedef typeof(nullptr) nullptr_t;\n"
-                              "#ifndef NULL\n"
-                              "#define NULL ((void*)0)\n"
-                              "#endif\n"
-                              "#define offsetof(type, member) __builtin_offsetof(type, member)\n"
-                           )},
-        {SV("stdbool.h"),  SV("#pragma once\n"
-                              "#define __bool_true_false_are_defined 1\n"
-                              "#ifndef bool\n"
-                              "#define bool bool\n"
-                              "#endif\n"
-                              "#ifndef true\n"
-                              "#define true true\n"
-                              "#endif\n"
-                              "#ifndef false\n"
-                              "#define false false\n"
-                              "#endif\n"
-                           )},
         {SV("float.h"),    SV("#pragma once\n"
                               "#if __has_include_next(<float.h>)\n"
                               "#include_next <float.h>\n"
@@ -4676,6 +4717,18 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n"
                               "#endif\n"
                             )},
+        {SV("iso646.h"), SV("#pragma once\n"
+                            "#define and &&\n"
+                            "#define and_eq &=\n"
+                            "#define bitand &\n"
+                            "#define bitor |\n"
+                            "#define compl ~\n"
+                            "#define not !\n"
+                            "#define not_eq !=\n"
+                            "#define or ||\n"
+                            "#define or_eq |=\n"
+                            "#define xor ^\n"
+                            "#define xor_eq ^=\n")},
         {SV("limits.h"),   SV("#pragma once\n"
                               "#ifdef __linux__\n"
                               "#define _GCC_LIMITS_H_\n"
@@ -4707,7 +4760,19 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#include_next <limits.h>\n"
                               "#endif\n"
                             )},
+        {SV("stdalign.h"), SV("#pragma once\n")},
+        {SV("stdarg.h"),   SV("#pragma once\n"
+                              "#define __STDC_VERSION_STDARG_H__ 202311L\n"
+                              "#define va_start __builtin_va_start\n"
+                              "#define va_copy __builtin_va_copy\n"
+                              "#define va_arg __builtin_va_arg\n"
+                              "#define va_end __builtin_va_end\n"
+                              "typedef __builtin_va_list va_list;\n"
+                            )},
         {SV("stdatomic.h"), SV("#pragma once\n"
+                              // This is a partial impl.
+                              // There is a *lot* of bloat in stdatomic.h
+                              "#define __STDC_VERSION_STDATOMIC_H__ 202311L\n"
                               "typedef enum {\n"
                               "    memory_order_relaxed = __ATOMIC_RELAXED,\n"
                               "    memory_order_consume = __ATOMIC_CONSUME,\n"
@@ -4728,7 +4793,8 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define ATOMIC_POINTER_LOCK_FREE __GCC_ATOMIC_POINTER_LOCK_FREE\n"
                               "#define _Atomic(tp) tp\n"
                               "#define ATOMIC_VAR_INIT(value) (value)\n"
-                              "#define atomic_init(obj, value) __atomic_store_n(obj, value, __ATOMIC_RELAXED)\n"
+                              "#define atomic_is_lock_free(x) ((void)x, true)\n"
+                              "#define atomic_init(obj, value) ((void)(*obj = value))\n"
                               "#define atomic_store(obj, value) __atomic_store_n(obj, value, __ATOMIC_SEQ_CST)\n"
                               "#define atomic_store_explicit(obj, value, order) __atomic_store_n(obj, value, order)\n"
                               "#define atomic_load(obj) __atomic_load_n(obj, __ATOMIC_SEQ_CST)\n"
@@ -4759,26 +4825,212 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define atomic_flag_test_and_set_explicit(obj, order) __atomic_exchange_n(obj, 1, order)\n"
                               "#define atomic_flag_clear(obj) __atomic_store_n(obj, 0, __ATOMIC_SEQ_CST)\n"
                               "#define atomic_flag_clear_explicit(obj, order) __atomic_store_n(obj, 0, order)\n"
+                              // uh is this wrong?
                               "typedef _Bool atomic_flag;\n"
                               "#define ATOMIC_FLAG_INIT 0\n"
                            )},
+        {SV("stdbool.h"),  SV("#pragma once\n"
+                              "#define __bool_true_false_are_defined 1\n"
+                              "#ifndef bool\n"
+                              "#define bool bool\n"
+                              "#endif\n"
+                              "#ifndef true\n"
+                              "#define true true\n"
+                              "#endif\n"
+                              "#ifndef false\n"
+                              "#define false false\n"
+                              "#endif\n"
+                           )},
+        {SV("stdckdint.h"),  SV("#pragma once\n"
+                                "#define __STDC_VERSION_STDCKDINT_H__ 202311L\n"
+                                "#define ckd_add(result, a, b) __builtin_add_overflow(a, b, result)\n"
+                                "#define ckd_sub(result, a, b) __builtin_sub_overflow(a, b, result)\n"
+                                "#define ckd_mul(result, a, b) __builtin_mul_overflow(a, b, result)\n"
+                            )},
+        {SV("stdcountof.h"), SV("#pragma once\n"
+                                "#define __STDC_VERSION_STDCOUNTOF_H__ 202603L\n"
+                                "#define countof _Countof\n"
+                            )},
+        {SV("stddef.h"),   SV("#pragma once\n"
+                              "#define __STDC_VERSION_STDDEF_H__ 202311L\n"
+                              "typedef __SIZE_TYPE__ size_t;\n"
+                              "typedef __PTRDIFF_TYPE__ ptrdiff_t;\n"
+                              "typedef __WCHAR_TYPE__ wchar_t;\n"
+                              "typedef __MAX_ALIGN_TYPE__ max_align_t;\n"
+                              "typedef typeof(nullptr) nullptr_t;\n"
+                              "#define unreachable() __builtin_unreachable()\n"
+                              "#ifndef NULL\n"
+                              "#define NULL ((void*)0)\n"
+                              "#endif\n"
+                              "#define offsetof(type, member) __builtin_offsetof(type, member)\n"
+                           )},
+        {SV("stdint.h"),   SV("#pragma once\n"
+                              "#if __has_include_next(<stdint.h>)\n"
+                              "#include_next <stdint.h>\n"
+                              "#endif\n"
+                              "#ifdef __STDC_VERSION_STDINT_H__\n"
+                              "#undef __STDC_VERSION_STDINT_H__\n"
+                              "#endif\n"
+                              "#define __STDC_VERSION_STDINT_H__ 202311L\n"
+                              // harmless to re-typedef
+                              "typedef __INT8_TYPE__ int8_t;\n"
+                              "typedef __INT16_TYPE__ int16_t;\n"
+                              "typedef __INT32_TYPE__ int32_t;\n"
+                              "typedef __INT64_TYPE__ int64_t;\n"
+                              "typedef __UINT8_TYPE__ uint8_t;\n"
+                              "typedef __UINT16_TYPE__ uint16_t;\n"
+                              "typedef __UINT32_TYPE__ uint32_t;\n"
+                              "typedef __UINT64_TYPE__ uint64_t;\n"
+                              "typedef __INT128_TYPE__ int128_t;\n"
+                              "typedef __UINT128_TYPE__ uint128_t;\n"
+                              "typedef __INT_LEAST8_TYPE__ int_least8_t;\n"
+                              "typedef __INT_LEAST16_TYPE__ int_least16_t;\n"
+                              "typedef __INT_LEAST32_TYPE__ int_least32_t;\n"
+                              "typedef __INT_LEAST64_TYPE__ int_least64_t;\n"
+                              "typedef __UINT_LEAST8_TYPE__ uint_least8_t;\n"
+                              "typedef __UINT_LEAST16_TYPE__ uint_least16_t;\n"
+                              "typedef __UINT_LEAST32_TYPE__ uint_least32_t;\n"
+                              "typedef __UINT_LEAST64_TYPE__ uint_least64_t;\n"
+                              "typedef __INT_FAST8_TYPE__ int_fast8_t;\n"
+                              "typedef __INT_FAST16_TYPE__ int_fast16_t;\n"
+                              "typedef __INT_FAST32_TYPE__ int_fast32_t;\n"
+                              "typedef __INT_FAST64_TYPE__ int_fast64_t;\n"
+                              "typedef __UINT_FAST8_TYPE__ uint_fast8_t;\n"
+                              "typedef __UINT_FAST16_TYPE__ uint_fast16_t;\n"
+                              "typedef __UINT_FAST32_TYPE__ uint_fast32_t;\n"
+                              "typedef __UINT_FAST64_TYPE__ uint_fast64_t;\n"
+                              "typedef __INTPTR_TYPE__ intptr_t;\n"
+                              "typedef __UINTPTR_TYPE__ uintptr_t;\n"
+                              "typedef __INTMAX_TYPE__ intmax_t;\n"
+                              "typedef __UINTMAX_TYPE__ uintmax_t;\n"
+                              "#include <__stdint_limits.h>\n"
+                           )},
+        // had to split into two strings.
+        {SV("__stdint_limits.h"), SV("#pragma once\n"
+                              // width macros
+                              "#defifndef INT8_WIDTH 8\n"
+                              "#defifndef INT16_WIDTH 16\n"
+                              "#defifndef INT32_WIDTH 32\n"
+                              "#defifndef INT64_WIDTH 64\n"
+                              "#defifndef UINT8_WIDTH 8\n"
+                              "#defifndef UINT16_WIDTH 16\n"
+                              "#defifndef UINT32_WIDTH 32\n"
+                              "#defifndef UINT64_WIDTH 64\n"
+                              "#defifndef INT_LEAST8_WIDTH 8\n"
+                              "#defifndef INT_LEAST16_WIDTH 16\n"
+                              "#defifndef INT_LEAST32_WIDTH 32\n"
+                              "#defifndef INT_LEAST64_WIDTH 64\n"
+                              "#defifndef UINT_LEAST8_WIDTH 8\n"
+                              "#defifndef UINT_LEAST16_WIDTH 16\n"
+                              "#defifndef UINT_LEAST32_WIDTH 32\n"
+                              "#defifndef UINT_LEAST64_WIDTH 64\n"
+                              "#defifndef INT_FAST8_WIDTH __INT_FAST8_WIDTH__\n"
+                              "#defifndef INT_FAST16_WIDTH __INT_FAST16_WIDTH__\n"
+                              "#defifndef INT_FAST32_WIDTH __INT_FAST32_WIDTH__\n"
+                              "#defifndef INT_FAST64_WIDTH __INT_FAST64_WIDTH__\n"
+                              "#defifndef UINT_FAST8_WIDTH __INT_FAST8_WIDTH__\n"
+                              "#defifndef UINT_FAST16_WIDTH __INT_FAST16_WIDTH__\n"
+                              "#defifndef UINT_FAST32_WIDTH __INT_FAST32_WIDTH__\n"
+                              "#defifndef UINT_FAST64_WIDTH __INT_FAST64_WIDTH__\n"
+                              "#defifndef INTPTR_WIDTH __INTPTR_WIDTH__\n"
+                              "#defifndef UINTPTR_WIDTH __INTPTR_WIDTH__\n"
+                              "#defifndef INTMAX_WIDTH __INTMAX_WIDTH__\n"
+                              "#defifndef UINTMAX_WIDTH __INTMAX_WIDTH__\n"
+                              "#defifndef PTRDIFF_WIDTH __PTRDIFF_WIDTH__\n"
+                              "#defifndef SIG_ATOMIC_WIDTH __SIG_ATOMIC_WIDTH__\n"
+                              "#defifndef SIZE_WIDTH __SIZE_WIDTH__\n"
+                              "#defifndef WCHAR_WIDTH __WCHAR_WIDTH__\n"
+                              "#defifndef WINT_WIDTH __WINT_WIDTH__\n"
+                              "#defifndef UINT128_WIDTH 128\n"
+                              "#defifndef INT128_WIDTH 128\n"
+                              // constant macros
+                              "#defifndef INT8_C __INT8_C\n"
+                              "#defifndef INT16_C __INT16_C\n"
+                              "#defifndef INT32_C __INT32_C\n"
+                              "#defifndef INT64_C __INT64_C\n"
+                              "#defifndef UINT8_C __UINT8_C\n"
+                              "#defifndef UINT16_C __UINT16_C\n"
+                              "#defifndef UINT32_C __UINT32_C\n"
+                              "#defifndef UINT64_C __UINT64_C\n"
+                              "#defifndef INTMAX_C __INTMAX_C\n"
+                              "#defifndef UINTMAX_C __UINTMAX_C\n"
+                              // max macros
+                              "#defifndef INT8_MAX __INT8_MAX__\n"
+                              "#defifndef INT16_MAX __INT16_MAX__\n"
+                              "#defifndef INT32_MAX __INT32_MAX__\n"
+                              "#defifndef INT64_MAX __INT64_MAX__\n"
+                              "#defifndef UINT8_MAX __UINT8_MAX__\n"
+                              "#defifndef UINT16_MAX __UINT16_MAX__\n"
+                              "#defifndef UINT32_MAX __UINT32_MAX__\n"
+                              "#defifndef UINT64_MAX __UINT64_MAX__\n"
+                              "#defifndef INT_LEAST8_MAX __INT_LEAST8_MAX__\n"
+                              "#defifndef INT_LEAST16_MAX __INT_LEAST16_MAX__\n"
+                              "#defifndef INT_LEAST32_MAX __INT_LEAST32_MAX__\n"
+                              "#defifndef INT_LEAST64_MAX __INT_LEAST64_MAX__\n"
+                              "#defifndef UINT_LEAST8_MAX __UINT_LEAST8_MAX__\n"
+                              "#defifndef UINT_LEAST16_MAX __UINT_LEAST16_MAX__\n"
+                              "#defifndef UINT_LEAST32_MAX __UINT_LEAST32_MAX__\n"
+                              "#defifndef UINT_LEAST64_MAX __UINT_LEAST64_MAX__\n"
+                              "#defifndef INT_FAST8_MAX __INT_FAST8_MAX__\n"
+                              "#defifndef INT_FAST16_MAX __INT_FAST16_MAX__\n"
+                              "#defifndef INT_FAST32_MAX __INT_FAST32_MAX__\n"
+                              "#defifndef INT_FAST64_MAX __INT_FAST64_MAX__\n"
+                              "#defifndef UINT_FAST8_MAX __UINT_FAST8_MAX__\n"
+                              "#defifndef UINT_FAST16_MAX __UINT_FAST16_MAX__\n"
+                              "#defifndef UINT_FAST32_MAX __UINT_FAST32_MAX__\n"
+                              "#defifndef UINT_FAST64_MAX __UINT_FAST64_MAX__\n"
+                              "#defifndef INTPTR_MAX __INTPTR_MAX__\n"
+                              "#defifndef UINTPTR_MAX __UINTPTR_MAX__\n"
+                              "#defifndef INTMAX_MAX __INTMAX_MAX__\n"
+                              "#defifndef UINTMAX_MAX __UINTMAX_MAX__\n"
+                              "#defifndef PTRDIFF_MAX __PTRDIFF_MAX__\n"
+                              "#defifndef SIG_ATOMIC_MAX __SIG_ATOMIC_MAX__\n"
+                              "#defifndef SIZE_MAX __SIZE_MAX__\n"
+                              "#defifndef WCHAR_MAX __WCHAR_MAX__\n"
+                              "#defifndef WINT_MAX __WINT_MAX__\n"
+                              // min macros
+                              "#defifndef INT8_MIN (-INT8_MAX-1)\n"
+                              "#defifndef INT16_MIN (-INT16_MAX-1)\n"
+                              "#defifndef INT32_MIN (-INT32_MAX-1)\n"
+                              "#defifndef INT64_MIN (-INT64_MAX-1)\n"
+                              "#defifndef INT_LEAST8_MIN (-INT_LEAST8_MAX-1)\n"
+                              "#defifndef INT_LEAST16_MIN (-INT_LEAST16_MAX-1)\n"
+                              "#defifndef INT_LEAST32_MIN (-INT_LEAST32_MAX-1)\n"
+                              "#defifndef INT_LEAST64_MIN (-INT_LEAST64_MAX-1)\n"
+                              "#defifndef INT_FAST8_MIN (-INT_FAST8_MAX-1)\n"
+                              "#defifndef INT_FAST16_MIN (-INT_FAST16_MAX-1)\n"
+                              "#defifndef INT_FAST32_MIN (-INT_FAST32_MAX-1)\n"
+                              "#defifndef INT_FAST64_MIN (-INT_FAST64_MAX-1)\n"
+                              "#defifndef INTPTR_MIN (-INTPTR_MAX-1)\n"
+                              "#defifndef INTMAX_MIN (-INTMAX_MAX-1)\n"
+                              "#defifndef PTRDIFF_MIN (-PTRDIFF_MAX-1)\n"
+                              "#defifndef SIG_ATOMIC_MIN (-SIG_ATOMIC_MAX-1)\n"
+                              "#defifndef WCHAR_MIN __WCHAR_MIN__\n"
+                              "#defifndef WINT_MIN __WINT_MIN__\n"
+                           )},
+        {SV("stdnoreturn.h"), SV("#pragma once\n"
+                              "#defifndef noreturn _Noreturn\n")},
+        {SV("setjmp.h"), SV("#pragma once\n"
+                            "#error setjmp not implemented\n")},
+        // nonstandard
         {SV("std.h"),      SV("#pragma once\n"
+                              "#include <assert.h>\n"
                               "#include <stdarg.h>\n"
                               "#include <stddef.h>\n"
                               "#include <stdbool.h>\n"
                               "#include <float.h>\n"
                               "#include <limits.h>\n"
                               "#include <stdint.h>\n"
-                              "#include <stdio.h>\n"
-                              "#include <stdlib.h>\n"
-                              "#include <string.h>\n"
-                              "#include <math.h>\n"
-                              "#include <ctype.h>\n"
-                              "#include <errno.h>\n"
-                              "#include <assert.h>\n"
-                              "#include <signal.h>\n"
-                              "#include <time.h>\n"
-                              "#include <inttypes.h>\n"
+                              "#include <stdatomic.h>\n"
+                              "#try_include <ctype.h>\n"
+                              "#try_include <errno.h>\n"
+                              "#try_include <inttypes.h>\n"
+                              "#try_include <math.h>\n"
+                              "#try_include <stdio.h>\n"
+                              "#try_include <stdlib.h>\n"
+                              "#try_include <string.h>\n"
+                              "#try_include <signal.h>\n"
+                              "#try_include <time.h>\n"
                           )},
     };
     for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
@@ -4795,13 +5047,13 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
 static
 int
 cpp_setup_default_includes(CppPreprocessor* cpp){
-    int err = cpp_setup_builtin_headers(cpp);
-    if(err) return err;
+    int err = 0;
     CcTargetConfig t = cpp->target;
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     if((CcTarget)CC_TARGET_NATIVE != t.target)
         goto finally;
     switch(t.target){
+        DEFAULT_UNREACHABLE;
         case CC_TARGET_AARCH64_MACOS:
         case CC_TARGET_X86_64_MACOS: {
             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
@@ -4890,7 +5142,8 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
             }
             break;
         }
-        default:
+        case CC_TARGET_TEST:
+        case CC_TARGET_COUNT:
             break;
     }
     finally:
@@ -6796,171 +7049,52 @@ enum {
     CC_LEX_FILE_NOT_FOUND_ERROR = _cc_file_not_found_error,
 };
 
-#define CKWS2(X) \
-X(do, do) \
-X(if, if) \
-
-#define CKWS3(X) \
-X(for, for) \
-X(int, int) \
-X(asm, asm) \
-
-#define CKWS4(X) \
-X(true, true) \
-X(long, long) \
-X(char, char) \
-X(auto, auto) \
-X(bool, bool) \
-X(else, else) \
-X(enum, enum) \
-X(case, case) \
-X(goto, goto) \
-X(void, void) \
-
-#define CKWS5(X) \
-X(__asm, asm) \
-X(break, break) \
-X(false, false) \
-X(float, float) \
-X(const, const) \
-X(short, short) \
-X(union, union) \
-X(while, while) \
-X(_Bool, bool) \
-X(_Type, _Type) \
-
-#define CKWS6(X) \
-X(double, double) \
-X(extern, extern) \
-X(inline, inline) \
-X(return, return) \
-X(signed, signed) \
-X(sizeof, sizeof) \
-X(static, static) \
-X(struct, struct) \
-X(switch, switch) \
-X(typeof, typeof) \
-
-#define CKWS7(X) \
-X(__asm__, asm) \
-X(alignas, alignas) \
-X(alignof, alignof) \
-X(default, default) \
-X(typedef, typedef) \
-X(nullptr, nullptr) \
-X(_Atomic, _Atomic) \
-X(_BitInt, _BitInt) \
-X(countof, _Countof) \
-X(__const, const) \
-
-#define CKWS8(X) \
-X(_Complex, _Complex) \
-X(continue, continue) \
-X(register, register) \
-X(restrict, restrict) \
-X(unsigned, unsigned) \
-X(volatile, volatile) \
-X(_Generic, _Generic) \
-X(_Countof, _Countof) \
-X(_Float16, _Float16) \
-X(_Float32, _Float32) \
-X(_Float64, _Float64) \
-X(_Alignas, alignas) \
-X(_Alignof, alignof) \
-X(__inline, inline) \
-X(__signed, signed) \
-X(__thread, thread_local) \
-X(noreturn, _Noreturn)\
-X(__typeof, typeof) \
-X(__int128, __int128) \
-
-#define CKWS9(X) \
-X(constexpr, constexpr) \
-X(_Noreturn, _Noreturn) \
-X(_Float128, _Float128) \
-X(_Float32x, _Float32x) \
-X(_Float64x, _Float64x) \
-X(__const__, const) \
-X(__alignof, alignof) \
-
-#define CKWS10(X) \
-X(_Imaginary, _Imaginary) \
-X(_Decimal32, _Decimal32) \
-X(_Decimal64, _Decimal64) \
-X(__inline__, inline) \
-X(__volatile, volatile) \
-X(__typeof__, typeof) \
-X(__restrict, restrict) \
-X(__signed__, signed) \
-
-#define CKWS11(X) \
-X(_Decimal128, _Decimal128) \
-X(__auto_type, __auto_type) \
-X(__attribute, __attribute__) \
-X(__alignof__, alignof) \
-
-#define CKWS12(X) \
-X(thread_local, thread_local) \
-X(__restrict__, restrict) \
-
-#define CKWS13(X) \
-X(static_assert, static_assert) \
-X(typeof_unqual, typeof_unqual) \
-X(_Thread_local, thread_local) \
-X(__attribute__, __attribute__) \
-
-#define CKWS14(X) \
-X(_Static_assert, static_assert) \
-
-#define CKWS17(X) \
-X(__typeof_unqual__, typeof_unqual) \
-
 static
 uint32_t
 cpp_lex_str_to_keyword(StringView txt){
 #define X(spelling, kw) if(sv_equals(txt, SV(#spelling))) return CC_##kw;
     switch(txt.length){
         case 2:
-            CKWS2(X);
+            CCKWS2(X);
             return (uint32_t)-1;
         case 3:
-            CKWS3(X);
+            CCKWS3(X);
             return (uint32_t)-1;
         case 4:
-            CKWS4(X);
+            CCKWS4(X);
             return (uint32_t)-1;
         case 5:
-            CKWS5(X);
+            CCKWS5(X);
             return (uint32_t)-1;
         case 6:
-            CKWS6(X);
+            CCKWS6(X);
             return (uint32_t)-1;
         case 7:
-            CKWS7(X);
+            CCKWS7(X);
             return (uint32_t)-1;
         case 8:
-            CKWS8(X);
+            CCKWS8(X);
             return (uint32_t)-1;
         case 9:
-            CKWS9(X);
+            CCKWS9(X);
             return (uint32_t)-1;
         case 10:
-            CKWS10(X);
+            CCKWS10(X);
             return (uint32_t)-1;
         case 11:
-            CKWS11(X);
+            CCKWS11(X);
             return (uint32_t)-1;
         case 12:
-            CKWS12(X);
+            CCKWS12(X);
             return (uint32_t)-1;
         case 13:
-            CKWS13(X)
+            CCKWS13(X)
             return (uint32_t)-1;
         case 14:
-            CKWS14(X)
+            CCKWS14(X)
             return (uint32_t)-1;
         case 17:
-            CKWS17(X)
+            CCKWS17(X)
             return (uint32_t)-1;
         default:
             return (uint32_t)-1;

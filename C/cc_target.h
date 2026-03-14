@@ -64,6 +64,7 @@ struct CcTargetConfig {
     CcBitfieldABI bitfield_abi;
     CcBasicTypeKind size_type;
     CcBasicTypeKind ptrdiff_type;
+    CcBasicTypeKind max_align_type;
     CcBasicTypeKind wchar_type;
     CcBasicTypeKind char16_type;
     CcBasicTypeKind char32_type;
@@ -151,6 +152,7 @@ cc_target_x86_64_linux(void){
         },
         .size_type    = CCBT_unsigned_long,
         .ptrdiff_type = CCBT_long,
+        .max_align_type = CCBT_unsigned_int128,
         .wchar_type   = CCBT_int,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,
@@ -248,6 +250,7 @@ cc_target_aarch64_linux(void){
         .size_type    = CCBT_unsigned_long,
         .ptrdiff_type = CCBT_long,
         .wchar_type   = CCBT_unsigned,
+        .max_align_type = CCBT_long_double,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,
         .wint_type    = CCBT_unsigned,
@@ -341,6 +344,7 @@ cc_target_x86_64_macos(void){
         },
         .size_type    = CCBT_unsigned_long,
         .ptrdiff_type = CCBT_long,
+        .max_align_type = CCBT_long_double,
         .wchar_type   = CCBT_int,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,
@@ -437,6 +441,7 @@ cc_target_aarch64_macos(void){
         },
         .size_type    = CCBT_unsigned_long,
         .ptrdiff_type = CCBT_long,
+        .max_align_type = CCBT_long_double,
         .wchar_type   = CCBT_int,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,
@@ -533,6 +538,7 @@ cc_target_x86_64_windows(void){
         },
         .size_type    = CCBT_unsigned_long_long,
         .ptrdiff_type = CCBT_long_long,
+        .max_align_type = CCBT_long_double,
         .wchar_type   = CCBT_unsigned_short,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,
@@ -626,6 +632,7 @@ cc_target_test(void){
         },
         .size_type    = CCBT_unsigned_long,
         .ptrdiff_type = CCBT_long,
+        .max_align_type = CCBT_long_double,
         .wchar_type   = CCBT_int,
         .char16_type  = CCBT_unsigned_short,
         .char32_type  = CCBT_unsigned,

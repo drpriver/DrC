@@ -3,6 +3,7 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#include "C/cc_keywords.h"
 #include "C/cc_parser.h"
 #include "Drp/get_input.h"
 #include "Drp/string_distances.h"
@@ -29,7 +30,9 @@ static const StringView cc_directive_strs[] = {
     SV("elif"), SV("elifdef"), SV("elifndef"),
     SV("else"), SV("endif"),
     SV("define"), SV("undef"),
-    SV("include"), SV("include_next"),
+    SV("defblock"), SV("endblock"),
+    SV("defifndef"),
+    SV("include"), SV("include_next"), SV("import"),
     SV("pragma"),
     SV("error"), SV("warning"),
     SV("line"),
@@ -37,24 +40,9 @@ static const StringView cc_directive_strs[] = {
 
 // C keyword names for tab completion.
 static const StringView cc_keyword_strs[] = {
-    SV("do"), SV("if"),
-    SV("for"), SV("int"),
-    SV("true"), SV("long"), SV("char"), SV("auto"), SV("bool"),
-    SV("else"), SV("enum"), SV("case"), SV("goto"), SV("void"),
-    SV("break"), SV("false"), SV("float"), SV("const"), SV("short"),
-    SV("union"), SV("while"),
-    SV("double"), SV("extern"), SV("inline"), SV("return"), SV("signed"),
-    SV("sizeof"), SV("static"), SV("struct"), SV("switch"), SV("typeof"),
-    SV("alignas"), SV("alignof"), SV("default"), SV("typedef"),
-    SV("nullptr"), SV("_Atomic"), SV("_BitInt"),
-    SV("_Complex"), SV("continue"), SV("register"), SV("restrict"),
-    SV("unsigned"), SV("volatile"), SV("_Generic"), SV("_Countof"),
-    SV("_Float16"), SV("_Float32"), SV("_Float64"),
-    SV("constexpr"), SV("_Noreturn"), SV("_Float128"),
-    SV("_Imaginary"), SV("_Decimal32"), SV("_Decimal64"),
-    SV("_Decimal128"),
-    SV("thread_local"),
-    SV("static_assert"), SV("typeof_unqual"),
+    #define X(spelling, unused) SV(#spelling),
+    CCKWS(X)
+    #undef X
 };
 
 struct ReplCompleterCtx {

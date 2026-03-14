@@ -2487,10 +2487,13 @@ cc_parse_primary(CcParser* p, CcExpr* _Nullable* _Nonnull out){
                             err = cc_parse_init_list(p, &result, type);
                             if(err) return err;
                             result->kind = CC_EXPR_COMPOUND_LITERAL;
-                            CcExpr* sz;
-                            err = cc_sizeof_as_expr(p, result->type, tok.loc, &sz);
+                            CcExpr* postfixed;
+                            err = cc_parse_postfix(p, result, &postfixed);
                             if(err) return err;
-                            cc_release_expr(p, result);
+                            CcExpr* sz;
+                            err = cc_sizeof_as_expr(p, postfixed->type, tok.loc, &sz);
+                            if(err) return err;
+                            cc_release_expr(p, postfixed);
                             *out = sz;
                             return 0;
                         }
@@ -2970,6 +2973,7 @@ cc_parse_postfix(CcParser* p, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
                     case CC_TYPE_IS_SIGNED:
                     case CC_TYPE_IS_CALLABLE:
                     case CC_TYPE_IS_VARIADIC:
+                    case CC_TYPE_IS_INCOMPLETE:
                         result_type = ccqt_basic(CCBT_bool);
                         break;
                     case CC_TYPE_SIZEOF:
@@ -4187,6 +4191,30 @@ cc_eval_expr(CcParser* p, CcExpr* e){
                 case CC_TYPE_IS_ATOMIC:     return (CcEvalResult){.kind=CC_EVAL_INT, .i = qt.is_atomic};
                 case CC_TYPE_IS_UNSIGNED:   return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !cc_target(p)->char_is_signed)};
                 case CC_TYPE_IS_SIGNED:    return (CcEvalResult){.kind=CC_EVAL_INT, .i = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind) && !ccbt_is_unsigned(qt.basic.kind, !cc_target(p)->char_is_signed)};
+                case CC_TYPE_IS_INCOMPLETE: {
+                    CcTypeKind k = ccqt_kind(qt);
+                    _Bool is_incomplete;
+                    switch(k){
+                        DEFAULT_UNREACHABLE;
+                        case CC_STRUCT:
+                            is_incomplete = ccqt_as_struct(qt)->is_incomplete;
+                            break;
+                        case CC_UNION:
+                            is_incomplete = ccqt_as_union(qt)->is_incomplete;
+                            break;
+                        case CC_ARRAY:
+                            is_incomplete = ccqt_as_array(qt)->is_incomplete;
+                            break;
+                        case CC_ENUM:
+                            is_incomplete = ccqt_as_enum(qt)->is_incomplete;
+                            break;
+                        case CC_FUNCTION:
+                        case CC_BASIC:
+                        case CC_POINTER:
+                            is_incomplete = 0;
+                    }
+                    return (CcEvalResult){.kind=CC_EVAL_INT, .i=is_incomplete};
+                }
                 case CC_TYPE_IS_CALLABLE: {
                     CcTypeKind k = ccqt_kind(qt);
                     return (CcEvalResult){.kind=CC_EVAL_INT, .i = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION)};
@@ -9481,6 +9509,7 @@ cc_define_builtin_types(CcParser* p){
             {SV("is_signed"), CC_TYPE_IS_SIGNED},
             {SV("is_callable"), CC_TYPE_IS_CALLABLE},
             {SV("is_variadic"), CC_TYPE_IS_VARIADIC},
+            {SV("is_incomplete"), CC_TYPE_IS_INCOMPLETE},
             {SV("sizeof_"), CC_TYPE_SIZEOF},
             {SV("alignof_"), CC_TYPE_ALIGNOF},
             {SV("pointee"), CC_TYPE_POINTEE},

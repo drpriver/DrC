@@ -68,6 +68,7 @@ FIRST(a, b, c) // -> a
 LAST(a, b, c)  // -> c
 ```
 
+### `defifndef`
 
 ### `defblock`
 

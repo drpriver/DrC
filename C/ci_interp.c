@@ -33,6 +33,16 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifndef DEFAULT_UNREACHABLE
+#if defined __GNUC__ && !defined __clang__
+#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
+#elif defined _MSC_VER
+#define DEFAULT_UNREACHABLE default: __assume(0)
+#else
+#define DEFAULT_UNREACHABLE
+#endif
+#endif
+
 enum {
     CI_NO_ERROR = _cc_no_error,
     CI_OOM_ERROR = _cc_oom_error,
@@ -1862,6 +1872,29 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_IS_CALLABLE: {
                 CcTypeKind k = ccqt_kind(qt);
                 *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
+                return 0;
+            }
+            case CC_TYPE_IS_INCOMPLETE: {
+                CcTypeKind k = ccqt_kind(qt);
+                switch(k){
+                    DEFAULT_UNREACHABLE;
+                    case CC_STRUCT:
+                        *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
+                        break;
+                    case CC_UNION:
+                        *(_Bool*)result = ccqt_as_union(qt)->is_incomplete;
+                        break;
+                    case CC_ARRAY:
+                        *(_Bool*)result = ccqt_as_array(qt)->is_incomplete;
+                        break;
+                    case CC_ENUM:
+                        *(_Bool*)result = ccqt_as_enum(qt)->is_incomplete;
+                        break;
+                    case CC_FUNCTION:
+                    case CC_BASIC:
+                    case CC_POINTER:
+                        *(_Bool*)result = 0;
+                }
                 return 0;
             }
             case CC_TYPE_IS_VARIADIC: {

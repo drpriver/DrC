@@ -2543,6 +2543,12 @@ TestFunction(test_parse_decls){
             .vars = {{SV("x"), SV("unsigned long"), SV("16")}},
         },
         {
+            "sizeof compound literal member", __LINE__,
+            SV("struct Foo { int x; };\n"
+               "unsigned long a = sizeof (struct Foo){0}.x;\n"),
+            .vars = {{SV("a"), SV("unsigned long"), SV("4")}},
+        },
+        {
             "unary minus on enum", __LINE__,
             SV("enum E { A = 1, B = 2 };\n"
                "int x = -A;\n"),
@@ -2584,15 +2590,15 @@ TestFunction(test_parse_decls){
         struct Case* c = &testcases[i];
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
-        if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto finally;}
         err = cpp_define_builtin_macros(&cc.cpp);
-        if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to define\n", __FILE__, c->line); goto finally;}
         err = cc_define_builtin_types(&cc);
-        if(err) {TestPrintf("%s:%d: failed to define builtin types", __FILE__, c->line); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto finally;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
-        if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto finally;}
         err = cc_parse_all(&cc);
-        if(err) {TestPrintf("%s:%d: failed to parse", __FILE__, c->line); goto finally;}
+        if(err) {TestPrintf("%s:%d: failed to parse\n", __FILE__, c->line); goto finally;}
         for(size_t n = 0; n < N; n++){
             StringView name = c->vars[n].name;
             if(!name.length) break;
@@ -3475,13 +3481,13 @@ TestFunction(test_parse_errors){
         struct ErrorCase* c = &cases[i];
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, c->input);
-        if(err) {TestPrintf("%s:%d: failed to cache", __FILE__, c->line); goto fin;}
+        if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto fin;}
         err = cpp_define_builtin_macros(&cc.cpp);
-        if(err) {TestPrintf("%s:%d: failed to define", __FILE__, c->line); goto fin;}
+        if(err) {TestPrintf("%s:%d: failed to define\n", __FILE__, c->line); goto fin;}
         err = cc_define_builtin_types(&cc);
-        if(err) {TestPrintf("%s:%d: failed to define builtin types", __FILE__, c->line); goto fin;}
+        if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto fin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
-        if(err) {TestPrintf("%s:%d: failed to include", __FILE__, c->line); goto fin;}
+        if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
         TEST_stats.executed++;
         if(!err){

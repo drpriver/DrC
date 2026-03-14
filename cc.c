@@ -227,6 +227,8 @@ int main(int argc, char** argv, char** envp){
     if(err) return err;
     err = ci_register_macros(&interp);
     if(err) return err;
+    err = cpp_setup_builtin_headers(&interp.parser.cpp);
+    if(err) return err;
     if(!cpp_nostdinc)
         err = cpp_setup_default_includes(&interp.parser.cpp);
     if(err) return err;

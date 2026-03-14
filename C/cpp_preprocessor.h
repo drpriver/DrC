@@ -260,6 +260,7 @@ cpp_define_builtin_func_macro(CppPreprocessor* cpp, StringView name, CppFuncMacr
 
 static int cpp_define_builtin_macros(CppPreprocessor* cpp);
 static int cpp_setup_default_includes(CppPreprocessor* cpp);
+static int cpp_setup_builtin_headers(CppPreprocessor* cpp);
 static void cpp_discard_all_input(CppPreprocessor* cpp);
 
 

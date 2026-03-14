@@ -2182,6 +2182,36 @@ TestFunction(test_cross_target){
             .exit_code = 4, // enum then both fit in one 4-byte unit
             .target = CC_TARGET_X86_64_LINUX,
         },
+        {
+            "alignof", __LINE__,
+            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "alignof", __LINE__,
+            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "alignof", __LINE__,
+            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = CC_TARGET_X86_64_MACOS,
+        },
+        {
+            "alignof", __LINE__,
+            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 8,
+            .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "alignof", __LINE__,
+            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 8,
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
     };
     int err;
     static int idx = 0;
