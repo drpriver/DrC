@@ -1943,19 +1943,43 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 CcTypeKind k = ccqt_kind(qt);
                 if(k != CC_STRUCT && k != CC_UNION)
                     return ci_error(ci, expr->loc, "_Type.field: not a struct or union type");
-                CcStruct* s = ccqt_as_struct(qt);
                 uintptr_t idx = 0;
                 err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
                 if(err) return err;
-                if(idx >= s->field_count)
-                    return ci_error(ci, expr->loc, "_Type.field: index out of range");
-                CcField* f = &s->fields[idx];
+                CcField* f;
+                if(k == CC_STRUCT){
+                    CcStruct* s = ccqt_as_struct(qt);
+                    if(idx >= s->field_count)
+                        return ci_error(ci, expr->loc, "_Type.field: index out of range");
+                    f = &s->fields[idx];
+                }
+                else {
+                    CcUnion* s = ccqt_as_union(qt);
+                    if(idx >= s->field_count)
+                        return ci_error(ci, expr->loc, "_Type.field: index out of range");
+                    f = &s->fields[idx];
+                }
                 CiRtField* out = (CiRtField*)result;
-                out->type = f->type;
-                out->name = f->name ? f->name->data : "";
-                out->offset = f->offset;
-                out->bitwidth = f->bitwidth;
-                out->bitoffset = f->bitoffset;
+                if(f->is_method){
+                    *out = (CiRtField){
+                        .type = f->type,
+                        .name = f->method->name ? f->method->name->data : "",
+                        .name_length = f->method->name ? f->method->name->length : 0,
+                        .offset = 0,
+                        .bitwidth = 0,
+                        .bitoffset = 0,
+                    };
+                }
+                else {
+                    *out = (CiRtField){
+                        .type = f->type,
+                        .name = f->name ? f->name->data : "",
+                        .name_length = f->name ? f->name->length : 0,
+                        .offset = f->offset,
+                        .bitwidth = f->bitwidth,
+                        .bitoffset = f->bitoffset,
+                    };
+                }
                 return 0;
             }
             case CC_TYPE_PUSH_METHOD:
@@ -1970,16 +1994,17 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_ENUMERATOR: {
                 if(ccqt_kind(qt) != CC_ENUM)
                     return ci_error(ci, expr->loc, "_Type.enumerator: not an enum type");
-                CcEnum* en = ccqt_as_enum(qt);
+                CcEnum* enum_ = ccqt_as_enum(qt);
                 uintptr_t idx = 0;
                 err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
                 if(err) return err;
-                if(idx >= en->enumerator_count)
+                if(idx >= enum_->enumerator_count)
                     return ci_error(ci, expr->loc, "_Type.enumerator: index out of range");
-                CcEnumerator* e2 = en->enumerators[idx];
+                CcEnumerator* enumerator = enum_->enumerators[idx];
                 CiRtEnumerator* out = (CiRtEnumerator*)result;
-                out->name = e2->name ? e2->name->data : "";
-                out->value = (long long)e2->value;
+                out->name = enumerator->name ? enumerator->name->data : "";
+                out->name_length = enumerator->name ? enumerator->name->length: 0;
+                out->value = (long long)enumerator->value;
                 return 0;
             }
             case CC_TYPE_RETURN_TYPE: {

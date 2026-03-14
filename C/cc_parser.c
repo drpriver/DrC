@@ -9351,6 +9351,7 @@ cc_define_builtin_types(CcParser* p){
         struct f {StringView name; CcQualType type; size_t offset;} fieldinfos[] = {
             {SV("type"), {.basic.kind=CCBT__Type}, offsetof(CiRtField, type)},
             {SV("name"), p->const_char_star, offsetof(CiRtField, name)},
+            {SV("name_length"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, name_length)},
             {SV("offset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, offset)},
             {SV("bitwidth"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitwidth)},
             {SV("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
@@ -9388,6 +9389,7 @@ cc_define_builtin_types(CcParser* p){
     {
         struct f {StringView name; CcQualType type; size_t offset;} enuminfos[] = {
             {SV("name"), p->const_char_star, offsetof(CiRtEnumerator, name)},
+            {SV("name_length"),{.basic.kind=CCBT_unsigned}, offsetof(CiRtEnumerator, name)},
             {SV("value"), {.basic.kind=CCBT_long_long}, offsetof(CiRtEnumerator, value)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof enuminfos / sizeof enuminfos[0]) * sizeof *fields);

@@ -211,14 +211,13 @@ struct CcUnion {
             CcTypeKind kind:        4;
             uint32_t is_incomplete: 1,
                      packed:        1,
-                     _padding:     28;
+                     _padding:     26;
         };
         struct {
             CcTypeKind kind:        4;
             uint32_t is_incomplete: 1,
                      packed:        1,
-                     has_fam:       1,
-                     _padding:     22,
+                     _padding:     23,
                    is_memory_class: 1;
             CcSysVEightByte class0: 1,
                             class1: 1;
@@ -241,6 +240,9 @@ struct CcUnion {
     CcField* _Nullable fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
+_Static_assert(offsetof(CcUnion, size) == 4, "");
+_Static_assert(offsetof(CcStruct, size) == 4, "");
+_Static_assert(sizeof(CcUnion) == sizeof(CcStruct), "");
 
 typedef struct CcEnumerator CcEnumerator;
 struct CcEnumerator {

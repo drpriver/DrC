@@ -175,24 +175,22 @@ static int cc_parse_func_body(CcParser*, CcFunc*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
 
+// NOTE: these structs are designed so they match the layout on 
+// any of our targets.
 typedef struct CiRtField CiRtField; // return by _Type.fields
 struct CiRtField {
     CcQualType type;
     const char* name;
-    unsigned offset,
+    unsigned name_length,
+             offset,
              bitwidth,
              bitoffset;
-};
-
-typedef struct CiRtFields CiRtFields;
-struct CiRtFields {
-    CiRtField * fields;
-    size_t count;
 };
 
 typedef struct CiRtEnumerator CiRtEnumerator;
 struct CiRtEnumerator {
     const char* name;
+    unsigned name_length;
     long long value;
 };
 
