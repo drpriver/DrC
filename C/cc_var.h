@@ -24,7 +24,8 @@ struct CcVariable {
              automatic: 1,
              interp_initialized: 1,
              interp_preinit: 1,
-             _padding: 10,
+             constexpr_: 1,
+             _padding: 9,
              alignment: 16; // 0 means default alignment
     CcExpr* _Null_unspecified initializer;
     union {

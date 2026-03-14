@@ -1121,6 +1121,30 @@ TestFunction(test_parse_decls){
             .vars = { { SV("s"), SV("struct S") } },
         },
         {
+            "constexpr variable in constant expr", __LINE__,
+            SV("constexpr int x = 5;\n"
+               "int a[x];\n"),
+            .vars = { { SV("a"), SV("int[5]") } },
+        },
+        {
+            "constexpr variable in static_assert", __LINE__,
+            SV("constexpr int x = 42;\n"
+               "static_assert(x == 42);\n"
+               "int y;\n"),
+            .vars = { { SV("y"), SV("int") } },
+        },
+        {
+            "constexpr variable in case label", __LINE__,
+            SV("constexpr int N = 3;\n"
+               "int f(int x) {\n"
+               "    switch(x) {\n"
+               "        case N: return 1;\n"
+               "        default: return 0;\n"
+               "    }\n"
+               "}\n"),
+            .funcs = { { SV("f"), SV("int(int)") } },
+        },
+        {
             "struct method declaration", __LINE__,
             SV("struct Foo { int x; int get_x(struct Foo* self); };\n"
                "int a[sizeof(struct Foo)];\n"),
@@ -2715,6 +2739,12 @@ TestFunction(test_parse_errors){
             "static_assert(sizeof(int)==8) fails", __LINE__,
             SV("static_assert(sizeof(int) == 8, \"int is not 8\");\n"),
             SV("(test):1:1: error: static assertion failed: (4 == (unsigned long)8): \"int is not 8\"\n"),
+        },
+        {
+            "constexpr with non-constant init", __LINE__,
+            SV("int y;\n"
+               "constexpr int x = y;\n"),
+            SV("(test):2:19: error: constexpr initializer is not a constant expression\n"),
         },
         {
             "FAM in middle of struct", __LINE__,

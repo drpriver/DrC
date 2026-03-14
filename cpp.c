@@ -114,6 +114,8 @@ int main(int argc, char** argv, char** envp){
     cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&cpp);
     if(err) return err;
+    err = cpp_setup_builtin_headers(&cpp);
+    if(err) return err;
     if(!cpp_nostdinc){
         err = cpp_setup_default_includes(&cpp);
         if(err) return err;
