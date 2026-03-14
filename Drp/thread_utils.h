@@ -11,6 +11,7 @@
     #include <pthread.h>
     #if defined(__linux__)
         #include <semaphore.h>
+        #include <sys/syscall.h>
     #elif defined(__APPLE__)
         // semaphore_wait, semaphore_signal
         #include <mach/semaphore.h>
@@ -18,6 +19,7 @@
         #include <mach/task.h>
         // mach_task_self
         #include <mach/mach_init.h>
+        #include <os/lock.h>
     #endif
 #endif
 
@@ -144,18 +146,12 @@ static warn_unused int create_thread(ThreadHandle* handle, thread_func* func, vo
 // This is a synchronization event between the joiner and the joinee.
 // (I know that is true for pthreads and assume it is true for Win32 as well.)
 //
-// Commented as it takes the handle by value.
-// static void join_thread(ThreadHandle);
+#if THIS_IS_NEVER_TRUE_BUT_SYNTAX_HIGHLIGHTING_WILL_WORK_
+static void join_thread(ThreadHandle);
+#endif
 
 typedef struct WorkerThread WorkerThread;
 static THREADFUNC(worker_thread_main);
-// Create a new worker, with the given job func.
-static WorkerThread* worker_create(thread_func*);
-// Shutdown the worker and free the resources associated with it.
-static void worker_destroy(WorkerThread* w);
-// Submit a job to the worker
-static void worker_submit(WorkerThread* w, void* job_data);
-static void worker_wait(WorkerThread* w);
 static int num_cpus(void);
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -165,39 +161,56 @@ struct ThreadHandle {
     pthread_t thread;
 };
 
-typedef pthread_mutex_t LOCK_T;
+#if defined(__APPLE__)
+typedef os_unfair_lock LOCK_T;
 static inline
 void
 LOCK_T_init(LOCK_T* lock){
-    pthread_mutex_init(lock, NULL);
+    *lock = OS_UNFAIR_LOCK_INIT;
 }
 
 static inline
 void
 LOCK_T_lock(LOCK_T* lock){
-    pthread_mutex_lock(lock);
+    os_unfair_lock_lock(lock);
 }
 
 static inline
 void
 LOCK_T_unlock(LOCK_T* lock){
-    pthread_mutex_unlock(lock);
+    os_unfair_lock_unlock(lock);
+}
+#elif defined(__linux__)
+typedef struct { int val; } LOCK_T;
+static inline
+void
+LOCK_T_init(LOCK_T* lock){
+    lock->val = 0;
 }
 
-typedef struct WorkerThread WorkerThread;
-struct WorkerThread {
-    ThreadHandle thrd;
-    pthread_cond_t worker_cond;
-    pthread_mutex_t mutex;
-#ifdef __APPLE__
-    semaphore_t sem;
-#else
-    sem_t sem;
+static inline
+void
+LOCK_T_lock(LOCK_T* lock){
+    int c = 0;
+    if(__atomic_compare_exchange_n(&lock->val, &c, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+        return;
+    if(c != 2)
+        c = __atomic_exchange_n(&lock->val, 2, __ATOMIC_ACQUIRE);
+    while(c != 0){
+        syscall(SYS_futex, &lock->val, 0/*FUTEX_WAIT*/, 2, NULL, NULL, 0);
+        c = __atomic_exchange_n(&lock->val, 2, __ATOMIC_ACQUIRE);
+    }
+}
+
+static inline
+void
+LOCK_T_unlock(LOCK_T* lock){
+    if(__atomic_fetch_sub(&lock->val, 1, __ATOMIC_RELEASE) != 1){
+        __atomic_store_n(&lock->val, 0, __ATOMIC_RELEASE);
+        syscall(SYS_futex, &lock->val, 1/*FUTEX_WAKE*/, 1, NULL, NULL, 0);
+    }
+}
 #endif
-    thread_func* job;
-    void*_Nullable job_data;
-    _Bool shutdown;
-};
 
 static
 int
@@ -206,92 +219,6 @@ num_cpus(void){
     return num;
 }
 
-static
-THREADFUNC(worker_thread_main){
-    pthread_detach(pthread_self());
-    WorkerThread* w = thread_arg;
-    pthread_mutex_lock(&w->mutex);
-    void* (*job)(void*) = w->job;
-    for(;;){
-        if(w->shutdown)
-            break;
-        void* job_data = w->job_data;
-        w->job_data = NULL;
-        pthread_mutex_unlock(&w->mutex);
-        if(job_data){
-            job(job_data);
-            #ifdef __APPLE__
-            semaphore_signal(w->sem);
-            #else
-            sem_post(&w->sem);
-            #endif
-        }
-        pthread_mutex_lock(&w->mutex);
-        pthread_cond_wait(&w->worker_cond, &w->mutex);
-    }
-    pthread_mutex_unlock(&w->mutex);
-    pthread_mutex_destroy(&w->mutex);
-    pthread_cond_destroy(&w->worker_cond);
-    #ifdef __APPLE__
-    semaphore_destroy(mach_task_self(), w->sem);
-    #else
-    #ifndef __linux__
-    #error woops
-    #endif
-    sem_destroy(&w->sem);
-    #endif
-    free(w);
-    return 0;
-}
-
-static
-WorkerThread*
-worker_create(thread_func* job){
-    WorkerThread* w = calloc(1, sizeof(*w));
-    w->job = job;
-    pthread_cond_init(&w->worker_cond, NULL);
-    pthread_mutex_init(&w->mutex, NULL);
-    #ifdef __APPLE__
-    kern_return_t ret = semaphore_create(mach_task_self(), &w->sem, SYNC_POLICY_FIFO, 0);
-    (void)ret;
-    #else
-    sem_init(&w->sem, 0, 0);
-    #endif
-    int th_err = create_thread(&w->thrd, worker_thread_main, w);
-    unhandled_error_condition(th_err);
-    (void)th_err;
-    return w;
-}
-
-static
-void
-worker_destroy(WorkerThread* w){
-    pthread_mutex_lock(&w->mutex);
-    w->shutdown = 1;
-    pthread_cond_signal(&w->worker_cond);
-    pthread_mutex_unlock(&w->mutex);
-}
-
-static
-void
-worker_submit(WorkerThread* w, void* job_data){
-    pthread_mutex_lock(&w->mutex);
-    w->job_data = job_data;
-    pthread_mutex_unlock(&w->mutex);
-    int err = pthread_cond_signal(&w->worker_cond);
-    unhandled_error_condition(err);
-    (void)err;
-}
-
-static
-void
-worker_wait(WorkerThread* w){
-    #ifdef __APPLE__
-    semaphore_wait(w->sem);
-    #else
-    sem_wait(&w->sem);
-    #endif
-}
 
 static
 warn_unused
@@ -311,39 +238,39 @@ join_thread(ThreadHandle handle){
 
 #elif defined(_WIN32)
 
-typedef CRITICAL_SECTION LOCK_T;
+typedef struct { LONG val; } LOCK_T;
 static inline
 void
 LOCK_T_init(LOCK_T* lock){
-    InitializeCriticalSection(lock);
+    lock->val = 0;
 }
 
 static inline
 void
 LOCK_T_lock(LOCK_T* lock){
-    EnterCriticalSection(lock);
+    LONG c = InterlockedCompareExchange(&lock->val, 1, 0);
+    if(c == 0) return;
+    if(c != 2)
+        c = InterlockedExchange(&lock->val, 2);
+    while(c != 0){
+        LONG expected = 2;
+        WaitOnAddress(&lock->val, &expected, sizeof(LONG), INFINITE);
+        c = InterlockedExchange(&lock->val, 2);
+    }
 }
 
 static inline
 void
 LOCK_T_unlock(LOCK_T* lock){
-    LeaveCriticalSection(lock);
+    if(InterlockedDecrement(&lock->val) != 0){
+        InterlockedExchange(&lock->val, 0);
+        WakeByAddressSingle(&lock->val);
+    }
 }
 
 typedef struct ThreadHandle ThreadHandle;
 struct ThreadHandle {
     HANDLE thread;
-};
-
-typedef struct WorkerThread WorkerThread;
-struct WorkerThread {
-    ThreadHandle thrd;
-    CONDITION_VARIABLE worker_cond;
-    CRITICAL_SECTION mutex;
-    HANDLE sem;
-    thread_func* job;
-    void*_Nullable job_data;
-    _Bool shutdown;
 };
 
 static
@@ -353,71 +280,6 @@ num_cpus(void){
     GetSystemInfo(&sysinfo);
     int num = sysinfo.dwNumberOfProcessors;
     return num;
-}
-
-static
-THREADFUNC(worker_thread_main){
-    WorkerThread* w = thread_arg;
-    CloseHandle(w->thrd.thread);
-    EnterCriticalSection(&w->mutex);
-    unsigned long (*job)(void*) = w->job;
-    for(;;){
-        if(w->shutdown)
-            break;
-        void* job_data = w->job_data;
-        w->job_data = NULL;
-        LeaveCriticalSection(&w->mutex);
-        if(job_data){
-            job(job_data);
-            ReleaseSemaphore(w->sem, 1, NULL);
-        }
-        EnterCriticalSection(&w->mutex);
-        SleepConditionVariableCS(&w->worker_cond, &w->mutex, INFINITE);
-    }
-    LeaveCriticalSection(&w->mutex);
-    DeleteCriticalSection(&w->mutex);
-    CloseHandle(w->sem);
-    // no need to destroy win32 condition variable
-    free(w);
-    return 0;
-}
-
-static
-WorkerThread*
-worker_create(thread_func* job){
-    WorkerThread* w = calloc(1, sizeof(*w));
-    w->job = job;
-    InitializeCriticalSection(&w->mutex);
-    InitializeConditionVariable(&w->worker_cond);
-    int th_err = create_thread(&w->thrd, worker_thread_main, w);
-    unhandled_error_condition(th_err != 0);
-    (void)th_err;
-    w->sem = CreateSemaphoreW(NULL, 0, LONG_MAX, NULL);
-    return w;
-}
-
-static
-void
-worker_destroy(WorkerThread* w){
-    EnterCriticalSection(&w->mutex);
-    w->shutdown = 1;
-    LeaveCriticalSection(&w->mutex);
-    WakeConditionVariable(&w->worker_cond);
-}
-
-static
-void
-worker_submit(WorkerThread* w, void* job_data){
-    EnterCriticalSection(&w->mutex);
-    w->job_data = job_data;
-    LeaveCriticalSection(&w->mutex);
-    WakeConditionVariable(&w->worker_cond);
-}
-
-static
-void
-worker_wait(WorkerThread* w){
-    WaitForSingleObject(w->sem, INFINITE);
 }
 
 static
@@ -439,6 +301,11 @@ join_thread(ThreadHandle handle){
 #elif defined(__wasm__)
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 
+typedef struct { int unused; } LOCK_T;
+static inline void LOCK_T_init(LOCK_T* lock){ (void)lock; }
+static inline void LOCK_T_lock(LOCK_T* lock){ (void)lock; }
+static inline void LOCK_T_unlock(LOCK_T* lock){ (void)lock; }
+
 typedef struct ThreadHandle ThreadHandle;
 struct ThreadHandle {
     int unused;
@@ -458,33 +325,6 @@ static
 void
 join_thread(ThreadHandle handle){
     (void)handle;
-    unimplemented();
-}
-typedef struct WorkerThread WorkerThread;
-struct WorkerThread {
-    int unused;
-};
-
-static WorkerThread dummy_worker_thread;
-static THREADFUNC(worker_thread_main);
-// Create a new worker, with the given job func.
-static WorkerThread* worker_create(thread_func* job){
-    unimplemented();
-    (void)job;
-    return &dummy_worker_thread;
-}
-// Shutdown the worker and free the resources associated with it.
-static void worker_destroy(WorkerThread* w){
-    (void)w;
-    unimplemented();
-}
-// Submit a job to the worker
-static void worker_submit(WorkerThread* w, void* job_data){
-    (void)w, (void)job_data;
-    unimplemented();
-}
-static void worker_wait(WorkerThread* w){
-    (void)w;
     unimplemented();
 }
 

@@ -417,7 +417,7 @@ TestFunction(test_obj_macros){
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
         if(err) continue;
-        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
         Allocator_free(MALLOCATOR, result.text, result.length);
@@ -1011,7 +1011,7 @@ TestFunction(test_builtin_macros){
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
         if(err) continue;
-        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
         if(result.length) Allocator_free(MALLOCATOR, result.text, result.length);
@@ -1411,7 +1411,7 @@ TestFunction(test_condition){
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
         TestExpectFalse(err);
         if(err) continue;
-        if(!test_expect_equals_sv(exp, result, "result", "exp", &TEST_stats, __FILE__, __func__, line)){
+        if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
         Allocator_free(MALLOCATOR, result.text, result.length);

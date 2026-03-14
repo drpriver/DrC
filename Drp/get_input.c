@@ -336,7 +336,9 @@ get_line_internal_loop(GetInputCtx* ctx){
         char sequence[8];
         ssize_t nread = read_one(&_c);
         int c = (int)(unsigned char)_c;
-        if(nread <= 0)
+        if(nread == 0)
+            return ctx->buff_count ? (ssize_t)ctx->buff_count : -1;
+        if(nread < 0)
             return ctx->buff_count;
         if(c == ESC){
             DBG("ESC\n");

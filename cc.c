@@ -105,12 +105,19 @@ int main(int argc, char** argv, char** envp){
         },
     };
     StringView output = {0};
+    StringView eval_str = {0};
     _Bool repl = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
             .dest = ARGDEST(&output),
             .help = "Where to write to",
+            .min_num = 0, .max_num = 1,
+        },
+        {
+            .name = SV("-e"),
+            .dest = ARGDEST(&eval_str),
+            .help = "Evaluate a string as C code.",
             .min_num = 0, .max_num = 1,
         },
         {
@@ -247,7 +254,13 @@ int main(int argc, char** argv, char** envp){
     }
     if(filename.length && (sv_equals(filename, SV("-")) || sv_equals(filename, SV("/dev/stdin"))))
         filename = (StringView){0};
-    if(!filename.length && !repl){
+    if(eval_str.length){
+        filename = SV("(-e)");
+        fc_write_path(fc, filename.text, filename.length);
+        err = fc_cache_file(fc, eval_str);
+        if(err) return err;
+    }
+    else if(!filename.length && !repl){
         LongString txt;
         #ifdef _WIN32
         HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);

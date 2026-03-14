@@ -161,9 +161,9 @@ cpp_define_builtin_obj_macro(CppPreprocessor* cpp, StringView name, CppObjMacroF
     if(err) return err;
     macro->is_builtin = 1;
     macro->nreplace = 0;
-    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "ctx doesn't fit in uint64");
+    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "fn doesn't fit in uint64");
     macro->data[0] = (uint64_t)fn;
-    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "fn doesn't fit in uint64");
+    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "ctx doesn't fit in uint64");
     macro->data[1] = (uint64_t)ctx;
     return 0;
 }
@@ -179,9 +179,9 @@ cpp_define_builtin_func_macro(CppPreprocessor* cpp, StringView name, CppFuncMacr
     macro->is_variadic = variadic;
     macro->no_expand_args = no_expand;
     macro->nreplace = 0;
-    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "ctx doesn't fit in uint64");
+    _Static_assert(sizeof(uint64_t) >= sizeof(void(*)(void)), "fn doesn't fit in uint64");
     macro->data[0] = (uint64_t)fn;
-    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "fn doesn't fit in uint64");
+    _Static_assert(sizeof(uint64_t) >= sizeof(void*), "ctx doesn't fit in uint64");
     macro->data[1] = (uint64_t)ctx;
     return 0;
 }
@@ -1028,12 +1028,18 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                     }
                     CppTokens *args = cpp_get_scratch(cpp);
                     Marray(size_t) *arg_seps = cpp_get_scratch_idxes(cpp);
-                    if(!args || !arg_seps) return 1;
+                    if(!args || !arg_seps){
+                        if(args) cpp_release_scratch(cpp, args);
+                        if(arg_seps) cpp_release_scratch_idxes(cpp, arg_seps);
+                        return CPP_OOM_ERROR;
+                    }
                     for(int paren = 1;;){
                         err = cpp_next_raw_token(cpp, &next);
-                        if(err) return err;
-                        if(next.type == CPP_EOF)
-                            return cpp_error(cpp, next.loc, "EOF in function-like macro invocation %s()", a->data);
+                        if(err) goto invoke_cleanup;
+                        if(next.type == CPP_EOF){
+                            err = cpp_error(cpp, next.loc, "EOF in function-like macro invocation %s()", a->data);
+                            goto invoke_cleanup;
+                        }
                         if(next.type == CPP_PUNCTUATOR){
                             if(next.punct == ')'){
                                 paren--;
@@ -1044,23 +1050,30 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                             else if(next.punct == ',' && paren == 1){
                                 if(macro->is_variadic || (macro->nparams > 1 && arg_seps->count < (size_t)macro->nparams-1)){
                                     err = ma_push(size_t)(arg_seps, cpp->allocator, args->count);
-                                    if(err) return err;
+                                    if(err) goto invoke_cleanup;
                                 }
-                                else
-                                    return cpp_error(cpp, next.loc, "Too many arguments to function-like macro %s()", a->data);
+                                else {
+                                    err = cpp_error(cpp, next.loc, "Too many arguments to function-like macro %s()", a->data);
+                                    goto invoke_cleanup;
+                                }
                             }
                         }
                         err = cpp_push_tok(cpp, args, next);
-                        if(err) return err;
+                        if(err) goto invoke_cleanup;
                     }
-                    if(args->count && !macro->nparams && !macro->is_variadic)
-                        return cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
-                    if(arg_seps->count+1 < macro->nparams)
-                        return cpp_error(cpp, args->data[0].loc, "Too few arguments to function-like macro %s()", a->data);
+                    if(args->count && !macro->nparams && !macro->is_variadic){
+                        err = cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
+                        goto invoke_cleanup;
+                    }
+                    if(arg_seps->count+1 < macro->nparams){
+                        err = cpp_error(cpp, args->count ? args->data[0].loc : tok.loc, "Too few arguments to function-like macro %s()", a->data);
+                        goto invoke_cleanup;
+                    }
                     err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, &cpp->pending);
-                    if(err) return err;
+                    invoke_cleanup:
                     cpp_release_scratch_idxes(cpp, arg_seps);
                     cpp_release_scratch(cpp, args);
+                    if(err) return err;
                     continue;
                 }
                 err = cpp_expand_obj_macro(cpp, macro, tok.loc, &cpp->pending);
@@ -1765,6 +1778,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
         }
         err = cpp_next_raw_token(cpp, &tok);
+        if(err) return err;
         if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
             // #define foo
             err = cpp_define_obj_macro(cpp, name, NULL, 0);
@@ -1789,65 +1803,75 @@ cpp_handle_directive(CppPreprocessor* cpp){
             CppTokens *names = cpp_get_scratch(cpp);
             if(!names) return CPP_OOM_ERROR;
             CppTokens *repl = cpp_get_scratch(cpp);
-            if(!repl) return CPP_OOM_ERROR;
+            if(!repl){ cpp_release_scratch(cpp, names); return CPP_OOM_ERROR; }
             _Bool variadic = 0;
             StringView named_variadic = {0};
             for(;;){
                 do {
                     err = cpp_next_raw_token(cpp, &tok);
-                    if(err) return err;
+                    if(err) goto finish_func_macro;
                 }while(tok.type == CPP_WHITESPACE);
                 if(tok.type == CPP_PUNCTUATOR && tok.punct == ')')
                     break;
                 if(names->count){
-                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ',')
-                        return cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ','){
+                        err = cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                        goto finish_func_macro;
+                    }
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
-                        if(err) return err;
+                        if(err) goto finish_func_macro;
                     }while(tok.type == CPP_WHITESPACE);
                 }
                 if(tok.type == CPP_PUNCTUATOR && tok.punct == '...'){
                     variadic = 1;
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
-                        if(err) return err;
+                        if(err) goto finish_func_macro;
                     }while(tok.type == CPP_WHITESPACE);
-                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
-                        return cpp_error(cpp, tok.loc, "... must be last macro param");
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')'){
+                        err = cpp_error(cpp, tok.loc, "... must be last macro param");
+                        goto finish_func_macro;
+                    }
                     break;
                 }
-                if(tok.type != CPP_IDENTIFIER)
-                    return cpp_error(cpp, tok.loc, "expected macro param name");
+                if(tok.type != CPP_IDENTIFIER){
+                    err = cpp_error(cpp, tok.loc, "expected macro param name");
+                    goto finish_func_macro;
+                }
                 // GCC extension: name... (named variadic parameter)
                 {
                     CppToken peek;
                     err = cpp_next_raw_token(cpp, &peek);
-                    if(err) return err;
+                    if(err) goto finish_func_macro;
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
                         named_variadic = tok.txt;
                         do {
                             err = cpp_next_raw_token(cpp, &tok);
-                            if(err) return err;
+                            if(err) goto finish_func_macro;
                         }while(tok.type == CPP_WHITESPACE);
-                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
-                            return cpp_error(cpp, tok.loc, "named variadic param must be last");
+                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')'){
+                            err = cpp_error(cpp, tok.loc, "named variadic param must be last");
+                            goto finish_func_macro;
+                        }
                         break;
                     }
                     err = cpp_push_tok(cpp, &cpp->pending, peek);
-                    if(err) return err;
+                    if(err) goto finish_func_macro;
                 }
                 err = cpp_push_tok(cpp, names, tok);
-                if(err) return err;
+                if(err) goto finish_func_macro;
             }
             err = cpp_next_raw_token(cpp, &tok);
-            if(err) return err;
-            if(tok.type != CPP_WHITESPACE && tok.type != CPP_NEWLINE && tok.type != CPP_EOF)
-                return cpp_error(cpp, tok.loc, "Illegal token immediately after ')'");
+            if(err) goto finish_func_macro;
+            if(tok.type != CPP_WHITESPACE && tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
+                err = cpp_error(cpp, tok.loc, "Illegal token immediately after ')'");
+                goto finish_func_macro;
+            }
             if(tok.type == CPP_WHITESPACE){
                 err = cpp_next_raw_token(cpp, &tok);
-                if(err) return err;
+                if(err) goto finish_func_macro;
             }
             while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
                 if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE){
@@ -1861,46 +1885,53 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                         repl->count--;
                     err = cpp_push_tok(cpp, repl, tok);
-                    if(err) return err;
+                    if(err) goto finish_func_macro;
                 }
                 err = cpp_next_raw_token(cpp, &tok);
-                if(err) return err;
+                if(err) goto finish_func_macro;
             }
             // push it back so dispatch loop sees newline
             err = cpp_push_tok(cpp, &cpp->pending, tok);
-            if(err) return err;
+            if(err) goto finish_func_macro;
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
             CppMacro* m;
             err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
-            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
-                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
+                err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                goto finish_func_macro;
+            }
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
-                if(!a) return CPP_UNREACHABLE_ERROR;
+                if(!a){ err = CPP_UNREACHABLE_ERROR; goto finish_func_macro; }
                 m = AM_get(&cpp->macros, a);
-                if(!m) return CPP_UNREACHABLE_ERROR;
+                if(!m){ err = CPP_UNREACHABLE_ERROR; goto finish_func_macro; }
                 if(!m->is_function_like){
-                    return cpp_error(cpp, tok.loc, "redefinition of an object-like macro (%.*s) as a function-like macro", sv_p(name));
+                    err = cpp_error(cpp, tok.loc, "redefinition of an object-like macro (%.*s) as a function-like macro", sv_p(name));
+                    goto finish_func_macro;
                 }
                 if(!!variadic != !!m->is_variadic){
                     cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                    goto finish_func_macro;
                 }
                 if(names->count != m->nparams){
                     cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                    goto finish_func_macro;
                 }
                 for(size_t i = 0; i < names->count; i++){
                     CppToken tname = names->data[i];
                     Atom pname = cpp_cmacro_params(m)[i];
                     if(AT_get_atom(cpp->at, tname.txt.text, tname.txt.length) != pname){
                         cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                        goto finish_func_macro;
                     }
                 }
                 if(repl->count != m->nreplace){
-                    return cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions %zu %zu", __LINE__, sv_p(name), repl->count, (size_t)m->nreplace);
+                    err = cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions %zu %zu", __LINE__, sv_p(name), repl->count, (size_t)m->nreplace);
+                    goto finish_func_macro;
                 }
                 for(size_t i = 0; i < repl->count; i++){
                     CppToken r = repl->data[i];
@@ -1909,27 +1940,31 @@ cpp_handle_directive(CppPreprocessor* cpp){
                         continue;
                     if(r.type != pre.type){
                         cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
-                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                        goto finish_func_macro;
                     }
                     if(!sv_equals(r.txt, pre.txt)){
                         cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
-                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                        goto finish_func_macro;
                     }
                 }
                 err = 0;
                 goto finish_func_macro;
             }
-            if(err) return err;
+            if(err) goto finish_func_macro;
             m->def_loc = tok.loc;
             m->is_variadic = variadic;
             m->is_function_like = 1;
             Atom* params = cpp_cmacro_params(m);
             for(size_t i = 0; i < names->count; i++){
                 Atom a = AT_atomize(cpp->at, names->data[i].txt.text, names->data[i].txt.length);
-                if(!a) return CPP_OOM_ERROR;
+                if(!a){ err = CPP_OOM_ERROR; goto finish_func_macro; }
                 for(size_t j = 0; j < i; j++){
-                    if(params[j] == a)
-                        return cpp_error(cpp, names->data[i].loc, "Duplicate macro param name");
+                    if(params[j] == a){
+                        err = cpp_error(cpp, names->data[i].loc, "Duplicate macro param name");
+                        goto finish_func_macro;
+                    }
                 }
                 params[i] = a;
             }
@@ -1965,16 +2000,14 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 size_t first = 0;
                 while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
                 if(first < repl->count && repl->data[first].type == CPP_PUNCTUATOR && repl->data[first].punct == '##'){
-                    cpp_release_scratch(cpp, repl);
-                    cpp_release_scratch(cpp, names);
-                    return cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                    err = cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                    goto finish_func_macro;
                 }
                 size_t last = repl->count;
                 while(last > 0 && repl->data[last-1].type == CPP_WHITESPACE) last--;
                 if(last > 0 && repl->data[last-1].type == CPP_PUNCTUATOR && repl->data[last-1].punct == '##'){
-                    cpp_release_scratch(cpp, repl);
-                    cpp_release_scratch(cpp, names);
-                    return cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                    err = cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                    goto finish_func_macro;
                 }
             }
             if(repl->count)
@@ -1982,7 +2015,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             finish_func_macro:;
             cpp_release_scratch(cpp, repl);
             cpp_release_scratch(cpp, names);
-            return 0;
+            return err;
         }
         else if(tok.type == CPP_WHITESPACE){
             while(tok.type == CPP_WHITESPACE){
@@ -1997,11 +2030,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(!repl) return CPP_OOM_ERROR;
             for(;;){
                 err = cpp_next_raw_token(cpp, &tok);
-                if(err) return err;
+                if(err) goto finish_obj_macro;
                 if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
                     // push it back so dispatch loop sees newline
                     err = cpp_push_tok(cpp, &cpp->pending, tok);
-                    if(err) return err;
+                    if(err) goto finish_obj_macro;
                     break;
                 }
                 if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE){
@@ -2015,7 +2048,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                         repl->count--;
                     err = cpp_push_tok(cpp, repl, tok);
-                    if(err) return err;
+                    if(err) goto finish_obj_macro;
                 }
             }
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
@@ -2025,31 +2058,35 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 size_t first = 0;
                 while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
                 if(first < repl->count && repl->data[first].type == CPP_PUNCTUATOR && repl->data[first].punct == '##'){
-                    cpp_release_scratch(cpp, repl);
-                    return cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                    err = cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
+                    goto finish_obj_macro;
                 }
                 size_t last = repl->count;
                 while(last > 0 && repl->data[last-1].type == CPP_WHITESPACE) last--;
                 if(last > 0 && repl->data[last-1].type == CPP_PUNCTUATOR && repl->data[last-1].punct == '##'){
-                    cpp_release_scratch(cpp, repl);
-                    return cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                    err = cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
+                    goto finish_obj_macro;
                 }
             }
             err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
-            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
-                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+            if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
+                err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                goto finish_obj_macro;
+            }
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
                 Atom a = AT_get_atom(cpp->at, name.text, name.length);
-                if(!a) return CPP_UNREACHABLE_ERROR;
+                if(!a){ err = CPP_UNREACHABLE_ERROR; goto finish_obj_macro; }
                 CppMacro* m = AM_get(&cpp->macros, a);
-                if(!m) return CPP_UNREACHABLE_ERROR;
+                if(!m){ err = CPP_UNREACHABLE_ERROR; goto finish_obj_macro; }
                 if(m->is_function_like){
                     cpp_error(cpp, tok.loc, "Redefinition of function-like macro (%.*s) as an object-like macro", sv_p(name));
-                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                    goto finish_obj_macro;
                 }
                 if(m->nreplace != repl->count){
                     cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions, %zu != %zu", sv_p(name), repl->count, (size_t)m->nreplace);
-                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                    goto finish_obj_macro;
                 }
                 for(size_t i = 0; i < repl->count; i++){
                     CppToken r = repl->data[i];
@@ -2058,20 +2095,23 @@ cpp_handle_directive(CppPreprocessor* cpp){
                         continue;
                     if(r.type != pre.type){
                         cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different type)", sv_p(name), i);
-                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                        goto finish_obj_macro;
                     }
                     if(!sv_equals(r.txt, pre.txt)){
                         cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different content)", sv_p(name), i);
-                        return cpp_error(cpp, m->def_loc, "... previously defined here");
+                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
+                        goto finish_obj_macro;
                     }
                 }
                 // Duplicate macro definition, ok
                 err = 0;
             }
-            if(err) return err;
-            ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
+            if(!err)
+                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
+            finish_obj_macro:;
             cpp_release_scratch(cpp, repl);
-            return 0;
+            return err;
         }
         else {
             return cpp_error(cpp, tok.loc, "Unexpected token type in #define");
@@ -2092,7 +2132,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         CppTokens *names = cpp_get_scratch(cpp);
         if(!names) return CPP_OOM_ERROR;
         CppTokens *repl = cpp_get_scratch(cpp);
-        if(!repl) return CPP_OOM_ERROR;
+        if(!repl){ cpp_release_scratch(cpp, names); return CPP_OOM_ERROR; }
         _Bool variadic = 0;
         StringView named_variadic = {0};
         if(is_func){
@@ -2100,66 +2140,73 @@ cpp_handle_directive(CppPreprocessor* cpp){
             for(;;){
                 do {
                     err = cpp_next_raw_token(cpp, &tok);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                 }while(tok.type == CPP_WHITESPACE);
                 if(tok.type == CPP_PUNCTUATOR && tok.punct == ')')
                     break;
                 if(names->count){
-                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ',')
-                        return cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ','){
+                        err = cpp_error(cpp, tok.loc, "Expecting ',' between param names");
+                        goto finish_defblock;
+                    }
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
-                        if(err) return err;
+                        if(err) goto finish_defblock;
                     }while(tok.type == CPP_WHITESPACE);
                 }
                 if(tok.type == CPP_PUNCTUATOR && tok.punct == '...'){
                     variadic = 1;
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
-                        if(err) return err;
+                        if(err) goto finish_defblock;
                     }while(tok.type == CPP_WHITESPACE);
-                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
-                        return cpp_error(cpp, tok.loc, "... must be last macro param");
+                    if(tok.type != CPP_PUNCTUATOR || tok.punct != ')'){
+                        err = cpp_error(cpp, tok.loc, "... must be last macro param");
+                        goto finish_defblock;
+                    }
                     break;
                 }
-                if(tok.type != CPP_IDENTIFIER)
-                    return cpp_error(cpp, tok.loc, "expected macro param name");
+                if(tok.type != CPP_IDENTIFIER){
+                    err = cpp_error(cpp, tok.loc, "expected macro param name");
+                    goto finish_defblock;
+                }
                 {
                     CppToken peek;
                     err = cpp_next_raw_token(cpp, &peek);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
                         named_variadic = tok.txt;
                         do {
                             err = cpp_next_raw_token(cpp, &tok);
-                            if(err) return err;
+                            if(err) goto finish_defblock;
                         }while(tok.type == CPP_WHITESPACE);
-                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')')
-                            return cpp_error(cpp, tok.loc, "named variadic param must be last");
+                        if(tok.type != CPP_PUNCTUATOR || tok.punct != ')'){
+                            err = cpp_error(cpp, tok.loc, "named variadic param must be last");
+                            goto finish_defblock;
+                        }
                         break;
                     }
                     err = cpp_push_tok(cpp, &cpp->pending, peek);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                 }
                 err = cpp_push_tok(cpp, names, tok);
-                if(err) return err;
+                if(err) goto finish_defblock;
             }
         }
         // Skip to end of the #defblock line
         while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
             err = cpp_next_raw_token(cpp, &tok);
-            if(err) return err;
+            if(err) goto finish_defblock;
         }
         // Collect body tokens until #endblock
         _Bool at_bol = 1; // at beginning of line
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
-            if(err) return err;
+            if(err) goto finish_defblock;
             if(tok.type == CPP_EOF){
-                cpp_release_scratch(cpp, repl);
-                cpp_release_scratch(cpp, names);
-                return cpp_error(cpp, tok.loc, "unterminated #defblock (missing #endblock)");
+                err = cpp_error(cpp, tok.loc, "unterminated #defblock (missing #endblock)");
+                goto finish_defblock;
             }
             if(tok.type == CPP_NEWLINE){
                 at_bol = 1;
@@ -2167,7 +2214,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(repl->count && ma_tail(*repl).type != CPP_WHITESPACE){
                     CppToken ws = {.type = CPP_WHITESPACE, .txt = SV(" "), .loc = tok.loc};
                     err = cpp_push_tok(cpp, repl, ws);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                 }
                 continue;
             }
@@ -2178,21 +2225,21 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 CppToken dir;
                 do {
                     err = cpp_next_raw_token(cpp, &dir);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                 } while(dir.type == CPP_WHITESPACE);
                 if(dir.type == CPP_IDENTIFIER && sv_equals(dir.txt, SV("endblock"))){
                     // Consume rest of line
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
-                        if(err) return err;
+                        if(err) goto finish_defblock;
                     } while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF);
                     err = cpp_push_tok(cpp, &cpp->pending, tok);
-                    if(err) return err;
+                    if(err) goto finish_defblock;
                     break;
                 }
                 // Not endblock — push back and treat # as part of body
                 err = cpp_push_tok(cpp, &cpp->pending, dir);
-                if(err) return err;
+                if(err) goto finish_defblock;
             }
             at_bol = 0;
             // Coalesce whitespace
@@ -2205,7 +2252,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
             err = cpp_push_tok(cpp, repl, tok);
-            if(err) return err;
+            if(err) goto finish_defblock;
         }
         while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
             repl->count--;
@@ -2214,15 +2261,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
             CppMacro* m;
             err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
-                cpp_release_scratch(cpp, repl);
-                cpp_release_scratch(cpp, names);
-                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                goto finish_defblock;
             }
-            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR){
-                cpp_release_scratch(cpp, repl);
-                cpp_release_scratch(cpp, names);
-                return err;
-            }
+            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR)
+                goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
             else {
                 m->def_loc = tok.loc;
@@ -2231,7 +2274,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 Atom* params = cpp_cmacro_params(m);
                 for(size_t i = 0; i < names->count; i++){
                     Atom a = AT_atomize(cpp->at, names->data[i].txt.text, names->data[i].txt.length);
-                    if(!a){ cpp_release_scratch(cpp, repl); cpp_release_scratch(cpp, names); return CPP_OOM_ERROR; }
+                    if(!a){ err = CPP_OOM_ERROR; goto finish_defblock; }
                     params[i] = a;
                 }
                 // Tag replacement tokens with param indices
@@ -2253,20 +2296,17 @@ cpp_handle_directive(CppPreprocessor* cpp){
         else {
             err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
-                cpp_release_scratch(cpp, repl);
-                cpp_release_scratch(cpp, names);
-                return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
+                goto finish_defblock;
             }
-            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR){
-                cpp_release_scratch(cpp, repl);
-                cpp_release_scratch(cpp, names);
-                return err;
-            }
+            if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR)
+                goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
         }
+        finish_defblock:;
         cpp_release_scratch(cpp, repl);
         cpp_release_scratch(cpp, names);
-        return 0;
+        return err;
     }
     else if(sv_equals(tok.txt, SV("undef"))){
         err = cpp_next_raw_token(cpp, &tok);
@@ -2298,30 +2338,30 @@ cpp_handle_directive(CppPreprocessor* cpp){
             .start = tok.loc,
         };
         CppTokens *toks = cpp_get_scratch(cpp);
+        if(!toks) return CPP_OOM_ERROR;
         // just scan to eol for now
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
-            if(err) return err;
+            if(err) goto finish_if;
             if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE)
                 break;
             err = cpp_push_tok(cpp, toks, tok);
-            if(err) {
-                cpp_release_scratch(cpp, toks);
-                return err;
-            }
+            if(err) goto finish_if;
         }
         // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
-        if(err){
-            cpp_release_scratch(cpp, toks);
-            return CPP_OOM_ERROR;
+        if(err) goto finish_if;
+        {
+            int64_t value;
+            err = cpp_eval_tokens(cpp, toks->data, toks->count, &value);
+            if(!err){
+                s.true_taken = !!value;
+                s.is_active = s.true_taken;
+            }
         }
-        int64_t value;
-        err = cpp_eval_tokens(cpp, toks->data, toks->count, &value);
+        finish_if:;
         cpp_release_scratch(cpp, toks);
         if(err) return err;
-        s.true_taken = !!value;
-        s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
     }
@@ -2564,21 +2604,22 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(!prag_toks) return CPP_OOM_ERROR;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
-            if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+            if(err) goto finish_pragma;
             if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
-                if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+                if(err) goto finish_pragma;
                 break;
             }
             if(tok.type == CPP_WHITESPACE && !prag_toks->count)
                 continue; // skip leading whitespace
             err = cpp_push_tok(cpp, prag_toks, tok);
-            if(err){ cpp_release_scratch(cpp, prag_toks); return err; }
+            if(err) goto finish_pragma;
         }
         // Strip trailing whitespace
         while(prag_toks->count && ma_tail(*prag_toks).type == CPP_WHITESPACE)
             prag_toks->count--;
         err = prag->fn(prag->ctx, cpp, pragma_loc, prag_toks->data, prag_toks->count);
+        finish_pragma:;
         cpp_release_scratch(cpp, prag_toks);
         if(err) return err;
     }
@@ -2949,28 +2990,30 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elif after #else");
         CppTokens *toks = cpp_get_scratch(cpp);
+        if(!toks) return CPP_OOM_ERROR;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
-            if(err){ cpp_release_scratch(cpp, toks); return err; }
+            if(err) goto finish_elif;
             if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE)
                 break;
             err = cpp_push_tok(cpp, toks, tok);
-            if(err){ cpp_release_scratch(cpp, toks); return err; }
+            if(err) goto finish_elif;
         }
         // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
-        if(err){ cpp_release_scratch(cpp, toks); return CPP_OOM_ERROR; }
+        if(err) goto finish_elif;
         s->is_active = 0;
         if(!s->true_taken){
             int64_t value;
             err = cpp_eval_tokens(cpp, toks->data, toks->count, &value);
-            cpp_release_scratch(cpp, toks);
-            if(err) return err;
-            s->true_taken = !!value;
-            s->is_active = s->true_taken;
+            if(!err){
+                s->true_taken = !!value;
+                s->is_active = s->true_taken;
+            }
         }
-        else
-            cpp_release_scratch(cpp, toks);
+        finish_elif:;
+        cpp_release_scratch(cpp, toks);
+        if(err) return err;
     }
     else if(sv_equals(tok.txt, SV("else"))){
         CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -3902,7 +3945,7 @@ cpp_substitute_and_paste(
                     CppTokens *ea = cpp_get_scratch(cpp);
                     if(!ea) return CPP_OOM_ERROR;
                     err = cpp_expand_argument(cpp, arg_start, arg_count, ea);
-                    if(err) return err;
+                    if(err){ cpp_release_scratch(cpp, ea); return err; }
                     expanded_args[pidx] = ea;
                 }
                 CppTokens *expanded = expanded_args[pidx];
@@ -3947,13 +3990,13 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
             CppTokens *result = cpp_get_scratch(cpp);
             if(!result) return CPP_OOM_ERROR;
             int err = fn(ctx, cpp, expansion_loc, result, args, arg_seps);
-            if(err){ cpp_release_scratch(cpp, result); return err; }
+            if(err) goto noexp_finally;
             SrcLocExp* parent = cpp_srcloc_to_exp(cpp, expansion_loc);
-            if(!parent){ cpp_release_scratch(cpp, result); return CPP_OOM_ERROR; }
+            if(!parent){ err = CPP_OOM_ERROR; goto noexp_finally; }
             macro->is_disabled = 1;
             CppToken reenable = {.type = CPP_REENABLE, .data1 = macro};
             err = cpp_push_tok(cpp, dst, reenable);
-            if(err){ cpp_release_scratch(cpp, result); return err; }
+            if(err) goto noexp_finally;
             for(size_t i = result->count; i-- > 0;){
                 CppToken t = result->data[i];
                 if(t.type == CPP_PLACEMARKER)
@@ -3968,10 +4011,11 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
                     }
                 }
                 err = cpp_push_tok(cpp, dst, t);
-                if(err){ cpp_release_scratch(cpp, result); return err; }
+                if(err) goto noexp_finally;
             }
+            noexp_finally:;
             cpp_release_scratch(cpp, result);
-            return 0;
+            return err;
         }
         else{
             int err;
@@ -5458,7 +5502,22 @@ cpp_builtin_eval(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
     err = cpp_eval_tokens(cpp, args->data, args->count, &value);
     if(err) return err;
     Atom a;
-    if(value < INT_MAX)
+    if(value == INT64_MIN){
+        // TODO: int64min
+        return 1;
+    }
+    else if(value < 0){
+        CppToken tok = {
+            .punct = '-',
+            .txt = SV("-"),
+            .loc = loc,
+            .type = CPP_PUNCTUATOR,
+        };
+        err = cpp_push_tok(cpp, outtoks, tok);
+        if(err) return err;
+        value = -value;
+    }
+    if(value <= INT_MAX)
         a = cpp_atomizef(cpp, "%u", (unsigned)value);
     else
         a = cpp_atomizef(cpp, "%llullu", (unsigned long long)value);
@@ -5530,7 +5589,7 @@ cpp_builtin_ident(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
     }
     StringView sv = msb_borrow_sv(&sb);
     Atom a = cpp_atomizef(cpp, "%.*s", sv_p(sv));
-    if(!a) return CPP_OOM_ERROR;
+    if(!a){ err = CPP_OOM_ERROR; goto finally; }
     CppToken tok = {
         .loc = loc,
         .type = CPP_IDENTIFIER,
@@ -5764,7 +5823,7 @@ cpp_builtin_set(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         if(key_toks[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __set");
         if(key)
-            return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __set");
+            return cpp_error(cpp, key_toks[i].loc, "Only one identifier as key to __set");
         key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
         if(!key) return CPP_OOM_ERROR;
     }
@@ -5848,7 +5907,7 @@ cpp_builtin_append(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
         if(key_toks[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, key_toks[i].loc, "Expected identifier as key to __append");
         if(key)
-            return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __append");
+            return cpp_error(cpp, key_toks[i].loc, "Only one identifier as key to __append");
         key = AT_atomize(cpp->at, key_toks[i].txt.text, key_toks[i].txt.length);
         if(!key) return CPP_OOM_ERROR;
     }
@@ -6229,26 +6288,21 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(!toks){ msb_destroy(&sb); return CPP_OOM_ERROR; }
     int err = cpp_mixin_string(cpp, loc, msb_borrow_sv(&sb), toks);
     msb_destroy(&sb);
-    if(err){ cpp_release_scratch(cpp, toks); return err; }
+    if(err) goto finish_Pragma;
     // Find pragma name (first non-whitespace identifier)
     size_t ti = 0;
     while(ti < toks->count && toks->data[ti].type == CPP_WHITESPACE) ti++;
-    if(ti >= toks->count){
-        cpp_release_scratch(cpp, toks);
-        return 0; // empty _Pragma - do nothing
-    }
+    if(ti >= toks->count)
+        goto finish_Pragma; // empty _Pragma - do nothing
     if(toks->data[ti].type != CPP_IDENTIFIER){
-        cpp_release_scratch(cpp, toks);
-        return cpp_error(cpp, loc, "Expected pragma name in _Pragma");
+        err = cpp_error(cpp, loc, "Expected pragma name in _Pragma");
+        goto finish_Pragma;
     }
     StringView prag_name_sv = toks->data[ti].txt;
     Atom prag_name = AT_get_atom(cpp->at, prag_name_sv.text, prag_name_sv.length);
     CppPragma* prag = prag_name ? AM_get(&cpp->pragmas, prag_name) : NULL;
-    if(!prag){
-        // Unknown pragma - silently ignore
-        cpp_release_scratch(cpp, toks);
-        return 0;
-    }
+    if(!prag)
+        goto finish_Pragma; // Unknown pragma - silently ignore
     // Collect remaining tokens (skip leading whitespace after pragma name)
     ti++;
     while(ti < toks->count && toks->data[ti].type == CPP_WHITESPACE) ti++;
@@ -6256,6 +6310,7 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     size_t end = toks->count;
     while(end > ti && toks->data[end-1].type == CPP_WHITESPACE) end--;
     err = prag->fn(prag->ctx, cpp, loc, toks->data + ti, end - ti);
+    finish_Pragma:;
     cpp_release_scratch(cpp, toks);
     return err;
 }
@@ -6371,8 +6426,7 @@ cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t co
     pending = cpp_get_scratch(cpp);
 
     if(!pending){
-        err = CPP_OOM_ERROR;
-        goto finally;
+        return CPP_OOM_ERROR;
     }
     CppTokenStream stream = {
         .toks = toks,
@@ -6380,7 +6434,6 @@ cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t co
         .pending = pending,
     };
     err = cpp_recursive_eval(cpp, &stream, value);
-    finally:
     cpp_release_scratch(cpp, pending);
     return err;
 }
@@ -6477,32 +6530,33 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 CppTokens* raw = cpp_get_scratch(cpp);
                 if(!raw) return CPP_OOM_ERROR;
                 err = cpp_push_tok(cpp, raw, next);
-                if(err){ cpp_release_scratch(cpp, raw); return err; }
+                if(err) goto finish_has_include_raw;
                 int paren = 1;
                 for(;;){
                     next = cpp_ts_next(s);
                     if(next.type == CPP_EOF){
-                        cpp_release_scratch(cpp, raw);
-                        return cpp_error(cpp, tok.loc, "Unterminated %.*s(", (int)name.length, name.text);
+                        err = cpp_error(cpp, tok.loc, "Unterminated %.*s(", (int)name.length, name.text);
+                        goto finish_has_include_raw;
                     }
                     if(next.type == CPP_PUNCTUATOR && next.punct == '(') paren++;
                     else if(next.type == CPP_PUNCTUATOR && next.punct == ')'){
                         if(--paren == 0) break;
                     }
                     err = cpp_push_tok(cpp, raw, next);
-                    if(err){ cpp_release_scratch(cpp, raw); return err; }
+                    if(err) goto finish_has_include_raw;
                 }
                 CppTokens* expanded = cpp_get_scratch(cpp);
-                if(!expanded){ cpp_release_scratch(cpp, raw); return CPP_OOM_ERROR; }
+                if(!expanded){ err = CPP_OOM_ERROR; goto finish_has_include_raw; }
                 err = cpp_expand_argument(cpp, raw->data, raw->count, expanded);
                 cpp_release_scratch(cpp, raw);
-                if(err){ cpp_release_scratch(cpp, expanded); return err; }
+                raw = NULL;
+                if(err) goto finish_has_include_exp;
                 // Find first non-whitespace expanded token
                 size_t ei = 0;
                 while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
                 if(ei >= expanded->count){
-                    cpp_release_scratch(cpp, expanded);
-                    return cpp_error(cpp, tok.loc, "Empty argument to %.*s", (int)name.length, name.text);
+                    err = cpp_error(cpp, tok.loc, "Empty argument to %.*s", (int)name.length, name.text);
+                    goto finish_has_include_exp;
                 }
                 CppToken etok = expanded->data[ei];
                 if(etok.type == CPP_STRING){
@@ -6525,9 +6579,10 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                         msb_write_str(&hsb, t.txt.text, t.txt.length);
                     }
                     if(ei >= expanded->count){
+                        err = cpp_error(cpp, tok.loc, "Unterminated < in %.*s after expansion", (int)name.length, name.text);
                         cpp_release_scratch(cpp, expanded);
                         msb_destroy(&hsb);
-                        return cpp_error(cpp, tok.loc, "Unterminated < in %.*s after expansion", (int)name.length, name.text);
+                        return err;
                     }
                     header_name = msb_borrow_sv(&hsb);
                     CppIncludePosition dummy3;
@@ -6539,9 +6594,15 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                     return 0;
                 }
                 else {
-                    cpp_release_scratch(cpp, expanded);
-                    return cpp_error(cpp, tok.loc, "Expected header name in %.*s after expansion", (int)name.length, name.text);
+                    err = cpp_error(cpp, tok.loc, "Expected header name in %.*s after expansion", (int)name.length, name.text);
+                    goto finish_has_include_exp;
                 }
+                finish_has_include_raw:;
+                cpp_release_scratch(cpp, raw);
+                return err;
+                finish_has_include_exp:;
+                cpp_release_scratch(cpp, expanded);
+                return err;
             }
             do { next = cpp_ts_next(s); } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != ')')
@@ -6638,7 +6699,11 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             }
             CppTokens *args = cpp_get_scratch(cpp);
             Marray(size_t) *arg_seps = cpp_get_scratch_idxes(cpp);
-            if(!args || !arg_seps) return CPP_OOM_ERROR;
+            if(!args || !arg_seps){
+                if(args) cpp_release_scratch(cpp, args);
+                if(arg_seps) cpp_release_scratch_idxes(cpp, arg_seps);
+                return CPP_OOM_ERROR;
+            }
             for(int paren = 1;;){
                 next = cpp_ts_next(s);
                 if(next.type == CPP_EOF){
@@ -6998,8 +7063,8 @@ cpp_mixin_string(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* ou
             case 'v': msb_write_char(&sb, '\v'); break;
             case '0': case '1': case '2': case '3':
             case '4': case '5': case '6': case '7':
-                t = 0;
-                for(size_t j = 0; j < 3 && i < str.length; j++){
+                t = c - '0';
+                for(size_t j = 1; j < 3 && i < str.length && str.text[i] >= '0' && str.text[i] <= '7'; j++){
                     t = (unsigned char)((t << 3)|((unsigned char)str.text[i++] - '0'));
                 }
                 msb_write_char(&sb, t);
