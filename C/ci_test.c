@@ -298,6 +298,35 @@ TestFunction(test_interpreter){
                "return x;\n"),
             .exit_code = 16,
         },
+        {
+            "assign: signed div_eq", __LINE__,
+            SV("int x = -6;\n"
+               "x /= 2;\n"
+               "return x + 100;\n"),
+            .exit_code = 97,
+        },
+        {
+            "assign: signed mod_eq", __LINE__,
+            SV("int x = -7;\n"
+               "x %= 3;\n"
+               "return x + 100;\n"),
+            .exit_code = 99,
+        },
+        {
+            "assign: signed rshift_eq", __LINE__,
+            SV("int x = -8;\n"
+               "x >>= 1;\n"
+               "return x + 100;\n"),
+            .exit_code = 96,
+        },
+        {
+            "assign: unsigned enum div_eq", __LINE__,
+            SV("typedef enum : unsigned { BIG = 3000000000u } E;\n"
+               "E e = BIG;\n"
+               "e /= 1000000000u;\n"
+               "return (int)e;\n"),
+            .exit_code = 3,
+        },
         // Increment / Decrement
         {
             "prefix increment", __LINE__,
@@ -481,6 +510,17 @@ TestFunction(test_interpreter){
                "}\n"
                "return r;\n"),
             .exit_code = 6,
+        },
+        {
+            "switch: unsigned enum", __LINE__,
+            SV("typedef enum : unsigned { A = 3000000000u, B = 100u } E;\n"
+               "E e = A;\n"
+               "switch(e){\n"
+               "  case 100u: return 1;\n"
+               "  case 3000000000u: return 2;\n"
+               "  default: return 3;\n"
+               "}\n"),
+            .exit_code = 2,
         },
         // Goto
         {
@@ -871,6 +911,28 @@ TestFunction(test_interpreter){
                "int x = (int)c;\n"
                "return x;\n"),
             .exit_code = -1,
+        },
+        {
+            "cast: unsigned enum to float", __LINE__,
+            SV("typedef enum : unsigned { V = 3000000000u } E;\n"
+               "E e = V;\n"
+               "double d = (double)e;\n"
+               "return (int)(d / 1000000000.0);\n"),
+            .exit_code = 3,
+        },
+        {
+            "cast: float to unsigned enum", __LINE__,
+            SV("typedef enum : unsigned { V = 0 } E;\n"
+               "E e = (E)3000000000.0;\n"
+               "return (int)(e / 1000000000u);\n"),
+            .exit_code = 3,
+        },
+        {
+            "cast: float to unsigned long long enum", __LINE__,
+            SV("typedef enum : unsigned long long { V = 0 } E;\n"
+               "E e = (E)1e19;\n"
+               "return (int)(e / (unsigned long long)1e18);\n"),
+            .exit_code = 10,
         },
         // Subscript equivalence *(a+i)
         {
@@ -1434,6 +1496,14 @@ TestFunction(test_interpreter){
                "s.a -= 5;\n"
                "return s.a + 100;\n"),
             .exit_code = 98,
+        },
+        {
+            "bitfield: signed assign result", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "int r = (s.a = -3);\n"
+               "return r + 100;\n"),
+            .exit_code = 97,
         },
         {
             "big string", __LINE__,

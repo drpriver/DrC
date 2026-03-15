@@ -274,7 +274,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             if(err) return err;
             err = ci_interp_expr(ci, frame,idx_expr, &idx, sizeof idx);
             if(err) return err;
-            _Bool idx_unsigned = ccqt_is_basic(idx_expr->type) && ccbt_is_unsigned(idx_expr->type.basic.kind, !ci_target(ci)->char_is_signed);
+            _Bool idx_unsigned = ccqt_is_unsigned(idx_expr->type, !ci_target(ci)->char_is_signed);
             if(idx_unsigned)
                 idx = (int64_t)ci_read_uint(&idx, idx_sz);
             else
@@ -582,21 +582,21 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(to_sz > 8){
                 // float to 128-bit int
                 CiUint128 v;
-                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind, !ci_target(ci)->char_is_signed))
+                if(ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed))
                     v = ci_uint128_from_uint64((uint64_t)d);
                 else
                     v = ci_uint128_from_int64((int64_t)d);
                 ci_uint128_write(result, to_sz, v);
             }
             else {
-                if(ccqt_is_basic(to) && ccbt_is_unsigned(to.basic.kind, !ci_target(ci)->char_is_signed))
+                if(ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed))
                     ci_write_uint(result, to_sz, (uint64_t)d);
                 else
                     ci_write_uint(result, to_sz, (uint64_t)(int64_t)d);
             }
         }
         else if(!from_is_float && to_is_float){
-            _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
+            _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
             double d;
             if(from_sz > 8){
                 CiUint128 v;
@@ -615,7 +615,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 CiUint128 v;
                 ci_uint128_read(&v, valp, from_sz);
                 if(from_sz <= 8){
-                    _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
+                    _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
                     if(from_unsigned)
                         v = ci_uint128_from_uint64(ci_read_uint(valp, from_sz));
                     else
@@ -629,7 +629,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 }
             }
             else {
-                _Bool from_unsigned = ccqt_is_basic(from) && ccbt_is_unsigned(from.basic.kind, !ci_target(ci)->char_is_signed);
+                _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
                 if(from_unsigned)
                     ci_write_uint(result, to_sz, ci_read_uint(valp, from_sz));
                 else
@@ -654,7 +654,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             rval = ci_read_uint(&rval, sz);
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, rval);
             if(result == ci_discard_buf) return 0;
-            uint64_t out = rval & (((uint64_t)1 << lhs->field_loc.bit_width) - 1);
+            _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
+            uint64_t out = ci_bitfield_extend(rval, lhs->field_loc.bit_width, !is_unsigned);
             memset(result, 0, size);
             memcpy(result, &out, sz < size ? sz : size);
             return 0;
@@ -1101,7 +1102,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
             return 0;
         }
-        _Bool is_unsigned = ccqt_is_basic(lhs->type) && ccbt_is_unsigned(lhs->type.basic.kind, !ci_target(ci)->char_is_signed);
+        _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
         if(lsz > 8 || rsz > 8 || result_sz > 8){
             // 128-bit integer path
             CiUint128 lu, ru;
@@ -1328,20 +1329,43 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             ci_write_float(result, expr->type.basic.kind, res);
         }
         else {
-            uint64_t lu = ci_read_uint(lval, sz);
-            uint64_t ru = ci_read_uint(&rbuf, rsz);
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            uint64_t lu, ru;
+            if(is_unsigned){
+                lu = ci_read_uint(lval, sz);
+                ru = ci_read_uint(&rbuf, rsz);
+            }
+            else {
+                lu = (uint64_t)ci_read_int(lval, sz);
+                ru = (uint64_t)ci_read_int(&rbuf, rsz);
+            }
             uint64_t res;
             switch(expr->kind){
                 case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
                 case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
                 case CC_EXPR_MULASSIGN:    res = lu * ru; break;
-                case CC_EXPR_DIVASSIGN:    res = ru ? lu / ru : 0; break;
-                case CC_EXPR_MODASSIGN:    res = ru ? lu % ru : 0; break;
+                case CC_EXPR_DIVASSIGN:
+                    if(is_unsigned)
+                        res = ru ? lu / ru : 0;
+                    else
+                        res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
+                    break;
+                case CC_EXPR_MODASSIGN:
+                    if(is_unsigned)
+                        res = ru ? lu % ru : 0;
+                    else
+                        res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
+                    break;
                 case CC_EXPR_BITANDASSIGN: res = lu & ru; break;
                 case CC_EXPR_BITORASSIGN:  res = lu | ru; break;
                 case CC_EXPR_BITXORASSIGN: res = lu ^ ru; break;
                 case CC_EXPR_LSHIFTASSIGN: res = lu << ru; break;
-                case CC_EXPR_RSHIFTASSIGN: res = lu >> ru; break;
+                case CC_EXPR_RSHIFTASSIGN:
+                    if(is_unsigned)
+                        res = lu >> ru;
+                    else
+                        res = (uint64_t)((int64_t)lu >> ru);
+                    break;
                 default: res = 0; break;
             }
             ci_write_uint(lval, sz, res);
@@ -1863,7 +1887,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 return 0;
             }
             case CC_TYPE_IS_INTEGER: {
-                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind);
+                CcQualType st = qt;
+                while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+                *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind);
                 return 0;
             }
             case CC_TYPE_IS_FLOAT: {
@@ -1911,11 +1937,13 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 return 0;
             }
             case CC_TYPE_IS_UNSIGNED: {
-                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
+                *(_Bool*)result = ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
                 return 0;
             }
             case CC_TYPE_IS_SIGNED: {
-                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_integer(qt.basic.kind) && !ccbt_is_unsigned(qt.basic.kind, !ci_target(ci)->char_is_signed);
+                CcQualType st = qt;
+                while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+                *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind) && !ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
                 return 0;
             }
             case CC_TYPE_SIZEOF: {
@@ -2198,7 +2226,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame, expr->lhs, &abuf, sizeof abuf);
         if(err) return err;
-        _Bool a_unsigned = ccqt_is_basic(expr->lhs->type) && ccbt_is_unsigned(expr->lhs->type.basic.kind, !ci_target(ci)->char_is_signed);
+        _Bool a_unsigned = ccqt_is_unsigned(expr->lhs->type, !ci_target(ci)->char_is_signed);
         CiInt128 a = a_unsigned ? ci_int128_from_uint64(ci_read_uint(&abuf, asz))
                               : ci_int128_from_int64(ci_read_int(&abuf, asz));
         // Read b
@@ -2208,7 +2236,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame, expr->values[0], &bbuf, sizeof bbuf);
         if(err) return err;
-        _Bool b_unsigned = ccqt_is_basic(expr->values[0]->type) && ccbt_is_unsigned(expr->values[0]->type.basic.kind, !ci_target(ci)->char_is_signed);
+        _Bool b_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
         CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz)) : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
         // Compute in infinite precision
         CiInt128 r;
@@ -2231,7 +2259,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         ci_write_uint(res_ptr, dsz, truncated);
         // Check for overflow: sign/zero-extend the truncated value
         // back to CiInt128 and compare with the infinite precision result.
-        _Bool dest_unsigned = ccqt_is_basic(dest_type) && ccbt_is_unsigned(dest_type.basic.kind, !ci_target(ci)->char_is_signed);
+        _Bool dest_unsigned = ccqt_is_unsigned(dest_type, !ci_target(ci)->char_is_signed);
         CiInt128 back;
         if(dest_unsigned){
             if(dsz >= 8)
@@ -2408,7 +2436,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 uint32_t ssz;
                 err = cc_sizeof_as_uint(&ci->parser, st, stmt->loc, &ssz);
                 if(err) return err;
-                _Bool is_unsigned = ccqt_is_basic(st) && ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
+                _Bool is_unsigned = ccqt_is_unsigned(st, !ci_target(ci)->char_is_signed);
                 if(is_unsigned)
                     val = ci_read_uint(&val, ssz);
                 else
