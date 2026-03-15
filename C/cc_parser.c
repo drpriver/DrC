@@ -9493,10 +9493,26 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 // For our supported targets, the only things that don't
                 // correspond to fixed-sized types is long on win64.
                 case CCBT_int:
+                    neg_int:;{
+                    int32_t val;
+                    if(sub_overflow((int32_t)0, (int32_t)operand->integer, &val)){
+                        err = CC_UNREACHABLE_ERROR;
+                        break;
+                    }
+                    node = cc_value_expr(p, e->loc, e->type);
+                    if(!node) {err = CC_OOM_ERROR; break;}
+                    node->integer = val;
+                    *result = node;
+                    break;
+                }
                 case CCBT_long:
-                case CCBT_long_long:{
+                    if(cc_target(p)->sizeof_[CCBT_long] == 8)
+                        goto neg_long_long;
+                    goto neg_int;
+                case CCBT_long_long:
+                    neg_long_long:;{
                     int64_t val;
-                    if(__builtin_sub_overflow((int64_t)0, operand->integer, &val)){
+                    if(sub_overflow((int64_t)0, operand->integer, &val)){
                         err = CC_UNREACHABLE_ERROR;
                         break;
                     }

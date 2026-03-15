@@ -3902,6 +3902,11 @@ TestFunction(test_parse_errors){
                "_Alignas(n) int x;\n"),
             SV("(test):2:10: error: expression is not a constant expression\n"),
         },
+        {
+            "signed neg overflow in constexpr", __LINE__,
+            SV("enum { X = -(-2147483647 - 1) };\n"),
+            SV("(test):1:10: error: enumerator value must be a constant integer expression\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
