@@ -2864,6 +2864,17 @@ TestFunction(test_parse_decls){
             SV("_Static_assert((unsigned long long)(-(unsigned)1) == 0xFFFFFFFFull);\n"
                "_Static_assert((unsigned long long)(-(unsigned)0) == 0ull);\n"),
         },
+        {
+            "constexpr: init_list not freed via comma", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "constexpr struct P p = {10, 20};\n"
+               "_Static_assert((p, 1));\n"
+               "_Static_assert(p.x == 10);\n"
+               "_Static_assert(p.y == 20);\n"),
+            .vars = {
+                {SV("p"), SV("const struct P")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -3906,6 +3917,12 @@ TestFunction(test_parse_errors){
             "signed neg overflow in constexpr", __LINE__,
             SV("enum { X = -(-2147483647 - 1) };\n"),
             SV("(test):1:10: error: enumerator value must be a constant integer expression\n"),
+        },
+        {
+            "negative constexpr array subscript", __LINE__,
+            SV("constexpr int arr[] = {10, 20, 30};\n"
+               "_Static_assert(arr[-1] == 0);\n"),
+            SV("(test):2:1: error: static_assert expression is not a constant expression\n"),
         },
     };
     static int idx = 0;

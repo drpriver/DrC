@@ -4332,7 +4332,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
             break;
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
-            if(e->init_list){
+            if(!e->init_list->rc--){
                 for(uint32_t i = 0; i < e->init_list->count; i++){
                     if(e->init_list->entries[i].value)
                         cc_release_expr(p, e->init_list->entries[i].value);
@@ -5980,7 +5980,7 @@ cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out
             }
             err = cc_expect_punct(p, CC_rbrace);
             if(err) return err;
-            list = Allocator_alloc(cc_allocator(p), sizeof(CcInitList) + sizeof(CcInitEntry));
+            list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + sizeof(CcInitEntry));
             if(!list) return CC_OOM_ERROR;
             list->loc = loc;
             list->count = 1;
@@ -5992,7 +5992,7 @@ cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out
         uint32_t max_index = 0;
         err = cc_parse_init(p, vc,target_type, 0, 1, loc, &entries, &max_index, NULL);
         if(err) return err;
-        list = Allocator_alloc(cc_allocator(p), sizeof(CcInitList) + entries.count * sizeof(CcInitEntry));
+        list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + entries.count * sizeof(CcInitEntry));
         if(!list) return CC_OOM_ERROR;
         list->loc = loc;
         list->count = (uint32_t)entries.count;
@@ -10382,6 +10382,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_INIT_LIST: {
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
             if(!node) return CC_OOM_ERROR;
+            e->init_list->rc++;
             node->init_list = e->init_list;
             *result = node;
             return 0;
@@ -10423,6 +10424,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     int64_t i;
                     int err = cc_eval_integer(p, cur->values[0], &i);
                     if(err) return err;
+                    if(i < 0) return 1;
                     uint32_t elem_size;
                     err = cc_sizeof_as_uint(p, cur->type, cur->loc, &elem_size);
                     if(err) return 1;
@@ -10438,17 +10440,18 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 if(offset < base->str.length){
                     unsigned char c = (unsigned char)base->text[offset];
                     CcExpr* node = cc_value_expr(p, e->loc, e->type);
-                    if(!node) return CC_OOM_ERROR;
+                    if(!node) { err = CC_OOM_ERROR; goto fini_init_list_access; }
                     if(cc_target(p)->char_is_signed)
                         node->integer = (signed char)c;
                     else
                         node->uinteger = c;
                     *result = node;
-                    return 0;
+                    goto fini_init_list_access;
                 }
-                return 1;
+                err = 1;
+                goto fini_init_list_access;
             }
-            if(base->kind != CC_EXPR_INIT_LIST) return 1;
+            if(base->kind != CC_EXPR_INIT_LIST) { err = 1; goto fini_init_list_access; }
             CcInitList* il = base->init_list;
             for(uint32_t i = 0; i < il->count; i++){
                 uint64_t entry_off = il->entries[i].field_loc.byte_offset;
@@ -10459,18 +10462,23 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     uint64_t idx = offset - entry_off;
                     unsigned char c = (unsigned char)v->text[idx];
                     CcExpr* node = cc_value_expr(p, e->loc, e->type);
-                    if(!node) return CC_OOM_ERROR;
+                    if(!node) { err = CC_OOM_ERROR; goto fini_init_list_access; }
                     if(cc_target(p)->char_is_signed)
                         node->integer = (signed char)c;
                     else
                         node->uinteger = c;
                     *result = node;
-                    return 0;
+                    goto fini_init_list_access;
                 }
-                if(entry_off == offset && il->entries[i].field_loc.bit_offset == e->field_loc.bit_offset)
-                    return cc_eval_expr(p, v, result);
+                if(entry_off == offset && il->entries[i].field_loc.bit_offset == e->field_loc.bit_offset){
+                    err = cc_eval_expr(p, v, result);
+                    goto fini_init_list_access;
+                }
             }
-            return 1;
+            err = 1;
+            fini_init_list_access:
+            cc_release_expr(p, base);
+            return err;
         }
         case CC_EXPR_ARROW:
         case CC_EXPR_STATEMENT_EXPRESSION:

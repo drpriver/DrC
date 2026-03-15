@@ -188,6 +188,7 @@ typedef struct CcInitList CcInitList;
 struct CcInitList {
     SrcLoc loc;
     uint32_t count;
+    uint32_t rc;
     CcInitEntry entries[];
 };
 
