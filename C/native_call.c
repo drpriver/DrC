@@ -89,7 +89,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
         case CC_STRUCT:{
             CcStruct* s = ccqt_as_struct(t);
             if(s->ffi_cache){ *out = s->ffi_cache; return NC_NO_ERROR; }
-            switch(CC_TARGET_NATIVE){
+            switch((CcTarget)CC_TARGET_NATIVE){
             case CC_TARGET_AARCH64_LINUX:
             case CC_TARGET_AARCH64_MACOS:
                 if(s->arm64.hfa_count){
@@ -152,7 +152,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
         case CC_UNION:{
             CcUnion* u = ccqt_as_union(t);
             if(u->ffi_cache){ *out = u->ffi_cache; return NC_NO_ERROR; }
-            switch(CC_TARGET_NATIVE){
+            switch((CcTarget)CC_TARGET_NATIVE){
             case CC_TARGET_AARCH64_LINUX:
             case CC_TARGET_AARCH64_MACOS:
                 if(u->arm64.hfa_count){

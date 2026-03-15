@@ -311,7 +311,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             return ci_interp_lvalue(ci, frame, expr->values[0], out, size);
         }
         case CC_EXPR_TERNARY: {
-            uint64_t cond = 0;
+            CiUint128 cond = {0};
             uint32_t cond_sz;
             int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
             if(err) return err;
@@ -671,7 +671,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return ci_interp_expr(ci, frame,expr->values[0], result, size);
     }
     case CC_EXPR_TERNARY: {
-        uint64_t cond = 0;
+        CiInt128 cond = {0};
         uint32_t cond_sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
         if(err) return err;
@@ -2271,7 +2271,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         case CC_STMT_FOR: {
             if(stmt->exprs[1]){
-                uint64_t cond = 0;
+                CiInt128 cond = {0};
                 uint32_t cond_sz;
                 int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[1]->type, stmt->loc, &cond_sz);
                 if(err) return err;
@@ -2286,7 +2286,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CC_STMT_WHILE: {
-            uint64_t cond = 0;
+            CiInt128 cond = {0};
             uint32_t cond_sz;
             int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
@@ -2300,7 +2300,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CC_STMT_IF: {
-            uint64_t cond = 0;
+            CiInt128 cond = {0};
             uint32_t cond_sz;
             int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
@@ -2313,7 +2313,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CC_STMT_DOWHILE: {
-            uint64_t cond = 0;
+            CiInt128 cond = {0};
             uint32_t cond_sz;
             int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
