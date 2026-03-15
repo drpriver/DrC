@@ -2976,6 +2976,8 @@ ci_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
     CppTokens* expanded = cpp_get_scratch(cpp);
     if(!expanded) return CI_OOM_ERROR;
     int err = 0;
+    err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err) goto finally;
     toks = expanded->data;
     ntoks = expanded->count;
     while(ntoks && toks->type == CPP_WHITESPACE){
@@ -3044,7 +3046,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             } while(ntoks && toks->type == CPP_WHITESPACE);
         }
     }
-    if(toks->type != CPP_STRING){
+    if(!ntoks || toks->type != CPP_STRING){
         err = cpp_error(cpp, loc, "#pragma pkg_config requires a string literal package name");
         goto finally;
     }
@@ -3547,10 +3549,11 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         return cpp_error(cpp, loc, "__SHELL__: command failed");
     }
     // Strip trailing newlines.
+    size_t output_alloc_size = output.length;
     while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
         output.length--;
     Atom v = cpp_atomizef(cpp, "\"%.*s\"", (int)output.length, output.text);
-    Allocator_free(scratch, output.text, output.length);
+    Allocator_free(scratch, output.text, output_alloc_size);
     if(!v) return CI_OOM_ERROR;
     CppToken result = {
         .txt = {v->length, v->data},
