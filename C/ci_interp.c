@@ -1294,6 +1294,23 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         err = ci_interp_expr(ci, frame,expr->values[0], &rbuf, sizeof rbuf);
         if(err) return err;
 
+        if(ccqt_kind(expr->type) == CC_POINTER){
+            CcPointer* pt = ccqt_as_ptr(expr->type);
+            uint32_t pointee_sz;
+            err = cc_sizeof_as_uint(&ci->parser, pt->pointee, expr->loc, &pointee_sz);
+            if(err) return err;
+            void* ptr = NULL;
+            memcpy(&ptr, lval, sizeof ptr);
+            int64_t idx = ci_read_int(&rbuf, rsz);
+            if(expr->kind == CC_EXPR_ADDASSIGN)
+                ptr = (char*)ptr + idx * pointee_sz;
+            else
+                ptr = (char*)ptr - idx * pointee_sz;
+            memcpy(lval, &ptr, sizeof ptr);
+            if(result == ci_discard_buf) return 0;
+            memcpy(result, &ptr, sizeof ptr);
+            return 0;
+        }
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
         if(is_float){
             double ld = ci_read_float(lval, expr->type.basic.kind);
@@ -3549,7 +3566,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         return cpp_error(cpp, loc, "__SHELL__: command failed");
     }
     // Strip trailing newlines.
-    size_t output_alloc_size = output.length;
+    size_t output_alloc_size = output.length + 1;
     while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
         output.length--;
     Atom v = cpp_atomizef(cpp, "\"%.*s\"", (int)output.length, output.text);

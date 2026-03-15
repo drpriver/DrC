@@ -542,6 +542,22 @@ TestFunction(test_interpreter){
             .exit_code = 10,
         },
         {
+            "pointer: += compound assign", __LINE__,
+            SV("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "p += 2;\n"
+               "return *p;\n"),
+            .exit_code = 30,
+        },
+        {
+            "pointer: -= compound assign", __LINE__,
+            SV("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr + 3;\n"
+               "p -= 2;\n"
+               "return *p;\n"),
+            .exit_code = 20,
+        },
+        {
             "pointer: difference", __LINE__,
             SV("int arr[5] = {0};\n"
                "int *a = &arr[1];\n"
