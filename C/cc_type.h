@@ -381,6 +381,15 @@ static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_p
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 
+static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && t.basic.kind == bt;}
+static inline
+_Bool
+ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
+    while(ccqt_kind(t) == CC_ENUM)
+        t = ccqt_as_enum(t)->underlying;
+    return ccqt_is_basic(t) && ccbt_is_unsigned(t.basic.kind, unsigned_char);
+}
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

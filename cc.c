@@ -107,6 +107,7 @@ int main(int argc, char** argv, char** envp){
     StringView output = {0};
     StringView eval_str = {0};
     _Bool repl = 0;
+    _Bool dump = 0;
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
@@ -148,6 +149,11 @@ int main(int argc, char** argv, char** envp){
             .dest = ARGDEST(&eager),
             .help = "Parse functions eagerly instead of deferring to usage",
         },
+        {
+            .name = SV("--dump"),
+            .dest = ARGDEST(&dump),
+            .help = "Dump symbols after execution",
+        }
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -208,48 +214,48 @@ int main(int argc, char** argv, char** envp){
     interp.parser.eager_parsing = eager;
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&interp.parser.cpp);
-    if(err) return err;
+    if(err) goto stringify_error;
     ProgArgvCtx argv_ctx = {
         .args = prog_args,
         .count = num_prog_args,
         .filename = filename.text,
     };
     err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__ARGV__"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__argv"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
-    if(err) return err;
+    if(err) goto stringify_error;
     {
         int argc_val = 1 + (int)num_prog_args;
         Atom a = cpp_atomizef(&interp.parser.cpp, "%d", argc_val);
         if(!a) return 1;
         CppToken tok = {.type = CPP_NUMBER, .txt = {a->length, a->data}};
         err = cpp_define_obj_macro(&interp.parser.cpp, SV("__ARGC__"), &tok, 1);
-        if(err) return err;
+        if(err) goto stringify_error;
     }
     err = cc_define_builtin_types(&interp.parser);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = cc_register_pragmas(&interp.parser);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = ci_register_pragmas(&interp);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = ci_register_macros(&interp);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = cpp_setup_builtin_headers(&interp.parser.cpp);
-    if(err) return err;
+    if(err) goto stringify_error;
     if(!cpp_nostdinc)
         err = cpp_setup_default_includes(&interp.parser.cpp);
-    if(err) return err;
+    if(err) goto stringify_error;
     for(size_t i = 0; i < lib_paths.count; i++){
         StringView p = lib_paths.data[i];
         err = ci_append_lib_path(&interp, p);
-        if(err) return err;
+        if(err) goto stringify_error;
     }
     for(size_t i = 0; i < libs.count; i++){
         StringView l = libs.data[i];
         err = ci_load_library(&interp, l);
         if(err){
             log_error(logger, "Unable to load library '%s'", l.text);
-            return err;
+            goto stringify_error;
         }
     }
     if(filename.length && (sv_equals(filename, SV("-")) || sv_equals(filename, SV("/dev/stdin"))))
@@ -258,7 +264,7 @@ int main(int argc, char** argv, char** envp){
         filename = SV("(-e)");
         fc_write_path(fc, filename.text, filename.length);
         err = fc_cache_file(fc, eval_str);
-        if(err) return err;
+        if(err) goto stringify_error;
     }
     else if(!filename.length && !repl){
         LongString txt;
@@ -268,28 +274,30 @@ int main(int argc, char** argv, char** envp){
         int handle = STDIN_FILENO;
         #endif
         FileError fe = read_file_handle(handle, MALLOCATOR, &txt);
-        if(fe.errored)
-            return 1;
+        if(fe.errored){
+            err = _cc_file_not_found_error;
+            goto stringify_error;
+        }
         filename = SV("(stdin)");
         fc_write_path(fc, filename.text, filename.length);
         err = fc_cache_file(fc, LS_to_SV(txt));
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
-        if(err) return err;
+        if(err) goto stringify_error;
     }
     err = cpp_cli_defines(&interp.parser.cpp);
-    if(err) return err;
+    if(err) goto stringify_error;
     fc->may_read_real_files = 1;
     if(filename.length){
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){filename.length, filename.text});
         if(err){
             log_error(logger, "Unable to read '%s'", filename.text);
-            return err;
+            goto stringify_error;
         }
     }
     err = cc_parse_all(&interp.parser);
-    if(err) return err;
+    if(err) goto stringify_error;
     err = ci_resolve_refs(&interp, 0);
-    if(err) return err;
+    if(err) goto stringify_error;
     if(repl){
         // Execute any statements from the initial file before entering REPL.
         {
@@ -298,7 +306,7 @@ int main(int argc, char** argv, char** envp){
             frame->stmt_count = interp.parser.toplevel_statements.count;
             while(frame->pc < frame->stmt_count){
                 err = ci_interp_step(&interp, frame);
-                if(err) return err;
+                if(err) goto stringify_error;
             }
         }
         interp.parser.repl = 1;
@@ -334,7 +342,7 @@ int main(int argc, char** argv, char** envp){
                 int namelen = (snprintf)(name, sizeof name, "(repl:%d)", input_num++);
                 fc_write_path(fc, name, namelen);
                 err = fc_cache_file(fc, src);
-                if(err) return err;
+                if(err) goto stringify_error;
                 err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){namelen, name});
                 if(err){
                     log_error(logger, "REPL error");
@@ -378,8 +386,9 @@ int main(int argc, char** argv, char** envp){
         frame->stmt_count = interp.parser.toplevel_statements.count;
         while(frame->pc < frame->stmt_count){
             err = ci_interp_step(&interp, frame);
-            if(err) return err;
+            if(err) goto stringify_error;
         }
+        if(dump)repl_builtin_command(&interp.parser, SV("/dump"));
         // Top-level return sets exit code
         if(interp.exit_code != EXIT_CODE_SENTINEL)
             return interp.exit_code;
@@ -394,11 +403,14 @@ int main(int argc, char** argv, char** envp){
                 main_argv[1+i] = Allocator_strndup(MALLOCATOR, prog_args[i], strlen(prog_args[i]));
             err = ci_call_main(&interp, main_argc, main_argv, envp, &main_ret);
             if(!err) return main_ret;
-            if(err != _cc_symbol_not_found_error) return err;
+            if(err != _cc_symbol_not_found_error) goto stringify_error;
         }
-        if(0)repl_builtin_command(&interp.parser, SV("/dump symbols"));
     }
     return 0;
+    stringify_error:;
+    const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
+    fprintf(stderr, "Fail: %s\n", error_name);
+    return 1;
 }
 
 static

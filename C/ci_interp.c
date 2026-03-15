@@ -2139,8 +2139,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         err = ci_interp_expr(ci, frame, expr->values[0], &bbuf, sizeof bbuf);
         if(err) return err;
         _Bool b_unsigned = ccqt_is_basic(expr->values[0]->type) && ccbt_is_unsigned(expr->values[0]->type.basic.kind, !ci_target(ci)->char_is_signed);
-        CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz))
-                              : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
+        CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz)) : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
         // Compute in infinite precision
         CiInt128 r;
         switch(expr->kind){

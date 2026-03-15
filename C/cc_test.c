@@ -2689,6 +2689,31 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "constexpr: lognot on float/double", __LINE__,
+            SV("_Static_assert(!0.0 == 1);\n"
+               "_Static_assert(!1.0 == 0);\n"
+               "_Static_assert(!0.0f == 1);\n"
+               "_Static_assert(!1.0f == 0);\n"),
+        },
+        {
+            "constexpr: short-circuit logand/logor", __LINE__,
+            SV("_Static_assert(1 || 1/0);\n"
+               "_Static_assert(!(0 && 1/0));\n"
+               "_Static_assert(!(0 || 0));\n"
+               "_Static_assert(1 && 1);\n"),
+        },
+        {
+            "constexpr: float comparison", __LINE__,
+            SV("_Static_assert(1.0 == 1.0);\n"
+               "_Static_assert(1.0 != 2.0);\n"
+               "_Static_assert(1.0 < 2.0);\n"
+               "_Static_assert(2.0 > 1.0);\n"
+               "_Static_assert(1.0f == 1.0f);\n"
+               "_Static_assert(1.0f < 2.0f);\n"
+               "_Static_assert(1.0e30 > 1.0e20);\n"
+               "_Static_assert(1.0e30 == 1.0e30);\n"),
+        },
+        {
             "constexpr: string subscript", __LINE__,
             SV("constexpr int x = \"abc\"[1];\n"
                "_Static_assert(x == 'b');\n"),
@@ -2828,6 +2853,16 @@ TestFunction(test_parse_decls){
             .vars = {
                 {SV("grid"), SV("const struct Row[2]")},
             },
+        },
+        {
+            "constexpr: bitnot truncation", __LINE__,
+            SV("_Static_assert((unsigned long long)(~0u) == 0xFFFFFFFFull);\n"
+               "_Static_assert((unsigned long long)(~1u) == 0xFFFFFFFEull);\n"),
+        },
+        {
+            "constexpr: unsigned neg truncation", __LINE__,
+            SV("_Static_assert((unsigned long long)(-(unsigned)1) == 0xFFFFFFFFull);\n"
+               "_Static_assert((unsigned long long)(-(unsigned)0) == 0ull);\n"),
         },
     };
     static int idx = 0;

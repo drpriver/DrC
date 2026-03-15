@@ -257,11 +257,11 @@ struct CcExpr {
         float float_;
         double double_;
         const char* text;
-        // CcStatement* stmt;
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;
         CcFieldLoc field_loc; // CC_EXPR_DOT, CC_EXPR_ARROW: resolved field offset+bitfield info
+        CcQualType type_value; // for expressions of type type
     };
     CcExpr*_Nonnull values[];
 };

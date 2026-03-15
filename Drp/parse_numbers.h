@@ -17,6 +17,8 @@
 #include "fast_float.h"
 #endif
 
+#include "ckdint.h"
+
 //
 // Functions for parsing strings into integers.
 //
@@ -34,90 +36,6 @@
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning( disable : 4146 )
-#endif
-
-#if defined(__wasm__)
-#define __builtin_mul_overflow(a, b, c) ((void)((*c) = a * b), 0)
-#define __builtin_add_overflow(a, b, c) ((void)((*c) = a + b), 0)
-#endif
-
-#if defined(__IMPORTC__)
-__import core.checkedint;
-
-static inline
-int
-__builtin_mul_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    _Bool overflowed = 0;
-    *dst = mulu(a, b, overflowed);
-    return overflowed;
-}
-static inline
-int
-__builtin_mul_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    _Bool overflowed = 0;
-    *dst = mulu(a, b, overflowed);
-    return overflowed;
-}
-#define __builtin_mul_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_mul_overflow_32, \
-    uint64_t: __builtin_mul_overflow_64)(a, b, dst)
-
-static inline
-int
-__builtin_add_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    _Bool overflowed = 0;
-    *dst = addu(a, b, overflowed);
-    return overflowed;
-}
-static inline
-int
-__builtin_add_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    _Bool overflowed = 0;
-    *dst = addu(a, b, overflowed);
-    return overflowed;
-}
-#define __builtin_add_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_add_overflow_32, \
-    uint64_t: __builtin_add_overflow_64)(a, b, dst)
-
-
-
-#elif defined(_MSC_VER) && !defined(__clang__)
-// Shim the overflow intrinsics for MSVC
-// These are slow as they use division.
-static inline
-int
-__builtin_mul_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    uint64_t res = (uint64_t)a * (uint64_t)b;
-    if(res > (uint64_t)UINT32_MAX) return 1;
-    *dst = res;
-    return 0;
-}
-static inline
-int
-__builtin_mul_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    if(a && b > UINT64_MAX / a) return 1;
-    *dst = a * b;
-    return 0;
-}
-#define __builtin_mul_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_mul_overflow_32, \
-    uint64_t: __builtin_mul_overflow_64)(a, b, dst)
-
-static inline
-int
-__builtin_add_overflow_32(uint32_t a, uint32_t b, uint32_t* dst){
-    return _addcarry_u32(0, a, b, dst);
-}
-static inline
-int
-__builtin_add_overflow_64(uint64_t a, uint64_t b, uint64_t* dst){
-    return _addcarry_u64(0, a, b, dst);
-}
-#define __builtin_add_overflow(a, b, dst) _Generic(a, \
-    uint32_t: __builtin_add_overflow_32, \
-    uint64_t: __builtin_add_overflow_64)(a, b, dst)
-
 #endif
 
 #ifndef warn_unused
@@ -344,11 +262,11 @@ parse_uint64(const char* str, size_t length){
             result.errored = PARSENUMBER_INVALID_CHARACTER;
             return result;
         }
-        if(__builtin_mul_overflow(value, 10, &value)){
+        if(mul_overflow(value, 10, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
-        if(__builtin_add_overflow(value, cval, &value)){
+        if(add_overflow(value, cval, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
@@ -408,11 +326,11 @@ parse_int64(const char* str, size_t length){
             result.errored = PARSENUMBER_INVALID_CHARACTER;
             return result;
         }
-        if(__builtin_mul_overflow(value, 10, &value)){
+        if(mul_overflow(value, 10, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
-        if(__builtin_add_overflow(value, cval, &value)){
+        if(add_overflow(value, cval, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
@@ -479,11 +397,11 @@ parse_uint32(const char*str, size_t length){
             result.errored = PARSENUMBER_INVALID_CHARACTER;
             return result;
         }
-        if(__builtin_mul_overflow(value, 10, &value)){
+        if(mul_overflow(value, 10, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
-        if(__builtin_add_overflow(value, cval, &value)){
+        if(add_overflow(value, cval, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
@@ -542,11 +460,11 @@ parse_int32(const char*str, size_t length){
             result.errored = PARSENUMBER_INVALID_CHARACTER;
             return result;
         }
-        if(__builtin_mul_overflow(value, 10, &value)){
+        if(mul_overflow(value, 10, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
-        if(__builtin_add_overflow(value, cval, &value)){
+        if(add_overflow(value, cval, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
@@ -760,11 +678,11 @@ parse_octal_inner(const char* str, size_t length){
             result.errored = PARSENUMBER_INVALID_CHARACTER;
             return result;
         }
-        if(__builtin_mul_overflow(value, (uint64_t)8, &value)){
+        if(mul_overflow(value, (uint64_t)8, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
-        if(__builtin_add_overflow(value, (uint64_t)cval, &value)){
+        if(add_overflow(value, (uint64_t)cval, &value)){
             result.errored = PARSENUMBER_OVERFLOWED_VALUE;
             return result;
         }
