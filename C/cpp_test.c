@@ -837,6 +837,7 @@ TestFunction(test_builtin_macros){
         {"__EVAL__", SV("__EVAL__(1+1)"), SV("2"), __LINE__, 0},
         {"__EVAL__", SV("__EVAL__(defined __EVAL__)"), SV("1"), __LINE__, 0},
         {"__eval", SV("__eval(3*4/3)"), SV("4"), __LINE__, 0},
+        {"__eval int64min", SV("__eval(-9223372036854775807 - 1)"), SV("-9223372036854775808llu"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(\"3\")"), SV("3"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
         {"__mixin", SV("#define S(x) #x\n__mixin(S(1)\"+1\")"), SV("\n1+1"), __LINE__, 0},

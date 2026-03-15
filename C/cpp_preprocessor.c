@@ -5591,8 +5591,22 @@ cpp_builtin_eval(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
     if(err) return err;
     Atom a;
     if(value == INT64_MIN){
-        // TODO: int64min
-        return 1;
+        CppToken minus = {
+            .punct = '-',
+            .txt = SV("-"),
+            .loc = loc,
+            .type = CPP_PUNCTUATOR,
+        };
+        err = cpp_push_tok(cpp, outtoks, minus);
+        if(err) return err;
+        a = cpp_atomizef(cpp, "9223372036854775808llu");
+        if(!a) return CPP_OOM_ERROR;
+        CppToken tok = {
+            .txt = {a->length, a->data},
+            .loc = loc,
+            .type = CPP_NUMBER,
+        };
+        return cpp_push_tok(cpp, outtoks, tok);
     }
     else if(value < 0){
         CppToken tok = {

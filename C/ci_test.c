@@ -1950,6 +1950,68 @@ TestFunction(test_interpreter){
                "return x ? 1 : 0;\n"),
             .exit_code = 0,
         },
+        {
+            "int128 signed div", __LINE__,
+            SV("__int128 a = -10;\n"
+               "__int128 b = 3;\n"
+               "return (int)(a / b);\n"),
+            .exit_code = (int)(-10 / 3),
+        },
+        {
+            "int128 signed mod", __LINE__,
+            SV("__int128 a = -10;\n"
+               "__int128 b = 3;\n"
+               "return (int)(a % b);\n"),
+            .exit_code = (int)(-10 % 3),
+        },
+        {
+            "int128 signed div both neg", __LINE__,
+            SV("__int128 a = -10;\n"
+               "__int128 b = -3;\n"
+               "return (int)(a / b);\n"),
+            .exit_code = (int)(-10 / -3),
+        },
+        {
+            "int128 signed mod both neg", __LINE__,
+            SV("__int128 a = -10;\n"
+               "__int128 b = -3;\n"
+               "return (int)(a % b);\n"),
+            .exit_code = (int)(-10 % -3),
+        },
+        {
+            "int128 signed lt neg", __LINE__,
+            SV("__int128 a = -1;\n"
+               "__int128 b = 1;\n"
+               "return a < b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128 signed gt neg", __LINE__,
+            SV("__int128 a = -1;\n"
+               "__int128 b = 1;\n"
+               "return a > b;\n"),
+            .exit_code = 0,
+        },
+        {
+            "int128 signed le neg", __LINE__,
+            SV("__int128 a = -1;\n"
+               "__int128 b = -1;\n"
+               "return a <= b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128 signed ge neg", __LINE__,
+            SV("__int128 a = 1;\n"
+               "__int128 b = -1;\n"
+               "return a >= b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128 signed rshift", __LINE__,
+            SV("__int128 a = -4;\n"
+               "return (int)(a >> 1);\n"),
+            .exit_code = -2,
+        },
     };
     int err;
     static int idx = 0;

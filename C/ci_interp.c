@@ -1107,25 +1107,50 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     if(is_unsigned)
                         res = ci_uint128_div(lu, ru);
                     else
-                        res = ci_uint128_div(lu, ru); // TODO: signed 128-bit division
+                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
                     break;
                 case CC_EXPR_MOD:
                     if(is_unsigned)
                         res = ci_uint128_mod(lu, ru);
                     else
-                        res = ci_uint128_mod(lu, ru); // TODO: signed 128-bit modulo
+                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
                     break;
                 case CC_EXPR_BITAND: res = ci_uint128_and(lu, ru); break;
                 case CC_EXPR_BITOR:  res = ci_uint128_or(lu, ru); break;
                 case CC_EXPR_BITXOR: res = ci_uint128_xor(lu, ru); break;
                 case CC_EXPR_LSHIFT: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
-                case CC_EXPR_RSHIFT: res = ci_uint128_shr(lu, ci_uint128_lo(ru)); break;
+                case CC_EXPR_RSHIFT:
+                    if(is_unsigned)
+                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
+                    else
+                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
+                    break;
                 case CC_EXPR_EQ: ci_write_uint(result, result_sz, ci_uint128_eq(lu, ru)); return 0;
                 case CC_EXPR_NE: ci_write_uint(result, result_sz, ci_uint128_ne(lu, ru)); return 0;
-                case CC_EXPR_LT: ci_write_uint(result, result_sz, ci_uint128_lt(lu, ru)); return 0;
-                case CC_EXPR_GT: ci_write_uint(result, result_sz, ci_uint128_gt(lu, ru)); return 0;
-                case CC_EXPR_LE: ci_write_uint(result, result_sz, ci_uint128_le(lu, ru)); return 0;
-                case CC_EXPR_GE: ci_write_uint(result, result_sz, ci_uint128_ge(lu, ru)); return 0;
+                case CC_EXPR_LT:
+                    if(is_unsigned)
+                        ci_write_uint(result, result_sz, ci_uint128_lt(lu, ru));
+                    else
+                        ci_write_uint(result, result_sz, ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    return 0;
+                case CC_EXPR_GT:
+                    if(is_unsigned)
+                        ci_write_uint(result, result_sz, ci_uint128_gt(lu, ru));
+                    else
+                        ci_write_uint(result, result_sz, ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    return 0;
+                case CC_EXPR_LE:
+                    if(is_unsigned)
+                        ci_write_uint(result, result_sz, ci_uint128_le(lu, ru));
+                    else
+                        ci_write_uint(result, result_sz, ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    return 0;
+                case CC_EXPR_GE:
+                    if(is_unsigned)
+                        ci_write_uint(result, result_sz, ci_uint128_ge(lu, ru));
+                    else
+                        ci_write_uint(result, result_sz, ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    return 0;
                 default: res = ci_uint128_from_uint64(0); break;
             }
             ci_uint128_write(result, result_sz, res);
