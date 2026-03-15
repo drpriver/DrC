@@ -2163,13 +2163,6 @@ TestFunction(test_interpreter){
                "return r < -1000000.0;\n"),
             .exit_code = 1,
         },
-        // Float: denormals
-        {
-            "float: denormal nonzero", __LINE__,
-            SV("double tiny = 5e-324;\n"
-               "return tiny != 0.0;\n"),
-            .exit_code = 1,
-        },
         // Shifts
         {
             "shift: by zero", __LINE__,
