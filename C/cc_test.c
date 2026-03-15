@@ -2865,6 +2865,12 @@ TestFunction(test_parse_decls){
                "_Static_assert((unsigned long long)(-(unsigned)0) == 0ull);\n"),
         },
         {
+            "constexpr: left shift negative", __LINE__,
+            SV("_Static_assert((-1 << 1) == -2);\n"
+               "_Static_assert((-1 << 0) == -1);\n"
+               "_Static_assert((-100 << 2) == -400);\n"),
+        },
+        {
             "constexpr: init_list not freed via comma", __LINE__,
             SV("struct P { int x; int y; };\n"
                "constexpr struct P p = {10, 20};\n"

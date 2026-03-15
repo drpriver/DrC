@@ -9882,7 +9882,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, integer, int32_t);
                         case CC_EXPR_LSHIFT:
                             if(rv < 0 || rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
-                            ARITH(<<, lv, rv, integer, int32_t);
+                            node->integer = (int32_t)((uint32_t)lv << rv); break;
                         case CC_EXPR_RSHIFT:
                             if(rv < 0 || rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, integer, int32_t);
@@ -9954,7 +9954,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, integer, int64_t);
                         case CC_EXPR_LSHIFT:
                             if(rv < 0 || rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
-                            ARITH(<<, lv, rv, integer, int64_t);
+                            node->integer = (int64_t)((uint64_t)lv << rv); break;
                         case CC_EXPR_RSHIFT:
                             if(rv < 0 || rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, integer, int64_t);
