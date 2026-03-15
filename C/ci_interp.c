@@ -412,8 +412,13 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
         return;
     }
     uint32_t ret_sz = 0;
-    if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void))
-        cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
+    if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void)){
+        int err = cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
+        if(err){
+            Allocator_free(ci_allocator(ci), frame, alloc_size);
+            return;
+        }
+    }
     *frame = (CiInterpFrame){
         .stmts = func->body.data,
         .stmt_count = func->body.count,
@@ -426,7 +431,11 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
         CcVariable* var = func->param_vars[i];
         if(!var) continue;
         uint32_t param_sz;
-        cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        int err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        if(err){
+            Allocator_free(ci_allocator(ci), frame, alloc_size);
+            return;
+        }
         void* storage = (char*)(frame + 1) + var->frame_offset;
         memcpy(storage, args[i], param_sz);
     }
