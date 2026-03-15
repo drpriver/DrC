@@ -179,6 +179,19 @@ ci_write_float(void* buf, CcBasicTypeKind k, double val){
     }
 }
 
+static inline
+_Bool
+ci_is_truthy(const void* buf, CcQualType type, uint32_t sz){
+    if(ccqt_is_basic(type) && ccbt_is_float(type.basic.kind))
+        return ci_read_float(buf, type.basic.kind) != 0.0;
+    if(sz > 8){
+        CiUint128 v;
+        ci_uint128_read(&v, buf, sz);
+        return ci_uint128_nonzero(v);
+    }
+    return ci_read_uint(buf, sz) != 0;
+}
+
 static
 void* _Nullable
 ci_var_storage(CiInterpFrame* frame, CcVariable* var){
@@ -304,8 +317,8 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             if(err) return err;
             err = ci_interp_expr(ci, frame, expr->lhs, &cond, sizeof cond);
             if(err) return err;
-            cond = ci_read_uint(&cond, cond_sz);
-            return ci_interp_lvalue(ci, frame, cond ? expr->values[0] : expr->values[1], out, size);
+            _Bool truthy = ci_is_truthy(&cond, expr->lhs->type, cond_sz);
+            return ci_interp_lvalue(ci, frame, truthy ? expr->values[0] : expr->values[1], out, size);
         }
         case CC_EXPR_VALUE:
             if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
@@ -664,7 +677,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame,expr->lhs, &cond, sizeof cond);
         if(err) return err;
-        if(ci_read_uint(&cond, cond_sz))
+        if(ci_is_truthy(&cond, expr->lhs->type, cond_sz))
             return ci_interp_expr(ci, frame,expr->values[0], result, size);
         else
             return ci_interp_expr(ci, frame,expr->values[1], result, size);
@@ -819,7 +832,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
         if(err) return err;
-        _Bool v = !ci_read_uint(&val, sz);
+        _Bool v = !ci_is_truthy(&val, expr->lhs->type, sz);
         uint32_t rsz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
         if(err) return err;
@@ -922,36 +935,28 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(expr->kind == CC_EXPR_LOGAND){
             err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
             if(err) return err;
-            _Bool lnz;
-            if(lsz > 8){ CiUint128 v; ci_uint128_read(&v, &lbuf128, lsz); lnz = ci_uint128_nonzero(v); }
-            else lnz = ci_read_uint(&lbuf128, lsz) != 0;
+            _Bool lnz = ci_is_truthy(&lbuf128, lhs->type, lsz);
             if(!lnz){
                 ci_write_uint(result, result_sz, 0);
                 return 0;
             }
             err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
             if(err) return err;
-            _Bool rnz;
-            if(rsz > 8){ CiUint128 v; ci_uint128_read(&v, &rbuf128, rsz); rnz = ci_uint128_nonzero(v); }
-            else rnz = ci_read_uint(&rbuf128, rsz) != 0;
+            _Bool rnz = ci_is_truthy(&rbuf128, rhs->type, rsz);
             ci_write_uint(result, result_sz, rnz ? 1 : 0);
             return 0;
         }
         if(expr->kind == CC_EXPR_LOGOR){
             err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
             if(err) return err;
-            _Bool lnz;
-            if(lsz > 8){ CiUint128 v; ci_uint128_read(&v, &lbuf128, lsz); lnz = ci_uint128_nonzero(v); }
-            else lnz = ci_read_uint(&lbuf128, lsz) != 0;
+            _Bool lnz = ci_is_truthy(&lbuf128, lhs->type, lsz);
             if(lnz){
                 ci_write_uint(result, result_sz, 1);
                 return 0;
             }
             err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
             if(err) return err;
-            _Bool rnz;
-            if(rsz > 8){ CiUint128 v; ci_uint128_read(&v, &rbuf128, rsz); rnz = ci_uint128_nonzero(v); }
-            else rnz = ci_read_uint(&rbuf128, rsz) != 0;
+            _Bool rnz = ci_is_truthy(&rbuf128, rhs->type, rsz);
             ci_write_uint(result, result_sz, rnz ? 1 : 0);
             return 0;
         }
@@ -2267,9 +2272,12 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CC_STMT_FOR: {
             if(stmt->exprs[1]){
                 uint64_t cond = 0;
-                int err = ci_interp_expr(ci, frame,stmt->exprs[1], &cond, sizeof cond);
+                uint32_t cond_sz;
+                int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[1]->type, stmt->loc, &cond_sz);
                 if(err) return err;
-                if(!cond){
+                err = ci_interp_expr(ci, frame,stmt->exprs[1], &cond, sizeof cond);
+                if(err) return err;
+                if(!ci_is_truthy(&cond, stmt->exprs[1]->type, cond_sz)){
                     frame->pc = stmt->targets[0];
                     return 0;
                 }
@@ -2279,9 +2287,12 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         }
         case CC_STMT_WHILE: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            uint32_t cond_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
-            if(!cond){
+            err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(!ci_is_truthy(&cond, stmt->exprs[0]->type, cond_sz)){
                 frame->pc = stmt->targets[0];
                 return 0;
             }
@@ -2290,9 +2301,12 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         }
         case CC_STMT_IF: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            uint32_t cond_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
-            if(!cond)
+            err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(!ci_is_truthy(&cond, stmt->exprs[0]->type, cond_sz))
                 frame->pc = stmt->targets[0];
             else
                 frame->pc++;
@@ -2300,9 +2314,12 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         }
         case CC_STMT_DOWHILE: {
             uint64_t cond = 0;
-            int err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            uint32_t cond_sz;
+            int err = cc_sizeof_as_uint(&ci->parser, stmt->exprs[0]->type, stmt->loc, &cond_sz);
             if(err) return err;
-            if(cond)
+            err = ci_interp_expr(ci, frame,stmt->exprs[0], &cond, sizeof cond);
+            if(err) return err;
+            if(ci_is_truthy(&cond, stmt->exprs[0]->type, cond_sz))
                 frame->pc = stmt->targets[0];
             else
                 frame->pc++;

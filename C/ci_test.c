@@ -1903,6 +1903,53 @@ TestFunction(test_interpreter){
                "return i == id(i);\n"),
             .exit_code = 1,
         },
+        // negative zero truthiness
+        {
+            "if neg zero double", __LINE__,
+            SV("double x = -0.0;\n"
+               "if(x) return 1;\n"
+               "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "if neg zero float", __LINE__,
+            SV("float x = -0.0f;\n"
+               "if(x) return 1;\n"
+               "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "while neg zero", __LINE__,
+            SV("double x = -0.0;\n"
+               "int n = 0;\n"
+               "while(x){ n++; break; }\n"
+               "return n;\n"),
+            .exit_code = 0,
+        },
+        {
+            "lognot neg zero", __LINE__,
+            SV("double x = -0.0;\n"
+               "return !x;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logand neg zero", __LINE__,
+            SV("double x = -0.0;\n"
+               "return x && 1;\n"),
+            .exit_code = 0,
+        },
+        {
+            "logor neg zero", __LINE__,
+            SV("double x = -0.0;\n"
+               "return x || 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "ternary neg zero", __LINE__,
+            SV("double x = -0.0;\n"
+               "return x ? 1 : 0;\n"),
+            .exit_code = 0,
+        },
     };
     int err;
     static int idx = 0;
