@@ -4485,6 +4485,8 @@ cc_expect_punct(CcParser* p, CcPunct punct){
     int err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){
+        if(punct == ';' && tok.type == CC_EOF)
+            return 0;
         // Build a readable name for the expected punctuator
         char buf[4];
         int len = 0;
