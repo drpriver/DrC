@@ -3587,10 +3587,15 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     }
     size_t envp_size = 0;
     void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+    if(!envp){
+        cmd_destroy(&cmd);
+        return CI_OOM_ERROR;
+    }
     int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
     cmd_destroy(&cmd);
-    if(envp) Allocator_free(scratch, envp, envp_size);
+    Allocator_free(scratch, envp, envp_size);
     if(run_err){
+        if(output.text) Allocator_free(scratch, output.text, output.length + 1);
         return cpp_error(cpp, loc, "__SHELL__: command failed");
     }
     // Strip trailing newlines.
