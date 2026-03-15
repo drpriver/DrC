@@ -360,6 +360,20 @@ ci_bitfield_read(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, ui
     return (storage >> bit_offset) & (((uint64_t)1 << bit_width) - 1);
 }
 
+// Sign-extend a bitfield value if it is a signed type.
+static inline
+uint64_t
+ci_bitfield_extend(uint64_t val, uint8_t bit_width, _Bool is_signed){
+    uint64_t mask = ((uint64_t)1 << bit_width) - 1;
+    val &= mask;
+    if(is_signed){
+        uint64_t sign_bit = (uint64_t)1 << (bit_width - 1);
+        if(val & sign_bit)
+            val |= ~mask;
+    }
+    return val;
+}
+
 static inline
 void
 ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width, uint64_t val){
@@ -725,6 +739,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
             if(expr->field_loc.bit_width){
                 uint64_t val = ci_bitfield_read(temp + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+                _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+                val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
                 memset(result, 0, size);
                 memcpy(result, &val, sz < size ? sz : size);
             }
@@ -742,6 +758,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
         if(expr->field_loc.bit_width){
             uint64_t val = ci_bitfield_read((char*)base + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
             memset(result, 0, size);
             memcpy(result, &val, sz < size ? sz : size);
         }
@@ -763,6 +781,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
         if(expr->field_loc.bit_width){
             uint64_t val = ci_bitfield_read((char*)ptr_val + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
             memset(result, 0, size);
             memcpy(result, &val, sz < size ? sz : size);
         }
@@ -863,7 +883,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, v);
             if(result == ci_discard_buf) return 0;
             uint64_t out = is_pre ? v : old;
-            out &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            out = ci_bitfield_extend(out, lhs->field_loc.bit_width, !is_unsigned);
             memset(result, 0, size);
             memcpy(result, &out, sz < size ? sz : size);
             return 0;
@@ -1231,6 +1252,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             err = ci_interp_expr(ci, frame, expr->values[0], &rbuf, sizeof rbuf);
             if(err) return err;
             uint64_t lu = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            lu = ci_bitfield_extend(lu, lhs->field_loc.bit_width, !is_unsigned);
             uint64_t ru = ci_read_uint(&rbuf, rsz);
             uint64_t res;
             switch(expr->kind){
@@ -1248,7 +1271,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
             if(result == ci_discard_buf) return 0;
-            res &= ((uint64_t)1 << lhs->field_loc.bit_width) - 1;
+            res = ci_bitfield_extend(res, lhs->field_loc.bit_width, !is_unsigned);
             memset(result, 0, size);
             memcpy(result, &res, sz < size ? sz : size);
             return 0;

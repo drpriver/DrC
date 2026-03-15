@@ -1204,7 +1204,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: write", __LINE__,
-            SV("struct S { int a : 3; int b : 5; };\n"
+            SV("struct S { unsigned a : 3; unsigned b : 5; };\n"
                "struct S s = {0};\n"
                "s.a = 5;\n"
                "s.b = 17;\n"
@@ -1213,7 +1213,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: write preserves adjacent", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {7, 0};\n"
                "s.b = 9;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1229,7 +1229,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow write", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {0};\n"
                "struct S* p = &s;\n"
                "p->a = 11;\n"
@@ -1239,7 +1239,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: preinc", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = ++s.a;\n"
                "return r * 100 + s.a;\n"),
@@ -1247,7 +1247,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: postinc", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = s.a++;\n"
                "return r * 100 + s.a;\n"),
@@ -1255,7 +1255,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: predec", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = --s.b;\n"
                "return r * 100 + s.b;\n"),
@@ -1263,7 +1263,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: postdec", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = s.b--;\n"
                "return r * 100 + s.b;\n"),
@@ -1287,7 +1287,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: subassign", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {9, 3};\n"
                "s.a -= 4;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1311,7 +1311,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow preinc", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "struct S* p = &s;\n"
                "int r = ++p->a;\n"
@@ -1326,6 +1326,98 @@ TestFunction(test_interpreter){
                "p->a += 5;\n"
                "return p->a * 100 + p->b;\n"),
             .exit_code = 7 * 100 + 3,
+        },
+        {
+            "bitfield: signed read -1", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -1;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 99,
+        },
+        {
+            "bitfield: signed read min", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -8;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 92,
+        },
+        {
+            "bitfield: signed read max", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = 7;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 107,
+        },
+        {
+            "bitfield: signed 1-bit", __LINE__,
+            SV("struct S { signed a : 1; };\n"
+               "struct S s = {0};\n"
+               "s.a = -1;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 99,
+        },
+        {
+            "bitfield: signed comparison", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -3;\n"
+               "return s.a < 0 ? 1 : 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: signed arithmetic", __LINE__,
+            SV("struct S { unsigned a : 4; signed b : 4; };\n"
+               "struct S s = {5, -3};\n"
+               "return s.a + s.b + 100;\n"),
+            .exit_code = 102,
+        },
+        {
+            "bitfield: signed preinc", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -3;\n"
+               "int r = ++s.a;\n"
+               "return r + 100;\n"),
+            .exit_code = 98,
+        },
+        {
+            "bitfield: signed postinc", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -3;\n"
+               "int r = s.a++;\n"
+               "return r + 100;\n"),
+            .exit_code = 97,
+        },
+        {
+            "bitfield: signed predec", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = 2;\n"
+               "int r = --s.a;\n"
+               "return r + 100;\n"),
+            .exit_code = 101,
+        },
+        {
+            "bitfield: signed addassign", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = -5;\n"
+               "s.a += 2;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 97,
+        },
+        {
+            "bitfield: signed subassign", __LINE__,
+            SV("struct S { signed a : 4; };\n"
+               "struct S s = {0};\n"
+               "s.a = 3;\n"
+               "s.a -= 5;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 98,
         },
         {
             "big string", __LINE__,
@@ -2011,6 +2103,203 @@ TestFunction(test_interpreter){
             SV("__int128 a = -4;\n"
                "return (int)(a >> 1);\n"),
             .exit_code = -2,
+        },
+        // Float: NaN
+        {
+            "float: nan != nan", __LINE__,
+            SV("double n = 0.0 / 0.0;\n"
+               "return n != n;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: nan not equal", __LINE__,
+            SV("double n = 0.0 / 0.0;\n"
+               "return !(n == n);\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: nan not less", __LINE__,
+            SV("double n = 0.0 / 0.0;\n"
+               "return !(n < 0.0) && !(n > 0.0) && !(n == 0.0);\n"),
+            .exit_code = 1,
+        },
+        // Float: infinity
+        {
+            "float: positive inf", __LINE__,
+            SV("double inf = 1.0 / 0.0;\n"
+               "return inf > 1000000.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: negative inf", __LINE__,
+            SV("double ninf = -1.0 / 0.0;\n"
+               "return ninf < -1000000.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: inf + inf", __LINE__,
+            SV("double inf = 1.0 / 0.0;\n"
+               "return inf + inf == inf;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: inf - inf is nan", __LINE__,
+            SV("double inf = 1.0 / 0.0;\n"
+               "double r = inf - inf;\n"
+               "return r != r;\n"),
+            .exit_code = 1,
+        },
+        // Float: negative zero
+        {
+            "float: neg zero equals zero", __LINE__,
+            SV("double nz = -0.0;\n"
+               "return nz == 0.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float: 1/neg zero is neg inf", __LINE__,
+            SV("double nz = -0.0;\n"
+               "double r = 1.0 / nz;\n"
+               "return r < -1000000.0;\n"),
+            .exit_code = 1,
+        },
+        // Float: denormals
+        {
+            "float: denormal nonzero", __LINE__,
+            SV("double tiny = 5e-324;\n"
+               "return tiny != 0.0;\n"),
+            .exit_code = 1,
+        },
+        // Shifts
+        {
+            "shift: by zero", __LINE__,
+            SV("return (42 << 0) + (42 >> 0) - 42;\n"),
+            .exit_code = 42,
+        },
+        {
+            "shift: 1u << 31", __LINE__,
+            SV("unsigned u = 1u << 31;\n"
+               "return u == 0x80000000u;\n"),
+            .exit_code = 1,
+        },
+        {
+            "shift: signed right negative", __LINE__,
+            SV("int x = -8;\n"
+               "return (x >> 1) + 100;\n"),
+            .exit_code = 96,
+        },
+        {
+            "shift: mixed width", __LINE__,
+            SV("unsigned char c = 0xFF;\n"
+               "int r = c << 4;\n"
+               "return r == 0xFF0;\n"),
+            .exit_code = 1,
+        },
+        // Initialization: designated array
+        {
+            "init: designated array", __LINE__,
+            SV("int a[5] = {[2] = 42, [4] = 99};\n"
+               "return a[0] + a[1] + a[2] + a[3] + a[4] - 99;\n"),
+            .exit_code = 42,
+        },
+        {
+            "init: designated overwrite", __LINE__,
+            SV("int a[3] = {1, 2, [0] = 10};\n"
+               "return a[0] + a[1];\n"),
+            .exit_code = 12,
+        },
+        // Type system: anonymous struct/union
+        {
+            "anonymous union", __LINE__,
+            SV("struct S { int tag; union { int ival; double dval; }; };\n"
+               "struct S s;\n"
+               "s.tag = 1;\n"
+               "s.ival = 42;\n"
+               "return s.ival;\n"),
+            .exit_code = 42,
+        },
+        {
+            "anonymous struct", __LINE__,
+            SV("struct S { struct { int x; int y; }; int z; };\n"
+               "struct S s = {{1, 2}, 3};\n"
+               "return s.x + s.y + s.z;\n"),
+            .exit_code = 6,
+        },
+        // Type system: _Static_assert
+        {
+            "_Static_assert", __LINE__,
+            SV("_Static_assert(sizeof(int) == 4, \"int must be 4 bytes\");\n"
+               "_Static_assert(1, \"true\");\n"
+               "return 42;\n"),
+            .exit_code = 42,
+        },
+        // Type system: typedef chain
+        {
+            "typedef chain", __LINE__,
+            SV("typedef int myint;\n"
+               "typedef myint myint2;\n"
+               "typedef myint2 *myint2_ptr;\n"
+               "myint2 v = 42;\n"
+               "myint2_ptr p = &v;\n"
+               "return *p;\n"),
+            .exit_code = 42,
+        },
+        // Type system: array of function pointers
+        {
+            "array of function pointers", __LINE__,
+            SV("int add(int a, int b){ return a + b; }\n"
+               "int mul(int a, int b){ return a * b; }\n"
+               "int (*ops[2])(int, int) = {add, mul};\n"
+               "return ops[0](3, 4) + ops[1](3, 4);\n"),
+            .exit_code = 19,
+        },
+        // Control flow: switch default in middle
+        {
+            "switch: default in middle", __LINE__,
+            SV("int x = 99;\n"
+               "int r = 0;\n"
+               "switch(x){\n"
+               "  case 1: r = 1; break;\n"
+               "  default: r = 42; break;\n"
+               "  case 2: r = 2; break;\n"
+               "}\n"
+               "return r;\n"),
+            .exit_code = 42,
+        },
+        // Control flow: nested continue
+        {
+            "nested continue", __LINE__,
+            SV("int count = 0;\n"
+               "for(int i = 0; i < 5; i++){\n"
+               "  for(int j = 0; j < 5; j++){\n"
+               "    if(j == 2) continue;\n"
+               "    if(j == 4) break;\n"
+               "    count++;\n"
+               "  }\n"
+               "}\n"
+               "return count;\n"),
+            .exit_code = 15,
+        },
+        // Pointer: negative index
+        {
+            "pointer: negative index", __LINE__,
+            SV("int arr[5] = {10, 20, 30, 40, 50};\n"
+               "int *p = arr + 3;\n"
+               "return p[-2];\n"),
+            .exit_code = 20,
+        },
+        // Linked list
+        {
+            "linked list", __LINE__,
+            SV("typedef struct Node Node;\n"
+               "struct Node { int val; Node *next; };\n"
+               "Node c = {3, 0};\n"
+               "Node b = {2, &c};\n"
+               "Node a = {1, &b};\n"
+               "int sum = 0;\n"
+               "for(Node *p = &a; p; p = p->next) sum += p->val;\n"
+               "return sum;\n"),
+            .exit_code = 6,
         },
     };
     int err;
