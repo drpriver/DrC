@@ -361,6 +361,28 @@ ccbt_to_unsigned(CcBasicTypeKind k){
 }
 
 static inline
+CcBasicTypeKind
+ccbt_to_signed(CcBasicTypeKind k){
+    switch(k){
+        case CCBT_char:
+        case CCBT_unsigned_char:
+            return CCBT_signed_char;
+        case CCBT_unsigned_short:
+            return CCBT_short;
+        case CCBT_unsigned:
+            return CCBT_int;
+        case CCBT_unsigned_long:
+            return CCBT_long;
+        case CCBT_unsigned_long_long:
+            return CCBT_long_long;
+        case CCBT_unsigned_int128:
+            return CCBT_int128;
+        default:
+            return k;
+    }
+}
+
+static inline
 CcQualType
 ccqt_basic(CcBasicTypeKind k){
     return (CcQualType){.basic.kind = k};

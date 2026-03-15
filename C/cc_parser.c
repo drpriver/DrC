@@ -89,6 +89,7 @@ static int cc_handle_static_asssert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
 static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
 static uint32_t cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type);
+static int cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc);
 
 enum {
     CC_NO_ERROR             = _cc_no_error,
@@ -3388,18 +3389,32 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             err = cc_implicit_cast(p, *argp, ptr_type, argp);
                             if(err) goto call_cleanup;
                         }
-                        else if(ccqt_is_basic(at)){
-                            CcBasicTypeKind k = at.basic.kind;
-                            if(k == CCBT_float){
-                                err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_double), argp);
-                                if(err) goto call_cleanup;
-                            }
-                            else if(ccbt_is_integer(k) && ccbt_int_rank(k) < ccbt_int_rank(CCBT_int)){
-                                err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_int), argp);
-                                if(err) goto call_cleanup;
+                        else {
+                            if(ccqt_kind(at) == CC_ENUM)
+                                at = ccqt_as_enum(at)->underlying;
+                            if(ccqt_is_basic(at)){
+                                CcBasicTypeKind k = at.basic.kind;
+                                if(k == CCBT_float){
+                                    err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_double), argp);
+                                    if(err) goto call_cleanup;
+                                }
+                                else if(ccbt_is_integer(k) && ccbt_int_rank(k) < ccbt_int_rank(CCBT_int)){
+                                    err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_int), argp);
+                                    if(err) goto call_cleanup;
+                                }
+                                else if(ccqt_kind((*argp)->type) == CC_ENUM){
+                                    err = cc_implicit_cast(p, *argp, at, argp);
+                                    if(err) goto call_cleanup;
+                                }
                             }
                         }
                     }
+                }
+                if(operand->kind == CC_EXPR_FUNCTION && operand->func->printf_like){
+                    uint32_t fi = operand->func->type->param_count - 1;
+                    SrcLoc fmt_loc = fi < nargs ? ((CcExpr*)args.data[fi])->loc : tok.loc;
+                    err = cc_check_printf_format(p, operand->func, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
+                    if(err) goto call_cleanup;
                 }
                 if(operand->kind != CC_EXPR_FUNCTION){
                     err = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
@@ -4126,6 +4141,317 @@ cc_debug(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_start(va, fmt);
     cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "debug", fmt, va);
     va_end(va);
+}
+
+// Retrieve the underlying string literal text from an expression,
+// looking through implicit casts and constexpr variables.
+// If the expression is not a string literal, sets *text to NULL (not an error).
+static
+int
+cc_get_string_literal(CcExpr* e, const char*_Nullable*_Nonnull text, uint32_t* length){
+    for(;;){
+        if(e->kind == CC_EXPR_CAST){
+            e = e->lhs;
+            continue;
+        }
+        if(e->kind == CC_EXPR_VARIABLE && e->var->constexpr_ && e->var->initializer){
+            e = e->var->initializer;
+            continue;
+        }
+        break;
+    }
+    if(e->kind != CC_EXPR_VALUE || ccqt_kind(e->type) != CC_ARRAY){
+        *text = NULL;
+        return 0;
+    }
+    CcArray* a = ccqt_as_array(e->type);
+    if(!ccqt_is_basic(a->element) || a->element.basic.kind != CCBT_char){
+        *text = NULL;
+        return 0;
+    }
+    *length = e->str.length;
+    *text = e->text;
+    return 0;
+}
+
+static
+int
+cc_printf_format_error(CcParser* p, SrcLoc loc, const char* spec, int spec_len, uint32_t arg_num, CcQualType expected, CcQualType actual){
+    cpp_msg_preamble(&p->cpp, loc, "error");
+    MStringBuilder* buff = &p->cpp.logger->buff;
+    msb_sprintf(buff, "format specifier '%%");
+    msb_write_str(buff, spec, spec_len);
+    msb_sprintf(buff, "' (argument %u) expects '", (unsigned)arg_num);
+    cc_print_type(buff, expected);
+    msb_write_literal(buff, "', but argument has type '");
+    cc_print_type(buff, actual);
+    msb_write_char(buff, '\'');
+    log_flush(p->cpp.logger, LOG_PRINT_ERROR);
+    cpp_msg_postamble(&p->cpp, loc, LOG_PRINT_ERROR);
+    return CC_SYNTAX_ERROR;
+}
+
+static
+int
+cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc){
+    uint32_t fmt_idx = func->type->param_count - 1;
+    uint32_t first_vararg = func->type->param_count;
+    if(fmt_idx >= nargs) return 0;
+    const char* fmt = NULL;
+    uint32_t slen = 0;
+    int err = cc_get_string_literal(args[fmt_idx], &fmt, &slen);
+    if(err) return err;
+    if(!fmt) return 0;
+    if(slen == 0) return 0;
+    slen--; // exclude null terminator
+    const CcTargetConfig* tc = cc_target(p);
+    uint32_t arg_idx = first_vararg;
+    uint32_t expected_args = 0;
+    for(uint32_t i = 0; i < slen; i++){
+        if(fmt[i] != '%') continue;
+        i++;
+        if(i >= slen)
+            return cc_error(p, loc, "incomplete format specifier at end of string");
+        if(fmt[i] == '%') continue;
+        // flags
+        while(i < slen && (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '#' || fmt[i] == '0' || fmt[i] == '\'' || fmt[i] == '$' || fmt[i] == '_'))
+            i++;
+        if(i >= slen)
+            return cc_error(p, loc, "incomplete format specifier at end of string");
+        // width
+        if(fmt[i] == '*'){
+            expected_args++;
+            if(arg_idx < nargs){
+                CcQualType actual = args[arg_idx]->type;
+                if(!ccqt_is_basic(actual) || actual.basic.kind != CCBT_int)
+                    return cc_printf_format_error(p, loc, "*", 1, arg_idx - first_vararg + 1, ccqt_basic(CCBT_int), actual);
+            }
+            arg_idx++;
+            i++;
+        }
+        else {
+            while(i < slen && fmt[i] >= '0' && fmt[i] <= '9') i++;
+        }
+        if(i >= slen)
+            return cc_error(p, loc, "incomplete format specifier at end of string");
+        // precision
+        if(fmt[i] == '.'){
+            i++;
+            if(i >= slen)
+                return cc_error(p, loc, "incomplete format specifier at end of string");
+            if(fmt[i] == '*'){
+                expected_args++;
+                if(arg_idx < nargs){
+                    CcQualType actual = args[arg_idx]->type;
+                    if(!ccqt_is_basic(actual) || actual.basic.kind != CCBT_int)
+                        return cc_printf_format_error(p, loc, ".*", 2, arg_idx - first_vararg + 1, ccqt_basic(CCBT_int), actual);
+                }
+                arg_idx++;
+                i++;
+            }
+            else {
+                while(i < slen && fmt[i] >= '0' && fmt[i] <= '9') i++;
+            }
+        }
+        if(i >= slen)
+            return cc_error(p, loc, "incomplete format specifier at end of string");
+        // length modifier
+        const char* spec_start = fmt + i;
+        enum {
+            LEN_NONE,
+            LEN_h,    // h
+            LEN_hh,   // hh
+            LEN_l,    // l
+            LEN_ll,   // ll
+            LEN_L,    // L (long double)
+            LEN_z,    // z
+            LEN_j,    // j
+            LEN_t,    // t
+            LEN_I,    // I (microslop, pointer-sized)
+            LEN_I32,  // I32 (microslop)
+            LEN_I64,  // I64 (microslop)
+        } len_mod = LEN_NONE;
+        if(fmt[i] == 'h'){
+            i++;
+            if(i < slen && fmt[i] == 'h'){ len_mod = LEN_hh; i++; }
+            else len_mod = LEN_h;
+        }
+        else if(fmt[i] == 'l'){
+            i++;
+            if(i < slen && fmt[i] == 'l'){ len_mod = LEN_ll; i++; }
+            else len_mod = LEN_l;
+        }
+        else if(fmt[i] == 'L'){ len_mod = LEN_L; i++; }
+        else if(fmt[i] == 'z'){ len_mod = LEN_z; i++; }
+        else if(fmt[i] == 'j'){ len_mod = LEN_j; i++; }
+        else if(fmt[i] == 't'){ len_mod = LEN_t; i++; }
+        else if(fmt[i] == 'I'){
+            i++;
+            if(i + 1 < slen && fmt[i] == '6' && fmt[i+1] == '4'){ len_mod = LEN_I64; i += 2; }
+            else if(i + 1 < slen && fmt[i] == '3' && fmt[i+1] == '2'){ len_mod = LEN_I32; i += 2; }
+            else len_mod = LEN_I;
+        }
+        if(i >= slen)
+            return cc_error(p, loc, "incomplete format specifier at end of string");
+        // conversion specifier
+        char conv = fmt[i];
+        int spec_len = (int)(fmt + i + 1 - spec_start);
+        CcQualType expected = {0};
+        // Validate length modifier + conversion specifier combination.
+        // Per C standard: hh,h,ll,j,z,t only with b,B,d,i,o,u,x,X,n
+        //                  l also with c,s and (no effect) a,A,e,E,f,F,g,G
+        //                  L only with a,A,e,E,f,F,g,G
+        if(len_mod != LEN_NONE){
+            _Bool valid = 1;
+            switch(len_mod){
+                case LEN_NONE: break;
+                case LEN_h: case LEN_hh:
+                case LEN_ll: case LEN_j: case LEN_z: case LEN_t:
+                    switch(conv){
+                        case 'b': case 'B': case 'd': case 'i':
+                        case 'o': case 'u': case 'x': case 'X':
+                        case 'n': break;
+                        default: valid = 0;
+                    }
+                    break;
+                case LEN_l:
+                    switch(conv){
+                        case 'b': case 'B': case 'd': case 'i':
+                        case 'o': case 'u': case 'x': case 'X':
+                        case 'n': case 'c': case 's':
+                        case 'a': case 'A': case 'e': case 'E':
+                        case 'f': case 'F': case 'g': case 'G':
+                            break;
+                        default: valid = 0;
+                    }
+                    break;
+                case LEN_L:
+                    switch(conv){
+                        case 'a': case 'A': case 'e': case 'E':
+                        case 'f': case 'F': case 'g': case 'G':
+                            break;
+                        default: valid = 0;
+                    }
+                    break;
+                case LEN_I: case LEN_I32: case LEN_I64:
+                    switch(conv){
+                        case 'b': case 'B': case 'd': case 'i':
+                        case 'o': case 'u': case 'x': case 'X':
+                            break;
+                        default: valid = 0;
+                    }
+                    break;
+            }
+            if(!valid)
+                return cc_error(p, loc, "invalid length modifier for '%%%c' format specifier", conv);
+        }
+        switch(conv){
+            case 'd': case 'i':
+                switch(len_mod){
+                    case LEN_NONE: expected = ccqt_basic(CCBT_int); break;
+                    case LEN_h:    expected = ccqt_basic(CCBT_int); break;
+                    case LEN_hh:   expected = ccqt_basic(CCBT_int); break;
+                    case LEN_l:    expected = ccqt_basic(CCBT_long); break;
+                    case LEN_ll:   expected = ccqt_basic(CCBT_long_long); break;
+                    case LEN_z:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
+                    case LEN_j:    expected = ccqt_basic(CCBT_long_long); break;
+                    case LEN_t:    expected = ccqt_basic(tc->ptrdiff_type); break;
+                    case LEN_I:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
+                    case LEN_I32:  expected = ccqt_basic(CCBT_int); break;
+                    case LEN_I64:  expected = ccqt_basic(CCBT_long_long); break;
+                    default: break;
+                }
+                break;
+            case 'u': case 'x': case 'X': case 'o':
+            case 'b': case 'B':
+                switch(len_mod){
+                    case LEN_NONE: expected = ccqt_basic(CCBT_unsigned); break;
+                    case LEN_h:    expected = ccqt_basic(CCBT_unsigned); break;
+                    case LEN_hh:   expected = ccqt_basic(CCBT_unsigned); break;
+                    case LEN_l:    expected = ccqt_basic(CCBT_unsigned_long); break;
+                    case LEN_ll:   expected = ccqt_basic(CCBT_unsigned_long_long); break;
+                    case LEN_z:    expected = ccqt_basic(tc->size_type); break;
+                    case LEN_j:    expected = ccqt_basic(CCBT_unsigned_long_long); break;
+                    case LEN_t:    expected = ccqt_basic(ccbt_to_unsigned(tc->ptrdiff_type)); break;
+                    case LEN_I:    expected = ccqt_basic(tc->size_type); break;
+                    case LEN_I32:  expected = ccqt_basic(CCBT_unsigned); break;
+                    case LEN_I64:  expected = ccqt_basic(CCBT_unsigned_long_long); break;
+                    default: break;
+                }
+                break;
+            case 'f': case 'F': case 'e': case 'E':
+            case 'g': case 'G': case 'a': case 'A':
+                if(len_mod == LEN_L)
+                    expected = ccqt_basic(CCBT_long_double);
+                else
+                    expected = ccqt_basic(CCBT_double); // l has no effect on floats
+                break;
+            case 'c':
+                if(len_mod == LEN_l)
+                    expected = ccqt_basic(tc->wint_type);
+                else
+                    expected = ccqt_basic(CCBT_int);
+                break;
+            case 's':
+                if(len_mod == LEN_l){
+                    CcQualType wchar_qt = ccqt_basic(tc->wchar_type);
+                    err = cc_pointer_of(p, wchar_qt, &expected);
+                    if(err) return err;
+                }
+                else
+                    expected = p->char_star;
+                break;
+            case 'p':
+                expected = p->void_star;
+                break;
+            case 'n':
+                expected = (CcQualType){0};
+                break;
+            default:
+                return cc_error(p, loc, "invalid format specifier '%%%c'", conv);
+        }
+        expected_args++;
+        if(expected.bits && arg_idx < nargs){
+            CcQualType actual = args[arg_idx]->type;
+            uint32_t arg_num = arg_idx - first_vararg + 1;
+            if(conv == 's'){
+                // %s or %ls: expected is a pointer type, check element type matches
+                CcBasicTypeKind expect_elem = ccqt_as_ptr(expected)->pointee.basic.kind;
+                _Bool ok = ccqt_kind(actual) == CC_POINTER
+                    && ccqt_is_basic(ccqt_as_ptr(actual)->pointee)
+                    && ccqt_as_ptr(actual)->pointee.basic.kind == expect_elem;
+                if(!ok)
+                    return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
+            }
+            else if(conv == 'p'){
+                if(!ccqt_is_pointer_like(actual)
+                    && !(ccqt_is_basic(actual) && actual.basic.kind == CCBT_nullptr_t))
+                    return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
+            }
+            else {
+                _Bool ok = ccqt_is_basic(actual) && actual.basic.kind == expected.basic.kind;
+                // Allow types that differ in name but match in size and signedness
+                // (e.g. long vs long long on LP64).
+                if(!ok && ccqt_is_basic(actual)){
+                    CcBasicTypeKind ek = expected.basic.kind;
+                    CcBasicTypeKind ak = actual.basic.kind;
+                    ok = tc->sizeof_[ek] == tc->sizeof_[ak]
+                        && ccbt_is_unsigned(ek, !tc->char_is_signed) == ccbt_is_unsigned(ak, !tc->char_is_signed);
+                }
+                if(!ok)
+                    return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
+            }
+        }
+        arg_idx++;
+    }
+    uint32_t provided = nargs - first_vararg;
+    if(expected_args > provided)
+        return cc_error(p, loc, "format specifies %u argument%s, but only %u provided",
+            expected_args, expected_args == 1 ? "" : "s", provided);
+    if(expected_args < provided)
+        return cc_error(p, loc, "format specifies %u argument%s, but %u provided",
+            expected_args, expected_args == 1 ? "" : "s", provided);
+    return 0;
 }
 
 static
@@ -9046,7 +9372,7 @@ cc_define_builtin_types(CcParser* p){
     }
     // Register __builtin_ libc functions
     {
-        struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic;} builtins[] = {
+        struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic; _Bool printf_like;} builtins[] = {
             {SV("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SV("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SV("strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
@@ -9056,8 +9382,8 @@ cc_define_builtin_types(CcParser* p){
             {SV("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SV("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
             {SV("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
-            {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1},
-            {SV("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1},
+            {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
+            {SV("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];
@@ -9073,6 +9399,7 @@ cc_define_builtin_types(CcParser* p){
             func->type = ftype;
             func->extern_ = 1;
             func->libc_builtin = 1;
+            func->printf_like = b->printf_like;
             err = cc_scope_insert_func(al, &p->global, key, func);
             if(err) return CC_OOM_ERROR;
             err = cc_scope_insert_func(al, &p->global, name, func);

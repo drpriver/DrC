@@ -2881,6 +2881,268 @@ TestFunction(test_parse_decls){
                 {SV("p"), SV("const struct P")},
             },
         },
+        // printf format checking: valid cases
+        {
+            "printf: basic %d", __LINE__,
+            SV("void f(void) { printf(\"%d\", 42); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %s with string literal", __LINE__,
+            SV("void f(void) { printf(\"%s\", \"hello\"); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %s with char*", __LINE__,
+            SV("void f(char* s) { printf(\"%s\", s); }\n"),
+            .funcs = { { SV("f"), SV("void(char *)") } },
+        },
+        {
+            "printf: %s with const char*", __LINE__,
+            SV("void f(const char* s) { printf(\"%s\", s); }\n"),
+            .funcs = { { SV("f"), SV("void(const char *)") } },
+        },
+        {
+            "printf: %p with pointer", __LINE__,
+            SV("void f(int* p) { printf(\"%p\", p); }\n"),
+            .funcs = { { SV("f"), SV("void(int *)") } },
+        },
+        {
+            "printf: %p with void*", __LINE__,
+            SV("void f(void* p) { printf(\"%p\", p); }\n"),
+            .funcs = { { SV("f"), SV("void(void *)") } },
+        },
+        {
+            "printf: %%", __LINE__,
+            SV("void f(void) { printf(\"100%%\"); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: no format args", __LINE__,
+            SV("void f(void) { printf(\"hello world\"); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: multiple specifiers", __LINE__,
+            SV("void f(void) { printf(\"%d %s %u\", 1, \"hi\", 2u); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %ld with long", __LINE__,
+            SV("void f(long x) { printf(\"%ld\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long)") } },
+        },
+        {
+            "printf: %lld with long long", __LINE__,
+            SV("void f(long long x) { printf(\"%lld\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long long)") } },
+        },
+        {
+            "printf: %zu with size_t", __LINE__,
+            SV("void f(unsigned long x) { printf(\"%zu\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned long)") } },
+        },
+        {
+            "printf: %x with unsigned", __LINE__,
+            SV("void f(unsigned x) { printf(\"%x\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned int)") } },
+        },
+        {
+            "printf: %o with unsigned", __LINE__,
+            SV("void f(unsigned x) { printf(\"%o\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned int)") } },
+        },
+        {
+            "printf: %f with double", __LINE__,
+            SV("void f(double x) { printf(\"%f\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: %e with double", __LINE__,
+            SV("void f(double x) { printf(\"%e\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: %g with double", __LINE__,
+            SV("void f(double x) { printf(\"%g\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: %c with int", __LINE__,
+            SV("void f(int c) { printf(\"%c\", c); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %*d with width", __LINE__,
+            SV("void f(void) { printf(\"%*d\", 10, 42); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %.*s with precision", __LINE__,
+            SV("void f(void) { printf(\"%.*s\", 5, \"hello\"); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %*.*f", __LINE__,
+            SV("void f(double x) { printf(\"%*.*f\", 10, 3, x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: flags and width", __LINE__,
+            SV("void f(void) { printf(\"%-+10d\", 42); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %hd (short promoted to int)", __LINE__,
+            SV("void f(int x) { printf(\"%hd\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %hhd (char promoted to int)", __LINE__,
+            SV("void f(int x) { printf(\"%hhd\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %lx with unsigned long", __LINE__,
+            SV("void f(unsigned long x) { printf(\"%lx\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned long)") } },
+        },
+        {
+            "printf: %llx with unsigned long long", __LINE__,
+            SV("void f(unsigned long long x) { printf(\"%llx\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned long long)") } },
+        },
+        {
+            "printf: non-literal format skipped", __LINE__,
+            SV("void f(const char* fmt) { printf(fmt, 1); }\n"),
+            .funcs = { { SV("f"), SV("void(const char *)") } },
+        },
+        {
+            "printf: constexpr format string", __LINE__,
+            SV("constexpr const char* fmt = \"%d\";\n"
+               "void f(void) { printf(fmt, 42); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %b binary", __LINE__,
+            SV("void f(unsigned x) { printf(\"%b\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned int)") } },
+        },
+        {
+            "printf: stb flags ' $ _", __LINE__,
+            SV("void f(void) { printf(\"%'d\", 1000); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %I64d", __LINE__,
+            SV("void f(long long x) { printf(\"%I64d\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long long)") } },
+        },
+        {
+            "printf: %I32u", __LINE__,
+            SV("void f(unsigned x) { printf(\"%I32u\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned int)") } },
+        },
+        {
+            "snprintf: valid", __LINE__,
+            SV("void f(char* buf) { snprintf(buf, 100, \"%d %s\", 42, \"hi\"); }\n"),
+            .funcs = { { SV("f"), SV("void(char *)") } },
+        },
+        {
+            "printf: float promotes to double for %f", __LINE__,
+            SV("void f(float x) { printf(\"%f\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(float)") } },
+        },
+        {
+            "printf: %lf (l has no effect on float)", __LINE__,
+            SV("void f(double x) { printf(\"%lf\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: %Lf with long double", __LINE__,
+            SV("void f(long double x) { printf(\"%Lf\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long double)") } },
+        },
+        {
+            "printf: %lc with int (wint_t)", __LINE__,
+            SV("void f(int c) { printf(\"%lc\", c); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %ls with int* (wchar_t*)", __LINE__,
+            SV("void f(int* s) { printf(\"%ls\", s); }\n"),
+            .funcs = { { SV("f"), SV("void(int *)") } },
+        },
+        {
+            "printf: %le (l no effect on float)", __LINE__,
+            SV("void f(double x) { printf(\"%le\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(double)") } },
+        },
+        {
+            "printf: %La with long double", __LINE__,
+            SV("void f(long double x) { printf(\"%La\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long double)") } },
+        },
+        {
+            "printf: %zd with signed size type", __LINE__,
+            SV("void f(long x) { printf(\"%zd\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long)") } },
+        },
+        {
+            "printf: %td with ptrdiff_t", __LINE__,
+            SV("void f(long x) { printf(\"%td\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long)") } },
+        },
+        {
+            "printf: %jd with intmax_t", __LINE__,
+            SV("void f(long long x) { printf(\"%jd\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long long)") } },
+        },
+        {
+            "printf: %ld with long long (same size)", __LINE__,
+            SV("void f(long long x) { printf(\"%ld\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(long long)") } },
+        },
+        {
+            "printf: %llu with unsigned long (same size)", __LINE__,
+            SV("void f(unsigned long x) { printf(\"%llu\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned long)") } },
+        },
+        {
+            "printf: %d with enum of fixed underlying int", __LINE__,
+            SV("enum E : int { A = 1 };\n"
+               "void f(void) { printf(\"%d\", A); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %u with enum of fixed underlying unsigned", __LINE__,
+            SV("enum E : unsigned { A = 1 };\n"
+               "void f(void) { printf(\"%u\", A); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %d with enum variable", __LINE__,
+            SV("enum E : int { A = 1 };\n"
+               "void f(enum E e) { printf(\"%d\", e); }\n"),
+            .funcs = { { SV("f"), SV("void(enum E)") } },
+        },
+        {
+            "printf: %d with enum no fixed type", __LINE__,
+            SV("enum E { A, B, C };\n"
+               "void f(void) { printf(\"%d\", A); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
+        {
+            "printf: %d with _Bool", __LINE__,
+            SV("void f(_Bool b) { printf(\"%d\", b); }\n"),
+            .funcs = { { SV("f"), SV("void(_Bool)") } },
+        },
+        {
+            "printf: %x with unsigned enum", __LINE__,
+            SV("enum E : unsigned { A = 1 };\n"
+               "void f(void) { printf(\"%x\", A); }\n"),
+            .funcs = { { SV("f"), SV("void(void)") } },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -3929,6 +4191,190 @@ TestFunction(test_parse_errors){
             SV("constexpr int arr[] = {10, 20, 30};\n"
                "_Static_assert(arr[-1] == 0);\n"),
             SV("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        // printf format checking
+        {
+            "printf: wrong type for %d", __LINE__,
+            SV("void f(void) { printf(\"%d\", \"hello\"); }\n"),
+            SV("(test):1:23: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: wrong type for %s", __LINE__,
+            SV("void f(void) { printf(\"%s\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%s' (argument 1) expects 'char *', but argument has type 'int'\n"),
+        },
+        {
+            "printf: too few args", __LINE__,
+            SV("void f(void) { printf(\"%d %d\", 1); }\n"),
+            SV("(test):1:23: error: format specifies 2 arguments, but only 1 provided\n"),
+        },
+        {
+            "printf: too many args", __LINE__,
+            SV("void f(void) { printf(\"%d\", 1, 2); }\n"),
+            SV("(test):1:23: error: format specifies 1 argument, but 2 provided\n"),
+        },
+        {
+            "printf: %p expects pointer", __LINE__,
+            SV("void f(void) { printf(\"%p\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%p' (argument 1) expects 'void *', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %ld expects long", __LINE__,
+            SV("void f(void) { printf(\"%ld\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%ld' (argument 1) expects 'long', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %zu expects size_t", __LINE__,
+            SV("void f(void) { printf(\"%zu\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%zu' (argument 1) expects 'unsigned long', but argument has type 'int'\n"),
+        },
+        {
+            "snprintf: wrong type for %d", __LINE__,
+            SV("void f(char* buf) { snprintf(buf, 100, \"%d\", \"hello\"); }\n"),
+            SV("(test):1:40: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: invalid specifier", __LINE__,
+            SV("void f(void) { printf(\"%q\"); }\n"),
+            SV("(test):1:23: error: invalid format specifier '%q'\n"),
+        },
+        {
+            "printf: %*s consumes int then char*", __LINE__,
+            SV("void f(void) { printf(\"%*s\", \"hello\", \"world\"); }\n"),
+            SV("(test):1:23: error: format specifier '%*' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: %.*d precision consumes int", __LINE__,
+            SV("void f(void) { printf(\"%.*d\", \"hello\"); }\n"),
+            SV("(test):1:23: error: format specifier '%.*' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: %d with long", __LINE__,
+            SV("void f(long x) { printf(\"%d\", x); }\n"),
+            SV("(test):1:25: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'long'\n"),
+        },
+        {
+            "printf: %d with unsigned", __LINE__,
+            SV("void f(unsigned x) { printf(\"%d\", x); }\n"),
+            SV("(test):1:29: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'unsigned int'\n"),
+        },
+        {
+            "printf: %u with int", __LINE__,
+            SV("void f(int x) { printf(\"%u\", x); }\n"),
+            SV("(test):1:24: error: format specifier '%u' (argument 1) expects 'unsigned int', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %lld with int", __LINE__,
+            SV("void f(void) { printf(\"%lld\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%lld' (argument 1) expects 'long long', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %f with int", __LINE__,
+            SV("void f(void) { printf(\"%f\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%f' (argument 1) expects 'double', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %s with int pointer", __LINE__,
+            SV("void f(int* p) { printf(\"%s\", p); }\n"),
+            SV("(test):1:25: error: format specifier '%s' (argument 1) expects 'char *', but argument has type 'int *'\n"),
+        },
+        {
+            "printf: %d with double", __LINE__,
+            SV("void f(double x) { printf(\"%d\", x); }\n"),
+            SV("(test):1:27: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'double'\n"),
+        },
+        {
+            "printf: too many args plural", __LINE__,
+            SV("void f(void) { printf(\"%d\", 1, 2, 3); }\n"),
+            SV("(test):1:23: error: format specifies 1 argument, but 3 provided\n"),
+        },
+        {
+            "printf: too few args 0 for 1", __LINE__,
+            SV("void f(void) { printf(\"%d\"); }\n"),
+            SV("(test):1:23: error: format specifies 1 argument, but only 0 provided\n"),
+        },
+        {
+            "printf: %hd with long (size mismatch)", __LINE__,
+            SV("void f(long x) { printf(\"%hd\", x); }\n"),
+            SV("(test):1:25: error: format specifier '%hd' (argument 1) expects 'int', but argument has type 'long'\n"),
+        },
+        {
+            "printf: constexpr format string error", __LINE__,
+            SV("constexpr const char* fmt = \"%d\";\n"
+               "void f(void) { printf(fmt, \"hello\"); }\n"),
+            SV("(test):2:23: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: %I64d with int", __LINE__,
+            SV("void f(void) { printf(\"%I64d\", 42); }\n"),
+            SV("(test):1:23: error: format specifier '%I64d' (argument 1) expects 'long long', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %b with int (signed)", __LINE__,
+            SV("void f(int x) { printf(\"%b\", x); }\n"),
+            SV("(test):1:24: error: format specifier '%b' (argument 1) expects 'unsigned int', but argument has type 'int'\n"),
+        },
+        {
+            "printf: incomplete % at end", __LINE__,
+            SV("void f(void) { printf(\"%\"); }\n"),
+            SV("(test):1:23: error: incomplete format specifier at end of string\n"),
+        },
+        // invalid length modifier + specifier combos
+        {
+            "printf: %hs invalid", __LINE__,
+            SV("void f(void) { printf(\"%hs\", \"hi\"); }\n"),
+            SV("(test):1:23: error: invalid length modifier for '%s' format specifier\n"),
+        },
+        {
+            "printf: %hc invalid", __LINE__,
+            SV("void f(void) { printf(\"%hc\", 42); }\n"),
+            SV("(test):1:23: error: invalid length modifier for '%c' format specifier\n"),
+        },
+        {
+            "printf: %llf invalid", __LINE__,
+            SV("void f(double x) { printf(\"%llf\", x); }\n"),
+            SV("(test):1:27: error: invalid length modifier for '%f' format specifier\n"),
+        },
+        {
+            "printf: %Ld invalid", __LINE__,
+            SV("void f(long double x) { printf(\"%Ld\", x); }\n"),
+            SV("(test):1:32: error: invalid length modifier for '%d' format specifier\n"),
+        },
+        {
+            "printf: %zs invalid", __LINE__,
+            SV("void f(void) { printf(\"%zs\", \"hi\"); }\n"),
+            SV("(test):1:23: error: invalid length modifier for '%s' format specifier\n"),
+        },
+        {
+            "printf: %Lc invalid", __LINE__,
+            SV("void f(void) { printf(\"%Lc\", 42); }\n"),
+            SV("(test):1:23: error: invalid length modifier for '%c' format specifier\n"),
+        },
+        {
+            "printf: %hhf invalid", __LINE__,
+            SV("void f(double x) { printf(\"%hhf\", x); }\n"),
+            SV("(test):1:27: error: invalid length modifier for '%f' format specifier\n"),
+        },
+        {
+            "printf: %Lp invalid", __LINE__,
+            SV("void f(void* p) { printf(\"%Lp\", p); }\n"),
+            SV("(test):1:26: error: invalid length modifier for '%p' format specifier\n"),
+        },
+        // wrong type for %lc, %ls, %Lf
+        {
+            "printf: %lc with char*", __LINE__,
+            SV("void f(void) { printf(\"%lc\", \"hello\"); }\n"),
+            SV("(test):1:23: error: format specifier '%lc' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: %ls with char*", __LINE__,
+            SV("void f(char* s) { printf(\"%ls\", s); }\n"),
+            SV("(test):1:26: error: format specifier '%ls' (argument 1) expects 'int *', but argument has type 'char *'\n"),
+        },
+        {
+            "printf: %Lf with double", __LINE__,
+            SV("void f(double x) { printf(\"%Lf\", x); }\n"),
+            SV("(test):1:27: error: format specifier '%Lf' (argument 1) expects 'long double', but argument has type 'double'\n"),
         },
     };
     static int idx = 0;

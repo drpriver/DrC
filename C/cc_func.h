@@ -41,7 +41,8 @@ struct CcFunc {
                          // to be parsed on first use or codegen.
              addr_taken: 1, // address taken (used as value, not just called directly)
              libc_builtin: 1,
-             _padding: 25;
+             printf_like: 1,
+             _padding: 24;
     uint32_t frame_size; // size of params + automatic local vars
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body. 
                                       // Return to the parser's free list when done.
