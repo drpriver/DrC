@@ -1460,7 +1460,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal,
-        #ifndef __DVM_CC__
+        #ifndef __DRC__ // workaround libffi limitation
         .print = (int(*)(void*, const char*, ...))b_printf,
         #endif
         .hout = ctx,
@@ -1642,7 +1642,7 @@ int
 print_ctx(BuildCtx* ctx, BuildTarget* tgt){
     (void)tgt;
     TiPrinter printer = {
-        #ifndef __DVM_CC__
+        #ifndef __DRC__ // libffi limitation
         .printer = (int(*)(void*, const char*, ...))b_printf,
         #endif
         .ctx = ctx,

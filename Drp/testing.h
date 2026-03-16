@@ -40,7 +40,7 @@
 
 static void diff_print(void*_Null_unspecified up, const char* fmt, ...);
 static DbgDiffPrinter TEST_DIFF_PRINTER = {
-#ifndef __DVM_CC__
+#ifndef __DRC__
     .printer=diff_print,
 #endif
     .escape_on    = "\033[4m",
@@ -52,7 +52,7 @@ static DbgDiffPrinter TEST_DIFF_PRINTER = {
 };
 
 #ifndef TestDebugBreak
-    #if defined __DVM_CC__
+    #if defined __DRC__
         #define TestDebugBreak() __builtin_debugtrap()
     #elif defined __clang__
         #define TestDebugBreak() __builtin_debugtrap()

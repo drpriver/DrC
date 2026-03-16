@@ -10,8 +10,8 @@ interpreted C code.
 
 A [REPL mode] is also offered.
 
-After building, try it out with `Bin/cc [Samples/hello.c]` or peruse the other
-[Samples].
+After building, try it out with <code>Bin/cc <a href=Samples/hello.c>Samples/hello.c</a></code>
+or peruse the other [Samples].
 
 Major Features Include:
 - [C Interpreter]
@@ -36,7 +36,7 @@ Building::md
   Nobuild::details
     This project uses a "nobuild" build system. Bootstrap the build system by
     doing something like:
-    ::pre
+    ::pre.console
       $ cc build.c -o build && ./build -b Bin && ./build tests
     From then on, you can just build using the build program. If you edit it or
     any of its deps, it will rebuild itself.
@@ -50,10 +50,12 @@ Building::md
       build.c = build.c
 
   Makefile::details
-    If you like using make, the makefile will bootstrap the build system for you.
+    If you like using make, the makefile will bootstrap the build system for
+    you.
 
   build.bat::details
-    You can bootstrap the build system on windows using build.bat. This is purely convenience.
+    You can bootstrap the build system on windows using build.bat. This is
+    purely convenience.
 
   Dependencies::details
     Depends on libffi. Assumes you can just do `-lffi` and that just works. If
@@ -61,10 +63,11 @@ Building::md
     "just werks" on windows is not worth the hassle.
 
 C Interpreter::md
-  C scripts, top level statements, no separate compile and run steps, no intermediate files.
+  C scripts, top level statements, no separate compile and run steps, no
+  intermediate files.
 REPL mode::md
   Run `Bin/cc` with `--repl` for a REPL experience, with interactive function calls etc.
-  ::pre
+  ::pre.console
     $ Bin/cc --repl
     cc> #include <stdio.h>
     ... int x = 3;
@@ -76,8 +79,9 @@ REPL mode::md
     x = 3
     cc> ^D
 Bindings-Free FFI::md
-  `#include` real C headers, `#pragma lib` to load them. Also supports `#pragma pkg_config` to populate include paths, lib paths etc.
-  ::pre
+  `#include` real C headers, `#pragma lib` to load them. Also supports `#pragma
+  pkg_config` to populate include paths, lib paths etc.
+  ::pre.C
     #pragma pkg_config "sdl2" // could ifdef for non-pkg-config systems
     #pragma lib "SDL2" // load the library
     #include <SDL2/SDL.h> <SDL.h> // extension, tries each in order
@@ -85,8 +89,9 @@ Bindings-Free FFI::md
     SDL_Init(SDL_INIT_VIDEO);
     // Call SDL funcs from your scripts now!
 Native Threads::md
-  Related to above, you can call actual system APIs to create threads with interpreted code.
-  ::pre
+  Related to above, you can call actual system APIs to create threads with
+  interpreted code.
+  ::pre.C
     #include <stdio.h>
     #include <pthread.h>
     pthread_t t;
@@ -97,18 +102,19 @@ Native Threads::md
     pthread_join(t, NULL);
   This example also shows off our captureless-lambda extension.
 First Class Types::md
-  `_Type T = int; printf("%s\n", T.name)`, etc. Pass them as values, reflect over them, see the [json demo]
+  `_Type T = int; printf("%s\n", T.name)`, etc. Pass them as values, reflect
+  over them, see the [json demo]
   ::links
     json demo = Samples/Extensions/json_parse.c
 Static If::md
   Include or exclude statements/decls based on compile time expressions.
-  ::pre
+  ::pre.C
     static if(__shell("date")[0] == 'W'){
       enum {IT_IS_WEDNESDAY=1};
     }
     printf("IT_IS_WEDNESDAY: %d\n", IT_IS_WEDNESDAY); // only compiles on wednesday
   More seriously:
-  ::pre
+  ::pre.C
     #define S_(x) #x
     #define S(x) S_(x)
     // __ident produces a single identifier token
@@ -138,12 +144,14 @@ Static If::md
   Unlike `#if`, `static if` has access to C-level information without the boilerplate of a procmacro.
 
 Procmacros::md
-  Register a C function as a macro, call it as a macro, outputs get turned into pp-tokens, you can mix them into your source file for code generation and other things.
+  Register a C function as a macro, call it as a macro, outputs get turned into
+  pp-tokens, you can mix them into your source file for code generation and
+  other things.
 
   Also, [power up preprocessor conditionals]:
   ::links
     power up preprocessor conditionals = Samples/Extensions/procmacro-if.c
-  ::pre
+  ::pre.C
     _Bool IS_POINTER(_Type T){ return T.is_pointer;}
     #pragma procmacro IS_POINTER
 
@@ -162,10 +170,12 @@ Procmacros::md
     #pragma message T "is not a pointer"
     #endif
 Methods and FUCS::md
-  Define methods in struct body, auto deref, `.` and `->` merged, FUCS: Function Uniform Call Syntax to have `.func` notation with free functions.
+  Define methods in struct body, auto deref, `.` and <code>-></code> merged,
+  FUCS: Function Uniform Call Syntax to have `.func` notation with free
+  functions.
 Named Arguments::md
   Same syntax as designated initializers.
-  ::pre
+  ::pre.C
     int func_with_lotta_bools(_Bool jump, _Bool skip, _Bool hop);
     func_with_lotta_bools(.hop = 1, .jump = 0, .skip = 1); // out of order
 
@@ -182,7 +192,7 @@ Embeddable::md
 Self Hosting::md
   The C interpreter is able to run itself.
 
-  ::pre
+  ::pre.console
     $ Bin/cc cc.c Samples/hello.c
     Hello world
     $ Bin/cc cc.c cc.c Samples/hello.c

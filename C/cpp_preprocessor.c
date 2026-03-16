@@ -4374,7 +4374,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         if(err) return err; \
     } while(0)
 
-    DEFINT("__DVM_CC__", 1);
+    DEFINT("__DRC__", 1);
     DEFINT("__FLT_EVAL_METHOD__", t.flt_eval_method);
 
     // __GNUC__ compatibility
@@ -5350,7 +5350,7 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     }
     err = cpp_define_obj_macro(cpp, SV("__STDC__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"dvm cc 0.1\"")}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"drc 0.0.1\"")}}, 1);
     if(err) return err;
     err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
     if(err) return err;
