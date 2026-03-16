@@ -1489,6 +1489,24 @@ TestFunction(test_interpreter){
             .exit_code = 97,
         },
         {
+            "bitfield: signed divassign", __LINE__,
+            SV("struct S { signed a : 8; };\n"
+               "struct S s = {0};\n"
+               "s.a = -7;\n"
+               "s.a /= 3;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 98,
+        },
+        {
+            "bitfield: signed modassign", __LINE__,
+            SV("struct S { signed a : 8; };\n"
+               "struct S s = {0};\n"
+               "s.a = -7;\n"
+               "s.a %= 3;\n"
+               "return s.a + 100;\n"),
+            .exit_code = 99,
+        },
+        {
             "bitfield: signed subassign", __LINE__,
             SV("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"

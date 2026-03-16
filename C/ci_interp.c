@@ -1264,19 +1264,38 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             uint64_t lu = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
             _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
             lu = ci_bitfield_extend(lu, lhs->field_loc.bit_width, !is_unsigned);
-            uint64_t ru = ci_read_uint(&rbuf, rsz);
+            uint64_t ru;
+            if(is_unsigned)
+                ru = ci_read_uint(&rbuf, rsz);
+            else
+                ru = (uint64_t)ci_read_int(&rbuf, rsz);
             uint64_t res;
             switch(expr->kind){
                 case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
                 case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
                 case CC_EXPR_MULASSIGN:    res = lu * ru; break;
-                case CC_EXPR_DIVASSIGN:    res = ru ? lu / ru : 0; break;
-                case CC_EXPR_MODASSIGN:    res = ru ? lu % ru : 0; break;
+                case CC_EXPR_DIVASSIGN:
+                    if(is_unsigned)
+                        res = ru ? lu / ru : 0;
+                    else
+                        res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
+                    break;
+                case CC_EXPR_MODASSIGN:
+                    if(is_unsigned)
+                        res = ru ? lu % ru : 0;
+                    else
+                        res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
+                    break;
                 case CC_EXPR_BITANDASSIGN: res = lu & ru; break;
                 case CC_EXPR_BITORASSIGN:  res = lu | ru; break;
                 case CC_EXPR_BITXORASSIGN: res = lu ^ ru; break;
                 case CC_EXPR_LSHIFTASSIGN: res = lu << ru; break;
-                case CC_EXPR_RSHIFTASSIGN: res = lu >> ru; break;
+                case CC_EXPR_RSHIFTASSIGN:
+                    if(is_unsigned)
+                        res = lu >> ru;
+                    else
+                        res = (uint64_t)((int64_t)lu >> ru);
+                    break;
                 default: res = 0; break;
             }
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
