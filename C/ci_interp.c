@@ -3262,6 +3262,8 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
                 CppToken onetok = {.type = CPP_NUMBER, .txt = {1, "1"}};
                 err = cpp_define_obj_macro(cpp, val, &onetok, 1);
             }
+            if(err == _cc_macro_already_exists_error)
+                err = cpp_error(cpp, loc, "pkg-config: macro '%.*s' already defined with a different value", (int)val.length, val.text);
             if(err) goto finally;
         }
         for(size_t i = 0; i < npkg_fw; i++){
