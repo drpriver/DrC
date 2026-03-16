@@ -4348,6 +4348,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
         switch(conv){
             case 'd': case 'i':
                 switch(len_mod){
+                    DEFAULT_UNREACHABLE;
                     case LEN_NONE: expected = ccqt_basic(CCBT_int); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_int); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_int); break;
@@ -4359,12 +4360,13 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                     case LEN_I:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_int); break;
                     case LEN_I64:  expected = ccqt_basic(CCBT_long_long); break;
-                    case LEN_L: default: break;
+                    case LEN_L: break;
                 }
                 break;
             case 'u': case 'x': case 'X': case 'o':
             case 'b': case 'B':
                 switch(len_mod){
+                    DEFAULT_UNREACHABLE;
                     case LEN_NONE: expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_unsigned); break;
@@ -4376,7 +4378,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                     case LEN_I:    expected = ccqt_basic(tc->size_type); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_I64:  expected = ccqt_basic(CCBT_unsigned_long_long); break;
-                    case LEN_L: default: break;
+                    case LEN_L: break;
                 }
                 break;
             case 'f': case 'F': case 'e': case 'E':
