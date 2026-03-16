@@ -12,49 +12,6 @@
 // There's some support for generating shell completions,
 // but you need an accompanying shell function.
 //
-// I have a fish function like:
-//
-// ```fish
-// function mk --description 'Runs ./build if it exists and is executable, otherwise runs make'
-//     if test -f ./build; and test -x ./build
-//
-//         ./build $argv
-//     else
-//         command make $argv
-//     end
-// end
-// ```
-//
-// and in ~/.config/fish/completions/mk.fish:
-// ```fish
-// set -g __mk_trusted_dirs "$HOME/<safe>"
-//
-// function __mk_is_trusted
-//     for d in $__mk_trusted_dirs
-//         if string match -q "$d/*" "$PWD"
-//             return 0
-//         end
-//     end
-//     return 1
-// end
-//
-// function __mk_update_completions --on-variable PWD
-//     complete -c mk -e
-//     if __mk_is_trusted; and test -f ./build.c; and git ls-files --error-unmatch build.c &>/dev/null; and test -f ./build -a -x ./build
-//         ./build --no-rebuild --fish-completions 2>/dev/null | string replace -r '^complete -c \\S+' 'complete -c mk' | while read -l line
-//             eval $line
-//         end
-//         ./build --no-rebuild fish-completions 2>/dev/null | string replace -r '^complete -c \\S+' 'complete -c mk' | while read -l line
-//             eval $line
-//         end
-//     else
-//         complete -c mk --wraps make
-//     end
-// end
-// __mk_update_completions
-// ```
-// So I can just type `mk` in my terminal and it just werks even when I go to other nobuild projects.
-//
 #include "Drp/compiler_warnings.h"
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"
