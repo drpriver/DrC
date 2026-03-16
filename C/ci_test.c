@@ -2385,6 +2385,15 @@ TestFunction(test_interpreter){
                "return p[-2];\n"),
             .exit_code = 20,
         },
+        {
+            "pointer: large unsigned index", __LINE__,
+            SV("char buf[4] = {0};\n"
+               "char *p = buf;\n"
+               "unsigned idx = 0x80000000u;\n"
+               "char *q = p + idx;\n"
+               "return q > p;\n"),
+            .exit_code = 1,
+        },
         // Linked list
         {
             "linked list", __LINE__,

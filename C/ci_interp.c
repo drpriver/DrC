@@ -1009,7 +1009,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(err) return err;
                 char* ptr = NULL;
                 memcpy(&ptr, &lbuf128, sizeof ptr);
-                int64_t idx = ci_read_int(&rbuf128, rsz);
+                _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
+                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf128, rsz) : ci_read_int(&rbuf128, rsz);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1025,7 +1026,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(err) return err;
                 char* ptr = NULL;
                 memcpy(&ptr, &rbuf128, sizeof ptr);
-                int64_t idx = ci_read_int(&lbuf128, lsz);
+                _Bool idx_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
+                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&lbuf128, lsz) : ci_read_int(&lbuf128, lsz);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1041,7 +1043,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(err) return err;
                 char* ptr = NULL;
                 memcpy(&ptr, &lbuf128, sizeof ptr);
-                int64_t idx = ci_read_int(&rbuf128, rsz);
+                _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
+                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf128, rsz) : ci_read_int(&rbuf128, rsz);
                 ptr -= idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1330,7 +1333,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(err) return err;
             void* ptr = NULL;
             memcpy(&ptr, lval, sizeof ptr);
-            int64_t idx = ci_read_int(&rbuf, rsz);
+            _Bool idx_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
+            int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf, rsz) : ci_read_int(&rbuf, rsz);
             if(expr->kind == CC_EXPR_ADDASSIGN)
                 ptr = (char*)ptr + idx * pointee_sz;
             else
