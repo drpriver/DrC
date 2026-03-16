@@ -12,17 +12,17 @@
 #include "Drp/term_util.h"
 #include "Drp/file_cache.h"
 #include "Drp/file_util.h"
+#include "Drp/get_input.h"
+#include "Drp/dre.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_tok.h"
 #include "C/cc_errors.h"
 #include "C/cc_parser.h"
-#include "cpp_args.h"
-#include "Drp/get_input.h"
-#include "cc_repl_completion.h"
 #include "C/native_call.h"
-#include "Drp/dre.h"
 #include "C/ci_interp.h"
+#include "cpp_args.h"
+#include "cc_repl_completion.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
