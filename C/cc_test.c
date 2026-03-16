@@ -3143,6 +3143,47 @@ TestFunction(test_parse_decls){
                "void f(void) { printf(\"%x\", A); }\n"),
             .funcs = { { SV("f"), SV("void(void)") } },
         },
+        {
+            "printf: %d with unsigned (same size)", __LINE__,
+            SV("void f(unsigned x) { printf(\"%d\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(unsigned int)") } },
+        },
+        {
+            "printf: %u with int (same size)", __LINE__,
+            SV("void f(int x) { printf(\"%u\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %b with int (same size)", __LINE__,
+            SV("void f(int x) { printf(\"%b\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        {
+            "printf: %x with int (same size)", __LINE__,
+            SV("void f(int x) { printf(\"%x\", x); }\n"),
+            .funcs = { { SV("f"), SV("void(int)") } },
+        },
+        // __attribute__((format(printf, ...)))
+        {
+            "printf attr: udf valid", __LINE__,
+            SV("__attribute__((format(printf, 1, 2)))\n"
+               "void my_printf(const char* fmt, ...);\n"
+               "void f(void) { my_printf(\"%d %s\", 42, \"hi\"); }\n"),
+            .funcs = {
+                { SV("my_printf"), SV("void(const char *, ...)") },
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "printf attr: udf valid with prefix args", __LINE__,
+            SV("__attribute__((format(printf, 2, 3)))\n"
+               "void log_msg(int level, const char* fmt, ...);\n"
+               "void f(void) { log_msg(1, \"%d\", 42); }\n"),
+            .funcs = {
+                { SV("log_msg"), SV("void(int, const char *, ...)") },
+                { SV("f"), SV("void(void)") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -4253,16 +4294,8 @@ TestFunction(test_parse_errors){
             SV("void f(long x) { printf(\"%d\", x); }\n"),
             SV("(test):1:25: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'long'\n"),
         },
-        {
-            "printf: %d with unsigned", __LINE__,
-            SV("void f(unsigned x) { printf(\"%d\", x); }\n"),
-            SV("(test):1:29: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'unsigned int'\n"),
-        },
-        {
-            "printf: %u with int", __LINE__,
-            SV("void f(int x) { printf(\"%u\", x); }\n"),
-            SV("(test):1:24: error: format specifier '%u' (argument 1) expects 'unsigned int', but argument has type 'int'\n"),
-        },
+
+
         {
             "printf: %lld with int", __LINE__,
             SV("void f(void) { printf(\"%lld\", 42); }\n"),
@@ -4309,11 +4342,8 @@ TestFunction(test_parse_errors){
             SV("void f(void) { printf(\"%I64d\", 42); }\n"),
             SV("(test):1:23: error: format specifier '%I64d' (argument 1) expects 'long long', but argument has type 'int'\n"),
         },
-        {
-            "printf: %b with int (signed)", __LINE__,
-            SV("void f(int x) { printf(\"%b\", x); }\n"),
-            SV("(test):1:24: error: format specifier '%b' (argument 1) expects 'unsigned int', but argument has type 'int'\n"),
-        },
+
+
         {
             "printf: incomplete % at end", __LINE__,
             SV("void f(void) { printf(\"%\"); }\n"),
@@ -4375,6 +4405,21 @@ TestFunction(test_parse_errors){
             "printf: %Lf with double", __LINE__,
             SV("void f(double x) { printf(\"%Lf\", x); }\n"),
             SV("(test):1:27: error: format specifier '%Lf' (argument 1) expects 'long double', but argument has type 'double'\n"),
+        },
+        // __attribute__((format(printf, ...))) errors
+        {
+            "printf attr: udf wrong type", __LINE__,
+            SV("__attribute__((format(printf, 1, 2)))\n"
+               "void my_printf(const char* fmt, ...);\n"
+               "void f(void) { my_printf(\"%d\", \"hello\"); }\n"),
+            SV("(test):3:26: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "printf attr: udf with prefix args wrong type", __LINE__,
+            SV("__attribute__((format(printf, 2, 3)))\n"
+               "void log_msg(int level, const char* fmt, ...);\n"
+               "void f(void) { log_msg(1, \"%d\", \"hello\"); }\n"),
+            SV("(test):3:27: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
         },
     };
     static int idx = 0;

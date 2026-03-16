@@ -56,7 +56,8 @@ struct CcAttributes {
             uint64_t packed:            1,
                      transparent_union: 1,
                      has_aligned:       1,
-                     _padding:          13,
+                     printf_like:       1,
+                     _padding:          12,
                      vector_size:       16,
                      aligned:           16,
                      _padding2:         16;

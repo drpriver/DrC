@@ -4223,7 +4223,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
             expected_args++;
             if(arg_idx < nargs){
                 CcQualType actual = args[arg_idx]->type;
-                if(!ccqt_is_basic(actual) || actual.basic.kind != CCBT_int)
+                if(!ccqt_is_basic(actual) || (actual.basic.kind != CCBT_int && actual.basic.kind != CCBT_unsigned))
                     return cc_printf_format_error(p, loc, "*", 1, arg_idx - first_vararg + 1, ccqt_basic(CCBT_int), actual);
             }
             arg_idx++;
@@ -4243,7 +4243,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                 expected_args++;
                 if(arg_idx < nargs){
                     CcQualType actual = args[arg_idx]->type;
-                    if(!ccqt_is_basic(actual) || actual.basic.kind != CCBT_int)
+                    if(!ccqt_is_basic(actual) || (actual.basic.kind != CCBT_int && actual.basic.kind != CCBT_unsigned))
                         return cc_printf_format_error(p, loc, ".*", 2, arg_idx - first_vararg + 1, ccqt_basic(CCBT_int), actual);
                 }
                 arg_idx++;
@@ -4430,13 +4430,13 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
             }
             else {
                 _Bool ok = ccqt_is_basic(actual) && actual.basic.kind == expected.basic.kind;
-                // Allow types that differ in name but match in size and signedness
-                // (e.g. long vs long long on LP64).
+                // Allow integer types that match in size, ignoring signedness
+                // (e.g. int vs unsigned, long vs long long on LP64).
                 if(!ok && ccqt_is_basic(actual)){
                     CcBasicTypeKind ek = expected.basic.kind;
                     CcBasicTypeKind ak = actual.basic.kind;
-                    ok = tc->sizeof_[ek] == tc->sizeof_[ak]
-                        && ccbt_is_unsigned(ek, !tc->char_is_signed) == ccbt_is_unsigned(ak, !tc->char_is_signed);
+                    ok = ccbt_is_integer(ek) && ccbt_is_integer(ak)
+                        && tc->sizeof_[ek] == tc->sizeof_[ak];
                 }
                 if(!ok)
                     return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
@@ -4894,6 +4894,38 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                 if(vs > UINT16_MAX)
                     return cc_error(p, tok.loc, "vector_size too large");
                 attrs->vector_size = (uint16_t)vs;
+                err = cc_expect_punct(p, CC_rparen);
+                if(err) return err;
+            }
+            else if(sv_equals(attr_name, SV("format"))){
+                err = cc_expect_punct(p, CC_lparen);
+                if(err) return err;
+                // Parse archetype: printf or __printf__
+                CcToken arch_tok;
+                err = cc_next_token(p, &arch_tok);
+                if(err) return err;
+                if(arch_tok.type != CC_IDENTIFIER)
+                    return cc_error(p, arch_tok.loc, "expected format archetype (e.g. 'printf')");
+                StringView arch = {.text = arch_tok.ident.ident->data, .length = arch_tok.ident.ident->length};
+                if(sv_startswith(arch, SV("__")))
+                    arch = sv_slice(arch, 2, arch.length);
+                if(sv_endswith(arch, SV("__")))
+                    arch = sv_slice(arch, 0, arch.length-2);
+                if(sv_equals(arch, SV("printf")))
+                    attrs->printf_like = 1;
+                // Skip the remaining arguments (format-string-index, first-to-check)
+                err = cc_expect_punct(p, CC_comma);
+                if(err) return err;
+                CcExpr* expr = NULL;
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                if(err) return err;
+                if(expr) cc_release_expr(p, expr);
+                err = cc_expect_punct(p, CC_comma);
+                if(err) return err;
+                expr = NULL;
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                if(err) return err;
+                if(expr) cc_release_expr(p, expr);
                 err = cc_expect_punct(p, CC_rparen);
                 if(err) return err;
             }
@@ -8654,6 +8686,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(p->attributes.transparent_union && tk != CC_UNION)
                 return cc_error(p, declbase->loc, "transparent_union attribute on non-union type is not supported");
         }
+        _Bool is_printf_like = p->attributes.printf_like;
         cc_clear_attributes(&p->attributes);
         // asm label: asm("symbol")
         Atom asm_label = NULL;
@@ -8682,6 +8715,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         // trailing __attribute__ after asm label
         err = cc_parse_attributes(p, &p->attributes);
         if(err) return err;
+        is_printf_like = is_printf_like || p->attributes.printf_like;
         // postfix processing
         _Bool stop = 0;
         err = cc_next_token(p, &tok);
@@ -8732,6 +8766,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 func->extern_ = declbase->spec.sp_extern;
                 func->static_ = declbase->spec.sp_static;
                 func->inline_ = declbase->spec.sp_inline;
+                func->printf_like = func->printf_like || is_printf_like;
                 func->tokens = body_tokens;
                 func->params.count = param_names.count;
                 func->params.data = param_names.data;
@@ -8760,6 +8795,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->extern_ = declbase->spec.sp_extern;
             func->static_ = declbase->spec.sp_static;
             func->inline_ = declbase->spec.sp_inline;
+            func->printf_like = func->printf_like || is_printf_like;
             func->params.count = param_names.count;
             func->params.data = param_names.data;
             func->enclosing = p->current_func;
@@ -8916,6 +8952,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->extern_ = declbase->spec.sp_extern;
             func->static_ = declbase->spec.sp_static;
             func->inline_ = declbase->spec.sp_inline;
+            func->printf_like = func->printf_like || is_printf_like;
             if(!func->defined){
                 func->params.count = param_names.count;
                 func->params.data = param_names.data;
