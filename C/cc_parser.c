@@ -4359,7 +4359,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                     case LEN_I:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_int); break;
                     case LEN_I64:  expected = ccqt_basic(CCBT_long_long); break;
-                    default: break;
+                    case LEN_L: default: break;
                 }
                 break;
             case 'u': case 'x': case 'X': case 'o':
@@ -4376,7 +4376,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                     case LEN_I:    expected = ccqt_basic(tc->size_type); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_I64:  expected = ccqt_basic(CCBT_unsigned_long_long); break;
-                    default: break;
+                    case LEN_L: default: break;
                 }
                 break;
             case 'f': case 'F': case 'e': case 'E':
