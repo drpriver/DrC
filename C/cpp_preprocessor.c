@@ -148,6 +148,23 @@ int
 cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks){
     CppMacro* macro;
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
+    if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
+        Atom a = AT_get_atom(cpp->at, name.text, name.length);
+        if(!a) return CPP_UNREACHABLE_ERROR;
+        CppMacro* m = AM_get(&cpp->macros, a);
+        if(!m) return CPP_UNREACHABLE_ERROR;
+        if(m->is_function_like || m->nreplace != ntoks)
+            return CPP_MACRO_ALREADY_EXISTS_ERROR;
+        for(size_t i = 0; i < ntoks; i++){
+            CppToken r = toks[i];
+            CppToken pre = cpp_cmacro_replacement(m)[i];
+            if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
+                continue;
+            if(r.type != pre.type || !sv_equals(r.txt, pre.txt))
+                return CPP_MACRO_ALREADY_EXISTS_ERROR;
+        }
+        return 0; // identical redefinition, ok
+    }
     if(err) return err;
     if(ntoks) memcpy(cpp_cmacro_replacement(macro), toks, ntoks * sizeof *toks);
     return 0;
@@ -5164,6 +5181,30 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#try_include <signal.h>\n"
                               "#try_include <time.h>\n"
                           )},
+        // stubs
+        {SV("immintrin.h"), SV("#pragma once\n"
+                               "#if __has_include_next(<immintrin.h>)\n"
+                               "#include_next <immintrin.h>\n"
+                               "#else\n"
+                               "typedef float __m128 __attribute__((__vector_size__(16)));\n"
+                               "typedef long long __m128i __attribute__((__vector_size__(16)));\n"
+                               "typedef double __m128d __attribute__((__vector_size__(16)));\n"
+                               "typedef float __m256 __attribute__((__vector_size__(32)));\n"
+                               "typedef long long __m256i __attribute__((__vector_size__(32)));\n"
+                               "typedef double __m256d __attribute__((__vector_size__(32)));\n"
+                               "#endif\n")},
+        {SV("xmmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
+        {SV("emmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
+        {SV("pmmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
+        {SV("tmmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
+        {SV("smmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
+        {SV("nmmintrin.h"),  SV("#pragma once\n"
+                                "#include <immintrin.h>\n")},
     };
     for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
         err = cpp_cache_builtin_header(cpp, headers[i].name, headers[i].content);
