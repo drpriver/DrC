@@ -1,4 +1,5 @@
 <!-- This md file was generated from a dnd file. -->
+
 ## Table of Contents
 * [Building](#building)
   * [Nobuild](#nobuild)
@@ -18,7 +19,6 @@
 * [Embeddable](#embeddable)
 * [Self Hosting](#self-hosting)
 
-
 # DrC
 
 
@@ -32,7 +32,7 @@ interpreted C code.
 A [REPL mode](#repl-mode) is also offered.
 
 
-After building, try it out with <code>Bin/cc <a href=Samples/hello.c>Samples/hello.c</a></code>
+After building, try it out with <code>Bin/drc <a href=Samples/hello.c>Samples/hello.c</a></code>
 or peruse the other [Samples](Samples).
 
 
@@ -59,7 +59,7 @@ This project uses a "nobuild" build system. Bootstrap the build system by
 doing something like:
 
 ```console
-$ cc build.c -o build && ./build -b Bin && ./build tests
+$ drc build.c -o build && ./build -b Bin && ./build tests
 ```
 
 
@@ -88,6 +88,9 @@ you.
 You can bootstrap the build system on windows using build.bat. This is
 purely convenience.
 
+
+Warning: windows is untested and probably doesn't compile.
+
 </details>
 
 <details><summary>Dependencies</summary>
@@ -98,19 +101,17 @@ you are on windows, that sucks. It will work there but getting it so it
 
 </details>
 
-
 ## C Interpreter
 
 C scripts, top level statements, no separate compile and run steps, no
 intermediate files.
 
-
 ## REPL mode
 
-Run `Bin/cc` with `--repl` for a REPL experience, with interactive function calls etc.
+Run `Bin/drc` with `--repl` for a REPL experience, with interactive function calls etc.
 
 ```console
-$ Bin/cc --repl
+$ Bin/drc --repl
 cc> #include <stdio.h>
 ... int x = 3;
 ... for(int i = 0; i < 4; i++) printf("x = %d\n", x);
@@ -121,7 +122,6 @@ x = 3
 x = 3
 cc> ^D
 ```
-
 
 ## Bindings-Free FFI
 
@@ -136,7 +136,6 @@ pkg_config` to populate include paths, lib paths etc.
 SDL_Init(SDL_INIT_VIDEO);
 // Call SDL funcs from your scripts now!
 ```
-
 
 ## Native Threads
 
@@ -157,12 +156,10 @@ pthread_join(t, NULL);
 
 This example also shows off our captureless-lambda extension.
 
-
 ## First Class Types
 
 `_Type T = int; printf("%s\n", T.name)`, etc. Pass them as values, reflect
 over them, see the [json demo](Samples/Extensions/json_parse.c)
-
 
 ## Static If
 
@@ -210,7 +207,6 @@ _Static_assert(sizeof(Optional(int)) > sizeof(int));
 
 Unlike `#if`, `static if` has access to C-level information without the boilerplate of a procmacro.
 
-
 ## Procmacros
 
 Register a C function as a macro, call it as a macro, outputs get turned into
@@ -240,13 +236,11 @@ _Bool IS_POINTER(_Type T){ return T.is_pointer;}
 #endif
 ```
 
-
 ## Methods and FUCS
 
 Define methods in struct body, auto deref, `.` and <code>-></code> merged,
 FUCS: Function Uniform Call Syntax to have `.func` notation with free
 functions.
-
 
 ## Named Arguments
 
@@ -255,12 +249,10 @@ Same syntax as designated initializers.
 ```C
 int func_with_lotta_bools(_Bool jump, _Bool skip, _Bool hop);
 func_with_lotta_bools(.hop = 1, .jump = 0, .skip = 1); // out of order
-
 ```
 
 
 Numbered args are also supported, but honestly aren't that useful, but whatever.
-
 
 ## Crazy Preprocessor
 
@@ -268,19 +260,17 @@ There's a bunch of cool preprocessor macros like `__mixin`, `__map`, `#defblock`
 There's also an API for registering your own builtin macros if you are embedding this
 interpreter.
 
-
 ## Embeddable
 
 This will support being embedded. WIP. No global state.
-
 
 ## Self Hosting
 
 The C interpreter is able to run itself.
 
 ```console
-$ Bin/cc cc.c Samples/hello.c
+$ Bin/drc cc.c Samples/hello.c
 Hello world
-$ Bin/cc cc.c cc.c Samples/hello.c
+$ Bin/drc cc.c cc.c Samples/hello.c
 Hello world
 ```

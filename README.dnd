@@ -10,7 +10,7 @@ interpreted C code.
 
 A [REPL mode] is also offered.
 
-After building, try it out with <code>Bin/cc <a href=Samples/hello.c>Samples/hello.c</a></code>
+After building, try it out with <code>Bin/drc <a href=Samples/hello.c>Samples/hello.c</a></code>
 or peruse the other [Samples].
 
 Major Features Include:
@@ -37,7 +37,7 @@ Building::md
     This project uses a "nobuild" build system. Bootstrap the build system by
     doing something like:
     ::pre.console
-      $ cc build.c -o build && ./build -b Bin && ./build tests
+      $ drc build.c -o build && ./build -b Bin && ./build tests
     From then on, you can just build using the build program. If you edit it or
     any of its deps, it will rebuild itself.
 
@@ -57,6 +57,8 @@ Building::md
     You can bootstrap the build system on windows using build.bat. This is
     purely convenience.
 
+    Warning: windows is untested and probably doesn't compile.
+
   Dependencies::details
     Depends on libffi. Assumes you can just do `-lffi` and that just works. If
     you are on windows, that sucks. It will work there but getting it so it
@@ -66,9 +68,9 @@ C Interpreter::md
   C scripts, top level statements, no separate compile and run steps, no
   intermediate files.
 REPL mode::md
-  Run `Bin/cc` with `--repl` for a REPL experience, with interactive function calls etc.
+  Run `Bin/drc` with `--repl` for a REPL experience, with interactive function calls etc.
   ::pre.console
-    $ Bin/cc --repl
+    $ Bin/drc --repl
     cc> #include <stdio.h>
     ... int x = 3;
     ... for(int i = 0; i < 4; i++) printf("x = %d\n", x);
@@ -193,9 +195,9 @@ Self Hosting::md
   The C interpreter is able to run itself.
 
   ::pre.console
-    $ Bin/cc cc.c Samples/hello.c
+    $ Bin/drc cc.c Samples/hello.c
     Hello world
-    $ Bin/cc cc.c cc.c Samples/hello.c
+    $ Bin/drc cc.c cc.c Samples/hello.c
     Hello world
 ::css #import
   README.css
