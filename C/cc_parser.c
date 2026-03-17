@@ -2077,7 +2077,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                             return cc_error(p, const_expr->loc, "invalid memory order value %u", const_vals[i]);
                         cc_release_expr(p, const_expr);
                     }
-                    if(op == CC_ATOMIC_COMPARE_EXCHANGE){
+                    if(op == CC_ATOMIC_COMPARE_EXCHANGE || op == CC_ATOMIC_COMPARE_EXCHANGE_N){
                         node->atomic.weak = const_vals[0];
                         node->atomic.memorder = const_vals[1];
                         node->atomic.fail_memorder = const_vals[2];
@@ -3996,9 +3996,6 @@ cc_parse_static_if(CcParser* p, SrcLoc loc){
         err = cc_expect_punct(p, ')');
         if(err) return err;
         SrcLoc cond_loc = cond->loc;
-        if(cond_loc.bits == 8444322315763748){
-            printf("hello\n");
-        }
         err = cc_eval_truthy(p, cond, &predicate);
         cc_release_expr(p, cond);
         if(err)
@@ -4637,7 +4634,16 @@ cc_expr_nvalues(CcExpr* e){
             }
             return 0;
         case CC_EXPR_TYPE_INTROSPECTION:
-            return (e->type_introspection.op >= CC_TYPE_IS_CALLABLE_WITH) ? 1 : 0;
+            switch(e->type_introspection.op){
+                case CC_TYPE_IS_CALLABLE_WITH:
+                case CC_TYPE_CASTABLE_TO:
+                case CC_TYPE_FIELD:
+                case CC_TYPE_PARAM_TYPE:
+                case CC_TYPE_ENUMERATOR:
+                    return 1;
+                default:
+                    return 0;
+            }
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
             return 0;
@@ -9263,7 +9269,7 @@ cc_define_builtin_types(CcParser* p){
     {
         struct f {StringView name; CcQualType type; size_t offset;} enuminfos[] = {
             {SV("name"), p->const_char_star, offsetof(CiRtEnumerator, name)},
-            {SV("name_length"),{.basic.kind=CCBT_unsigned}, offsetof(CiRtEnumerator, name)},
+            {SV("name_length"),{.basic.kind=CCBT_unsigned}, offsetof(CiRtEnumerator, name_length)},
             {SV("value"), {.basic.kind=CCBT_long_long}, offsetof(CiRtEnumerator, value)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof enuminfos / sizeof enuminfos[0]) * sizeof *fields);
