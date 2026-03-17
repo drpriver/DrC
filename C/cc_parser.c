@@ -6319,7 +6319,7 @@ cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace){
             // Empty scalar init: {}, count=0
             cc_next_token(p, &peek);
-            list = Allocator_alloc(cc_allocator(p), sizeof(CcInitList));
+            list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList));
             if(!list) return CC_OOM_ERROR;
             list->loc = loc;
             list->count = 0;
@@ -6951,6 +6951,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                 }
             }
             CcEnumerator* enumerator = Allocator_zalloc(cc_allocator(p), sizeof *enumerator);
+            if(!enumerator){ err = CC_OOM_ERROR; goto enum_err; }
             *enumerator = (CcEnumerator){
                 .name = ename,
                 .value = next_value,
