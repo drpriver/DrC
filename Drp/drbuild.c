@@ -29,7 +29,8 @@
 #endif
 
 #ifdef __linux__
-#include <sys/sendfile.h>
+#include <sys/types.h>
+ssize_t copy_file_range(int fd_in, loff_t* off_in, int fd_out, loff_t* off_out, size_t len, unsigned int flags);
 #endif
 
 #ifndef __builtin_debugtrap
@@ -393,7 +394,7 @@ b_read_file(BuildCtx* ctx, const char* path, MStringBuilder* out){
         if(path_sb.errored) goto wfinally;
         #ifdef _WIN32
         fh = CreateFileW((wchar_t*)path_sb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if(fh == INVALID_HANDLE_VALUE) {
+        if(fh == INVALID_HANDLE_VALUE){
             err = 1;
             goto wfinally;
         }
@@ -1718,7 +1719,7 @@ compile_commands(BuildCtx* ctx, BuildTarget* t){
         if(!tgt->is_compile_command) continue;
         CompileCommand* cc; int err = ma_alloc(CompileCommand)(&commands, tmp, &cc);
         if(err) return err;
-        if(tgt->dependencies.count < 1) {
+        if(tgt->dependencies.count < 1){
             b_loglvl(BLOG_ERROR, ctx, "'%s' has no dependencies.\n", tgt->name->data);
             return 1;
         }
@@ -1979,26 +1980,32 @@ copy_file(BuildCtx* ctx, const char* from, const char* to){
         int tfd = -1;
         int ffd = -1;
         ffd = open(from, O_RDONLY);
-        if(ffd < 0) goto finally;
+        if(ffd < 0){
+            err = 1;
+            goto finally;
+        }
         err = fstat(ffd, &sfrom);
         if(err) goto finally;
 
         tfd = open(to, O_WRONLY|O_CREAT|O_TRUNC,  sfrom.st_mode & 0777);
-        if(tfd < 0) {
+        if(tfd < 0){
             err = 1;
             goto finally;
         }
         for(off_t offset = 0; offset < sfrom.st_size;){
-            ssize_t sent = sendfile(tfd, ffd, &offset, sfrom.st_size - offset);
-            if(sent == -1){
+            loff_t off_in = offset;
+            loff_t off_out = offset;
+            ssize_t copied = copy_file_range(ffd, &off_in, tfd, &off_out, sfrom.st_size - offset, 0);
+            if(copied == -1){
                 if(errno == EINTR) continue;
                 err = 1;
                 goto finally;
             }
-            if(sent == 0 && offset < sfrom.st_size){
+            if(copied == 0){
                 err = 1;
                 goto finally;
             }
+            offset += copied;
         }
         err = 0;
 
@@ -2258,7 +2265,7 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                 }
                 break;
             case ':':
-                if(backslash) {
+                if(backslash){
                     msb_write_char(current, '\\');
                     backslash = 0;
                 }
@@ -2276,7 +2283,7 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                 // idk, ignore it
                 break;
             default:
-                if(backslash) {
+                if(backslash){
                     msb_write_char(current, '\\');
                     backslash = 0;
                 }

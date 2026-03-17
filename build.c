@@ -23,6 +23,7 @@
 #endif
 
 static int mkfile(BuildCtx*, BuildTarget*);
+static int do_install(BuildCtx*, BuildTarget*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
@@ -32,10 +33,10 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* Makefile = script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
 
-    BuildTarget* cpp = exe_target(ctx, "cpp", "cpp.c", ctx->target.os);
+    BuildTarget* cpp = exe_target(ctx, "drcpp", "cpp.c", ctx->target.os);
     add_dep(ctx, all, cpp);
 
-    BuildTarget* cc = exe_target(ctx, "cc", "cc.c", ctx->target.os);
+    BuildTarget* cc = exe_target(ctx, "drc", "cc.c", ctx->target.os);
     if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
         cmd_carg(&cc->cmd, "-ldl");
     }
@@ -125,7 +126,7 @@ int main(int argc, char** argv, char** envp){
 
     {
         BuildTarget* bins[] = {cpp, cc};
-        const char* names[] = {"cpp", "cc"};
+        const char* names[] = {"drcpp", "drc"};
         for(size_t i = 0; i < sizeof bins / sizeof bins[0]; i++){
             BuildTarget* bin = bins[i];
             const char* name = names[i];
@@ -165,6 +166,13 @@ int main(int argc, char** argv, char** envp){
         }
     }
     {
+        static BuildTarget* bins[2]; bins[0] = cpp; bins[1] = cc;
+        BuildTarget* install = script_target(ctx, "install", do_install, bins);
+        install->is_phony = 1;
+        add_dep(ctx, install, cpp);
+        add_dep(ctx, install, cc);
+    }
+    {
         BuildTarget* tags = cmd_target(ctx, "tags");
         tags->is_phony = 1;
         cmd_prog(&tags->cmd, BUILD_OS == OS_WINDOWS?LS("py") : LS("python3"));
@@ -173,6 +181,54 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, tags, compile_commands_json);
     }
     return execute_targets(ctx);
+}
+
+static
+int
+do_install(BuildCtx* ctx, BuildTarget* tgt){
+    BuildTarget*const* bins = (BuildTarget*const*)tgt->user_data;
+    Atom prefix = env_getenv2(&ctx->env, "PREFIX", sizeof "PREFIX" - 1);
+    Atom destdir = env_getenv2(&ctx->env, "DESTDIR", sizeof "DESTDIR" - 1);
+    Atom bindir_env = env_getenv2(&ctx->env, "bindir", sizeof "bindir" - 1);
+    if(!prefix && !bindir_env && BUILD_OS == OS_WINDOWS){
+        b_loglvl(BLOG_ERROR, ctx, "PREFIX or bindir must be set on Windows for install\n");
+        return 1;
+    }
+    Atom bindir;
+    if(bindir_env)
+        bindir = bindir_env;
+    else
+        bindir = b_atomize_f(ctx, "%s/bin", prefix ? prefix->data : "/usr/local");
+    if(destdir)
+        bindir = b_atomize_f(ctx, "%s%s", destdir->data, bindir->data);
+    int err;
+    if(BUILD_OS == OS_WINDOWS){
+        err = mkdirs_if_not_exists(ctx, AT_to_LS(bindir));
+        if(err) return err;
+        for(int i = 0; i < 2; i++){
+            BuildTarget* c = bins[i];
+            Atom dst = b_atomize_f(ctx, "%s/%s", bindir->data, path_basename(AT_to_SV(c->name), BUILD_OS==OS_WINDOWS).text);
+            err = copy_file(ctx, c->name->data, dst->data);
+            if(err) return err;
+        }
+    }
+    else {
+        CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
+        cmd_prog(&cmd, LS("install"));
+        cmd_cargs(&cmd, "-d", bindir->data);
+        err = b_run_cmd_sync(ctx, &cmd);
+        if(err) return err;
+        cmd_clear(&cmd);
+        cmd_prog(&cmd, LS("install"));
+        cmd_cargs(&cmd, "-m", "755");
+        for(int i = 0; i < 2; i++)
+            cmd_aarg(&cmd, bins[i]->name);
+        cmd_aarg(&cmd, bindir);
+        err = b_run_cmd_sync(ctx, &cmd);
+        cmd_destroy(&cmd);
+        if(err) return err;
+    }
+    return 0;
 }
 
 static
