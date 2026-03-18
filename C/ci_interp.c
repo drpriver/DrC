@@ -128,9 +128,8 @@ ci_read_uint(const void* buf, uint32_t sz){
         case 4: return *(const uint32_t*)buf;
         case 8: return *(const uint64_t*)buf;
     }
-    uint64_t v = 0;
-    memcpy(&v, buf, sz);
-    return v;
+    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
+    return 0;
 }
 
 static inline
@@ -142,9 +141,23 @@ ci_read_int(const void* buf, uint32_t sz){
         case 4: return *(const int32_t*)buf;
         case 8: return *(const int64_t*)buf;
     }
-    uint64_t v = 0;
-    memcpy(&v, buf, sz);
-    return (int64_t)v;
+    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
+    return 0;
+}
+
+// Read an integer value as int64_t, handling sizes up to 16 (int128).
+// For 128-bit values, this truncates to 64 bits (appropriate for indices, etc.).
+static inline
+int64_t
+ci_read_int_any(const void* buf, uint32_t sz, _Bool is_unsigned){
+    if(sz <= 8){
+        if(is_unsigned)
+            return (int64_t)ci_read_uint(buf, sz);
+        return ci_read_int(buf, sz);
+    }
+    CiUint128 v;
+    ci_uint128_read(&v, buf, sz);
+    return (int64_t)ci_uint128_lo(v);
 }
 
 static inline
@@ -268,17 +281,14 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
             uint32_t elem_sz;
             int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &elem_sz);
             if(err) return err;
-            int64_t idx = 0;
+            CiUint128 idx_buf = {0};
             uint32_t idx_sz;
             err = cc_sizeof_as_uint(&ci->parser, idx_expr->type, expr->loc, &idx_sz);
             if(err) return err;
-            err = ci_interp_expr(ci, frame,idx_expr, &idx, sizeof idx);
+            err = ci_interp_expr(ci, frame,idx_expr, &idx_buf, sizeof idx_buf);
             if(err) return err;
             _Bool idx_unsigned = ccqt_is_unsigned(idx_expr->type, !ci_target(ci)->char_is_signed);
-            if(idx_unsigned)
-                idx = (int64_t)ci_read_uint(&idx, idx_sz);
-            else
-                idx = ci_read_int(&idx, idx_sz);
+            int64_t idx = ci_read_int_any(&idx_buf, idx_sz, idx_unsigned);
             if(ccqt_kind(base_type) == CC_ARRAY){
                 // Array: get lvalue of base, index into it
                 void* base;
@@ -520,7 +530,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         err = cc_sizeof_as_uint(&ci->parser, var_type, expr->loc, &sz);
         if(err) return err;
         if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, 0, size);
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
         memcpy(result, storage, sz);
         return 0;
     }
@@ -532,7 +542,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 func->name ? func->name->data : "<unknown>");
         void (*fn)(void) = func->native_func;
         if(sizeof fn > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, 0, size);
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof fn, size);
         memcpy(result, &fn, sizeof fn);
         return 0;
     }
@@ -816,7 +826,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return 0;
     }
     case CC_EXPR_NEG: {
-        uint64_t val = 0;
+        CiUint128 val = {0};
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
@@ -828,6 +838,13 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
             double d = -ci_read_float(&val, expr->type.basic.kind);
             ci_write_float(result, expr->type.basic.kind, d);
+        }
+        else if(sz > 8){
+            CiUint128 v;
+            ci_uint128_read(&v, &val, sz);
+            CiUint128 zero = {0};
+            v = ci_uint128_sub(zero, v);
+            ci_uint128_write(result, sz, v);
         }
         else {
             int64_t v = -ci_read_int(&val, sz);
@@ -842,7 +859,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return ci_interp_expr(ci, frame,expr->lhs, result, size);
     }
     case CC_EXPR_BITNOT: {
-        uint64_t val = 0;
+        CiUint128 val = {0};
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
@@ -851,12 +868,21 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(result == ci_discard_buf) return 0;
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        uint64_t v = ~ci_read_uint(&val, sz);
-        ci_write_uint(result, sz, v);
+        if(sz > 8){
+            CiUint128 v;
+            ci_uint128_read(&v, &val, sz);
+            CiUint128 ones = ci_uint128_from_int64(-1);
+            v = ci_uint128_xor(v, ones);
+            ci_uint128_write(result, sz, v);
+        }
+        else {
+            uint64_t v = ~ci_read_uint(&val, sz);
+            ci_write_uint(result, sz, v);
+        }
         return 0;
     }
     case CC_EXPR_LOGNOT: {
-        uint64_t val = 0;
+        CiUint128 val = {0};
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
         if(err) return err;
@@ -932,6 +958,16 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(result == ci_discard_buf) return 0;
             void* out = is_pre ? ptr : old;
             memcpy(result, &out, sizeof out);
+        }
+        else if(sz > 8){
+            CiUint128 v;
+            ci_uint128_read(&v, lval, sz);
+            CiUint128 old = v;
+            CiUint128 one = ci_uint128_from_uint64(1);
+            v = is_inc ? ci_uint128_add(v, one) : ci_uint128_sub(v, one);
+            ci_uint128_write(lval, sz, v);
+            if(result == ci_discard_buf) return 0;
+            ci_uint128_write(result, sz, is_pre ? v : old);
         }
         else {
             uint64_t v = ci_read_uint(lval, sz);
@@ -1010,7 +1046,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 char* ptr = NULL;
                 memcpy(&ptr, &lbuf128, sizeof ptr);
                 _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf128, rsz) : ci_read_int(&rbuf128, rsz);
+                int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1027,7 +1063,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 char* ptr = NULL;
                 memcpy(&ptr, &rbuf128, sizeof ptr);
                 _Bool idx_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&lbuf128, lsz) : ci_read_int(&lbuf128, lsz);
+                int64_t idx = ci_read_int_any(&lbuf128, lsz, idx_unsigned);
                 ptr += idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1044,7 +1080,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 char* ptr = NULL;
                 memcpy(&ptr, &lbuf128, sizeof ptr);
                 _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf128, rsz) : ci_read_int(&rbuf128, rsz);
+                int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
                 ptr -= idx * elem_sz;
                 memcpy(result, &ptr, sizeof ptr);
                 return 0;
@@ -1319,7 +1355,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        uint64_t rbuf = 0;
+        CiUint128 rbuf = {0};
         uint32_t rsz;
         err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
         if(err) return err;
@@ -1334,7 +1370,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             void* ptr = NULL;
             memcpy(&ptr, lval, sizeof ptr);
             _Bool idx_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
-            int64_t idx = idx_unsigned ? (int64_t)ci_read_uint(&rbuf, rsz) : ci_read_int(&rbuf, rsz);
+            int64_t idx = ci_read_int_any(&rbuf, rsz, idx_unsigned);
             if(expr->kind == CC_EXPR_ADDASSIGN)
                 ptr = (char*)ptr + idx * pointee_sz;
             else
@@ -1359,6 +1395,56 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             ci_write_float(lval, expr->type.basic.kind, res);
             if(result == ci_discard_buf) return 0;
             ci_write_float(result, expr->type.basic.kind, res);
+        }
+        else if(sz > 8 || rsz > 8){
+            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
+            CiUint128 lu, ru;
+            if(is_unsigned){
+                ci_uint128_read(&lu, lval, sz);
+                ci_uint128_read(&ru, &rbuf, rsz);
+            }
+            else {
+                if(sz <= 8)
+                    lu = ci_uint128_from_int64(ci_read_int(lval, sz));
+                else
+                    ci_uint128_read(&lu, lval, sz);
+                if(rsz <= 8)
+                    ru = ci_uint128_from_int64(ci_read_int(&rbuf, rsz));
+                else
+                    ci_uint128_read(&ru, &rbuf, rsz);
+            }
+            CiUint128 res;
+            switch(expr->kind){
+                case CC_EXPR_ADDASSIGN:    res = ci_uint128_add(lu, ru); break;
+                case CC_EXPR_SUBASSIGN:    res = ci_uint128_sub(lu, ru); break;
+                case CC_EXPR_MULASSIGN:    res = ci_uint128_mul(lu, ru); break;
+                case CC_EXPR_DIVASSIGN:
+                    if(is_unsigned)
+                        res = ci_uint128_div(lu, ru);
+                    else
+                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CC_EXPR_MODASSIGN:
+                    if(is_unsigned)
+                        res = ci_uint128_mod(lu, ru);
+                    else
+                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CC_EXPR_BITANDASSIGN: res = ci_uint128_and(lu, ru); break;
+                case CC_EXPR_BITORASSIGN:  res = ci_uint128_or(lu, ru); break;
+                case CC_EXPR_BITXORASSIGN: res = ci_uint128_xor(lu, ru); break;
+                case CC_EXPR_LSHIFTASSIGN: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
+                case CC_EXPR_RSHIFTASSIGN:
+                    if(is_unsigned)
+                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
+                    else
+                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
+                    break;
+                default: res = ci_uint128_from_uint64(0); break;
+            }
+            ci_uint128_write(lval, sz, res);
+            if(result == ci_discard_buf) return 0;
+            ci_uint128_write(result, sz, res);
         }
         else {
             _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);

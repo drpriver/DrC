@@ -2262,6 +2262,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(!ccqt_is_basic(a->type) || !ccbt_is_integer(a->type.basic.kind))
                         return cc_error(p, a->loc, "first argument to overflow builtin must be an integer type");
+                    if(a->type.basic.kind == CCBT_int128 || a->type.basic.kind == CCBT_unsigned_int128)
+                        return cc_error(p, a->loc, "__int128 is not supported for overflow builtins");
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* b;
@@ -2269,6 +2271,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(!ccqt_is_basic(b->type) || !ccbt_is_integer(b->type.basic.kind))
                         return cc_error(p, b->loc, "second argument to overflow builtin must be an integer type");
+                    if(b->type.basic.kind == CCBT_int128 || b->type.basic.kind == CCBT_unsigned_int128)
+                        return cc_error(p, b->loc, "__int128 is not supported for overflow builtins");
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* res;
@@ -2278,6 +2282,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     || !ccqt_is_basic(ccqt_as_ptr(res->type)->pointee)
                     || !ccbt_is_integer(ccqt_as_ptr(res->type)->pointee.basic.kind))
                         return cc_error(p, res->loc, "third argument to overflow builtin must be a pointer to integer type");
+                    if(ccqt_as_ptr(res->type)->pointee.basic.kind == CCBT_int128 || ccqt_as_ptr(res->type)->pointee.basic.kind == CCBT_unsigned_int128)
+                        return cc_error(p, res->loc, "__int128 is not supported for overflow builtins");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExprKind kind;
@@ -2305,6 +2311,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(!ccqt_is_basic(arg->type) || !ccbt_is_integer(arg->type.basic.kind))
                         return cc_error(p, arg->loc, "argument to popcount must be an integer type");
+                    if(arg->type.basic.kind == CCBT_int128 || arg->type.basic.kind == CCBT_unsigned_int128)
+                        return cc_error(p, arg->loc, "__int128 is not supported for popcount");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_POPCOUNT, tok.loc, ccqt_basic(CCBT_int), 0);
@@ -2326,6 +2334,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(!ccqt_is_basic(arg->type) || !ccbt_is_integer(arg->type.basic.kind))
                         return cc_error(p, arg->loc, "argument to ctz/clz must be an integer type");
+                    if(arg->type.basic.kind == CCBT_int128 || arg->type.basic.kind == CCBT_unsigned_int128)
+                        return cc_error(p, arg->loc, "__int128 is not supported for ctz/clz");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExprKind kind = (builtin == CC__builtin_ctz
@@ -6567,6 +6577,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
                         goto struct_err;
                     }
+                    if(ccqt_is_basic(member_type) && (member_type.basic.kind == CCBT_int128 || member_type.basic.kind == CCBT_unsigned_int128)){
+                        err = cc_error(p, tok.loc, "__int128 is not supported for bitfields");
+                        goto struct_err;
+                    }
                     uint32_t type_size;
                     err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
                     if(err) goto struct_err;
@@ -6687,6 +6701,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
                            && ccqt_kind(member_type) != CC_ENUM){
                             err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
+                            goto struct_err;
+                        }
+                        if(ccqt_is_basic(member_type) && (member_type.basic.kind == CCBT_int128 || member_type.basic.kind == CCBT_unsigned_int128)){
+                            err = cc_error(p, tok.loc, "__int128 is not supported for bitfields");
                             goto struct_err;
                         }
                         uint32_t type_size;
@@ -7965,6 +7983,8 @@ cc_parse_statement(CcParser* p){
                             st = ccqt_as_enum(st)->underlying;
                         if(!ccqt_is_basic(st) || !ccbt_is_integer(st.basic.kind))
                             return cc_error(p, tok.loc, "switch requires integer expression");
+                        if(st.basic.kind == CCBT_int128 || st.basic.kind == CCBT_unsigned_int128)
+                            return cc_error(p, tok.loc, "__int128 is not supported in switch");
                     }
                     err = cc_expect_punct(p, ')');
                     if(err) return err;

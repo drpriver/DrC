@@ -2407,6 +2407,93 @@ TestFunction(test_interpreter){
                "return sum;\n"),
             .exit_code = 6,
         },
+        {
+            "int128 index", __LINE__,
+            SV("signed __int128 i = -1;\n"
+               "int arr[3] = {1,2,3};\n"
+               "int* p = arr + 2;\n"
+               "return p[i];\n"),
+            .exit_code = 2,
+        },
+        {
+            "int128 ptr-math", __LINE__,
+            SV("signed __int128 i = 2;\n"
+               "int arr[3] = {1,2,3};\n"
+               "int* p = arr + i;\n"
+               "return p[0];\n"),
+            .exit_code = 3,
+        },
+        {
+            "int128 neg", __LINE__,
+            SV("signed __int128 i = -1;\n"
+               "return (int)-i;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128 not", __LINE__,
+            SV("signed __int128 i = -1;\n"
+               "return (int)~i;\n"),
+            .exit_code = 0,
+        },
+        {
+            "int128 lognot", __LINE__,
+            SV("signed __int128 i = -1;\n"
+               "return !i;\n"),
+            .exit_code = 0,
+        },
+        {
+            "int128 assign", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "signed __int128 i2; i2 = i;\n"
+               "return (int)i2;\n"),
+            .exit_code = 3,
+        },
+        {
+            "int128 compassign", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "signed __int128 i2 = 1; i2 += i;\n"
+               "return (int)i2;\n"),
+            .exit_code = 4,
+        },
+        {
+            "int128 post-inc", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "return (int)i++;\n"),
+            .exit_code = 3,
+        },
+        {
+            "int128 pre-inc", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "return (int)++i;\n"),
+            .exit_code = 4,
+        },
+        {
+            "int128 post-dec", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "return (int)i--;\n"),
+            .exit_code = 3,
+        },
+        {
+            "int128 pre-dec", __LINE__,
+            SV("signed __int128 i = 3;\n"
+               "return (int)--i;\n"),
+            .exit_code = 2,
+        },
+        {
+            "int128 ptr-sub", __LINE__,
+            SV("signed __int128 i = 1;\n"
+               "int arr[3] = {1,2,3};\n"
+               "int* p = arr + 2;\n"
+               "p = p - i;\n"
+               "return *p;\n"),
+            .exit_code = 2,
+        },
+        {
+            "int128 lognot zero", __LINE__,
+            SV("signed __int128 i = 0;\n"
+               "return !i;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
