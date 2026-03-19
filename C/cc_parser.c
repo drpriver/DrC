@@ -9527,6 +9527,7 @@ cc_define_builtin_types(CcParser* p){
             {SV("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SV("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
             {SV("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
+            {SV("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
             {SV("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
         };
