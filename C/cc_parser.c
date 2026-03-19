@@ -1438,6 +1438,21 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     && !(ccqt_is_basic(lp) && lp.basic.kind == CCBT_void)
                     && !(ccqt_is_basic(rp) && rp.basic.kind == CCBT_void))
                         return cc_error(p, tok.loc, "pointer subtraction with incompatible types");
+                    // Array-to-pointer decay
+                    if(ccqt_kind(left->type) == CC_ARRAY){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, ccqt_as_array(left->type)->element, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, left, ptr_type, &left);
+                        if(err) return err;
+                    }
+                    if(ccqt_kind(right->type) == CC_ARRAY){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, ccqt_as_array(right->type)->element, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, right, ptr_type, &right);
+                        if(err) return err;
+                    }
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){

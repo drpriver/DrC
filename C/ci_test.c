@@ -605,6 +605,17 @@ TestFunction(test_interpreter){
                "return (int)(b - a);\n"),
             .exit_code = 3,
         },
+        {
+            "pointer: sub array decay", __LINE__,
+            SV("typedef struct Foo { char data[10000]; } Foo;\n"
+               "Foo f;\n"
+               "char* p = f.data;\n"
+               "char* end = f.data + sizeof f.data;\n"
+               "long diff = end - p;\n"
+               "long diff2 = end - f.data;\n"
+               "return diff != diff2;\n"),
+            .exit_code = 0,
+        },
         // Arrays
         {
             "array: basic", __LINE__,
