@@ -134,6 +134,43 @@ TestFunction(test_interpreter){
             SV("return 256 >> 4;\n"),
             .exit_code = 16,
         },
+        {
+            "bitwise: u64 and", __LINE__,
+            SV("union { double d; unsigned long long i; } u;\n"
+               "u.d = 0.5;\n"
+               "unsigned long long expmask = 0x7FF0000000000000ULL;\n"
+               "unsigned long long result = u.i & expmask;\n"
+               "return result == 0x3FE0000000000000ULL;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitwise: u64 and sign", __LINE__,
+            SV("union { double d; unsigned long long i; } u;\n"
+               "u.d = -1.0;\n"
+               "unsigned long long signmask = 0x8000000000000000ULL;\n"
+               "return (u.i & signmask) != 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitwise: u64 and frac", __LINE__,
+            SV("union { double d; unsigned long long i; } u;\n"
+               "u.d = 1.0;\n"
+               "unsigned long long fracmask = 0x000FFFFFFFFFFFFFULL;\n"
+               "return (u.i & fracmask) == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "hex literal U promotion", __LINE__,
+            SV("unsigned long long x = 0x7FF0000000000000U;\n"
+               "return x != 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "hex literal no suffix promotion", __LINE__,
+            SV("unsigned long long x = 0x8000000000000000;\n"
+               "return x != 0;\n"),
+            .exit_code = 1,
+        },
         // Comparison
         {
             "cmp: eq true", __LINE__,

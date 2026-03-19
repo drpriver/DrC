@@ -7493,6 +7493,15 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid digit in number");
         v = u.result;
     }
+    // Determine type: start from the suffix-implied
+    // minimum type, then promote if the value doesn't fit.
+    // Hex/octal/binary try unsigned types; decimal does not (unless U).
+    _Bool is_decimal = !is_hex
+        && !(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B'))
+        && !(buf_len > 1 && buf[0] == '0');
+    const uint8_t* sizes = cpp->target.sizeof_;
+    #define SMAX(bt) (sizes[bt] >= 8 ? (uint64_t)INT64_MAX  : ((uint64_t)1 << (sizes[bt] * 8 - 1)) - 1)
+    #define UMAX(bt) (sizes[bt] >= 8 ? UINT64_MAX           : ((uint64_t)1 << (sizes[bt] * 8)) - 1)
     CcConstantType ctype;
     if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;
     else if(num_l >= 2)          ctype = CC_LONG_LONG;
@@ -7500,6 +7509,19 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     else if(num_l == 1)          ctype = CC_LONG;
     else if(has_u)               ctype = CC_UNSIGNED;
     else                         ctype = CC_INT;
+    // Promote if value doesn't fit
+    if(ctype == CC_INT && v > SMAX(CCBT_int))
+        ctype = is_decimal ? CC_LONG : CC_UNSIGNED;
+    if(ctype == CC_UNSIGNED && v > UMAX(CCBT_unsigned))
+        ctype = CC_UNSIGNED_LONG;
+    if(ctype == CC_LONG && v > SMAX(CCBT_long))
+        ctype = is_decimal ? CC_LONG_LONG : CC_UNSIGNED_LONG;
+    if(ctype == CC_UNSIGNED_LONG && v > UMAX(CCBT_unsigned_long))
+        ctype = CC_UNSIGNED_LONG_LONG;
+    if(ctype == CC_LONG_LONG && v > SMAX(CCBT_long_long))
+        ctype = CC_UNSIGNED_LONG_LONG;
+    #undef SMAX
+    #undef UMAX
     *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,
