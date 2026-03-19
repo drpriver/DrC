@@ -2927,7 +2927,7 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_pkg_config, ci_pragma_procmacro;
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
@@ -2935,6 +2935,8 @@ ci_register_pragmas(CiInterpreter*ci){
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib"), ci_pragma_lib, ci);
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib_path"), ci_pragma_lib_path, ci);
+    if(err) return err;
+    err = cpp_register_pragma(&ci->parser.cpp, SV("framework"), ci_pragma_framework, ci);
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("pkg_config"), ci_pragma_pkg_config, ci);
     if(err) return err;
@@ -3100,6 +3102,34 @@ ci_load_library(CiInterpreter* ci, StringView sv){
 
 static
 int
+ci_load_framework(CiInterpreter* ci, StringView sv){
+    if(!ci->can_dlopen) return CI_RUNTIME_ERROR;
+    if(ci_target(ci)->os != CC_OS_MACOS) return CI_LIBRARY_NOT_FOUND_ERROR;
+    MStringBuilder sb = {.allocator=ci_scratch_allocator(ci)};
+    int err = 0;
+    _Bool success = 0;
+    for(size_t i = 0; i < ci->parser.cpp.framework_paths.count; i++){
+        StringView fp = ci->parser.cpp.framework_paths.data[i];
+        msb_reset(&sb);
+        msb_write_str(&sb, fp.text, fp.length);
+        if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
+        msb_write_str(&sb, sv.text, sv.length);
+        msb_write_literal(&sb, ".framework/");
+        msb_write_str(&sb, sv.text, sv.length);
+        msb_nul_terminate(&sb);
+        if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        if(err) goto finally;
+        if(success) goto finally;
+    }
+    err = CI_LIBRARY_NOT_FOUND_ERROR;
+    finally:
+    msb_destroy(&sb);
+    return err;
+}
+
+static
+int
 ci_pragma_lib(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     CiInterpreter* ci = ctx;
     if(!ci->can_dlopen)
@@ -3160,6 +3190,41 @@ ci_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
     }
     StringView name = {toks->txt.length-2, toks->txt.text+1};
     err = ci_append_lib_path(ci, name);
+    finally:
+    cpp_release_scratch(cpp, expanded);
+    return err;
+}
+static
+int
+ci_pragma_framework(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    CiInterpreter* ci = ctx;
+    if(!ci->can_dlopen)
+        return cpp_error(cpp, loc, "Loading libraries is disabled");
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CI_OOM_ERROR;
+    int err = 0;
+    err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err) goto finally;
+    toks = expanded->data;
+    ntoks = expanded->count;
+    while(ntoks && toks->type == CPP_WHITESPACE){
+        toks++;
+        ntoks--;
+    }
+    while(ntoks && toks[ntoks-1].type == CPP_WHITESPACE)
+        ntoks--;
+    if(!ntoks){
+        err = cpp_error(cpp, loc, "#pragma framework without any arguments");
+        goto finally;
+    }
+    if(toks->type != CPP_STRING){
+        err = cpp_error(cpp, loc, "#pragma framework requires a string literal framework name");
+        goto finally;
+    }
+    StringView name = {toks->txt.length-2, toks->txt.text+1};
+    err = ci_load_framework(ci, name);
+    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+        err = cpp_error(cpp, loc, "failed to load framework '%.*s'", (int)name.length, name.text);
     finally:
     cpp_release_scratch(cpp, expanded);
     return err;

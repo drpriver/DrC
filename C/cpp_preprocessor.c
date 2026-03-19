@@ -4204,7 +4204,8 @@ static CppFuncMacroFn cpp_builtin_eval,
                       ;
 static CppPragmaFn cpp_builtin_pragma_once,
                    cpp_builtin_pragma_message,
-                   cpp_builtin_pragma_include_path
+                   cpp_builtin_pragma_include_path,
+                   cpp_builtin_pragma_framework_path
                    ;
 
 // Define a macro that expands to a type name from a CcBasicTypeKind.
@@ -5397,6 +5398,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     if(err) return err;
     err = cpp_register_pragma(cpp, SV("include_path"), cpp_builtin_pragma_include_path, NULL);
     if(err) return err;
+    err = cpp_register_pragma(cpp, SV("framework_path"), cpp_builtin_pragma_framework_path, NULL);
+    if(err) return err;
 
     err = cpp_define_target_macros(cpp);
     return err;
@@ -6396,6 +6399,36 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
     cpp_release_scratch(cpp, expanded);
     if(err) return CPP_OOM_ERROR;
     return 0;
+}
+
+static
+int
+cpp_builtin_pragma_framework_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    (void)ctx;
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CPP_OOM_ERROR;
+    int err = cpp_expand_argument(cpp, toks, ntoks, expanded);
+    if(err) goto finally;
+    const CppToken* etoks = expanded->data;
+    size_t en = expanded->count;
+    size_t i = 0;
+    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    if(i >= en || etoks[i].type != CPP_STRING){
+        err = cpp_error(cpp, loc, "#pragma framework_path requires a string literal path");
+        goto finally;
+    }
+    CppToken strtok = etoks[i];
+    i++;
+    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    if(i < en)
+        cpp_warn(cpp, loc, "Trailing tokens after #pragma framework_path");
+    StringView path = {strtok.txt.length - 2, strtok.txt.text + 1};
+    // Prepend so user framework paths are searched before system defaults.
+    err = ma_insert(StringView)(&cpp->framework_paths, cpp->allocator, 0, path);
+    if(err) err = CPP_OOM_ERROR;
+    finally:
+    cpp_release_scratch(cpp, expanded);
+    return err;
 }
 
 static

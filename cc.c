@@ -75,7 +75,7 @@ int main(int argc, char** argv, char** envp){
     };
     LOCK_T_init(&interp.error_lock);
     LOCK_T_init(&interp.atom_lock);
-    Marray(StringView) libs = {0}, lib_paths = {0};
+    Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
         .user_data = &interp.parser.cpp,
@@ -143,6 +143,17 @@ int main(int argc, char** argv, char** envp){
             .max_num = 1000,
             .one_at_a_time = 1,
             .space_sep_is_optional = 1,
+        },
+        {
+            .name = SV("-framework"),
+            .dest = cpp_ma_sv_dest(&tlib, &frameworks),
+            .append_proc = ma_sv_appender,
+            .help = "Link a macOS framework.",
+            .max_num = 1000,
+            .one_at_a_time = 1,
+            #ifndef __APPLE__
+            .hidden = 1,
+            #endif
         },
         {
             .name = SV("--eager"),
@@ -255,6 +266,14 @@ int main(int argc, char** argv, char** envp){
         err = ci_load_library(&interp, l);
         if(err){
             log_error(logger, "Unable to load library '%s'", l.text);
+            goto stringify_error;
+        }
+    }
+    for(size_t i = 0; i < frameworks.count; i++){
+        StringView f = frameworks.data[i];
+        err = ci_load_framework(&interp, f);
+        if(err){
+            log_error(logger, "Unable to load framework '%s'", f.text);
             goto stringify_error;
         }
     }

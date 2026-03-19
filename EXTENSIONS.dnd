@@ -585,6 +585,16 @@ Interpreter-only::md
   `#pragma lib_path "path"`::md
     Add a directory to the library search path.
 
+  `#pragma framework "name"`::md
+    Link against a macOS framework. Only searches framework paths, unlike
+    `#pragma lib` which also tries regular library paths.
+
+  `#pragma framework_path "path"`::md
+    Add a directory to the macOS framework search path. Prepended before
+    system defaults, so user framework paths are searched first. Affects
+    both `#include <Foo/Bar.h>` header lookup and `#pragma framework`
+    loading.
+
   `#pragma pkg_config "package"`::md
     Use `pkg-config` to find include paths and libraries for a
     package.
