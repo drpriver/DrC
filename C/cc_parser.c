@@ -707,8 +707,7 @@ int
 cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_ftype, SrcLoc loc){
     CcFunction* new_type = ccqt_as_function(new_ftype);
     CcFunction* old_type = existing->type;
-    // Check linkage: static must be consistent.
-    if(existing->static_ && !declbase->spec.sp_static)
+    if(existing->static_ && declbase->spec.sp_extern)
         return cc_error(p, loc, "non-static declaration of '%.*s' follows static declaration", existing->name->length, existing->name->data);
     if(!existing->static_ && declbase->spec.sp_static)
         return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration", existing->name->length, existing->name->data);
@@ -8794,8 +8793,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 func->loc = tok.loc;
                 func->mangle = asm_label;
                 func->defined = 1;
-                func->extern_ = declbase->spec.sp_extern;
-                func->static_ = declbase->spec.sp_static;
+                if(declbase->spec.sp_extern || declbase->spec.sp_static){
+                    func->extern_ = declbase->spec.sp_extern;
+                    func->static_ = declbase->spec.sp_static;
+                }
                 func->inline_ = declbase->spec.sp_inline;
                 func->printf_like = func->printf_like || is_printf_like;
                 func->tokens = body_tokens;
@@ -8823,8 +8824,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->loc = tok.loc;
             func->mangle = asm_label;
             func->defined = 1;
-            func->extern_ = declbase->spec.sp_extern;
-            func->static_ = declbase->spec.sp_static;
+            if(declbase->spec.sp_extern || declbase->spec.sp_static){
+                func->extern_ = declbase->spec.sp_extern;
+                func->static_ = declbase->spec.sp_static;
+            }
             func->inline_ = declbase->spec.sp_inline;
             func->printf_like = func->printf_like || is_printf_like;
             func->params.count = param_names.count;
@@ -8980,8 +8983,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             }
             func->type = ccqt_as_function(type);
             func->mangle = asm_label;
-            func->extern_ = declbase->spec.sp_extern;
-            func->static_ = declbase->spec.sp_static;
+            if(declbase->spec.sp_extern || declbase->spec.sp_static){
+                func->extern_ = declbase->spec.sp_extern;
+                func->static_ = declbase->spec.sp_static;
+            }
             func->inline_ = declbase->spec.sp_inline;
             func->printf_like = func->printf_like || is_printf_like;
             if(!func->defined){

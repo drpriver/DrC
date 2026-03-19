@@ -3184,6 +3184,14 @@ TestFunction(test_parse_decls){
                 { SV("f"), SV("void(void)") },
             },
         },
+        {
+            "static fwd decl then bare definition", __LINE__,
+            SV("static void foo(void);\n"
+               "void foo(void){}\n"),
+            .funcs = {
+                { SV("foo"), SV("void(void)") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -4420,6 +4428,12 @@ TestFunction(test_parse_errors){
                "void log_msg(int level, const char* fmt, ...);\n"
                "void f(void) { log_msg(1, \"%d\", \"hello\"); }\n"),
             SV("(test):3:27: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
+        },
+        {
+            "extern definition after static declaration", __LINE__,
+            SV("static void foo(void);\n"
+               "extern void foo(void){}\n"),
+            SV("(test):2:22: error: non-static declaration of 'foo' follows static declaration\n"),
         },
     };
     static int idx = 0;
