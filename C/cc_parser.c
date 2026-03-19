@@ -1179,6 +1179,14 @@ cc_parse_ternary_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull 
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_question){
         err = cc_require_scalar(p, cond, tok.loc, "'?:'");
         if(err) return err;
+        // Array-to-pointer decay for condition
+        if(ccqt_kind(cond->type) == CC_ARRAY && !ccqt_as_array(cond->type)->is_vector){
+            CcQualType ptr_type;
+            err = cc_pointer_of(p, ccqt_as_array(cond->type)->element, &ptr_type);
+            if(err) return err;
+            err = cc_implicit_cast(p, cond, ptr_type, &cond);
+            if(err) return err;
+        }
         CcExpr* then_expr;
         err = cc_parse_expr(p, vc, &then_expr);
         if(err) return err;
@@ -1355,6 +1363,21 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     if(err) return err;
                 }
                 else if(lp && rp){
+                    // Array-to-pointer decay
+                    if(ccqt_kind(left->type) == CC_ARRAY && !ccqt_as_array(left->type)->is_vector){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, ccqt_as_array(left->type)->element, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, left, ptr_type, &left);
+                        if(err) return err;
+                    }
+                    if(ccqt_kind(right->type) == CC_ARRAY && !ccqt_as_array(right->type)->is_vector){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, ccqt_as_array(right->type)->element, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, right, ptr_type, &right);
+                        if(err) return err;
+                    }
                     CcQualType lpointee, rpointee;
                     cc_deref_type(p, left->type, &lpointee, tok.loc);
                     cc_deref_type(p, right->type, &rpointee, tok.loc);

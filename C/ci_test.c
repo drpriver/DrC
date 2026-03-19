@@ -616,6 +616,14 @@ TestFunction(test_interpreter){
                "return diff != diff2;\n"),
             .exit_code = 0,
         },
+        {
+            "pointer: ternary array decay cond", __LINE__,
+            SV("typedef struct Foo { char data[10000]; } Foo;\n"
+               "Foo f;\n"
+               "char* c = f.data ? f.data : (void*)0;\n"
+               "return c != f.data;\n"),
+            .exit_code = 0,
+        },
         // Arrays
         {
             "array: basic", __LINE__,
