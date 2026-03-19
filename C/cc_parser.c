@@ -85,7 +85,7 @@ static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value)
 static int cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out, CcQualType target_type);
 static int cc_desugar_compound_literal(CcParser* p, CcExpr* compound_lit, CcExpr*_Nullable*_Nonnull out);
 static const CcTargetConfig* cc_target(const CcParser*);
-static int cc_handle_static_asssert(CcParser*);
+static int cc_handle_static_assert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
 static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
 static uint32_t cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type);
@@ -4077,7 +4077,7 @@ cc_parse_one(CcParser* p){
     switch(tok.type){
         case CC_KEYWORD:
             if(tok.kw.kw == CC_static_assert){
-                return cc_handle_static_asssert(p);
+                return cc_handle_static_assert(p);
             }
             goto Ldefault;
         default:
@@ -6491,7 +6491,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
             if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '}')
                 break;
             if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static_assert){
-                err = cc_handle_static_asssert(p);
+                err = cc_handle_static_assert(p);
                 if(err) goto struct_err;
                 continue;
             }
@@ -9063,7 +9063,7 @@ cc_target(const CcParser* p){
 
 static
 int
-cc_handle_static_asssert(CcParser* p){
+cc_handle_static_assert(CcParser* p){
     CcToken tok;
     int err;
     err = cc_next_token(p, &tok);
