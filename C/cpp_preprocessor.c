@@ -3221,9 +3221,9 @@ cpp_get_argument(const CppTokens *args, const Marray(size_t) *arg_seps, size_t a
         end = args->count;
     }
     // Skip leading/trailing whitespace
-    while(start < end && args->data[start].type == CPP_WHITESPACE)
+    while(start < end && (args->data[start].type == CPP_WHITESPACE || args->data[start].type == CPP_NEWLINE))
         start++;
-    while(end > start && args->data[end-1].type == CPP_WHITESPACE)
+    while(end > start && (args->data[end-1].type == CPP_WHITESPACE || args->data[end-1].type == CPP_NEWLINE))
         end--;
     *out_start = (start < args->count) ? &args->data[start] : NULL;
     *out_count = end - start;
@@ -3245,11 +3245,11 @@ cpp_get_va_args(const CppTokens *args, const Marray(size_t) *arg_seps, size_t np
         start = args->count;
     }
     // Skip leading whitespace
-    while(start < args->count && args->data[start].type == CPP_WHITESPACE)
+    while(start < args->count && (args->data[start].type == CPP_WHITESPACE || args->data[start].type == CPP_NEWLINE))
         start++;
     size_t end = args->count;
     // Skip trailing whitespace
-    while(end > start && args->data[end-1].type == CPP_WHITESPACE)
+    while(end > start && (args->data[end-1].type == CPP_WHITESPACE || args->data[end-1].type == CPP_NEWLINE))
         end--;
     *out_start = (start < args->count) ? &args->data[start] : NULL;
     *out_count = end - start;

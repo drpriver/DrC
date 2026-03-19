@@ -245,6 +245,7 @@ TestFunction(test_func_macros){
         {"token_paste_3",SV("#define PASTE3(a,b,c) a##b##c\nPASTE3(x,y,z)"),SV("\nxyz"),__LINE__},
         {"paste_empty_left",SV("#define PASTE(a,b) a##b\nPASTE(,bar)"),SV("\nbar"), __LINE__},
         {"paste_empty_right",SV("#define PASTE(a,b) a##b\nPASTE(foo,)"),SV("\nfoo"), __LINE__},
+        {"paste_multiline_arg",SV("#define X(a) x##a\nint X(\n        asd);"), SV("\nint xasd;"), __LINE__},
         {"va_args",SV("#define VA(...) __VA_ARGS__\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
         {"gnu_va_args",SV("#define VA(args...) args\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
         {"va_args_empty",SV("#define VA(...) [__VA_ARGS__]\nVA()"),SV("\n[]"),__LINE__},
