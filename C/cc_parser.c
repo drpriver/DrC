@@ -3731,9 +3731,11 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 else
                     msb_write_literal(sb, "<anon> = ");
                 if(f->is_bitfield){
+                    uint32_t storage_sz = cc_type_sizeof_assume_complete(cc_target(p), f->type);
                     uint64_t storage = 0;
-                    memcpy(&storage, (const char*)data + f->offset, sizeof(uint32_t));
-                    uint64_t val = (storage >> f->bitoffset) & (((uint64_t)1 << f->bitwidth) - 1);
+                    memcpy(&storage, (const char*)data + f->offset, storage_sz);
+                    uint64_t mask = f->bitwidth >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << f->bitwidth) - 1;
+                    uint64_t val = (storage >> f->bitoffset) & mask;
                     msb_sprintf(sb, "%llu", (unsigned long long)val);
                 }
                 else {
