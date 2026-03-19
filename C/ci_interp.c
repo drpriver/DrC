@@ -367,14 +367,15 @@ uint64_t
 ci_bitfield_read(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width){
     uint64_t storage = 0;
     memcpy(&storage, storage_addr, storage_sz);
-    return (storage >> bit_offset) & (((uint64_t)1 << bit_width) - 1);
+    uint64_t mask = bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bit_width) - 1;
+    return (storage >> bit_offset) & mask;
 }
 
 // Sign-extend a bitfield value if it is a signed type.
 static inline
 uint64_t
 ci_bitfield_extend(uint64_t val, uint8_t bit_width, _Bool is_signed){
-    uint64_t mask = ((uint64_t)1 << bit_width) - 1;
+    uint64_t mask = bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bit_width) - 1;
     val &= mask;
     if(is_signed){
         uint64_t sign_bit = (uint64_t)1 << (bit_width - 1);
@@ -387,7 +388,7 @@ ci_bitfield_extend(uint64_t val, uint8_t bit_width, _Bool is_signed){
 static inline
 void
 ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width, uint64_t val){
-    uint64_t mask = ((uint64_t)1 << bit_width) - 1;
+    uint64_t mask = bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bit_width) - 1;
     uint64_t storage = 0;
     memcpy(&storage, storage_addr, storage_sz);
     storage &= ~(mask << bit_offset);
@@ -1644,7 +1645,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     // bitfield
                     uint64_t existing = 0;
                     memcpy(&existing, (char*)result + off, esz);
-                    uint64_t mask = ((uint64_t)1 << e->field_loc.bit_width) - 1;
+                    uint64_t mask = e->field_loc.bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << e->field_loc.bit_width) - 1;
                     existing &= ~(mask << e->field_loc.bit_offset);
                     existing |= (val & mask) << e->field_loc.bit_offset;
                     memcpy((char*)result + off, &existing, esz);
