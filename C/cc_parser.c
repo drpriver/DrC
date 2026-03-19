@@ -6104,15 +6104,47 @@ cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_off
                     return cc_error(p, field_tok.loc, "expected field name after '.'");
                 CcFieldLoc fl;
                 CcQualType sub;
-                if(!cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub, NULL))
+                // Use cc_find_field_index to identify which top-level union field
+                // the designator belongs to (may be an anonymous member).
+                uint32_t ufi = cc_find_field_index(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub);
+                if(ufi >= u->field_count)
                     return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
                 fl.byte_offset += base_offset;
                 err = cc_parse_desig_tail(p, &sub, &fl);
                 if(err) return err;
                 err = cc_parse_init_value(p, vc,sub, fl, 0, desig_loc, buf);
                 if(err) return err;
-                err = cc_init_list_comma(p);
-                if(err) return err;
+                // If the designator resolved through an anonymous member,
+                // allow additional designators for the same member.
+                if(!u->fields[ufi].name){
+                    for(;;){
+                        err = cc_init_list_comma(p);
+                        if(err) return err;
+                        err = cc_peek(p, &peek);
+                        if(err) return err;
+                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace)
+                            break;
+                        if(peek.type != CC_PUNCTUATOR || peek.punct.punct != '.')
+                            return cc_error(p, peek.loc, "expected '.' or '}' in union initializer");
+                        cc_next_token(p, &peek); // consume '.'
+                        desig_loc = peek.loc;
+                        err = cc_next_token(p, &field_tok);
+                        if(err) return err;
+                        if(field_tok.type != CC_IDENTIFIER)
+                            return cc_error(p, field_tok.loc, "expected field name after '.'");
+                        if(!cc_lookup_field(u->fields, u->field_count, field_tok.ident.ident, &fl, &sub, NULL))
+                            return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
+                        fl.byte_offset += base_offset;
+                        err = cc_parse_desig_tail(p, &sub, &fl);
+                        if(err) return err;
+                        err = cc_parse_init_value(p, vc,sub, fl, 0, desig_loc, buf);
+                        if(err) return err;
+                    }
+                }
+                else {
+                    err = cc_init_list_comma(p);
+                    if(err) return err;
+                }
                 return cc_expect_punct(p, CC_rbrace);
             }
         }

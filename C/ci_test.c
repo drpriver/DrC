@@ -2322,6 +2322,94 @@ TestFunction(test_interpreter){
                "return s.x + s.y + s.z;\n"),
             .exit_code = 6,
         },
+        {
+            "anon struct in union designated init", __LINE__,
+            SV("typedef unsigned uint32_t;\n"
+               "typedef union Goals Goals;\n"
+               "union Goals {\n"
+               "    struct {\n"
+               "        uint32_t a : 1, b : 1, c : 1, _reserved : 29;\n"
+               "    };\n"
+               "};\n"
+               "Goals g = {.a = 1, .b = 1};\n"
+               "return g.a + g.b + g.c;\n"),
+            .exit_code = 2,
+        },
+        {
+            "anon union in struct designated init", __LINE__,
+            SV("struct S { int tag; union { int ival; float fval; }; };\n"
+               "struct S s = {.tag = 10, .ival = 32};\n"
+               "return s.tag + s.ival;\n"),
+            .exit_code = 42,
+        },
+        {
+            "anon struct in union positional init", __LINE__,
+            SV("union U { struct { int x; int y; }; };\n"
+               "union U u = {{5, 7}};\n"
+               "return u.x + u.y;\n"),
+            .exit_code = 12,
+        },
+        {
+            "deeply nested anon: union>struct>union>struct", __LINE__,
+            SV("union Outer {\n"
+               "    struct {\n"
+               "        union {\n"
+               "            struct {\n"
+               "                int a;\n"
+               "                int b;\n"
+               "            };\n"
+               "            long long raw;\n"
+               "        };\n"
+               "        int c;\n"
+               "    };\n"
+               "};\n"
+               "union Outer o = {.a = 10, .b = 20, .c = 12};\n"
+               "return o.a + o.b + o.c;\n"),
+            .exit_code = 42,
+        },
+        {
+            "deeply nested anon: struct>union>struct>union", __LINE__,
+            SV("struct Outer {\n"
+               "    int tag;\n"
+               "    union {\n"
+               "        struct {\n"
+               "            union {\n"
+               "                int x;\n"
+               "                float fx;\n"
+               "            };\n"
+               "            int y;\n"
+               "        };\n"
+               "        long long raw;\n"
+               "    };\n"
+               "};\n"
+               "struct Outer o = {.tag = 2, .x = 30, .y = 10};\n"
+               "return o.tag + o.x + o.y;\n"),
+            .exit_code = 42,
+        },
+        {
+            "anon struct in union: three fields", __LINE__,
+            SV("union V {\n"
+               "    struct { int a; int b; int c; };\n"
+               "    long long arr[2];\n"
+               "};\n"
+               "union V v = {.a = 10, .b = 12, .c = 20};\n"
+               "return v.a + v.b + v.c;\n"),
+            .exit_code = 42,
+        },
+        {
+            "anon struct in union: trailing comma", __LINE__,
+            SV("union W { struct { int x; int y; }; };\n"
+               "union W w = {.x = 40, .y = 2,};\n"
+               "return w.x + w.y;\n"),
+            .exit_code = 42,
+        },
+        {
+            "anon struct in union: single field desig", __LINE__,
+            SV("union X { struct { int a; int b; }; int raw; };\n"
+               "union X x = {.b = 42};\n"
+               "return x.b;\n"),
+            .exit_code = 42,
+        },
         // Type system: _Static_assert
         {
             "_Static_assert", __LINE__,
