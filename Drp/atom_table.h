@@ -76,7 +76,7 @@ AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
     Atom_* atom = Allocator_alloc(at->allocator, 1+len+sizeof *atom);
     if(!atom) return NULL;
     atom->flags = ATOM_ALLOCATED;
-    atom->length = (uint16_t)len;
+    atom->length = (uint32_t)len;
     memcpy(atom->data, txt, len);
     atom->data[len] = 0;
     atom->hash = hash_align1(txt, len);
