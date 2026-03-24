@@ -96,6 +96,22 @@ int json_parse(_Type T, const char** p, void* out){
         return -1;
     }
 
+    // Enum — parse from JSON string, match enumerator names
+    if(T.is_enum){
+        const char* s = json_string(p);
+        if(!s) return -1;
+        for(int i = 0; i < (int)T.enumerators; i++){
+            auto e = T.enumerator(i);
+            if(strcmp(s, e.name) == 0){
+                if(T.sizeof_ <= 4) *(int*)out = (int)e.value;
+                else                *(long long*)out = e.value;
+                return 0;
+            }
+        }
+        fprintf(stderr, "json: unknown enumerator '%s' for %s\n", s, T.name);
+        return -1;
+    }
+
     // Integers
     if(T.is_integer){
         char* end;
@@ -118,22 +134,6 @@ int json_parse(_Type T, const char** p, void* out){
         if(T.sizeof_ == 4) *(float*)out = (float)v;
         else                *(double*)out = v;
         return 0;
-    }
-
-    // Enum — parse from JSON string, match enumerator names
-    if(T.is_enum){
-        const char* s = json_string(p);
-        if(!s) return -1;
-        for(int i = 0; i < (int)T.enumerators; i++){
-            auto e = T.enumerator(i);
-            if(strcmp(s, e.name) == 0){
-                if(T.sizeof_ <= 4) *(int*)out = (int)e.value;
-                else                *(long long*)out = e.value;
-                return 0;
-            }
-        }
-        fprintf(stderr, "json: unknown enumerator '%s' for %s\n", s, T.name);
-        return -1;
     }
 
     // Struct — parse JSON object, match keys to field names
@@ -206,6 +206,22 @@ void json_write(_Type T, FILE* f, const void* data, int indent){
         return;
     }
 
+    // Enum — write as string using enumerator name
+    if(T.is_enum){
+        long long v;
+        if(T.sizeof_ <= 4) v = *(int*)data;
+        else                v = *(long long*)data;
+        for(int i = 0; i < (int)T.enumerators; i++){
+            auto e = T.enumerator(i);
+            if(e.value == v){
+                fprintf(f, "\"%s\"", e.name);
+                return;
+            }
+        }
+        fprintf(f, "%lld", v); // fallback: unknown enumerator
+        return;
+    }
+
     // Integers
     if(T.is_integer){
         long long v;
@@ -223,22 +239,6 @@ void json_write(_Type T, FILE* f, const void* data, int indent){
         if(T.sizeof_ == 4) v = *(float*)data;
         else                v = *(double*)data;
         fprintf(f, "%g", v);
-        return;
-    }
-
-    // Enum — write as string using enumerator name
-    if(T.is_enum){
-        long long v;
-        if(T.sizeof_ <= 4) v = *(int*)data;
-        else                v = *(long long*)data;
-        for(int i = 0; i < (int)T.enumerators; i++){
-            auto e = T.enumerator(i);
-            if(e.value == v){
-                fprintf(f, "\"%s\"", e.name);
-                return;
-            }
-        }
-        fprintf(f, "%lld", v); // fallback: unknown enumerator
         return;
     }
 

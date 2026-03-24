@@ -1,6 +1,6 @@
 int printf(const char*, ...);
 #define COMMA ,
-const char** args[] = {
+const char* args[] = {
     __let(arg(i), __argv(i) COMMA,
         __for(0, __ARGC__, arg)
     )

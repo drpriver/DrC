@@ -5,7 +5,7 @@
 // Usage: Bin/cc Samples/sort.c [file]
 
 const char* input = __argv(1, NULL);
-FILE* fp = input?fopen(input, "rb"):fp;
+FILE* fp = input?fopen(input, "rb"):stdin;
 if(!fp) return (perror(input), 1);
 
 void* xmalloc(size_t sz){
