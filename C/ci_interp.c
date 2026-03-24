@@ -3554,19 +3554,19 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     a = cpp_atomizef(cpp, "%d", (int)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_int]));
                     break;
                 case CCBT_unsigned:
-                    a = cpp_atomizef(cpp, "%uu", (unsigned)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned]));
+                    a = cpp_atomizef(cpp, "%u", (unsigned)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned]));
                     break;
                 case CCBT_long:
-                    a = cpp_atomizef(cpp, "%lldl", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long]));
+                    a = cpp_atomizef(cpp, "%lld", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long]));
                     break;
                 case CCBT_unsigned_long:
-                    a = cpp_atomizef(cpp, "%llulu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long]));
+                    a = cpp_atomizef(cpp, "%llu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long]));
                     break;
                 case CCBT_long_long:
-                    a = cpp_atomizef(cpp, "%lldll", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long_long]));
+                    a = cpp_atomizef(cpp, "%lld", (long long)ci_read_int(result, ci_target(ci)->sizeof_[CCBT_long_long]));
                     break;
                 case CCBT_unsigned_long_long:
-                    a = cpp_atomizef(cpp, "%llullu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long_long]));
+                    a = cpp_atomizef(cpp, "%llu", (unsigned long long)ci_read_uint(result, ci_target(ci)->sizeof_[CCBT_unsigned_long_long]));
                     break;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
