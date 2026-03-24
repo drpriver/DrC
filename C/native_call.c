@@ -221,31 +221,31 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     *out = &ffi_type_uint8;
                     return NC_NO_ERROR;
                 case CCBT_char:
-                    *out = &ffi_type_sint8;
+                    *out = &ffi_type_schar;
                     return NC_NO_ERROR;
                 case CCBT_signed_char:
-                    *out = &ffi_type_sint8;
+                    *out = &ffi_type_schar;
                     return NC_NO_ERROR;
                 case CCBT_unsigned_char:
-                    *out = &ffi_type_uint8;
+                    *out = &ffi_type_uchar;
                     return NC_NO_ERROR;
                 case CCBT_short:
-                    *out = &ffi_type_sint16;
+                    *out = &ffi_type_sshort;
                     return NC_NO_ERROR;
                 case CCBT_unsigned_short:
-                    *out = &ffi_type_uint16;
+                    *out = &ffi_type_ushort;
                     return NC_NO_ERROR;
                 case CCBT_int:
-                    *out = &ffi_type_sint32;
+                    *out = &ffi_type_sint;
                     return NC_NO_ERROR;
                 case CCBT_unsigned:
-                    *out = &ffi_type_uint32;
+                    *out = &ffi_type_uint;
                     return NC_NO_ERROR;
                 case CCBT_long:
-                    *out = &ffi_type_sint64;
+                    *out = &ffi_type_slong;
                     return NC_NO_ERROR;
                 case CCBT_unsigned_long:
-                    *out = &ffi_type_uint64;
+                    *out = &ffi_type_ulong;
                     return NC_NO_ERROR;
                 case CCBT_long_long:
                     *out = &ffi_type_sint64;
