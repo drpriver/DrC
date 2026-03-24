@@ -1,9 +1,13 @@
-#ifdef __linux__
+#ifdef __APPLE__
+#pragma framework "Python"
+#include <Python/Python.h>
+#elif defined __linux__
 #pragma pkg_config "python3-embed"
 #include <Python.h>
 #else
-#pragma lib "Python"
+// untested windows
 #include <Python/Python.h>
+#pragma lib "Python"
 #endif
 #include <stdarg.h>
 #include <stdio.h>
