@@ -47,6 +47,8 @@
   * [`__shell(program, args...)`](#shellprogram-args)
   * [`#pragma lib "name"`](#pragma-lib-name)
   * [`#pragma lib_path "path"`](#pragma-libpath-path)
+  * [`#pragma framework "name"`](#pragma-framework-name)
+  * [`#pragma framework_path "path"`](#pragma-frameworkpath-path)
   * [`#pragma pkg_config "package"`](#pragma-pkgconfig-package)
   * [`#pragma procmacro name`](#pragma-procmacro-name)
 
@@ -821,6 +823,18 @@ Link against a native shared library.
 ### `#pragma lib_path "path"`
 
 Add a directory to the library search path.
+
+### `#pragma framework "name"`
+
+Link against a macOS framework. Only searches framework paths, unlike
+`#pragma lib` which also tries regular library paths.
+
+### `#pragma framework_path "path"`
+
+Add a directory to the macOS framework search path. Prepended before
+system defaults, so user framework paths are searched first. Affects
+both `#include &lt;Foo/Bar.h&gt;` header lookup and `#pragma framework`
+loading.
 
 ### `#pragma pkg_config "package"`
 
