@@ -7,9 +7,9 @@
 
 // Minimal HTTP GET client using BSD sockets.
 
-const char* host = __argv(1, "localhost");
-const char* port = __argv(2, "6969");
-const char* path = __argv(3, "/");
+const char* host = __argc > 1 ? __argv[1] : "localhost";
+const char* port = __argc > 2 ? __argv[2] : "6969";
+const char* path = __argc > 3 ? __argv[3] : "/";
 
 // resolve host
 struct addrinfo hints;

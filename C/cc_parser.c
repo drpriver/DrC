@@ -9197,6 +9197,20 @@ cc_handle_static_assert(CcParser* p){
 
 static
 int
+cc_register_extern_var(CcParser* p, StringView name, CcQualType type){
+    Allocator al = cc_allocator(p);
+    Atom a = AT_atomize(p->cpp.at, name.text, name.length);
+    if(!a) return CC_OOM_ERROR;
+    CcVariable* var = Allocator_zalloc(al, sizeof *var);
+    if(!var) return CC_OOM_ERROR;
+    var->name = a;
+    var->type = type;
+    var->extern_ = 1;
+    return cc_scope_insert_var(al, &p->global, a, var);
+}
+
+static
+int
 cc_define_builtin_types(CcParser* p){
     int err;
     Allocator al = cc_allocator(p);

@@ -11,7 +11,7 @@ unsigned char mem[MEMSZ];
 char prog[MAXPROG];
 int proglen = 0;
 
-const char* file = __ARGV__(1, NULL);
+const char* file = __argc > 1 ? __argv[1] : NULL;
 if(file){
     FILE* f = fopen(file, "r");
     if(!f){

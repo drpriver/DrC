@@ -12,7 +12,7 @@
 
 int strieq(const char* a, const char* b){
     for(; *a && *b; a++, b++)
-        if(tolower(*a) != tolower(*b)) return 0;
+        if(tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
     return *a == *b;
 }
 

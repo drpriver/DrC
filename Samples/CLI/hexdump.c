@@ -2,7 +2,7 @@
 // Hex dump of input/stdin, similar to `xxd` or `hexdump -C`
 unsigned char buf[16];
 unsigned long offset = 0;
-const char* input = __argv(1, NULL);
+const char* input = __argc > 1 ? __argv[1] : NULL;
 FILE* fp = input?fopen(input, "rb"):stdin;
 if(!fp) return (perror(input), 1);
 for(;;){

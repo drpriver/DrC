@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 
 void json_ws(const char** p){
-    while(isspace(**p)) ++*p;
+    while(isspace((unsigned char)**p)) ++*p;
 }
 
 const char* json_string(const char** p){

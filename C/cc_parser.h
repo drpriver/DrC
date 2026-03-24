@@ -178,6 +178,7 @@ static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);
 static int cc_register_pragmas(CcParser*);
+static int cc_register_extern_var(CcParser*, StringView name, CcQualType type);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);

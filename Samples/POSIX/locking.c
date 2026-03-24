@@ -11,7 +11,7 @@
 
 enum { NTHREADS = 4, ITERS = 100000 };
 
-const char* mode = __argv(1, "mutex");
+const char* mode = __argc > 1 ? __argv[1] : "mutex";
 _Bool use_mutex = 0;
 _Bool use_atomic = 0;
 if(use_mutex = (strcmp(mode, "mutex") == 0)){ }

@@ -9,7 +9,7 @@
 // Directory listing (like ls -l)
 // Usage: Bin/cc Samples/ls.c [path]
 
-const char* dir = __ARGV__(1, ".");
+const char* dir = __argc > 1 ? __argv[1] : ".";
 
 DIR* d = opendir(dir);
 if(!d){

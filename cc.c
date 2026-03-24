@@ -30,16 +30,7 @@
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
 
-typedef struct ProgArgvCtx ProgArgvCtx;
-struct ProgArgvCtx {
-    const char*const* args;
-    size_t count;
-    const char* filename;
-};
-
-static
-int
-cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
+static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 
 int main(int argc, char** argv, char** envp){
     _Bool eager = 0;
@@ -226,25 +217,34 @@ int main(int argc, char** argv, char** envp){
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
     err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) goto stringify_error;
-    ProgArgvCtx argv_ctx = {
-        .args = prog_args,
-        .count = num_prog_args,
-        .filename = filename.text,
-    };
-    err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__ARGV__"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
-    if(err) goto stringify_error;
-    err = cpp_define_builtin_func_macro(&interp.parser.cpp, SV("__argv"), cpp_builtin_argv, &argv_ctx, 1, 1, 0);
-    if(err) goto stringify_error;
-    {
-        int argc_val = 1 + (int)num_prog_args;
-        Atom a = cpp_atomizef(&interp.parser.cpp, "%d", argc_val);
-        if(!a) return 1;
-        CppToken tok = {.type = CPP_NUMBER, .txt = {a->length, a->data}};
-        err = cpp_define_obj_macro(&interp.parser.cpp, SV("__ARGC__"), &tok, 1);
-        if(err) goto stringify_error;
-    }
+    // Build argc/argv for __argc/__argv globals and ci_call_main.
+    int script_argc = 1 + (int)num_prog_args;
+    char* script_argv_storage[MAX_PROG_ARGS + 2];
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wcast-qual"
+    script_argv_storage[0] = (char*)filename.text;
+    for(size_t i = 0; i < num_prog_args; i++)
+        script_argv_storage[1+i] = (char*)prog_args[i];
+    #pragma GCC diagnostic pop
+    script_argv_storage[script_argc] = NULL;
+    char** script_argv = script_argv_storage;
     err = cc_define_builtin_types(&interp.parser);
     if(err) goto stringify_error;
+    {
+        CcQualType char_star, char_star_star;
+        err = cc_pointer_of(&interp.parser, ccqt_basic(CCBT_char), &char_star);
+        if(err) goto stringify_error;
+        err = cc_pointer_of(&interp.parser, char_star, &char_star_star);
+        if(err) goto stringify_error;
+        err = cc_register_extern_var(&interp.parser, SV("__argc"), ccqt_basic(CCBT_int));
+        if(err) goto stringify_error;
+        err = cc_register_extern_var(&interp.parser, SV("__argv"), char_star_star);
+        if(err) goto stringify_error;
+        err = ci_register_sym(&interp, SV("builtins"), SV("__argc"), &script_argc);
+        if(err) goto stringify_error;
+        err = ci_register_sym(&interp, SV("builtins"), SV("__argv"), &script_argv);
+        if(err) goto stringify_error;
+    }
     err = cc_register_pragmas(&interp.parser);
     if(err) goto stringify_error;
     err = ci_register_pragmas(&interp);
@@ -414,13 +414,7 @@ int main(int argc, char** argv, char** envp){
         // Call main if defined
         {
             int main_ret = 0;
-            int main_argc = 1 + (int)num_prog_args;
-            char** main_argv = Allocator_zalloc(MALLOCATOR, (main_argc+1)*sizeof *main_argv);
-            if(!main_argv) return 1;
-            main_argv[0] = Allocator_strndup(MALLOCATOR, filename.text, filename.length);
-            for(size_t i = 0; i < num_prog_args; i++)
-                main_argv[1+i] = Allocator_strndup(MALLOCATOR, prog_args[i], strlen(prog_args[i]));
-            err = ci_call_main(&interp, main_argc, main_argv, envp, &main_ret);
+            err = ci_call_main(&interp, script_argc, script_argv, envp, &main_ret);
             if(!err) return main_ret;
             if(err != _cc_symbol_not_found_error) goto stringify_error;
         }
@@ -430,59 +424,6 @@ int main(int argc, char** argv, char** envp){
     const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
     fprintf(stderr, "Fail: %s\n", error_name);
     return 1;
-}
-
-static
-int
-cpp_builtin_argv(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
-    ProgArgvCtx* pctx = ctx;
-    // Parse the index from arg 0
-    CppToken *arg0_toks; size_t arg0_count;
-    cpp_get_argument(args, arg_seps, 0, &arg0_toks, &arg0_count);
-    int64_t index = -1;
-    for(size_t i = 0; i < arg0_count; i++){
-        if(arg0_toks[i].type == CPP_WHITESPACE) continue;
-        if(arg0_toks[i].type == CPP_NUMBER){
-            index = 0;
-            for(size_t j = 0; j < arg0_toks[i].txt.length; j++){
-                char c = arg0_toks[i].txt.text[j];
-                if(c < '0' || c > '9')
-                    return cpp_error(cpp, arg0_toks[i].loc, "Expected integer index as arg to __ARGV__");
-                index = index * 10 + (c - '0');
-            }
-            break;
-        }
-        return cpp_error(cpp, arg0_toks[i].loc, "Expected integer index as arg to __ARGV__");
-    }
-    if(index < 0)
-        return cpp_error(cpp, loc, "Missing index argument to __ARGV__");
-    // Look up the value
-    const char* value = NULL;
-    if(index == 0)
-        value = pctx->filename;
-    else if((size_t)(index - 1) < pctx->count)
-        value = pctx->args[index - 1];
-    if(value){
-        Atom a = cpp_atomizef(cpp, "\"%s\"", value);
-        if(!a) return _cc_oom_error;
-        CppToken tok = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = loc};
-        return cpp_push_tok(cpp, outtoks, tok);
-    }
-    // No value: use fallback (second arg) if provided
-    if(arg_seps->count >= 1){
-        CppToken *fb_toks; size_t fb_count;
-        cpp_get_argument(args, arg_seps, 1, &fb_toks, &fb_count);
-        for(size_t i = 0; i < fb_count; i++){
-            int e = cpp_push_tok(cpp, outtoks, fb_toks[i]);
-            if(e) return e;
-        }
-        return 0;
-    }
-    // No fallback: emit empty string
-    Atom a = cpp_atomizef(cpp, "\"\"");
-    if(!a) return _cc_oom_error;
-    CppToken tok = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = loc};
-    return cpp_push_tok(cpp, outtoks, tok);
 }
 
 static void cc_print_type(MStringBuilder*, CcQualType t);

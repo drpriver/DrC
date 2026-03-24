@@ -83,7 +83,7 @@ for(int i = 0; i < NTHREADS; i++)
     pthread_join(threads[i], NULL);
 
 // Write PPM
-const char* outpath = __argv(1, "mandelbrot.ppm");
+const char* outpath = __argc > 1 ? __argv[1] : "mandelbrot.ppm";
 FILE* out = fopen(outpath, "wb");
 if(!out){ perror(outpath); return 1; }
 fprintf(out, "P6\n%d %d\n255\n", W, H);

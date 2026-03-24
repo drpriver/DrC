@@ -7,7 +7,7 @@
 // Run a command via pipe+fork+exec, capture output, print stats.
 // Usage: Bin/cc Samples/pipe.c "ls -la"
 
-const char* cmd = __ARGV__(1, "ls");
+const char* cmd = __argc > 1 ? __argv[1] : "ls";
 char* buf = strdup(cmd);
 enum {MAX_ARGS=64};
 char* args[MAX_ARGS];

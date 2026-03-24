@@ -274,7 +274,7 @@ void appDidFinishLaunching(id self, SEL _cmd, id note){
     ((void(*)(id, SEL, CGSize))objc_msgSend)(window, sel("setMinSize:"), minSize);
 
     // Open file from command line argument if given
-    const char* initialPath = __argv(1, NULL);
+    const char* initialPath = __argc > 1 ? __argv[1] : NULL;
     if(initialPath){
         id contents = nsstr_from_file(initialPath);
         if(contents){

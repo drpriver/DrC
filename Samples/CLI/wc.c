@@ -2,7 +2,7 @@
 // Word, line, and character count on stdin/input (like wc)
 long lines = 0, words = 0, chars = 0;
 bool in_word = 0;
-const char* input = __argv(1, NULL);
+const char* input = __argc > 1 ? __argv[1] : NULL;
 FILE* fp = input?fopen(input, "rb"):stdin;
 if(!fp) return (perror(input), 1);
 for(int c; (c = fgetc(fp)) != EOF;){
