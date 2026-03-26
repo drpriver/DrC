@@ -20,12 +20,11 @@ struct CcVariable {
     CcQualType type;
     uint32_t extern_: 1,
              static_: 1,
-             tenative: 1,
              automatic: 1,
              interp_initialized: 1,
              interp_preinit: 1,
              constexpr_: 1,
-             _padding: 9,
+             _padding: 10,
              alignment: 16; // 0 means default alignment
     CcExpr* _Null_unspecified initializer;
     union {
