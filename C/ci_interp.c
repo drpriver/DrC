@@ -3707,7 +3707,7 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
             }
         }
     }
-    if(ci_target(ci)->target != CC_TARGET_NATIVE)
+    if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
         return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
     #ifdef NO_NATIVE_CALL
         (void)out;

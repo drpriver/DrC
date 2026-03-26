@@ -30,7 +30,6 @@
 
 #ifdef __linux__
 #include <sys/types.h>
-ssize_t copy_file_range(int fd_in, loff_t* off_in, int fd_out, loff_t* off_out, size_t len, unsigned int flags);
 #endif
 
 #ifndef __builtin_debugtrap
@@ -50,6 +49,10 @@ ssize_t copy_file_range(int fd_in, loff_t* off_in, int fd_out, loff_t* off_out, 
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#endif
+
+#ifdef __linux__
+ssize_t copy_file_range(int fd_in, loff_t* off_in, int fd_out, loff_t* off_out, size_t len, unsigned int flags);
 #endif
 
 #define APET(E) {.enum_size = sizeof(enum E), .enum_count=arrlen(E##SVs), .enum_names=E##SVs,}
