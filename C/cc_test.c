@@ -2584,6 +2584,61 @@ TestFunction(test_parse_decls){
                "int a[\"Hello\"[4] - 'n'];\n"),
             .vars = {{SV("a"), SV("int[1]")}},
         },
+        // Wide string literal constant expressions
+        {
+            "sizeof L string as constant", __LINE__,
+            SV("int a[sizeof(L\"hello\")];\n"),
+            .vars = {{SV("a"), SV("int[24]")}}, // 6 * 4
+        },
+        {
+            "sizeof u string as constant", __LINE__,
+            SV("int a[sizeof(u\"hello\")];\n"),
+            .vars = {{SV("a"), SV("int[12]")}}, // 6 * 2
+        },
+        {
+            "sizeof U string as constant", __LINE__,
+            SV("int a[sizeof(U\"hello\")];\n"),
+            .vars = {{SV("a"), SV("int[24]")}}, // 6 * 4
+        },
+        {
+            "sizeof u8 string as constant", __LINE__,
+            SV("int a[sizeof(u8\"hello\")];\n"),
+            .vars = {{SV("a"), SV("int[6]")}}, // 6 * 1
+        },
+        {
+            "L string subscript as constant", __LINE__,
+            SV("enum { X = L\"ABC\"[1] };\n"
+               "int a[X];\n"),
+            .vars = {{SV("a"), SV("int[66]")}}, // 'B'
+        },
+        {
+            "u string subscript as constant", __LINE__,
+            SV("enum { X = u\"ABC\"[0] };\n"
+               "int a[X];\n"),
+            .vars = {{SV("a"), SV("int[65]")}}, // 'A'
+        },
+        {
+            "U string subscript as constant", __LINE__,
+            SV("enum { X = U\"ABC\"[2] };\n"
+               "int a[X];\n"),
+            .vars = {{SV("a"), SV("int[67]")}}, // 'C'
+        },
+        {
+            "u8 string subscript as constant", __LINE__,
+            SV("enum { X = u8\"ABC\"[1] };\n"
+               "int a[X];\n"),
+            .vars = {{SV("a"), SV("int[66]")}}, // 'B'
+        },
+        {
+            "L string UCN subscript as constant", __LINE__,
+            SV("enum { X = L\"\\u00E9\"[0] };\n"
+               "int a[X];\n"),
+            .vars = {{SV("a"), SV("int[233]")}}, // 0xE9
+        },
+        {
+            "U string UCN above BMP as constant", __LINE__,
+            SV("_Static_assert(U\"\\U0001F600\"[0] == 0x1F600);\n"),
+        },
         {
             "constexpr struct predecl", __LINE__,
             SV("struct foo {int x;};\n"

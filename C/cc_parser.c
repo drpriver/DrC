@@ -1770,8 +1770,15 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             if(!node) return CC_OOM_ERROR;
             node->str.length = tok.str.length;
             node->text = tok.str.utf8;
-            // Type: char[N] (array of char, length includes null terminator)
-            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), tok.str.length, 0, 0, 0, 0);
+            CcBasicTypeKind elem_type;
+            switch(tok.str.stype){
+                case CC_STRING:   elem_type = CCBT_char; break;
+                case CC_LSTRING:  elem_type = cc_target(p)->wchar_type; break;
+                case CC_uSTRING:  elem_type = cc_target(p)->char16_type; break;
+                case CC_USTRING:  elem_type = cc_target(p)->char32_type; break;
+                case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
+            }
+            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
             *out = node;
@@ -5940,11 +5947,14 @@ cc_parse_init_value(CcParser* p, CcValueClass vc, CcQualType field_type, CcField
             cc_next_token(p, &peek); // consume '{'
             return cc_parse_init(p, vc,field_type, field_loc.byte_offset, 1, peek.loc, buf, NULL, NULL);
         }
-        // String literal initializing a char array (brace elision)
+        // String literal initializing a char/wchar/char16/char32 array (brace elision)
         if(ftk == CC_ARRAY && peek.type == CC_STRING_LITERAL){
             CcArray* arr = ccqt_as_array(field_type);
             CcBasicTypeKind ek = ccqt_is_basic(arr->element) ? arr->element.basic.kind : CCBT_COUNT;
-            if(ek == CCBT_char || ek == CCBT_signed_char || ek == CCBT_unsigned_char){
+            if(ek == CCBT_char || ek == CCBT_signed_char || ek == CCBT_unsigned_char
+            || ek == cc_target(p)->wchar_type
+            || ek == cc_target(p)->char16_type
+            || ek == cc_target(p)->char32_type){
                 CcExpr* v;
                 err = cc_parse_assignment_expr(p, vc, &v);
                 if(err) return err;
@@ -10216,14 +10226,18 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 if(err) return err;
                 if(i < 0 || (uint64_t)i >= arr->str.length)
                     return CC_VALUE_ERROR;
-                // TODO: how do we represent wide strings?
-                unsigned char c = (unsigned char)arr->text[i];
                 CcExpr* node = cc_value_expr(p, e->loc, e->type);
                 if(!node) return CC_OOM_ERROR;
-                if(cc_target(p)->char_is_signed)
-                    node->integer = (signed char)c;
+                CcArray* arr_type = ccqt_as_array(arr->type);
+                uint32_t elem_sz = cc_target(p)->sizeof_[arr_type->element.basic.kind];
+                if(elem_sz == 4)
+                    node->uinteger = ((const uint32_t*)arr->text)[i];
+                else if(elem_sz == 2)
+                    node->uinteger = ((const uint16_t*)arr->text)[i];
+                else if(cc_target(p)->char_is_signed)
+                    node->integer = (signed char)arr->text[i];
                 else
-                    node->uinteger = c;
+                    node->uinteger = (unsigned char)arr->text[i];
                 *result = node;
                 return 0;
             }

@@ -916,6 +916,155 @@ TestFunction(test_interpreter){
                "return s[1];\n"),
             .exit_code = 101, // 'e'
         },
+        // Wide string literals
+        {
+            "L string indexing", __LINE__,
+            SV("return L\"hello\"[1];\n"),
+            .exit_code = 101, // 'e'
+        },
+        {
+            "u string indexing", __LINE__,
+            SV("return u\"hello\"[0];\n"),
+            .exit_code = 104, // 'h'
+        },
+        {
+            "U string indexing", __LINE__,
+            SV("return U\"hello\"[2];\n"),
+            .exit_code = 108, // 'l'
+        },
+        {
+            "u8 string indexing", __LINE__,
+            SV("return u8\"hello\"[4];\n"),
+            .exit_code = 111, // 'o'
+        },
+        {
+            "L string null terminator", __LINE__,
+            SV("return L\"hi\"[2];\n"),
+            .exit_code = 0,
+        },
+        {
+            "u string null terminator", __LINE__,
+            SV("return u\"hi\"[2];\n"),
+            .exit_code = 0,
+        },
+        {
+            "U string null terminator", __LINE__,
+            SV("return U\"hi\"[2];\n"),
+            .exit_code = 0,
+        },
+        {
+            "u8 string null terminator", __LINE__,
+            SV("return u8\"hi\"[2];\n"),
+            .exit_code = 0,
+        },
+        {
+            "sizeof L string element", __LINE__,
+            SV("return sizeof(L\"x\"[0]);\n"),
+            .exit_code = 4, // sizeof(int)
+        },
+        {
+            "sizeof u string element", __LINE__,
+            SV("return sizeof(u\"x\"[0]);\n"),
+            .exit_code = 2, // sizeof(unsigned short)
+        },
+        {
+            "sizeof U string element", __LINE__,
+            SV("return sizeof(U\"x\"[0]);\n"),
+            .exit_code = 4, // sizeof(unsigned int)
+        },
+        {
+            "sizeof u8 string element", __LINE__,
+            SV("return sizeof(u8\"x\"[0]);\n"),
+            .exit_code = 1, // sizeof(unsigned char)
+        },
+        {
+            "sizeof L string", __LINE__,
+            SV("return sizeof(L\"hello\");\n"),
+            .exit_code = 24, // 6 * 4
+        },
+        {
+            "sizeof u string", __LINE__,
+            SV("return sizeof(u\"hello\");\n"),
+            .exit_code = 12, // 6 * 2
+        },
+        {
+            "sizeof U string", __LINE__,
+            SV("return sizeof(U\"hello\");\n"),
+            .exit_code = 24, // 6 * 4
+        },
+        {
+            "sizeof u8 string", __LINE__,
+            SV("return sizeof(u8\"hello\");\n"),
+            .exit_code = 6, // 6 * 1
+        },
+        {
+            "L string escape", __LINE__,
+            SV("return L\"a\\nb\"[1];\n"),
+            .exit_code = 10, // '\n'
+        },
+        {
+            "L string UCN", __LINE__,
+            SV("return L\"\\u0041\"[0];\n"),
+            .exit_code = 65, // 'A'
+        },
+        {
+            "u string UCN", __LINE__,
+            SV("return u\"\\u00E9\"[0];\n"),
+            .exit_code = 233, // 0xE9
+        },
+        {
+            "U string UCN above BMP", __LINE__,
+            SV("return U\"\\U0001F600\"[0] == 0x1F600;\n"),
+            .exit_code = 1,
+        },
+        {
+            "L string array init", __LINE__,
+            SV("int arr[] = L\"AB\";\n"
+               "return arr[0] + arr[1];\n"),
+            .exit_code = 131, // 'A' + 'B' = 65 + 66
+        },
+        {
+            "u string array init", __LINE__,
+            SV("unsigned short arr[] = u\"AB\";\n"
+               "return arr[0] + arr[1];\n"),
+            .exit_code = 131, // 65 + 66
+        },
+        {
+            "U string array init", __LINE__,
+            SV("unsigned arr[] = U\"AB\";\n"
+               "return arr[0] + arr[1];\n"),
+            .exit_code = 131, // 65 + 66
+        },
+        {
+            "u8 string array init", __LINE__,
+            SV("unsigned char arr[] = u8\"AB\";\n"
+               "return arr[0] + arr[1];\n"),
+            .exit_code = 131, // 65 + 66
+        },
+        {
+            "char array truncation", __LINE__,
+            SV("char t[3] = \"abc\";\n"
+               "return t[2];\n"),
+            .exit_code = 99, // 'c', null terminator dropped
+        },
+        {
+            "L string array truncation", __LINE__,
+            SV("int t[3] = L\"abc\";\n"
+               "return t[2];\n"),
+            .exit_code = 99, // 'c'
+        },
+        {
+            "u string array truncation", __LINE__,
+            SV("unsigned short t[3] = u\"abc\";\n"
+               "return t[2];\n"),
+            .exit_code = 99, // 'c'
+        },
+        {
+            "U string array truncation", __LINE__,
+            SV("unsigned t[3] = U\"abc\";\n"
+               "return t[2];\n"),
+            .exit_code = 99, // 'c'
+        },
         // Multidimensional array
         {
             "2d array", __LINE__,

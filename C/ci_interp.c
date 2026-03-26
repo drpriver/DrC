@@ -333,7 +333,10 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_VALUE:
             if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
                 *out = (void*)(uintptr_t)expr->text;
-                *size = expr->str.length;
+                uint32_t sz;
+                int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+                if(err) return err;
+                *size = sz;
                 return 0;
             }
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -499,11 +502,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(ccqt_kind(expr->type) == CC_ARRAY){
-            if(sz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-            uint32_t len = expr->str.length;
-            if(len > sz) len = sz;
-            memcpy(result, expr->text, len);
+            // String literal may be truncated by the target array
+            // (e.g. char t[3] = "abc" drops the null terminator).
+            // The parser already validates this is legal.
+            if(sz > size) sz = (uint32_t)size;
+            memcpy(result, expr->text, sz);
             return 0;
         }
         if(sz > size)
