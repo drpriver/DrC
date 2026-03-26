@@ -2107,12 +2107,13 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         if(err) return err;
                         int64_t ev;
                         err = cc_eval_integer(p, const_expr, &ev);
+                        SrcLoc eloc = const_expr->loc;
+                        cc_release_expr(p, const_expr);
                         if(err)
-                            return cc_error(p, const_expr->loc, "memory order must be a constant expression");
+                            return cc_error(p, eloc, "memory order must be a constant expression");
                         const_vals[i] = (unsigned)ev;
                         if(const_vals[i] >= CC_MO_COUNT)
-                            return cc_error(p, const_expr->loc, "invalid memory order value %u", const_vals[i]);
-                        cc_release_expr(p, const_expr);
+                            return cc_error(p, eloc, "invalid memory order value %u", const_vals[i]);
                     }
                     if(op == CC_ATOMIC_COMPARE_EXCHANGE || op == CC_ATOMIC_COMPARE_EXCHANGE_N){
                         node->atomic.weak = const_vals[0];
