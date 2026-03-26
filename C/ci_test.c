@@ -916,6 +916,37 @@ TestFunction(test_interpreter){
                "return s[1];\n"),
             .exit_code = 101, // 'e'
         },
+        {
+            "deref array variable", __LINE__,
+            SV("int arr[] = {10, 20, 30};\n"
+               "return *arr;\n"),
+            .exit_code = 10,
+        },
+        {
+            "deref string literal", __LINE__,
+            SV("return *\"hello\";\n"),
+            .exit_code = 104, // 'h'
+        },
+        {
+            "deref L string literal", __LINE__,
+            SV("return *L\"hello\";\n"),
+            .exit_code = 104, // 'h'
+        },
+        {
+            "deref u string literal", __LINE__,
+            SV("return *u\"hello\";\n"),
+            .exit_code = 104, // 'h'
+        },
+        {
+            "deref U string literal", __LINE__,
+            SV("return *U\"hello\";\n"),
+            .exit_code = 104, // 'h'
+        },
+        {
+            "deref u8 string literal", __LINE__,
+            SV("return *u8\"hello\";\n"),
+            .exit_code = 104, // 'h'
+        },
         // Wide string literals
         {
             "L string indexing", __LINE__,
