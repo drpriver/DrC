@@ -1,0 +1,20 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get install -y libffi-dev
+      - run: cc build.c -o build && ./build -b Bin
+      - run: ./build test
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: cc build.c -o build && ./build -b Bin
+      - run: ./build test
