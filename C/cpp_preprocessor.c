@@ -6964,6 +6964,9 @@ int
 cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
+    if(len && *s == 'L'){ s++; len--; }
+    else if(len >= 2 && s[0] == 'u' && s[1] == '8'){ s += 2; len -= 2; }
+    else if(len && (*s == 'u' || *s == 'U')){ s++; len--; }
     if(len < 3 || s[0] != '\'' || s[len-1] != '\'')
         return cpp_error(cpp, tok.loc, "Invalid character constant");
     const char* p = s + 1;
