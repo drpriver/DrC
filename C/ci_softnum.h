@@ -148,8 +148,12 @@ static inline CiInt128 ci_int128_from_uint128(CiUint128 a){ return (CiInt128)a; 
 static inline CiUint128 ci_uint128_from_int128(CiInt128 a){ return (CiUint128)a; }
 #else
 typedef struct { uint64_t lo; int64_t hi; } CiInt128;
+static inline int64_t ci_asr64(int64_t v, uint64_t amount){
+    if(v >= 0) return (int64_t)((uint64_t)v >> amount);
+    return (int64_t)~(~(uint64_t)v >> amount);
+}
 static inline CiInt128 ci_int128_from_int64(int64_t v){
-    return (CiInt128){.lo = (uint64_t)v, .hi = v >> 63};
+    return (CiInt128){.lo = (uint64_t)v, .hi = v < 0 ? (int64_t)-1 : (int64_t)0};
 }
 static inline CiInt128 ci_int128_from_uint64(uint64_t v){
     return (CiInt128){.lo = v, .hi = 0};
@@ -205,10 +209,11 @@ static inline _Bool ci_int128_gt(CiInt128 a, CiInt128 b){ return ci_int128_lt(b,
 static inline _Bool ci_int128_le(CiInt128 a, CiInt128 b){ return !ci_int128_gt(a, b); }
 static inline _Bool ci_int128_ge(CiInt128 a, CiInt128 b){ return !ci_int128_lt(a, b); }
 static inline CiInt128 ci_int128_shr(CiInt128 a, uint64_t b){
-    if(b >= 128) return (CiInt128){(uint64_t)(a.hi >> 63), a.hi >> 63};
-    if(b >= 64) return (CiInt128){(uint64_t)(a.hi >> (b - 64)), a.hi >> 63};
+    int64_t sign = a.hi < 0 ? (int64_t)-1 : (int64_t)0;
+    if(b >= 128) return (CiInt128){(uint64_t)sign, sign};
+    if(b >= 64) return (CiInt128){(uint64_t)ci_asr64(a.hi, b - 64), sign};
     if(b == 0) return a;
-    return (CiInt128){(a.lo >> b) | ((uint64_t)a.hi << (64 - b)), a.hi >> b};
+    return (CiInt128){(a.lo >> b) | ((uint64_t)a.hi << (64 - b)), ci_asr64(a.hi, b)};
 }
 static CiInt128 ci_int128_div(CiInt128 a, CiInt128 b){
     if(!b.lo && !b.hi) return (CiInt128){0, 0};
