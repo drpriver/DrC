@@ -2926,6 +2926,13 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     if(!idx_int && !idx_ptr)
                         return cc_error(p, tok.loc, "array subscript requires integer or pointer type");
                 }
+                // a[b] is *(a+b), so if operand is integer and index
+                // is pointer-like, swap them (e.g. 1["hello"]).
+                if(!ccqt_is_pointer_like(operand->type) && ccqt_is_pointer_like(index->type)){
+                    CcExpr* tmp = operand;
+                    operand = index;
+                    index = tmp;
+                }
                 CcQualType elem_type;
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                 if(err) return err;
