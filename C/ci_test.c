@@ -899,7 +899,7 @@ TestFunction(test_interpreter){
             SV("struct SmallStr { char txt[8]; };\n"
                "char *p = (struct SmallStr){\"hello\"}.txt;\n"
                "return p[1];\n"),
-            .exit_code = 101, // 'e'
+            .exit_code = 'e',
         },
         {
             "compound literal as function arg", __LINE__,
@@ -914,7 +914,7 @@ TestFunction(test_interpreter){
             "string literal indexing", __LINE__,
             SV("const char *s = \"hello\";\n"
                "return s[1];\n"),
-            .exit_code = 101, // 'e'
+            .exit_code = 'e',
         },
         {
             "deref array variable", __LINE__,
@@ -923,50 +923,73 @@ TestFunction(test_interpreter){
             .exit_code = 10,
         },
         {
+            "reversed subscript string literal", __LINE__,
+            SV("return 1[\"hello\"];\n"),
+            .exit_code = 'e',
+        },
+        {
+            "reversed subscript array", __LINE__,
+            SV("int arr[] = {10, 20, 30};\n"
+               "return 2[arr];\n"),
+            .exit_code = 30,
+        },
+        {
+            "ternary string literal subscript", __LINE__,
+            SV("int x = 1;\n"
+               "return (x ? \"abc\" : \"def\")[1];\n"),
+            .exit_code = 'b',
+        },
+        {
+            "ternary string literal subscript false", __LINE__,
+            SV("int x = 0;\n"
+               "return (x ? \"abc\" : \"def\")[1];\n"),
+            .exit_code = 'e',
+        },
+        {
             "deref string literal", __LINE__,
             SV("return *\"hello\";\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         {
             "deref L string literal", __LINE__,
             SV("return *L\"hello\";\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         {
             "deref u string literal", __LINE__,
             SV("return *u\"hello\";\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         {
             "deref U string literal", __LINE__,
             SV("return *U\"hello\";\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         {
             "deref u8 string literal", __LINE__,
             SV("return *u8\"hello\";\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         // Wide string literals
         {
             "L string indexing", __LINE__,
             SV("return L\"hello\"[1];\n"),
-            .exit_code = 101, // 'e'
+            .exit_code = 'e',
         },
         {
             "u string indexing", __LINE__,
             SV("return u\"hello\"[0];\n"),
-            .exit_code = 104, // 'h'
+            .exit_code = 'h',
         },
         {
             "U string indexing", __LINE__,
             SV("return U\"hello\"[2];\n"),
-            .exit_code = 108, // 'l'
+            .exit_code = 'l',
         },
         {
             "u8 string indexing", __LINE__,
             SV("return u8\"hello\"[4];\n"),
-            .exit_code = 111, // 'o'
+            .exit_code = 'o',
         },
         {
             "L string null terminator", __LINE__,
@@ -1031,12 +1054,12 @@ TestFunction(test_interpreter){
         {
             "L string escape", __LINE__,
             SV("return L\"a\\nb\"[1];\n"),
-            .exit_code = 10, // '\n'
+            .exit_code = '\n',
         },
         {
             "L string UCN", __LINE__,
             SV("return L\"\\u0041\"[0];\n"),
-            .exit_code = 65, // 'A'
+            .exit_code = 'A',
         },
         {
             "u string UCN", __LINE__,
@@ -1052,7 +1075,7 @@ TestFunction(test_interpreter){
             "L string array init", __LINE__,
             SV("int arr[] = L\"AB\";\n"
                "return arr[0] + arr[1];\n"),
-            .exit_code = 131, // 'A' + 'B' = 65 + 66
+            .exit_code = 'A' + 'B',
         },
         {
             "u string array init", __LINE__,
@@ -1076,25 +1099,25 @@ TestFunction(test_interpreter){
             "char array truncation", __LINE__,
             SV("char t[3] = \"abc\";\n"
                "return t[2];\n"),
-            .exit_code = 99, // 'c', null terminator dropped
+            .exit_code = 'c', // null terminator dropped
         },
         {
             "L string array truncation", __LINE__,
             SV("int t[3] = L\"abc\";\n"
                "return t[2];\n"),
-            .exit_code = 99, // 'c'
+            .exit_code = 'c',
         },
         {
             "u string array truncation", __LINE__,
             SV("unsigned short t[3] = u\"abc\";\n"
                "return t[2];\n"),
-            .exit_code = 99, // 'c'
+            .exit_code = 'c',
         },
         {
             "U string array truncation", __LINE__,
             SV("unsigned t[3] = U\"abc\";\n"
                "return t[2];\n"),
-            .exit_code = 99, // 'c'
+            .exit_code = 'c',
         },
         // Multidimensional array
         {
@@ -1276,7 +1299,7 @@ TestFunction(test_interpreter){
             "string: adjacent concat", __LINE__,
             SV("const char *s = \"hel\" \"lo\";\n"
                "return s[3];\n"),
-            .exit_code = 108, // 'l'
+            .exit_code = 'l',
         },
         // Integer constants: hex and octal
         {
