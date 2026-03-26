@@ -1870,6 +1870,14 @@ TestFunction(test_include){
             SV("test/main.c"),   SV("#include_oneof \"header.h\" <nonexistent.h>\nRESULT"),
             SV("test/header.h"), SV("#define RESULT first\n"),
             {0}, SV("\n\nfirst")},
+        {"has_include quoted same dir", __LINE__, 0,
+            SV("test/main.c"),   SV("#if __has_include(\"header.h\")\n"
+                                     "found\n"
+                                     "#else\n"
+                                     "not_found\n"
+                                     "#endif"),
+            SV("test/header.h"), SV(""),
+            {0}, SV("\nfound\n\n\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){

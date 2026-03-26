@@ -205,27 +205,6 @@ cpp_define_builtin_func_macro(CppPreprocessor* cpp, StringView name, CppFuncMacr
 
 static
 _Bool
-cpp_has_include(CppPreprocessor* cpp, _Bool quote, StringView header_name){
-    MStringBuilder* sb = fc_path_builder(cpp->fc);
-    for(size_t i = quote?0:1; i < arrlen(cpp->include_paths); i++){
-        Marray(StringView)* dirs = &cpp->include_paths[i];
-        MARRAY_FOR_EACH_VALUE(StringView, d, *dirs){
-            msb_reset(sb);
-            if(!d.length) continue;
-            msb_write_str(sb, d.text, d.length);
-            if(msb_peek(sb) != '/')
-                msb_write_char(sb, '/');
-            msb_write_str(sb, header_name.text, header_name.length);
-            if(fc_is_file(cpp->fc)){
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-static
-_Bool
 cpp_is_pragma_once(CppPreprocessor* cpp, uint32_t file_id){
     // Binary search in sorted list
     size_t lo = 0, hi = cpp->pragma_once_files.count;

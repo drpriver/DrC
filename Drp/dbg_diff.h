@@ -93,7 +93,11 @@ dbg_diff_print_line(size_t lineno, DbgDiffPrinter* printer, int mode, StringView
     if(!prefix) prefix = "";
     const char *end = printer->reset;
     if(!end) end = "";
+    #ifdef __DRC__
+    TestPrintf("%s%zu │ ", prefix, lineno);
+    #else
     printer->printer(printer->ctx, "%s%zu │ ", prefix, lineno);
+    #endif
     const char *on = printer->escape_on;
     if(!on) on = "";
     const char *off = printer->escape_reset;
@@ -114,15 +118,31 @@ dbg_diff_print_line(size_t lineno, DbgDiffPrinter* printer, int mode, StringView
             case 0x1B: esc = "\\e"; break;
             default:
                 if(c < 0x20 || c >= 0x7F)
+                    #ifdef __DRC__
+                    TestPrintf("%s\\x%02X%s", on, c, off);
+                    #else
                     printer->printer(printer->ctx, "%s\\x%02X%s", on, c, off);
+                    #endif
                 else
+                    #ifdef __DRC__
+                    TestPrintf("%c", c);
+                    #else
                     printer->printer(printer->ctx, "%c", c);
+                    #endif
                 break;
         }
         if(esc)
+            #ifdef __DRC__
+            TestPrintf("%s%s%s", on, esc, off);
+            #else
             printer->printer(printer->ctx, "%s%s%s", on, esc, off);
+            #endif
     }
+    #ifdef __DRC__
+    TestPrintf("%s\n", end);
+    #else
     printer->printer(printer->ctx, "%s\n", end);
+    #endif
 }
 
 #ifdef __clang__
