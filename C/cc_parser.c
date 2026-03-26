@@ -4922,6 +4922,8 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                     uint64_t align = (uint64_t)align_i;
                     if(align == 0 || (align & (align - 1)) != 0)
                         return cc_error(p, tok.loc, "alignment must be a positive power of 2");
+                    if(align > UINT16_MAX)
+                        return cc_error(p, tok.loc, "alignment too large");
                     attrs->aligned = (uint16_t)align;
                     attrs->has_aligned = 1;
                     err = cc_expect_punct(p, CC_rparen);

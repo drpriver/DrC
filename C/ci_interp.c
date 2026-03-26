@@ -2297,7 +2297,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         uint64_t sz = 0;
         int err = ci_interp_expr(ci, frame, expr->lhs, &sz, sizeof sz);
         if(err) return err;
-        sz = ci_read_uint(&sz, sizeof(size_t));
+        sz = ci_read_uint(&sz, ci_target(ci)->sizeof_[CCBT_nullptr_t]);
         CiAllocaBlock* block = Allocator_alloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
         if(!block) return CI_OOM_ERROR;
         memset(block + 1, 0, sz);
@@ -3151,7 +3151,7 @@ ci_pragma_lib(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, con
         err = cpp_error(cpp, loc, "#pragma lib without any arguments");
         goto finally;
     }
-    if(toks->type != CPP_STRING){
+    if(toks->type != CPP_STRING || toks->txt.length < 2){
         err = cpp_error(cpp, loc, "#pragma lib requires a string literal library name");
         goto finally;
     }
@@ -3184,7 +3184,7 @@ ci_pragma_lib_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
         err = cpp_error(cpp, loc, "#pragma lib_path without any arguments");
         goto finally;
     }
-    if(toks->type != CPP_STRING){
+    if(toks->type != CPP_STRING || toks->txt.length < 2){
         err = cpp_error(cpp, loc, "#pragma lib_path requires a string literal library name");
         goto finally;
     }
@@ -3217,7 +3217,7 @@ ci_pragma_framework(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         err = cpp_error(cpp, loc, "#pragma framework without any arguments");
         goto finally;
     }
-    if(toks->type != CPP_STRING){
+    if(toks->type != CPP_STRING || toks->txt.length < 2){
         err = cpp_error(cpp, loc, "#pragma framework requires a string literal framework name");
         goto finally;
     }
@@ -3275,7 +3275,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             } while(ntoks && toks->type == CPP_WHITESPACE);
         }
     }
-    if(!ntoks || toks->type != CPP_STRING){
+    if(!ntoks || toks->type != CPP_STRING || toks->txt.length < 2){
         err = cpp_error(cpp, loc, "#pragma pkg_config requires a string literal package name");
         goto finally;
     }
