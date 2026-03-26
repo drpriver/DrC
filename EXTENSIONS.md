@@ -12,7 +12,7 @@
   * [`#defifndef`](#defifndef)
   * [`#defblock`](#defblock)
   * [`__map(macro, ...)`](#mapmacro)
-  * [`__eval(pp-expression)`](#evalpp-expression)
+  * [`__calc(pp-expression)`](#calcpp-expression)
   * [`__mixin(strings...)`](#mixinstrings)
   * [`__env("key" , fallback)`](#envkey-fallback)
   * [`__if(condition, then, else)`](#ifcondition-then-else)
@@ -199,9 +199,9 @@ const char* names[] = { __map(S, foo, bar, baz) };
 // -> const char* names[] = { "foo", "bar", "baz", };
 ```
 
-### `__eval(pp-expression)`
+### `__calc(pp-expression)`
 
-`__eval()` (also spelled `__EVAL__()`) evaluates the
+`__calc()` (also spelled `__CALC__()`) evaluates the
 pp-expression using the same rules as in `#if` and returns a
 pp-number that is the result of the expansion. This is useful for
 token-pasting.
@@ -210,7 +210,7 @@ token-pasting.
 // Expressions are evaluated and replaced with a single pp-number token,
 // so it can be used with the paste operator:
 #define CONCAT(a, b) a ## b
-CONCAT(x, __eval(1 + 1)) // -> x2
+CONCAT(x, __calc(1 + 1)) // -> x2
 ```
 
 ### `__mixin(strings...)`
@@ -246,7 +246,7 @@ can contain invalid tokens.
 
 ```C
 #define X 1
-__if(X, "yes", __eval(1/0)) // -> "yes" (division by zero never evaluated)
+__if(X, "yes", __calc(1/0)) // -> "yes" (division by zero never evaluated)
 __if(0, bad, good)           // -> good
 ```
 
@@ -289,7 +289,7 @@ accumulation patterns.
 
 ```C
 __set(n, 0)
-#define FIELD(type, name) type name; __set(n, __eval(__get(n) + 1))
+#define FIELD(type, name) type name; __set(n, __calc(__get(n) + 1))
 FIELD(int, x)
 FIELD(float, y)
 FIELD(char*, name)

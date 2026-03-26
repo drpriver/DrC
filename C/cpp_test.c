@@ -835,28 +835,28 @@ TestFunction(test_builtin_macros){
         {"__TIME__", SV("__TIME__"), SV("\"01:02:03\""), __LINE__, 0},
 
         // extensions
-        {"__EVAL__", SV("__EVAL__(1+1)"), SV("2"), __LINE__, 0},
-        {"__EVAL__", SV("__EVAL__(defined __EVAL__)"), SV("1"), __LINE__, 0},
-        {"__eval", SV("__eval(3*4/3)"), SV("4"), __LINE__, 0},
-        {"__eval int64min", SV("__eval(-9223372036854775807 - 1)"), SV("-9223372036854775808llu"), __LINE__, 0},
+        {"__CALC__", SV("__CALC__(1+1)"), SV("2"), __LINE__, 0},
+        {"__CALC__", SV("__CALC__(defined __CALC__)"), SV("1"), __LINE__, 0},
+        {"__calc", SV("__calc(3*4/3)"), SV("4"), __LINE__, 0},
+        {"__calc int64min", SV("__calc(-9223372036854775807 - 1)"), SV("-9223372036854775808llu"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(\"3\")"), SV("3"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
         {"__mixin", SV("#define S(x) #x\n__mixin(S(1)\"+1\")"), SV("\n1+1"), __LINE__, 0},
         {"__env", SV("__env(\"wolo\")"), SV("\"woo\""), __LINE__, 0},
         {"__ENV__", SV("__ENV__(\"foobar\")"), SV(""), __LINE__, 0},
         {"__if", SV("__if(1, 2, 3)"), SV("2"), __LINE__, 0},
-        {"__if", SV("__if(1, , __eval(1/0))"), SV(""), __LINE__, 0},
-        {"__IF__", SV("#define X 1\n__IF__(X, 3, __eval(1/0))"), SV("\n3"), __LINE__, 0},
+        {"__if", SV("__if(1, , __calc(1/0))"), SV(""), __LINE__, 0},
+        {"__IF__", SV("#define X 1\n__IF__(X, 3, __calc(1/0))"), SV("\n3"), __LINE__, 0},
         {"__ident", SV("__ident(\"this is an ident\")"), SV("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
         {"__FORMAT__", SV("__format(\"%d = %s\", 10, \"hello world\")"), SV("\"10 = hello world\""), __LINE__, 0},
         {"__set/__get basic", SV("__set(x, 42)\n__get(x)"), SV("\n42"), __LINE__, 0},
         {"__get unset", SV("__get(x)"), SV(""), __LINE__, 0},
         {"__set overwrite", SV("__set(x, 1)\n__set(x, 2)\n__get(x)"), SV("\n\n2"), __LINE__, 0},
         {"__set multiple tokens", SV("__set(stuff, a b c)\n__get(stuff)"), SV("\na b c"), __LINE__, 0},
-        {"__set with eval", SV("__set(n, 0)\n__set(n, __eval(__get(n) + 1))\n__get(n)"), SV("\n\n1"), __LINE__, 0},
+        {"__set with calc", SV("__set(n, 0)\n__set(n, __calc(__get(n) + 1))\n__get(n)"), SV("\n\n1"), __LINE__, 0},
         {"__set empty", SV("__set(e)\n__get(e)"), SV("\n"), __LINE__, 0},
         {"__set count fields", SV(
-            "#define FIELD(type, name) type name; __set(n, __eval(__get(n) + 1))\n"
+            "#define FIELD(type, name) type name; __set(n, __calc(__get(n) + 1))\n"
             "__set(n, 0)\n"
             "FIELD(int, x)\n"
             "FIELD(float, y)\n"
@@ -905,7 +905,7 @@ TestFunction(test_builtin_macros){
         {"__set enum strings", SV(
             "__set(n, 0)\n"
             "__set(strs, )\n"
-            "#define EV(name) name = __get(n), __set(strs, __get(strs) [name] = #name,) __set(n, __eval(__get(n) + 1))\n"
+            "#define EV(name) name = __get(n), __set(strs, __get(strs) [name] = #name,) __set(n, __calc(__get(n) + 1))\n"
             "enum { EV(RED) EV(GREEN) EV(BLUE) };\n"
             "const char* names[] = { __get(strs) };"), SV(
             "\n"
@@ -994,7 +994,7 @@ TestFunction(test_builtin_macros){
             "1 + 2"), __LINE__, 0},
         {"__append enum strings", SV(
             "__set(n2, 0)\n"
-            "#define EV2(name) name = __get(n2), __append(strs2, [name] = #name,) __set(n2, __eval(__get(n2) + 1))\n"
+            "#define EV2(name) name = __get(n2), __append(strs2, [name] = #name,) __set(n2, __calc(__get(n2) + 1))\n"
             "enum { EV2(RED) EV2(GREEN) EV2(BLUE) };\n"
             "const char* names[] = { __get(strs2) };"), SV(
             "\n"

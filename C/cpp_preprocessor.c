@@ -4165,7 +4165,7 @@ static CppObjMacroFn cpp_builtin_file,
                      cpp_builtin_base_file,
                      cpp_builtin_timestamp
                      ;
-static CppFuncMacroFn cpp_builtin_eval,
+static CppFuncMacroFn cpp_builtin_calc,
                       cpp_builtin_mixin,
                       cpp_builtin_env,
                       cpp_builtin_if,
@@ -5337,8 +5337,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     static const struct {
         StringView name; CppFuncMacroFn* fn; size_t nparams; _Bool variadic, no_expand;
     } func_builtins[] = {
-        {SV("__EVAL__"), cpp_builtin_eval, 1, 0, 1},
-        {SV("__eval"), cpp_builtin_eval, 1, 0, 1},
+        {SV("__CALC__"), cpp_builtin_calc, 1, 0, 1},
+        {SV("__calc"), cpp_builtin_calc, 1, 0, 1},
         {SV("__MIXIN__"), cpp_builtin_mixin, 1, 0, 0},
         {SV("__mixin"), cpp_builtin_mixin, 1, 0, 0},
         {SV("__env"), cpp_builtin_env, 1, 1, 0},
@@ -5605,7 +5605,7 @@ cpp_builtin_timestamp(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc 
 
 static
 int
-cpp_builtin_eval(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+cpp_builtin_calc(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
     (void)ctx;
     (void)arg_seps;
     int err;
