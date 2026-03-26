@@ -454,6 +454,24 @@ TestFunction(test_cc_lex_strings){
         {"u_empty",  SV("u\"\""),        cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0}, 1), __LINE__},
         {"U_empty",  SV("U\"\""),        cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 0}, 1), __LINE__},
         {"u8_empty", SV("u8\"\""),       cc_str_tok(CC_U8STRING, SV("\0")), __LINE__},
+        // Escape sequences in prefixed strings
+        {"L_escape_n",  SV("L\"a\\nb\""),   cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 'a','\n','b', 0}, 4), __LINE__},
+        {"u_escape_t",  SV("u\"a\\tb\""),   cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 'a','\t','b', 0}, 4), __LINE__},
+        {"U_escape_bs", SV("U\"a\\\\b\""),  cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 'a','\\','b', 0}, 4), __LINE__},
+        {"u8_escape_n", SV("u8\"a\\nb\""),  cc_str_tok(CC_U8STRING, SV("a\nb\0")), __LINE__},
+        {"L_hex_esc",   SV("L\"\\x41\""),   cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 0x41, 0}, 2), __LINE__},
+        {"u_hex_esc",   SV("u\"\\x41\""),   cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0x41, 0}, 2), __LINE__},
+        {"U_octal_esc", SV("U\"\\101\""),   cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 0101, 0}, 2), __LINE__},
+        {"u8_hex_esc",  SV("u8\"\\x41\""),  cc_str_tok(CC_U8STRING, SV("\x41\0")), __LINE__},
+        // UCN in prefixed strings
+        {"L_ucn_u",     SV("L\"\\u0041\""),      cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 0x0041, 0}, 2), __LINE__},
+        {"u_ucn_u",     SV("u\"\\u00E9\""),      cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0x00E9, 0}, 2), __LINE__},
+        {"U_ucn_U",     SV("U\"\\U0001F600\""),  cc_str32_tok(CC_USTRING,  (const unsigned int[]){ 0x1F600, 0}, 2), __LINE__},
+        {"u8_ucn_u",    SV("u8\"\\u00E9\""),     cc_str_tok(CC_U8STRING, SV("\xc3\xa9\0")), __LINE__},
+        {"u8_ucn_cjk",  SV("u8\"\\u4e16\""),     cc_str_tok(CC_U8STRING, SV("\xe4\xb8\x96\0")), __LINE__},
+        {"L_ucn_U_4b",  SV("L\"\\U0001F600\""),  cc_str32_tok(CC_LSTRING,  (const unsigned int[]){ 0x1F600, 0}, 2), __LINE__},
+        // u string with UCN above BMP (surrogate pair)
+        {"u_ucn_U_surr", SV("u\"\\U0001F600\""), cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0xD83D, 0xDE00, 0}, 3), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];
