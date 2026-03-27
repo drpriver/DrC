@@ -10112,11 +10112,14 @@ cc_define_builtin_types(CcParser* p){
             break;
         }
         case CC_TARGET_AARCH64_MACOS:
-        case CC_TARGET_X86_64_WINDOWS:
         case CC_TARGET_TEST: {
             // typedef void *__builtin_va_list;
-            err = cc_pointer_of(p, ccqt_basic(CCBT_void), &va_list_type);
-            if(err) return err;
+            va_list_type = p->void_star;
+            break;
+        }
+        case CC_TARGET_X86_64_WINDOWS: {
+            // typedef char *__builtin_va_list
+            va_list_type = p->char_star;
             break;
         }
         case CC_TARGET_COUNT:
