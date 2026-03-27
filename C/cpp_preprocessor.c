@@ -4427,6 +4427,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     } while(0)
 
     DEFINT("__DRC__", 1);
+    DEFINT("_FORTIFY_SOURCE", 0);
     DEFINT("__FLT_EVAL_METHOD__", t.flt_eval_method);
 
     // __GNUC__ compatibility
