@@ -571,6 +571,7 @@ cc_target_x86_64_windows(void){
             "__fastcall=\0"
             "__vectorcall=\0"
             "__thiscall=\0"
+            "__unaligned=\0"
         ),
     };
 }
