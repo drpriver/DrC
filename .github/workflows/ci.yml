@@ -1,20 +1,30 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  linux:
+  linux-x64:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - run: sudo apt-get install -y libffi-dev
-      - run: cc build.c -o build && ./build -b Bin
+      - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
+      - run: ./build test
+
+  linux-arm:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y libffi-dev
+      - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
       - run: ./build test
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - run: cc build.c -o build && ./build -b Bin
       - run: ./build test
