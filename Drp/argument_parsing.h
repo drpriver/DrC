@@ -381,6 +381,7 @@ struct ArgParseDestination {
 // element of the array and set the max_num appropriately.
 //
 #define ARGDEST(_x) ((ArgParseDestination){.type = ARGTYPE((_x)[0]), .pointer=_x})
+#define ARGDESTI(_x) {.type = ARGTYPE((_x)[0]), .pointer=_x}
 
 // For bit flags.
 static inline

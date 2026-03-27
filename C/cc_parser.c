@@ -5,6 +5,7 @@
 //
 #include <stdarg.h>
 #include <float.h>
+#include <math.h>
 #include "../Drp/msb_atomize.h"
 #include "../Drp/bit_util.h"
 #include "../Drp/parray.h"
@@ -2734,17 +2735,17 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(builtin == CC__builtin_huge_valf){
                         node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_float), 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->float_ = (float)(1.0/0.0);
+                        node->float_ = INFINITY;
                     }
                     else if(builtin == CC__builtin_huge_val){
                         node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_double), 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->double_ = 1.0/0.0;
+                        node->double_ = (double)INFINITY;
                     }
                     else {
                         node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_long_double), 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->double_ = 1.0/0.0;
+                        node->double_ = (double)INFINITY;
                     }
                     *out = node;
                     return 0;
@@ -2795,12 +2796,12 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(builtin == CC__builtin_nanf){
                         node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_float), 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->float_ = (float)(0.0/0.0);
+                        node->float_ = NAN;
                     }
                     else {
                         node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT_double), 0);
                         if(!node) return CC_OOM_ERROR;
-                        node->double_ = 0.0/0.0;
+                        node->double_ = (double)NAN;
                     }
                     *out = node;
                     return 0;
@@ -9991,12 +9992,12 @@ cc_define_builtin_types(CcParser* p){
 
     {
         struct f {StringView name; CcQualType type; size_t offset;} fieldinfos[] = {
-            {SV("type"), {.basic.kind=CCBT__Type}, offsetof(CiRtField, type)},
-            {SV("name"), p->const_char_star, offsetof(CiRtField, name)},
-            {SV("name_length"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, name_length)},
-            {SV("offset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, offset)},
-            {SV("bitwidth"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitwidth)},
-            {SV("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
+            {SVI("type"), {.basic.kind=CCBT__Type}, offsetof(CiRtField, type)},
+            {SVI("name"), p->const_char_star, offsetof(CiRtField, name)},
+            {SVI("name_length"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, name_length)},
+            {SVI("offset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, offset)},
+            {SVI("bitwidth"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitwidth)},
+            {SVI("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]) * sizeof *fields);
         if(!fields) return CC_OOM_ERROR;
@@ -10030,9 +10031,9 @@ cc_define_builtin_types(CcParser* p){
 
     {
         struct f {StringView name; CcQualType type; size_t offset;} enuminfos[] = {
-            {SV("name"), p->const_char_star, offsetof(CiRtEnumerator, name)},
-            {SV("name_length"),{.basic.kind=CCBT_unsigned}, offsetof(CiRtEnumerator, name_length)},
-            {SV("value"), {.basic.kind=CCBT_long_long}, offsetof(CiRtEnumerator, value)},
+            {SVI("name"), p->const_char_star, offsetof(CiRtEnumerator, name)},
+            {SVI("name_length"),{.basic.kind=CCBT_unsigned}, offsetof(CiRtEnumerator, name_length)},
+            {SVI("value"), {.basic.kind=CCBT_long_long}, offsetof(CiRtEnumerator, value)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof enuminfos / sizeof enuminfos[0]) * sizeof *fields);
         if(!fields) return CC_OOM_ERROR;
@@ -10076,54 +10077,54 @@ cc_define_builtin_types(CcParser* p){
     // Register builtin functions
     {
         static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
-            {SV("__builtin_constant_p"), CC__builtin_constant_p},
-            {SV("__builtin_offsetof"), CC__builtin_offsetof},
-            {SV("__func__"), CC__func__},
-            {SV("__FUNCTION__"), CC__func__},
-            {SV("__atomic_fetch_add"), CC__atomic_fetch_add},
-            {SV("__atomic_fetch_sub"), CC__atomic_fetch_sub},
-            {SV("__atomic_load_n"), CC__atomic_load_n},
-            {SV("__atomic_load"), CC__atomic_load},
-            {SV("__atomic_store_n"), CC__atomic_store_n},
-            {SV("__atomic_exchange_n"), CC__atomic_exchange_n},
-            {SV("__atomic_compare_exchange_n"), CC__atomic_compare_exchange_n},
-            {SV("__atomic_compare_exchange"), CC__atomic_compare_exchange},
-            {SV("__atomic_store"), CC__atomic_store},
-            {SV("__atomic_exchange"), CC__atomic_exchange},
-            {SV("__atomic_thread_fence"), CC__atomic_thread_fence},
-            {SV("__atomic_signal_fence"), CC__atomic_signal_fence},
-            {SV("__builtin_va_start"), CC__builtin_va_start},
-            {SV("__builtin_va_end"),   CC__builtin_va_end},
-            {SV("__builtin_va_arg"),   CC__builtin_va_arg},
-            {SV("__builtin_va_copy"),  CC__builtin_va_copy},
-            {SV("__builtin_expect"),  CC__builtin_expect},
-            {SV("__builtin_unreachable"), CC__builtin_unreachable},
-            {SV("__builtin_trap"), CC__builtin_trap},
-            {SV("__builtin_debugtrap"), CC__builtin_debugtrap},
-            {SV("__builtin_abort"), CC__builtin_abort},
-            {SV("__builtin_mul_overflow"), CC__builtin_mul_overflow},
-            {SV("__builtin_add_overflow"), CC__builtin_add_overflow},
-            {SV("__builtin_sub_overflow"), CC__builtin_sub_overflow},
-            {SV("__builtin_popcount"), CC__builtin_popcount},
-            {SV("__builtin_popcountl"), CC__builtin_popcountl},
-            {SV("__builtin_popcountll"), CC__builtin_popcountll},
-            {SV("__builtin_ctz"), CC__builtin_ctz},
-            {SV("__builtin_ctzl"), CC__builtin_ctzl},
-            {SV("__builtin_ctzll"), CC__builtin_ctzll},
-            {SV("__builtin_clz"), CC__builtin_clz},
-            {SV("__builtin_clzl"), CC__builtin_clzl},
-            {SV("__builtin_clzll"), CC__builtin_clzll},
-            {SV("__builtin_huge_val"), CC__builtin_huge_val},
-            {SV("__builtin_huge_valf"), CC__builtin_huge_valf},
-            {SV("__builtin_huge_vall"), CC__builtin_huge_vall},
-            {SV("__builtin_nan"), CC__builtin_nan},
-            {SV("__builtin_nanf"), CC__builtin_nanf},
-            {SV("__nan"), CC__nan},
-            {SV("__builtin_alloca"), CC__builtin_alloca},
-            {SV("_alloca"), CC__builtin_alloca},
-            {SV("alloca"), CC__builtin_alloca},
-            {SV("__builtin_intern"), CC__builtin_intern},
-            {SV("__bt"), CC__bt},
+            {SVI("__builtin_constant_p"), CC__builtin_constant_p},
+            {SVI("__builtin_offsetof"), CC__builtin_offsetof},
+            {SVI("__func__"), CC__func__},
+            {SVI("__FUNCTION__"), CC__func__},
+            {SVI("__atomic_fetch_add"), CC__atomic_fetch_add},
+            {SVI("__atomic_fetch_sub"), CC__atomic_fetch_sub},
+            {SVI("__atomic_load_n"), CC__atomic_load_n},
+            {SVI("__atomic_load"), CC__atomic_load},
+            {SVI("__atomic_store_n"), CC__atomic_store_n},
+            {SVI("__atomic_exchange_n"), CC__atomic_exchange_n},
+            {SVI("__atomic_compare_exchange_n"), CC__atomic_compare_exchange_n},
+            {SVI("__atomic_compare_exchange"), CC__atomic_compare_exchange},
+            {SVI("__atomic_store"), CC__atomic_store},
+            {SVI("__atomic_exchange"), CC__atomic_exchange},
+            {SVI("__atomic_thread_fence"), CC__atomic_thread_fence},
+            {SVI("__atomic_signal_fence"), CC__atomic_signal_fence},
+            {SVI("__builtin_va_start"), CC__builtin_va_start},
+            {SVI("__builtin_va_end"),   CC__builtin_va_end},
+            {SVI("__builtin_va_arg"),   CC__builtin_va_arg},
+            {SVI("__builtin_va_copy"),  CC__builtin_va_copy},
+            {SVI("__builtin_expect"),  CC__builtin_expect},
+            {SVI("__builtin_unreachable"), CC__builtin_unreachable},
+            {SVI("__builtin_trap"), CC__builtin_trap},
+            {SVI("__builtin_debugtrap"), CC__builtin_debugtrap},
+            {SVI("__builtin_abort"), CC__builtin_abort},
+            {SVI("__builtin_mul_overflow"), CC__builtin_mul_overflow},
+            {SVI("__builtin_add_overflow"), CC__builtin_add_overflow},
+            {SVI("__builtin_sub_overflow"), CC__builtin_sub_overflow},
+            {SVI("__builtin_popcount"), CC__builtin_popcount},
+            {SVI("__builtin_popcountl"), CC__builtin_popcountl},
+            {SVI("__builtin_popcountll"), CC__builtin_popcountll},
+            {SVI("__builtin_ctz"), CC__builtin_ctz},
+            {SVI("__builtin_ctzl"), CC__builtin_ctzl},
+            {SVI("__builtin_ctzll"), CC__builtin_ctzll},
+            {SVI("__builtin_clz"), CC__builtin_clz},
+            {SVI("__builtin_clzl"), CC__builtin_clzl},
+            {SVI("__builtin_clzll"), CC__builtin_clzll},
+            {SVI("__builtin_huge_val"), CC__builtin_huge_val},
+            {SVI("__builtin_huge_valf"), CC__builtin_huge_valf},
+            {SVI("__builtin_huge_vall"), CC__builtin_huge_vall},
+            {SVI("__builtin_nan"), CC__builtin_nan},
+            {SVI("__builtin_nanf"), CC__builtin_nanf},
+            {SVI("__nan"), CC__nan},
+            {SVI("__builtin_alloca"), CC__builtin_alloca},
+            {SVI("_alloca"), CC__builtin_alloca},
+            {SVI("alloca"), CC__builtin_alloca},
+            {SVI("__builtin_intern"), CC__builtin_intern},
+            {SVI("__bt"), CC__bt},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
@@ -10138,42 +10139,42 @@ cc_define_builtin_types(CcParser* p){
     // Register type methods/fields
     {
         static const struct { StringView name; CcTypeIntrospectionOp op; } typeintro[] = {
-            {SV("name"), CC_TYPE_NAME},
-            {SV("tag"), CC_TYPE_TAG},
-            {SV("is_integer"), CC_TYPE_IS_INTEGER},
-            {SV("is_float"), CC_TYPE_IS_FLOAT},
-            {SV("is_arithmetic"), CC_TYPE_IS_ARITHMETIC},
-            {SV("is_pointer"), CC_TYPE_IS_POINTER},
-            {SV("is_struct"), CC_TYPE_IS_STRUCT},
-            {SV("is_union"), CC_TYPE_IS_UNION},
-            {SV("is_array"), CC_TYPE_IS_ARRAY},
-            {SV("is_function"), CC_TYPE_IS_FUNCTION},
-            {SV("is_enum"), CC_TYPE_IS_ENUM},
-            {SV("is_const"), CC_TYPE_IS_CONST},
-            {SV("is_volatile"), CC_TYPE_IS_VOLATILE},
-            {SV("is_atomic"), CC_TYPE_IS_ATOMIC},
-            {SV("is_unsigned"), CC_TYPE_IS_UNSIGNED},
-            {SV("is_signed"), CC_TYPE_IS_SIGNED},
-            {SV("is_callable"), CC_TYPE_IS_CALLABLE},
-            {SV("is_variadic"), CC_TYPE_IS_VARIADIC},
-            {SV("is_incomplete"), CC_TYPE_IS_INCOMPLETE},
-            {SV("sizeof_"), CC_TYPE_SIZEOF},
-            {SV("alignof_"), CC_TYPE_ALIGNOF},
-            {SV("pointee"), CC_TYPE_POINTEE},
-            {SV("unqual"), CC_TYPE_UNQUAL},
-            {SV("count"), CC_TYPE_COUNT},
-            {SV("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
-            {SV("is_castable_to"), CC_TYPE_CASTABLE_TO},
-            {SV("field"), CC_TYPE_FIELD}, // field name or index;
-            {SV("fields"), CC_TYPE_FIELDS},
-            {SV("push_method"), CC_TYPE_PUSH_METHOD},
-            {SV("enumerators"), CC_TYPE_ENUMERATORS},
-            {SV("enumerator"), CC_TYPE_ENUMERATOR},
-            {SV("return_type"), CC_TYPE_RETURN_TYPE},
-            {SV("param_count"), CC_TYPE_PARAM_COUNT},
-            {SV("param_type"), CC_TYPE_PARAM_TYPE},
-            {SV("element_type"), CC_TYPE_ELEMENT_TYPE},
-            {SV("underlying_type"), CC_TYPE_UNDERLYING_TYPE},
+            {SVI("name"), CC_TYPE_NAME},
+            {SVI("tag"), CC_TYPE_TAG},
+            {SVI("is_integer"), CC_TYPE_IS_INTEGER},
+            {SVI("is_float"), CC_TYPE_IS_FLOAT},
+            {SVI("is_arithmetic"), CC_TYPE_IS_ARITHMETIC},
+            {SVI("is_pointer"), CC_TYPE_IS_POINTER},
+            {SVI("is_struct"), CC_TYPE_IS_STRUCT},
+            {SVI("is_union"), CC_TYPE_IS_UNION},
+            {SVI("is_array"), CC_TYPE_IS_ARRAY},
+            {SVI("is_function"), CC_TYPE_IS_FUNCTION},
+            {SVI("is_enum"), CC_TYPE_IS_ENUM},
+            {SVI("is_const"), CC_TYPE_IS_CONST},
+            {SVI("is_volatile"), CC_TYPE_IS_VOLATILE},
+            {SVI("is_atomic"), CC_TYPE_IS_ATOMIC},
+            {SVI("is_unsigned"), CC_TYPE_IS_UNSIGNED},
+            {SVI("is_signed"), CC_TYPE_IS_SIGNED},
+            {SVI("is_callable"), CC_TYPE_IS_CALLABLE},
+            {SVI("is_variadic"), CC_TYPE_IS_VARIADIC},
+            {SVI("is_incomplete"), CC_TYPE_IS_INCOMPLETE},
+            {SVI("sizeof_"), CC_TYPE_SIZEOF},
+            {SVI("alignof_"), CC_TYPE_ALIGNOF},
+            {SVI("pointee"), CC_TYPE_POINTEE},
+            {SVI("unqual"), CC_TYPE_UNQUAL},
+            {SVI("count"), CC_TYPE_COUNT},
+            {SVI("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
+            {SVI("is_castable_to"), CC_TYPE_CASTABLE_TO},
+            {SVI("field"), CC_TYPE_FIELD}, // field name or index;
+            {SVI("fields"), CC_TYPE_FIELDS},
+            {SVI("push_method"), CC_TYPE_PUSH_METHOD},
+            {SVI("enumerators"), CC_TYPE_ENUMERATORS},
+            {SVI("enumerator"), CC_TYPE_ENUMERATOR},
+            {SVI("return_type"), CC_TYPE_RETURN_TYPE},
+            {SVI("param_count"), CC_TYPE_PARAM_COUNT},
+            {SVI("param_type"), CC_TYPE_PARAM_TYPE},
+            {SVI("element_type"), CC_TYPE_ELEMENT_TYPE},
+            {SVI("underlying_type"), CC_TYPE_UNDERLYING_TYPE},
         };
         for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
             Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);
@@ -10185,18 +10186,18 @@ cc_define_builtin_types(CcParser* p){
     // Register __builtin_ libc functions
     {
         struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic; _Bool printf_like;} builtins[] = {
-            {SV("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
-            {SV("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("malloc"), p->void_star, 1, {{.basic.kind=t.size_type}}, .variadic=0},
-            {SV("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
-            {SV("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
-            {SV("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SV("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
-            {SV("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
+            {SVI("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("malloc"), p->void_star, 1, {{.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
+            {SVI("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];

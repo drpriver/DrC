@@ -9,6 +9,9 @@
 #ifndef MALLOCATOR
 #define MALLOCATOR ((Allocator){.type=ALLOCATOR_MALLOC})
 #endif
+#ifndef MALLOCATORI
+#define MALLOCATORI {.type=ALLOCATOR_MALLOC}
+#endif
 
 #ifdef MALLOCATOR_UNSAFE_TRACK_STATS
 static struct {

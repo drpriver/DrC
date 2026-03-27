@@ -3,13 +3,6 @@
 #define dre_assert(...) (void)(__VA_ARGS__)
 #include "dre.h"
 
-#define AS_STRING_ENTRY(s) #s,
-DRE_API
-const char * _Nonnull const dre_error_name_table[] = {
-    "NO_ERROR",
-    RE_ERRORS(AS_STRING_ENTRY)
-};
-
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif

@@ -4716,16 +4716,16 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         // No-suffix: __INT8_C(c) -> c
         // With-suffix: __INT64_C(c) -> c ## L
         struct { StringView name; const char*_Nullable suffix; } c_macros[] = {
-            {SV("__INT8_C"),    NULL},
-            {SV("__INT16_C"),   NULL},
-            {SV("__INT32_C"),   NULL},
-            {SV("__INT64_C"),   i64_suf},
-            {SV("__UINT8_C"),   NULL},
-            {SV("__UINT16_C"),  "U"},
-            {SV("__UINT32_C"),  "U"},
-            {SV("__UINT64_C"),  u64_suf},
-            {SV("__INTMAX_C"),  imax_suf},
-            {SV("__UINTMAX_C"), umax_suf},
+            {SVI("__INT8_C"),    NULL},
+            {SVI("__INT16_C"),   NULL},
+            {SVI("__INT32_C"),   NULL},
+            {SVI("__INT64_C"),   i64_suf},
+            {SVI("__UINT8_C"),   NULL},
+            {SVI("__UINT16_C"),  "U"},
+            {SVI("__UINT32_C"),  "U"},
+            {SVI("__UINT64_C"),  u64_suf},
+            {SVI("__INTMAX_C"),  imax_suf},
+            {SVI("__UINTMAX_C"), umax_suf},
         };
         Atom c_param = AT_atomize(cpp->at, "c", 1);
         if(!c_param) return CPP_OOM_ERROR;
@@ -4862,8 +4862,8 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
     int err;
     // Cache virtual built-in headers
     static const struct { StringView name; StringView content; } headers[] = {
-        {SV("<no source>"), SV("")},
-        {SV("assert.h"),   SV(// Note: no pragma once, can be included multiple times
+        {SVI("<no source>"), SVI("")},
+        {SVI("assert.h"),   SVI(// Note: no pragma once, can be included multiple times
                               "#defifndef __STDC_VERSION_ASSERT_H__ 202311L\n"
                               "#undef assert\n"
                               "#ifdef NDEBUG\n"
@@ -4873,7 +4873,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               // FIXME: diagnose assert(1,1)
                               "#define assert(...) ((__VA_ARGS__)?(void)0:__builtin_trap())\n"
                               "#endif\n")},
-        {SV("float.h"),    SV("#pragma once\n"
+        {SVI("float.h"),    SVI("#pragma once\n"
                               "#if __has_include_next(<float.h>)\n"
                                    "#include_next <float.h>\n"
                               "#endif\n"
@@ -4919,7 +4919,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                   "#defifndef DECIMAL_DIG __DECIMAL_DIG__\n"
                               "#endif\n"
                             )},
-        {SV("iso646.h"), SV("#pragma once\n"
+        {SVI("iso646.h"), SVI("#pragma once\n"
                             "#define and &&\n"
                             "#define and_eq &=\n"
                             "#define bitand &\n"
@@ -4931,7 +4931,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                             "#define or_eq |=\n"
                             "#define xor ^\n"
                             "#define xor_eq ^=\n")},
-        {SV("limits.h"),   SV("#pragma once\n"
+        {SVI("limits.h"),   SVI("#pragma once\n"
                               "#ifdef __linux__\n"
                               "#define _GCC_LIMITS_H_\n"
                               "#define CHAR_BIT __CHAR_BIT__\n"
@@ -4962,8 +4962,8 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#include_next <limits.h>\n"
                               "#endif\n"
                             )},
-        {SV("stdalign.h"), SV("#pragma once\n")},
-        {SV("stdarg.h"),   SV("#pragma once\n"
+        {SVI("stdalign.h"), SVI("#pragma once\n")},
+        {SVI("stdarg.h"),   SVI("#pragma once\n"
                               "#define __STDC_VERSION_STDARG_H__ 202311L\n"
                               "#define va_start __builtin_va_start\n"
                               "#define va_copy __builtin_va_copy\n"
@@ -4971,7 +4971,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define va_end __builtin_va_end\n"
                               "typedef __builtin_va_list va_list;\n"
                             )},
-        {SV("stdatomic.h"), SV("#pragma once\n"
+        {SVI("stdatomic.h"), SVI("#pragma once\n"
                               // This is a partial impl.
                               // There is a *lot* of bloat in stdatomic.h
                               "#define __STDC_VERSION_STDATOMIC_H__ 202311L\n"
@@ -5031,7 +5031,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "typedef _Bool atomic_flag;\n"
                               "#define ATOMIC_FLAG_INIT 0\n"
                            )},
-        {SV("stdbool.h"),  SV("#pragma once\n"
+        {SVI("stdbool.h"),  SVI("#pragma once\n"
                               "#define __bool_true_false_are_defined 1\n"
                               "#ifndef bool\n"
                               "#define bool bool\n"
@@ -5043,17 +5043,17 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define false false\n"
                               "#endif\n"
                            )},
-        {SV("stdckdint.h"),  SV("#pragma once\n"
+        {SVI("stdckdint.h"),  SVI("#pragma once\n"
                                 "#define __STDC_VERSION_STDCKDINT_H__ 202311L\n"
                                 "#define ckd_add(result, a, b) __builtin_add_overflow(a, b, result)\n"
                                 "#define ckd_sub(result, a, b) __builtin_sub_overflow(a, b, result)\n"
                                 "#define ckd_mul(result, a, b) __builtin_mul_overflow(a, b, result)\n"
                             )},
-        {SV("stdcountof.h"), SV("#pragma once\n"
+        {SVI("stdcountof.h"), SVI("#pragma once\n"
                                 "#define __STDC_VERSION_STDCOUNTOF_H__ 202603L\n"
                                 "#define countof _Countof\n"
                             )},
-        {SV("stddef.h"),   SV("#pragma once\n"
+        {SVI("stddef.h"),   SVI("#pragma once\n"
                               "#define __STDC_VERSION_STDDEF_H__ 202311L\n"
                               "typedef __SIZE_TYPE__ size_t;\n"
                               "typedef __PTRDIFF_TYPE__ ptrdiff_t;\n"
@@ -5066,7 +5066,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#endif\n"
                               "#define offsetof(type, member) __builtin_offsetof(type, member)\n"
                            )},
-        {SV("stdint.h"),   SV("#pragma once\n"
+        {SVI("stdint.h"),   SVI("#pragma once\n"
                               "#if __has_include_next(<stdint.h>)\n"
                               "#include_next <stdint.h>\n"
                               "#endif\n"
@@ -5108,7 +5108,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#include <__stdint_limits.h>\n"
                            )},
         // had to split into two strings.
-        {SV("__stdint_limits.h"), SV("#pragma once\n"
+        {SVI("__stdint_limits.h"), SVI("#pragma once\n"
                               // width macros
                               "#defifndef INT8_WIDTH 8\n"
                               "#defifndef INT16_WIDTH 16\n"
@@ -5210,12 +5210,12 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#defifndef WCHAR_MIN __WCHAR_MIN__\n"
                               "#defifndef WINT_MIN __WINT_MIN__\n"
                            )},
-        {SV("stdnoreturn.h"), SV("#pragma once\n"
+        {SVI("stdnoreturn.h"), SVI("#pragma once\n"
                               "#defifndef noreturn _Noreturn\n")},
-        {SV("setjmp.h"), SV("#pragma once\n"
+        {SVI("setjmp.h"), SVI("#pragma once\n"
                             "#error setjmp not implemented\n")},
         // nonstandard
-        {SV("std.h"),      SV("#pragma once\n"
+        {SVI("std.h"),      SVI("#pragma once\n"
                               "#include <assert.h>\n"
                               "#include <stdarg.h>\n"
                               "#include <stddef.h>\n"
@@ -5235,7 +5235,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#try_include <time.h>\n"
                           )},
         // stubs
-        {SV("immintrin.h"), SV("#pragma once\n"
+        {SVI("immintrin.h"), SVI("#pragma once\n"
                                "#if __has_include_next(<immintrin.h>)\n"
                                "#include_next <immintrin.h>\n"
                                "#else\n"
@@ -5246,17 +5246,17 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                "typedef long long __m256i __attribute__((__vector_size__(32)));\n"
                                "typedef double __m256d __attribute__((__vector_size__(32)));\n"
                                "#endif\n")},
-        {SV("xmmintrin.h"),  SV("#pragma once\n"
+        {SVI("xmmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
-        {SV("emmintrin.h"),  SV("#pragma once\n"
+        {SVI("emmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
-        {SV("pmmintrin.h"),  SV("#pragma once\n"
+        {SVI("pmmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
-        {SV("tmmintrin.h"),  SV("#pragma once\n"
+        {SVI("tmmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
-        {SV("smmintrin.h"),  SV("#pragma once\n"
+        {SVI("smmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
-        {SV("nmmintrin.h"),  SV("#pragma once\n"
+        {SVI("nmmintrin.h"),  SVI("#pragma once\n"
                                 "#include <immintrin.h>\n")},
     };
     for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
@@ -5264,7 +5264,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
         if(err) return err;
     }
     // Add <builtin> to isystem_paths so it's searched before platform headers
-    StringView sv = SV("<builtin>");
+    StringView sv = SVI("<builtin>");
     err = ma_push(StringView)(&cpp->isystem_paths, cpp->allocator, sv);
     if(err) return CPP_OOM_ERROR;
     return 0;
@@ -5384,18 +5384,18 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     static const struct {
         StringView name; CppObjMacroFn* fn;
     } obj_builtins[] = {
-        {SV("__FILE__"), cpp_builtin_file},
-        {SV("__LINE__"), cpp_builtin_line},
-        {SV("__COUNTER__"), cpp_builtin_counter},
-        {SV("__FILE_NAME__"), cpp_builtin_filename},
-        {SV("__DIR__"), cpp_builtin_dir},
-        {SV("__INCLUDE_LEVEL__"), cpp_builtin_include_level},
-        {SV("__DATE__"), cpp_builtin_date},
-        {SV("__TIME__"), cpp_builtin_time},
-        {SV("__RAND__"), cpp_builtin_rand},
-        {SV("__RANDOM__"), cpp_builtin_rand},
-        {SV("__BASE_FILE__"), cpp_builtin_base_file},
-        {SV("__TIMESTAMP__"), cpp_builtin_timestamp},
+        {SVI("__FILE__"), cpp_builtin_file},
+        {SVI("__LINE__"), cpp_builtin_line},
+        {SVI("__COUNTER__"), cpp_builtin_counter},
+        {SVI("__FILE_NAME__"), cpp_builtin_filename},
+        {SVI("__DIR__"), cpp_builtin_dir},
+        {SVI("__INCLUDE_LEVEL__"), cpp_builtin_include_level},
+        {SVI("__DATE__"), cpp_builtin_date},
+        {SVI("__TIME__"), cpp_builtin_time},
+        {SVI("__RAND__"), cpp_builtin_rand},
+        {SVI("__RANDOM__"), cpp_builtin_rand},
+        {SVI("__BASE_FILE__"), cpp_builtin_base_file},
+        {SVI("__TIMESTAMP__"), cpp_builtin_timestamp},
     };
     for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
@@ -5410,35 +5410,35 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     static const struct {
         StringView name; CppFuncMacroFn* fn; size_t nparams; _Bool variadic, no_expand;
     } func_builtins[] = {
-        {SV("__CALC__"), cpp_builtin_calc, 1, 0, 1},
-        {SV("__calc"), cpp_builtin_calc, 1, 0, 1},
-        {SV("__MIXIN__"), cpp_builtin_mixin, 1, 0, 0},
-        {SV("__mixin"), cpp_builtin_mixin, 1, 0, 0},
-        {SV("__env"), cpp_builtin_env, 1, 1, 0},
-        {SV("__ENV__"), cpp_builtin_env, 1, 1, 0},
-        {SV("__IF__"), cpp_builtin_if, 3, 0, 1},
-        {SV("__if"), cpp_builtin_if, 3, 0, 1},
-        {SV("__ident"), cpp_builtin_ident, 1, 0, 0},
-        {SV("__IDENT__"), cpp_builtin_ident, 1, 0, 0},
-        {SV("__format"), cpp_builtin_fmt, 1, 1, 0},
-        {SV("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
-        {SV("__print"), cpp_builtin_print, 0, 1, 0},
-        {SV("__PRINT__"), cpp_builtin_print, 0, 1, 0},
-        {SV("__set"), cpp_builtin_set, 1, 1, 0},
-        {SV("__SET__"), cpp_builtin_set, 1, 1, 0},
-        {SV("__get"), cpp_builtin_get, 1, 0, 0},
-        {SV("__GET__"), cpp_builtin_get, 1, 0, 0},
-        {SV("__append"), cpp_builtin_append, 1, 1, 0},
-        {SV("__APPEND__"), cpp_builtin_append, 1, 1, 0},
-        {SV("__for"), cpp_builtin_for, 3, 0, 0},
-        {SV("__FOR__"), cpp_builtin_for, 3, 0, 0},
-        {SV("__map"), cpp_builtin_map, 1, 1, 0},
-        {SV("__MAP__"), cpp_builtin_map, 1, 1, 0},
-        {SV("__let"), cpp_builtin_let, 3, 0, 1},
-        {SV("__LET__"), cpp_builtin_let, 3, 0, 1},
-        {SV("_Pragma"), cpp_builtin__Pragma, 1, 0, 0},
-        {SV("__WHERE__"), cpp_builtin_where, 1, 0, 1},
-        {SV("__where"), cpp_builtin_where, 1, 0, 1},
+        {SVI("__CALC__"), cpp_builtin_calc, 1, 0, 1},
+        {SVI("__calc"), cpp_builtin_calc, 1, 0, 1},
+        {SVI("__MIXIN__"), cpp_builtin_mixin, 1, 0, 0},
+        {SVI("__mixin"), cpp_builtin_mixin, 1, 0, 0},
+        {SVI("__env"), cpp_builtin_env, 1, 1, 0},
+        {SVI("__ENV__"), cpp_builtin_env, 1, 1, 0},
+        {SVI("__IF__"), cpp_builtin_if, 3, 0, 1},
+        {SVI("__if"), cpp_builtin_if, 3, 0, 1},
+        {SVI("__ident"), cpp_builtin_ident, 1, 0, 0},
+        {SVI("__IDENT__"), cpp_builtin_ident, 1, 0, 0},
+        {SVI("__format"), cpp_builtin_fmt, 1, 1, 0},
+        {SVI("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
+        {SVI("__print"), cpp_builtin_print, 0, 1, 0},
+        {SVI("__PRINT__"), cpp_builtin_print, 0, 1, 0},
+        {SVI("__set"), cpp_builtin_set, 1, 1, 0},
+        {SVI("__SET__"), cpp_builtin_set, 1, 1, 0},
+        {SVI("__get"), cpp_builtin_get, 1, 0, 0},
+        {SVI("__GET__"), cpp_builtin_get, 1, 0, 0},
+        {SVI("__append"), cpp_builtin_append, 1, 1, 0},
+        {SVI("__APPEND__"), cpp_builtin_append, 1, 1, 0},
+        {SVI("__for"), cpp_builtin_for, 3, 0, 0},
+        {SVI("__FOR__"), cpp_builtin_for, 3, 0, 0},
+        {SVI("__map"), cpp_builtin_map, 1, 1, 0},
+        {SVI("__MAP__"), cpp_builtin_map, 1, 1, 0},
+        {SVI("__let"), cpp_builtin_let, 3, 0, 1},
+        {SVI("__LET__"), cpp_builtin_let, 3, 0, 1},
+        {SVI("_Pragma"), cpp_builtin__Pragma, 1, 0, 0},
+        {SVI("__WHERE__"), cpp_builtin_where, 1, 0, 1},
+        {SVI("__where"), cpp_builtin_where, 1, 0, 1},
     };
     for(size_t i = 0; i < sizeof func_builtins / sizeof func_builtins[0]; i++){
         err = cpp_define_builtin_func_macro(cpp, func_builtins[i].name, func_builtins[i].fn, NULL, func_builtins[i].nparams, func_builtins[i].variadic, func_builtins[i].no_expand);

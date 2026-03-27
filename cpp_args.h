@@ -74,7 +74,7 @@ cpp_macro_dest(MStringBuilder* sb){
     return dest;
 }
 
-static MStringBuilder cpp_cli_macros = {.allocator=MALLOCATOR};
+static MStringBuilder cpp_cli_macros = {.allocator=MALLOCATORI};
 static _Bool cpp_nostdinc = 0;
 static CcTarget cc_target_arg = CC_TARGET_NATIVE;
 static const ArgParseEnumType cc_target_argparse_enum = {
@@ -86,12 +86,12 @@ static
 ArgParseKwParams*
 cpp_kwargs(CppPreprocessor* cpp){
     static ArgParseUserDefinedType t = {
-        .type_name = SV("path"),
+        .type_name = SVI("path"),
     };
     t.user_data = cpp;
     static ArgToParse kw_args[] = {
         [0] = {
-            .name = SV("-I"),
+            .name = SVI("-I"),
             .append_proc = ma_sv_appender,
             .help = "Extra include paths.",
             .max_num = 1000,
@@ -99,7 +99,7 @@ cpp_kwargs(CppPreprocessor* cpp){
             .space_sep_is_optional = 1,
         },
         [1] = {
-            .name = SV("-isystem"),
+            .name = SVI("-isystem"),
             .append_proc = ma_sv_appender,
             .help = "Extra system include paths.",
             .max_num = 1000,
@@ -107,7 +107,7 @@ cpp_kwargs(CppPreprocessor* cpp){
             .space_sep_is_optional = 1,
         },
         [2] = {
-            .name = SV("-iquote"),
+            .name = SVI("-iquote"),
             .append_proc = ma_sv_appender,
             .help = "Extra quote include paths.",
             .max_num = 1000,
@@ -115,7 +115,7 @@ cpp_kwargs(CppPreprocessor* cpp){
             .space_sep_is_optional = 1,
         },
         [3] = {
-            .name = SV("-idirafter"),
+            .name = SVI("-idirafter"),
             .append_proc = ma_sv_appender,
             .help = "Extra dirafter include paths.",
             .max_num = 1000,
@@ -123,7 +123,7 @@ cpp_kwargs(CppPreprocessor* cpp){
             .space_sep_is_optional = 1,
         },
         [4] = {
-            .name = SV("-F"),
+            .name = SVI("-F"),
             .append_proc = ma_sv_appender,
             .help = "Extra framework paths.",
             .max_num = 1000,
@@ -134,7 +134,7 @@ cpp_kwargs(CppPreprocessor* cpp){
             #endif
         },
         [5] = {
-            .name = SV("-D"),
+            .name = SVI("-D"),
             .append_proc = cli_macro,
             .help = "Predefined macros.",
             .max_num=1000,
@@ -142,15 +142,15 @@ cpp_kwargs(CppPreprocessor* cpp){
             .space_sep_is_optional=1,
         },
         [6] = {
-            .name = SV("--target"),
+            .name = SVI("--target"),
             .dest = {.type = ARG_ENUM, .pointer = &cc_target_arg, .enum_pointer = &cc_target_argparse_enum},
             .help = "Target ABI.",
             .min_num = 0, .max_num = 1,
         },
         [7] = {
-            .name = SV("--nostdinc"),
-            .altname1 = SV("-nostdinc"),
-            .dest = ARGDEST(&cpp_nostdinc),
+            .name = SVI("--nostdinc"),
+            .altname1 = SVI("-nostdinc"),
+            .dest = ARGDESTI(&cpp_nostdinc),
             .help = "Do not search standard system include paths.",
         },
     };

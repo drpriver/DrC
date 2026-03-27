@@ -11,7 +11,7 @@
 #elif __has_include(<ffi.h>)
 #include <ffi.h>
 #else
-#pragma message "<ffi.h> not found"
+#pragma message("<ffi.h> not found")
 #define NO_NATIVE_CALL
 #endif
 #else

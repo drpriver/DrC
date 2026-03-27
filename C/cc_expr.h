@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include <stddef.h>
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "cc_type.h"
@@ -266,7 +267,7 @@ struct CcExpr {
     };
     CcExpr*_Nonnull values[];
 };
-_Static_assert(__builtin_offsetof(CcExpr, loc) ==8, "");
+_Static_assert(offsetof(CcExpr, loc) ==8, "");
 
 
 #ifdef __clang__

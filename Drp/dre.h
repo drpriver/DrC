@@ -54,7 +54,17 @@ enum re_error { RE_ERROR_NONE, RE_ERRORS(RE_ERROR_AS_ENUM_MEMBER) };
 #define DRE_API static
 #endif
 
-DRE_API const char * _Nonnull const dre_error_name_table[];
+#if !defined __clang__ && !defined _Nonnull
+#define _Nonnull
+#endif
+
+#define AS_STRING_ENTRY(s) #s,
+DRE_API
+const char * _Nonnull const dre_error_name_table[] = {
+    "NO_ERROR",
+    RE_ERRORS(AS_STRING_ENTRY)
+};
+#undef AS_STRING_ENTRY
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin

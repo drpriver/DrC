@@ -104,6 +104,7 @@ testing_realloc(TestingAllocator* ta, void*_Nullable data, size_t orig_size, siz
 
 TestingAllocator THE_TestingAllocator = {.fail_at=0};
 #define MALLOCATOR ((Allocator){.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator})
+#define MALLOCATORI {.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator}
 #define THE_TESTING_ALLOCATOR  ((Allocator){.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator})
 
 static inline

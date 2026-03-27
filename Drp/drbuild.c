@@ -459,6 +459,7 @@ b_read_file(BuildCtx* ctx, const char* path, MStringBuilder* out){
         pfinally:
         if(fd >= 0) close(fd);
         #endif
+        goto finally;
     }
     finally:
     return err;

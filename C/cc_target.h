@@ -38,12 +38,12 @@ enum CcArch TYPED_ENUM(int){
 TYPEDEF_ENUM(CcArch, int);
 
 static const StringView cc_target_names[CC_TARGET_COUNT] = {
-    [CC_TARGET_X86_64_LINUX]   = SV("x86_64-linux"),
-    [CC_TARGET_AARCH64_LINUX]  = SV("aarch64-linux"),
-    [CC_TARGET_X86_64_MACOS]   = SV("x86_64-macos"),
-    [CC_TARGET_AARCH64_MACOS]  = SV("aarch64-macos"),
-    [CC_TARGET_X86_64_WINDOWS] = SV("x86_64-windows"),
-    [CC_TARGET_TEST]           = SV("test"),
+    [CC_TARGET_X86_64_LINUX]   = SVI("x86_64-linux"),
+    [CC_TARGET_AARCH64_LINUX]  = SVI("aarch64-linux"),
+    [CC_TARGET_X86_64_MACOS]   = SVI("x86_64-macos"),
+    [CC_TARGET_AARCH64_MACOS]  = SVI("aarch64-macos"),
+    [CC_TARGET_X86_64_WINDOWS] = SVI("x86_64-windows"),
+    [CC_TARGET_TEST]           = SVI("test"),
 };
 
 enum CcBitfieldABI TYPED_ENUM(uint8_t) {

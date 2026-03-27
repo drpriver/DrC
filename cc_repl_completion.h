@@ -26,21 +26,21 @@ static _Bool is_ident_char(char c){
 
 // Preprocessor directive names for tab completion (without the #).
 static const StringView cc_directive_strs[] = {
-    SV("if"), SV("ifdef"), SV("ifndef"),
-    SV("elif"), SV("elifdef"), SV("elifndef"),
-    SV("else"), SV("endif"),
-    SV("define"), SV("undef"),
-    SV("defblock"), SV("endblock"),
-    SV("defifndef"),
-    SV("include"), SV("include_next"), SV("import"),
-    SV("pragma"),
-    SV("error"), SV("warning"),
-    SV("line"),
+    SVI("if"), SVI("ifdef"), SVI("ifndef"),
+    SVI("elif"), SVI("elifdef"), SVI("elifndef"),
+    SVI("else"), SVI("endif"),
+    SVI("define"), SVI("undef"),
+    SVI("defblock"), SVI("endblock"),
+    SVI("defifndef"),
+    SVI("include"), SVI("include_next"), SVI("import"),
+    SVI("pragma"),
+    SVI("error"), SVI("warning"),
+    SVI("line"),
 };
 
 // C keyword names for tab completion.
 static const StringView cc_keyword_strs[] = {
-    #define X(spelling, unused) SV(#spelling),
+    #define X(spelling, unused) SVI(#spelling),
     CCKWS(X)
     #undef X
 };
