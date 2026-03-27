@@ -3121,6 +3121,23 @@ TestFunction(test_cross_target){
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
+            "msvc bitfield typed enum packs with underlying", __LINE__,
+            SV("enum A : unsigned int { A_VAL = 1 };\n"
+               "enum B : unsigned int { B_VAL = 2 };\n"
+               "typedef struct { enum A a: 4; unsigned int b: 1; enum B c: 1; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // all have uint32_t underlying, pack together
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "msvc bitfield diff size enum starts new unit", __LINE__,
+            SV("enum A : unsigned short { A_VAL = 1 };\n"
+               "typedef struct { enum A a: 4; unsigned int b: 1; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // short(2) + pad(2) + int(4)
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
             "alignof", __LINE__,
             SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 16,

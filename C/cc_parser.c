@@ -5943,8 +5943,10 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             // Can we pack into the current storage unit?
             _Bool fits;
             uint32_t f_offset = 0, f_bitoffset = 0;
+            CcQualType ft = f->type;
+            while(ccqt_kind(ft) == CC_ENUM) ft = ccqt_as_enum(ft)->underlying;
             if(bf_abi == CC_BITFIELD_MSVC){
-                fits = bitfield_type.bits == f->type.bits && bitfield_offset + bw <= storage_bits;
+                fits = bitfield_type.bits == ft.bits && bitfield_offset + bw <= storage_bits;
                 f_offset = bitfield_storage_start;
                 f_bitoffset = bitfield_offset;
             }
@@ -5980,7 +5982,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                 bitfield_storage_start = offset;
                 bitfield_storage_end = offset + field_size;
 
-                bitfield_type = f->type;
+                bitfield_type = ft;
             }
             if(field_align > max_align)
                 max_align = field_align;
