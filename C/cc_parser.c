@@ -871,6 +871,8 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
     }
     #ifdef __GNUC__
     __builtin_unreachable();
+    #elif defined _MSC_VER
+    __assume(0);
     #endif
 }
 
@@ -988,6 +990,8 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
     }
     #ifdef __GNUC__
     __builtin_unreachable();
+    #elif defined _MSC_VER
+    __assume(0);
     #endif
 }
 
@@ -1036,6 +1040,8 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
     }
     #ifdef __GNUC__
     __builtin_unreachable();
+    #elif defined _MSC_VER
+    __assume(0);
     #endif
 }
 
