@@ -7871,10 +7871,15 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         spec->sp_auto = 1;
                         continue;
                     case CC__Type:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
+                        if(base_type->bits || spec->sp_typebits){
+                            Atom a = AT_atomize(p->cpp.at, "_Type", 5);
+                            if(!a) return CC_OOM_ERROR;
+                            tok = (CcToken){
+                                .ident = {.type = CC_IDENTIFIER, .ident = a},
+                                .loc = tok.loc,
+                            };
+                            return cc_unget(p, &tok);
+                        }
                         *base_type = ccqt_basic(CCBT__Type);
                         continue;
                     case CC_bool:
