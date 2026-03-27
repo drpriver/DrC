@@ -7109,7 +7109,16 @@ int
 cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
-    // Strip integer suffixes: [uUlL]+
+    // Strip MSVC integer suffixes: [uU]?i(8|16|32|64)
+    if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I'))
+        len -= 3;
+    else if(len >= 3 && s[len-1] == '2' && s[len-2] == '3' && (s[len-3] == 'i' || s[len-3] == 'I'))
+        len -= 3;
+    else if(len >= 3 && s[len-1] == '6' && s[len-2] == '1' && (s[len-3] == 'i' || s[len-3] == 'I'))
+        len -= 3;
+    else if(len >= 2 && s[len-1] == '8' && (s[len-2] == 'i' || s[len-2] == 'I'))
+        len -= 2;
+    // Strip standard integer suffixes: [uUlL]+
     while(len && (s[len-1] == 'u' || s[len-1] == 'U' || s[len-1] == 'l' || s[len-1] == 'L'))
         len--;
     if(!len)
@@ -7546,28 +7555,50 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     size_t len = cpptok->txt.length;
     // Detect hex prefix before suffix stripping so we don't eat hex digits
     _Bool maybe_hex = (len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'));
-    // Strip suffix from end
+    // Check for MSVC integer suffixes: [uU]?i(8|16|32|64)
+    int msvc_bits = 0; // 0 = no MSVC suffix, 8/16/32/64 = explicit width
     _Bool has_u = 0;
-    int num_l = 0;
-    _Bool has_f = 0;
-    while(len){
-        char c = s[len-1];
-        if(c == 'u' || c == 'U'){
-            if(has_u) break;
+    if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I')){
+        msvc_bits = 64; len -= 3;
+    }
+    else if(len >= 3 && s[len-1] == '2' && s[len-2] == '3' && (s[len-3] == 'i' || s[len-3] == 'I')){
+        msvc_bits = 32; len -= 3;
+    }
+    else if(len >= 3 && s[len-1] == '6' && s[len-2] == '1' && (s[len-3] == 'i' || s[len-3] == 'I')){
+        msvc_bits = 16; len -= 3;
+    }
+    else if(len >= 2 && s[len-1] == '8' && (s[len-2] == 'i' || s[len-2] == 'I')){
+        msvc_bits = 8; len -= 2;
+    }
+    if(msvc_bits){
+        if(len && (s[len-1] == 'u' || s[len-1] == 'U')){
             has_u = 1;
             len--;
         }
-        else if(c == 'l' || c == 'L'){
-            if(num_l >= 2) break;
-            num_l++;
-            len--;
+    }
+    // Strip standard suffix from end
+    int num_l = 0;
+    _Bool has_f = 0;
+    if(!msvc_bits){
+        while(len){
+            char c = s[len-1];
+            if(c == 'u' || c == 'U'){
+                if(has_u) break;
+                has_u = 1;
+                len--;
+            }
+            else if(c == 'l' || c == 'L'){
+                if(num_l >= 2) break;
+                num_l++;
+                len--;
+            }
+            else if(!maybe_hex && (c == 'f' || c == 'F')){
+                if(has_f) break;
+                has_f = 1;
+                len--;
+            }
+            else break;
         }
-        else if(!maybe_hex && (c == 'f' || c == 'F')){
-            if(has_f) break;
-            has_f = 1;
-            len--;
-        }
-        else break;
     }
     if(!len)
         return cpp_error(cpp, cpptok->loc, "Invalid number literal");
@@ -7664,35 +7695,47 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid digit in number");
         v = u.result;
     }
-    // Determine type: start from the suffix-implied
-    // minimum type, then promote if the value doesn't fit.
-    // Hex/octal/binary try unsigned types; decimal does not (unless U).
-    _Bool is_decimal = !is_hex
-        && !(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B'))
-        && !(buf_len > 1 && buf[0] == '0');
-    const uint8_t* sizes = cpp->target.sizeof_;
-    #define SMAX(bt) (sizes[bt] >= 8 ? (uint64_t)INT64_MAX  : ((uint64_t)1 << (sizes[bt] * 8 - 1)) - 1)
-    #define UMAX(bt) (sizes[bt] >= 8 ? UINT64_MAX           : ((uint64_t)1 << (sizes[bt] * 8)) - 1)
+    // Determine type.
     CcConstantType ctype;
-    if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;
-    else if(num_l >= 2)          ctype = CC_LONG_LONG;
-    else if(has_u && num_l == 1) ctype = CC_UNSIGNED_LONG;
-    else if(num_l == 1)          ctype = CC_LONG;
-    else if(has_u)               ctype = CC_UNSIGNED;
-    else                         ctype = CC_INT;
-    // Promote if value doesn't fit
-    if(ctype == CC_INT && v > SMAX(CCBT_int))
-        ctype = is_decimal ? CC_LONG : CC_UNSIGNED;
-    if(ctype == CC_UNSIGNED && v > UMAX(CCBT_unsigned))
-        ctype = CC_UNSIGNED_LONG;
-    if(ctype == CC_LONG && v > SMAX(CCBT_long))
-        ctype = is_decimal ? CC_LONG_LONG : CC_UNSIGNED_LONG;
-    if(ctype == CC_UNSIGNED_LONG && v > UMAX(CCBT_unsigned_long))
-        ctype = CC_UNSIGNED_LONG_LONG;
-    if(ctype == CC_LONG_LONG && v > SMAX(CCBT_long_long))
-        ctype = CC_UNSIGNED_LONG_LONG;
-    #undef SMAX
-    #undef UMAX
+    if(msvc_bits){
+        // MSVC suffix: explicit type, no promotion.
+        // i8/i16/i32 map to int/unsigned (C has no short literals).
+        // i64 maps to long long/unsigned long long.
+        if(msvc_bits == 64)
+            ctype = has_u ? CC_UNSIGNED_LONG_LONG : CC_LONG_LONG;
+        else
+            ctype = has_u ? CC_UNSIGNED : CC_INT;
+    }
+    else {
+        // Standard suffix: start from suffix-implied minimum type,
+        // then promote if the value doesn't fit.
+        // Hex/octal/binary try unsigned types; decimal does not (unless U).
+        _Bool is_decimal = !is_hex
+            && !(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B'))
+            && !(buf_len > 1 && buf[0] == '0');
+        const uint8_t* sizes = cpp->target.sizeof_;
+        #define SMAX(bt) (sizes[bt] >= 8 ? (uint64_t)INT64_MAX  : ((uint64_t)1 << (sizes[bt] * 8 - 1)) - 1)
+        #define UMAX(bt) (sizes[bt] >= 8 ? UINT64_MAX           : ((uint64_t)1 << (sizes[bt] * 8)) - 1)
+        if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;
+        else if(num_l >= 2)          ctype = CC_LONG_LONG;
+        else if(has_u && num_l == 1) ctype = CC_UNSIGNED_LONG;
+        else if(num_l == 1)          ctype = CC_LONG;
+        else if(has_u)               ctype = CC_UNSIGNED;
+        else                         ctype = CC_INT;
+        // Promote if value doesn't fit
+        if(ctype == CC_INT && v > SMAX(CCBT_int))
+            ctype = is_decimal ? CC_LONG : CC_UNSIGNED;
+        if(ctype == CC_UNSIGNED && v > UMAX(CCBT_unsigned))
+            ctype = CC_UNSIGNED_LONG;
+        if(ctype == CC_LONG && v > SMAX(CCBT_long))
+            ctype = is_decimal ? CC_LONG_LONG : CC_UNSIGNED_LONG;
+        if(ctype == CC_UNSIGNED_LONG && v > UMAX(CCBT_unsigned_long))
+            ctype = CC_UNSIGNED_LONG_LONG;
+        if(ctype == CC_LONG_LONG && v > SMAX(CCBT_long_long))
+            ctype = CC_UNSIGNED_LONG_LONG;
+        #undef SMAX
+        #undef UMAX
+    }
     *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,

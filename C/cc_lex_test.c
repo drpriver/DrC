@@ -265,6 +265,18 @@ TestFunction(test_cc_lex_integers){
         // 0 through decimal path (not octal)
         {"zero_u",       SV("0u"),         cc_int_tok(0, CC_UNSIGNED), __LINE__},
         {"zero_ll",      SV("0LL"),        cc_int_tok(0, CC_LONG_LONG), __LINE__},
+        // MSVC integer suffixes
+        {"msvc_i8",      SV("42i8"),       cc_int_tok(42, CC_INT), __LINE__},
+        {"msvc_i16",     SV("42i16"),      cc_int_tok(42, CC_INT), __LINE__},
+        {"msvc_i32",     SV("42i32"),      cc_int_tok(42, CC_INT), __LINE__},
+        {"msvc_i64",     SV("42i64"),      cc_int_tok(42, CC_LONG_LONG), __LINE__},
+        {"msvc_ui8",     SV("42ui8"),      cc_int_tok(42, CC_UNSIGNED), __LINE__},
+        {"msvc_ui16",    SV("42ui16"),     cc_int_tok(42, CC_UNSIGNED), __LINE__},
+        {"msvc_ui32",    SV("42ui32"),     cc_int_tok(42, CC_UNSIGNED), __LINE__},
+        {"msvc_ui64",    SV("42ui64"),     cc_int_tok(42, CC_UNSIGNED_LONG_LONG), __LINE__},
+        {"msvc_hex_i32", SV("0xFFFFFFFFi32"), cc_int_tok(0xFFFFFFFF, CC_INT), __LINE__},
+        {"msvc_hex_ui64",SV("0xFFFFFFFFFFFFFFFFui64"), cc_int_tok(UINT64_MAX, CC_UNSIGNED_LONG_LONG), __LINE__},
+        {"msvc_I64_upper", SV("42I64"),    cc_int_tok(42, CC_LONG_LONG), __LINE__},
     };
     for(size_t i = 0; i < arrlen(test_cases); i++){
         CcToken toks[MAX_TEST_TOKENS];

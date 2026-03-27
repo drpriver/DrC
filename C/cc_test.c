@@ -2965,6 +2965,46 @@ TestFunction(test_parse_decls){
                "_Static_assert((unsigned long long)(-(unsigned)0) == 0ull);\n"),
         },
         {
+            "msvc suffix i8", __LINE__,
+            SV("_Static_assert(42i8 == 42);\n"),
+        },
+        {
+            "msvc suffix i16", __LINE__,
+            SV("_Static_assert(1000i16 == 1000);\n"),
+        },
+        {
+            "msvc suffix i32", __LINE__,
+            SV("_Static_assert(100000i32 == 100000);\n"),
+        },
+        {
+            "msvc suffix i64", __LINE__,
+            SV("_Static_assert(9223372036854775807i64 == 9223372036854775807LL);\n"),
+        },
+        {
+            "msvc suffix ui64", __LINE__,
+            SV("_Static_assert(0xFFFFFFFFFFFFFFFFui64 == 0xFFFFFFFFFFFFFFFFULL);\n"),
+        },
+        {
+            "msvc suffix ui32", __LINE__,
+            SV("_Static_assert(0xFFFFFFFFui32 == 0xFFFFFFFFU);\n"),
+        },
+        {
+            "msvc suffix hex i32", __LINE__,
+            SV("_Static_assert(0xDeAdBeEfi32 == 0xDeAdBeEf);\n"),
+        },
+        {
+            "msvc suffix octal i32", __LINE__,
+            SV("_Static_assert(077i32 == 63);\n"),
+        },
+        {
+            "msvc suffix I64 uppercase", __LINE__,
+            SV("_Static_assert(42I64 == 42LL);\n"),
+        },
+        {
+            "msvc suffix in expression", __LINE__,
+            SV("_Static_assert(1i64 + 2i64 == 3);\n"),
+        },
+        {
             "constexpr: left shift negative", __LINE__,
             SV("_Static_assert((-1 << 1) == -2);\n"
                "_Static_assert((-1 << 0) == -1);\n"
@@ -4554,6 +4594,21 @@ TestFunction(test_parse_errors){
             SV("static void foo(void);\n"
                "extern void foo(void){}\n"),
             SV("(test):2:22: error: non-static declaration of 'foo' follows static declaration\n"),
+        },
+        {
+            "msvc suffix i7 invalid", __LINE__,
+            SV("int x = 42i7;\n"),
+            SV("(test):1:9: error: Invalid digit in number\n"),
+        },
+        {
+            "msvc suffix bare i invalid", __LINE__,
+            SV("int x = 42i;\n"),
+            SV("(test):1:9: error: Invalid digit in number\n"),
+        },
+        {
+            "msvc suffix i128 invalid", __LINE__,
+            SV("int x = 42i128;\n"),
+            SV("(test):1:9: error: Invalid digit in number\n"),
         },
     };
     static int idx = 0;
