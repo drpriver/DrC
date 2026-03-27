@@ -1875,10 +1875,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_func_macro;
-            if(tok.type != CPP_WHITESPACE && tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
-                err = cpp_error(cpp, tok.loc, "Illegal token immediately after ')'");
-                goto finish_func_macro;
-            }
             if(tok.type == CPP_WHITESPACE){
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) goto finish_func_macro;

@@ -238,6 +238,7 @@ TestFunction(test_func_macros){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         {"simple_func_macro",SV("#define F(x) x*x\nF(2)"), SV("\n2*2"), __LINE__},
+        {"no_space_after_rparen",SV("#define F(x)x*x\nF(2)"), SV("\n2*2"), __LINE__},
         {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
         {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
         {"stringify_with_spaces",SV("#define STR(x) #x\nSTR(hello world)"),SV("\n\"hello world\""),__LINE__},
