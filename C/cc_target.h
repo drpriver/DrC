@@ -566,6 +566,11 @@ cc_target_x86_64_windows(void){
             "__amd64\0"
             "_M_X64\0"
             "_M_AMD64\0"
+            "__cdecl=\0"
+            "__stdcall=\0"
+            "__fastcall=\0"
+            "__vectorcall=\0"
+            "__thiscall=\0"
         ),
     };
 }

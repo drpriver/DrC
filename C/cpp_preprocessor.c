@@ -4820,7 +4820,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             if(eq){
                 StringView name = {(size_t)(eq - p), p};
                 StringView val  = {len - name.length - 1, eq + 1};
-                err = cpp_def_num(cpp, name, val);
+                if(val.length)
+                    err = cpp_def_num(cpp, name, val);
+                else
+                    err = cpp_define_obj_macro(cpp, name, NULL, 0);
             }
             else {
                 err = cpp_def_1(cpp, (StringView){len, p});
