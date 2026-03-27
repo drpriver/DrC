@@ -4181,6 +4181,7 @@ static CppFuncMacroFn cpp_builtin_calc,
                       cpp_builtin_map,
                       cpp_builtin_let,
                       cpp_builtin__Pragma,
+                      cpp_builtin___pragma,
                       cpp_builtin_where
                       ;
 static CppPragmaFn cpp_builtin_pragma_once,
@@ -5477,6 +5478,7 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SVI("__let"), cpp_builtin_let, 3, 0, 1},
         {SVI("__LET__"), cpp_builtin_let, 3, 0, 1},
         {SVI("_Pragma"), cpp_builtin__Pragma, 1, 0, 0},
+        {SVI("__pragma"), cpp_builtin___pragma, 0, 1, 1},
         {SVI("__WHERE__"), cpp_builtin_where, 1, 0, 1},
         {SVI("__where"), cpp_builtin_where, 1, 0, 1},
     };
@@ -6581,6 +6583,33 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     finish_Pragma:;
     cpp_release_scratch(cpp, toks);
     return err;
+}
+
+static
+int
+cpp_builtin___pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
+    (void)ctx;
+    (void)outtoks;
+    (void)arg_seps;
+    // Find pragma name (first non-whitespace identifier)
+    size_t ti = 0;
+    while(ti < args->count && args->data[ti].type == CPP_WHITESPACE) ti++;
+    if(ti >= args->count)
+        return 0; // empty __pragma - do nothing
+    if(args->data[ti].type != CPP_IDENTIFIER)
+        return cpp_error(cpp, loc, "Expected pragma name in __pragma");
+    StringView prag_name_sv = args->data[ti].txt;
+    Atom prag_name = AT_get_atom(cpp->at, prag_name_sv.text, prag_name_sv.length);
+    CppPragma* prag = prag_name ? AM_get(&cpp->pragmas, prag_name) : NULL;
+    if(!prag)
+        return 0; // Unknown pragma - silently ignore
+    // Collect remaining tokens (skip leading whitespace after pragma name)
+    ti++;
+    while(ti < args->count && args->data[ti].type == CPP_WHITESPACE) ti++;
+    // Strip trailing whitespace
+    size_t end = args->count;
+    while(end > ti && args->data[end-1].type == CPP_WHITESPACE) end--;
+    return prag->fn(prag->ctx, cpp, loc, args->data + ti, end - ti);
 }
 
 static

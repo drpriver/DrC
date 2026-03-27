@@ -4802,6 +4802,33 @@ TestFunction(test_struct_layout){
             },
         },
         {
+            "__pragma pack(1)", __LINE__,
+            SV("__pragma(pack(1))\n"
+               "struct MPP1 { char a; int b; char c; };\n"
+               "__pragma(pack())\n"),
+            SV("MPP1"), 0,
+            .size = 6, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+                { SV("c"), .offset = 5 },
+            },
+        },
+        {
+            "__pragma pack in macro", __LINE__,
+            SV("#define PACK(n) __pragma(pack(n))\n"
+               "PACK(1)\n"
+               "struct MPP2 { char a; int b; char c; };\n"
+               "PACK()\n"),
+            SV("MPP2"), 0,
+            .size = 6, .alignment = 1,
+            .fields = {
+                { SV("a"), .offset = 0 },
+                { SV("b"), .offset = 1 },
+                { SV("c"), .offset = 5 },
+            },
+        },
+        {
             "pragma pack(2)", __LINE__,
             SV("#pragma pack(2)\n"
                "struct PP2 { char a; int b; double c; };\n"

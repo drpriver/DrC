@@ -1845,6 +1845,10 @@ TestFunction(test_include){
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("_Pragma(\"once\")\n#define VAL ok\n"),
             {0}, SV("\n\n\n\nok")},
+        {"__pragma once prevents double inclusion", __LINE__, 0,
+            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SV("test/hdr.h"),  SV("__pragma(once)\n#define VAL ok\n"),
+            {0}, SV("\n\n\n\nok")},
         // Include guard optimization tests
         {"include guard prevents double inclusion", __LINE__, 0,
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
