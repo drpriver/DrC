@@ -3247,6 +3247,26 @@ TestFunction(test_parse_decls){
                 { SV("foo"), SV("void(void)") },
             },
         },
+        {
+            "__has_builtin", __LINE__,
+            SV("#if __has_builtin(__builtin_expect)\n"
+               "int has_expect;\n"
+               "#endif\n"
+               "#if __has_builtin(__builtin_trap)\n"
+               "int has_trap;\n"
+               "#endif\n"
+               "#if __has_builtin(__builtin_nope)\n"
+               "int has_nope;\n"
+               "#endif\n"
+               "#if __has_builtin(__atomic_load_n)\n"
+               "int has_atomic;\n"
+               "#endif\n"),
+            .vars = {
+                { SV("has_expect"), SV("int") },
+                { SV("has_trap"), SV("int") },
+                { SV("has_atomic"), SV("int") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

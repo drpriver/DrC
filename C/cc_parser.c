@@ -88,6 +88,7 @@ static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_assert(CcParser*);
 static int cc_stmt(CcParser*, CcStmtKind, SrcLoc, size_t*);
 static CcStatement*_Nullable cc_get_stmt(CcParser*, size_t);
+static int cc_has_builtin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
 static uint32_t cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type);
 static int cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc);
 
@@ -9820,6 +9821,36 @@ cc_register_extern_var(CcParser* p, StringView name, CcQualType type){
 
 static
 int
+cc_has_builtin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    (void)arg_seps;
+    CcParser* p = ctx;
+    // Find the identifier token in the args.
+    StringView name = {0};
+    for(size_t i = 0; i < args->count; i++){
+        CppToken tok = args->data[i];
+        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+        if(tok.type == CPP_IDENTIFIER){
+            name = tok.txt;
+            break;
+        }
+        return cpp_error(cpp, tok.loc, "Expected identifier in __has_builtin");
+    }
+    if(!name.text)
+        return cpp_error(cpp, loc, "Expected identifier in __has_builtin");
+    _Bool found = 0;
+    Atom a = AT_get_atom(cpp->at, name.text, name.length);
+    if(a)
+        found = AM_get(&p->builtins, a) != 0;
+    CppToken result = {
+        .type = CPP_NUMBER,
+        .loc = loc,
+        .txt = found ? SV("1") : SV("0"),
+    };
+    return cpp_push_tok(cpp, outtoks, result);
+}
+
+static
+int
 cc_define_builtin_types(CcParser* p){
     int err;
     Allocator al = cc_allocator(p);
@@ -10095,6 +10126,9 @@ cc_define_builtin_types(CcParser* p){
             if(err) return CC_OOM_ERROR;
         }
     }
+    err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_builtin"), cc_has_builtin, p, 1, 0, 1);
+    if(err) return err;
+
     // Register type methods/fields
     {
         static const struct { StringView name; CcTypeIntrospectionOp op; } typeintro[] = {
