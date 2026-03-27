@@ -11401,7 +11401,8 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcExpr* type_val = cc_value_expr(p, e->loc, ccqt_basic(CCBT__Type));
                     if(!type_val) { err = CC_OOM_ERROR; goto fini_introspection; }
                     type_val->uinteger = f->type.bits;
-                    il->entries[0] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, type)}, .value = type_val};
+                    il->entries[0].field_loc.byte_offset = offsetof(CiRtField, type);
+                    il->entries[0].value = type_val;
                     // name (const char*) at offset 8
                     CcExpr* name_val = cc_value_expr(p, e->loc, p->const_char_star);
                     if(!name_val) { err = CC_OOM_ERROR; goto fini_introspection; }
@@ -11411,23 +11412,28 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                                        : (f->name ? f->name->length : 0);
                     name_val->text = fname;
                     name_val->str.length = fname_len + 1;
-                    il->entries[1] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, name)}, .value = name_val};
+                    il->entries[1].field_loc.byte_offset = offsetof(CiRtField, name);
+                    il->entries[1].value = name_val;
                     // name_length (unsigned) at offset 16
                     CcExpr* namelen_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), fname_len);
                     if(!namelen_val) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[2] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, name_length)}, .value = namelen_val};
+                    il->entries[2].field_loc.byte_offset = offsetof(CiRtField, name_length);
+                    il->entries[2].value = namelen_val;
                     // offset (unsigned)
                     CcExpr* off_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), f->offset);
                     if(!off_val) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[3] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, offset)}, .value = off_val};
+                    il->entries[3].field_loc.byte_offset = offsetof(CiRtField, offset);
+                    il->entries[3].value = off_val;
                     // bitwidth (unsigned)
                     CcExpr* bw_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), f->bitwidth);
                     if(!bw_val) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[4] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, bitwidth)}, .value = bw_val};
+                    il->entries[4].field_loc.byte_offset = offsetof(CiRtField, bitwidth);
+                    il->entries[4].value = bw_val;
                     // bitoffset (unsigned)
                     CcExpr* bo_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), f->bitoffset);
                     if(!bo_val) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[5] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtField, bitoffset)}, .value = bo_val};
+                    il->entries[5].field_loc.byte_offset = offsetof(CiRtField, bitoffset);
+                    il->entries[5].value = bo_val;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, p->builtin_field, 0);
                     if(!node) { err = CC_OOM_ERROR; goto fini_introspection; }
                     node->init_list = il;
@@ -11453,15 +11459,18 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(!name_val) { err = CC_OOM_ERROR; goto fini_introspection; }
                     name_val->text = en->name ? en->name->data : "";
                     name_val->str.length = en->name ? en->name->length + 1 : 1;
-                    il->entries[0] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtEnumerator, name)}, .value = name_val};
+                    il->entries[0].field_loc.byte_offset = offsetof(CiRtEnumerator, name);
+                    il->entries[0].value = name_val;
                     // name_length (unsigned)
                     CcExpr* namelen_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), en->name ? en->name->length : 0);
                     if(!namelen_val) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[1] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtEnumerator, name_length)}, .value = namelen_val};
+                    il->entries[1].field_loc.byte_offset = offsetof(CiRtEnumerator, name_length);
+                    il->entries[1].value = namelen_val;
                     // value (long long)
                     CcExpr* val_node = cc_int64_expr(p, e->loc, ccqt_basic(CCBT_long_long), en->value);
                     if(!val_node) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    il->entries[2] = (CcInitEntry){.field_loc = {.byte_offset = offsetof(CiRtEnumerator, value)}, .value = val_node};
+                    il->entries[2].field_loc.byte_offset = offsetof(CiRtEnumerator, value);
+                    il->entries[2].value = val_node;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, p->builtin_enumerator, 0);
                     if(!node) { err = CC_OOM_ERROR; goto fini_introspection; }
                     node->init_list = il;
