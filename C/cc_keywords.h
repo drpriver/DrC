@@ -99,6 +99,7 @@
     X(__typeof__, typeof) \
     X(__restrict, restrict) \
     X(__signed__, signed) \
+    X(__declspec, __declspec) \
 
 #define CCKWS11(X) \
     X(_Decimal128, _Decimal128) \

@@ -57,7 +57,9 @@ struct CcAttributes {
                      transparent_union: 1,
                      has_aligned:       1,
                      printf_like:       1,
-                     _padding:          12,
+                     is_noreturn:       1,
+                     is_thread_local:   1,
+                     _padding:          10,
                      vector_size:       16,
                      aligned:           16,
                      _padding2:         16;

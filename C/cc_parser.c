@@ -78,6 +78,7 @@ static CcExpr* _Nullable cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc
 typedef struct CcDeclBase CcDeclBase;
 static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_type, SrcLoc loc);
 static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
+static int cc_parse_declspec(CcParser* p, CcAttributes* attrs);
 static int cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type);
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
 static _Bool cc_lookup_field(CcField* _Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcFunc*_Nullable*_Nullable out_method);
@@ -542,6 +543,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_static_assert:
             case CC__Countof:
             case CC___attribute__:
+            case CC___declspec:
                 return 0;
         }
     }
@@ -3066,6 +3068,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 return cc_parse_lambda(p, vc, tok.loc, out);
             case CC___attribute__:
+            case CC___declspec:
             case CC__Noreturn:
             case CC_alignas:
             case CC_auto:
@@ -5573,6 +5576,109 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
     }
 }
 
+static
+int
+cc_parse_declspec(CcParser* p, CcAttributes* attrs){
+    int err = 0;
+    CcToken tok;
+    for(;;){
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type != CC_KEYWORD || tok.kw.kw != CC___declspec)
+            return 0;
+        err = cc_next_token(p, &tok); // consume __declspec
+        if(err) return err;
+        SrcLoc declspec_loc = tok.loc;
+        err = cc_expect_punct(p, CC_lparen);
+        if(err) return err;
+        for(;;){
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_rparen)
+                break;
+            err = cc_next_token(p, &tok);
+            if(err) return err;
+            // Handle keyword-named specifiers
+            if(tok.type == CC_KEYWORD){
+                if(tok.kw.kw == CC__Noreturn)
+                    attrs->is_noreturn = 1;
+                else {
+                    // Unknown keyword specifier — skip any argument list
+                    err = cc_peek(p, &tok);
+                    if(err) return err;
+                    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+                        err = cc_next_token(p, &tok);
+                        if(err) return err;
+                        int depth = 1;
+                        while(depth > 0){
+                            err = cc_next_token(p, &tok);
+                            if(err) return err;
+                            if(tok.type == CC_EOF)
+                                return cc_error(p, declspec_loc, "unterminated __declspec argument list");
+                            if(tok.type == CC_PUNCTUATOR){
+                                if(tok.punct.punct == CC_lparen) depth++;
+                                else if(tok.punct.punct == CC_rparen) depth--;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if(tok.type != CC_IDENTIFIER)
+                return cc_error(p, tok.loc, "expected __declspec specifier name");
+            StringView name = {.text = tok.ident.ident->data, .length = tok.ident.ident->length};
+            if(sv_equals(name, SV("align"))){
+                err = cc_expect_punct(p, CC_lparen);
+                if(err) return err;
+                CcExpr* expr = NULL;
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                if(err) return err;
+                if(!expr)
+                    return cc_error(p, tok.loc, "expected constant expression for __declspec(align)");
+                int64_t align_i;
+                err = cc_eval_integer(p, expr, &align_i);
+                cc_release_expr(p, expr);
+                if(err)
+                    return cc_error(p, tok.loc, "__declspec(align) requires a constant integral expression");
+                uint64_t align = (uint64_t)align_i;
+                if(align == 0 || (align & (align - 1)) != 0)
+                    return cc_error(p, tok.loc, "alignment must be a positive power of 2");
+                if(align > UINT16_MAX)
+                    return cc_error(p, tok.loc, "alignment too large");
+                attrs->aligned = (uint16_t)align;
+                attrs->has_aligned = 1;
+                err = cc_expect_punct(p, CC_rparen);
+                if(err) return err;
+            }
+            else if(sv_equals(name, SV("thread"))){
+                attrs->is_thread_local = 1;
+            }
+            else {
+                // Unknown specifier — skip any argument list
+                err = cc_peek(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+                    err = cc_next_token(p, &tok);
+                    if(err) return err;
+                    int depth = 1;
+                    while(depth > 0){
+                        err = cc_next_token(p, &tok);
+                        if(err) return err;
+                        if(tok.type == CC_EOF)
+                            return cc_error(p, declspec_loc, "unterminated __declspec argument list");
+                        if(tok.type == CC_PUNCTUATOR){
+                            if(tok.punct.punct == CC_lparen) depth++;
+                            else if(tok.punct.punct == CC_rparen) depth--;
+                        }
+                    }
+                }
+            }
+        }
+        err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+    }
+}
+
 
 static inline
 uint32_t
@@ -7061,6 +7167,8 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
     cc_clear_attributes(&p->attributes);
     err = cc_parse_attributes(p, &attrs);
     if(err) return err;
+    err = cc_parse_declspec(p, &attrs);
+    if(err) return err;
     Atom name = NULL;
     err = cc_peek(p, &tok);
     if(err) return err;
@@ -8083,6 +8191,25 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         }
                         continue;
                     }
+                    case CC___declspec: {
+                        err = cc_unget(p, &tok);
+                        if(err) return err;
+                        err = cc_parse_declspec(p, &p->attributes);
+                        if(err) return err;
+                        if(p->attributes.has_aligned){
+                            if(p->attributes.aligned > base->alignment)
+                                base->alignment = p->attributes.aligned;
+                        }
+                        if(p->attributes.is_noreturn){
+                            spec->sp_noreturn = 1;
+                            p->attributes.is_noreturn = 0;
+                        }
+                        if(p->attributes.is_thread_local){
+                            spec->sp_thread_local = 1;
+                            p->attributes.is_thread_local = 0;
+                        }
+                        continue;
+                    }
                     case CC_typeof_unqual:
                     do_typeof: {
                         if(base_type->bits)
@@ -8812,6 +8939,8 @@ cc_parse_statement(CcParser* p){
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");
                 case CC___attribute__:
                     return cc_unimplemented(p, tok.loc, "TODO: __attribute__ as statement"); // __attribute__((fallthrough))
+                case CC___declspec:
+                    return cc_error(p, tok.loc, "Unexpected keyword in this position");
             }
             break;
         case CC_PUNCTUATOR:
@@ -8967,6 +9096,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     case CC__Noreturn:
                     case CC__Type:
                     case CC___attribute__:
+                    case CC___declspec:
                     case CC___auto_type:
                     case CC___int128:
                     case CC_alignas:
@@ -9396,8 +9526,15 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         }
         if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
             CcTypeKind tk = ccqt_kind(type);
-            if(p->attributes.has_aligned && tk != CC_STRUCT && tk != CC_UNION)
-                return cc_error(p, declbase->loc, "aligned attribute on non-struct/union type is not supported");
+            if(p->attributes.has_aligned && tk != CC_STRUCT && tk != CC_UNION){
+                if(declbase->alignment >= p->attributes.aligned){
+                    // Already applied (e.g. from __declspec(align)), just clear
+                    p->attributes.has_aligned = 0;
+                    p->attributes.aligned = 0;
+                }
+                else
+                    return cc_error(p, declbase->loc, "aligned attribute on non-struct/union type is not supported");
+            }
             if(p->attributes.packed && tk != CC_STRUCT)
                 return cc_error(p, declbase->loc, "packed attribute on non-struct type is not supported");
             if(p->attributes.transparent_union && tk != CC_UNION)

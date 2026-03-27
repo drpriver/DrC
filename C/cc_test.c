@@ -449,6 +449,51 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "__declspec(align) on decl", __LINE__,
+            SV("__declspec(align(16)) int x;\n"
+               "int a[_Alignof x];\n"
+              ),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("a"), SV("int[16]") },
+            },
+        },
+        {
+            "__declspec(noreturn)", __LINE__,
+            SV("__declspec(noreturn) void die(void);\n"),
+            .funcs = {
+                { SV("die"), SV("void(void)") },
+            },
+        },
+        {
+            "__declspec(dllimport) ignored", __LINE__,
+            SV("__declspec(dllimport) int foo(void);\n"),
+            .funcs = {
+                { SV("foo"), SV("int(void)") },
+            },
+        },
+        {
+            "__declspec multiple specifiers", __LINE__,
+            SV("__declspec(dllimport noreturn) void bar(void);\n"),
+            .funcs = {
+                { SV("bar"), SV("void(void)") },
+            },
+        },
+        {
+            "__declspec(deprecated) with args ignored", __LINE__,
+            SV("__declspec(deprecated(\"use bar\")) int foo(void);\n"),
+            .funcs = {
+                { SV("foo"), SV("int(void)") },
+            },
+        },
+        {
+            "empty __declspec", __LINE__,
+            SV("__declspec() int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
             "typeof sizeof", __LINE__,
             SV("typeof(sizeof(int)) a;\n"),
             .vars = {
@@ -4636,6 +4681,24 @@ TestFunction(test_struct_layout){
             "aligned struct", __LINE__,
             SV("struct __attribute__((aligned(16))) Al { int x; };\n"),
             SV("Al"), 0,
+            .size = 16, .alignment = 16,
+            .fields = {
+                { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "__declspec(align) struct", __LINE__,
+            SV("__declspec(align(16)) struct Al2 { int x; };\n"),
+            SV("Al2"), 0,
+            .size = 16, .alignment = 16,
+            .fields = {
+                { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "__declspec(align) after struct keyword", __LINE__,
+            SV("struct __declspec(align(16)) Al3 { int x; };\n"),
+            SV("Al3"), 0,
             .size = 16, .alignment = 16,
             .fields = {
                 { SV("x"), .offset = 0 },
