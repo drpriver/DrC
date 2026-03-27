@@ -5785,7 +5785,7 @@ cpp_builtin_ident(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
         goto finally;
     }
     StringView sv = msb_borrow_sv(&sb);
-    Atom a = cpp_atomizef(cpp, "%.*s", sv_p(sv));
+    Atom a = cpp_atomizef(cpp, "%.*s", (int)sv.length, sv.text?sv.text:"");
     if(!a){ err = CPP_OOM_ERROR; goto finally; }
     CppToken tok = {
         .loc = loc,
