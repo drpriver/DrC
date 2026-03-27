@@ -457,7 +457,7 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
           }\
       }while(0)
 #else
-  #define TestExpect(lhs, rhs) do {\
+  #define TestExpect(lhs, op, rhs) do {\
           TEST_stats.executed++;\
           if (!((lhs) op (rhs))) {\
               TEST_stats.failures++; \
