@@ -116,6 +116,7 @@
     X(typeof_unqual, typeof_unqual) \
     X(_Thread_local, thread_local) \
     X(__attribute__, __attribute__) \
+    X(__forceinline, inline) \
 
 #define CCKWS14(X) \
     X(_Static_assert, static_assert) \
