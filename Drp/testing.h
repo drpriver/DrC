@@ -1269,7 +1269,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     int n_threads = 0;
     int n_cpus = num_cpus();
     char j_help[128];
-    snprintf(j_help, sizeof j_help, "Use as many threads as cpus (%d)", n_cpus);
+    (snprintf)(j_help, sizeof j_help, "Use as many threads as cpus (%d)", n_cpus);
 
     ArgToParse kw_args[] = {
         #ifndef __wasm__
