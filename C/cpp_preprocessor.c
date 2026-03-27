@@ -5302,17 +5302,41 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                "typedef double __m256d __attribute__((__vector_size__(32)));\n"
                                "#endif\n")},
         {SVI("xmmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<xmmintrin.h>)\n"
+                                "#include_next <xmmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
         {SVI("emmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<emmintrin.h>)\n"
+                                "#include_next <emmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
         {SVI("pmmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<pmmintrin.h>)\n"
+                                "#include_next <pmmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
         {SVI("tmmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<tmmintrin.h>)\n"
+                                "#include_next <tmmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
         {SVI("smmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<smmintrin.h>)\n"
+                                "#include_next <smmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
         {SVI("nmmintrin.h"),  SVI("#pragma once\n"
-                                "#include <immintrin.h>\n")},
+                                "#if __has_include_next(<nmmintrin.h>)\n"
+                                "#include_next <nmmintrin.h>\n"
+                                "#else\n"
+                                "#include <immintrin.h>\n"
+                                "#endif\n")},
     };
     for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
         err = cpp_cache_builtin_header(cpp, headers[i].name, headers[i].content);
