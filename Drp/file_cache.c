@@ -134,7 +134,24 @@ fc_is_file(FileCache* fc){
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
-    // TODO
+    {
+        MStringBuilder16 wb = {.allocator = fc->allocator};
+        msb16_write_utf8(&wb, f->path.text, f->path.length);
+        if(wb.errored){ msb16_destroy(&wb); goto finally; }
+        msb16_nul_terminate(&wb);
+        DWORD attrs = GetFileAttributesW((LPCWSTR)wb.data);
+        msb16_destroy(&wb);
+        f->valid = 1;
+        if(attrs == INVALID_FILE_ATTRIBUTES){
+            f->exists = 0;
+            f->is_file = 0;
+        }
+        else {
+            f->exists = 1;
+            result = !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+            f->is_file = result;
+        }
+    }
     #else
     struct stat s;
     int err = stat(f->path.text, &s);
@@ -162,6 +179,7 @@ int
 fc_read_file(FileCache* fc, StringView* outdata){
     int result = ENOENT;
     #ifdef _WIN32
+    HANDLE fh = INVALID_HANDLE_VALUE;
     #else
     int fd = -1;
     #endif
@@ -176,7 +194,64 @@ fc_read_file(FileCache* fc, StringView* outdata){
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
-    // TODO
+    {
+        MStringBuilder16 wb = {.allocator = fc->allocator};
+        msb16_write_utf8(&wb, f->path.text, f->path.length);
+        if(wb.errored){ msb16_destroy(&wb); goto finally; }
+        msb16_nul_terminate(&wb);
+        fh = CreateFileW((LPCWSTR)wb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        msb16_destroy(&wb);
+    }
+    if(fh == INVALID_HANDLE_VALUE){
+        f->valid = 1;
+        f->unreadable = 1;
+        f->is_file = 0;
+        result = ENOENT;
+        goto finally;
+    }
+    LARGE_INTEGER size;
+    if(!GetFileSizeEx(fh, &size)){
+        f->valid = 1;
+        f->exists = 0;
+        f->is_file = 0;
+        f->size_cached = 0;
+        f->data_cached = 0;
+        result = EIO;
+        goto finally;
+    }
+    f->valid = 1;
+    f->exists = 1;
+    f->is_file = 1;
+    f->size_cached = 1;
+    f->data_size = (size_t)size.QuadPart;
+    void* data = Allocator_alloc(fc->allocator, f->data_size);
+    if(!data){
+        f->data_cached = 0;
+        result = ENOMEM;
+        goto finally;
+    }
+    size_t nread = 0;
+    while(nread < f->data_size){
+        DWORD to_read = f->data_size - nread;
+        if(to_read > 0x80000000u) to_read = 0x80000000u;
+        DWORD n;
+        if(!ReadFile(fh, (char*)data + nread, to_read, &n, NULL)){
+            Allocator_free(fc->allocator, data, f->data_size);
+            result = EIO;
+            goto finally;
+        }
+        if(n == 0){
+            Allocator_free(fc->allocator, data, f->data_size);
+            result = EIO;
+            goto finally;
+        }
+        nread += n;
+    }
+    f->data_cached = 1;
+    f->data.buff = data;
+    f->data.n_bytes = nread;
+    *outdata = (StringView){f->data.n_bytes, f->data.buff};
+    result = 0;
     #else
     fd = open(f->path.text, O_RDONLY);
     if(fd < 0){
@@ -241,10 +316,10 @@ fc_read_file(FileCache* fc, StringView* outdata){
     f->data.n_bytes = nread;
     *outdata = (StringView){f->data.n_bytes, f->data.buff};
     result = 0;
-
     #endif
     finally:
     #ifdef _WIN32
+    if(fh != INVALID_HANDLE_VALUE) CloseHandle(fh);
     #else
     if(fd >= 0) close(fd);
     #endif
@@ -267,7 +342,38 @@ fc_get_size(FileCache* fc, size_t* sz){
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
     #ifdef _WIN32
-    // TODO
+    {
+        MStringBuilder16 wb = {.allocator = fc->allocator};
+        msb16_write_utf8(&wb, f->path.text, f->path.length);
+        if(wb.errored){ msb16_destroy(&wb); goto finally; }
+        msb16_nul_terminate(&wb);
+        HANDLE fh = CreateFileW((LPCWSTR)wb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        msb16_destroy(&wb);
+        if(fh == INVALID_HANDLE_VALUE){
+            f->valid = 1;
+            f->exists = 0;
+            f->is_file = 0;
+            result = ENOENT;
+            goto finally;
+        }
+        LARGE_INTEGER size;
+        if(!GetFileSizeEx(fh, &size)){
+            CloseHandle(fh);
+            f->valid = 1;
+            f->exists = 1;
+            f->is_file = 0;
+            result = EIO;
+            goto finally;
+        }
+        CloseHandle(fh);
+        f->valid = 1;
+        f->exists = 1;
+        f->is_file = 1;
+        f->size_cached = 1;
+        f->data_size = (size_t)size.QuadPart;
+        *sz = f->data_size;
+        result = 0;
+    }
     #else
     struct stat s;
     int err = stat(f->path.text, &s);
