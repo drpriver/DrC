@@ -57,7 +57,7 @@ static DbgDiffPrinter TEST_DIFF_PRINTER = {
     #elif defined __clang__
         #define TestDebugBreak() __builtin_debugtrap()
     #elif defined _MSC_VER
-        #define __builtin_debugtrap() __debugbreak()
+        #define TestDebugBreak() __debugbreak()
     #elif defined __GNUC__
         #if defined __x86_64__ || defined __i386__
             #define TestDebugBreak() asm("int $3")
