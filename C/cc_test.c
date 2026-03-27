@@ -4222,7 +4222,7 @@ TestFunction(test_parse_errors){
             "typedef redef diff type", __LINE__,
             SV("typedef int foo;\n"
                "typedef float foo;\n"),
-            SV("(test):2:18: error: redefinition of typedef 'foo' with different type\n"),
+            SV("(test):2:18: error: redefinition of typedef 'foo' as 'float'; previously defined as 'int'\n"),
         },
         {
             "ptr addassign float", __LINE__,

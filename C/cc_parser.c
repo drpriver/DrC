@@ -9786,8 +9786,19 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         }
         if(declbase->spec.sp_typedef){
             CcQualType existing_td = cc_scope_lookup_typedef(p->current, name, CC_SCOPE_NO_WALK);
-            if(existing_td.bits && existing_td.bits != type.bits)
-                return cc_error(p, tok.loc, "redefinition of typedef '%.*s' with different type", name->length, name->data);
+            if(existing_td.bits && existing_td.bits != type.bits){
+                cpp_include_backtrace(&p->cpp, LOG_PRINT_ERROR);
+                cpp_msg_preamble(&p->cpp, tok.loc, "error");
+                MStringBuilder* buff = &p->cpp.logger->buff;
+                msb_sprintf(buff, "redefinition of typedef '%.*s' as '", name->length, name->data);
+                cc_print_type(buff, type);
+                msb_write_literal(buff, "'; previously defined as '");
+                cc_print_type(buff, existing_td);
+                msb_write_char(buff, '\'');
+                log_flush(p->cpp.logger, LOG_PRINT_ERROR);
+                cpp_msg_postamble(&p->cpp, tok.loc, LOG_PRINT_ERROR);
+                return CC_SYNTAX_ERROR;
+            }
             err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type);
             if(err) return err;
         }
