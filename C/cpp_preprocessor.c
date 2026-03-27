@@ -5265,8 +5265,10 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                            )},
         {SVI("stdnoreturn.h"), SVI("#pragma once\n"
                               "#defifndef noreturn _Noreturn\n")},
+        #if 0
         {SVI("setjmp.h"), SVI("#pragma once\n"
-                            "#error setjmp not implemented\n")},
+                              "#error setjmp not implemented\n")},
+        #endif
         // nonstandard
         {SVI("std.h"),      SVI("#pragma once\n"
                               "#include <assert.h>\n"
