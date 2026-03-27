@@ -21,6 +21,13 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifdef _MSC_VER
+#define ALIGN(n) __declspec(align(n))
+#else
+#define ALIGN(n) __attribute((aligned(n)))
+#endif
+
+
 enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_BASIC,
     CC_ENUM,
@@ -96,8 +103,8 @@ CcTypeKind ccqt_kind(CcQualType t) {
 }
 
 typedef struct CcPointer CcPointer;
-struct CcPointer {
-    _Alignas(8) union {
+struct ALIGN(8) CcPointer {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind: 4;
@@ -107,12 +114,13 @@ struct CcPointer {
     };
     CcQualType pointee;
 };
+_Static_assert(_Alignof(CcPointer)==8, "");
 
 typedef struct CcExpr CcExpr;
 
 typedef struct CcArray CcArray;
-struct CcArray {
-    _Alignas(8) union {
+struct ALIGN(8) CcArray {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
@@ -130,10 +138,11 @@ struct CcArray {
         CcExpr* _Nullable vla_expr;
     };
 };
+_Static_assert(_Alignof(CcArray)==8, "");
 
 typedef struct CcFunction CcFunction;
-struct CcFunction {
-    _Alignas(8) union {
+struct ALIGN(8) CcFunction {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:       4;
@@ -146,6 +155,7 @@ struct CcFunction {
     uint32_t param_count;
     CcQualType params[];
 };
+_Static_assert(_Alignof(CcFunction)==8, "");
 
 typedef struct CcFunc CcFunc;
 typedef struct CcField CcField;
@@ -172,8 +182,8 @@ enum CcSysVEightByte TYPED_ENUM(uint32_t){
 TYPEDEF_ENUM(CcSysVEightByte, uint32_t);
 
 typedef struct CcStruct CcStruct;
-struct CcStruct {
-    _Alignas(8) union {
+struct ALIGN(8) CcStruct {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
@@ -211,10 +221,11 @@ struct CcStruct {
     CcField* _Null_unspecified fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
+_Static_assert(_Alignof(CcStruct)==8, "");
 
 typedef struct CcUnion CcUnion;
-struct CcUnion {
-    _Alignas(8) union {
+struct ALIGN(8) CcUnion {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
@@ -249,6 +260,7 @@ struct CcUnion {
     CcField* _Nullable fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
 };
+_Static_assert(_Alignof(CcUnion)==8, "");
 _Static_assert(offsetof(CcUnion, size) == 4, "");
 _Static_assert(offsetof(CcStruct, size) == 4, "");
 _Static_assert(sizeof(CcUnion) == sizeof(CcStruct), "");
@@ -262,8 +274,8 @@ struct CcEnumerator {
 };
 
 typedef struct CcEnum CcEnum;
-struct CcEnum {
-    _Alignas(8) union {
+struct ALIGN(8) CcEnum {
+    union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:        4;
@@ -277,6 +289,7 @@ struct CcEnum {
     size_t enumerator_count;
     CcEnumerator*_Nonnull* _Nullable enumerators;
 };
+_Static_assert(_Alignof(CcEnum)==8, "");
 
 
 static inline
@@ -492,6 +505,7 @@ ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
         t = ccqt_as_enum(t)->underlying;
     return ccqt_is_basic(t) && ccbt_is_unsigned(t.basic.kind, unsigned_char);
 }
+#undef ALIGN
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
