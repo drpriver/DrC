@@ -33,13 +33,23 @@
 #pragma clang assume_nonnull begin
 #endif
 
-#ifndef DEFAULT_UNREACHABLE
+#ifndef CASES_EXHAUSTED
 #if defined __GNUC__ && !defined __clang__
+#define CASES_EXHAUSTED default: __builtin_unreachable()
+#elif defined _MSC_VER
+#define CASES_EXHAUSTED default: __assume(0)
+#else
+#define CASES_EXHAUSTED
+#endif
+#endif
+
+#ifndef DEFAULT_UNREACHABLE
+#if defined __GNUC__
 #define DEFAULT_UNREACHABLE default: __builtin_unreachable()
 #elif defined _MSC_VER
 #define DEFAULT_UNREACHABLE default: __assume(0)
 #else
-#define DEFAULT_UNREACHABLE
+#define DEFAULT_UNREACHABLE default: abort()
 #endif
 #endif
 
@@ -340,8 +350,65 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
                 return 0;
             }
             return ci_error(ci, expr->loc, "expression is not an lvalue");
-        default:
+        case CC_EXPR_SIZEOF_VMT:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+        case CC_EXPR_NEG:
+        case CC_EXPR_POS:
+        case CC_EXPR_BITNOT:
+        case CC_EXPR_LOGNOT:
+        case CC_EXPR_ADDR:
+        case CC_EXPR_PREINC:
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_POSTDEC:
+        case CC_EXPR_ADD:
+        case CC_EXPR_SUB:
+        case CC_EXPR_MUL:
+        case CC_EXPR_DIV:
+        case CC_EXPR_MOD:
+        case CC_EXPR_BITAND:
+        case CC_EXPR_BITOR:
+        case CC_EXPR_BITXOR:
+        case CC_EXPR_LSHIFT:
+        case CC_EXPR_RSHIFT:
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR:
+        case CC_EXPR_EQ:
+        case CC_EXPR_NE:
+        case CC_EXPR_LT:
+        case CC_EXPR_GT:
+        case CC_EXPR_LE:
+        case CC_EXPR_GE:
+        case CC_EXPR_ASSIGN:
+        case CC_EXPR_ADDASSIGN:
+        case CC_EXPR_SUBASSIGN:
+        case CC_EXPR_MULASSIGN:
+        case CC_EXPR_DIVASSIGN:
+        case CC_EXPR_MODASSIGN:
+        case CC_EXPR_BITANDASSIGN:
+        case CC_EXPR_BITORASSIGN:
+        case CC_EXPR_BITXORASSIGN:
+        case CC_EXPR_LSHIFTASSIGN:
+        case CC_EXPR_RSHIFTASSIGN:
+        case CC_EXPR_CAST:
+        case CC_EXPR_CALL:
+        case CC_EXPR_STATEMENT_EXPRESSION:
+        case CC_EXPR_ATOMIC:
+        case CC_EXPR_VA:
+        case CC_EXPR_BUILTIN:
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_INTERN:
+        case CC_EXPR_TYPE_INTROSPECTION:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
+        CASES_EXHAUSTED;
     }
 }
 
@@ -1038,121 +1105,110 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         _Bool lhs_ptr = ccqt_is_pointer_like(lhs->type);
         _Bool rhs_ptr = ccqt_is_pointer_like(rhs->type);
         if(lhs_ptr || rhs_ptr){
-            if(expr->kind == CC_EXPR_ADD && lhs_ptr && !rhs_ptr){
-                CcQualType pointee;
-                if(ccqt_kind(lhs->type) == CC_POINTER)
-                    pointee = ccqt_as_ptr(lhs->type)->pointee;
-                else
-                    pointee = ccqt_as_array(lhs->type)->element;
-                uint32_t elem_sz;
-                err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                if(err) return err;
-                char* ptr = NULL;
-                memcpy(&ptr, &lbuf128, sizeof ptr);
-                _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
-                ptr += idx * elem_sz;
-                memcpy(result, &ptr, sizeof ptr);
-                return 0;
+            // Pointer arithmetic helper: get pointee and elem_sz from the pointer side
+            CcExpr* ptr_side = lhs_ptr ? lhs : rhs;
+            CcQualType pointee;
+            if(ccqt_kind(ptr_side->type) == CC_POINTER)
+                pointee = ccqt_as_ptr(ptr_side->type)->pointee;
+            else
+                pointee = ccqt_as_array(ptr_side->type)->element;
+            uint32_t elem_sz;
+            err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
+            if(err) return err;
+            switch((uint32_t)expr->kind){
+                case CC_EXPR_ADD: {
+                    CiUint128 *ptr_buf = lhs_ptr ? &lbuf128 : &rbuf128;
+                    CiUint128 *idx_buf = lhs_ptr ? &rbuf128 : &lbuf128;
+                    CcExpr* idx_side = lhs_ptr ? rhs : lhs;
+                    uint32_t idx_sz = lhs_ptr ? rsz : lsz;
+                    char* ptr = NULL;
+                    memcpy(&ptr, ptr_buf, sizeof ptr);
+                    _Bool idx_unsigned = ccqt_is_unsigned(idx_side->type, !ci_target(ci)->char_is_signed);
+                    int64_t idx = ci_read_int_any(idx_buf, idx_sz, idx_unsigned);
+                    ptr += idx * elem_sz;
+                    memcpy(result, &ptr, sizeof ptr);
+                    return 0;
+                }
+                case CC_EXPR_SUB: {
+                    char* lp = NULL;
+                    memcpy(&lp, &lbuf128, sizeof lp);
+                    if(rhs_ptr){
+                        // ptr - ptr
+                        char* rp = NULL;
+                        memcpy(&rp, &rbuf128, sizeof rp);
+                        int64_t diff = (lp - rp) / (int64_t)elem_sz;
+                        ci_write_uint(result, result_sz, (uint64_t)diff);
+                    } else {
+                        // ptr - int
+                        _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
+                        int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
+                        lp -= idx * elem_sz;
+                        memcpy(result, &lp, sizeof lp);
+                    }
+                    return 0;
+                }
+                #define PTR_CMP(op) do { \
+                    char* lp = NULL, *rp = NULL; \
+                    memcpy(&lp, &lbuf128, sizeof lp); \
+                    memcpy(&rp, &rbuf128, sizeof rp); \
+                    ci_write_uint(result, result_sz, lp op rp); \
+                    return 0; \
+                } while(0)
+                case CC_EXPR_EQ: PTR_CMP(==);
+                case CC_EXPR_NE: PTR_CMP(!=);
+                case CC_EXPR_LT: PTR_CMP(<);
+                case CC_EXPR_GT: PTR_CMP(>);
+                case CC_EXPR_LE: PTR_CMP(<=);
+                case CC_EXPR_GE: PTR_CMP(>=);
+                #undef PTR_CMP
+                DEFAULT_UNREACHABLE;
             }
-            if(expr->kind == CC_EXPR_ADD && !lhs_ptr && rhs_ptr){
-                CcQualType pointee;
-                if(ccqt_kind(rhs->type) == CC_POINTER)
-                    pointee = ccqt_as_ptr(rhs->type)->pointee;
-                else
-                    pointee = ccqt_as_array(rhs->type)->element;
-                uint32_t elem_sz;
-                err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                if(err) return err;
-                char* ptr = NULL;
-                memcpy(&ptr, &rbuf128, sizeof ptr);
-                _Bool idx_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = ci_read_int_any(&lbuf128, lsz, idx_unsigned);
-                ptr += idx * elem_sz;
-                memcpy(result, &ptr, sizeof ptr);
-                return 0;
-            }
-            if(expr->kind == CC_EXPR_SUB && lhs_ptr && !rhs_ptr){
-                CcQualType pointee;
-                if(ccqt_kind(lhs->type) == CC_POINTER)
-                    pointee = ccqt_as_ptr(lhs->type)->pointee;
-                else
-                    pointee = ccqt_as_array(lhs->type)->element;
-                uint32_t elem_sz;
-                err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                if(err) return err;
-                char* ptr = NULL;
-                memcpy(&ptr, &lbuf128, sizeof ptr);
-                _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
-                int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
-                ptr -= idx * elem_sz;
-                memcpy(result, &ptr, sizeof ptr);
-                return 0;
-            }
-            if(expr->kind == CC_EXPR_SUB && lhs_ptr && rhs_ptr){
-                CcQualType pointee;
-                if(ccqt_kind(lhs->type) == CC_POINTER)
-                    pointee = ccqt_as_ptr(lhs->type)->pointee;
-                else
-                    pointee = ccqt_as_array(lhs->type)->element;
-                uint32_t elem_sz;
-                err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                if(err) return err;
-                char* lp = NULL, *rp = NULL;
-                memcpy(&lp, &lbuf128, sizeof lp);
-                memcpy(&rp, &rbuf128, sizeof rp);
-                int64_t diff = (lp - rp) / (int64_t)elem_sz;
-                ci_write_uint(result, result_sz, (uint64_t)diff);
-                return 0;
-            }
-            char* lp = NULL, *rp = NULL;
-            memcpy(&lp, &lbuf128, sizeof lp);
-            memcpy(&rp, &rbuf128, sizeof rp);
-            _Bool cmp;
-            switch(expr->kind){
-                case CC_EXPR_EQ: cmp = lp == rp; break;
-                case CC_EXPR_NE: cmp = lp != rp; break;
-                case CC_EXPR_LT: cmp = lp <  rp; break;
-                case CC_EXPR_GT: cmp = lp >  rp; break;
-                case CC_EXPR_LE: cmp = lp <= rp; break;
-                case CC_EXPR_GE: cmp = lp >= rp; break;
-                default:
-                    return ci_error(ci, expr->loc, "unsupported pointer operation");
-            }
-            ci_write_uint(result, result_sz, cmp);
-            return 0;
         }
         _Bool is_float = ccqt_is_basic(lhs->type) && ccbt_is_float(lhs->type.basic.kind);
         if(is_float){
             double ld = ci_read_float(&lbuf128, lhs->type.basic.kind);
             double rd = ci_read_float(&rbuf128, rhs->type.basic.kind);
-            double res;
-            switch(expr->kind){
-                case CC_EXPR_ADD: res = ld + rd; break;
-                case CC_EXPR_SUB: res = ld - rd; break;
-                case CC_EXPR_MUL: res = ld * rd; break;
-                case CC_EXPR_DIV: res = ld / rd; break;
-                default: {
-                    _Bool cmp;
-                    switch(expr->kind){
-                        case CC_EXPR_EQ: cmp = ld == rd; break;
-                        case CC_EXPR_NE: cmp = ld != rd; break;
-                        case CC_EXPR_LT: cmp = ld <  rd; break;
-                        case CC_EXPR_GT: cmp = ld >  rd; break;
-                        case CC_EXPR_LE: cmp = ld <= rd; break;
-                        case CC_EXPR_GE: cmp = ld >= rd; break;
-                        default:
-                            return ci_error(ci, expr->loc, "unsupported float operation");
-                    }
-                    ci_write_uint(result, result_sz, cmp);
+            switch((uint32_t)expr->kind){
+                case CC_EXPR_ADD: {
+                    double res = ld + rd;
+                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
+                        ci_write_float(result, expr->type.basic.kind, res);
+                    else
+                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
                     return 0;
                 }
+                case CC_EXPR_SUB: {
+                    double res = ld - rd;
+                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
+                        ci_write_float(result, expr->type.basic.kind, res);
+                    else
+                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
+                    return 0;
+                }
+                case CC_EXPR_MUL: {
+                    double res = ld * rd;
+                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
+                        ci_write_float(result, expr->type.basic.kind, res);
+                    else
+                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
+                    return 0;
+                }
+                case CC_EXPR_DIV: {
+                    double res = ld / rd;
+                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
+                        ci_write_float(result, expr->type.basic.kind, res);
+                    else
+                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
+                    return 0;
+                }
+                case CC_EXPR_EQ: ci_write_uint(result, result_sz, ld == rd); return 0;
+                case CC_EXPR_NE: ci_write_uint(result, result_sz, ld != rd); return 0;
+                case CC_EXPR_LT: ci_write_uint(result, result_sz, ld <  rd); return 0;
+                case CC_EXPR_GT: ci_write_uint(result, result_sz, ld >  rd); return 0;
+                case CC_EXPR_LE: ci_write_uint(result, result_sz, ld <= rd); return 0;
+                case CC_EXPR_GE: ci_write_uint(result, result_sz, ld >= rd); return 0;
+                DEFAULT_UNREACHABLE;
             }
-            if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
-                ci_write_float(result, expr->type.basic.kind, res);
-            else
-                ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
-            return 0;
         }
         _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
         if(lsz > 8 || rsz > 8 || result_sz > 8){
@@ -1173,7 +1229,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     ci_uint128_read(&ru, &rbuf128, rsz);
             }
             CiUint128 res;
-            switch(expr->kind){
+            switch((uint32_t)expr->kind){
                 case CC_EXPR_ADD: res = ci_uint128_add(lu, ru); break;
                 case CC_EXPR_SUB: res = ci_uint128_sub(lu, ru); break;
                 case CC_EXPR_MUL: res = ci_uint128_mul(lu, ru); break;
@@ -1225,7 +1281,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         ci_write_uint(result, result_sz, ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
                     return 0;
-                default: res = ci_uint128_from_uint64(0); break;
+                DEFAULT_UNREACHABLE;
             }
             ci_uint128_write(result, result_sz, res);
             return 0;
@@ -1240,7 +1296,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             ru = (uint64_t)ci_read_int(&rbuf128, rsz);
         }
         uint64_t res;
-        switch(expr->kind){
+        switch((uint32_t)expr->kind){
             case CC_EXPR_ADD: res = lu + ru; break;
             case CC_EXPR_SUB: res = lu - ru; break;
             case CC_EXPR_MUL: res = lu * ru; break;
@@ -1280,7 +1336,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_EXPR_GE:
                 res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru);
                 break;
-            default: res = 0; break;
+            DEFAULT_UNREACHABLE;
         }
         ci_write_uint(result, result_sz, res);
         return 0;
@@ -1313,7 +1369,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             else
                 ru = (uint64_t)ci_read_int(&rbuf, rsz);
             uint64_t res;
-            switch(expr->kind){
+            switch((uint32_t)expr->kind){
                 case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
                 case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
                 case CC_EXPR_MULASSIGN:    res = lu * ru; break;
@@ -1339,7 +1395,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = (uint64_t)((int64_t)lu >> ru);
                     break;
-                default: res = 0; break;
+                DEFAULT_UNREACHABLE;
             }
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
             if(result == ci_discard_buf) return 0;
@@ -1389,12 +1445,12 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             double ld = ci_read_float(lval, expr->type.basic.kind);
             double rd = ci_read_float(&rbuf, expr->values[0]->type.basic.kind);
             double res;
-            switch(expr->kind){
+            switch((uint32_t)expr->kind){
                 case CC_EXPR_ADDASSIGN: res = ld + rd; break;
                 case CC_EXPR_SUBASSIGN: res = ld - rd; break;
                 case CC_EXPR_MULASSIGN: res = ld * rd; break;
                 case CC_EXPR_DIVASSIGN: res = rd != 0.0 ? ld / rd : 0.0; break;
-                default: return ci_error(ci, expr->loc, "unsupported float compound assignment");
+                DEFAULT_UNREACHABLE;
             }
             ci_write_float(lval, expr->type.basic.kind, res);
             if(result == ci_discard_buf) return 0;
@@ -1418,7 +1474,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     ci_uint128_read(&ru, &rbuf, rsz);
             }
             CiUint128 res;
-            switch(expr->kind){
+            switch((uint32_t)expr->kind){
                 case CC_EXPR_ADDASSIGN:    res = ci_uint128_add(lu, ru); break;
                 case CC_EXPR_SUBASSIGN:    res = ci_uint128_sub(lu, ru); break;
                 case CC_EXPR_MULASSIGN:    res = ci_uint128_mul(lu, ru); break;
@@ -1444,7 +1500,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
                     break;
-                default: res = ci_uint128_from_uint64(0); break;
+                DEFAULT_UNREACHABLE;
             }
             ci_uint128_write(lval, sz, res);
             if(result == ci_discard_buf) return 0;
@@ -1462,7 +1518,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 ru = (uint64_t)ci_read_int(&rbuf, rsz);
             }
             uint64_t res;
-            switch(expr->kind){
+            switch((uint32_t)expr->kind){
                 case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
                 case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
                 case CC_EXPR_MULASSIGN:    res = lu * ru; break;
@@ -1488,7 +1544,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = (uint64_t)((int64_t)lu >> ru);
                     break;
-                default: res = 0; break;
+                DEFAULT_UNREACHABLE;
             }
             ci_write_uint(lval, sz, res);
             if(result == ci_discard_buf) return 0;
@@ -1807,7 +1863,15 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
                 }
                 break;
-            default: return ci_error(ci, expr->loc, "unsupported atomic operation");
+            case CC_ATOMIC_LOAD_N:
+            case CC_ATOMIC_LOAD:
+            case CC_ATOMIC_STORE:
+            case CC_ATOMIC_EXCHANGE:
+            case CC_ATOMIC_COMPARE_EXCHANGE_N:
+            case CC_ATOMIC_COMPARE_EXCHANGE:
+            case CC_ATOMIC_THREAD_FENCE:
+            case CC_ATOMIC_SIGNAL_FENCE:
+                return ci_error(ci, expr->loc, "unsupported atomic operation");
         }
         #undef ATOMIC_DISPATCH
         return 0;
@@ -2097,7 +2161,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_IS_INCOMPLETE: {
                 CcTypeKind k = ccqt_kind(qt);
                 switch(k){
-                    DEFAULT_UNREACHABLE;
+                    CASES_EXHAUSTED;
                     case CC_STRUCT:
                         *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
                         break;
@@ -2362,11 +2426,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz)) : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
         // Compute in infinite precision
         CiInt128 r;
-        switch(expr->kind){
+        switch((uint32_t)expr->kind){
             case CC_EXPR_ADD_OVERFLOW: r = ci_int128_add(a, b); break;
             case CC_EXPR_SUB_OVERFLOW: r = ci_int128_sub(a, b); break;
             case CC_EXPR_MUL_OVERFLOW: r = ci_int128_mul(a, b); break;
-            default: return CI_UNREACHABLE_ERROR;
+            DEFAULT_UNREACHABLE;
         }
         // Get result pointer and destination type
         void* res_ptr = NULL;

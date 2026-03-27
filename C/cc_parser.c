@@ -129,13 +129,23 @@ enum {
 #pragma clang assume_nonnull begin
 #endif
 
-#ifndef DEFAULT_UNREACHABLE
+#ifndef CASES_EXHAUSTED
 #if defined __GNUC__ && !defined __clang__
+#define CASES_EXHAUSTED default: __builtin_unreachable()
+#elif defined _MSC_VER
+#define CASES_EXHAUSTED default: __assume(0)
+#else
+#define CASES_EXHAUSTED
+#endif
+#endif
+
+#ifndef DEFAULT_UNREACHABLE
+#if defined __GNUC__
 #define DEFAULT_UNREACHABLE default: __builtin_unreachable()
 #elif defined _MSC_VER
 #define DEFAULT_UNREACHABLE default: __assume(0)
 #else
-#define DEFAULT_UNREACHABLE
+#define DEFAULT_UNREACHABLE default: abort()
 #endif
 #endif
 
@@ -498,7 +508,38 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_const: case CC_volatile: case CC_restrict:
             case CC__Type:
                 return 1;
-            default:
+            case CC_do:
+            case CC_if:
+            case CC_for:
+            case CC_asm:
+            case CC_true:
+            case CC_auto:
+            case CC_else:
+            case CC_case:
+            case CC_goto:
+            case CC_false:
+            case CC_break:
+            case CC_while:
+            case CC_extern:
+            case CC_inline:
+            case CC_return:
+            case CC_sizeof:
+            case CC_static:
+            case CC_switch:
+            case CC_alignas:
+            case CC_alignof:
+            case CC_default:
+            case CC_typedef:
+            case CC_nullptr:
+            case CC_continue:
+            case CC_register:
+            case CC__Generic:
+            case CC_constexpr:
+            case CC__Noreturn:
+            case CC_thread_local:
+            case CC_static_assert:
+            case CC__Countof:
+            case CC___attribute__:
                 return 0;
         }
     }
@@ -841,7 +882,7 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
     CcQualType size_type = ccqt_basic(cfg->size_type);
     uint64_t align;
     switch(ccqt_kind(t)){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CC_BASIC:{
             if(t.basic.kind >= CCBT_COUNT)
                 return cc_error(p, loc, "alignof applied to invalid kind");
@@ -1504,7 +1545,12 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                 }
                 break;
             }
-            default: {
+            case CC_EXPR_MUL:
+            case CC_EXPR_DIV:
+            case CC_EXPR_MOD:
+            case CC_EXPR_BITAND:
+            case CC_EXPR_BITOR:
+            case CC_EXPR_BITXOR: {
                 // arithmetic/bitwise: *,/,%,&,|,^
                 err = cc_usual_arithmetic(p, left->type, right->type, &result_type, tok.loc);
                 if(err) return err;
@@ -1519,6 +1565,54 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                 if(err) return err;
                 break;
             }
+            case CC_EXPR_VALUE:
+            case CC_EXPR_SIZEOF_VMT:
+            case CC_EXPR_VARIABLE:
+            case CC_EXPR_FUNCTION:
+            case CC_EXPR_COMPOUND_LITERAL:
+            case CC_EXPR_INIT_LIST:
+            case CC_EXPR_NEG:
+            case CC_EXPR_POS:
+            case CC_EXPR_BITNOT:
+            case CC_EXPR_LOGNOT:
+            case CC_EXPR_DEREF:
+            case CC_EXPR_ADDR:
+            case CC_EXPR_PREINC:
+            case CC_EXPR_PREDEC:
+            case CC_EXPR_POSTINC:
+            case CC_EXPR_POSTDEC:
+            case CC_EXPR_ASSIGN:
+            case CC_EXPR_ADDASSIGN:
+            case CC_EXPR_SUBASSIGN:
+            case CC_EXPR_MULASSIGN:
+            case CC_EXPR_DIVASSIGN:
+            case CC_EXPR_MODASSIGN:
+            case CC_EXPR_BITANDASSIGN:
+            case CC_EXPR_BITORASSIGN:
+            case CC_EXPR_BITXORASSIGN:
+            case CC_EXPR_LSHIFTASSIGN:
+            case CC_EXPR_RSHIFTASSIGN:
+            case CC_EXPR_TERNARY:
+            case CC_EXPR_CAST:
+            case CC_EXPR_CALL:
+            case CC_EXPR_SUBSCRIPT:
+            case CC_EXPR_DOT:
+            case CC_EXPR_ARROW:
+            case CC_EXPR_COMMA:
+            case CC_EXPR_STATEMENT_EXPRESSION:
+            case CC_EXPR_ATOMIC:
+            case CC_EXPR_VA:
+            case CC_EXPR_BUILTIN:
+            case CC_EXPR_ADD_OVERFLOW:
+            case CC_EXPR_MUL_OVERFLOW:
+            case CC_EXPR_SUB_OVERFLOW:
+            case CC_EXPR_POPCOUNT:
+            case CC_EXPR_CLZ:
+            case CC_EXPR_CTZ:
+            case CC_EXPR_ALLOCA:
+            case CC_EXPR_INTERN:
+            case CC_EXPR_TYPE_INTROSPECTION:
+                return CC_UNREACHABLE_ERROR;
         }
         CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 1);
         if(!node) return CC_OOM_ERROR;
@@ -1599,7 +1693,46 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             case CC_amp:       kind = CC_EXPR_ADDR;   break;
             case CC_plusplus:   kind = CC_EXPR_PREINC; break;
             case CC_minusminus:kind = CC_EXPR_PREDEC; break;
-            default: is_prefix = 0; break;
+            case CC_lbracket:
+            case CC_rbracket:
+            case CC_lparen:
+            case CC_rparen:
+            case CC_lbrace:
+            case CC_rbrace:
+            case CC_dot:
+            case CC_slash:
+            case CC_percent:
+            case CC_lt:
+            case CC_gt:
+            case CC_xor:
+            case CC_pipe:
+            case CC_question:
+            case CC_colon:
+            case CC_semi:
+            case CC_assign:
+            case CC_comma:
+            case CC_arrow:
+            case CC_lshift:
+            case CC_rshift:
+            case CC_le:
+            case CC_ge:
+            case CC_eq:
+            case CC_ne:
+            case CC_and:
+            case CC_or:
+            case CC_double_colon:
+            case CC_ellipsis:
+            case CC_star_assign:
+            case CC_slash_assign:
+            case CC_percent_assign:
+            case CC_plus_assign:
+            case CC_minus_assign:
+            case CC_lshift_assign:
+            case CC_rshift_assign:
+            case CC_amp_assign:
+            case CC_xor_assign:
+            case CC_pipe_assign:
+                is_prefix = 0; break;
         }
         if(is_prefix){
             if((kind == CC_EXPR_PREINC || kind == CC_EXPR_PREDEC) && vc > CC_RUNTIME_VALUE)
@@ -1671,7 +1804,8 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     break;
                 }
-                default: // PREINC, PREDEC
+                case CC_EXPR_PREINC:
+                case CC_EXPR_PREDEC:
                     if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
@@ -1687,6 +1821,64 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     }
                     result_type = operand->type;
                     break;
+                case CC_EXPR_VALUE:
+                case CC_EXPR_SIZEOF_VMT:
+                case CC_EXPR_VARIABLE:
+                case CC_EXPR_FUNCTION:
+                case CC_EXPR_COMPOUND_LITERAL:
+                case CC_EXPR_INIT_LIST:
+                case CC_EXPR_POSTINC:
+                case CC_EXPR_POSTDEC:
+                case CC_EXPR_ADD:
+                case CC_EXPR_SUB:
+                case CC_EXPR_MUL:
+                case CC_EXPR_DIV:
+                case CC_EXPR_MOD:
+                case CC_EXPR_BITAND:
+                case CC_EXPR_BITOR:
+                case CC_EXPR_BITXOR:
+                case CC_EXPR_LSHIFT:
+                case CC_EXPR_RSHIFT:
+                case CC_EXPR_LOGAND:
+                case CC_EXPR_LOGOR:
+                case CC_EXPR_EQ:
+                case CC_EXPR_NE:
+                case CC_EXPR_LT:
+                case CC_EXPR_GT:
+                case CC_EXPR_LE:
+                case CC_EXPR_GE:
+                case CC_EXPR_ASSIGN:
+                case CC_EXPR_ADDASSIGN:
+                case CC_EXPR_SUBASSIGN:
+                case CC_EXPR_MULASSIGN:
+                case CC_EXPR_DIVASSIGN:
+                case CC_EXPR_MODASSIGN:
+                case CC_EXPR_BITANDASSIGN:
+                case CC_EXPR_BITORASSIGN:
+                case CC_EXPR_BITXORASSIGN:
+                case CC_EXPR_LSHIFTASSIGN:
+                case CC_EXPR_RSHIFTASSIGN:
+                case CC_EXPR_TERNARY:
+                case CC_EXPR_CAST:
+                case CC_EXPR_CALL:
+                case CC_EXPR_SUBSCRIPT:
+                case CC_EXPR_DOT:
+                case CC_EXPR_ARROW:
+                case CC_EXPR_COMMA:
+                case CC_EXPR_STATEMENT_EXPRESSION:
+                case CC_EXPR_ATOMIC:
+                case CC_EXPR_VA:
+                case CC_EXPR_BUILTIN:
+                case CC_EXPR_ADD_OVERFLOW:
+                case CC_EXPR_MUL_OVERFLOW:
+                case CC_EXPR_SUB_OVERFLOW:
+                case CC_EXPR_POPCOUNT:
+                case CC_EXPR_CLZ:
+                case CC_EXPR_CTZ:
+                case CC_EXPR_ALLOCA:
+                case CC_EXPR_INTERN:
+                case CC_EXPR_TYPE_INTROSPECTION:
+                    return CC_UNREACHABLE_ERROR;
             }
             CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 0);
             if(!node) return CC_OOM_ERROR;
@@ -1784,6 +1976,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_uSTRING:  elem_type = cc_target(p)->char16_type; break;
                 case CC_USTRING:  elem_type = cc_target(p)->char32_type; break;
                 case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
+                CASES_EXHAUSTED;
             }
             CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
             if(!sa) return CC_OOM_ERROR;
@@ -2026,7 +2219,46 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC__atomic_exchange_n:op = CC_ATOMIC_EXCHANGE_N; break;
                         case CC__atomic_compare_exchange_n: op = CC_ATOMIC_COMPARE_EXCHANGE_N; break;
                         case CC__atomic_compare_exchange:   op = CC_ATOMIC_COMPARE_EXCHANGE;   break;
-                        default: return cc_unreachable(p, tok.loc, "compiler broken??");
+                        case CC_BUILTIN_NONE:
+                        case CC__atomic_exchange:
+                        case CC__atomic_load:
+                        case CC__atomic_signal_fence:
+                        case CC__atomic_store:
+                        case CC__atomic_thread_fence:
+                        case CC__bt:
+                        case CC__builtin_abort:
+                        case CC__builtin_add_overflow:
+                        case CC__builtin_alloca:
+                        case CC__builtin_clz:
+                        case CC__builtin_clzl:
+                        case CC__builtin_clzll:
+                        case CC__builtin_constant_p:
+                        case CC__builtin_ctz:
+                        case CC__builtin_ctzl:
+                        case CC__builtin_ctzll:
+                        case CC__builtin_debugtrap:
+                        case CC__builtin_expect:
+                        case CC__builtin_huge_val:
+                        case CC__builtin_huge_valf:
+                        case CC__builtin_huge_vall:
+                        case CC__builtin_intern:
+                        case CC__builtin_mul_overflow:
+                        case CC__builtin_nan:
+                        case CC__builtin_nanf:
+                        case CC__builtin_offsetof:
+                        case CC__builtin_popcount:
+                        case CC__builtin_popcountl:
+                        case CC__builtin_popcountll:
+                        case CC__builtin_sub_overflow:
+                        case CC__builtin_trap:
+                        case CC__builtin_unreachable:
+                        case CC__builtin_va_arg:
+                        case CC__builtin_va_copy:
+                        case CC__builtin_va_end:
+                        case CC__builtin_va_start:
+                        case CC__func__:
+                        case CC__nan:
+                        return cc_unreachable(p, tok.loc, "compiler broken??");
                     }
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
@@ -2295,7 +2527,48 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC__builtin_debugtrap:   op = CC_BUILTIN_DEBUGTRAP; break;
                         case CC__builtin_abort:       op = CC_BUILTIN_ABORT; break;
                         case CC__bt:                  op = CC_BUILTIN_BACKTRACE; break;
-                        default: return CC_UNREACHABLE_ERROR;
+                        case CC_BUILTIN_NONE:
+                        case CC__atomic_compare_exchange:
+                        case CC__atomic_compare_exchange_n:
+                        case CC__atomic_exchange:
+                        case CC__atomic_exchange_n:
+                        case CC__atomic_fetch_add:
+                        case CC__atomic_fetch_sub:
+                        case CC__atomic_load:
+                        case CC__atomic_load_n:
+                        case CC__atomic_signal_fence:
+                        case CC__atomic_store:
+                        case CC__atomic_store_n:
+                        case CC__atomic_thread_fence:
+                        case CC__builtin_add_overflow:
+                        case CC__builtin_alloca:
+                        case CC__builtin_clz:
+                        case CC__builtin_clzl:
+                        case CC__builtin_clzll:
+                        case CC__builtin_constant_p:
+                        case CC__builtin_ctz:
+                        case CC__builtin_ctzl:
+                        case CC__builtin_ctzll:
+                        case CC__builtin_expect:
+                        case CC__builtin_huge_val:
+                        case CC__builtin_huge_valf:
+                        case CC__builtin_huge_vall:
+                        case CC__builtin_intern:
+                        case CC__builtin_mul_overflow:
+                        case CC__builtin_nan:
+                        case CC__builtin_nanf:
+                        case CC__builtin_offsetof:
+                        case CC__builtin_popcount:
+                        case CC__builtin_popcountl:
+                        case CC__builtin_popcountll:
+                        case CC__builtin_sub_overflow:
+                        case CC__builtin_va_arg:
+                        case CC__builtin_va_copy:
+                        case CC__builtin_va_end:
+                        case CC__builtin_va_start:
+                        case CC__func__:
+                        case CC__nan:
+                        return CC_UNREACHABLE_ERROR;
                     }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ccqt_basic(CCBT_void), 0);
                     if(!node) return CC_OOM_ERROR;
@@ -2343,7 +2616,50 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC__builtin_add_overflow: kind = CC_EXPR_ADD_OVERFLOW; break;
                         case CC__builtin_sub_overflow: kind = CC_EXPR_SUB_OVERFLOW; break;
                         case CC__builtin_mul_overflow: kind = CC_EXPR_MUL_OVERFLOW; break;
-                        default: return CC_UNREACHABLE_ERROR;
+                        case CC_BUILTIN_NONE:
+                        case CC__atomic_compare_exchange:
+                        case CC__atomic_compare_exchange_n:
+                        case CC__atomic_exchange:
+                        case CC__atomic_exchange_n:
+                        case CC__atomic_fetch_add:
+                        case CC__atomic_fetch_sub:
+                        case CC__atomic_load:
+                        case CC__atomic_load_n:
+                        case CC__atomic_signal_fence:
+                        case CC__atomic_store:
+                        case CC__atomic_store_n:
+                        case CC__atomic_thread_fence:
+                        case CC__bt:
+                        case CC__builtin_abort:
+                        case CC__builtin_alloca:
+                        case CC__builtin_clz:
+                        case CC__builtin_clzl:
+                        case CC__builtin_clzll:
+                        case CC__builtin_constant_p:
+                        case CC__builtin_ctz:
+                        case CC__builtin_ctzl:
+                        case CC__builtin_ctzll:
+                        case CC__builtin_debugtrap:
+                        case CC__builtin_expect:
+                        case CC__builtin_huge_val:
+                        case CC__builtin_huge_valf:
+                        case CC__builtin_huge_vall:
+                        case CC__builtin_intern:
+                        case CC__builtin_nan:
+                        case CC__builtin_nanf:
+                        case CC__builtin_offsetof:
+                        case CC__builtin_popcount:
+                        case CC__builtin_popcountl:
+                        case CC__builtin_popcountll:
+                        case CC__builtin_trap:
+                        case CC__builtin_unreachable:
+                        case CC__builtin_va_arg:
+                        case CC__builtin_va_copy:
+                        case CC__builtin_va_end:
+                        case CC__builtin_va_start:
+                        case CC__func__:
+                        case CC__nan:
+                        return CC_UNREACHABLE_ERROR;
                     }
                     CcExpr* node = cc_make_expr(p, kind, tok.loc, ccqt_basic(CCBT_bool), 2);
                     if(!node) return CC_OOM_ERROR;
@@ -2703,13 +3019,71 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             }
             case CC__Generic:
                 return cc_parse_Generic(p, vc, out);
-            default:
-                if(cc_is_type_start(p, &tok)){
-                    err = cc_unget(p, &tok);
-                    if(err) return err;
-                    return cc_parse_lambda(p, vc, tok.loc, out);
-                }
+            // type-start keywords: parse as lambda
+            case CC__Atomic:
+            case CC__BitInt:
+            case CC__Complex:
+            case CC__Decimal128:
+            case CC__Decimal32:
+            case CC__Decimal64:
+            case CC__Float128:
+            case CC__Float16:
+            case CC__Float32:
+            case CC__Float32x:
+            case CC__Float64:
+            case CC__Float64x:
+            case CC__Imaginary:
+            case CC__Type:
+            case CC___auto_type:
+            case CC___int128:
+            case CC_bool:
+            case CC_char:
+            case CC_const:
+            case CC_double:
+            case CC_enum:
+            case CC_float:
+            case CC_int:
+            case CC_long:
+            case CC_restrict:
+            case CC_short:
+            case CC_signed:
+            case CC_struct:
+            case CC_typeof:
+            case CC_typeof_unqual:
+            case CC_union:
+            case CC_unsigned:
+            case CC_void:
+            case CC_volatile:
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                return cc_parse_lambda(p, vc, tok.loc, out);
+            case CC___attribute__:
+            case CC__Noreturn:
+            case CC_alignas:
+            case CC_auto:
+            case CC_asm:
+            case CC_break:
+            case CC_case:
+            case CC_constexpr:
+            case CC_continue:
+            case CC_default:
+            case CC_do:
+            case CC_else:
+            case CC_extern:
+            case CC_for:
+            case CC_goto:
+            case CC_if:
+            case CC_inline:
+            case CC_register:
+            case CC_return:
+            case CC_static:
+            case CC_static_assert:
+            case CC_switch:
+            case CC_thread_local:
+            case CC_typedef:
+            case CC_while:
                 return cc_error(p, tok.loc, "Unexpected keyword in expression");
+                CASES_EXHAUSTED;
             }
         case CC_EOF:
             return cc_error(p, tok.loc, "Unexpected end of input in expression");
@@ -2820,7 +3194,47 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
                             goto done_skip;
                         }
                         break;
-                    default: break;
+                    case CC_amp:
+                    case CC_amp_assign:
+                    case CC_and:
+                    case CC_arrow:
+                    case CC_assign:
+                    case CC_bang:
+                    case CC_colon:
+                    case CC_dot:
+                    case CC_double_colon:
+                    case CC_ellipsis:
+                    case CC_eq:
+                    case CC_ge:
+                    case CC_gt:
+                    case CC_le:
+                    case CC_lshift:
+                    case CC_lshift_assign:
+                    case CC_lt:
+                    case CC_minus:
+                    case CC_minus_assign:
+                    case CC_minusminus:
+                    case CC_ne:
+                    case CC_or:
+                    case CC_percent:
+                    case CC_percent_assign:
+                    case CC_pipe:
+                    case CC_pipe_assign:
+                    case CC_plus:
+                    case CC_plus_assign:
+                    case CC_plusplus:
+                    case CC_question:
+                    case CC_rshift:
+                    case CC_rshift_assign:
+                    case CC_semi:
+                    case CC_slash:
+                    case CC_slash_assign:
+                    case CC_star:
+                    case CC_star_assign:
+                    case CC_tilde:
+                    case CC_xor:
+                    case CC_xor_assign:
+                    break;
                 }
             }
             done_skip:;
@@ -3736,9 +4150,18 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                     msb_sprintf(sb, "%llu", (unsigned long long)v);
                     return;
                 }
-                default:
+                case CCBT_COUNT:
+                case CCBT_INVALID:
+                case CCBT_double_complex:
+                case CCBT_float128:
+                case CCBT_float16:
+                case CCBT_float_complex:
+                case CCBT_int128:
+                case CCBT_long_double_complex:
+                case CCBT_unsigned_int128:
                     msb_write_literal(sb, "<unknown basic>");
                     return;
+                CASES_EXHAUSTED;
             }
         }
         case CC_POINTER: {
@@ -4139,7 +4562,11 @@ cc_parse_one(CcParser* p){
                 return cc_handle_static_assert(p);
             }
             goto Ldefault;
-        default:
+        case CC_CONSTANT:
+        case CC_EOF:
+        case CC_IDENTIFIER:
+        case CC_PUNCTUATOR:
+        case CC_STRING_LITERAL:
             Ldefault:;
             break;
     }
@@ -4416,7 +4843,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
         switch(conv){
             case 'd': case 'i':
                 switch(len_mod){
-                    DEFAULT_UNREACHABLE;
+                    CASES_EXHAUSTED;
                     case LEN_NONE: expected = ccqt_basic(CCBT_int); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_int); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_int); break;
@@ -4434,7 +4861,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
             case 'u': case 'x': case 'X': case 'o':
             case 'b': case 'B':
                 switch(len_mod){
-                    DEFAULT_UNREACHABLE;
+                    CASES_EXHAUSTED;
                     case LEN_NONE: expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_unsigned); break;
@@ -4712,8 +5139,40 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_TYPE_PARAM_TYPE:
                 case CC_TYPE_ENUMERATOR:
                     return 1;
-                default:
+                case CC_TYPE_ALIGNOF:
+                case CC_TYPE_COUNT:
+                case CC_TYPE_ELEMENT_TYPE:
+                case CC_TYPE_ENUMERATORS:
+                case CC_TYPE_FIELDS:
+                case CC_TYPE_IS_ARITHMETIC:
+                case CC_TYPE_IS_ARRAY:
+                case CC_TYPE_IS_ATOMIC:
+                case CC_TYPE_IS_CALLABLE:
+                case CC_TYPE_IS_CONST:
+                case CC_TYPE_IS_ENUM:
+                case CC_TYPE_IS_FLOAT:
+                case CC_TYPE_IS_FUNCTION:
+                case CC_TYPE_IS_INCOMPLETE:
+                case CC_TYPE_IS_INTEGER:
+                case CC_TYPE_IS_POINTER:
+                case CC_TYPE_IS_SIGNED:
+                case CC_TYPE_IS_STRUCT:
+                case CC_TYPE_IS_UNION:
+                case CC_TYPE_IS_UNSIGNED:
+                case CC_TYPE_IS_VARIADIC:
+                case CC_TYPE_IS_VOLATILE:
+                case CC_TYPE_NAME:
+                case CC_TYPE_NONE:
+                case CC_TYPE_PARAM_COUNT:
+                case CC_TYPE_POINTEE:
+                case CC_TYPE_PUSH_METHOD:
+                case CC_TYPE_RETURN_TYPE:
+                case CC_TYPE_SIZEOF:
+                case CC_TYPE_TAG:
+                case CC_TYPE_UNDERLYING_TYPE:
+                case CC_TYPE_UNQUAL:
                     return 0;
+                CASES_EXHAUSTED;
             }
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
@@ -4747,7 +5206,63 @@ cc_release_expr(CcParser* p, CcExpr* e){
                 Allocator_free(cc_allocator(p), e->init_list, sizeof(CcInitList) + e->init_list->count * sizeof(CcInitEntry));
             }
             break;
-        default:
+        case CC_EXPR_ADD:
+        case CC_EXPR_ADDASSIGN:
+        case CC_EXPR_ADDR:
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_ASSIGN:
+        case CC_EXPR_ATOMIC:
+        case CC_EXPR_BITAND:
+        case CC_EXPR_BITANDASSIGN:
+        case CC_EXPR_BITNOT:
+        case CC_EXPR_BITOR:
+        case CC_EXPR_BITORASSIGN:
+        case CC_EXPR_BITXOR:
+        case CC_EXPR_BITXORASSIGN:
+        case CC_EXPR_CALL:
+        case CC_EXPR_CAST:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_COMMA:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_DIV:
+        case CC_EXPR_DIVASSIGN:
+        case CC_EXPR_EQ:
+        case CC_EXPR_GE:
+        case CC_EXPR_GT:
+        case CC_EXPR_INTERN:
+        case CC_EXPR_LE:
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGNOT:
+        case CC_EXPR_LOGOR:
+        case CC_EXPR_LSHIFT:
+        case CC_EXPR_LSHIFTASSIGN:
+        case CC_EXPR_LT:
+        case CC_EXPR_MOD:
+        case CC_EXPR_MODASSIGN:
+        case CC_EXPR_MUL:
+        case CC_EXPR_MULASSIGN:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_NE:
+        case CC_EXPR_NEG:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_POS:
+        case CC_EXPR_POSTDEC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_PREINC:
+        case CC_EXPR_RSHIFT:
+        case CC_EXPR_RSHIFTASSIGN:
+        case CC_EXPR_SIZEOF_VMT:
+        case CC_EXPR_STATEMENT_EXPRESSION:
+        case CC_EXPR_SUB:
+        case CC_EXPR_SUBASSIGN:
+        case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_TERNARY:
+        case CC_EXPR_TYPE_INTROSPECTION:
+        case CC_EXPR_VA:
             if(e->lhs)
                 cc_release_expr(p, e->lhs);
             break;
@@ -5064,7 +5579,7 @@ static
 uint32_t
 cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type){
     switch(ccqt_kind(type)){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CC_BASIC:    return tc->sizeof_[type.basic.kind];
         case CC_POINTER:  return tc->sizeof_[CCBT_nullptr_t];
         case CC_FUNCTION: return tc->sizeof_[CCBT_nullptr_t];
@@ -7404,8 +7919,10 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                                 case CC_POINTER:
                                     align_val = cc_target(p)->alignof_[CCBT_nullptr_t];
                                     break;
-                                default:
+                                case CC_ENUM:
+                                case CC_FUNCTION:
                                     return cc_error(p, tok.loc, "_Alignas with this type not yet supported");
+                                CASES_EXHAUSTED;
                             }
                         }
                         else {
@@ -8425,7 +8942,69 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     case CC_const:    const_    = 1; continue;
                     case CC_volatile: volatile_ = 1; continue;
                     case CC__Atomic:  atomic_   = 1; continue;
-                    default: break;
+                    case CC__BitInt:
+                    case CC__Complex:
+                    case CC__Countof:
+                    case CC__Decimal128:
+                    case CC__Decimal32:
+                    case CC__Decimal64:
+                    case CC__Float128:
+                    case CC__Float16:
+                    case CC__Float32:
+                    case CC__Float32x:
+                    case CC__Float64:
+                    case CC__Float64x:
+                    case CC__Generic:
+                    case CC__Imaginary:
+                    case CC__Noreturn:
+                    case CC__Type:
+                    case CC___attribute__:
+                    case CC___auto_type:
+                    case CC___int128:
+                    case CC_alignas:
+                    case CC_alignof:
+                    case CC_asm:
+                    case CC_auto:
+                    case CC_bool:
+                    case CC_break:
+                    case CC_case:
+                    case CC_char:
+                    case CC_constexpr:
+                    case CC_continue:
+                    case CC_default:
+                    case CC_do:
+                    case CC_double:
+                    case CC_else:
+                    case CC_enum:
+                    case CC_extern:
+                    case CC_false:
+                    case CC_float:
+                    case CC_for:
+                    case CC_goto:
+                    case CC_if:
+                    case CC_inline:
+                    case CC_int:
+                    case CC_long:
+                    case CC_nullptr:
+                    case CC_register:
+                    case CC_return:
+                    case CC_short:
+                    case CC_signed:
+                    case CC_sizeof:
+                    case CC_static:
+                    case CC_static_assert:
+                    case CC_struct:
+                    case CC_switch:
+                    case CC_thread_local:
+                    case CC_true:
+                    case CC_typedef:
+                    case CC_typeof:
+                    case CC_typeof_unqual:
+                    case CC_union:
+                    case CC_unsigned:
+                    case CC_void:
+                    case CC_while:
+                    break;
                 }
             }
             err = cc_unget(p, &tok);
@@ -8710,8 +9289,11 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
             if(!func) return t;
             return (CcQualType){.bits = (uintptr_t)func | quals};
         }
-        default:
+        case CC_ENUM:
+        case CC_STRUCT:
+        case CC_UNION:
             return t;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -9343,12 +9925,16 @@ cc_define_builtin_types(CcParser* p){
             va_list_type = (CcQualType){.bits = (uintptr_t)s};
             break;
         }
-        default: {
+        case CC_TARGET_AARCH64_MACOS:
+        case CC_TARGET_X86_64_WINDOWS:
+        case CC_TARGET_TEST: {
             // typedef void *__builtin_va_list;
             err = cc_pointer_of(p, ccqt_basic(CCBT_void), &va_list_type);
             if(err) return err;
             break;
         }
+        case CC_TARGET_COUNT:
+            return CC_UNREACHABLE_ERROR;
     }
     err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
     if(err) return CC_OOM_ERROR;
@@ -9702,7 +10288,7 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
     if(!ccqt_is_basic(t)) return 1;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d || d >= 9223372036854775808.0 || d < -9223372036854775808.0) return 1;
@@ -9757,7 +10343,7 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
     if(!ccqt_is_basic(t)) return 1;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d || d < 0.0 || d >= 18446744073709551616.0) return 1;
@@ -9811,7 +10397,7 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
     if(!ccqt_is_basic(t)) return 1;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d) return 1;
@@ -9880,7 +10466,7 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
     if(!ccqt_is_basic(t)) return 1;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CCBT_double:
             *out = v->double_;
             return 0;
@@ -9965,7 +10551,7 @@ static
 int
 cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
     switch(e->kind){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CC_EXPR_VALUE: {
             CcExpr* node = _cc_alloc_expr(p, 0);
             if(!node) return CC_OOM_ERROR;
@@ -9987,7 +10573,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             CcExpr* node;
             switch(e->type.basic.kind){
-                DEFAULT_UNREACHABLE;
+                CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -10090,7 +10676,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             CcExpr* node;
             switch(e->type.basic.kind){
-                DEFAULT_UNREACHABLE;
+                CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -10166,7 +10752,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     err = 0; \
                     goto fini_lognot; \
                 }while(0)
-                DEFAULT_UNREACHABLE;
+                CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -10344,9 +10930,9 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             } while(0); break
             #define CMP(op, lv, rv) node->integer = (lv) op (rv); break
             switch(optype.basic.kind){
-                DEFAULT_UNREACHABLE;
+                CASES_EXHAUSTED;
                 case CCBT_float:
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: ARITH(+, L->float_, R->float_, float_, float);
                         case CC_EXPR_SUB: ARITH(-, L->float_, R->float_, float_, float);
                         case CC_EXPR_MUL: ARITH(*, L->float_, R->float_, float_, float);
@@ -10357,11 +10943,11 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  L->float_, R->float_);
                         case CC_EXPR_LE: CMP(<=, L->float_, R->float_);
                         case CC_EXPR_GE: CMP(>=, L->float_, R->float_);
-                        default: err = CC_UNREACHABLE_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;
                 case CCBT_double:
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: ARITH(+, L->double_, R->double_, double_, double);
                         case CC_EXPR_SUB: ARITH(-, L->double_, R->double_, double_, double);
                         case CC_EXPR_MUL: ARITH(*, L->double_, R->double_, double_, double);
@@ -10372,7 +10958,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  L->double_, R->double_);
                         case CC_EXPR_LE: CMP(<=, L->double_, R->double_);
                         case CC_EXPR_GE: CMP(>=, L->double_, R->double_);
-                        default: err = CC_UNREACHABLE_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;
                 case CCBT_char:
@@ -10385,7 +10971,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_int:
                     int_:;{
                     int32_t lv = (int32_t)L->integer, rv = (int32_t)R->integer;
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: SIGNED_ARITH(+, add_overflow, lv, rv, integer, int32_t);
                         case CC_EXPR_SUB: SIGNED_ARITH(-, sub_overflow, lv, rv, integer, int32_t);
                         case CC_EXPR_MUL: SIGNED_ARITH(*, mul_overflow, lv, rv, integer, int32_t);
@@ -10410,7 +10996,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        default: err = CC_UNIMPLEMENTED_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_unsigned_char:
@@ -10418,7 +11004,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_unsigned:
                     unsigned_:;{
                     uint32_t lv = (uint32_t)L->uinteger, rv = (uint32_t)R->uinteger;
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: ARITH(+, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_SUB: ARITH(-, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_MUL: ARITH(*, lv, rv, uinteger, uint32_t);
@@ -10443,7 +11029,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        default: err = CC_UNIMPLEMENTED_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_long:
@@ -10457,7 +11043,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_long_long:
                     long_long:;{
                     int64_t lv = L->integer, rv = R->integer;
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: SIGNED_ARITH(+, add_overflow, lv, rv, integer, int64_t);
                         case CC_EXPR_SUB: SIGNED_ARITH(-, sub_overflow, lv, rv, integer, int64_t);
                         case CC_EXPR_MUL: SIGNED_ARITH(*, mul_overflow, lv, rv, integer, int64_t);
@@ -10482,13 +11068,13 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        default: err = CC_UNIMPLEMENTED_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_unsigned_long_long:
                     unsigned_long_long:;{
                     uint64_t lv = L->uinteger, rv = R->uinteger;
-                    switch(e->kind){
+                    switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: ARITH(+, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_SUB: ARITH(-, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_MUL: ARITH(*, lv, rv, uinteger, uint64_t);
@@ -10513,7 +11099,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        default: err = CC_UNIMPLEMENTED_ERROR; goto fini_binary;
+                        DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_INVALID:
@@ -10639,7 +11225,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcTypeKind k = ccqt_kind(qt);
                     _Bool is_incomplete;
                     switch(k){
-                        DEFAULT_UNREACHABLE;
+                        CASES_EXHAUSTED;
                         case CC_STRUCT:   is_incomplete = ccqt_as_struct(qt)->is_incomplete; break;
                         case CC_UNION:    is_incomplete = ccqt_as_union(qt)->is_incomplete; break;
                         case CC_ARRAY:    is_incomplete = ccqt_as_array(qt)->is_incomplete; break;

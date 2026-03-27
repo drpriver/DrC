@@ -23,13 +23,13 @@
 #pragma clang assume_nonnull begin
 #endif
 
-#ifndef DEFAULT_UNREACHABLE
+#ifndef CASES_EXHAUSTED
 #if defined __GNUC__ && !defined __clang__
-#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
+#define CASES_EXHAUSTED default: __builtin_unreachable()
 #elif defined _MSC_VER
-#define DEFAULT_UNREACHABLE default: __assume(0)
+#define CASES_EXHAUSTED default: __assume(0)
 #else
-#define DEFAULT_UNREACHABLE
+#define CASES_EXHAUSTED
 #endif
 #endif
 
@@ -1098,7 +1098,9 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                 *ptok = tok;
                 cpp->at_line_start = 0;
                 return 0;
-            default:
+            case CPP_HEADER_NAME:
+            case CPP_PLACEMARKER:
+            case CPP_REENABLE:
                 return cpp_error(cpp, tok.loc, "%.*s token escaped", sv_p(CppTokenTypeSV[tok.type]));
         }
     }
@@ -4262,7 +4264,20 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
             toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__int128")};
             break;
-        default:
+        case CCBT_INVALID:
+        case CCBT_void:
+        case CCBT_bool:
+        case CCBT_char:
+        case CCBT_float16:
+        case CCBT_float:
+        case CCBT_double:
+        case CCBT_float128:
+        case CCBT_float_complex:
+        case CCBT_double_complex:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT__Type:
+        case CCBT_COUNT:
             return -1;
     }
     return cpp_define_obj_macro(cpp, name, toks, ntoks);
@@ -4278,7 +4293,24 @@ ccbt_unsigned_of(CcBasicTypeKind kind){
         case CCBT_int: case CCBT_unsigned: return CCBT_unsigned;
         case CCBT_long: case CCBT_unsigned_long: return CCBT_unsigned_long;
         case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_unsigned_long_long;
-        default: return kind;
+        case CCBT_INVALID:
+        case CCBT_void:
+        case CCBT_bool:
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+        case CCBT_float16:
+        case CCBT_float:
+        case CCBT_double:
+        case CCBT_long_double:
+        case CCBT_float128:
+        case CCBT_float_complex:
+        case CCBT_double_complex:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT__Type:
+        case CCBT_COUNT:
+            return kind;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -4292,7 +4324,24 @@ ccbt_signed_of(CcBasicTypeKind kind){
         case CCBT_int: case CCBT_unsigned: return CCBT_int;
         case CCBT_long: case CCBT_unsigned_long: return CCBT_long;
         case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_long_long;
-        default: return kind;
+        case CCBT_INVALID:
+        case CCBT_void:
+        case CCBT_bool:
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+        case CCBT_float16:
+        case CCBT_float:
+        case CCBT_double:
+        case CCBT_long_double:
+        case CCBT_float128:
+        case CCBT_float_complex:
+        case CCBT_double_complex:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT__Type:
+        case CCBT_COUNT:
+            return kind;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -4307,7 +4356,30 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT_unsigned_long: return "UL";
         case CCBT_long_long: return "LL";
         case CCBT_unsigned_long_long: return "ULL";
-        default: return "";
+        case CCBT_INVALID:
+        case CCBT_void:
+        case CCBT_bool:
+        case CCBT_char:
+        case CCBT_signed_char:
+        case CCBT_unsigned_char:
+        case CCBT_short:
+        case CCBT_unsigned_short:
+        case CCBT_int:
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+        case CCBT_float16:
+        case CCBT_float:
+        case CCBT_double:
+        case CCBT_long_double:
+        case CCBT_float128:
+        case CCBT_float_complex:
+        case CCBT_double_complex:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT__Type:
+        case CCBT_COUNT:
+            return "";
+        CASES_EXHAUSTED;
     }
 }
 
@@ -5206,7 +5278,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
     if((CcTarget)CC_TARGET_NATIVE != t.target)
         goto finally;
     switch(t.target){
-        DEFAULT_UNREACHABLE;
+        CASES_EXHAUSTED;
         case CC_TARGET_AARCH64_MACOS:
         case CC_TARGET_X86_64_MACOS: {
             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
@@ -6342,7 +6414,7 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CppPreprocessor* cpp, Sr
         }
     }
     StringView msg = msb_borrow_sv(&sb);
-    cpp_info(cpp, loc, "%.*s", sv_p(msg));
+    cpp_info(cpp, loc, "%.*s", (int)msg.length, msg.text ? msg.text : "");
     msb_destroy(&sb);
     cpp_release_scratch(cpp, expanded);
     return 0;
@@ -7095,8 +7167,17 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
                 default:
                     return cpp_error(cpp, tok.loc, "Unexpected punctuator in #if expression");
             }
-        default:
+        case CPP_EOF:
+        case CPP_HEADER_NAME:
+        case CPP_IDENTIFIER:
+        case CPP_STRING:
+        case CPP_WHITESPACE:
+        case CPP_NEWLINE:
+        case CPP_OTHER:
+        case CPP_PLACEMARKER:
+        case CPP_REENABLE:
             return cpp_error(cpp, tok.loc, "Unexpected token in #if expression");
+        CASES_EXHAUSTED;
     }
 }
 

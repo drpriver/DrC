@@ -98,7 +98,32 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_float:       base = &ffi_type_float; break;
                         case CCBT_double:      base = &ffi_type_double; break;
                         case CCBT_long_double: base = &ffi_type_longdouble; break;
-                        default: return NC_UNSUPPORTED_TYPE;
+                        case CCBT_COUNT:
+                        case CCBT_INVALID:
+                        case CCBT__Type:
+                        case CCBT_bool:
+                        case CCBT_char:
+                        case CCBT_double_complex:
+                        case CCBT_float128:
+                        case CCBT_float16:
+                        case CCBT_float_complex:
+                        case CCBT_int:
+                        case CCBT_int128:
+                        case CCBT_long:
+                        case CCBT_long_double_complex:
+                        case CCBT_long_long:
+                        case CCBT_nullptr_t:
+                        case CCBT_short:
+                        case CCBT_signed_char:
+                        case CCBT_unsigned:
+                        case CCBT_unsigned_char:
+                        case CCBT_unsigned_int128:
+                        case CCBT_unsigned_long:
+                        case CCBT_unsigned_long_long:
+                        case CCBT_unsigned_short:
+                        case CCBT_void:
+                        return NC_UNSUPPORTED_TYPE;
+                        CASES_EXHAUSTED;
                     }
                     uint32_t n = s->arm64.hfa_count;
                     ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
@@ -161,7 +186,32 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_float:       base = &ffi_type_float; break;
                         case CCBT_double:      base = &ffi_type_double; break;
                         case CCBT_long_double: base = &ffi_type_longdouble; break;
-                        default: return NC_UNSUPPORTED_TYPE;
+                        case CCBT_COUNT:
+                        case CCBT_INVALID:
+                        case CCBT__Type:
+                        case CCBT_bool:
+                        case CCBT_char:
+                        case CCBT_double_complex:
+                        case CCBT_float128:
+                        case CCBT_float16:
+                        case CCBT_float_complex:
+                        case CCBT_int:
+                        case CCBT_int128:
+                        case CCBT_long:
+                        case CCBT_long_double_complex:
+                        case CCBT_long_long:
+                        case CCBT_nullptr_t:
+                        case CCBT_short:
+                        case CCBT_signed_char:
+                        case CCBT_unsigned:
+                        case CCBT_unsigned_char:
+                        case CCBT_unsigned_int128:
+                        case CCBT_unsigned_long:
+                        case CCBT_unsigned_long_long:
+                        case CCBT_unsigned_short:
+                        case CCBT_void:
+                        return NC_UNSUPPORTED_TYPE;
+                        CASES_EXHAUSTED;
                     }
                     uint32_t n = u->arm64.hfa_count;
                     ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));

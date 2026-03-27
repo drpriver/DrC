@@ -8,6 +8,15 @@
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
 #endif
+#ifndef CASES_EXHAUSTED
+#if defined(__GNUC__) && !defined(__clang__)
+#define CASES_EXHAUSTED default: __builtin_unreachable()
+#elif defined(_MSC_VER)
+#define CASES_EXHAUSTED default: __assume(0)
+#else
+#define CASES_EXHAUSTED
+#endif
+#endif
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
@@ -186,8 +195,18 @@ cc_tok_matches(CcToken got, CcToken exp){
                 case CC_DOUBLE:
                 case CC_LONG_DOUBLE:
                     return got.constant.double_value == exp.constant.double_value;
-                default:
+                case CC_INT:
+                case CC_UNSIGNED:
+                case CC_LONG:
+                case CC_UNSIGNED_LONG:
+                case CC_LONG_LONG:
+                case CC_UNSIGNED_LONG_LONG:
+                case CC_WCHAR:
+                case CC_CHAR16:
+                case CC_CHAR32:
+                case CC_UCHAR:
                     return got.constant.integer_value == exp.constant.integer_value;
+                CASES_EXHAUSTED;
             }
         case CC_STRING_LITERAL:
             if(got.str.stype != exp.str.stype) return 0;
@@ -199,8 +218,10 @@ cc_tok_matches(CcToken got, CcToken exp){
                     return memcmp(got.str.utf32, exp.str.utf32, got.str.length * 4) == 0;
                 case CC_LSTRING:
                     return memcmp(got.str.utf32, exp.str.utf32, got.str.length * 4) == 0;
-                default:
+                case CC_STRING:
+                case CC_U8STRING:
                     return memcmp(got.str.utf8, exp.str.utf8, got.str.length) == 0;
+                CASES_EXHAUSTED;
             }
         case CC_PUNCTUATOR:
             return got.punct.punct == exp.punct.punct;

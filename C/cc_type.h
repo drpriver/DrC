@@ -8,6 +8,15 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/typed_enum.h"
+#ifndef CASES_EXHAUSTED
+#if defined(__GNUC__) && !defined(__clang__)
+#define CASES_EXHAUSTED default: __builtin_unreachable()
+#elif defined(_MSC_VER)
+#define CASES_EXHAUSTED default: __assume(0)
+#else
+#define CASES_EXHAUSTED
+#endif
+#endif
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -303,8 +312,27 @@ ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
         case CCBT_unsigned_long_long:
         case CCBT_unsigned_int128:
             return 1;
-        default:
+        case CCBT_COUNT:
+        case CCBT_INVALID:
+        case CCBT__Type:
+        case CCBT_double:
+        case CCBT_double_complex:
+        case CCBT_float:
+        case CCBT_float128:
+        case CCBT_float16:
+        case CCBT_float_complex:
+        case CCBT_int:
+        case CCBT_int128:
+        case CCBT_long:
+        case CCBT_long_double:
+        case CCBT_long_double_complex:
+        case CCBT_long_long:
+        case CCBT_nullptr_t:
+        case CCBT_short:
+        case CCBT_signed_char:
+        case CCBT_void:
             return 0;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -333,8 +361,21 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_int128:
         case CCBT_unsigned_int128:
             return 6;
-        default:
+        case CCBT_COUNT:
+        case CCBT_INVALID:
+        case CCBT__Type:
+        case CCBT_double:
+        case CCBT_double_complex:
+        case CCBT_float:
+        case CCBT_float128:
+        case CCBT_float16:
+        case CCBT_float_complex:
+        case CCBT_long_double:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT_void:
             return -1;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -355,8 +396,28 @@ ccbt_to_unsigned(CcBasicTypeKind k){
             return CCBT_unsigned_long_long;
         case CCBT_int128:
             return CCBT_unsigned_int128;
-        default:
+        case CCBT_COUNT:
+        case CCBT_INVALID:
+        case CCBT__Type:
+        case CCBT_bool:
+        case CCBT_double:
+        case CCBT_double_complex:
+        case CCBT_float:
+        case CCBT_float128:
+        case CCBT_float16:
+        case CCBT_float_complex:
+        case CCBT_long_double:
+        case CCBT_long_double_complex:
+        case CCBT_nullptr_t:
+        case CCBT_unsigned:
+        case CCBT_unsigned_char:
+        case CCBT_unsigned_int128:
+        case CCBT_unsigned_long:
+        case CCBT_unsigned_long_long:
+        case CCBT_unsigned_short:
+        case CCBT_void:
             return k;
+        CASES_EXHAUSTED;
     }
 }
 
@@ -377,8 +438,28 @@ ccbt_to_signed(CcBasicTypeKind k){
             return CCBT_long_long;
         case CCBT_unsigned_int128:
             return CCBT_int128;
-        default:
+        case CCBT_COUNT:
+        case CCBT_INVALID:
+        case CCBT__Type:
+        case CCBT_bool:
+        case CCBT_double:
+        case CCBT_double_complex:
+        case CCBT_float:
+        case CCBT_float128:
+        case CCBT_float16:
+        case CCBT_float_complex:
+        case CCBT_int:
+        case CCBT_int128:
+        case CCBT_long:
+        case CCBT_long_double:
+        case CCBT_long_double_complex:
+        case CCBT_long_long:
+        case CCBT_nullptr_t:
+        case CCBT_short:
+        case CCBT_signed_char:
+        case CCBT_void:
             return k;
+        CASES_EXHAUSTED;
     }
 }
 
