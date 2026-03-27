@@ -1699,7 +1699,19 @@ cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level){
 
 static
 void
+cpp_include_backtrace(CppPreprocessor* cpp, LogLevel level){
+    if(cpp->frames.count < 2) return;
+    for(size_t i = 0; i < cpp->frames.count - 1; i++){
+        CppFrame* f = &cpp->frames.data[i];
+        LongString path = f->file_id < cpp->fc->map.count?cpp->fc->map.data[f->file_id].path:LS("???");
+        log_logf(cpp->logger, level, "In file included from %s:%d:", path.text, (int)(f->line - 1));
+    }
+}
+
+static
+void
 cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va){
+    cpp_include_backtrace(cpp, level);
     cpp_msg_preamble(cpp, loc, prefix);
     log_logv(cpp->logger, level, fmt, va);
     cpp_msg_postamble(cpp, loc, level);
