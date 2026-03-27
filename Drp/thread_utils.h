@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include "posixheader.h"
 #include "windowsheader.h"
+#ifdef _MSC_VER
+#pragma comment(lib, "Synchronization.lib")
+#endif
 
 #if defined(__linux__) || defined(__APPLE__)
     #include <pthread.h>
