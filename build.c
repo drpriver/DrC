@@ -24,6 +24,8 @@
 
 static int mkfile(BuildCtx*, BuildTarget*);
 static int do_install(BuildCtx*, BuildTarget*);
+static int fetch_libffi(BuildCtx*, BuildTarget*);
+static int copy_libffi_dll(BuildCtx*, BuildTarget*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
@@ -40,7 +42,28 @@ int main(int argc, char** argv, char** envp){
     if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
         cmd_carg(&cc->cmd, "-ldl");
     }
-    cmd_carg(&cc->cmd, "-lffi");
+    BuildTarget* ffi_lib = NULL;
+    BuildTarget* ffi_dll = NULL;
+    if(BUILD_OS == OS_WINDOWS){
+        // Fetched/libffi/libffi-8.lib is the output of the fetch coro.
+        ffi_lib = alloc_targeta(ctx, b_atomize(ctx, "Fetched/libffi/libffi-8.lib"));
+        BuildTarget* fetch_ffi = coro_target(ctx, "fetch-libffi", fetch_libffi, NULL);
+        add_dep(ctx, ffi_lib, fetch_ffi);
+        ta_pusha(ctx, &fetch_ffi->outputs, ffi_lib->name);
+
+        // bin/libffi-8.dll is copied from the fetched files.
+        ffi_dll = bin_target(ctx, "libffi-8.dll");
+        BuildTarget* copy_ffi = script_target(ctx, "copy-libffi-dll", copy_libffi_dll, NULL);
+        add_dep(ctx, copy_ffi, ffi_lib);
+        add_dep(ctx, ffi_dll, copy_ffi);
+        ta_pusha(ctx, &copy_ffi->outputs, ffi_dll->name);
+
+        cmd_carg(&cc->cmd, "-IFetched/libffi");
+        target_inp(ctx, cc, ffi_lib);
+    }
+    else {
+        cmd_carg(&cc->cmd, "-lffi");
+    }
     add_dep(ctx, all, cc);
 
     BuildTarget* tests = phony_target(ctx, "tests");
@@ -66,14 +89,22 @@ int main(int argc, char** argv, char** envp){
             const char* cmd_name = test_files[i].cmd_name;
             BuildTarget* bin = exe_target(ctx, name, file, OS_NATIVE);
             if(test_files[i].needs_lffi){
-                if(BUILD_OS == OS_LINUX)
-                    cmd_carg(&bin->cmd, "-ldl");
-                cmd_carg(&bin->cmd, "-lffi");
+                if(BUILD_OS == OS_WINDOWS){
+                    cmd_carg(&bin->cmd, "-IFetched/libffi");
+                    target_inp(ctx, bin, ffi_lib);
+                }
+                else {
+                    if(BUILD_OS == OS_LINUX)
+                        cmd_carg(&bin->cmd, "-ldl");
+                    cmd_carg(&bin->cmd, "-lffi");
+                }
             }
             add_dep(ctx, all, bin);
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
             target_prog(ctx, cmd, bin);
+            if(test_files[i].needs_lffi && ffi_dll)
+                add_dep(ctx, cmd, ffi_dll);
             if(!ctx->dash_dash_args.count)
                 cmd_carg(&cmd->cmd, "--multithreaded");
             else
@@ -93,13 +124,21 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, all, cc_opt);
         ctx->target.native_sanitize = saved_ns;
         cmd_carg(&cc_opt->cmd, "-O2");
-        if(BUILD_OS == OS_LINUX)
-            cmd_carg(&cc_opt->cmd, "-ldl");
-        cmd_carg(&cc_opt->cmd, "-lffi");
+        if(BUILD_OS == OS_WINDOWS){
+            cmd_carg(&cc_opt->cmd, "-IFetched/libffi");
+            target_inp(ctx, cc_opt, ffi_lib);
+        }
+        else {
+            if(BUILD_OS == OS_LINUX)
+                cmd_carg(&cc_opt->cmd, "-ldl");
+            cmd_carg(&cc_opt->cmd, "-lffi");
+        }
 
         selfhost = cmd_target(ctx, "selfhost");
         selfhost->is_phony = 1;
         add_dep(ctx, selfhost, cc_opt);
+        if(ffi_dll)
+            add_dep(ctx, selfhost, ffi_dll);
         cmd_prog(&selfhost->cmd, (LongString){cc_opt->name->length, cc_opt->name->data});
         cmd_cargs(&selfhost->cmd, "cc.c", "Samples/hello.c");
         add_dep(ctx, selftests, selfhost);
@@ -134,6 +173,8 @@ int main(int argc, char** argv, char** envp){
             Atom run_name = b_atomize_f(ctx, "run_%s", name);
             BuildTarget* run = exec_target(ctx, run_name->data, bin);
             run->is_phony = 1;
+            if(ffi_dll && bin == cc)
+                add_dep(ctx, run, ffi_dll);
             for(size_t j = 0; j < ctx->dash_dash_args.count; j++){
                 Atom a = ctx->dash_dash_args.data[j];
                 cmd_arg(&run->cmd, (LongString){a->length, a->data});
@@ -229,6 +270,66 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
         if(err) return err;
     }
     return 0;
+}
+
+static
+int
+fetch_libffi(BuildCtx* ctx, BuildTarget* tgt){
+    BCoro* coro = &tgt->coro;
+    BSTATE(fetch_libffi,
+        char _pad;
+    );
+    CmdBuilder* cmd = &tgt->cmd;
+    switch(coro->step){ BGO(BFINISHED); BGO(0); BGO(1); BGO(2); default: b_debug_break(ctx, "Invalid coro step");}
+    L0:;
+    if(b_file_info_uncached(ctx, "Fetched/libffi", sizeof "Fetched/libffi" - 1)->exists)
+        goto finish;
+    if(!b_file_info_uncached(ctx, "Fetched", sizeof "Fetched" - 1)->exists){
+        b_log(ctx, "mkdir Fetched\n");
+        int err = mkdir_if_not_exists(ctx, "Fetched");
+        if(err) return BERROR;
+    }
+    {
+        int err = mkdir_if_not_exists(ctx, "Fetched/libffi");
+        if(err) return BERROR;
+    }
+    {
+        cmd_clear(cmd);
+        cmd_prog(cmd, LS("curl"));
+        cmd_cargs(cmd, "-L",
+            "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2-x86-64bit-msvc-binaries.zip",
+            "-f", "-s", "-o", "Fetched/libffi.zip");
+        int err = b_run_cmd_async(ctx, tgt, cmd);
+        if(err) return BERROR;
+        BYIELD(1);
+    }
+    {
+        cmd_clear(cmd);
+        cmd_prog(cmd, LS("tar"));
+        cmd_cargs(cmd, "-xf", "Fetched/libffi.zip", "-C", "Fetched/libffi");
+        int err = b_run_cmd_async(ctx, tgt, cmd);
+        if(err) return BERROR;
+        BYIELD(2);
+    }
+    {
+        b_log(ctx, "rm Fetched/libffi.zip\n");
+        int err = rm_file(ctx, "Fetched/libffi.zip");
+        if(err) return BERROR;
+    }
+    finish:
+    BFINISH();
+}
+
+static
+int
+copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
+    (void)tgt;
+    Atom dst = b_atomize_f(ctx, "%s/libffi-8.dll", ctx->build_dir->data);
+    b_log(ctx, "cp Fetched/libffi/libffi-8.dll %s\n", dst->data);
+    int err = copy_file(ctx, "Fetched/libffi/libffi-8.dll", dst->data);
+    if(err)
+        b_loglvl(BLOG_ERROR, ctx, "Failed to copy libffi-8.dll\n");
+    return err;
 }
 
 static

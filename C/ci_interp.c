@@ -3116,6 +3116,25 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
+static
+int
+ci_preload_system_libs(CiInterpreter* ci){
+    #if defined(_WIN32) && !defined(NO_NATIVE_CALL)
+    static const StringView crt_libs[] = {SVI("ucrtbase"), SVI("kernel32"), SVI("ntdll"), SVI("api-ms-win-core-synch-l1-2-0")};
+    for(size_t i = 0; i < sizeof crt_libs / sizeof crt_libs[0]; i++){
+        void* handle = LoadLibraryA(crt_libs[i].text);
+        if(!handle) continue;
+        Atom a = AT_atomize(ci->parser.cpp.at, crt_libs[i].text, crt_libs[i].length);
+        if(!a) return CI_OOM_ERROR;
+        int err = AM_put(&ci->opened_libs, ci_allocator(ci), a, handle);
+        if(err) return CI_OOM_ERROR;
+    }
+    #else
+    (void)ci;
+    #endif
+    return 0;
+}
+
 static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro;
 static
 int

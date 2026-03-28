@@ -22,14 +22,14 @@ jobs:
       - run: sudo apt-get install -y libffi-dev
       - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
       - run: ./build test -- --multithreaded --force-colors
-  windows:
+  windows-x64:
     runs-on: windows-latest
     defaults:
       run:
         shell: cmd
     steps:
       - uses: actions/checkout@v6
-      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin && build.exe run_cpp_test run_cc_lex_test run_cc_test run_ci_test -- --multithreaded --force-colors
+      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin && build.exe test -- --multithreaded --force-colors
   macos:
     runs-on: macos-latest
     steps:

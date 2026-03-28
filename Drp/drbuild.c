@@ -2564,13 +2564,28 @@ execute_targets(BuildCtx* ctx){
                     if(tgt->is_coro){
                         int b = tgt->corop(ctx, tgt);
                         if(b == BERROR) goto finally;
-                        if(ctx->jobs.count == (size_t)ctx->njobs)
+                        if(b == BFINISHED){
+                            tgt->visit_state = UP_TO_DATE;
+                            if(tgt->is_binary)
+                                b_file_info(ctx, tgt->name->data, tgt->name->length)->valid = 0;
+                            MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs){
+                                get_targeta(ctx, o)->visit_state = UP_TO_DATE;
+                                b_file_info(ctx, o->data, o->length)->valid = 0;
+                            }
+                        }
+                        else if(ctx->jobs.count == (size_t)ctx->njobs)
                             goto Break;
                     }
                     else if(tgt->is_script){
                         err = tgt->script(ctx, tgt);
                         if(err) return err;
                         tgt->visit_state = UP_TO_DATE;
+                        if(tgt->is_binary)
+                            b_file_info(ctx, tgt->name->data, tgt->name->length)->valid = 0;
+                        MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs){
+                            get_targeta(ctx, o)->visit_state = UP_TO_DATE;
+                            b_file_info(ctx, o->data, o->length)->valid = 0;
+                        }
                     }
                     else {
                         if(tgt->should_exec){

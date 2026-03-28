@@ -313,14 +313,26 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     *out = &ffi_type_longdouble;
                     return NC_NO_ERROR;
                 case CCBT_float_complex:
+                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
                     *out = &ffi_type_complex_float;
                     return NC_NO_ERROR;
+                    #else
+                    return NC_UNSUPPORTED_TYPE;
+                    #endif
                 case CCBT_double_complex:
+                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
                     *out = &ffi_type_complex_double;
                     return NC_NO_ERROR;
+                    #else
+                    return NC_UNSUPPORTED_TYPE;
+                    #endif
                 case CCBT_long_double_complex:
+                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
                     *out = &ffi_type_complex_longdouble;
                     return NC_NO_ERROR;
+                    #else
+                    return NC_UNSUPPORTED_TYPE;
+                    #endif
                 case CCBT_nullptr_t:
                     *out = &ffi_type_pointer;
                     return NC_NO_ERROR;

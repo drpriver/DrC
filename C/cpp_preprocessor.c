@@ -2533,7 +2533,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(err) return err;
                 break;
             }
-            cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
+            if(0)cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
         }
         {
             CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -2964,7 +2964,7 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
                 if(err) return err;
                 break;
             }
-            cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
+            if(0)cpp_warn(cpp, tok.loc, "Trailing tokens after #endif");
         }
         {
             CppPoundIf* s = &ma_tail(cpp->if_stack);

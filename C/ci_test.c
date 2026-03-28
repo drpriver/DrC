@@ -2268,6 +2268,23 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "msvc __va_start/__va_end", __LINE__,
+            SV("typedef __builtin_va_list va_list;\n"
+                "void __va_start(va_list*, ...);\n"
+                "void __va_end(va_list*);\n"
+                "int sum(int n, ...){\n"
+                "  va_list ap;\n"
+                "  __va_start(&ap, n);\n"
+                "  int s = 0;\n"
+                "  for(int i = 0; i < n; i++)\n"
+                "    s += __builtin_va_arg(ap, int);\n"
+                "  __va_end(&ap);\n"
+                "  return s;\n"
+                "}\n"
+                "return sum(3, 10, 20, 30);\n"),
+            .exit_code = 60,
+        },
+        {
             "cpy really fake fla", __LINE__,
             SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"

@@ -92,7 +92,6 @@ struct SdlDep {
 
 static const struct SdlDep SDL = {"SDL2", "SDL", "2.30.9"};
 // Async C script
-static int fetch_sdl(BuildCtx* ctx, BCoro* coro, const void* arg);
 
 static
 int

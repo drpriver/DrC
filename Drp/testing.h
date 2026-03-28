@@ -10,7 +10,10 @@
 #include <stdarg.h>
 #ifdef _WIN32
 #include <direct.h> // for chdir
+#include <io.h>
 #define chdir _chdir
+#define isatty _isatty
+#define fileno _fileno
 #else
 #include <unistd.h>
 #endif
