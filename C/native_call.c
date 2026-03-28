@@ -19,6 +19,10 @@
 #endif
 #endif
 
+#ifdef _WIN32
+#define NATIVE_CALL_NO_COMPLEX_TYPE
+#endif
+
 #include "cc_errors.h"
 #include "native_call.h"
 #include "cc_func.h"
@@ -313,21 +317,21 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     *out = &ffi_type_longdouble;
                     return NC_NO_ERROR;
                 case CCBT_float_complex:
-                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
+                    #if defined FFI_TARGET_HAS_COMPLEX_TYPE && !defined NATIVE_CALL_NO_COMPLEX_TYPE
                     *out = &ffi_type_complex_float;
                     return NC_NO_ERROR;
                     #else
                     return NC_UNSUPPORTED_TYPE;
                     #endif
                 case CCBT_double_complex:
-                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
+                    #if defined FFI_TARGET_HAS_COMPLEX_TYPE && !defined NATIVE_CALL_NO_COMPLEX_TYPE
                     *out = &ffi_type_complex_double;
                     return NC_NO_ERROR;
                     #else
                     return NC_UNSUPPORTED_TYPE;
                     #endif
                 case CCBT_long_double_complex:
-                    #ifdef FFI_TARGET_HAS_COMPLEX_TYPE
+                    #if defined FFI_TARGET_HAS_COMPLEX_TYPE && !defined NATIVE_CALL_NO_COMPLEX_TYPE
                     *out = &ffi_type_complex_longdouble;
                     return NC_NO_ERROR;
                     #else
