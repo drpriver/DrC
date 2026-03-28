@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#ifdef __DRC__
+#define USE_MURMUR 1
+#endif
 
 #ifndef __clang__
 #ifndef _Null_unspecified

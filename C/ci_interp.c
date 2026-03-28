@@ -3269,7 +3269,7 @@ static
 int
 ci_preload_system_libs(CiInterpreter* ci){
     #if defined(_WIN32) && !defined(NO_NATIVE_CALL)
-    static const StringView crt_libs[] = {SVI("ucrtbase"), SVI("kernel32"), SVI("ntdll"), SVI("api-ms-win-core-synch-l1-2-0")};
+    static const StringView crt_libs[] = {SVI("ucrtbase"), SVI("kernel32"), SVI("ntdll"), SVI("api-ms-win-core-synch-l1-2-0"), SVI("dbghelp")};
     for(size_t i = 0; i < sizeof crt_libs / sizeof crt_libs[0]; i++){
         void* handle = LoadLibraryA(crt_libs[i].text);
         if(!handle) continue;
