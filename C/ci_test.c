@@ -2373,6 +2373,24 @@ TestFunction(test_interpreter){
             .exit_code = 0xFF + 0xF0,
         },
         {
+            "_umul128", __LINE__,
+            SV("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
+                "unsigned long long hi;\n"
+                "unsigned long long lo = _umul128(0x100000000ULL, 0x100000000ULL, &hi);\n"
+                "return (int)(lo + hi);\n"),
+            // 0x100000000 * 0x100000000 = 0x1_00000000_00000000, so lo=0, hi=1
+            .exit_code = 0 + 1,
+        },
+        {
+            "_umul128 no overflow", __LINE__,
+            SV("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
+                "unsigned long long hi;\n"
+                "unsigned long long lo = _umul128(7, 9, &hi);\n"
+                "return (int)(lo + hi);\n"),
+            // 7*9=63, fits in low, hi=0
+            .exit_code = 63,
+        },
+        {
             "cpy really fake fla", __LINE__,
             SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"

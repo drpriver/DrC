@@ -1622,6 +1622,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_ALLOCA:
             case CC_EXPR_INTERN:
             case CC_EXPR_TYPE_INTROSPECTION:
+            case CC_EXPR_UMUL128:
                 return CC_UNREACHABLE_ERROR;
         }
         CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 1);
@@ -1888,6 +1889,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ALLOCA:
                 case CC_EXPR_INTERN:
                 case CC_EXPR_TYPE_INTROSPECTION:
+                case CC_EXPR_UMUL128:
                     return CC_UNREACHABLE_ERROR;
             }
             CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 0);
@@ -2305,6 +2307,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC_InterlockedXor8:
                         case CC_InterlockedXor16:
                         case CC_InterlockedXor64:
+                        case CC__umul128:
                         return cc_unreachable(p, tok.loc, "compiler broken??");
                     }
                     err = cc_expect_punct(p, '(');
@@ -2614,6 +2617,43 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__umul128: {
+                    // unsigned __int64 _umul128(unsigned __int64, unsigned __int64, unsigned __int64*)
+                    CcQualType ull_type = ccqt_basic(CCBT_unsigned_long_long);
+                    CcQualType ull_ptr_type;
+                    err = cc_pointer_of(p, ull_type, &ull_ptr_type);
+                    if(err) return err;
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* a;
+                    err = cc_parse_assignment_expr(p, vc, &a);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, a, ull_type, &a);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* b;
+                    err = cc_parse_assignment_expr(p, vc, &b);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, b, ull_type, &b);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* high_ptr;
+                    err = cc_parse_assignment_expr(p, vc, &high_ptr);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, high_ptr, ull_ptr_type, &high_ptr);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_UMUL128, tok.loc, ull_type, 2);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = a;
+                    node->values[0] = b;
+                    node->values[1] = high_ptr;
+                    *out = node;
+                    return 0;
+                }
                 case CC__builtin_va_start: {
                     // (ap, param) or (ap)
                     err = cc_expect_punct(p, '(');
@@ -2817,6 +2857,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC_InterlockedXor8:
                         case CC_InterlockedXor16:
                         case CC_InterlockedXor64:
+                        case CC__umul128:
                         return CC_UNREACHABLE_ERROR;
                     }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ccqt_basic(CCBT_void), 0);
@@ -2942,6 +2983,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC_InterlockedXor8:
                         case CC_InterlockedXor16:
                         case CC_InterlockedXor64:
+                        case CC__umul128:
                         return CC_UNREACHABLE_ERROR;
                     }
                     CcExpr* node = cc_make_expr(p, kind, tok.loc, ccqt_basic(CCBT_bool), 2);
@@ -4577,6 +4619,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_CLZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
+        case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
@@ -5389,6 +5432,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_UMUL128:
             return 2;
         // variable
         case CC_EXPR_CALL:
@@ -5554,6 +5598,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_SUB_OVERFLOW:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
+        case CC_EXPR_UMUL128:
         case CC_EXPR_VA:
             if(e->lhs)
                 cc_release_expr(p, e->lhs);
@@ -10604,6 +10649,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("_InterlockedXor8"), CC_InterlockedXor8},
             {SVI("_InterlockedXor16"), CC_InterlockedXor16},
             {SVI("_InterlockedXor64"), CC_InterlockedXor64},
+            {SVI("_umul128"), CC__umul128},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
@@ -12157,6 +12203,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         }
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
+        case CC_EXPR_UMUL128:
             return 1;
     }
 }

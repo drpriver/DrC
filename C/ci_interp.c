@@ -407,6 +407,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_TYPE_INTROSPECTION:
+        case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
         CASES_EXHAUSTED;
     }
@@ -2671,6 +2672,25 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(sizeof(void*) > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
         memcpy(result, &interned, sizeof(void*));
+        return 0;
+    }
+    case CC_EXPR_UMUL128: {
+        uint64_t a = 0, b = 0;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &a, 8);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->values[0], &b, 8);
+        if(err) return err;
+        void* high_ptr = NULL;
+        err = ci_interp_expr(ci, frame, expr->values[1], &high_ptr, sizeof high_ptr);
+        if(err) return err;
+        #ifdef _MSC_VER
+        *(uint64_t*)result = _umul128(a, b, (uint64_t*)high_ptr);
+        #else
+        unsigned __int128 full = (unsigned __int128)a * b;
+        *(uint64_t*)result = (uint64_t)full;
+        if(high_ptr)
+            *(uint64_t*)high_ptr = (uint64_t)(full >> 64);
+        #endif
         return 0;
     }
     case CC_EXPR_ADD_OVERFLOW:

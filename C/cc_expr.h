@@ -86,6 +86,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
+    CC_EXPR_UMUL128, // _umul128(a, b, &high) -> low
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
