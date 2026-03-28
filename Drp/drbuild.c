@@ -2131,7 +2131,7 @@ print_command(BuildCtx* ctx, CmdBuilder* cmd){
 
 static
 void
-parse_vs_json_text(BuildCtx* ctx, LongString text){
+parse_vs_json_text(BuildCtx* ctx, LongString text, BuildTarget* target){
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
     DrJsonContext* jsctx = drjson_create_ctx(tmp, &ctx->at);
     unsigned flags = 0;
@@ -2146,24 +2146,6 @@ parse_vs_json_text(BuildCtx* ctx, LongString text){
         b_loglvl(BLOG_WARN, ctx, "version mismatch, expected '1.2', got '%s'\n", version.atom->data);
         goto finally;
     }
-    DrJsonValue source = drjson_checked_query(jsctx, val, DRJSON_STRING, "Data.Source", sizeof "Data.Source"-1);
-    if(source.kind == DRJSON_ERROR)
-        goto finally;
-    Atom src_path = b_normalize_patha(ctx, source.atom);
-    BuildTarget* target = NULL;
-    AtomMapItems items = AM_items(&ctx->targets);
-    MARRAY_FOR_EACH_VALUE(AtomMapItem, item, items){
-        BuildTarget* t = item.p;
-        MARRAY_FOR_EACH_VALUE(Atom, a, t->dependencies){
-            if(a == src_path){
-                target = t;
-                goto Break;
-            }
-        }
-    }
-    b_loglvl(BLOG_WARN, ctx, "target not found for '%s'\n", source.atom->data);
-    goto finally;
-    Break:;
     DrJsonValue includes = drjson_checked_query(jsctx, val, DRJSON_ARRAY, "Data.Includes", sizeof "Data.Includes" - 1);
     if(includes.kind == DRJSON_ERROR)
         goto finally;
@@ -2310,8 +2292,16 @@ parse_depfile(BuildCtx* ctx, const char* filename){
     if(e) goto finally;
     LongString text = msb_borrow_ls(&sb);
     StringView fn = {strlen(filename), filename};
-    if(sv_endswith(fn, SV(".json")))
-        parse_vs_json_text(ctx, text);
+    if(sv_endswith(fn, SV(".deps.json"))){
+        StringView base = path_basename(fn, BUILD_OS == OS_WINDOWS);
+        size_t name_len = base.length - (sizeof ".deps.json" - 1);
+        StringView name = {name_len, base.text};
+        const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe"))) ? ".exe" : "";
+        Atom target_name = b_atomize_f(ctx, "%s/%.*s%s", ctx->build_dir->data, (int)name_len, base.text, ext);
+        BuildTarget* target = get_targeta(ctx, target_name);
+        if(target)
+            parse_vs_json_text(ctx, text, target);
+    }
     else
         parse_makefile_text(ctx, text);
     finally:
