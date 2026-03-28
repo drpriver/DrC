@@ -10131,6 +10131,7 @@ cc_define_builtin_types(CcParser* p){
         }
         case CC_TARGET_COUNT:
             return CC_UNREACHABLE_ERROR;
+        CASES_EXHAUSTED;
     }
     err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
     if(err) return CC_OOM_ERROR;
