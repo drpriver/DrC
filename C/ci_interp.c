@@ -1984,6 +1984,58 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 }
             #endif
                 break;
+            case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE: {
+                // values[0] = exchange, values[1] = comparand, result = old value
+                uint64_t exchange_val = 0;
+                uint64_t comparand_val = 0;
+                err = ci_interp_expr(ci, frame, expr->values[0], &exchange_val, sz);
+                if(err) return err;
+                err = ci_interp_expr(ci, frame, expr->values[1], &comparand_val, sz);
+                if(err) return err;
+                // __atomic_compare_exchange writes the old value into comparand_val on failure.
+                // On success the old value equals comparand, already there.
+                #ifdef _MSC_VER
+                switch(sz){
+                    case 1: *(uint8_t*)result  = (uint8_t)_InterlockedCompareExchange8((volatile char*)ptr, (char)exchange_val, (char)comparand_val); break;
+                    case 2: *(uint16_t*)result = (uint16_t)_InterlockedCompareExchange16((volatile short*)ptr, (short)exchange_val, (short)comparand_val); break;
+                    case 4: *(uint32_t*)result = (uint32_t)_InterlockedCompareExchange((volatile long*)ptr, (long)exchange_val, (long)comparand_val); break;
+                    case 8: *(uint64_t*)result = (uint64_t)_InterlockedCompareExchange64((volatile long long*)ptr, (long long)exchange_val, (long long)comparand_val); break;
+                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+                }
+                #else
+                switch(sz){
+                    case 1:  __atomic_compare_exchange(( uint8_t*)ptr, ( uint8_t*)&comparand_val, ( uint8_t*)&exchange_val, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                    case 2:  __atomic_compare_exchange((uint16_t*)ptr, (uint16_t*)&comparand_val, (uint16_t*)&exchange_val, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                    case 4:  __atomic_compare_exchange((uint32_t*)ptr, (uint32_t*)&comparand_val, (uint32_t*)&exchange_val, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                    case 8:  __atomic_compare_exchange((uint64_t*)ptr, (uint64_t*)&comparand_val, (uint64_t*)&exchange_val, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
+                }
+                memcpy(result, &comparand_val, sz);
+                #endif
+                break;
+            }
+            case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE128: {
+                // values[0] = exchange_high, values[1] = exchange_low, values[2] = comparand_result ptr
+                // result = unsigned char (bool)
+                int64_t exchange_high = 0;
+                int64_t exchange_low = 0;
+                void* comparand_ptr = NULL;
+                err = ci_interp_expr(ci, frame, expr->values[0], &exchange_high, 8);
+                if(err) return err;
+                err = ci_interp_expr(ci, frame, expr->values[1], &exchange_low, 8);
+                if(err) return err;
+                err = ci_interp_expr(ci, frame, expr->values[2], &comparand_ptr, sizeof comparand_ptr);
+                if(err) return err;
+                #ifdef _MSC_VER
+                *(unsigned char*)result = _InterlockedCompareExchange128((volatile __int64*)ptr, exchange_high, exchange_low, (__int64*)comparand_ptr);
+                #else
+                typedef struct { _Alignas(16) uint64_t lo; uint64_t hi; } Pair128;
+                Pair128 desired = {(uint64_t)exchange_low, (uint64_t)exchange_high};
+                _Bool r = __atomic_compare_exchange((Pair128*)ptr, (Pair128*)comparand_ptr, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                *(unsigned char*)result = r;
+                #endif
+                break;
+            }
             case CC_ATOMIC_LOAD_N:
             case CC_ATOMIC_LOAD:
             case CC_ATOMIC_STORE:

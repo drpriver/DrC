@@ -2285,6 +2285,46 @@ TestFunction(test_interpreter){
             .exit_code = 60,
         },
         {
+            "_InterlockedExchange", __LINE__,
+            SV("long _InterlockedExchange(long volatile*, long);\n"
+                "long volatile x = 10;\n"
+                "long old = _InterlockedExchange(&x, 42);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 10 + 42,
+        },
+        {
+            "_InterlockedCompareExchange success", __LINE__,
+            SV("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+                "long volatile x = 10;\n"
+                "long old = _InterlockedCompareExchange(&x, 42, 10);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 10 + 42,
+        },
+        {
+            "_InterlockedCompareExchange failure", __LINE__,
+            SV("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+                "long volatile x = 10;\n"
+                "long old = _InterlockedCompareExchange(&x, 42, 99);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 10 + 10,
+        },
+        {
+            "_InterlockedExchange8", __LINE__,
+            SV("char _InterlockedExchange8(char volatile*, char);\n"
+                "char volatile x = 5;\n"
+                "char old = _InterlockedExchange8(&x, 7);\n"
+                "return old + x;\n"),
+            .exit_code = 5 + 7,
+        },
+        {
+            "_InterlockedCompareExchange64", __LINE__,
+            SV("long long _InterlockedCompareExchange64(long long volatile*, long long, long long);\n"
+                "long long volatile x = 100;\n"
+                "long long old = _InterlockedCompareExchange64(&x, 200, 100);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 100 + 200,
+        },
+        {
             "cpy really fake fla", __LINE__,
             SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"

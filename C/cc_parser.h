@@ -120,6 +120,15 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_alloca,
     CC__builtin_intern,
     CC__bt,
+    CC_InterlockedExchange,
+    CC_InterlockedExchange8,
+    CC_InterlockedExchange16,
+    CC_InterlockedExchange64,
+    CC_InterlockedCompareExchange,
+    CC_InterlockedCompareExchange8,
+    CC_InterlockedCompareExchange16,
+    CC_InterlockedCompareExchange64,
+    CC_InterlockedCompareExchange128,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 
