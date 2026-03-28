@@ -2377,6 +2377,7 @@ parse_depfiles(BuildCtx* ctx){
                 pattern.cursor = ctx->deps_dir->length+1;
                 msb16_write_str(&pattern, fd.cFileName, wcslen(fd.cFileName));
                 ls = msb16_borrow_ls(&pattern);
+                msb_reset(&path);
                 msb_write_utf16(&path, ls.text, ls.length);
                 parse_depfile(ctx, msb_borrow_ls(&path).text);
             } while(FindNextFileW(h, &fd));
