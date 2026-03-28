@@ -80,6 +80,9 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__func__,
     CC__atomic_fetch_add, // (ptr, val, memorder)
     CC__atomic_fetch_sub, // (ptr, val, memorder)
+    CC__atomic_fetch_and, // (ptr, val, memorder)
+    CC__atomic_fetch_or,  // (ptr, val, memorder)
+    CC__atomic_fetch_xor, // (ptr, val, memorder)
     CC__atomic_load_n,    // (ptr, memorder)
     CC__atomic_load,      // (ptr, ret, memorder)
     CC__atomic_store_n,   // (ptr, val, memorder)
@@ -129,6 +132,28 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC_InterlockedCompareExchange16,
     CC_InterlockedCompareExchange64,
     CC_InterlockedCompareExchange128,
+    CC_InterlockedIncrement,
+    CC_InterlockedIncrement16,
+    CC_InterlockedIncrement64,
+    CC_InterlockedDecrement,
+    CC_InterlockedDecrement16,
+    CC_InterlockedDecrement64,
+    CC_InterlockedExchangeAdd,
+    CC_InterlockedExchangeAdd8,
+    CC_InterlockedExchangeAdd16,
+    CC_InterlockedExchangeAdd64,
+    CC_InterlockedAnd,
+    CC_InterlockedAnd8,
+    CC_InterlockedAnd16,
+    CC_InterlockedAnd64,
+    CC_InterlockedOr,
+    CC_InterlockedOr8,
+    CC_InterlockedOr16,
+    CC_InterlockedOr64,
+    CC_InterlockedXor,
+    CC_InterlockedXor8,
+    CC_InterlockedXor16,
+    CC_InterlockedXor64,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

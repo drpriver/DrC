@@ -2325,6 +2325,54 @@ TestFunction(test_interpreter){
             .exit_code = 100 + 200,
         },
         {
+            "_InterlockedIncrement", __LINE__,
+            SV("long _InterlockedIncrement(long volatile*);\n"
+                "long volatile x = 10;\n"
+                "long new_val = _InterlockedIncrement(&x);\n"
+                "return (int)(new_val + x);\n"),
+            .exit_code = 11 + 11,
+        },
+        {
+            "_InterlockedDecrement", __LINE__,
+            SV("long _InterlockedDecrement(long volatile*);\n"
+                "long volatile x = 10;\n"
+                "long new_val = _InterlockedDecrement(&x);\n"
+                "return (int)(new_val + x);\n"),
+            .exit_code = 9 + 9,
+        },
+        {
+            "_InterlockedExchangeAdd", __LINE__,
+            SV("long _InterlockedExchangeAdd(long volatile*, long);\n"
+                "long volatile x = 10;\n"
+                "long old = _InterlockedExchangeAdd(&x, 5);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 10 + 15,
+        },
+        {
+            "_InterlockedAnd", __LINE__,
+            SV("long _InterlockedAnd(long volatile*, long);\n"
+                "long volatile x = 0xFF;\n"
+                "long old = _InterlockedAnd(&x, 0x0F);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 0xFF + 0x0F,
+        },
+        {
+            "_InterlockedOr", __LINE__,
+            SV("long _InterlockedOr(long volatile*, long);\n"
+                "long volatile x = 0xF0;\n"
+                "long old = _InterlockedOr(&x, 0x0F);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 0xF0 + 0xFF,
+        },
+        {
+            "_InterlockedXor", __LINE__,
+            SV("long _InterlockedXor(long volatile*, long);\n"
+                "long volatile x = 0xFF;\n"
+                "long old = _InterlockedXor(&x, 0x0F);\n"
+                "return (int)(old + x);\n"),
+            .exit_code = 0xFF + 0xF0,
+        },
+        {
             "cpy really fake fla", __LINE__,
             SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"
