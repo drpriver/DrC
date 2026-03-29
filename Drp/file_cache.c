@@ -232,8 +232,8 @@ fc_read_file(FileCache* fc, StringView* outdata){
     }
     size_t nread = 0;
     while(nread < f->data_size){
-        DWORD to_read = f->data_size - nread;
-        if(to_read > 0x80000000u) to_read = 0x80000000u;
+        size_t remaining = f->data_size - nread;
+        DWORD to_read = remaining > 0x7FFFFFFF ? 0x7FFFFFFF : (DWORD)remaining;
         DWORD n;
         if(!ReadFile(fh, (char*)data + nread, to_read, &n, NULL)){
             Allocator_free(fc->allocator, data, f->data_size);

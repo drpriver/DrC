@@ -2391,14 +2391,14 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 uint32_t sz;
                 err = cc_sizeof_as_uint(&ci->parser, qt, expr->loc, &sz);
                 if(err) return err;
-                *(unsigned long*)result = sz;
+                *(size_t*)result = sz;
                 return 0;
             }
             case CC_TYPE_ALIGNOF: {
                 uint32_t al;
                 err = cc_alignof_as_uint(&ci->parser, qt, expr->loc, &al);
                 if(err) return err;
-                *(unsigned long*)result = al;
+                *(size_t*)result = al;
                 return 0;
             }
             case CC_TYPE_POINTEE: {
@@ -2451,7 +2451,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_COUNT: {
                 if(ccqt_kind(qt) != CC_ARRAY)
                     return ci_error(ci, expr->loc, "_Type.count: not an array type");
-                *(unsigned long*)result = ccqt_as_array(qt)->length;
+                *(size_t*)result = ccqt_as_array(qt)->length;
                 return 0;
             }
             case CC_TYPE_IS_CALLABLE_WITH: {
@@ -2527,7 +2527,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(ccqt_kind(qt) != CC_ENUM)
                     return ci_error(ci, expr->loc, "_Type.enumerators: not an enum type");
                 CcEnum* en = ccqt_as_enum(qt);
-                *(unsigned long*)result = en->enumerator_count;
+                *(size_t*)result = en->enumerator_count;
                 return 0;
             }
             case CC_TYPE_ENUMERATOR: {
@@ -2559,7 +2559,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
                 if(ccqt_kind(ft) != CC_FUNCTION)
                     return ci_error(ci, expr->loc, "_Type.param_count: not a function type");
-                *(unsigned long*)result = ccqt_as_function(ft)->param_count;
+                *(size_t*)result = ccqt_as_function(ft)->param_count;
                 return 0;
             }
             case CC_TYPE_PARAM_TYPE: {
@@ -2593,7 +2593,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 if(k != CC_STRUCT && k != CC_UNION)
                     return ci_error(ci, expr->loc, "_Type.fields: not a struct or union type");
                 CcStruct* s = ccqt_as_struct(qt);
-                *(unsigned long*)result = s->field_count;
+                *(size_t*)result = s->field_count;
                 return 0;
             }
         }

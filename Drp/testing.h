@@ -1075,7 +1075,7 @@ testing_seed_rng(uint64_t*_Nonnull seed_){
         HMODULE lib = LoadLibraryW(L"Advapi32.dll");
         assert(lib);
         typedef BOOLEAN(RtlGenRandomT)(PVOID, ULONG);
-        RtlGenRandomT* gr = (RtlGenRandomT*)GetProcAddress(lib, "SystemFunction036"); // RtlGenRandom
+        RtlGenRandomT* gr = (RtlGenRandomT*)(void*)GetProcAddress(lib, "SystemFunction036"); // RtlGenRandom
         BOOLEAN r = gr(&seed, sizeof seed);
         (void)r;
         FreeLibrary(lib);
