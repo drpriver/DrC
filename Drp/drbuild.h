@@ -333,13 +333,13 @@ static const StringView CompilerFlavorSVs[] = {
 // to use a different compiler.
 //
 #ifndef DEFAULT_BUILD_COMPILER
-#if defined(__clang__) && defined(_MSC_VER)
+#if defined __clang__ && defined _MSC_VER && !defined __GNUC__
 #define DEFAULT_BUILD_COMPILER "clang-cl"
-#elif defined(__clang__)
+#elif defined __clang__
 #define DEFAULT_BUILD_COMPILER "clang"
-#elif defined(_MSC_VER)
+#elif defined _MSC_VER
 #define DEFAULT_BUILD_COMPILER "cl"
-#elif defined(__GNUC__)
+#elif defined __GNUC__
 #define DEFAULT_BUILD_COMPILER "gcc"
 #else
 #define DEFAULT_BUILD_COMPILER "cc"
