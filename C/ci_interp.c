@@ -3285,25 +3285,6 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
-static
-int
-ci_preload_system_libs(CiInterpreter* ci){
-    #if defined(_WIN32) && !defined(NO_NATIVE_CALL)
-    static const StringView crt_libs[] = {SVI("ucrtbase"), SVI("kernel32"), SVI("ntdll"), SVI("api-ms-win-core-synch-l1-2-0"), SVI("dbghelp")};
-    for(size_t i = 0; i < sizeof crt_libs / sizeof crt_libs[0]; i++){
-        void* handle = LoadLibraryA(crt_libs[i].text);
-        if(!handle) continue;
-        Atom a = AT_atomize(ci->parser.cpp.at, crt_libs[i].text, crt_libs[i].length);
-        if(!a) return CI_OOM_ERROR;
-        int err = AM_put(&ci->opened_libs, ci_allocator(ci), a, handle);
-        if(err) return CI_OOM_ERROR;
-    }
-    #else
-    (void)ci;
-    #endif
-    return 0;
-}
-
 static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro;
 static
 int
@@ -4083,30 +4064,35 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
     }
     if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
         return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
+    void* p = NULL;
     #ifdef NO_NATIVE_CALL
+        (void)p;
         (void)out;
         return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
     #elif defined _WIN32
-        // Try the exe module first, then each dlopen'd library.
-        void* p = (void*)GetProcAddress(GetModuleHandleW(NULL), sym.text);
-        if(!p){
-            AtomMapItems items = AM_items(&ci->opened_libs);
-            for(size_t i = 0; !p && i < items.count; i++){
-                if(!items.data[i].p) continue;
-                p = (void*)GetProcAddress(items.data[i].p, sym.text);
+        // Search all loaded modules (like dlsym(RTLD_DEFAULT, ...)).
+        {
+            HMODULE modules[256];
+            DWORD needed = 0;
+            BOOL ok = K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &needed);
+            if(ok){
+                DWORD count = needed / sizeof(HMODULE);
+                if(count > 256) count = 256;
+                for(DWORD i = 0; i < count; i++){
+                    p = GetProcAddress(modules[i], sym.text);
+                    if(p) break;
+                }
             }
         }
         if(!p) return ci_error(ci, loc, "%s '%s' not found", what, sym.text);
-        *out = p;
-        return 0;
     #else
-        void* p = dlsym(RTLD_DEFAULT, sym.text);
+        p = dlsym(RTLD_DEFAULT, sym.text);
         if(!p && sym.text[0] == '_')
             p = dlsym(RTLD_DEFAULT, sym.text+1);
         if(!p) return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
-        *out = p;
-        return 0;
     #endif
+    *out = p;
+    return 0;
 }
 static
 int

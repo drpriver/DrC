@@ -253,8 +253,6 @@ int main(int argc, char** argv, char** envp){
     if(err) goto stringify_error;
     err = ci_register_pragmas(&interp);
     if(err) goto stringify_error;
-    err = ci_preload_system_libs(&interp);
-    if(err) goto stringify_error;
     err = ci_register_macros(&interp);
     if(err) goto stringify_error;
     err = cpp_setup_builtin_headers(&interp.parser.cpp);

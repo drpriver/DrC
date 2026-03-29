@@ -82,7 +82,6 @@ static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_expr(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void* result, size_t size);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
-static int ci_preload_system_libs(CiInterpreter* ci);
 static int ci_register_macros(CiInterpreter*);
 static int ci_load_library(CiInterpreter*, StringView);
 static int ci_load_framework(CiInterpreter*, StringView);
