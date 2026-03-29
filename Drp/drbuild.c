@@ -3111,6 +3111,8 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     }
     if(flavor == COMPILER_CLANG_CL)
         target_linkarg(ctx, target, "clang_rt.builtins-x86_64.lib");
+    else if(flavor == COMPILER_CLANG && target_os == OS_WINDOWS)
+        target_linkarg(ctx, target, "-lclang_rt.builtins-x86_64");
     BuildTarget* phony = phony_target(ctx, name);
     add_dep(ctx, phony, target);
     return target;
