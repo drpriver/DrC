@@ -88,16 +88,12 @@ you.
 You can bootstrap the build system on windows using build.bat. This is
 purely convenience.
 
-
-Warning: windows is untested and probably doesn't compile.
-
 </details>
 
 <details><summary>Dependencies</summary>
 
-Depends on libffi. Assumes you can just do `-lffi` and that just works. If
-you are on windows, that sucks. It will work there but getting it so it
-"just werks" on windows is not worth the hassle.
+Depends on libffi. On Linux/macOS, assumes you can just do `-lffi` and
+that just works. On Windows, the build system fetches libffi binaries.
 
 </details>
 
