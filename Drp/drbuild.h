@@ -465,6 +465,8 @@ struct BuildTarget {
     Atom name;
     Marray(Atom) dependencies;
     Marray(Atom) outputs;
+    Marray(Atom) linker_args;
+    enum CompilerFlavor compiler_flavor;
     CmdBuilder cmd;
     union {
         int (*script)(BuildCtx*, BuildTarget*);
@@ -518,6 +520,10 @@ Atom
 __attribute__((format(printf, 2, 3)))
 #endif
 b_atomize_f(BuildCtx* ctx, const char*, ...);
+
+static
+Atom
+b_atomize_fv(BuildCtx* ctx, const char* fmt, va_list ap);
 
 static
 Atom
@@ -744,9 +750,11 @@ target_src_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*
 static
 void
 target_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
+
 static
 void
 target_argf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
+
 static
 void
 target_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
@@ -754,12 +762,34 @@ target_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
 static
 void
 target_argout(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* out);
+
 static
 void
 target_arginp(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* inp);
+
 static
 void
 target_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp);
+
+static
+void
+target_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
+
+static
+void
+target_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
+
+static
+void
+target_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp);
+
+static
+void
+target_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp);
+
+static
+void
+target_linklib(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
 
 static inline
 BuildTarget*

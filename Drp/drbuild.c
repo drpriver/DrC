@@ -2427,6 +2427,17 @@ int
 execute_targets(BuildCtx* ctx){
     int err = 0;
     parse_depfiles(ctx);
+    {
+        AtomMapItems items = AM_items(&ctx->targets);
+        for(size_t i = 0; i < items.count; i++){
+            BuildTarget* t = items.data[i].p;
+            if(!t || !t->linker_args.count) continue;
+            if(t->compiler_flavor == COMPILER_CL || t->compiler_flavor == COMPILER_CLANG_CL)
+                cmd_carg(&t->cmd, "/link");
+            MARRAY_FOR_EACH_VALUE(Atom, l, t->linker_args)
+                cmd_aarg(&t->cmd, l);
+        }
+    }
     MARRAY_FOR_EACH_VALUE(Atom, b, ctx->build_targets){
         BuildTarget* t = get_targeta(ctx, b);
         if(!t){
@@ -3020,6 +3031,7 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     target->is_binary = 1;
     target->is_cmd = 1;
     target->is_compile_command = 1;
+    target->compiler_flavor = flavor;
     CmdBuilder* cmd = &target->cmd;
     cmd->allocator = allocator_from_arena(&ctx->perm_aa);
     cmd_prog(cmd, AT_to_LS(cc));
@@ -3093,9 +3105,12 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     cmd_argf(cmd, "-I%s", ctx->gen_dir->data);
     target_src_inp(ctx, target, src_dep);
     if(target_os == OS_LINUX){
-        cmd_cargs(cmd, "-lm", "-lpthread");
-        if(flavor == COMPILER_GCC) cmd_carg(cmd, "-latomic");
+        target_linkarg(ctx, target, "-lm");
+        target_linkarg(ctx, target, "-lpthread");
+        if(flavor == COMPILER_GCC) target_linkarg(ctx, target, "-latomic");
     }
+    if(flavor == COMPILER_CLANG_CL)
+        target_linkarg(ctx, target, "clang_rt.builtins-x86_64.lib");
     BuildTarget* phony = phony_target(ctx, name);
     add_dep(ctx, phony, target);
     return target;
@@ -3233,6 +3248,38 @@ target_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp)
     target_src_inp(ctx, tgt, inp);
 }
 
+static
+void
+target_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
+    Atom a = b_atomize(ctx, arg);
+    ta_pusha(ctx, &tgt->linker_args, a);
+}
+
+static
+void
+target_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...){
+    va_list ap;
+    va_start(ap, fmt);
+    Atom a = b_atomize_fv(ctx, fmt, ap);
+    va_end(ap);
+    ta_pusha(ctx, &tgt->linker_args, a);
+}
+static
+void
+target_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp){
+    add_dep(ctx, tgt, inp);
+    ta_pusha(ctx, &tgt->linker_args, inp->name);
+}
+
+static
+void
+target_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp){
+    Atom a = b_atomize(ctx, arg);
+    ta_pusha(ctx, &tgt->linker_args, a);
+    add_dep(ctx, tgt, inp);
+    ta_pusha(ctx, &tgt->linker_args, inp->name);
+}
+
 static inline
 BuildTarget*
 script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
@@ -3285,6 +3332,14 @@ b_atomize_f(BuildCtx* ctx, const char* fmt, ...){
     va_start(vap, fmt);
     Atom a = AT_atomize_fv(&ctx->at, fmt, vap);
     va_end(vap);
+    if(!a) b_oom(ctx);
+    return a;
+}
+
+static
+Atom
+b_atomize_fv(BuildCtx* ctx, const char* fmt, va_list ap){
+    Atom a = AT_atomize_fv(&ctx->at, fmt, ap);
     if(!a) b_oom(ctx);
     return a;
 }

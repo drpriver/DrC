@@ -44,7 +44,7 @@ int main(int argc, char** argv, char** envp){
 
     BuildTarget* cc = exe_target(ctx, "drc", "cc.c", ctx->target.os);
     if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
-        cmd_carg(&cc->cmd, "-ldl");
+        target_linkarg(ctx, cc, "-ldl");
     }
     BuildTarget* ffi_lib = NULL;
     BuildTarget* ffi_dll = NULL;
@@ -59,11 +59,11 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, ffi_dll, copy_ffi);
         add_out(ctx, copy_ffi, ffi_dll);
         cmd_carg(&cc->cmd, "-IFetched/libffi");
-        target_arginp(ctx, cc, "/link", ffi_lib);
+        target_linkinp(ctx, cc, ffi_lib);
     }
     else {
         fetch_ffi->is_phony = 1;
-        cmd_carg(&cc->cmd, "-lffi");
+        target_linkarg(ctx, cc, "-lffi");
     }
     add_dep(ctx, all, cc);
 
@@ -92,12 +92,12 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_lffi){
                 if(BUILD_OS == OS_WINDOWS){
                     cmd_carg(&bin->cmd, "-IFetched/libffi");
-                    target_inp(ctx, bin, ffi_lib);
+                    target_linkinp(ctx, bin, ffi_lib);
                 }
                 else {
                     if(BUILD_OS == OS_LINUX)
-                        cmd_carg(&bin->cmd, "-ldl");
-                    cmd_carg(&bin->cmd, "-lffi");
+                        target_linkarg(ctx, bin, "-ldl");
+                    target_linkarg(ctx, bin, "-lffi");
                 }
             }
             add_dep(ctx, all, bin);
@@ -127,12 +127,12 @@ int main(int argc, char** argv, char** envp){
         cmd_carg(&cc_opt->cmd, "-O2");
         if(BUILD_OS == OS_WINDOWS){
             cmd_carg(&cc_opt->cmd, "-IFetched/libffi");
-            target_inp(ctx, cc_opt, ffi_lib);
+            target_linkinp(ctx, cc_opt, ffi_lib);
         }
         else {
             if(BUILD_OS == OS_LINUX)
-                cmd_carg(&cc_opt->cmd, "-ldl");
-            cmd_carg(&cc_opt->cmd, "-lffi");
+                target_linkarg(ctx, cc_opt, "-ldl");
+            target_linkarg(ctx, cc_opt, "-lffi");
         }
 
         selfhost = cmd_target(ctx, "selfhost");
