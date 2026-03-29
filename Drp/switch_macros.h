@@ -26,13 +26,13 @@
 // For when the default case is unreachable because only a subset
 // of the switch values are possible.
 //
-#ifndef DEFAULT_UNREACHABLE
+#ifndef DRP_DEFAULT_UNREACHABLE
 #if defined __GNUC__
-#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
+#define DRP_DEFAULT_UNREACHABLE default: __builtin_unreachable()
 #elif defined _MSC_VER
-#define DEFAULT_UNREACHABLE default: __assume(0)
+#define DRP_DEFAULT_UNREACHABLE default: __assume(0)
 #else
-#define DEFAULT_UNREACHABLE default: abort()
+#define DRP_DEFAULT_UNREACHABLE default: abort()
 #endif
 #endif
 

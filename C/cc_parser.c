@@ -11491,7 +11491,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  L->float_, R->float_);
                         case CC_EXPR_LE: CMP(<=, L->float_, R->float_);
                         case CC_EXPR_GE: CMP(>=, L->float_, R->float_);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;
                 case CCBT_double:
@@ -11506,7 +11506,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  L->double_, R->double_);
                         case CC_EXPR_LE: CMP(<=, L->double_, R->double_);
                         case CC_EXPR_GE: CMP(>=, L->double_, R->double_);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;
                 case CCBT_char:
@@ -11544,7 +11544,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_unsigned_char:
@@ -11577,7 +11577,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_long:
@@ -11616,7 +11616,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_unsigned_long_long:
@@ -11647,7 +11647,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_GT: CMP(>,  lv, rv);
                         case CC_EXPR_LE: CMP(<=, lv, rv);
                         case CC_EXPR_GE: CMP(>=, lv, rv);
-                        DEFAULT_UNREACHABLE;
+                        DRP_DEFAULT_UNREACHABLE;
                     }
                     break;}
                 case CCBT_INVALID:

@@ -1145,7 +1145,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case CC_EXPR_LE: PTR_CMP(<=);
                 case CC_EXPR_GE: PTR_CMP(>=);
                 #undef PTR_CMP
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
         }
         _Bool is_float = ccqt_is_basic(lhs->type) && ccbt_is_float(lhs->type.basic.kind);
@@ -1191,7 +1191,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case CC_EXPR_GT: ci_write_uint(result, result_sz, ld >  rd); return 0;
                 case CC_EXPR_LE: ci_write_uint(result, result_sz, ld <= rd); return 0;
                 case CC_EXPR_GE: ci_write_uint(result, result_sz, ld >= rd); return 0;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
         }
         _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
@@ -1265,7 +1265,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         ci_write_uint(result, result_sz, ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
                     return 0;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
             ci_uint128_write(result, result_sz, res);
             return 0;
@@ -1320,7 +1320,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_EXPR_GE:
                 res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru);
                 break;
-            DEFAULT_UNREACHABLE;
+            DRP_DEFAULT_UNREACHABLE;
         }
         ci_write_uint(result, result_sz, res);
         return 0;
@@ -1379,7 +1379,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = (uint64_t)((int64_t)lu >> ru);
                     break;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
             ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
             if(result == ci_discard_buf) return 0;
@@ -1434,7 +1434,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case CC_EXPR_SUBASSIGN: res = ld - rd; break;
                 case CC_EXPR_MULASSIGN: res = ld * rd; break;
                 case CC_EXPR_DIVASSIGN: res = rd != 0.0 ? ld / rd : 0.0; break;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
             ci_write_float(lval, expr->type.basic.kind, res);
             if(result == ci_discard_buf) return 0;
@@ -1484,7 +1484,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
                     break;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
             ci_uint128_write(lval, sz, res);
             if(result == ci_discard_buf) return 0;
@@ -1528,7 +1528,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     else
                         res = (uint64_t)((int64_t)lu >> ru);
                     break;
-                DEFAULT_UNREACHABLE;
+                DRP_DEFAULT_UNREACHABLE;
             }
             ci_write_uint(lval, sz, res);
             if(result == ci_discard_buf) return 0;
@@ -2704,7 +2704,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_EXPR_ADD_OVERFLOW: r = ci_int128_add(a, b); break;
             case CC_EXPR_SUB_OVERFLOW: r = ci_int128_sub(a, b); break;
             case CC_EXPR_MUL_OVERFLOW: r = ci_int128_mul(a, b); break;
-            DEFAULT_UNREACHABLE;
+            DRP_DEFAULT_UNREACHABLE;
         }
         // Get result pointer and destination type
         void* res_ptr = NULL;
