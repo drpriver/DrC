@@ -10,13 +10,13 @@ BUILDTARGETS:=clean list print compile_commands.json all \
 
 ifeq ($(OS),Windows_NT)
 ifeq ($(origin CC),default)
-CC:=$(firstword $(foreach c,clang gcc cl,$(if $(shell where $(c) 2>nul),$(c))))
+CC:=$(firstword $(foreach c,cl clang,$(if $(shell where $(c) 2>/dev/null),$(c))))
 endif
 $(BUILDTARGETS): | build.exe
 	@build $@
 build.exe:
 ifeq ($(CC),cl)
-	$(CC) build.c /Fe:$@
+	$(CC) /nologo /std:c11 /Zc:preprocessor /wd5105 build.c /Fe:$@
 else
 	$(CC) build.c -o $@
 endif
