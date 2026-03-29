@@ -83,6 +83,7 @@
 #endif
 
 #if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning( error : 4013 ) // implicit function declaration
 #pragma warning( disable : 4244 )
 #pragma warning( disable : 4146 )
 #pragma warning( disable : 4267 )

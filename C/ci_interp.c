@@ -5,6 +5,7 @@
 #include <stddef.h>
 #ifdef _WIN32
 #include "../Drp/windowsheader.h"
+#include <Psapi.h>
 #else
 #include <dlfcn.h>
 #if defined(__GLIBC__) && !defined(RTLD_DEFAULT)
@@ -3285,11 +3286,25 @@ ci_append_lib_path(CiInterpreter* ci, StringView sv){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro;
+static
+int
+ci_preload_system_libs(CiInterpreter* ci){
+    #if defined(_WIN32) && !defined(NO_NATIVE_CALL)
+    static const char*const libs[] = {"ucrtbase", "kernel32", "ntdll"};
+    for(size_t i = 0; i < sizeof libs / sizeof libs[0]; i++)
+        LoadLibraryA(libs[i]);
+    #endif
+    (void)ci;
+    return 0;
+}
+
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro, ci_pragma_comment;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
     int err = 0;
+    err = cpp_register_pragma(&ci->parser.cpp, SV("comment"), ci_pragma_comment, ci);
+    if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib"), ci_pragma_lib, ci);
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("lib_path"), ci_pragma_lib_path, ci);
@@ -3483,6 +3498,42 @@ ci_load_framework(CiInterpreter* ci, StringView sv){
     err = CI_LIBRARY_NOT_FOUND_ERROR;
     finally:
     msb_destroy(&sb);
+    return err;
+}
+
+static
+int
+ci_pragma_comment(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    // #pragma comment(lib, "name")
+    // Skip whitespace between tokens.
+    CiInterpreter* ci = ctx;
+    size_t i = 0;
+    while(i < ntoks && toks[i].type == CPP_WHITESPACE) i++;
+    if(i >= ntoks || toks[i].type != CPP_PUNCTUATOR || toks[i].punct != '(')
+        return 0; // ignore unknown comment pragmas
+    i++;
+    while(i < ntoks && toks[i].type == CPP_WHITESPACE) i++;
+    if(i >= ntoks || toks[i].type != CPP_IDENTIFIER)
+        return 0;
+    StringView kind = toks[i].txt;
+    i++;
+    if(!sv_equals(kind, SV("lib")))
+        return 0; // ignore non-lib comment pragmas
+    while(i < ntoks && toks[i].type == CPP_WHITESPACE) i++;
+    if(i >= ntoks || toks[i].type != CPP_PUNCTUATOR || toks[i].punct != ',')
+        return cpp_error(cpp, loc, "#pragma comment(lib, ...) expected ','");
+    i++;
+    while(i < ntoks && toks[i].type == CPP_WHITESPACE) i++;
+    if(i >= ntoks || toks[i].type != CPP_STRING || toks[i].txt.length < 2)
+        return cpp_error(cpp, loc, "#pragma comment(lib, ...) expected string literal");
+    StringView name = {toks[i].txt.length-2, toks[i].txt.text+1};
+    if(!ci->can_dlopen)
+        return 0; // silently ignore when dlopen is disabled
+    if(sv_endswith(name, SV(".lib")))
+        name.length -= 4;
+    int err = ci_load_library(ci, name);
+    if(err == CI_LIBRARY_NOT_FOUND_ERROR)
+        err = cpp_error(cpp, loc, "failed to load library '%.*s'", (int)name.length, name.text);
     return err;
 }
 
@@ -4084,7 +4135,22 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
                 }
             }
         }
-        if(!p) return ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+        if(!p){
+            ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+            HMODULE modules[256];
+            DWORD needed = 0;
+            if(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &needed)){
+                DWORD count = needed / sizeof(HMODULE);
+                if(count > 256) count = 256;
+                Logger* logger = ci->parser.cpp.logger;
+                for(DWORD i = 0; i < count; i++){
+                    char name[256];
+                    if(K32GetModuleBaseNameA(GetCurrentProcess(), modules[i], name, sizeof name))
+                        log_logf(logger, LOG_PRINT_ERROR, "  loaded: %s\n", name);
+                }
+            }
+            return CI_RUNTIME_ERROR;
+        }
     #else
         p = dlsym(RTLD_DEFAULT, sym.text);
         if(!p && sym.text[0] == '_')
