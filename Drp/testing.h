@@ -994,8 +994,8 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 //
 static
 void
-run_the_tests(size_t*_Nonnull which_tests, int test_count, struct TestResults* result){
-    for(int i = 0; i < test_count; i++){
+run_the_tests(size_t*_Nonnull which_tests, size_t test_count, struct TestResults* result){
+    for(size_t i = 0; i < test_count; i++){
         size_t idx = which_tests[i];
         TestFunc* func = test_funcs[idx].test_func;
         assert(func);
@@ -1093,9 +1093,9 @@ testing_seed_rng(uint64_t*_Nonnull seed_){
 
 static inline
 void
-shuffle_tests(size_t*_Nonnull which_tests, int test_count){
+shuffle_tests(size_t*_Nonnull which_tests, size_t test_count){
     if(test_count < 2) return;
-    for(int i = 0; i < test_count; i++){
+    for(size_t i = 0; i < test_count; i++){
         size_t j = (testing_rng_random() % (test_count-i)) + i;
         size_t tmp = which_tests[i];
         which_tests[i] = which_tests[j];
@@ -1105,7 +1105,7 @@ shuffle_tests(size_t*_Nonnull which_tests, int test_count){
 
 struct TestJobData {
     size_t* _Nonnull which_tests;
-    int test_count;
+    size_t test_count;
     int*_Nonnull test_idx;
     struct TestResults result;
 };
@@ -1140,7 +1140,7 @@ ThreadReturnValue
 test_thread_worker(void*_Nonnull thread_arg){
     struct TestJobData* jd = thread_arg;
     // First: run all DUPLICATE_FOR_EACH_THREAD tests (each thread runs all of them)
-    for(int i = 0; i < jd->test_count; i++){
+    for(size_t i = 0; i < jd->test_count; i++){
         size_t which_test = jd->which_tests[i];
         if(!(test_funcs[which_test].flags & TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD))
             continue;
@@ -1156,7 +1156,7 @@ test_thread_worker(void*_Nonnull thread_arg){
     // Then: work-steal non-DUPLICATE tests
     for(;;){
         int idx = test_atomic_increment(jd->test_idx);
-        if(idx >= jd->test_count)
+        if((size_t)idx >= jd->test_count)
             break;
         size_t which_test = jd->which_tests[idx];
         if(test_funcs[which_test].flags & TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD)
@@ -1175,7 +1175,7 @@ test_thread_worker(void*_Nonnull thread_arg){
 
 static
 void
-run_the_tests_multithreaded(size_t*_Nonnull which_tests, int test_count, struct TestResults*_Nonnull result, int num_threads){
+run_the_tests_multithreaded(size_t*_Nonnull which_tests, size_t test_count, struct TestResults*_Nonnull result, int num_threads){
     struct TestJobData jds[32];
     ThreadHandle handles[32];
     if(num_threads > 32) num_threads = 32;
@@ -1298,7 +1298,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         [TARGET_INDEX] = {
             .name = SV("-t"),
             .altname1 = SV("--target"),
-            .max_num = test_funcs_count,
+            .max_num = (int)test_funcs_count,
             .dest = ArgEnumDest(tests_to_run, &targets),
             .help = "If given, only run the named test function. If not given, "
                     "all tests will be run. Specify by name or by number.",
@@ -1473,7 +1473,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     }
     #ifndef __wasm__
     // Register extras
-    for(int i = 0; i < kw_args[TEE_INDEX].num_parsed; i++){
+    for(size_t i = 0; i < kw_args[TEE_INDEX].num_parsed; i++){
         FILE* fp = fopen(extrafiles[i].text, append?"ab":"wb");
         if(!fp){
             fprintf(stderr, "Unable to open '%s': %s\n", extrafiles[i].text, strerror(errno));

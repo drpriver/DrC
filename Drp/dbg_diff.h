@@ -39,10 +39,9 @@ static inline void dbg_diff_print_line(size_t, DbgDiffPrinter*, int, StringView)
 static inline
 void
 dbg_diff(DbgDiffPrinter* printer, StringView expected, StringView actual) {
-    StringView orig = expected;
     size_t lineno = 0;
     size_t last_line_match = 0;
-    StringView last_exp_match = {0}, last_act_match = {0};
+    StringView last_exp_match = {0};
     while(expected.length || actual.length){
         lineno++;
         StringView exp = dbg_diff_line_slice(&expected);
@@ -52,7 +51,6 @@ dbg_diff(DbgDiffPrinter* printer, StringView expected, StringView actual) {
                 dbg_diff_print_line(lineno, printer, DBG_DIFF_MATCHED, exp);
             last_line_match = lineno;
             last_exp_match = exp;
-            last_act_match = act;
             continue;
         }
         if(last_line_match == lineno-1)

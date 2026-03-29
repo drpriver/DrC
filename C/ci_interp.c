@@ -30,29 +30,11 @@
 #include "../Drp/argument_parsing.h"
 #include "../Drp/bit_util.h"
 #include "../Drp/msb_atomize.h"
+#include "../Drp/switch_macros.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
-#ifndef CASES_EXHAUSTED
-#if defined __GNUC__ && !defined __clang__
-#define CASES_EXHAUSTED default: __builtin_unreachable()
-#elif defined _MSC_VER
-#define CASES_EXHAUSTED default: __assume(0)
-#else
-#define CASES_EXHAUSTED
-#endif
-#endif
-
-#ifndef DEFAULT_UNREACHABLE
-#if defined __GNUC__
-#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
-#elif defined _MSC_VER
-#define DEFAULT_UNREACHABLE default: __assume(0)
-#else
-#define DEFAULT_UNREACHABLE default: abort()
-#endif
-#endif
 
 enum {
     CI_NO_ERROR = _cc_no_error,
@@ -2067,7 +2049,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     case 8:  _InterlockedExchange64((volatile long long*)ptr, *(long long*)val_buf); break;
                     case 16: { __int64 _nv[2]; memcpy(_nv, val_buf, 16);
                                __int64 _cmp[2] = {0};
-                               while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp)); break; }
+                               while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp)){} break; }
                     default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
                 }
             #else
@@ -4130,7 +4112,7 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
                 DWORD count = needed / sizeof(HMODULE);
                 if(count > 256) count = 256;
                 for(DWORD i = 0; i < count; i++){
-                    p = GetProcAddress(modules[i], sym.text);
+                    p = (void*)GetProcAddress(modules[i], sym.text);
                     if(p) break;
                 }
             }

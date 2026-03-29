@@ -9,6 +9,7 @@
 #define HEAVY_RECORDING
 #endif
 #define CI_THREAD_UNSAFE_ALLOCATOR
+#include "../Drp/compiler_warnings.h"
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
@@ -23,7 +24,6 @@
 #include "cc_target.h"
 #include "ci_interp.h"
 
-#include "../Drp/compiler_warnings.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif

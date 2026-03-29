@@ -3,6 +3,11 @@
 //
 #ifndef COMPILER_WARNINGS_H
 #define COMPILER_WARNINGS_H
+#ifdef _WIN32
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic error "-Wall"
@@ -40,7 +45,7 @@
 #if __has_warning("-Wc23-extensions")
 #pragma clang diagnostic ignored "-Wc23-extensions"
 #endif
-#pragma clang diagnostic error "-Wgnu-zero-variadic-macro-arguments"
+#pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wlanguage-extension-token"
 #pragma clang diagnostic ignored "-Wgnu-auto-type"
 #pragma clang diagnostic ignored "-Wextra-semi"
@@ -51,7 +56,7 @@
 #pragma clang diagnostic error "-Wfor-loop-analysis"
 #pragma clang diagnostic error "-Winfinite-recursion"
 #pragma clang diagnostic error "-Wduplicate-enum"
-#pragma clang diagnostic error "-Wmissing-field-initializers"
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma clang diagnostic error "-Wpointer-type-mismatch"
 #pragma clang diagnostic error "-Wextra-tokens"
 #pragma clang diagnostic error "-Wmacro-redefined"
@@ -73,6 +78,7 @@
 #pragma clang diagnostic error "-Wexcess-initializers"
 #endif
 #pragma clang diagnostic error "-Wbitfield-constant-conversion"
+#pragma clang diagnostic ignored "-Wmultichar"
 #endif
 
 #if defined(__GNUC__) && !defined(__clang__)

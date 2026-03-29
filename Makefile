@@ -18,14 +18,14 @@ build.exe:
 ifeq ($(CC),cl)
 	$(CC) /nologo /std:c11 /Zc:preprocessor /wd5105 build.c /Fe:$@
 else
-	$(CC) build.c -o $@
+	$(CC) -march=native build.c -o $@
 endif
 	./build -b Bin
 else
 $(BUILDTARGETS): | build
 	@./build $@
 build:
-	$(CC) build.c -o $@
+	$(CC) -march=native build.c -o $@
 	./build -b Bin
 endif
 .DEFAULT_GOAL:=all

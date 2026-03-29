@@ -59,7 +59,7 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, ffi_dll, copy_ffi);
         add_out(ctx, copy_ffi, ffi_dll);
         cmd_carg(&cc->cmd, "-IFetched/libffi");
-        target_inp(ctx, cc, ffi_lib);
+        target_arginp(ctx, cc, "/link", ffi_lib);
     }
     else {
         fetch_ffi->is_phony = 1;
@@ -373,14 +373,14 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         "ifeq ($(CC),cl)\n"
             "\t$(CC) /nologo /std:c11 /Zc:preprocessor /wd5105 build.c /Fe:$@\n"
         "else\n"
-             "\t$(CC) build.c -o $@\n"
+             "\t$(CC) -march=native build.c -o $@\n"
         "endif\n"
              "\t./build -b Bin\n"
         "else\n"
         "$(BUILDTARGETS): | build\n"
              "\t@./build $@\n"
         "build:\n"
-             "\t$(CC) build.c -o $@\n"
+             "\t$(CC) -march=native build.c -o $@\n"
              "\t./build -b Bin\n"
         "endif\n"
         ".DEFAULT_GOAL:=all\n");

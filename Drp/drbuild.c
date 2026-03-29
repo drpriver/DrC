@@ -2748,10 +2748,18 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
                 goto fallthrough;
             case COMPILER_CLANG_CL:
                 fallthrough:;
+                cmd_cargs(cmd, "-march=native");
                 cmd_cargs(cmd, "-o", ctx->exe_path->data);
-                cmd_cargs(cmd, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
                 depfile = b_atomize_f(ctx, "%s.deps", ctx->exe_path->data);
-                cmd_aarg(cmd, depfile);
+                if(ctx->build_compiler_flavor == COMPILER_CLANG_CL){
+                    cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
+                    cmd_argf(cmd, "/clang:-MF%s", depfile->data);
+                    cmd_argf(cmd, "/clang:-MT%s", b_normalize_patha(ctx, ctx->exe_path)->data);
+                }
+                else {
+                    cmd_cargs(cmd, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
+                    cmd_aarg(cmd, depfile);
+                }
                 break;
             case COMPILER_CL:
                 cmd_cargs(cmd, "/nologo", "/std:c11");
@@ -3052,9 +3060,18 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
                     "-Xarch_arm64", "-mmacosx-version-min=11.0"
                 );
             }
-            cmd_cargs(cmd, "-o", binary->data);
-            cmd_cargs(cmd, "-MT", binary->data, "-MMD", "-MP", "-MF");
-            cmd_argf(cmd, "%s/%s.deps", ctx->deps_dir->data, name);
+            if(flavor == COMPILER_CLANG_CL){
+                cmd_argf(cmd, "/Fe:%s", binary->data);
+                cmd_argf(cmd, "/Fo%s/%s.obj", ctx->build_dir->data, name);
+                cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
+                cmd_argf(cmd, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
+                cmd_argf(cmd, "/clang:-MT%s", binary->data);
+            }
+            else {
+                cmd_cargs(cmd, "-o", binary->data);
+                cmd_cargs(cmd, "-MT", binary->data, "-MMD", "-MP", "-MF");
+                cmd_argf(cmd, "%s/%s.deps", ctx->deps_dir->data, name);
+            }
             if(tsan && sanitize) cmd_cargs(cmd, "-fsanitize=thread,undefined");
             else if(tsan) cmd_cargs(cmd, "-fsanitize=thread");
             else if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");

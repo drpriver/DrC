@@ -223,12 +223,17 @@ int main(int argc, char** argv, char** envp){
     #ifdef __GNUC__
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wcast-qual"
+    #elif defined __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wcast-qual"
     #endif
     script_argv_storage[0] = (char*)filename.text;
     for(size_t i = 0; i < num_prog_args; i++)
         script_argv_storage[1+i] = (char*)prog_args[i];
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
+    #elif defined __clang__
+    #pragma clang diagnostic pop
     #endif
     script_argv_storage[script_argc] = NULL;
     char** script_argv = script_argv_storage;

@@ -8,15 +8,8 @@
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
 #endif
-#ifndef CASES_EXHAUSTED
-#if defined(__GNUC__) && !defined(__clang__)
-#define CASES_EXHAUSTED default: __builtin_unreachable()
-#elif defined(_MSC_VER)
-#define CASES_EXHAUSTED default: __assume(0)
-#else
-#define CASES_EXHAUSTED
-#endif
-#endif
+#include "../Drp/compiler_warnings.h"
+#include "../Drp/switch_macros.h"
 #include "../Drp/Allocators/testing_allocator.h"
 #include "../Drp/testing.h"
 #include "../Drp/Allocators/mallocator.h"
@@ -31,7 +24,6 @@
 #include "cpp_preprocessor.h"
 #include "cc_tok.h"
 
-#include "../Drp/compiler_warnings.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif

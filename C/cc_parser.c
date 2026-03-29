@@ -11,6 +11,7 @@
 #include "../Drp/parray.h"
 #include "../Drp/merge_sort.h"
 #include "../Drp/ckdint.h"
+#include "../Drp/switch_macros.h"
 #include "cc_expr.h"
 #include "cc_parser.h"
 #include "cpp_preprocessor.h"
@@ -132,25 +133,6 @@ enum {
 #pragma clang assume_nonnull begin
 #endif
 
-#ifndef CASES_EXHAUSTED
-#if defined __GNUC__ && !defined __clang__
-#define CASES_EXHAUSTED default: __builtin_unreachable()
-#elif defined _MSC_VER
-#define CASES_EXHAUSTED default: __assume(0)
-#else
-#define CASES_EXHAUSTED
-#endif
-#endif
-
-#ifndef DEFAULT_UNREACHABLE
-#if defined __GNUC__
-#define DEFAULT_UNREACHABLE default: __builtin_unreachable()
-#elif defined _MSC_VER
-#define DEFAULT_UNREACHABLE default: __assume(0)
-#else
-#define DEFAULT_UNREACHABLE default: abort()
-#endif
-#endif
 
 static int cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value);
 

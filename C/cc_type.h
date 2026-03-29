@@ -8,15 +8,7 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/typed_enum.h"
-#ifndef CASES_EXHAUSTED
-#if defined(__GNUC__) && !defined(__clang__)
-#define CASES_EXHAUSTED default: __builtin_unreachable()
-#elif defined(_MSC_VER)
-#define CASES_EXHAUSTED default: __assume(0)
-#else
-#define CASES_EXHAUSTED
-#endif
-#endif
+#include "../Drp/switch_macros.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
