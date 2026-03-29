@@ -1,7 +1,7 @@
 @echo off
+if "%CC%"=="cl" goto use_cl
 if "%CC%"=="clang" goto use_clang
 if "%CC%"=="clang-cl" goto use_clang_cl
-if "%CC%"=="cl" goto use_cl
 where cl >nul 2>nul && goto use_cl
 where clang >nul 2>nul && goto use_clang
 echo No C compiler found
