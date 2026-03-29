@@ -2755,7 +2755,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
                 break;
             case COMPILER_CL:
                 cmd_cargs(cmd, "/nologo", "/std:c11");
-                cmd_cargs(cmd, "/Zc:preprocessor");
+                cmd_cargs(cmd, "/Zc:preprocessor", "/wd5105");
                 cmd_cargs(cmd, "/Zi", "/DEBUG");
                 cmd_argf(cmd, "/Fd:%s.pdb", b_normalize_patha(ctx, ctx->exe_path)->data);
                 cmd_argf(cmd, "/Fe:%s", b_normalize_patha(ctx, ctx->exe_path)->data);
@@ -3061,7 +3061,7 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
             if(optimize) cmd_cargs(cmd, "-O2");
             break;
         case COMPILER_CL:
-            cmd_cargs(cmd, "/nologo", "/std:c11");
+            cmd_cargs(cmd, "/nologo", "/std:c11", "/Zc:preprocessor", "/wd5105");
             if(debug){
                 cmd_cargs(cmd, "/Zi", "/DEBUG");
                 cmd_argf(cmd, "/Fd:%s/%s.pdb", ctx->build_dir->data, name);

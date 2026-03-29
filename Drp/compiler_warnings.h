@@ -84,6 +84,17 @@
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning( error : 4013 ) // implicit function declaration
+#pragma warning( error : 4020 ) // too many actual parameters
+#pragma warning( error : 4024 ) // different types for formal and actual parameter
+#pragma warning( error : 4028 ) // formal parameter different from declaration
+#pragma warning( error : 4029 ) // declared formal parameter list different from definition
+#pragma warning( error : 4047 ) // differs in levels of indirection
+#pragma warning( error : 4133 ) // incompatible types
+#pragma warning( error : 4098 ) // void function returning a value
+#pragma warning( error : 4715 ) // not all control paths return a value
+#pragma warning( error : 4700 ) // use before assign
+#pragma warning( error : 4113 ) // wrong function pointer type
+#pragma warning( error : 4033 ) // missing first param
 #pragma warning( disable : 4244 )
 #pragma warning( disable : 4146 )
 #pragma warning( disable : 4267 )
