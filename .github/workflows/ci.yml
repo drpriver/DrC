@@ -24,12 +24,16 @@ jobs:
       - run: ./build test -- --multithreaded --force-colors
   windows-x64:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        cc: [cl, clang, clang-cl]
     defaults:
       run:
         shell: cmd
     steps:
       - uses: actions/checkout@v6
-      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin && build.exe test -- --multithreaded --force-colors
+      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && set CC=${{ matrix.cc }}&& build.bat
+      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && build.exe test -- --multithreaded --force-colors
   macos:
     runs-on: macos-latest
     steps:
