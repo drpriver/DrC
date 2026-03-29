@@ -4,6 +4,11 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 
+#ifdef _WIN32
+// libffi incorrectly assumes gnu-flavored compiler = GNU ABI
+#pragma push_macro("__GNUC__")
+#undef __GNUC__
+#endif
 #ifndef NO_NATIVE_CALL
 #ifdef __has_include
 #if __has_include(<ffi/ffi.h>)
@@ -17,6 +22,9 @@
 #else
 #include <ffi.h>
 #endif
+#endif
+#ifdef _WIN32
+#pragma pop_macro("__GNUC__")
 #endif
 
 #ifdef _WIN32
