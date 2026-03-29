@@ -142,7 +142,7 @@ force_inline uint32_t crc32_u32(uint32_t h, uint32_t v){ return _mm_crc32_u32(h,
 force_inline uint32_t crc32_u16(uint32_t h, uint16_t v){ return _mm_crc32_u16(h, v); }
 force_inline uint32_t crc32_u8 (uint32_t h, uint8_t  v){ return _mm_crc32_u8 (h, v); }
 #else
-force_inline uint32_t crc32_u64(uint32_t h, uint64_t v){ return __builtin_ia32_crc32di(h, v); }
+force_inline uint32_t crc32_u64(uint32_t h, uint64_t v){ return (uint32_t)__builtin_ia32_crc32di(h, v); }
 force_inline uint32_t crc32_u32(uint32_t h, uint32_t v){ return __builtin_ia32_crc32si(h, v); }
 force_inline uint32_t crc32_u16(uint32_t h, uint16_t v){ return __builtin_ia32_crc32hi(h, v); }
 force_inline uint32_t crc32_u8 (uint32_t h, uint8_t  v){ return __builtin_ia32_crc32qi(h, v); }

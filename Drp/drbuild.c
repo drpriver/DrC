@@ -409,13 +409,20 @@ b_read_file(BuildCtx* ctx, const char* path, MStringBuilder* out){
         }
         err = msb_ensure_additional(out, size+1);
         if(err) goto wfinally;
-        DWORD nread;
-        ok = ReadFile(fh, out->data+out->cursor, size, &nread, NULL);
-        if(!ok){
-            err = 1;
-            goto wfinally;
+        {
+            uint64_t remaining = size;
+            while(remaining){
+                DWORD to_read = remaining > 0x7FFFFFFF ? 0x7FFFFFFF : (DWORD)remaining;
+                DWORD nread;
+                ok = ReadFile(fh, out->data+out->cursor, to_read, &nread, NULL);
+                if(!ok){
+                    err = 1;
+                    goto wfinally;
+                }
+                out->cursor += nread;
+                remaining -= nread;
+            }
         }
-        out->cursor += size;
         #endif
         wfinally:
         #ifdef _WIN32
@@ -1020,7 +1027,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                 if(err) goto fail;
                 #ifdef _WIN32
                 // FIXME: the behavior on buffer too small is really weird
-                sz = GetModuleFileNameW(NULL, (wchar_t*)wsb.data, wsb.capacity);
+                sz = GetModuleFileNameW(NULL, (wchar_t*)wsb.data, (DWORD)wsb.capacity);
                 #endif
                 wsb.cursor = sz;
                 StringViewUtf16 sv16 = msb16_borrow_sv(&wsb);
@@ -1129,7 +1136,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             err = msb16_ensure_additional(&wsb, 2048);
             if(err) goto fail;
             #ifdef _WIN32
-            len = GetCurrentDirectoryW(wsb.capacity, (wchar_t*)wsb.data);
+            len = GetCurrentDirectoryW((DWORD)wsb.capacity, (wchar_t*)wsb.data);
             #endif
             msb_write_utf16(&sb, wsb.data, len);
             msb16_destroy(&wsb);
@@ -1751,7 +1758,7 @@ b_log_(BuildCtx* ctx, const char* msg, size_t len){
     #ifdef _WIN32
     else {
         DWORD n = 0;
-        WriteFile((HANDLE)(uintptr_t)ctx->logger.errhandle, msg, len, &n, NULL);
+        WriteFile((HANDLE)(uintptr_t)ctx->logger.errhandle, msg, (DWORD)len, &n, NULL);
     }
     #else
     else {
@@ -1832,7 +1839,7 @@ b_printfv(BuildCtx* ctx, const char* fmt, va_list vap){
     #ifdef _WIN32
     else {
         DWORD n = 0;
-        WriteFile((HANDLE)(uintptr_t)ctx->logger.outhandle, sv.text, sv.length, &n, NULL);
+        WriteFile((HANDLE)(uintptr_t)ctx->logger.outhandle, sv.text, (DWORD)sv.length, &n, NULL);
     }
     #else
     else {
