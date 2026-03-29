@@ -37,7 +37,7 @@ Building::md
     This project uses a "nobuild" build system. Bootstrap the build system by
     doing something like:
     ::pre.console
-      $ drc build.c -o build && ./build -b Bin && ./build tests
+      $ cc build.c -o build && ./build -b Bin && ./build tests
     From then on, you can just build using the build program. If you edit it or
     any of its deps, it will rebuild itself.
 

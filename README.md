@@ -59,7 +59,7 @@ This project uses a "nobuild" build system. Bootstrap the build system by
 doing something like:
 
 ```console
-$ drc build.c -o build && ./build -b Bin && ./build tests
+$ cc build.c -o build && ./build -b Bin && ./build tests
 ```
 
 
