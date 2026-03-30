@@ -14,9 +14,9 @@
 #endif
 
 #ifdef _MSC_VER
-#define ALIGN(n) __declspec(align(n))
+#define CC_ALIGN(n) __declspec(align(n))
 #else
-#define ALIGN(n) __attribute((aligned(n)))
+#define CC_ALIGN(n) __attribute((aligned(n)))
 #endif
 
 
@@ -95,7 +95,7 @@ CcTypeKind ccqt_kind(CcQualType t) {
 }
 
 typedef struct CcPointer CcPointer;
-struct ALIGN(8) CcPointer {
+struct CC_ALIGN(8) CcPointer {
     union {
         uint32_t _bits;
         struct {
@@ -111,7 +111,7 @@ _Static_assert(_Alignof(CcPointer)==8, "");
 typedef struct CcExpr CcExpr;
 
 typedef struct CcArray CcArray;
-struct ALIGN(8) CcArray {
+struct CC_ALIGN(8) CcArray {
     union {
         uint32_t _bits;
         struct {
@@ -133,7 +133,7 @@ struct ALIGN(8) CcArray {
 _Static_assert(_Alignof(CcArray)==8, "");
 
 typedef struct CcFunction CcFunction;
-struct ALIGN(8) CcFunction {
+struct CC_ALIGN(8) CcFunction {
     union {
         uint32_t _bits;
         struct {
@@ -174,7 +174,7 @@ enum CcSysVEightByte TYPED_ENUM(uint32_t){
 TYPEDEF_ENUM(CcSysVEightByte, uint32_t);
 
 typedef struct CcStruct CcStruct;
-struct ALIGN(8) CcStruct {
+struct CC_ALIGN(8) CcStruct {
     union {
         uint32_t _bits;
         struct {
@@ -216,7 +216,7 @@ struct ALIGN(8) CcStruct {
 _Static_assert(_Alignof(CcStruct)==8, "");
 
 typedef struct CcUnion CcUnion;
-struct ALIGN(8) CcUnion {
+struct CC_ALIGN(8) CcUnion {
     union {
         uint32_t _bits;
         struct {
@@ -266,7 +266,7 @@ struct CcEnumerator {
 };
 
 typedef struct CcEnum CcEnum;
-struct ALIGN(8) CcEnum {
+struct CC_ALIGN(8) CcEnum {
     union {
         uint32_t _bits;
         struct {
@@ -497,7 +497,7 @@ ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
         t = ccqt_as_enum(t)->underlying;
     return ccqt_is_basic(t) && ccbt_is_unsigned(t.basic.kind, unsigned_char);
 }
-#undef ALIGN
+#undef CC_ALIGN
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
