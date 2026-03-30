@@ -63,6 +63,9 @@ int main(){
     }
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    #ifdef __APPLE__
+    SDL_PumpEvents();
+    #endif
     SDL_Quit();
     return 0;
 }

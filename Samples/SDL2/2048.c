@@ -132,22 +132,22 @@ void slide(int dr, int dc){
         }
         // Merge adjacent equal tiles
         int merged[N];
-        int n = 0;
+        int mn = 0;
         for(int k = 0; k < n; k++){
             if(k + 1 < n && vals[k] == vals[k + 1]){
-                merged[n++] = vals[k] * 2;
+                merged[mn++] = vals[k] * 2;
                 score += vals[k] * 2;
                 if(vals[k] * 2 == 2048) won = 1;
                 k++;
             }
             else {
-                merged[n++] = vals[k];
+                merged[mn++] = vals[k];
             }
         }
         for(int j = 0; j < N; j++){
             int r = dr ? (dr > 0 ? N - 1 - j : j) : i;
             int c = dc ? (dc > 0 ? N - 1 - j : j) : i;
-            int newval = j < n ? merged[j] : 0;
+            int newval = j < mn ? merged[j] : 0;
             if(board[r][c] != newval) moved = 1;
             board[r][c] = newval;
         }
@@ -291,4 +291,7 @@ for(;;){
 finish:
 SDL_DestroyRenderer(renderer);
 SDL_DestroyWindow(window);
+#ifdef __APPLE__
+SDL_PumpEvents();
+#endif
 SDL_Quit();

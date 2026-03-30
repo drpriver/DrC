@@ -281,4 +281,7 @@ for(int i = 0; i < NTHREADS; i++){
 SDL_DestroyTexture(tex);
 SDL_DestroyRenderer(ren);
 SDL_DestroyWindow(win);
+#ifdef __APPLE__
+SDL_PumpEvents();
+#endif
 SDL_Quit();

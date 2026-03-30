@@ -609,4 +609,7 @@ for(;;){
 finish:
 SDL_DestroyRenderer(ren);
 SDL_DestroyWindow(win);
+#ifdef __APPLE__
+SDL_PumpEvents();
+#endif
 SDL_Quit();
