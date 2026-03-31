@@ -4610,6 +4610,11 @@ TestFunction(test_parse_errors){
             SV("int x = 42i128;\n"),
             SV("(test):1:9: error: Invalid digit in number\n"),
         },
+        {
+            "anonymous function definition", __LINE__,
+            SV("void(void){}\n"),
+            SV("(test):1:11: error: Expected ',' or ';'\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

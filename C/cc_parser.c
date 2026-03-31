@@ -9797,7 +9797,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             // tail != &head means the declarator itself built derived types.
             // Only allow function bodies when the declarator introduced the
             // function type, not when it came from a typedef.
-            is_fndef = tail != &head && ccqt_kind(head) == CC_FUNCTION;
+            is_fndef = name && tail != &head && ccqt_kind(head) == CC_FUNCTION;
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
             // Validate type: no arrays of void/functions, no functions returning arrays/functions
