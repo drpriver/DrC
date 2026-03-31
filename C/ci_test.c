@@ -1473,6 +1473,44 @@ TestFunction(test_interpreter){
                "}();\n"),
             .exit_code = 42,
         },
+        {
+            "lambda (IIFE) parenthesized", __LINE__,
+            SV("return (int(int x){ return x + 1; })(41);\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) parenthesized void", __LINE__,
+            SV("int x = 1;\n"
+               "(void(int* p){ *p = 42; })(&x);\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) parenthesized multi param", __LINE__,
+            SV("return (int(int a, int b){ return a * b + 2; })(8, 5);\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) parenthesized in expr", __LINE__,
+            SV("int x = 10 + (int(int a){ return a * 2; })(16);\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) parenthesized nested", __LINE__,
+            SV("return (int(int x){ return x + 1; })((int(void){ return 41; })());\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) parenthesized no params", __LINE__,
+            SV("return (int(void){ return 42; })();\n"),
+            .exit_code = 42,
+        },
+        {
+            "lambda (IIFE) double parens", __LINE__,
+            SV("return ((int(void){ return 42; }))();\n"),
+            .exit_code = 42,
+        },
         // Atomics
         {
             "atomic: fetch_add", __LINE__,

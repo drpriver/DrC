@@ -29,6 +29,7 @@ static int cc_parse_prefix(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnul
 static int cc_parse_primary(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_postfix(CcParser* p, CcValueClass, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_lambda(CcParser* p, CcValueClass, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_lambda_body(CcParser* p, CcValueClass, SrcLoc loc, CcQualType type, Marray(Atom)* param_names, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_Generic(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
@@ -64,7 +65,7 @@ static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_No
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
-static int cc_parse_type_name(CcParser* p, CcQualType* out);
+static int cc_parse_type_name(CcParser* p, CcQualType* out, Marray(Atom)* _Nullable param_names);
 static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
@@ -538,7 +539,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
 
 static
 int
-cc_parse_type_name(CcParser* p, CcQualType* out){
+cc_parse_type_name(CcParser* p, CcQualType* out, Marray(Atom)* _Nullable param_names){
     CcDeclBase base = {0};
     int err = cc_parse_declaration_specifier(p, &base);
     if(err) return err;
@@ -554,11 +555,40 @@ cc_parse_type_name(CcParser* p, CcQualType* out){
         return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
     CcQualType head = {0};
     CcQualType* tail = &head;
-    err = cc_parse_declarator(p, &head, &tail, NULL, NULL);
+    err = cc_parse_declarator(p, &head, &tail, NULL, param_names);
     if(err) return err;
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
     return 0;
+}
+
+static
+int
+cc_parse_lambda_body(CcParser* p, CcValueClass vc, SrcLoc loc, CcQualType type, Marray(Atom)* param_names, CcExpr* _Nullable* _Nonnull out){
+    int err;
+    CcToken tok;
+    err = cc_next_token(p, &tok); // consume '{'
+    if(err){ ma_cleanup(Atom)(param_names, cc_allocator(p)); return err; }
+    CcFunction* ftype = ccqt_as_function(type);
+    CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+    if(!func){ ma_cleanup(Atom)(param_names, cc_allocator(p)); return CC_OOM_ERROR; }
+    func->name = NULL;
+    func->type = ftype;
+    func->loc = loc;
+    func->defined = 1;
+    func->params.count = param_names->count;
+    func->params.data = param_names->data;
+    func->enclosing = p->current_func;
+    err = cc_parse_func_body_inner(p, func, 1);
+    if(err) return err;
+    err = cc_expect_punct(p, CC_rbrace);
+    if(err) return err;
+    CcExpr* node = cc_make_expr(p, CC_EXPR_FUNCTION, loc, (CcQualType){.bits=(uintptr_t)func->type}, 0);
+    if(!node) return CC_OOM_ERROR;
+    node->func = func;
+    err = PM_put(&p->used_funcs, cc_allocator(p), func, func);
+    if(err) return CC_OOM_ERROR;
+    return cc_parse_postfix(p, vc, node, out);
 }
 
 static
@@ -600,31 +630,7 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
         type_val->uinteger = type.bits;
         return cc_parse_postfix(p, vc, type_val, out);
     }
-    err = cc_next_token(p, &peek); // consume '{'
-    if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
-    // Create anonymous CcFunc
-    CcFunction* ftype = ccqt_as_function(type);
-    CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-    if(!func){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return CC_OOM_ERROR; }
-    func->name = NULL;
-    func->type = ftype;
-    func->loc = loc;
-    func->defined = 1;
-    func->params.count = param_names.count;
-    func->params.data = param_names.data;
-    func->enclosing = p->current_func;
-    err = cc_parse_func_body_inner(p, func, 1);
-    if(err) return err;
-    // consume '}'
-    err = cc_expect_punct(p, CC_rbrace);
-    if(err) return err;
-    // Build CC_EXPR_FUNCTION node
-    CcExpr* node = cc_make_expr(p, CC_EXPR_FUNCTION, loc, (CcQualType){.bits=(uintptr_t)func->type}, 0);
-    if(!node) return CC_OOM_ERROR;
-    node->func = func;
-    err = PM_put(&p->used_funcs, cc_allocator(p), func, func);
-    if(err) return CC_OOM_ERROR;
-    return cc_parse_postfix(p, vc, node, out);
+    return cc_parse_lambda_body(p, vc, loc, type, &param_names, out);
 }
 
 
@@ -1632,8 +1638,23 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             if(err) return err;
             if(cc_is_type_start(p, &peek)){
                 CcQualType cast_type;
-                err = cc_parse_type_name(p, &cast_type);
-                if(err) return err;
+                Marray(Atom) param_names = {0};
+                err = cc_parse_type_name(p, &cast_type, &param_names);
+                if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+                // Check for parenthesized lambda: (func-type { body })
+                CcToken peek_after;
+                err = cc_peek(p, &peek_after);
+                if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+                if(peek_after.type == CC_PUNCTUATOR && peek_after.punct.punct == CC_lbrace
+                   && ccqt_kind(cast_type) == CC_FUNCTION){
+                    CcExpr* lambda;
+                    err = cc_parse_lambda_body(p, vc, tok.loc, cast_type, &param_names, &lambda);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                    return cc_parse_postfix(p, vc, lambda, out);
+                }
+                ma_cleanup(Atom)(&param_names, cc_allocator(p));
                 err = cc_expect_punct(p, CC_rparen);
                 if(err) return err;
                 // Check for compound literal: (type){...}
@@ -2006,7 +2027,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, CC_lparen);
                     if(err) return err;
                     CcQualType type;
-                    err = cc_parse_type_name(p, &type);
+                    err = cc_parse_type_name(p, &type, NULL);
                     if(err) return err;
                     err = cc_expect_punct(p, CC_comma);
                     if(err) return err;
@@ -2696,7 +2717,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcQualType arg_type;
-                    err = cc_parse_type_name(p, &arg_type);
+                    err = cc_parse_type_name(p, &arg_type, NULL);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -3179,7 +3200,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(cc_is_type_start(p, &peek2)){
                         CcQualType type;
-                        err = cc_parse_type_name(p, &type);
+                        err = cc_parse_type_name(p, &type, NULL);
                         if(err) return err;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
@@ -3238,7 +3259,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(cc_is_type_start(p, &peek2)){
                         CcQualType type;
-                        err = cc_parse_type_name(p, &type);
+                        err = cc_parse_type_name(p, &type, NULL);
                         if(err) return err;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
@@ -3278,7 +3299,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 if(err) return err;
                 CcQualType arr_type;
                 if(cc_is_type_start(p, &peek)){
-                    err = cc_parse_type_name(p, &arr_type);
+                    err = cc_parse_type_name(p, &arr_type, NULL);
                     if(err) return err;
                 }
                 else {
@@ -3411,7 +3432,7 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
     SrcLoc loc = tok.loc;
     // Extension: allow a type in first slot
     if(cc_is_type_start(p, &tok)){
-        err = cc_parse_type_name(p, &tswitch);
+        err = cc_parse_type_name(p, &tswitch, NULL);
         if(err) return err;
     }
     else {
@@ -3462,7 +3483,7 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
         }
         else {
             CcQualType assoc_type;
-            err = cc_parse_type_name(p, &assoc_type);
+            err = cc_parse_type_name(p, &assoc_type, NULL);
             if(err) return err;
             is_match = (assoc_type.bits == tswitch.bits);
         }
@@ -3836,7 +3857,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             err = cc_peek(p, &peek2);
                             if(err) return err;
                             if(cc_is_type_start(p, &peek2)){
-                                err = cc_parse_type_name(p, &arg_type);
+                                err = cc_parse_type_name(p, &arg_type, NULL);
                                 if(err) return err;
                             }
                             else {
@@ -8313,7 +8334,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         uint32_t align_val;
                         if(cc_is_type_start(p, &peek)){
                             CcQualType align_type;
-                            err = cc_parse_type_name(p, &align_type);
+                            err = cc_parse_type_name(p, &align_type, NULL);
                             if(err) return err;
                             switch(ccqt_kind(align_type)){
                                 case CC_BASIC:
@@ -8540,7 +8561,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(err) return err;
                         _Bool is_typename = cc_is_type_start(p, &peek);
                         if(is_typename){
-                            err = cc_parse_type_name(p, base_type);
+                            err = cc_parse_type_name(p, base_type, NULL);
                             if(err) return err;
                         }
                         else {
