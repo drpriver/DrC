@@ -62,12 +62,12 @@
 //
 // This example is for information needed for cross-compiling to windows targeting msvc.
 //
-// X(type, field, help, default_value)
+// X(type, cli, field, help, default_value)
 #define TARGET_SETTINGS_EXTRA_FIELDS(X) \
-    X(Atom, winsdkinc, "Windows sdk include. Include the version number. For cross-compilation.", nil_atom) \
-    X(Atom, winsdklib, "Windows sdk libs. Include the version number. For cross-compilation.", nil_atom) \
-    X(Atom, msvcinc, "Path to msvc include. For cross-compilation.", nil_atom) \
-    X(Atom, msvclib, "Path to msvc libs. For cross-compilation.", nil_atom) \
+    X(Atom, winsdkinc, "--winsdkinc", "Windows sdk include. Include the version number. For cross-compilation.", nil_atom) \
+    X(Atom, winsdklib, "--winsdklib", "Windows sdk libs. Include the version number. For cross-compilation.", nil_atom) \
+    X(Atom, msvcinc, "--msvcinc", "Path to msvc include. For cross-compilation.", nil_atom) \
+    X(Atom, msvclib, "--msvclib", "Path to msvc libs. For cross-compilation.", nil_atom) \
 
 #include "Drp/build.h"
 
@@ -368,7 +368,7 @@ struct TargetSettings {
     _Bool tsan;
     _Bool no_debug_symbols;
 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-#define X(type, field, help, def) type field;
+#define X(type, field, cli, help, def) type field;
     TARGET_SETTINGS_EXTRA_FIELDS(X)
 #undef X
 #endif
@@ -581,6 +581,8 @@ void
 __attribute__((format(printf, 3, 4)))
 #endif
 b_loglvl(int, BuildCtx* ctx, const char* fmt, ...);
+
+static int b_num_cpus(void);
 
 static
 void

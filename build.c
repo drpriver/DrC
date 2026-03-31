@@ -13,6 +13,9 @@
 // but you need an accompanying shell function.
 //
 #include "Drp/compiler_warnings.h"
+#define TARGET_SETTINGS_EXTRA_FIELDS(X) \
+    X(Atom, fuzz_cc, "--fuzz-cc", "Clang with libFuzzer support for building fuzz targets.", nil_atom) \
+    X(Atom, fuzz_sysroot, "--fuzz-sysroot", "Sysroot for the fuzz compiler.", nil_atom)
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"
 #include "Drp/MStringBuilder.h"
@@ -116,6 +119,43 @@ int main(int argc, char** argv, char** envp){
             add_dep(ctx, tests, cmd);
         }
     }
+    {
+        // TODO: there should be a helper in drbuild for custom compilers.
+        const char* ext = BUILD_OS == OS_WINDOWS ? ".exe" : "";
+        Atom fuzz_name = b_atomize_f(ctx, "%s/cc_fuzz%s", ctx->build_dir->data, ext);
+        BuildTarget* fuzz = alloc_targeta(ctx, fuzz_name);
+        fuzz->is_binary = 1;
+        fuzz->is_cmd = 1;
+        fuzz->is_compile_command = 1;
+        Atom fuzz_cc = ctx->target.fuzz_cc->length ? ctx->target.fuzz_cc : b_atomize(ctx, "clang");
+        CmdBuilder* cmd = &fuzz->cmd;
+        cmd->allocator = allocator_from_arena(&ctx->perm_aa);
+        cmd_prog(cmd, (LongString){fuzz_cc->length, fuzz_cc->data});
+        cmd_cargs(cmd,
+            "-g", "-O1", "-march=native",
+            "-fsanitize=fuzzer,address,undefined");
+        if(ctx->target.fuzz_sysroot->length)
+            cmd_argf(cmd, "--sysroot=%s", ctx->target.fuzz_sysroot->data);
+        target_src_inp(ctx, fuzz, "C/cc_fuzz.c");
+        cmd_cargs(cmd, "-o", fuzz_name->data);
+        cmd_cargs(cmd, "-MT", fuzz_name->data, "-MMD", "-MP", "-MF");
+        cmd_argf(cmd, "%s/cc_fuzz.deps", ctx->deps_dir->data);
+        BuildTarget* fuzz_phony = phony_target(ctx, "cc_fuzz");
+        add_dep(ctx, fuzz_phony, fuzz);
+        Atom corpus_name = b_atomize_f(ctx, "%s/fuzz_corpus", ctx->build_dir->data);
+        BuildTarget* corpus_dir = directory_target(ctx, corpus_name->data);
+        BuildTarget* run_fuzz = exec_target(ctx, "run_cc_fuzz", fuzz);
+        run_fuzz->is_phony = 1;
+        add_dep(ctx, run_fuzz, corpus_dir);
+        cmd_aarg(&run_fuzz->cmd, corpus_name);
+        cmd_cargs(&run_fuzz->cmd, "-max_len=10000");
+        cmd_argf(&run_fuzz->cmd, "-fork=%d", b_num_cpus());
+        if(ctx->dash_dash_args.count){
+            for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
+                cmd_aarg(&run_fuzz->cmd, ctx->dash_dash_args.data[j]);
+        }
+    }
+
     BuildTarget* selfhost;
     {
         // Optimized cc without sanitizers for self-hosted tests

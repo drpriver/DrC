@@ -514,7 +514,7 @@ static struct BctxInfo {
 
 enum {
 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-#define X(type, field, help, def) _tsef_##field,
+#define X(type, field, cli, help, def) _tsef_##field,
     TARGET_SETTINGS_EXTRA_FIELDS(X)
 #undef X
 #endif
@@ -833,8 +833,8 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                     .offset = offsetof(TargetSettings, tsan),
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-                    #define X(ty, field, help, def) { \
-                        .name = b_atomize(ctx, #field), \
+                    #define X(ty, field, cli, help, def) { \
+                        .name = b_atomize(ctx, cli), \
                         .type = BTypeInfo(ty), \
                         .offset = offsetof(TargetSettings, field), \
                     },
@@ -1189,7 +1189,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     }
     if(err) goto fail;
     #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-        #define X(ty, field, help, def) \
+        #define X(ty, field, cli, help, def) \
             ctx->target.field = def;
         TARGET_SETTINGS_EXTRA_FIELDS(X)
         #undef X
@@ -1385,8 +1385,8 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             .min_num = 1, .max_num = 1,
         },
         #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-            #define X(ty, field, h, def) { \
-                .name = SV(#field), \
+            #define X(ty, field, cli, h, def) { \
+                .name = SV(cli), \
                 .dest = BARGDEST(&ctx->target.field), \
                 .help = h, \
                 .min_num = 0, .max_num = 1, \
@@ -1544,7 +1544,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             if(after_ap.sanitize != before_ap.sanitize) ctx->target.sanitize = after_ap.sanitize;
             if(after_ap.tsan != before_ap.tsan) ctx->target.tsan = after_ap.tsan;
             #ifdef TARGET_SETTINGS_EXTRA_FIELDS
-                #define X(ty, field, help, def) \
+                #define X(ty, field, cli, help, def) \
                 if(after_ap.field != before_ap.field) \
                     ctx->target.field = after_ap.field;
                 TARGET_SETTINGS_EXTRA_FIELDS(X)
