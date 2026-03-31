@@ -10070,6 +10070,19 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             else if(declbase->spec.sp_infer_type){
                 // Infer type from initializer
                 type = initializer->type;
+                // Decay array to pointer, function to function pointer
+                if(ccqt_kind(type) == CC_ARRAY && !ccqt_as_array(type)->is_vector){
+                    err = cc_pointer_of(p, ccqt_as_array(type)->element, &type);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, initializer, type, &initializer);
+                    if(err) return err;
+                }
+                else if(ccqt_kind(type) == CC_FUNCTION){
+                    err = cc_pointer_of(p, type, &type);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, initializer, type, &initializer);
+                    if(err) return err;
+                }
                 // Apply qualifiers from specifier
                 if(declbase->spec.sp_const) type.is_const = 1;
                 if(declbase->spec.sp_volatile) type.is_volatile = 1;

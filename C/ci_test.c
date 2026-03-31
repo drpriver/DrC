@@ -1511,6 +1511,25 @@ TestFunction(test_interpreter){
             SV("return ((int(void){ return 42; }))();\n"),
             .exit_code = 42,
         },
+        {
+            "auto decays lambda to function pointer", __LINE__,
+            SV("auto fp = int(int x){ return x + 1; };\n"
+               "return fp(41);\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr decays lambda to function pointer", __LINE__,
+            SV("constexpr fp = int(int x){ return x + 1; };\n"
+               "return fp(41);\n"),
+            .exit_code = 42,
+        },
+        {
+            "auto decays array to pointer", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "auto p = arr;\n"
+               "return p[1] + p[2];\n"),
+            .exit_code = 50,
+        },
         // Atomics
         {
             "atomic: fetch_add", __LINE__,
