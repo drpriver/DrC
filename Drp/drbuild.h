@@ -62,7 +62,7 @@
 //
 // This example is for information needed for cross-compiling to windows targeting msvc.
 //
-// X(type, cli, field, help, default_value)
+// X(type, field, cli, help, default_value)
 #define TARGET_SETTINGS_EXTRA_FIELDS(X) \
     X(Atom, winsdkinc, "--winsdkinc", "Windows sdk include. Include the version number. For cross-compilation.", nil_atom) \
     X(Atom, winsdklib, "--winsdklib", "Windows sdk libs. Include the version number. For cross-compilation.", nil_atom) \
