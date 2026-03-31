@@ -1096,11 +1096,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 pointee = ccqt_as_ptr(ptr_side->type)->pointee;
             else
                 pointee = ccqt_as_array(ptr_side->type)->element;
-            uint32_t elem_sz;
-            err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-            if(err) return err;
             switch((uint32_t)expr->kind){
                 case CC_EXPR_ADD: {
+                    uint32_t elem_sz;
+                    err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
+                    if(err) return err;
                     CiUint128 *ptr_buf = lhs_ptr ? &lbuf128 : &rbuf128;
                     CiUint128 *idx_buf = lhs_ptr ? &rbuf128 : &lbuf128;
                     CcExpr* idx_side = lhs_ptr ? rhs : lhs;
@@ -1114,6 +1114,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     return 0;
                 }
                 case CC_EXPR_SUB: {
+                    uint32_t elem_sz;
+                    err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
+                    if(err) return err;
                     char* lp = NULL;
                     memcpy(&lp, &lbuf128, sizeof lp);
                     if(rhs_ptr){

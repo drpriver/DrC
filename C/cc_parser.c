@@ -1390,8 +1390,8 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     result_type = ccqt_basic(CCBT_int);
                     break;
                 }
-                _Bool lp = ccqt_is_pointer_like(left->type);
-                _Bool rp = ccqt_is_pointer_like(right->type);
+                _Bool lp = ccqt_is_pointer_like(left->type) || ccqt_kind(left->type) == CC_FUNCTION;
+                _Bool rp = ccqt_is_pointer_like(right->type) || ccqt_kind(right->type) == CC_FUNCTION;
                 if(!lp && !rp){
                     CcQualType common;
                     err = cc_usual_arithmetic(p, left->type, right->type, &common, tok.loc);
@@ -1413,6 +1413,21 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     if(ccqt_kind(right->type) == CC_ARRAY && !ccqt_as_array(right->type)->is_vector){
                         CcQualType ptr_type;
                         err = cc_pointer_of(p, ccqt_as_array(right->type)->element, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, right, ptr_type, &right);
+                        if(err) return err;
+                    }
+                    // Function-to-pointer decay
+                    if(ccqt_kind(left->type) == CC_FUNCTION){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, left->type, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, left, ptr_type, &left);
+                        if(err) return err;
+                    }
+                    if(ccqt_kind(right->type) == CC_FUNCTION){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, right->type, &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, right, ptr_type, &right);
                         if(err) return err;

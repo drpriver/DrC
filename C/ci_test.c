@@ -1530,6 +1530,33 @@ TestFunction(test_interpreter){
                "return p[1] + p[2];\n"),
             .exit_code = 50,
         },
+        {
+            "compare function pointers eq", __LINE__,
+            SV("auto fp = int(int x){ return x; };\n"
+               "auto fp2 = fp;\n"
+               "return fp == fp2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "compare function pointers ne", __LINE__,
+            SV("auto fp1 = int(void){ return 1; };\n"
+               "auto fp2 = int(void){ return 2; };\n"
+               "return fp1 != fp2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "function pointer == function", __LINE__,
+            SV("int g(int x){ return x; }\n"
+               "auto fp = g;\n"
+               "return fp == g;\n"),
+            .exit_code = 1,
+        },
+        {
+            "function pointer != null", __LINE__,
+            SV("auto fp = int(void){ return 1; };\n"
+               "return fp != 0;\n"),
+            .exit_code = 1,
+        },
         // Atomics
         {
             "atomic: fetch_add", __LINE__,
