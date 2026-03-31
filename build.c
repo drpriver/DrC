@@ -361,13 +361,14 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
     if(msb_peek(&sb) == ' ') msb_erase(&sb, 1);
     msb_write_char(&sb, '\n');
     msb_write_literal(&sb,
-        ".PHONY: $(BUILDTARGETS)\n"
+        "UNKNOWN:=$(filter-out $(BUILDTARGETS) build build.exe Makefile,$(MAKECMDGOALS))\n"
+        ".PHONY: $(BUILDTARGETS) $(UNKNOWN)\n"
         "\n"
         "ifeq ($(OS),Windows_NT)\n"
         "ifeq ($(origin CC),default)\n"
         "CC:=$(firstword $(foreach c,cl clang,$(if $(shell where $(c) 2>/dev/null),$(c))))\n"
         "endif\n"
-        "$(BUILDTARGETS): | build.exe\n"
+        "$(BUILDTARGETS) $(UNKNOWN): | build.exe\n"
             "\t@build $@\n"
         "build.exe:\n"
         "ifeq ($(CC),cl)\n"
@@ -377,7 +378,7 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         "endif\n"
              "\t./build -b Bin\n"
         "else\n"
-        "$(BUILDTARGETS): | build\n"
+        "$(BUILDTARGETS) $(UNKNOWN): | build\n"
              "\t@./build $@\n"
         "build:\n"
              "\t$(CC) -march=native build.c -o $@\n"

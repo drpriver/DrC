@@ -6,13 +6,14 @@ BUILDTARGETS:=clean list print compile_commands.json all \
   self_cc_lex_test self_cc_test self_ci_test \
   self_ci_native_test run_drcpp debug_drcpp run_drc \
   debug_drc repl install tags
-.PHONY: $(BUILDTARGETS)
+UNKNOWN:=$(filter-out $(BUILDTARGETS) build build.exe Makefile,$(MAKECMDGOALS))
+.PHONY: $(BUILDTARGETS) $(UNKNOWN)
 
 ifeq ($(OS),Windows_NT)
 ifeq ($(origin CC),default)
 CC:=$(firstword $(foreach c,cl clang,$(if $(shell where $(c) 2>/dev/null),$(c))))
 endif
-$(BUILDTARGETS): | build.exe
+$(BUILDTARGETS) $(UNKNOWN): | build.exe
 	@build $@
 build.exe:
 ifeq ($(CC),cl)
@@ -22,7 +23,7 @@ else
 endif
 	./build -b Bin
 else
-$(BUILDTARGETS): | build
+$(BUILDTARGETS) $(UNKNOWN): | build
 	@./build $@
 build:
 	$(CC) -march=native build.c -o $@
