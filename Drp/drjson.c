@@ -700,26 +700,21 @@ parse_number(DrJsonParseContext* ctx){
     ptrdiff_t length = cursor - num_begin;
     if(!length) return drjson_make_error(DRJSON_ERROR_UNEXPECTED_EOF, "Zero length number");
     DrJsonValue result;
+    int err;
     if(has_exponent || has_decimal){
-        DoubleResult pr = parse_double(num_begin, length);
-        if(pr.errored){
-            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
-        }
-        result = drjson_make_number(pr.result);
+        double d; err = parse_double(num_begin, length, &d);
+        if(err) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        result = drjson_make_number(d);
     }
     else if(has_minus){
-        Int64Result pr = parse_int64(num_begin, length);
-        if(pr.errored){
-            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
-        }
-        result =  drjson_make_int(pr.result);
+        int64_t i; err = parse_int64(num_begin, length, &i);
+        if(err) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        result = drjson_make_int(i);
     }
     else {
-        Uint64Result pr = parse_uint64(num_begin, length);
-        if(pr.errored){
-            return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
-        }
-        result =  drjson_make_uint(pr.result);
+        uint64_t u; err = parse_uint64(num_begin, length, &u);
+        if(err) return drjson_make_error(DRJSON_ERROR_INVALID_VALUE, "Failed to parse number");
+        result = drjson_make_uint(u);
     }
     ctx->cursor = cursor;
     return result;
@@ -1317,11 +1312,10 @@ drjson_query(const DrJsonContext* ctx, DrJsonValue v, const char* query, size_t 
     Ldo_subscript:
         {
             // lazy
-            Int64Result pr = parse_int64(query+begin, i-begin);
-            if(pr.errored){
+            int64_t index;
+            int err = parse_int64(query+begin, i-begin, &index);
+            if(err)
                 RETERROR(DRJSON_ERROR_INVALID_VALUE, "Unable to parse number for subscript");
-            }
-            int64_t index = pr.result;
             o = drjson_get_by_index(ctx, o, index);
             if(o.kind == DRJSON_ERROR) return o;
         }

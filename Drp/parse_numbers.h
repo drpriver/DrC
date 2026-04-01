@@ -7,6 +7,7 @@
 #include <stddef.h>
 // integer types, INT64_MAX, etc.
 #include <stdint.h>
+#include "typed_enum.h"
 
 // Allow suppression of float parsing.
 #ifndef PARSE_NUMBER_PARSE_FLOATS
@@ -56,7 +57,7 @@
 //       may report OVERFLOWED_VALUE instead of INVALID_CHARACTER if the length
 //       check is done first. There is no guarantee over which particular error
 //       is reported, just that an error will be reported for invalid input.
-enum ParseNumberError {
+enum ParseNumberError TYPED_ENUM(int) {
     // No error.
     PARSENUMBER_NO_ERROR = 0,
     // Input ended when more input was expected.
@@ -68,51 +69,7 @@ enum ParseNumberError {
     // parsing an int.
     PARSENUMBER_INVALID_CHARACTER = 3,
 };
-
-//
-// Result structs for the various parsing functions.
-//
-// Check the `errored` field first. If it is non-zero, `result` is
-// indeterminate.
-// If it is zero, then the result field is valid and is the parsed number.
-//
-
-typedef struct Uint64Result {
-    uint64_t result;
-    enum ParseNumberError errored;
-} Uint64Result;
-
-typedef struct Int64Result {
-    int64_t result;
-    enum ParseNumberError errored;
-} Int64Result;
-
-typedef struct Uint32Result {
-    uint32_t result;
-    enum ParseNumberError errored;
-} Uint32Result;
-
-typedef struct Int32Result {
-    int32_t result;
-    enum ParseNumberError errored;
-} Int32Result;
-
-typedef struct IntResult {
-    int result;
-    enum ParseNumberError errored;
-} IntResult;
-
-#if PARSE_NUMBER_PARSE_FLOATS
-typedef struct FloatResult {
-    float result;
-    enum ParseNumberError errored;
-} FloatResult;
-
-typedef struct DoubleResult {
-    double result;
-    enum ParseNumberError errored;
-} DoubleResult;
-#endif
+TYPEDEF_ENUM(ParseNumberError, int);
 
 //
 // Forward declarations of the public API.
@@ -128,117 +85,109 @@ typedef struct DoubleResult {
 // Parses a decimal uint64.
 static inline
 warn_unused
-struct Uint64Result
-parse_uint64(const char* str, size_t length);
+ParseNumberError
+parse_uint64(const char* str, size_t length, uint64_t* result);
 
 //
 // Parses a decimal int64.
 static inline
 warn_unused
-struct Int64Result
-parse_int64(const char* str, size_t length);
+ParseNumberError
+parse_int64(const char* str, size_t length, int64_t* result);
 
 //
 // Parses a decimal uint32.
 static inline
 warn_unused
-struct Uint32Result
-parse_uint32(const char*str, size_t length);
+ParseNumberError
+parse_uint32(const char*str, size_t length, uint32_t* result);
 
 
 //
 // Parses a decimal int32.
 static inline
 warn_unused
-struct Int32Result
-parse_int32(const char*str, size_t length);
+ParseNumberError
+parse_int32(const char*str, size_t length, int32_t* result);
 
 //
 // Parses a decimal int.
 static inline
 warn_unused
-struct IntResult
-parse_int(const char* str, size_t length);
+ParseNumberError
+parse_int(const char* str, size_t length, int* result);
 
 //
 // Parses hex format, but with a leading '#' instead of '0x'.
 static inline
 warn_unused
-struct Uint64Result
-parse_pound_hex(const char* str, size_t length);
+ParseNumberError
+parse_pound_hex(const char* str, size_t length, uint64_t* result);
 
 //
 // Parses traditional hex format, such as '0xf00dface'
 static inline
 warn_unused
-struct Uint64Result
-parse_hex(const char* str, size_t length);
+ParseNumberError
+parse_hex(const char* str, size_t length, uint64_t* result);
 
 //
 // Parses binary notation, such as '0b1101'.
 static inline
 warn_unused
-struct Uint64Result
-parse_binary(const char* str, size_t length);
+ParseNumberError
+parse_binary(const char* str, size_t length, uint64_t* result);
 
 //
 // Parses octal notation, such as '0o755' or '0O755'.
 static inline
 warn_unused
-struct Uint64Result
-parse_octal(const char* str, size_t length);
+ParseNumberError
+parse_octal(const char* str, size_t length, uint64_t* result);
 
 //
 // Parses an unsigned integer, in whatever format is comfortable for a human.
 // Accepts 0x hexes, 0b binary, plain decimals, and also # hexes.
 static inline
 warn_unused
-#ifdef __wasm__
-struct Uint32Result
-#else
-struct Uint64Result
-#endif
-parse_unsigned_human(const char* str, size_t length);
+ParseNumberError
+parse_unsigned_human(const char* str, size_t length, uint64_t* result);
 
+#if PARSE_NUMBER_PARSE_FLOATS
 //
 // Parses a float, in regular or scientific form.
 static inline
 warn_unused
-struct FloatResult
-parse_float(const char* str, size_t length);
+ParseNumberError
+parse_float(const char* str, size_t length, float* result);
 
 //
 // Parses a double, in regular or scientific form.
 static inline
 warn_unused
-struct DoubleResult
-parse_double(const char* str, size_t length);
+ParseNumberError
+parse_double(const char* str, size_t length, double* result);
+#endif
 
 
 // Implementations after this point.
 
 static inline
 warn_unused
-struct Uint64Result
-parse_uint64(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_uint64(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     if(*str == '+'){
         str++;
         length--;
     }
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     // UINT64_MAX is 18,446,744,073,709,551,615 (20 characters)
-    if(length > 20){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+    if(length > 20)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     int bad = 0;
     uint64_t value = 0;
     for(size_t i=0;i < length-1; i++){
@@ -249,42 +198,32 @@ parse_uint64(const char* str, size_t length){
         value *= 10;
         value += cval;
     }
-    if(bad){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(bad)
+        return PARSENUMBER_INVALID_CHARACTER;
     // Handle the last char differently as it's the only
     // one that can overflow.
     {
         unsigned cval = (unsigned char)str[length-1];
         cval -= '0';
-        if(cval > 9u){
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
-        }
-        if(mul_overflow(value, 10, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        if(add_overflow(value, cval, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
+        if(cval > 9u)
+            return PARSENUMBER_INVALID_CHARACTER;
+        if(mul_overflow(value, 10, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        if(add_overflow(value, cval, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
 
     }
-    result.result = value;
-    return result;
+    *result = value;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-struct Int64Result
-parse_int64(const char* str, size_t length){
-    struct Int64Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_int64(const char* str, size_t length, int64_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     _Bool negative = (*str == '-');
     if(negative){
         str++;
@@ -294,15 +233,11 @@ parse_int64(const char* str, size_t length){
         str++;
         length--;
     }
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     // INT64_MAX is 9223372036854775807 (19 characters)
-    if(length > 19){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+    if(length > 19)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     int bad = 0;
     uint64_t value = 0;
     for(size_t i=0;i < length-1; i++){
@@ -313,67 +248,49 @@ parse_int64(const char* str, size_t length){
         value *= 10;
         value += cval;
     }
-    if(bad){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(bad)
+        return PARSENUMBER_INVALID_CHARACTER;
     // Handle the last char differently as it's the only
     // one that can overflow.
     {
         unsigned cval = (unsigned char)str[length-1];
         cval -= '0';
-        if(cval > 9u){
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
-        }
-        if(mul_overflow(value, 10, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        if(add_overflow(value, cval, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
+        if(cval > 9u)
+            return PARSENUMBER_INVALID_CHARACTER;
+        if(mul_overflow(value, 10, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        if(add_overflow(value, cval, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
     }
     if(negative){
-        if(value > (uint64_t)INT64_MAX+1){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        result.result = (int64_t)-value;
+        if(value > (uint64_t)INT64_MAX+1)
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        *result = (int64_t)-value;
     }
     else{
-        if(value > (uint64_t)INT64_MAX){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        result.result = (int64_t)value;
+        if(value > (uint64_t)INT64_MAX)
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        *result = (int64_t)value;
     }
-    return result;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-struct Uint32Result
-parse_uint32(const char*str, size_t length){
-    struct Uint32Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_uint32(const char*str, size_t length, uint32_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     if(*str == '+'){
         str++;
         length--;
     }
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     // UINT32_MAX is 10 characters
-    if(length > 10){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+    if(length > 10)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     int bad = 0;
     uint32_t value = 0;
     for(size_t i=0;i < length-1; i++){
@@ -384,41 +301,31 @@ parse_uint32(const char*str, size_t length){
         value *= 10;
         value += cval;
     }
-    if(bad){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(bad)
+        return PARSENUMBER_INVALID_CHARACTER;
     // Handle the last char differently as it's the only
     // one that can overflow.
     {
         unsigned cval = (unsigned char)str[length-1];
         cval -= '0';
-        if(cval > 9u){
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
-        }
-        if(mul_overflow(value, 10, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        if(add_overflow(value, cval, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
+        if(cval > 9u)
+            return PARSENUMBER_INVALID_CHARACTER;
+        if(mul_overflow(value, 10, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        if(add_overflow(value, cval, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
     }
-    result.result = value;
-    return result;
+    *result = value;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-struct Int32Result
-parse_int32(const char*str, size_t length){
-    struct Int32Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_int32(const char*str, size_t length, int32_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     _Bool negative = (*str == '-');
     if(negative){
         str++;
@@ -428,15 +335,11 @@ parse_int32(const char*str, size_t length){
         str++;
         length--;
     }
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     // INT32_max is 10 chars
-    if(length > 10){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+    if(length > 10)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     int bad = 0;
     uint32_t value = 0;
     for(size_t i=0;i < length-1; i++){
@@ -447,65 +350,50 @@ parse_int32(const char*str, size_t length){
         value *= 10;
         value += cval;
     }
-    if(bad){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(bad)
+        return PARSENUMBER_INVALID_CHARACTER;
     // Handle the last char differently as it's the only
     // one that can overflow.
     {
         unsigned cval = (unsigned char)str[length-1];
         cval -= '0';
-        if(cval > 9u){
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
-        }
-        if(mul_overflow(value, 10, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        if(add_overflow(value, cval, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
+        if(cval > 9u)
+            return PARSENUMBER_INVALID_CHARACTER;
+        if(mul_overflow(value, 10, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        if(add_overflow(value, cval, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
     }
     if(negative){
-        if(value > (uint32_t)INT32_MAX+1){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        result.result = (int32_t)-value;
+        if(value > (uint32_t)INT32_MAX+1)
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        *result = (int32_t)-value;
     }
     else{
-        if(value > (uint32_t)INT32_MAX){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        result.result = (int32_t)value;
+        if(value > (uint32_t)INT32_MAX)
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        *result = (int32_t)value;
     }
-    return result;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-struct IntResult
-parse_int(const char* str, size_t length){
-    struct IntResult result;
-    struct Int32Result e = parse_int32(str, length);
-    result.errored = e.errored;
-    result.result = e.result;
-    return result;
+ParseNumberError
+parse_int(const char* str, size_t length, int* result){
+    int32_t r;
+    ParseNumberError err = parse_int32(str, length, &r);
+    *result = r;
+    return err;
 }
 
 static inline
 warn_unused
-struct Uint64Result
-parse_hex_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(length > sizeof(result.result)*2){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+ParseNumberError
+parse_hex_inner(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(length > sizeof(*result)*2)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     uint64_t value = 0;
     for(size_t i = 0; i < length; i++){
         char c = str[i];
@@ -524,88 +412,67 @@ parse_hex_inner(const char* str, size_t length){
                 char_value = (uint64_t)(c - 'A' + 10);
                 break;
             default:
-                result.errored = PARSENUMBER_INVALID_CHARACTER;
-                return result;
+                return PARSENUMBER_INVALID_CHARACTER;
         }
         value <<= 4;
         value |= char_value;
     }
-    result.result = value;
-    return result;
+    *result = value;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-struct Uint64Result
-parse_pound_hex(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(length < 2){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    if(str[0] != '#'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    return parse_hex_inner(str+1, length-1);
+ParseNumberError
+parse_pound_hex(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(length < 2)
+        return PARSENUMBER_UNEXPECTED_END;
+    if(str[0] != '#')
+        return PARSENUMBER_INVALID_CHARACTER;
+    return parse_hex_inner(str+1, length-1, result);
 }
 
 static inline
 warn_unused
-struct Uint64Result
-parse_hex(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(length<3){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    if(str[0] != '0'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    if(str[1] != 'x' && str[1] != 'X'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    return parse_hex_inner(str+2, length-2);
+ParseNumberError
+parse_hex(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(length<3)
+        return PARSENUMBER_UNEXPECTED_END;
+    if(str[0] != '0')
+        return PARSENUMBER_INVALID_CHARACTER;
+    if(str[1] != 'x' && str[1] != 'X')
+        return PARSENUMBER_INVALID_CHARACTER;
+    return parse_hex_inner(str+2, length-2, result);
 }
 
-static inline warn_unused struct Uint64Result parse_binary_inner(const char*, size_t);
-static inline warn_unused struct Uint64Result parse_octal_inner(const char*, size_t);
+static inline warn_unused ParseNumberError parse_binary_inner(const char*, size_t, uint64_t*);
+static inline warn_unused ParseNumberError parse_octal_inner(const char*, size_t, uint64_t*);
 
 static inline
 warn_unused
-struct Uint64Result
-parse_binary(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(length<3){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    if(str[0] != '0'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    if(str[1] != 'b' && str[1] != 'B'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    return parse_binary_inner(str+2, length-2);
+ParseNumberError
+parse_binary(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(length<3)
+        return PARSENUMBER_UNEXPECTED_END;
+    if(str[0] != '0')
+        return PARSENUMBER_INVALID_CHARACTER;
+    if(str[1] != 'b' && str[1] != 'B')
+        return PARSENUMBER_INVALID_CHARACTER;
+    return parse_binary_inner(str+2, length-2, result);
 }
 
 static inline
 warn_unused
-struct Uint64Result
-parse_binary_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    if(length > 64){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+ParseNumberError
+parse_binary_inner(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
+    if(length > 64)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     unsigned long long mask = 1llu << 63;
     mask >>= (64 - length);
     // @speed
@@ -614,56 +481,47 @@ parse_binary_inner(const char* str, size_t length){
     // You'd have to see what code is generated though
     // (does the compiler turn it into a binary decision tree?)
     // 2**8 is only 256, that's probably not worth it.
+    uint64_t value = 0;
     for(size_t i = 0; i < length; i++, mask>>=1){
         switch(str[i]){
             case '1':
-                result.result |= mask;
+                value |= mask;
                 continue;
             case '0':
                 continue;
             default:
-                result.errored = PARSENUMBER_INVALID_CHARACTER;
-                return result;
+                return PARSENUMBER_INVALID_CHARACTER;
         }
     }
-    return result;
+    *result = value;
+    return PARSENUMBER_NO_ERROR;
 }
 
 
 static inline
 warn_unused
-struct Uint64Result
-parse_octal(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(length < 3){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    if(str[0] != '0'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    if(str[1] != 'o' && str[1] != 'O'){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
-    return parse_octal_inner(str+2, length-2);
+ParseNumberError
+parse_octal(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(length < 3)
+        return PARSENUMBER_UNEXPECTED_END;
+    if(str[0] != '0')
+        return PARSENUMBER_INVALID_CHARACTER;
+    if(str[1] != 'o' && str[1] != 'O')
+        return PARSENUMBER_INVALID_CHARACTER;
+    return parse_octal_inner(str+2, length-2, result);
 }
 
 static inline
 warn_unused
-struct Uint64Result
-parse_octal_inner(const char* str, size_t length){
-    struct Uint64Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_octal_inner(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     // UINT64_MAX is 1777777777777777777777 in octal (22 digits)
-    if(length > 22){
-        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-        return result;
-    }
+    if(length > 22)
+        return PARSENUMBER_OVERFLOWED_VALUE;
     int bad = 0;
     uint64_t value = 0;
     for(size_t i = 0; i < length-1; i++){
@@ -674,90 +532,65 @@ parse_octal_inner(const char* str, size_t length){
         value <<= 3;
         value |= cval & 7u;
     }
-    if(bad){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(bad)
+        return PARSENUMBER_INVALID_CHARACTER;
     // Handle the last digit with overflow checking.
     {
         unsigned cval = (unsigned char)str[length-1];
         cval -= '0';
-        if(cval > 7u){
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
-        }
-        if(mul_overflow(value, (uint64_t)8, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
-        if(add_overflow(value, (uint64_t)cval, &value)){
-            result.errored = PARSENUMBER_OVERFLOWED_VALUE;
-            return result;
-        }
+        if(cval > 7u)
+            return PARSENUMBER_INVALID_CHARACTER;
+        if(mul_overflow(value, (uint64_t)8, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
+        if(add_overflow(value, (uint64_t)cval, &value))
+            return PARSENUMBER_OVERFLOWED_VALUE;
     }
-    result.result = value;
-    return result;
+    *result = value;
+    return PARSENUMBER_NO_ERROR;
 }
 
 static inline
 warn_unused
-#ifdef __wasm__
-// XXX bad codegen with the uint64 version
-struct Uint32Result
-#else
-struct Uint64Result
-#endif
-parse_unsigned_human(const char* str, size_t length){
-    #ifndef __wasm__
-    struct Uint64Result result = {0};
-    if(!length){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
+ParseNumberError
+parse_unsigned_human(const char* str, size_t length, uint64_t* result){
+    *result = 0;
+    if(!length)
+        return PARSENUMBER_UNEXPECTED_END;
     if(str[0] == '#')
-        return parse_pound_hex(str, length);
+        return parse_pound_hex(str, length, result);
     if(str[0] == '0' && length > 1){
         if(str[1] == 'x' || str[1] == 'X')
-            return parse_hex(str, length);
+            return parse_hex(str, length, result);
         if(str[1] == 'b' || str[1] == 'B')
-            return parse_binary(str, length);
+            return parse_binary(str, length, result);
     }
-    return parse_uint64(str, length);
-    #else
-    return parse_uint32(str, length);
-    #endif
+    return parse_uint64(str, length, result);
 }
 
 #if PARSE_NUMBER_PARSE_FLOATS
 static inline
 warn_unused
-struct FloatResult
-parse_float(const char* str, size_t length){
-    struct FloatResult result = {0};
+ParseNumberError
+parse_float(const char* str, size_t length, float* result){
+    *result = 0;
     const char* end = str + length;
     // fast_float doesn't accept leading '+', but we want to.
     while(str != end && *str == '+')
         str++;
-    if(str == end){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    fast_float_from_chars_result fr = fast_float_from_chars_float(str, end, &result.result, FASTFLOAT_FORMAT_GENERAL);
-    if(fr.ptr != end){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(str == end)
+        return PARSENUMBER_UNEXPECTED_END;
+    fast_float_from_chars_result fr = fast_float_from_chars_float(str, end, result, FASTFLOAT_FORMAT_GENERAL);
+    if(fr.ptr != end)
+        return PARSENUMBER_INVALID_CHARACTER;
     switch(fr.error){
         case FASTFLOAT_NO_ERROR:
-            return result;
+            return PARSENUMBER_NO_ERROR;
         case FASTFLOAT_INVALID_VALUE:
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
+            return PARSENUMBER_INVALID_CHARACTER;
         default:
         case FASTFLOAT_BAD_FORMAT:
             // This should never happen, but meh.
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
+            return PARSENUMBER_INVALID_CHARACTER;
     }
 }
 
@@ -765,33 +598,27 @@ parse_float(const char* str, size_t length){
 // Parses a double, in regular or scientific form.
 static inline
 warn_unused
-struct DoubleResult
-parse_double(const char* str, size_t length){
-    struct DoubleResult result = {0};
+ParseNumberError
+parse_double(const char* str, size_t length, double* result){
+    *result = 0;
     const char* end = str + length;
     // fast_float doesn't accept leading '+', but we want to.
     while(str != end && *str == '+')
         str++;
-    if(str == end){
-        result.errored = PARSENUMBER_UNEXPECTED_END;
-        return result;
-    }
-    fast_float_from_chars_result fr = fast_float_from_chars_double(str, end, &result.result, FASTFLOAT_FORMAT_GENERAL);
-    if(fr.ptr != end){
-        result.errored = PARSENUMBER_INVALID_CHARACTER;
-        return result;
-    }
+    if(str == end)
+        return PARSENUMBER_UNEXPECTED_END;
+    fast_float_from_chars_result fr = fast_float_from_chars_double(str, end, result, FASTFLOAT_FORMAT_GENERAL);
+    if(fr.ptr != end)
+        return PARSENUMBER_INVALID_CHARACTER;
     switch(fr.error){
         case FASTFLOAT_NO_ERROR:
-            return result;
+            return PARSENUMBER_NO_ERROR;
         case FASTFLOAT_INVALID_VALUE:
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
+            return PARSENUMBER_INVALID_CHARACTER;
         default:
         case FASTFLOAT_BAD_FORMAT:
             // This should never happen, but meh.
-            result.errored = PARSENUMBER_INVALID_CHARACTER;
-            return result;
+            return PARSENUMBER_INVALID_CHARACTER;
     }
 }
 #endif

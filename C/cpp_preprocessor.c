@@ -5931,12 +5931,12 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                                     err = cpp_error(cpp, tok.loc, "Too many number args to format");
                                     goto finally;
                                 }
-                                Uint64Result u = parse_unsigned_human(tok.txt.text, tok.txt.length);
-                                if(u.errored){
+                                uint64_t uval; err = parse_unsigned_human(tok.txt.text, tok.txt.length, &uval);
+                                if(err){
                                     err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
                                     goto finally;
                                 }
-                                msb_sprintf(&sb, "%llu", (unsigned long long)u.result);
+                                msb_sprintf(&sb, "%llu", (unsigned long long)uval);
                                 wrote_number = 1;
                                 continue;
                             }
@@ -7112,26 +7112,23 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
         len--;
     if(!len)
         return cpp_error(cpp, tok.loc, "Invalid number literal");
+    ParseNumberError err;
     uint64_t v = 0;
     if(len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')){
-        Uint64Result u = parse_hex(s, len);
-        if(u.errored) return cpp_error(cpp, tok.loc, "Invalid hex digit in number");
-        v = u.result;
+        err = parse_hex(s, len, &v);
+        if(err) return cpp_error(cpp, tok.loc, "Invalid hex digit in number");
     }
     else if(len > 2 && s[0] == '0' && (s[1] == 'b' || s[1] == 'B')){
-        Uint64Result u = parse_binary(s, len);
-        if(u.errored) return cpp_error(cpp, tok.loc, "Invalid binary digit in number");
-        v = u.result;
+        err = parse_binary(s, len, &v);
+        if(err) return cpp_error(cpp, tok.loc, "Invalid binary digit in number");
     }
     else if(len > 1 && s[0] == '0'){
-        Uint64Result u = parse_octal_inner(s+1, len-1);
-        if(u.errored) return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
-        v = u.result;
+        err = parse_octal_inner(s+1, len-1, &v);
+        if(err) return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
     }
     else{
-        Uint64Result u = parse_uint64(s, len);
-        if(u.errored) return cpp_error(cpp, tok.loc, "Invalid digit in number");
-        v = u.result;
+        err = parse_uint64(s, len, &v);
+        if(err) return cpp_error(cpp, tok.loc, "Invalid digit in number");
     }
     *value = (int64_t)v;
     return 0;
@@ -7663,6 +7660,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     if(!buf_len)
         return cpp_error(cpp, cpptok->loc, "Invalid number literal");
     // Detect float: contains '.', or 'e'/'E' (decimal), or 'p'/'P' (hex)
+    int err;
     _Bool is_float = 0;
     _Bool is_hex = (buf_len > 2 && buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X'));
     for(size_t i = 0; i < buf_len; i++){
@@ -7687,22 +7685,20 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         CcConstantType ctype;
         if(has_f){
             ctype = CC_FLOAT;
-            FloatResult fr = parse_float(buf, buf_len);
-            if(fr.errored)
-                return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
+            float fval; err = parse_float(buf, buf_len, &fval);
+            if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
             *cctok = (CcToken){
                 .constant = {
                     .type = CC_CONSTANT,
                     .ctype = ctype,
-                    .float_value = fr.result,
+                    .float_value = fval,
                 },
                 .loc = cpptok->loc,
             };
         }
         else {
-            DoubleResult dr = parse_double(buf, buf_len);
-            if(dr.errored)
-                return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
+            double dval; err = parse_double(buf, buf_len, &dval);
+            if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
             if(num_l)
                 ctype = CC_LONG_DOUBLE;
             else
@@ -7711,7 +7707,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
                 .constant = {
                     .type = CC_CONSTANT,
                     .ctype = ctype,
-                    .double_value = dr.result,
+                    .double_value = dval,
                 },
                 .loc = cpptok->loc,
             };
@@ -7721,24 +7717,20 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     // Integer
     uint64_t v = 0;
     if(is_hex){
-        Uint64Result u = parse_hex(buf, buf_len);
-        if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid hex digit in number");
-        v = u.result;
+        err = parse_hex(buf, buf_len, &v);
+        if(err) return cpp_error(cpp, cpptok->loc, "Invalid hex digit in number");
     }
     else if(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B')){
-        Uint64Result u = parse_binary(buf, buf_len);
-        if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid binary digit in number");
-        v = u.result;
+        err = parse_binary(buf, buf_len, &v);
+        if(err) return cpp_error(cpp, cpptok->loc, "Invalid binary digit in number");
     }
     else if(buf_len > 1 && buf[0] == '0'){
-        Uint64Result u = parse_octal_inner(buf+1, buf_len-1);
-        if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid octal digit in number");
-        v = u.result;
+        err = parse_octal_inner(buf+1, buf_len-1, &v);
+        if(err) return cpp_error(cpp, cpptok->loc, "Invalid octal digit in number");
     }
     else{
-        Uint64Result u = parse_uint64(buf, buf_len);
-        if(u.errored) return cpp_error(cpp, cpptok->loc, "Invalid digit in number");
-        v = u.result;
+        err = parse_uint64(buf, buf_len, &v);
+        if(err) return cpp_error(cpp, cpptok->loc, "Invalid digit in number");
     }
     // Determine type.
     CcConstantType ctype;

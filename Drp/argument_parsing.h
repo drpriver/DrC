@@ -1129,53 +1129,34 @@ parse_arg(ArgToParse* arg, StringView s){
         if(arg->pnum_parsed) (*arg->pnum_parsed)++; \
     } \
 }while(0)
+    int err;
     switch(arg->dest.type){
         case ARG_INTEGER64:{
-            #ifndef __wasm__
-            struct Int64Result e = parse_int64(s.text, s.length);
-            #else
-            // XXX Getting bad codegen with int64
-            struct Int32Result e = parse_int32(s.text, s.length);
-            #endif
-            if(e.errored){
-                return ARGPARSE_CONVERSION_ERROR;
-            }
-            int64_t value = e.result;
+            int64_t value; err = parse_int64(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
             APPEND_ARG(int64_t, value);
         }break;
         case ARG_UINTEGER64:{
-            #ifndef __wasm__
-            struct Uint64Result e = parse_unsigned_human(s.text, s.length);
-            #else
-            // XXX Getting bad codegen with uint64
-            struct Uint32Result e = parse_unsigned_human(s.text, s.length);
-            #endif
-            if(e.errored) {
-                return ARGPARSE_CONVERSION_ERROR;
-            }
-            uint64_t value = e.result;
+            uint64_t value; err = parse_unsigned_human(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
             APPEND_ARG(uint64_t, value);
         }break;
         case ARG_INT:{
-            struct IntResult e = parse_int(s.text, s.length);
-            if(e.errored) {
-                return ARGPARSE_CONVERSION_ERROR;
-            }
-            int value = e.result;
+            int value; err = parse_int(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
             APPEND_ARG(int, value);
         }break;
         #if PARSE_NUMBER_PARSE_FLOATS
         case ARG_FLOAT32:{
-            FloatResult fr = parse_float(s.text, s.length);
-            if(fr.errored)
-                return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(float, fr.result);
+            float value; err = parse_float(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
+            APPEND_ARG(float, value);
         }break;
         case ARG_FLOAT64:{
-            DoubleResult fr = parse_double(s.text, s.length);
-            if(fr.errored)
-                return ARGPARSE_CONVERSION_ERROR;
-            APPEND_ARG(double, fr.result);
+            double value;
+            err = parse_double(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
+            APPEND_ARG(double, value);
         }break;
         #endif
         // for flags, using the append_proc doesn't make sense.
@@ -1211,27 +1192,23 @@ parse_arg(ArgToParse* arg, StringView s){
             if(!s.length) return ARGPARSE_CONVERSION_ERROR;
             const ArgParseEnumType* enu = arg->dest.enum_pointer;
             // allow specifying enums by numeric value.
-            #ifndef __wasm__
-            struct Uint64Result uint_res = parse_unsigned_human(s.text, s.length);
-            #else
-            // XXX bad codegen with the uint64 version
-            struct Uint32Result uint_res = parse_unsigned_human(s.text, s.length);
-            #endif
-            if(!uint_res.errored){
-                if(uint_res.result >= enu->enum_count)
+            uint64_t uint_val;
+            err = parse_unsigned_human(s.text, s.length, &uint_val);
+            if(!err){
+                if(uint_val >= enu->enum_count)
                     return ARGPARSE_CONVERSION_ERROR;
                 switch(enu->enum_size){
                     case 1:{
-                        APPEND_ARG(uint8_t, (uint8_t)uint_res.result);
+                        APPEND_ARG(uint8_t, (uint8_t)uint_val);
                     }return 0;
                     case 2:{
-                        APPEND_ARG(uint16_t, (uint16_t)uint_res.result);
+                        APPEND_ARG(uint16_t, (uint16_t)uint_val);
                     }return 0;
                     case 4:{
-                        APPEND_ARG(uint32_t, (uint32_t)uint_res.result);
+                        APPEND_ARG(uint32_t, (uint32_t)uint_val);
                     }return 0;
                     case 8:{
-                        APPEND_ARG(uint64_t, uint_res.result);
+                        APPEND_ARG(uint64_t, uint_val);
                     }return 0;
                     default:
                         return ARGPARSE_INTERNAL_ERROR;
