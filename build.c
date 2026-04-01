@@ -133,7 +133,8 @@ int main(int argc, char** argv, char** envp){
         cmd_prog(cmd, (LongString){fuzz_cc->length, fuzz_cc->data});
         cmd_cargs(cmd,
             "-g", "-O1", "-march=native",
-            "-fsanitize=fuzzer,address,undefined");
+            "-fsanitize=fuzzer,address,undefined",
+            "-fno-sanitize-recover=undefined");
         if(ctx->target.fuzz_sysroot->length)
             cmd_argf(cmd, "--sysroot=%s", ctx->target.fuzz_sysroot->data);
         target_src_inp(ctx, fuzz, "C/cc_fuzz.c");
