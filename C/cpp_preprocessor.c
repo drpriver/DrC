@@ -20,6 +20,7 @@
 #include "../Drp/path_util.h"
 #include "../Drp/parse_numbers.h"
 #include "../Drp/switch_macros.h"
+#include "../Drp/ckdint.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -7301,6 +7302,8 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
                 case '-':
                     err = cpp_eval_atom(cpp, s, value);
                     if(err) return err;
+                    if(*value == INT64_MIN)
+                        return cpp_error(cpp, tok.loc, "overflow in negation in #if");
                     *value = -*value;
                     return 0;
                 default:
@@ -7352,24 +7355,44 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
             *value = *value ? mid : right;
         }
         else{
-            // TODO overflow etc.
             int64_t rhs;
             err = cpp_recursive_eval_prec(cpp, s, &rhs, prec + 1);
             if(err) return err;
             switch(tok.punct){
-                case '*':  *value = *value * rhs; break;
+                case '*':
+                    if(mul_overflow(*value, rhs, value))
+                        return cpp_error(cpp, tok.loc, "overflow in mul in #if");
+                    break;
                 case '/':
                     if(!rhs) return cpp_error(cpp, tok.loc, "Division by zero in #if");
+                    if(*value == INT64_MIN && rhs == -1)
+                        return cpp_error(cpp, tok.loc, "overflow in div in #if");
                     *value = *value / rhs;
                     break;
                 case '%':
                     if(!rhs) return cpp_error(cpp, tok.loc, "Modulo by zero in #if");
+                    if(*value == INT64_MIN && rhs == -1)
+                        return cpp_error(cpp, tok.loc, "overflow in mod in #if");
                     *value = *value % rhs;
                     break;
-                case '+':  *value = *value + rhs; break;
-                case '-':  *value = *value - rhs; break;
-                case '<<': *value = *value << rhs; break;
-                case '>>': *value = *value >> rhs; break;
+                case '+':
+                    if(add_overflow(*value, rhs, value))
+                        return cpp_error(cpp, tok.loc, "overflow in add in #if");
+                    break;
+                case '-':
+                    if(sub_overflow(*value, rhs, value))
+                        return cpp_error(cpp, tok.loc, "overflow in sub in #if");
+                    break;
+                case '<<':
+                    if(rhs < 0 || rhs >= 64)
+                        return cpp_error(cpp, tok.loc, "shift amount out of range in #if");
+                    *value = (int64_t)((uint64_t)*value << rhs);
+                    break;
+                case '>>':
+                    if(rhs < 0 || rhs >= 64)
+                        return cpp_error(cpp, tok.loc, "shift amount out of range in #if");
+                    *value = *value >> rhs;
+                    break;
                 case '<':  *value = (*value < rhs); break;
                 case '>':  *value = (*value > rhs); break;
                 case '<=': *value = (*value <= rhs); break;
