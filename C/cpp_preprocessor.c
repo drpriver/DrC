@@ -7182,6 +7182,30 @@ cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
                         p++;
                     }
                     break;
+                case 'u': {
+                    p++;
+                    uint32_t uval = 0;
+                    for(int i = 0; i < 4 && p < e; i++, p++){
+                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
+                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
+                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
+                        else return cpp_error(cpp, tok.loc, "Invalid \\u escape");
+                    }
+                    v = (v << 16) | uval;
+                    continue;
+                }
+                case 'U': {
+                    p++;
+                    uint32_t uval = 0;
+                    for(int i = 0; i < 8 && p < e; i++, p++){
+                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
+                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
+                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
+                        else return cpp_error(cpp, tok.loc, "Invalid \\U escape");
+                    }
+                    v = (v << 32) | uval;
+                    continue;
+                }
                 default:
                     c = (unsigned char)*p; p++; break;
             }

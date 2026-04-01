@@ -1601,6 +1601,10 @@ TestFunction(test_if_eval){
             SV("#if U'A' == 65\nyes\n#endif"), SV("\nyes\n")},
         {"char u8'A'", __LINE__, 0,
             SV("#if u8'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\u0041'", __LINE__, 0,
+            SV("#if '\\u0041' == 65\nyes\n#endif"), SV("\nyes\n")},
+        {"char '\\U00000041'", __LINE__, 0,
+            SV("#if '\\U00000041' == 65\nyes\n#endif"), SV("\nyes\n")},
         // Unary operators
         {"unary !", __LINE__, 0,
             SV("#if !0\nyes\n#endif"), SV("\nyes\n")},
