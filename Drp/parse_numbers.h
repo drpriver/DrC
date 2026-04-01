@@ -598,6 +598,14 @@ warn_unused
 struct Uint64Result
 parse_binary_inner(const char* str, size_t length){
     struct Uint64Result result = {0};
+    if(!length){
+        result.errored = PARSENUMBER_UNEXPECTED_END;
+        return result;
+    }
+    if(length > 64){
+        result.errored = PARSENUMBER_OVERFLOWED_VALUE;
+        return result;
+    }
     unsigned long long mask = 1llu << 63;
     mask >>= (64 - length);
     // @speed
