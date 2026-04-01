@@ -1493,6 +1493,9 @@ TestFunction(test_erroneous_condition){
         {"if eval bad msvc suffix bare i", __LINE__,
             SV("#if 42i\n#endif"),
             SV("(test):1:5: error: Invalid digit in number\n")},
+        {"char constant too long", __LINE__,
+            SV("#if 'ABCDE'\n#endif"),
+            SV("(test):1:5: error: Character constant too long\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){

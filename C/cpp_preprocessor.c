@@ -62,6 +62,7 @@ static SrcLoc cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* par
 static int cpp_ident_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_number_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_string_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+static int cpp_parse_char_body(CppPreprocessor*, SrcLoc, const char*, const char*, int64_t*, _Bool allow_multichar);
 static int cpp_char_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_punct_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_handle_directive(CppPreprocessor *cpp);
@@ -7137,23 +7138,18 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
 
 static
 int
-cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
-    const char* s = tok.txt.text;
-    size_t len = tok.txt.length;
-    if(len && *s == 'L'){ s++; len--; }
-    else if(len >= 2 && s[0] == 'u' && s[1] == '8'){ s += 2; len -= 2; }
-    else if(len && (*s == 'u' || *s == 'U')){ s++; len--; }
-    if(len < 3 || s[0] != '\'' || s[len-1] != '\'')
-        return cpp_error(cpp, tok.loc, "Invalid character constant");
-    const char* p = s + 1;
-    const char* e = s + len - 1;
+cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char* e, int64_t* value, _Bool allow_multichar){
     int64_t v = 0;
+    int nchars = 0;
     while(p < e){
+        if(nchars >= 4)
+            return cpp_error(cpp, loc, "Character constant too long");
+        nchars++;
         unsigned char c;
         if(*p == '\\'){
             p++;
             if(p == e)
-                return cpp_error(cpp, tok.loc, "Invalid escape in character constant");
+                return cpp_error(cpp, loc, "Invalid escape in character constant");
             switch(*p){
                 case 'n':  c = '\n'; p++; break;
                 case 't':  c = '\t'; p++; break;
@@ -7189,7 +7185,7 @@ cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
                         if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
                         else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
                         else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, tok.loc, "Invalid \\u escape");
+                        else return cpp_error(cpp, loc, "Invalid \\u escape");
                     }
                     v = (v << 16) | uval;
                     continue;
@@ -7201,7 +7197,7 @@ cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
                         if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
                         else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
                         else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, tok.loc, "Invalid \\U escape");
+                        else return cpp_error(cpp, loc, "Invalid \\U escape");
                     }
                     v = (v << 32) | uval;
                     continue;
@@ -7214,8 +7210,23 @@ cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
             c = (unsigned char)*p++;
         v = (v << 8) | c;
     }
+    if(!allow_multichar && nchars != 1)
+        return cpp_error(cpp, loc, "Multi-character character constant with prefix is not allowed");
     *value = v;
     return 0;
+}
+
+static
+int
+cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
+    const char* s = tok.txt.text;
+    size_t len = tok.txt.length;
+    if(len && *s == 'L'){ s++; len--; }
+    else if(len >= 2 && s[0] == 'u' && s[1] == '8'){ s += 2; len -= 2; }
+    else if(len && (*s == 'u' || *s == 'U')){ s++; len--; }
+    if(len < 3 || s[0] != '\'' || s[len-1] != '\'')
+        return cpp_error(cpp, tok.loc, "Invalid character constant");
+    return cpp_parse_char_body(cpp, tok.loc, s + 1, s + len - 1, value, 1);
 }
 
 static
@@ -7777,76 +7788,8 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     if(e <= p || *e != '\'')
         return cpp_error(cpp, cpptok->loc, "Invalid character constant");
     int64_t v = 0;
-    int nchars = 0;
-    while(p < e){
-        nchars++;
-        unsigned char c;
-        if(*p == '\\'){
-            p++;
-            if(p == e)
-                return cpp_error(cpp, cpptok->loc, "Invalid escape in character constant");
-            switch(*p){
-                case 'n':  c = '\n'; p++; break;
-                case 't':  c = '\t'; p++; break;
-                case 'r':  c = '\r'; p++; break;
-                case '\\': c = '\\'; p++; break;
-                case '\'': c = '\''; p++; break;
-                case '"':  c = '"';  p++; break;
-                case 'a':  c = '\a'; p++; break;
-                case 'b':  c = '\b'; p++; break;
-                case 'f':  c = '\f'; p++; break;
-                case 'v':  c = '\v'; p++; break;
-                case '0': case '1': case '2': case '3':
-                case '4': case '5': case '6': case '7':
-                    c = 0;
-                    for(int i = 0; i < 3 && p < e && *p >= '0' && *p <= '7'; i++, p++)
-                        c = (unsigned char)((c << 3) | (*p - '0'));
-                    break;
-                case 'x':
-                    p++;
-                    c = 0;
-                    while(p < e){
-                        if(*p >= '0' && *p <= '9')      c = (unsigned char)((c << 4) | (*p - '0'));
-                        else if(*p >= 'a' && *p <= 'f') c = (unsigned char)((c << 4) | (*p - 'a' + 10));
-                        else if(*p >= 'A' && *p <= 'F') c = (unsigned char)((c << 4) | (*p - 'A' + 10));
-                        else break;
-                        p++;
-                    }
-                    break;
-                case 'u': {
-                    p++;
-                    uint32_t uval = 0;
-                    for(int i = 0; i < 4 && p < e; i++, p++){
-                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
-                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
-                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, cpptok->loc, "Invalid \\u escape");
-                    }
-                    v = (v << 16) | uval;
-                    continue;
-                }
-                case 'U': {
-                    p++;
-                    uint32_t uval = 0;
-                    for(int i = 0; i < 8 && p < e; i++, p++){
-                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
-                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
-                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, cpptok->loc, "Invalid \\U escape");
-                    }
-                    v = (v << 32) | uval;
-                    continue;
-                }
-                default:
-                    c = (unsigned char)*p; p++; break;
-            }
-        }
-        else
-            c = (unsigned char)*p++;
-        v = (v << 8) | c;
-    }
-    if(ctype != CC_INT && nchars != 1)
-        return cpp_error(cpp, cpptok->loc, "Multi-character character constant with prefix is not allowed");
+    int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype == CC_INT);
+    if(err) return err;
     *cctok = (CcToken){
         .constant = {
             .type = CC_CONSTANT,
