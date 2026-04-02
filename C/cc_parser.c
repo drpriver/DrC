@@ -80,6 +80,8 @@ static CcExpr* _Nullable cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc
 typedef struct CcDeclBase CcDeclBase;
 static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_type, SrcLoc loc);
 static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
+static _Bool cc_is_c23_attribute_start(CcParser* p);
+static int cc_parse_c23_attributes(CcParser* p, CcAttributes* attrs);
 static int cc_parse_declspec(CcParser* p, CcAttributes* attrs);
 static int cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* base_type);
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
@@ -4882,6 +4884,20 @@ cc_parse_one(CcParser* p){
         }
         cc_unget(p, &tok); // push `static` back
     }
+    // Parse leading C23 [[ ... ]] attributes
+    if(cc_is_c23_attribute_start(p)){
+        err = cc_parse_c23_attributes(p, &p->attributes);
+        if(err) return err;
+        // Check for attribute-declaration: [[ attr ]] ;
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
+            err = cc_next_token(p, &tok); // consume ';'
+            if(err) return err;
+            cc_clear_attributes(&p->attributes);
+            return 0;
+        }
+    }
     CcDeclBase b = {0};
     err = cc_parse_declaration_specifier(p, &b);
     if(err) return err;
@@ -5744,19 +5760,160 @@ cc_scratch_allocator(CcParser*p){
     return allocator_from_arena(&p->scratch_arena);
 }
 
+// cc_match_gnu_attribute
+// ----------------------
+// Tries to match a gnu-style attribute.
+// On match, parses any arguments and updates *attrs.
+// For unrecognized names, skips any argument list.
+//
+// Arguments:
+// ----------
+// p:
+//     The parser.
+//
+// loc:
+//     Source location for error reporting.
+//
+// attr_name:
+//     Canonicalized attribute name (without any __).
+//
+// attrs:
+//     Attribute flags to update.
+//
+// Returns:
+// --------
+// 0 on success. Error code on failure.
+static
+int
+cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttributes* attrs){
+    int err = 0;
+    CcToken tok;
+    if(sv_equals(attr_name, SV("packed"))){
+        attrs->packed = 1;
+    }
+    else if(sv_equals(attr_name, SV("transparent_union"))){
+        attrs->transparent_union = 1;
+    }
+    else if(sv_equals(attr_name, SV("aligned"))){
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+            err = cc_next_token(p, &tok); // consume '('
+            if(err) return err;
+            CcExpr* expr = NULL;
+            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+            if(err) return err;
+            if(!expr)
+                return cc_error(p, loc, "expected constant expression for aligned attribute");
+            int64_t align_i;
+            err = cc_eval_integer(p, expr, &align_i);
+            cc_release_expr(p, expr);
+            if(err)
+                return cc_error(p, loc, "aligned attribute requires a constant integral expression");
+            uint64_t align = (uint64_t)align_i;
+            if(align == 0 || (align & (align - 1)) != 0)
+                return cc_error(p, loc, "alignment must be a positive power of 2");
+            if(align > UINT16_MAX)
+                return cc_error(p, loc, "alignment too large");
+            attrs->aligned = (uint16_t)align;
+            attrs->has_aligned = 1;
+            err = cc_expect_punct(p, CC_rparen);
+            if(err) return err;
+        }
+        else {
+            attrs->aligned = cc_target(p)->max_align;
+            attrs->has_aligned = 1;
+        }
+    }
+    else if(sv_equals(attr_name, SV("vector_size"))){
+        err = cc_expect_punct(p, CC_lparen);
+        if(err) return err;
+        CcExpr* expr = NULL;
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        if(err) return err;
+        if(!expr)
+            return cc_error(p, loc, "expected constant expression for vector_size attribute");
+        int64_t vs_i;
+        err = cc_eval_integer(p, expr, &vs_i);
+        cc_release_expr(p, expr);
+        if(err)
+            return cc_error(p, loc, "vector_size attribute requires a constant integral expression");
+        uint64_t vs = (uint64_t)vs_i;
+        if(vs == 0 || (vs & (vs - 1)) != 0)
+            return cc_error(p, loc, "vector_size must be a power of 2");
+        if(vs > UINT16_MAX)
+            return cc_error(p, loc, "vector_size too large");
+        attrs->vector_size = (uint16_t)vs;
+        err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+    }
+    else if(sv_equals(attr_name, SV("format"))){
+        err = cc_expect_punct(p, CC_lparen);
+        if(err) return err;
+        CcToken arch_tok;
+        err = cc_next_token(p, &arch_tok);
+        if(err) return err;
+        if(arch_tok.type != CC_IDENTIFIER)
+            return cc_error(p, arch_tok.loc, "expected format archetype (e.g. 'printf')");
+        StringView arch = {.text = arch_tok.ident.ident->data, .length = arch_tok.ident.ident->length};
+        if(sv_startswith(arch, SV("__")))
+            arch = sv_slice(arch, 2, arch.length);
+        if(sv_endswith(arch, SV("__")))
+            arch = sv_slice(arch, 0, arch.length-2);
+        if(sv_equals(arch, SV("printf")))
+            attrs->printf_like = 1;
+        err = cc_expect_punct(p, CC_comma);
+        if(err) return err;
+        CcExpr* expr = NULL;
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        if(err) return err;
+        if(expr) cc_release_expr(p, expr);
+        err = cc_expect_punct(p, CC_comma);
+        if(err) return err;
+        expr = NULL;
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        if(err) return err;
+        if(expr) cc_release_expr(p, expr);
+        err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+    }
+    else {
+        // Unknown attribute — skip any argument list
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+            err = cc_next_token(p, &tok); // consume '('
+            if(err) return err;
+            int depth = 1;
+            while(depth > 0){
+                err = cc_next_token(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_EOF)
+                    return cc_error(p, loc, "unterminated attribute argument list");
+                if(tok.type == CC_PUNCTUATOR){
+                    if(tok.punct.punct == CC_lparen) depth++;
+                    else if(tok.punct.punct == CC_rparen) depth--;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static
 int
 cc_parse_attributes(CcParser* p, CcAttributes* attrs){
     int err = 0;
     CcToken tok;
     for(;;){
+        err = cc_parse_c23_attributes(p, attrs);
+        if(err) return err;
         err = cc_peek(p, &tok);
         if(err) return err;
         if(tok.type != CC_KEYWORD || tok.kw.kw != CC___attribute__)
             return 0;
         err = cc_next_token(p, &tok); // consume __attribute__
         if(err) return err;
-        SrcLoc attr_loc = tok.loc;
         // Expect ((
         err = cc_expect_punct(p, CC_lparen);
         if(err) return err;
@@ -5778,8 +5935,7 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
             if(tok.type == CC_IDENTIFIER)
                 attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
             else {
-                // Attribute name that is also a keyword.
-                // Just ignore it for now, in the future we can parse const I guess.
+                // Attribute name that is also a keyword — just ignore.
                 attr_name = SV("");
             }
             // Strip leading/trailing underscores for canonical matching
@@ -5787,120 +5943,8 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
                 attr_name = sv_slice(attr_name, 2, attr_name.length);
             if(sv_endswith(attr_name, SV("__")))
                 attr_name = sv_slice(attr_name, 0, attr_name.length-2);
-            if(sv_equals(attr_name, SV("packed"))){
-                attrs->packed = 1;
-            }
-            else if(sv_equals(attr_name, SV("transparent_union"))){
-                attrs->transparent_union = 1;
-            }
-            else if(sv_equals(attr_name, SV("aligned"))){
-                // Check for optional (N) argument
-                err = cc_peek(p, &tok);
-                if(err) return err;
-                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
-                    err = cc_next_token(p, &tok); // consume '('
-                    if(err) return err;
-                    CcExpr* expr = NULL;
-                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
-                    if(err) return err;
-                    if(!expr)
-                        return cc_error(p, tok.loc, "expected constant expression for aligned attribute");
-                    int64_t align_i;
-                    err = cc_eval_integer(p, expr, &align_i);
-                    cc_release_expr(p, expr);
-                    if(err)
-                        return cc_error(p, tok.loc, "aligned attribute requires a constant integral expression");
-                    uint64_t align = (uint64_t)align_i;
-                    if(align == 0 || (align & (align - 1)) != 0)
-                        return cc_error(p, tok.loc, "alignment must be a positive power of 2");
-                    if(align > UINT16_MAX)
-                        return cc_error(p, tok.loc, "alignment too large");
-                    attrs->aligned = (uint16_t)align;
-                    attrs->has_aligned = 1;
-                    err = cc_expect_punct(p, CC_rparen);
-                    if(err) return err;
-                }
-                else {
-                    // aligned without argument means maximum alignment for the target
-                    attrs->aligned = cc_target(p)->max_align;
-                    attrs->has_aligned = 1;
-                }
-            }
-            else if(sv_equals(attr_name, SV("vector_size"))){
-                err = cc_expect_punct(p, CC_lparen);
-                if(err) return err;
-                CcExpr* expr = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
-                if(err) return err;
-                if(!expr)
-                    return cc_error(p, tok.loc, "expected constant expression for vector_size attribute");
-                int64_t vs_i;
-                err = cc_eval_integer(p, expr, &vs_i);
-                cc_release_expr(p, expr);
-                if(err)
-                    return cc_error(p, tok.loc, "vector_size attribute requires a constant integral expression");
-                uint64_t vs = (uint64_t)vs_i;
-                if(vs == 0 || (vs & (vs - 1)) != 0)
-                    return cc_error(p, tok.loc, "vector_size must be a power of 2");
-                if(vs > UINT16_MAX)
-                    return cc_error(p, tok.loc, "vector_size too large");
-                attrs->vector_size = (uint16_t)vs;
-                err = cc_expect_punct(p, CC_rparen);
-                if(err) return err;
-            }
-            else if(sv_equals(attr_name, SV("format"))){
-                err = cc_expect_punct(p, CC_lparen);
-                if(err) return err;
-                // Parse archetype: printf or __printf__
-                CcToken arch_tok;
-                err = cc_next_token(p, &arch_tok);
-                if(err) return err;
-                if(arch_tok.type != CC_IDENTIFIER)
-                    return cc_error(p, arch_tok.loc, "expected format archetype (e.g. 'printf')");
-                StringView arch = {.text = arch_tok.ident.ident->data, .length = arch_tok.ident.ident->length};
-                if(sv_startswith(arch, SV("__")))
-                    arch = sv_slice(arch, 2, arch.length);
-                if(sv_endswith(arch, SV("__")))
-                    arch = sv_slice(arch, 0, arch.length-2);
-                if(sv_equals(arch, SV("printf")))
-                    attrs->printf_like = 1;
-                // Skip the remaining arguments (format-string-index, first-to-check)
-                err = cc_expect_punct(p, CC_comma);
-                if(err) return err;
-                CcExpr* expr = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
-                if(err) return err;
-                if(expr) cc_release_expr(p, expr);
-                err = cc_expect_punct(p, CC_comma);
-                if(err) return err;
-                expr = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
-                if(err) return err;
-                if(expr) cc_release_expr(p, expr);
-                err = cc_expect_punct(p, CC_rparen);
-                if(err) return err;
-            }
-            else {
-                // Unknown attribute — skip any argument list
-                if(0) cc_warn(p, tok.loc, "ignoring unknown attribute '%.*s'", (int)attr_name.length, attr_name.text);
-                err = cc_peek(p, &tok);
-                if(err) return err;
-                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
-                    err = cc_next_token(p, &tok); // consume '('
-                    if(err) return err;
-                    int depth = 1;
-                    while(depth > 0){
-                        err = cc_next_token(p, &tok);
-                        if(err) return err;
-                        if(tok.type == CC_EOF)
-                            return cc_error(p, attr_loc, "unterminated attribute argument list");
-                        if(tok.type == CC_PUNCTUATOR){
-                            if(tok.punct.punct == CC_lparen) depth++;
-                            else if(tok.punct.punct == CC_rparen) depth--;
-                        }
-                    }
-                }
-            }
+            err = cc_match_gnu_attribute(p, tok.loc, attr_name, attrs);
+            if(err) return err;
             // Check for comma or end
             err = cc_peek(p, &tok);
             if(err) return err;
@@ -5916,6 +5960,142 @@ cc_parse_attributes(CcParser* p, CcAttributes* attrs){
         err = cc_expect_punct(p, CC_rparen);
         if(err) return err;
         err = cc_expect_punct(p, CC_rparen);
+        if(err) return err;
+    }
+}
+
+// Returns true if the next two tokens are `[` `[` (C23 attribute start).
+// Does not consume any tokens.
+static
+_Bool
+cc_is_c23_attribute_start(CcParser* p){
+    CcToken t1, t2;
+    int err = cc_peek(p, &t1);
+    if(err) return 0;
+    if(t1.type != CC_PUNCTUATOR || t1.punct.punct != CC_lbracket)
+        return 0;
+    err = cc_next_token(p, &t1); // consume first '['
+    if(err) return 0;
+    err = cc_peek(p, &t2);
+    cc_unget(p, &t1); // push back first '['
+    if(err) return 0;
+    return t2.type == CC_PUNCTUATOR && t2.punct.punct == CC_lbracket;
+}
+
+static
+int
+cc_parse_c23_attributes(CcParser* p, CcAttributes* attrs){
+    int err = 0;
+    CcToken tok;
+    for(;;){
+        if(!cc_is_c23_attribute_start(p))
+            return 0;
+        err = cc_next_token(p, &tok); // consume first '['
+        if(err) return err;
+        SrcLoc attr_loc = tok.loc;
+        err = cc_next_token(p, &tok); // consume second '['
+        if(err) return err;
+        // Parse attribute-list (possibly empty)
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_rbracket)
+            goto close_brackets;
+        for(;;){
+            // Each attribute is: attribute-token attribute-argument-clause_opt
+            // attribute-token is: identifier | identifier :: identifier
+            // Allow empty entries (for trailing comma).
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_rbracket)
+                break;
+            err = cc_next_token(p, &tok);
+            if(err) return err;
+            if(tok.type != CC_IDENTIFIER && tok.type != CC_KEYWORD)
+                return cc_error(p, tok.loc, "expected attribute name");
+            // Handle _Noreturn keyword specially
+            if(tok.type == CC_KEYWORD){
+                if(tok.kw.kw == CC__Noreturn)
+                    attrs->is_noreturn = 1;
+                // Skip argument clause and continue to comma/end check below
+                goto c23_skip_args;
+            }
+            StringView attr_name = {.text = tok.ident.ident->data, .length = tok.ident.ident->length};
+            _Bool is_gnu = 0;
+            // Check for prefix::name
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_double_colon){
+                err = cc_next_token(p, &tok); // consume '::'
+                if(err) return err;
+                // Check if prefix is "gnu" or "__gnu__"
+                StringView prefix = attr_name;
+                if(sv_startswith(prefix, SV("__")))
+                    prefix = sv_slice(prefix, 2, prefix.length);
+                if(sv_endswith(prefix, SV("__")))
+                    prefix = sv_slice(prefix, 0, prefix.length-2);
+                is_gnu = sv_equals(prefix, SV("gnu"));
+                err = cc_next_token(p, &tok);
+                if(err) return err;
+                if(tok.type != CC_IDENTIFIER && tok.type != CC_KEYWORD)
+                    return cc_error(p, tok.loc, "expected attribute name after '::'");
+                if(tok.type == CC_IDENTIFIER)
+                    attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
+                else {
+                    // vendor::keyword — just skip
+                    goto c23_skip_args;
+                }
+                if(!is_gnu)
+                    goto c23_skip_args;
+            }
+            // Strip __ for canonical matching
+            if(sv_startswith(attr_name, SV("__")))
+                attr_name = sv_slice(attr_name, 2, attr_name.length);
+            if(sv_endswith(attr_name, SV("__")))
+                attr_name = sv_slice(attr_name, 0, attr_name.length-2);
+            // Match standard attributes
+            if(sv_equals(attr_name, SV("noreturn"))){
+                attrs->is_noreturn = 1;
+            }
+            // Match gnu:: attributes
+            else if(is_gnu){
+                err = cc_match_gnu_attribute(p, tok.loc, attr_name, attrs);
+                if(err) return err;
+                goto c23_skip_comma;
+            }
+            c23_skip_args:
+            // Skip optional argument clause: ( balanced-token-sequence )
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+                err = cc_next_token(p, &tok); // consume '('
+                if(err) return err;
+                int depth = 1;
+                while(depth > 0){
+                    err = cc_next_token(p, &tok);
+                    if(err) return err;
+                    if(tok.type == CC_EOF)
+                        return cc_error(p, attr_loc, "unterminated attribute argument list");
+                    if(tok.type == CC_PUNCTUATOR){
+                        if(tok.punct.punct == CC_lparen) depth++;
+                        else if(tok.punct.punct == CC_rparen) depth--;
+                    }
+                }
+            }
+            c23_skip_comma:
+            // Check for comma or end
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ','){
+                err = cc_next_token(p, &tok); // consume ','
+                if(err) return err;
+                continue;
+            }
+            break;
+        }
+        close_brackets:
+        err = cc_expect_punct(p, CC_rbracket);
+        if(err) return err;
+        err = cc_expect_punct(p, CC_rbracket);
         if(err) return err;
     }
 }
@@ -7939,6 +8119,12 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
     Atom name = NULL;
     CcQualType underlying = ccqt_basic(CCBT_int);
     _Bool has_fixed_underlying = 0;
+    // Optional attributes after 'enum'
+    {
+        CcAttributes enum_attrs = {0};
+        err = cc_parse_attributes(p, &enum_attrs);
+        if(err) return err;
+    }
     // Optional tag name
     err = cc_peek(p, &tok);
     if(err) return err;
@@ -8022,6 +8208,12 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
             if(cc_scope_lookup_enumerator(p->current, ename, CC_SCOPE_NO_WALK)){
                 err = cc_error(p, eloc, "Redefinition of enumerator '%s'", ename->data);
                 goto enum_err;
+            }
+            // Optional attributes after enumerator name
+            {
+                CcAttributes enumerator_attrs = {0};
+                err = cc_parse_attributes(p, &enumerator_attrs);
+                if(err) goto enum_err;
             }
             // Optional = constant-expression
             err = cc_peek(p, &tok);
@@ -8529,38 +8721,18 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "thread_local after constexpr");
                         spec->sp_thread_local = 1;
                         continue;
-                    case CC___attribute__: {
+                    case CC___attribute__:
                         err = cc_unget(p, &tok);
                         if(err) return err;
                         err = cc_parse_attributes(p, &p->attributes);
                         if(err) return err;
-                        if(p->attributes.has_aligned){
-                            if(p->attributes.aligned > base->alignment)
-                                base->alignment = p->attributes.aligned;
-                            p->attributes.has_aligned = 0;
-                            p->attributes.aligned = 0;
-                        }
-                        continue;
-                    }
-                    case CC___declspec: {
+                        goto transfer_attrs;
+                    case CC___declspec:
                         err = cc_unget(p, &tok);
                         if(err) return err;
                         err = cc_parse_declspec(p, &p->attributes);
                         if(err) return err;
-                        if(p->attributes.has_aligned){
-                            if(p->attributes.aligned > base->alignment)
-                                base->alignment = p->attributes.aligned;
-                        }
-                        if(p->attributes.is_noreturn){
-                            spec->sp_noreturn = 1;
-                            p->attributes.is_noreturn = 0;
-                        }
-                        if(p->attributes.is_thread_local){
-                            spec->sp_thread_local = 1;
-                            p->attributes.is_thread_local = 0;
-                        }
-                        continue;
-                    }
+                        goto transfer_attrs;
                     case CC_typeof_unqual:
                     do_typeof: {
                         if(base_type->bits)
@@ -8615,8 +8787,35 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
             case CC_EOF:
             case CC_CONSTANT:
             case CC_STRING_LITERAL:
-            case CC_PUNCTUATOR:
                 return cc_unget(p, &tok);
+            case CC_PUNCTUATOR:
+                if(tok.punct.punct == CC_lbracket){
+                    CcToken peek;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbracket){
+                        err = cc_unget(p, &tok);
+                        if(err) return err;
+                        err = cc_parse_c23_attributes(p, &p->attributes);
+                        if(err) return err;
+                        goto transfer_attrs;
+                    }
+                }
+                return cc_unget(p, &tok);
+            transfer_attrs:
+                if(p->attributes.has_aligned){
+                    if(p->attributes.aligned > base->alignment)
+                        base->alignment = p->attributes.aligned;
+                }
+                if(p->attributes.is_noreturn){
+                    spec->sp_noreturn = 1;
+                    p->attributes.is_noreturn = 0;
+                }
+                if(p->attributes.is_thread_local){
+                    spec->sp_thread_local = 1;
+                    p->attributes.is_thread_local = 0;
+                }
+                continue;
         }
     }
     return 0;
@@ -8744,6 +8943,22 @@ cc_parse_statement(CcParser* p){
     int err;
     CcToken tok;
     size_t stmt_idx;
+    if(cc_is_c23_attribute_start(p)){
+        CcAttributes stmt_attrs = {0};
+        err = cc_parse_c23_attributes(p, &stmt_attrs);
+        if(err) return err;
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
+            // bare [[attr]];
+            err = cc_next_token(p, &tok); // consume ';'
+            if(err) return err;
+            return 0;
+        }
+        // Merge for the next declaration/statement
+        p->attributes.bits |= stmt_attrs.bits;
+        // Fall through
+    }
     err = cc_next_token(p, &tok);
     if(err) return err;
     switch(tok.type){
@@ -9288,8 +9503,17 @@ cc_parse_statement(CcParser* p){
                 case CC__Countof:
                 case CC__Type:
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");
-                case CC___attribute__:
-                    return cc_unimplemented(p, tok.loc, "TODO: __attribute__ as statement"); // __attribute__((fallthrough))
+                case CC___attribute__: {
+                    // __attribute__((fallthrough)); etc.
+                    err = cc_unget(p, &tok);
+                    if(err) return err;
+                    CcAttributes stmt_attrs = {0};
+                    err = cc_parse_attributes(p, &stmt_attrs);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    return 0;
+                }
                 case CC___declspec:
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");
             }
@@ -9498,6 +9722,12 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             }
             err = cc_unget(p, &tok);
             if(err) return err;
+            {
+                CcAttributes ptr_attrs = {0};
+                err = cc_parse_attributes(p, &ptr_attrs);
+                if(err) return err;
+                if(ptr_attrs.bits) continue;
+            }
             break;
         }
         err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
@@ -9554,12 +9784,22 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
         err = cc_next_token(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '['){
+            // Disambiguate: '[' '[' is C23 attribute, not array
+            CcToken peek;
+            err = cc_peek(p, &peek);
+            if(err) return err;
+            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '['){
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                err = cc_parse_c23_attributes(p, &p->attributes);
+                if(err) return err;
+                continue;
+            }
             CcArray* arr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *arr);
             if(!arr) return CC_OOM_ERROR;
             arr->kind = CC_ARRAY;
             // Parse optional qualifiers and 'static' inside [] (C99 §6.7.6.2)
             // e.g. int a[static restrict 10], int a[const], int a[restrict]
-            CcToken peek;
             for(;;){
                 err = cc_peek(p, &peek);
                 if(err) return err;

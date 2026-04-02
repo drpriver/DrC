@@ -3352,6 +3352,242 @@ TestFunction(test_parse_decls){
                 { SV("has_atomic"), SV("int") },
             },
         },
+        // C23 [[attribute]] syntax (6.7.13)
+        {
+            "[[nodiscard]] on function", __LINE__,
+            SV("[[nodiscard]] int important_func(void);\n"),
+            .funcs = {
+                { SV("important_func"), SV("int(void)") },
+            },
+        },
+        {
+            "[[nodiscard]] on struct", __LINE__,
+            SV("struct [[nodiscard]] error_info { int code; };\n"
+               "struct error_info enable_missile_safety_mode(void);\n"),
+            .funcs = {
+                { SV("enable_missile_safety_mode"), SV("struct error_info(void)") },
+            },
+        },
+        {
+            "[[nodiscard]] with message", __LINE__,
+            SV("[[nodiscard(\"armer needs to check armed state\")]]\n"
+               "_Bool arm_detonator(int within);\n"),
+            .funcs = {
+                { SV("arm_detonator"), SV("_Bool(int)") },
+            },
+        },
+        {
+            "[[deprecated]] on function", __LINE__,
+            SV("[[deprecated]] void old_api(void);\n"),
+            .funcs = {
+                { SV("old_api"), SV("void(void)") },
+            },
+        },
+        {
+            "[[deprecated]] with message on function", __LINE__,
+            SV("[[deprecated(\"use new_api\")]] void old_api(void);\n"),
+            .funcs = {
+                { SV("old_api"), SV("void(void)") },
+            },
+        },
+        {
+            "[[deprecated]] on struct", __LINE__,
+            SV("struct [[deprecated]] S { int a; };\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "[[deprecated]] on enum", __LINE__,
+            SV("enum [[deprecated]] E1 { one };\n"
+               "int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "[[deprecated]] on enumerator", __LINE__,
+            SV("enum E2 {\n"
+               "    two [[deprecated(\"use 'three' instead\")]],\n"
+               "    three\n"
+               "};\n"
+               "int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "[[deprecated]] on typedef", __LINE__,
+            SV("[[deprecated]] typedef int Foo;\n"
+               "int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+            .typedefs = {
+                { SV("Foo"), SV("int") },
+            },
+        },
+        {
+            "[[maybe_unused]] on function and param", __LINE__,
+            SV("[[maybe_unused]] void f([[maybe_unused]] int i);\n"),
+            .funcs = {
+                { SV("f"), SV("void(int)") },
+            },
+        },
+        {
+            "[[maybe_unused]] on variable", __LINE__,
+            SV("void f(void) {\n"
+               "    [[maybe_unused]] int j = 100;\n"
+               "}\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "[[noreturn]] on function", __LINE__,
+            SV("[[noreturn]] void f(void);\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "[[noreturn]] on function def", __LINE__,
+            SV("[[noreturn]] void f(void) { __builtin_trap(); }\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "[[__noreturn__]] alternate spelling", __LINE__,
+            SV("[[__noreturn__]] void f(void);\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "[[_Noreturn]] obsolescent spelling", __LINE__,
+            SV("[[_Noreturn]] void f(void);\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "empty [[]] attribute", __LINE__,
+            SV("[[ ]] int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "spaced [[ ]] attribute brackets", __LINE__,
+            SV("[ [ noreturn ] ] void f(void) { __builtin_trap(); }\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "multiple attributes in one specifier", __LINE__,
+            SV("[[deprecated, nodiscard]] int f(void);\n"),
+            .funcs = {
+                { SV("f"), SV("int(void)") },
+            },
+        },
+        {
+            "multiple attribute specifiers", __LINE__,
+            SV("[[deprecated]] [[nodiscard]] int f(void);\n"),
+            .funcs = {
+                { SV("f"), SV("int(void)") },
+            },
+        },
+        {
+            "[[gnu::noreturn]]", __LINE__,
+            SV("[[gnu::noreturn]] void die(void);\n"),
+            .funcs = {
+                { SV("die"), SV("void(void)") },
+            },
+        },
+        {
+            "vendor attribute prefix", __LINE__,
+            SV("[[gnu::unused]] int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "[[reproducible]] on function type", __LINE__,
+            SV("unsigned long hash(const char *s) [[reproducible]];\n"),
+            .funcs = {
+                { SV("hash"), SV("unsigned long(const char *)") },
+            },
+        },
+        {
+            "[[unsequenced]] on function type", __LINE__,
+            SV("_Bool tendency(signed char) [[unsequenced]];\n"),
+            .funcs = {
+                { SV("tendency"), SV("_Bool(signed char)") },
+            },
+        },
+        {
+            "attribute on struct member", __LINE__,
+            SV("struct S {\n"
+               "    [[deprecated]] int old_field;\n"
+               "    int new_field;\n"
+               "};\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "[[fallthrough]] in switch", __LINE__,
+            SV("int f(int n) {\n"
+               "    switch (n) {\n"
+               "    case 1:\n"
+               "        [[fallthrough]];\n"
+               "    case 2:\n"
+               "        return 1;\n"
+               "    default:\n"
+               "        return 0;\n"
+               "    }\n"
+               "}\n"),
+            .funcs = {
+                { SV("f"), SV("int(int)") },
+            },
+        },
+        {
+            "__attribute__((fallthrough)) in switch", __LINE__,
+            SV("int f(int n) {\n"
+               "    switch (n) {\n"
+               "    case 1:\n"
+               "        __attribute__((fallthrough));\n"
+               "    case 2:\n"
+               "        return 1;\n"
+               "    default:\n"
+               "        return 0;\n"
+               "    }\n"
+               "}\n"),
+            .funcs = {
+                { SV("f"), SV("int(int)") },
+            },
+        },
+        {
+            "attribute on pointer declarator", __LINE__,
+            SV("int * [[]] p;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+            },
+        },
+        {
+            "attribute on label", __LINE__,
+            SV("void f(void) {\n"
+               "    [[maybe_unused]] label:\n"
+               "    return;\n"
+               "}\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -4762,6 +4998,26 @@ TestFunction(test_struct_layout){
             .size = 16, .alignment = 16,
             .fields = {
                 { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "[[gnu::aligned]] struct", __LINE__,
+            SV("struct [[gnu::aligned(16)]] Al4 { int x; };\n"),
+            SV("Al4"), 0,
+            .size = 16, .alignment = 16,
+            .fields = {
+                { SV("x"), .offset = 0 },
+            },
+        },
+        {
+            "[[gnu::packed]] struct", __LINE__,
+            SV("struct [[gnu::packed]] Pk2 { int x; char y; int z; };\n"),
+            SV("Pk2"), 0,
+            .size = 9, .alignment = 1,
+            .fields = {
+                { SV("x"), .offset = 0 },
+                { SV("y"), .offset = 4 },
+                { SV("z"), .offset = 5 },
             },
         },
         {
