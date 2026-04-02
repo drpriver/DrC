@@ -446,7 +446,7 @@ ti_print_class(const void* src, const TypeInfoClass* ti, TiPrinter* printer){
         if(!t) return;
         ti_print_any(src, t, printer);
     }
-    if(!t) __builtin_debugtrap(); // TODO: unimplemented
+    if(!t) __builtin_trap(); // TODO: unimplemented
 }
 
 #ifndef TIK_NO_STDIO

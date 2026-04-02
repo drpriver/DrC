@@ -34,7 +34,7 @@ ArgParseDestination
 ArgAtomDest(Atom _Nullable*_Nonnull dst, AtomTable* at){
     static ArgParseUserDefinedType apudt;
     if(apudt.user_data && apudt.user_data != at)
-        __builtin_debugtrap();
+        __builtin_trap();
     if(!apudt.user_data){
         apudt.converter = ap_atom_converter;
         apudt.default_printer = ap_atom_printer;

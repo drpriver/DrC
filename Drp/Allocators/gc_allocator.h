@@ -179,7 +179,7 @@ gc_free(GcAllocator* gc, const void* _Nullable data, size_t orig_size){
         #pragma warning(pop)
     #endif
     h--;
-    if(h->is_free) __builtin_debugtrap();
+    if(h->is_free) __builtin_trap();
     if(h == gc->livelist){
         h->is_free = 1;
         while(h && h->is_free){

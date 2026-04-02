@@ -9,8 +9,14 @@
 #include "atom.h"
 #include "hash_func.h"
 #ifndef __builtin_debugtrap
-#if defined(__GNUC__) && ! defined(__clang__)
-#define __builtin_debugtrap() __builtin_trap()
+#if defined(__GNUC__) && ! defined(__clang__) && !defined(__DRC__)
+    #if defined __x86_64__ || defined __i386__
+        #define __builtin_debugtrap() __asm__ volatile("int3")
+    #elif defined __aarch64__
+        #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
+    #else
+        #define __builtin_debugtrap() __builtin_trap()
+    #endif
 #elif defined(_MSC_VER)
 #define __builtin_debugtrap() __debugbreak()
 #endif
@@ -92,7 +98,7 @@ AT_atomize(AtomTable* at, const char* txt, size_t len){
     if(!atom) return NULL;
     int err = AT_store_atom(at, atom);
     if(err){
-        if(err == 2) __builtin_debugtrap();
+        if(err == 2) __builtin_trap();
         Allocator_free(at->allocator, atom, 1+atom->length+sizeof *atom);
         return NULL;
     }

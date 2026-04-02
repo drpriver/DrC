@@ -19,7 +19,7 @@
 // size_t
 #include <stddef.h>
 #include "mem_util.h"
-#define fa_push(array, ...) (*(array)).count < sizeof (*(array)).data / sizeof (*(array)).data[0]? (void)((*(array)).data[(*(array)).count++] = (__VA_ARGS__)) :( __builtin_debugtrap(), (void)0)
+#define fa_push(array, ...) (*(array)).count < sizeof (*(array)).data / sizeof (*(array)).data[0]? (void)((*(array)).data[(*(array)).count++] = (__VA_ARGS__)) :( __builtin_trap(), (void)0)
 
 #define FA_FOR_EACH(type, iter, fixed) \
 for(type \

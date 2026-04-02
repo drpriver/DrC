@@ -33,16 +33,22 @@
 #endif
 
 #ifndef __builtin_debugtrap
-#if defined(__GNUC__) && ! defined(__clang__)
-#define __builtin_debugtrap() __builtin_trap()
-#elif defined(_MSC_VER)
+#if defined __GNUC__ && !defined __clang__ && !defined __DRC__
+    #if defined __x86_64__ || defined __i386__
+        #define __builtin_debugtrap() __asm__ volatile("int3")
+    #elif defined __aarch64__
+        #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
+    #else
+        #define __builtin_debugtrap() __builtin_trap()
+    #endif
+#elif defined _MSC_VER
 #define __builtin_debugtrap() __debugbreak()
 #endif
 #endif
 
 #ifndef __builtin_trap
-#if defined(_MSC_VER) && !defined(__clang__)
-#define __builtin_trap() __fastfail(5)
+#if defined _MSC_VER && !defined __clang__
+#define __builtin_trap() __fastfail(7)
 #endif
 #endif
 
@@ -89,7 +95,7 @@ b_cmp_mtime(const MTime* a, const MTime* b);
 static inline
 void
 b_memremove(size_t whence, void* buff, size_t bufflen, size_t nremove){
-    if(nremove + whence > bufflen) __builtin_debugtrap();
+    if(nremove + whence > bufflen) __builtin_trap();
     size_t tail = bufflen - whence - nremove;
     char* p = buff;
     if(tail) memmove(p+whence, p+whence+nremove, tail);
@@ -182,7 +188,7 @@ b_normalize_patha(BuildCtx* ctx, Atom path){
 
 static
 enum CompilerFlavor
-guess_compiler_flavor(Atom cc_){
+b_guess_compiler_flavor(Atom cc_){
     StringView cc = AT_to_SV(cc_);
     if(sv_contains(cc, SV("gcc"))){
         if(sv_contains(cc, SV("mingw")))
@@ -275,7 +281,7 @@ b_file_info(BuildCtx* ctx, const char* path, size_t length){
             fi->is_file = S_ISREG(s.st_mode);
             #ifdef __linux__
             fi->mtime = s.st_mtim;
-            #elif defined(__APPLE__)
+            #elif defined __APPLE__
             fi->mtime = s.st_mtimespec;
             #else
             // TODO
@@ -363,7 +369,7 @@ b_file_info_uncached(BuildCtx* ctx, const char* path, size_t length){
             fi->is_file = S_ISREG(s.st_mode);
             #ifdef __linux__
             fi->mtime = s.st_mtim;
-            #elif defined(__APPLE__)
+            #elif defined __APPLE__
             fi->mtime = s.st_mtimespec;
             #else
             // TODO
@@ -834,7 +840,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                     #define X(ty, field, cli, help, def) { \
-                        .name = b_atomize(ctx, cli), \
+                        .name = b_atomize(ctx, #field), \
                         .type = BTypeInfo(ty), \
                         .offset = offsetof(TargetSettings, field), \
                     },
@@ -1554,9 +1560,9 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         err = 0;
     }
     if(!ctx->target.compiler_flavor)
-        ctx->target.compiler_flavor = guess_compiler_flavor(ctx->target.cc);
+        ctx->target.compiler_flavor = b_guess_compiler_flavor(ctx->target.cc);
     if(!ctx->build_compiler_flavor)
-        ctx->build_compiler_flavor = guess_compiler_flavor(ctx->build_cc);
+        ctx->build_compiler_flavor = b_guess_compiler_flavor(ctx->build_cc);
     if(!no_rebuild){
         err = maybe_recompile_this(ctx, argc, argv);
         if(err) goto fail;
@@ -1976,7 +1982,7 @@ copy_file(BuildCtx* ctx, const char* from, const char* to){
     }
     else if(BUILD_OS == OS_APPLE){
         int ret = 0;
-        #if defined(__APPLE__)
+        #if defined __APPLE__
         copyfile_state_t s = copyfile_state_alloc();
         copyfile_flags_t flags = COPYFILE_ALL;
         ret = copyfile(from, to, s, flags);
@@ -1986,7 +1992,7 @@ copy_file(BuildCtx* ctx, const char* from, const char* to){
     }
     else if(BUILD_OS == OS_LINUX){
         int err = 0;
-        #if defined(__linux__)
+        #if defined __linux__
         struct stat sfrom;
         int tfd = -1;
         int ffd = -1;
@@ -2062,7 +2068,7 @@ copy_directory(BuildCtx* ctx, const char* from, const char* to){
     }
     else if(BUILD_OS == OS_APPLE){
         int ret = 0;
-        #if defined(__APPLE__)
+        #if defined __APPLE__
         copyfile_state_t s = copyfile_state_alloc();
         copyfile_flags_t flags = COPYFILE_ALL | COPYFILE_RECURSIVE;
         ret = copyfile(from, to, s, flags);
@@ -2072,7 +2078,7 @@ copy_directory(BuildCtx* ctx, const char* from, const char* to){
     }
     else if(BUILD_OS == OS_LINUX){
         int err = 0;
-        #if defined(__linux__)
+        #if defined __linux__
         CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         cmd_prog(&cmd, LS("cp"));
         cmd_cargs(&cmd, "-r", from, to);

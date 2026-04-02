@@ -139,7 +139,7 @@ bounded_random(RngState* rng, uint32_t bound){
             return temp;
         }
     }
-    __builtin_debugtrap();
+    __builtin_trap();
 #if defined(__GNUC__) || defined(__clang__)
     __builtin_unreachable();
 #else

@@ -348,7 +348,7 @@ static const StringView CompilerFlavorSVs[] = {
 
 static
 enum CompilerFlavor
-guess_compiler_flavor(Atom cc);
+b_guess_compiler_flavor(Atom cc);
 // ---------------------------
 // Guesses the flavor of the compiler based on its name.
 //
