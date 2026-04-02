@@ -8,17 +8,9 @@
 #include "Allocators/allocator.h"
 #include "atom.h"
 #include "hash_func.h"
-#ifndef __builtin_debugtrap
-#if defined(__GNUC__) && ! defined(__clang__) && !defined(__DRC__)
-    #if defined __x86_64__ || defined __i386__
-        #define __builtin_debugtrap() __asm__ volatile("int3")
-    #elif defined __aarch64__
-        #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
-    #else
-        #define __builtin_debugtrap() __builtin_trap()
-    #endif
-#elif defined(_MSC_VER)
-#define __builtin_debugtrap() __debugbreak()
+#ifndef __builtin_trap
+#if defined _MSC_VER && !defined __clang__
+#define __builtin_trap() __fastfail(7)
 #endif
 #endif
 
