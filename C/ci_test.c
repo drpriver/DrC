@@ -4346,6 +4346,102 @@ TestFunction(test_interpreter){
                "return (int)a;\n"),
             .exit_code = 1,
         },
+        {
+            "static_assert: type introspection fields", __LINE__,
+            SV("struct S { int a; int b; int c; };\n"
+               "_Static_assert((struct S).fields == 3, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection enumerators", __LINE__,
+            SV("enum E { A, B, C };\n"
+               "_Static_assert((enum E).enumerators == 3, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection param_count", __LINE__,
+            SV("_Static_assert((int(int, float)).param_count == 2, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection return_type", __LINE__,
+            SV("_Static_assert((int(void)).return_type.is_integer, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection param_type", __LINE__,
+            SV("_Static_assert((int(int, float)).param_type(1).is_float, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection element_type", __LINE__,
+            SV("_Static_assert((int[5]).element_type.is_integer, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection count", __LINE__,
+            SV("_Static_assert((int[7]).count == 7, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection pointee", __LINE__,
+            SV("_Static_assert((int*).pointee.is_integer, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection unqual", __LINE__,
+            SV("_Static_assert(!(const int).unqual.is_const, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection is_callable", __LINE__,
+            SV("_Static_assert((int(*)(int)).is_callable, \"\");\n"
+               "_Static_assert(!(int).is_callable, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection is_variadic", __LINE__,
+            SV("_Static_assert((int(int, ...)).is_variadic, \"\");\n"
+               "_Static_assert(!(int(int)).is_variadic, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection is_incomplete", __LINE__,
+            SV("struct Fwd;\n"
+               "_Static_assert((struct Fwd).is_incomplete, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection underlying_type", __LINE__,
+            SV("enum E : unsigned char { X };\n"
+               "_Static_assert((enum E).underlying_type.is_unsigned, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection is_castable_to", __LINE__,
+            SV("_Static_assert((int).is_castable_to(float), \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: type introspection is_callable_with", __LINE__,
+            SV("_Static_assert((int(int)).is_callable_with(int), \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
