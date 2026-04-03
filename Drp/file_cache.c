@@ -421,11 +421,14 @@ fc_cache_file(FileCache* fc, StringView data){
         result = 1;
         goto finally;
     }
-    void* p = Allocator_dupe(fc->allocator, data.text, data.length);
-    if(!p){
-        f->valid = 0;
-        result = 1;
-        goto finally;
+    void* p = NULL;
+    if(data.length){
+        p = Allocator_dupe(fc->allocator, data.text, data.length);
+        if(!p){
+            f->valid = 0;
+            result = 1;
+            goto finally;
+        }
     }
     f->data.buff = p;
     f->data.n_bytes = data.length;

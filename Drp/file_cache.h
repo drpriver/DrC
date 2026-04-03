@@ -13,6 +13,9 @@
 #ifndef _Nullable
 #define _Nullable
 #endif
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
 #endif
 
 typedef struct FileCache FileCache;
@@ -61,7 +64,7 @@ struct CachedFile {
     uint32_t _padding:   26;
     size_t data_size; // from stat
     struct {
-        const void *buff;
+        const void *_Null_unspecified buff;
         size_t n_bytes;
     } data;
 };
