@@ -479,8 +479,11 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
     if(sb.errored) return sb.errored;
     StringView sv = msb_borrow_sv(&sb);
     FileError fe = write_file("Makefile", sv.text, sv.length);
-    (void)fe;
     msb_destroy(&sb);
+    if(fe.errored){
+        b_loglvl(BLOG_ERROR, ctx, "Failed to write Makefile\n");
+        return 1;
+    }
     return 0;
 }
 
