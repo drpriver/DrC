@@ -4981,6 +4981,71 @@ TestFunction(test_parse_errors){
             SV("long long long x;\n"),
             SV("(test):1:11: error: Duplicate long after long long in declaration\n"),
         },
+        {
+            "duplicate int", __LINE__,
+            SV("int int x;\n"),
+            SV("(test):1:5: error: Duplicate int in declaration\n"),
+        },
+        {
+            "duplicate char", __LINE__,
+            SV("char char x;\n"),
+            SV("(test):1:6: error: Duplicate char in declaration\n"),
+        },
+        {
+            "char after int", __LINE__,
+            SV("int char x;\n"),
+            SV("(test):1:5: error: char after int\n"),
+        },
+        {
+            "int after char", __LINE__,
+            SV("char int x;\n"),
+            SV("(test):1:6: error: int after char\n"),
+        },
+        {
+            "long after char", __LINE__,
+            SV("char long x;\n"),
+            SV("(test):1:6: error: long after char\n"),
+        },
+        {
+            "char after long", __LINE__,
+            SV("long char x;\n"),
+            SV("(test):1:6: error: char after long\n"),
+        },
+        {
+            "__int128 after int", __LINE__,
+            SV("int __int128 x;\n"),
+            SV("(test):1:5: error: __int128 after int\n"),
+        },
+        {
+            "int after __int128", __LINE__,
+            SV("__int128 int x;\n"),
+            SV("(test):1:10: error: int after __int128\n"),
+        },
+        {
+            "__int128 after char", __LINE__,
+            SV("char __int128 x;\n"),
+            SV("(test):1:6: error: __int128 after char\n"),
+        },
+        {
+            "__int128 after short", __LINE__,
+            SV("short __int128 x;\n"),
+            SV("(test):1:7: error: __int128 after short\n"),
+        },
+        {
+            "__int128 after long", __LINE__,
+            SV("long __int128 x;\n"),
+            SV("(test):1:6: error: __int128 after long\n"),
+        },
+        {
+            "duplicate __int128", __LINE__,
+            SV("__int128 __int128 x;\n"),
+            SV("(test):1:10: error: Duplicate __int128 in declaration\n"),
+        },
+        {
+            "char after short", __LINE__,
+            SV("short char x;\n"),
+            SV("(test):1:7: error: char after short\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

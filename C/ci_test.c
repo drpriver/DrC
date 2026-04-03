@@ -3631,6 +3631,118 @@ TestFunction(test_interpreter){
                "return _Generic(arr, int*: 1, default: 0);\n"),
             .exit_code = 1,
         },
+        {
+            "pointer: le comparison", __LINE__,
+            SV("int arr[3] = {0};\n"
+               "return &arr[0] <= &arr[2];\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer: ge comparison", __LINE__,
+            SV("int arr[3] = {0};\n"
+               "return &arr[2] >= &arr[0];\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer: le equal", __LINE__,
+            SV("int x;\n"
+               "return &x <= &x;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: mulassign", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {5};\n"
+               "s.a *= 3;\n"
+               "return s.a;\n"),
+            .exit_code = 15,
+        },
+        {
+            "bitfield: divassign unsigned", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {42};\n"
+               "s.a /= 6;\n"
+               "return s.a;\n"),
+            .exit_code = 7,
+        },
+        {
+            "bitfield: modassign unsigned", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {17};\n"
+               "s.a %= 5;\n"
+               "return s.a;\n"),
+            .exit_code = 2,
+        },
+        {
+            "bitfield: lshiftassign", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {1};\n"
+               "s.a <<= 4;\n"
+               "return s.a;\n"),
+            .exit_code = 16,
+        },
+        {
+            "bitfield: rshiftassign unsigned", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {128};\n"
+               "s.a >>= 3;\n"
+               "return s.a;\n"),
+            .exit_code = 16,
+        },
+        {
+            "bitfield: xorassign", __LINE__,
+            SV("struct S { unsigned a : 8; };\n"
+               "struct S s = {0xFF};\n"
+               "s.a ^= 0x0F;\n"
+               "return s.a;\n"),
+            .exit_code = 0xF0,
+        },
+        {
+            "__builtin_huge_valf", __LINE__,
+            SV("float __builtin_huge_valf(void);\n"
+               "float f = __builtin_huge_valf();\n"
+               "return f > 1000000.0f;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__builtin_huge_val", __LINE__,
+            SV("double __builtin_huge_val(void);\n"
+               "double d = __builtin_huge_val();\n"
+               "return d > 1000000.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__builtin_nanf", __LINE__,
+            SV("float __builtin_nanf(const char*);\n"
+               "float f = __builtin_nanf(\"\");\n"
+               "return f != f;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__builtin_nan", __LINE__,
+            SV("double __builtin_nan(const char*);\n"
+               "double d = __builtin_nan(\"\");\n"
+               "return d != d;\n"),
+            .exit_code = 1,
+        },
+        {
+            "char literal: wchar", __LINE__,
+            SV("int x = L'A';\n"
+               "return x;\n"),
+            .exit_code = 65,
+        },
+        {
+            "char literal: char16", __LINE__,
+            SV("unsigned short x = u'B';\n"
+               "return x;\n"),
+            .exit_code = 66,
+        },
+        {
+            "char literal: char32", __LINE__,
+            SV("unsigned x = U'C';\n"
+               "return x;\n"),
+            .exit_code = 67,
+        },
     };
     int err;
     static int idx = 0;
