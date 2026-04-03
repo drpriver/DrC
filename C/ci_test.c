@@ -3480,6 +3480,157 @@ TestFunction(test_interpreter){
                "return s[0] == 'i' && s[1] == 'n' && s[2] == 't';\n"),
             .exit_code = 1,
         },
+        {
+            "atomic: fetch_and", __LINE__,
+            SV("int x = 0xFF;\n"
+               "int old = __atomic_fetch_and(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
+               "return old * 10 + x;\n"),
+            .exit_code = 0xFF * 10 + 0x0F,
+        },
+        {
+            "atomic: fetch_or", __LINE__,
+            SV("int x = 0xF0;\n"
+               "int old = __atomic_fetch_or(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
+               "return old + x - 0xFF;\n"),
+            .exit_code = 0xF0,
+        },
+        {
+            "atomic: fetch_xor", __LINE__,
+            SV("int x = 0xFF;\n"
+               "int old = __atomic_fetch_xor(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
+               "return old - x;\n"),
+            .exit_code = 0xFF - 0xF0,
+        },
+        {
+            "type introspection: fields count", __LINE__,
+            SV("struct S { int x; int y; int z; };\n"
+               "return (int)(struct S).fields;\n"),
+            .exit_code = 3,
+        },
+        {
+            "type introspection: field name", __LINE__,
+            SV("struct S { int x; int y; };\n"
+               "struct __builtin_Field f = (struct S).field(0);\n"
+               "return f.name[0] == 'x';\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: field offset", __LINE__,
+            SV("struct S { int x; int y; };\n"
+               "struct __builtin_Field f = (struct S).field(1);\n"
+               "return (int)f.offset;\n"),
+            .exit_code = 4,
+        },
+        {
+            "type introspection: enumerators count", __LINE__,
+            SV("enum E { A, B, C, D };\n"
+               "return (int)(enum E).enumerators;\n"),
+            .exit_code = 4,
+        },
+        {
+            "type introspection: enumerator value", __LINE__,
+            SV("enum E { A = 10, B = 20 };\n"
+               "struct __builtin_Enumerator e = (enum E).enumerator(1);\n"
+               "return (int)e.value;\n"),
+            .exit_code = 20,
+        },
+        {
+            "type introspection: enumerator name", __LINE__,
+            SV("enum E { FOO = 1, BAR = 2 };\n"
+               "struct __builtin_Enumerator e = (enum E).enumerator(0);\n"
+               "return e.name[0] == 'F' && e.name[1] == 'O' && e.name[2] == 'O';\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: return_type", __LINE__,
+            SV("return (int(int, int)).return_type.is_integer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: param_count", __LINE__,
+            SV("return (int)(int(int, float)).param_count;\n"),
+            .exit_code = 2,
+        },
+        {
+            "type introspection: param_type", __LINE__,
+            SV("return (int(int, float)).param_type(1).is_float;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: element_type", __LINE__,
+            SV("return (int[5]).element_type.is_integer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: underlying_type", __LINE__,
+            SV("enum E : unsigned char { A };\n"
+               "return (enum E).underlying_type.is_unsigned;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: castable_to", __LINE__,
+            SV("_Bool r = (int).is_castable_to(float);\n"
+               "return r;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_callable_with", __LINE__,
+            SV("typedef int fn_t(int);\n"
+               "_Bool r = (fn_t).is_callable_with(int);\n"
+               "return r;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_callable_with false", __LINE__,
+            SV("struct S { int x; };\n"
+               "typedef int fn_t(int);\n"
+               "_Bool r = (fn_t).is_callable_with(struct S);\n"
+               "return !r;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__builtin_intern", __LINE__,
+            SV("const char* __builtin_intern(const char*);\n"
+               "const char* a = __builtin_intern(\"hello\");\n"
+               "const char* b = __builtin_intern(\"hello\");\n"
+               "return a == b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric literal: unsigned long", __LINE__,
+            SV("unsigned long x = 42ul;\n"
+               "return (int)x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "numeric literal: unsigned long long", __LINE__,
+            SV("unsigned long long x = 42ull;\n"
+               "return (int)x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "numeric literal: long double", __LINE__,
+            SV("long double x = 7.0L;\n"
+               "return (int)x;\n"),
+            .exit_code = 7,
+        },
+        {
+            "nullptr", __LINE__,
+            SV("int *p = nullptr;\n"
+               "return p == nullptr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "true false", __LINE__,
+            SV("return true && !false;\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Generic: array decay to pointer", __LINE__,
+            SV("int arr[3] = {1, 2, 3};\n"
+               "return _Generic(arr, int*: 1, default: 0);\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;

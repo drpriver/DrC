@@ -344,6 +344,11 @@ TestFunction(test_func_macros){
         {"va_arg_paste", SV("#define F(...) prefix ## __VA_ARG__(0)\nF(1, 2)"), SV("\nprefix1"), __LINE__},
         {"va_arg_expr", SV("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SV("\nc"), __LINE__},
         {"va_arg_expand", SV("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SV("\n\n42"), __LINE__},
+        {"identical func redef", SV("#define F(a, b) a + b\n#define F(a, b) a + b\nF(1, 2)"), SV("\n\n1 + 2"), __LINE__},
+        {"va_opt_paste_right", SV(
+            "#define F(...) x ## __VA_OPT__(y)\n"
+            "F(1)\n"
+            "F()"), SV("\nxy\nx"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -409,6 +414,7 @@ TestFunction(test_obj_macros){
         {"obj_paste_simple", SV("#define AB a ## b\nAB"), SV("\nab"), __LINE__},
         {"obj_paste_hash", SV("#define HH # ## #\nHH"), SV("\n##"), __LINE__},
         {"obj_paste_multi", SV("#define XYZ x ## y ## z\nXYZ"), SV("\nxyz"), __LINE__},
+        {"identical obj redef", SV("#define X 42\n#define X 42\nX"), SV("\n\n42"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1551,6 +1557,18 @@ TestFunction(test_erroneous_condition){
         {"error directive empty", __LINE__,
             SV("#error\n"),
             SV("(test):1:2: error: #error \n")},
+        {"obj macro redef different", __LINE__,
+            SV("#define X 1\n#define X 2\n"),
+            SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
+               "(test):1:12: error: ... previously defined here\n")},
+        {"func macro redef different body", __LINE__,
+            SV("#define F(a) a\n#define F(a) a + 1\n"),
+            SV("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
+               "(test):1:15: error: ... previously defined here\n")},
+        {"func macro redef different params", __LINE__,
+            SV("#define F(a, b) a\n#define F(a) a\n"),
+            SV("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
+               "(test):1:18: error: ... previously defined here\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){

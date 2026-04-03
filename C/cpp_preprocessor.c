@@ -1929,7 +1929,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     }
                 }
                 if(repl->count != m->nreplace){
-                    err = cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions %zu %zu", __LINE__, sv_p(name), repl->count, (size_t)m->nreplace);
+                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
+                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
                     goto finish_func_macro;
                 }
                 for(size_t i = 0; i < repl->count; i++){
@@ -1938,12 +1939,12 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
                         continue;
                     if(r.type != pre.type){
-                        cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
+                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
                         err = cpp_error(cpp, m->def_loc, "... previously defined here");
                         goto finish_func_macro;
                     }
                     if(!sv_equals(r.txt, pre.txt)){
-                        cpp_error(cpp, tok.loc, "%d: Duplicate function-like macro (%.*s) with different definitions", __LINE__, sv_p(name));
+                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
                         err = cpp_error(cpp, m->def_loc, "... previously defined here");
                         goto finish_func_macro;
                     }

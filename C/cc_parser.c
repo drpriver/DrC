@@ -3109,6 +3109,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     if(!cc_implicit_convertible(arg->type, p->const_char_star))
                         return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
+                    err = cc_implicit_cast(p, arg, p->const_char_star, &arg);
+                    if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_star, 0);
