@@ -34,7 +34,7 @@ static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 TestFunction(test_parse_decls){
     TESTBEGIN();
     enum {N=8}; // can increase if we need to
-    struct Case {
+    static struct Case {
         const char* test; int line;
         StringView input;
         struct {
@@ -53,7 +53,7 @@ TestFunction(test_parse_decls){
             StringView repr;
         } typedefs[N];
         _Bool skip;
-    } static testcases[] = {
+    } testcases[] = {
         {
             "parse decls", __LINE__,
             SV("int (*x)[10];\n"
