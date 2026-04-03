@@ -4216,6 +4216,136 @@ TestFunction(test_interpreter){
                "return _Alignof(struct S);\n"),
             .exit_code = 4,
         },
+        {
+            "unicode escape in string", __LINE__,
+            SV("const char* s = \"\\u0041\\u0042\";\n"
+               "return s[0] + s[1];\n"),
+            .exit_code = 'A' + 'B',
+        },
+        {
+            "hex escape in string", __LINE__,
+            SV("const char* s = \"\\x41\\x42\\x43\";\n"
+               "return s[0] + s[1] + s[2];\n"),
+            .exit_code = 'A' + 'B' + 'C',
+        },
+        {
+            "octal escape in string", __LINE__,
+            SV("const char* s = \"\\101\\102\";\n"
+               "return s[0] + s[1];\n"),
+            .exit_code = 'A' + 'B',
+        },
+        {
+            "u8 string with unicode escape", __LINE__,
+            SV("unsigned char s[] = u8\"\\u00C0\";\n"
+               "return s[0];\n"),
+            .exit_code = 0xC3, // UTF-8 encoding of U+00C0 first byte
+        },
+        {
+            "U string with high codepoint", __LINE__,
+            SV("unsigned int s[] = U\"\\U0001F600\";\n"
+               "return s[0] == 0x1F600;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u string with BMP char", __LINE__,
+            SV("unsigned short s[] = u\"\\u00E9\";\n"
+               "return s[0];\n"),
+            .exit_code = 0xE9,
+        },
+        {
+            "L string with unicode escape", __LINE__,
+            SV("int s[] = L\"\\u00E9\";\n"
+               "return s[0];\n"),
+            .exit_code = 0xE9,
+        },
+        {
+            "multichar literal", __LINE__,
+            SV("int x = 'AB';\n"
+               "return x != 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "sizeof struct with method", __LINE__,
+            SV("struct S {\n"
+               "    int x;\n"
+               "    int get(struct S* self){ return self->x; }\n"
+               "};\n"
+               "return sizeof(struct S) == sizeof(int);\n"),
+            .exit_code = 1,
+        },
+        {
+            "call struct method", __LINE__,
+            SV("struct S {\n"
+               "    int x;\n"
+               "    int get(struct S* self){ return self->x; }\n"
+               "};\n"
+               "struct S s = {42};\n"
+               "return s.get();\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: int division", __LINE__,
+            SV("constexpr int a = 100 / 3;\n"
+               "return a;\n"),
+            .exit_code = 33,
+        },
+        {
+            "constexpr: int modulo", __LINE__,
+            SV("constexpr int a = 100 % 3;\n"
+               "return a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: int shifts", __LINE__,
+            SV("constexpr int a = 5 << 2;\n"
+               "constexpr int b = 20 >> 2;\n"
+               "return a + b;\n"),
+            .exit_code = 25,
+        },
+        {
+            "constexpr: int bitwise", __LINE__,
+            SV("constexpr int a = 0xF & 0x3;\n"
+               "constexpr int b = 0x8 | 0x4;\n"
+               "constexpr int c = 0xF ^ 0x3;\n"
+               "return a + b + c;\n"),
+            .exit_code = 3 + 12 + 12,
+        },
+        {
+            "constexpr: long long division", __LINE__,
+            SV("constexpr long long a = 1000000000000ll / 3ll;\n"
+               "return (int)(a % 1000);\n"),
+            .exit_code = 333,
+        },
+        {
+            "constexpr: long long modulo", __LINE__,
+            SV("constexpr long long a = 1000000000000ll % 7ll;\n"
+               "return (int)a;\n"),
+            .exit_code = (int)(1000000000000ll % 7ll),
+        },
+        {
+            "constexpr: unsigned long long division", __LINE__,
+            SV("constexpr unsigned long long a = 1000000000000ull / 3ull;\n"
+               "return (int)(a % 1000);\n"),
+            .exit_code = 333,
+        },
+        {
+            "constexpr: unsigned long long modulo", __LINE__,
+            SV("constexpr unsigned long long a = 1000000000000ull % 7ull;\n"
+               "return (int)a;\n"),
+            .exit_code = (int)(1000000000000ull % 7ull),
+        },
+        {
+            "constexpr: unsigned int division", __LINE__,
+            SV("constexpr unsigned a = 100u / 3u;\n"
+               "return (int)a;\n"),
+            .exit_code = 33,
+        },
+        {
+            "constexpr: unsigned int modulo", __LINE__,
+            SV("constexpr unsigned a = 100u % 3u;\n"
+               "return (int)a;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
