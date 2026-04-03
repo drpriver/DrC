@@ -4638,6 +4638,215 @@ TestFunction(test_interpreter){
                "return (int)v.length_sq();\n"),
             .exit_code = 25,
         },
+        {
+            "pragma typedef auto", __LINE__,
+            SV("#pragma typedef on\n"
+               "struct Point { int x; int y; };\n"
+               "#pragma typedef off\n"
+               "Point p = {3, 4};\n"
+               "return p.x + p.y;\n"),
+            .exit_code = 7,
+        },
+        {
+            "sizeof incomplete array param", __LINE__,
+            SV("int sum(int arr[], int n){\n"
+               "    int s = 0;\n"
+               "    for(int i = 0; i < n; i++) s += arr[i];\n"
+               "    return s;\n"
+               "}\n"
+               "int a[] = {1,2,3};\n"
+               "return sum(a, 3);\n"),
+            .exit_code = 6,
+        },
+        {
+            "ternary: null pointer branches", __LINE__,
+            SV("int x = 1;\n"
+               "int *p = x ? &x : (void*)0;\n"
+               "return *p;\n"),
+            .exit_code = 1,
+        },
+        {
+            "ternary: function pointer decay", __LINE__,
+            SV("int f(void) { return 42; }\n"
+               "int (*fp)(void) = 1 ? f : f;\n"
+               "return fp();\n"),
+            .exit_code = 42,
+        },
+        {
+            "function pointer equality with function", __LINE__,
+            SV("int f(void) { return 1; }\n"
+               "int g(void) { return 2; }\n"
+               "int (*fp)(void) = f;\n"
+               "return (fp == f) + (fp != g);\n"),
+            .exit_code = 2,
+        },
+        {
+            "pointer add with enum index", __LINE__,
+            SV("enum { IDX = 2 };\n"
+               "int arr[3] = {10, 20, 30};\n"
+               "return arr[IDX];\n"),
+            .exit_code = 30,
+        },
+        {
+            "float: comparison le ge", __LINE__,
+            SV("float a = 1.5f;\n"
+               "float b = 2.5f;\n"
+               "return (a <= b) + (b >= a) + (a <= a);\n"),
+            .exit_code = 3,
+        },
+        {
+            "double: comparison le ge", __LINE__,
+            SV("double a = 1.5;\n"
+               "double b = 2.5;\n"
+               "return (a <= b) + (b >= a) + (a <= a);\n"),
+            .exit_code = 3,
+        },
+        {
+            "float: mod via cast", __LINE__,
+            SV("float a = 7.5f;\n"
+               "int b = (int)a % 3;\n"
+               "return b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "struct init brace elision", __LINE__,
+            SV("struct Inner { int a; int b; };\n"
+               "struct Outer { struct Inner in; int c; };\n"
+               "struct Outer o = {1, 2, 3};\n"
+               "return o.in.a + o.in.b + o.c;\n"),
+            .exit_code = 6,
+        },
+        {
+            "array init unsized", __LINE__,
+            SV("int arr[] = {10, 20, 30, 40, 50};\n"
+               "return sizeof arr / sizeof arr[0];\n"),
+            .exit_code = 5,
+        },
+        {
+            "union init first member", __LINE__,
+            SV("union U { int i; float f; };\n"
+               "union U u = {42};\n"
+               "return u.i;\n"),
+            .exit_code = 42,
+        },
+        {
+            "union init designated", __LINE__,
+            SV("union U { int i; char c; };\n"
+               "union U u = {.c = 7};\n"
+               "return u.c;\n"),
+            .exit_code = 7,
+        },
+        {
+            "nested designated init", __LINE__,
+            SV("struct Inner { int x; int y; };\n"
+               "struct Outer { struct Inner p; int z; };\n"
+               "struct Outer o = {.p.x = 1, .p.y = 2, .z = 3};\n"
+               "return o.p.x + o.p.y + o.z;\n"),
+            .exit_code = 6,
+        },
+        {
+            "chained array designator", __LINE__,
+            SV("struct S { int arr[3]; };\n"
+               "struct S s = {.arr[1] = 42};\n"
+               "return s.arr[0] + s.arr[1] + s.arr[2];\n"),
+            .exit_code = 42,
+        },
+        {
+            "sizeof long double", __LINE__,
+            SV("return sizeof(long double) >= 8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "alignas struct member", __LINE__,
+            SV("struct S { alignas(16) int x; int y; };\n"
+               "return sizeof(struct S) >= 16;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: comma expression", __LINE__,
+            SV("constexpr int x = (1, 2, 42);\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "_Alignas with type", __LINE__,
+            SV("_Alignas(double) int x = 42;\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "signed/unsigned type parsing", __LINE__,
+            SV("signed x = -5;\n"
+               "unsigned y = 5;\n"
+               "return x + (int)y;\n"),
+            .exit_code = 0,
+        },
+        {
+            "implicit int return", __LINE__,
+            SV("int f(void);\n"
+               "int f(void){ return 42; }\n"
+               "return f();\n"),
+            .exit_code = 42,
+        },
+        {
+            "sizeof expression not evaluated", __LINE__,
+            SV("int x = 5;\n"
+               "int s = sizeof(x++);\n"
+               "return x * 10 + s;\n"),
+            .exit_code = 54,
+        },
+        {
+            "string literal comparison", __LINE__,
+            SV("const char* a = \"hello\";\n"
+               "const char* b = \"hello\";\n"
+               "return a[0] == b[0];\n"),
+            .exit_code = 1,
+        },
+        {
+            "double to unsigned cast", __LINE__,
+            SV("double d = 42.7;\n"
+               "unsigned u = (unsigned)d;\n"
+               "return (int)u;\n"),
+            .exit_code = 42,
+        },
+        {
+            "unsigned to double cast", __LINE__,
+            SV("unsigned u = 42;\n"
+               "double d = (double)u;\n"
+               "return (int)d;\n"),
+            .exit_code = 42,
+        },
+        {
+            "long double arith", __LINE__,
+            SV("long double a = 3.5L;\n"
+               "long double b = 2.5L;\n"
+               "return (int)(a + b);\n"),
+            .exit_code = 6,
+        },
+        {
+            "array of structs init", __LINE__,
+            SV("struct P { int x; int y; };\n"
+               "struct P arr[] = {{1,2},{3,4},{5,6}};\n"
+               "return arr[0].x + arr[1].y + arr[2].x;\n"),
+            .exit_code = 10,
+        },
+        {
+            "switch: char value", __LINE__,
+            SV("char c = 'B';\n"
+               "switch(c){\n"
+               "    case 'A': return 1;\n"
+               "    case 'B': return 2;\n"
+               "    case 'C': return 3;\n"
+               "}\n"
+               "return 0;\n"),
+            .exit_code = 2,
+        },
+        {
+            "nested array init designator", __LINE__,
+            SV("int m[2][3] = {[1] = {4, 5, 6}};\n"
+               "return m[0][0] + m[1][0] + m[1][2];\n"),
+            .exit_code = 10,
+        },
     };
     int err;
     static int idx = 0;
