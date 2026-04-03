@@ -53,7 +53,7 @@ TestFunction(test_parse_decls){
             StringView repr;
         } typedefs[N];
         _Bool skip;
-    } testcases[] = {
+    } static testcases[] = {
         {
             "parse decls", __LINE__,
             SV("int (*x)[10];\n"
@@ -3697,6 +3697,148 @@ TestFunction(test_parse_decls){
                 { SV("f"), SV("int(int)") },
             },
         },
+        {
+            "_Float16 variable", __LINE__,
+            SV("_Float16 x;\n"),
+            .vars = {
+                { SV("x"), SV("_Float16") },
+            },
+        },
+        {
+            "bool variable", __LINE__,
+            SV("_Bool x;\n"),
+            .vars = {
+                { SV("x"), SV("_Bool") },
+            },
+        },
+        {
+            "signed char variable", __LINE__,
+            SV("signed char x;\n"),
+            .vars = {
+                { SV("x"), SV("signed char") },
+            },
+        },
+        {
+            "unsigned char variable", __LINE__,
+            SV("unsigned char x;\n"),
+            .vars = {
+                { SV("x"), SV("unsigned char") },
+            },
+        },
+        {
+            "unsigned short variable", __LINE__,
+            SV("unsigned short x;\n"),
+            .vars = {
+                { SV("x"), SV("unsigned short") },
+            },
+        },
+        {
+            "unsigned long variable", __LINE__,
+            SV("unsigned long x;\n"),
+            .vars = {
+                { SV("x"), SV("unsigned long") },
+            },
+        },
+        {
+            "unsigned long long variable", __LINE__,
+            SV("unsigned long long x;\n"),
+            .vars = {
+                { SV("x"), SV("unsigned long long") },
+            },
+        },
+        {
+            "long long variable", __LINE__,
+            SV("long long x;\n"),
+            .vars = {
+                { SV("x"), SV("long long") },
+            },
+        },
+        {
+            "long double variable", __LINE__,
+            SV("long double x;\n"),
+            .vars = {
+                { SV("x"), SV("long double") },
+            },
+        },
+        {
+            "__int128 variable", __LINE__,
+            SV("__int128 x;\n"),
+            .vars = {
+                { SV("x"), SV("__int128") },
+            },
+        },
+        {
+            "unsigned __int128 variable", __LINE__,
+            SV("unsigned __int128 x;\n"),
+            .vars = {
+                { SV("x"), SV("unsigned __int128") },
+            },
+        },
+        {
+            "register variable", __LINE__,
+            SV("void f(void){ register int x = 0; }\n"),
+            .funcs = {
+                { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "restrict pointer", __LINE__,
+            SV("int * restrict p;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+            },
+        },
+        {
+            "volatile variable", __LINE__,
+            SV("volatile int x;\n"),
+            .vars = {
+                { SV("x"), SV("volatile int") },
+            },
+        },
+        {
+            "static variable", __LINE__,
+            SV("static int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "extern variable", __LINE__,
+            SV("extern int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "pragma pack struct", __LINE__,
+            SV("#pragma pack(1)\n"
+               "struct S { char a; int b; };\n"
+               "#pragma pack()\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "__declspec align struct", __LINE__,
+            SV("struct __declspec(align(32)) S { int x; };\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+            .skip = 0,
+        },
+        {
+            "struct with method", __LINE__,
+            SV("struct S {\n"
+               "    int x;\n"
+               "    int get(struct S* self){ return self->x; }\n"
+               "};\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -5075,6 +5217,46 @@ TestFunction(test_parse_errors){
             "register after extern", __LINE__,
             SV("extern register int x;\n"),
             SV("(test):1:8: error: register after extern\n"),
+        },
+        {
+            "register after typedef", __LINE__,
+            SV("typedef register int x;\n"),
+            SV("(test):1:9: error: register after typedef\n"),
+        },
+        {
+            "register after thread_local", __LINE__,
+            SV("thread_local register int x;\n"),
+            SV("(test):1:14: error: register after thread_local\n"),
+        },
+        {
+            "constexpr after thread_local", __LINE__,
+            SV("thread_local constexpr int x;\n"),
+            SV("(test):1:14: error: constexpr after thread_local\n"),
+        },
+        {
+            "unsigned after __auto_type", __LINE__,
+            SV("__auto_type unsigned x = 1;\n"),
+            SV("(test):1:13: error: unsigned after __auto_type\n"),
+        },
+        {
+            "int after __auto_type", __LINE__,
+            SV("__auto_type int x = 1;\n"),
+            SV("(test):1:13: error: int after __auto_type\n"),
+        },
+        {
+            "long after __auto_type", __LINE__,
+            SV("__auto_type long x = 1;\n"),
+            SV("(test):1:13: error: long after __auto_type\n"),
+        },
+        {
+            "char after __auto_type", __LINE__,
+            SV("__auto_type char x = 'a';\n"),
+            SV("(test):1:13: error: char after __auto_type\n"),
+        },
+        {
+            "__int128 after __auto_type", __LINE__,
+            SV("__auto_type __int128 x = 1;\n"),
+            SV("(test):1:13: error: __int128 after __auto_type\n"),
         },
     };
     static int idx = 0;

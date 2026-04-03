@@ -1008,7 +1008,12 @@ TestFunction(test_builtin_macros){
             "\n"
             "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
             "const char* names[] = { [RED] = \"RED\",[GREEN] = \"GREEN\",[BLUE] = \"BLUE\", };"), __LINE__, 0},
-
+        {"__BASE_FILE__", SV("__BASE_FILE__"), SV("\"(test)\""), __LINE__, 0},
+        {"__TIMESTAMP__", SV("__TIMESTAMP__"), SV("\"??? ??? ?? ??:??:?? ????\""), __LINE__, 0},
+        {"__format", SV("__format(\"%d + %d = %d\", 1, 2, 3)"), SV("\"1 + 2 = 3\""), __LINE__, 0},
+        {"defblock obj", SV("#defblock HELLO\nhello world\n#endblock\nHELLO"), SV("\nhello world"), __LINE__, 0},
+        {"defblock func", SV("#defblock ADD(x, y)\nx + y\n#endblock\nADD(3, 4)"), SV("\n3 + 4"), __LINE__, 0},
+        {"defblock variadic", SV("#defblock LOG(fmt, ...)\nfmt __VA_ARGS__\n#endblock\nLOG(hello, world)"), SV("\nhello world"), __LINE__, 0},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1968,6 +1973,22 @@ TestFunction(test_include){
                                      "#endif"),
             SV("test/header.h"), SV(""),
             {0}, SV("\nfound\n\n\n")},
+        {"has_include not found", __LINE__, 0,
+            SV("test/main.c"),   SV("#if __has_include(\"nonexistent.h\")\n"
+                                     "found\n"
+                                     "#else\n"
+                                     "not_found\n"
+                                     "#endif"),
+            SV("test/other.h"),  SV(""),
+            {0}, SV("\n\n\nnot_found\n")},
+        {"pragma once prevents double include", __LINE__, 0,
+            SV("test/main.c"),   SV("#include \"header.h\"\n#include \"header.h\"\nDONE"),
+            SV("test/header.h"), SV("#pragma once\n#define DONE ok\n"),
+            {0}, SV("\n\n\n\nok")},
+        {"include guard prevents double include", __LINE__, 0,
+            SV("test/main.c"),   SV("#include \"header.h\"\n#include \"header.h\"\nVAL"),
+            SV("test/header.h"), SV("#ifndef GUARD_H\n#define GUARD_H\n#define VAL 42\n#endif\n"),
+            {0}, SV("\n\n\n\n\n42")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){

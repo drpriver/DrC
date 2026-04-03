@@ -4080,6 +4080,142 @@ TestFunction(test_interpreter){
                "return 1;\n"),
             .exit_code = 1,
         },
+        {
+            "__func__", __LINE__,
+            SV("int check(void){\n"
+               "    const char* n = __func__;\n"
+               "    return n[0] == 'c' && n[1] == 'h';\n"
+               "}\n"
+               "return check();\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned int ops", __LINE__,
+            SV("constexpr unsigned a = 100u + 50u;\n"
+               "constexpr unsigned b = 100u - 30u;\n"
+               "constexpr unsigned c = 10u * 5u;\n"
+               "constexpr unsigned d = 42u / 6u;\n"
+               "constexpr unsigned e = 17u % 5u;\n"
+               "constexpr unsigned f = 0xFFu & 0x0Fu;\n"
+               "constexpr unsigned g = 0xF0u | 0x0Fu;\n"
+               "constexpr unsigned h = 0xFFu ^ 0x0Fu;\n"
+               "constexpr unsigned i = 1u << 4;\n"
+               "constexpr unsigned j = 256u >> 4;\n"
+               "return (int)(a - b - c + d + e + f + g - h + i - j);\n"),
+            // 150 - 70 - 50 + 7 + 2 + 15 + 255 - 240 + 16 - 16 = 69
+            .exit_code = 69,
+        },
+        {
+            "constexpr: unsigned comparisons", __LINE__,
+            SV("_Static_assert(1u < 2u, \"\");\n"
+               "_Static_assert(2u > 1u, \"\");\n"
+               "_Static_assert(1u <= 1u, \"\");\n"
+               "_Static_assert(1u >= 1u, \"\");\n"
+               "_Static_assert(1u == 1u, \"\");\n"
+               "_Static_assert(1u != 2u, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: int sub mul div", __LINE__,
+            SV("constexpr int a = 100 - 58;\n"
+               "constexpr int b = 6 * 7;\n"
+               "constexpr int c = 84 / 2;\n"
+               "_Static_assert(a == 42, \"\");\n"
+               "_Static_assert(b == 42, \"\");\n"
+               "_Static_assert(c == 42, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned long long negation", __LINE__,
+            SV("constexpr unsigned long long a = -1ull;\n"
+               "return a > 100ull;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: cast unsigned to signed", __LINE__,
+            SV("constexpr int a = (int)42u;\n"
+               "return a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: cast long long to int", __LINE__,
+            SV("constexpr int a = (int)42ll;\n"
+               "return a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: unary plus", __LINE__,
+            SV("constexpr int a = +42;\n"
+               "return a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "designated arg: named", __LINE__,
+            SV("int add(int a, int b){ return a * 10 + b; }\n"
+               "return add(.b = 2, .a = 3);\n"),
+            .exit_code = 32,
+        },
+        {
+            "designated arg: positional", __LINE__,
+            SV("int add(int a, int b){ return a * 10 + b; }\n"
+               "return add([1] = 2, [0] = 3);\n"),
+            .exit_code = 32,
+        },
+        {
+            "designated arg: mixed", __LINE__,
+            SV("int f(int a, int b, int c){ return a * 100 + b * 10 + c; }\n"
+               "return f(1, .c = 3, .b = 2);\n"),
+            .exit_code = 123,
+        },
+        {
+            "pragma pack basic", __LINE__,
+            SV("#pragma pack(1)\n"
+               "struct S { char a; int b; };\n"
+               "#pragma pack()\n"
+               "return sizeof(struct S);\n"),
+            .exit_code = 5,
+        },
+        {
+            "pragma pack push pop", __LINE__,
+            SV("#pragma pack(push, 1)\n"
+               "struct S1 { char a; int b; };\n"
+               "#pragma pack(pop)\n"
+               "struct S2 { char a; int b; };\n"
+               "return sizeof(struct S1) * 10 + (sizeof(struct S2) >= 5 ? sizeof(struct S2) : 0);\n"),
+            .exit_code = 58,
+        },
+        {
+            "string init char array", __LINE__,
+            SV("char s[6] = \"hello\";\n"
+               "return s[0] + s[4];\n"),
+            .exit_code = 'h' + 'o',
+        },
+        {
+            "string init wchar array", __LINE__,
+            SV("int s[] = L\"abc\";\n"
+               "return s[0] + s[2];\n"),
+            .exit_code = 'a' + 'c',
+        },
+        {
+            "empty braced scalar init", __LINE__,
+            SV("int x = {};\n"
+               "return x;\n"),
+            .exit_code = 0,
+        },
+        {
+            "_Countof", __LINE__,
+            SV("int arr[7];\n"
+               "return _Countof(arr);\n"),
+            .exit_code = 7,
+        },
+        {
+            "alignof struct", __LINE__,
+            SV("struct S { char c; int i; };\n"
+               "return _Alignof(struct S);\n"),
+            .exit_code = 4,
+        },
     };
     int err;
     static int idx = 0;
