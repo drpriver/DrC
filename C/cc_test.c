@@ -5046,6 +5046,36 @@ TestFunction(test_parse_errors){
             SV("short char x;\n"),
             SV("(test):1:7: error: char after short\n"),
         },
+        {
+            "unsigned after signed", __LINE__,
+            SV("signed unsigned x;\n"),
+            SV("(test):1:8: error: unsigned after signed\n"),
+        },
+        {
+            "signed after unsigned", __LINE__,
+            SV("unsigned signed x;\n"),
+            SV("(test):1:10: error: signed after unsigned\n"),
+        },
+        {
+            "constexpr after extern", __LINE__,
+            SV("extern constexpr int x;\n"),
+            SV("(test):1:8: error: constexpr after extern\n"),
+        },
+        {
+            "constexpr after typedef", __LINE__,
+            SV("typedef constexpr int x;\n"),
+            SV("(test):1:9: error: constexpr after typedef\n"),
+        },
+        {
+            "register after static", __LINE__,
+            SV("static register int x;\n"),
+            SV("(test):1:8: error: register after static\n"),
+        },
+        {
+            "register after extern", __LINE__,
+            SV("extern register int x;\n"),
+            SV("(test):1:8: error: register after extern\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

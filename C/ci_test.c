@@ -3908,6 +3908,152 @@ TestFunction(test_interpreter){
                "return 1;\n"),
             .exit_code = 1,
         },
+        {
+            "constexpr: long long ops", __LINE__,
+            SV("constexpr long long a = 1000000000ll * 3ll;\n"
+               "constexpr long long b = a / 1000000ll;\n"
+               "constexpr long long c = a % 1000000000ll;\n"
+               "constexpr long long d = a & 0xFFll;\n"
+               "constexpr long long e = 0ll | 0xFFll;\n"
+               "constexpr long long f = 0xFFll ^ 0x0Fll;\n"
+               "constexpr long long g = 1ll << 32;\n"
+               "constexpr long long h = g >> 16;\n"
+               "_Static_assert(a == 3000000000ll, \"\");\n"
+               "_Static_assert(b == 3000ll, \"\");\n"
+               "_Static_assert(g == 4294967296ll, \"\");\n"
+               "_Static_assert(h == 65536ll, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: long long comparisons", __LINE__,
+            SV("_Static_assert(1ll < 2ll, \"\");\n"
+               "_Static_assert(2ll > 1ll, \"\");\n"
+               "_Static_assert(3ll <= 3ll, \"\");\n"
+               "_Static_assert(3ll >= 3ll, \"\");\n"
+               "_Static_assert(5ll == 5ll, \"\");\n"
+               "_Static_assert(5ll != 6ll, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned long long ops", __LINE__,
+            SV("constexpr unsigned long long a = 10000000000ull * 3ull;\n"
+               "constexpr unsigned long long b = a / 1000000ull;\n"
+               "constexpr unsigned long long c = a % 1000000000ull;\n"
+               "constexpr unsigned long long d = 0xFFFFFFFFFFFFFFFFull & 0xFFull;\n"
+               "constexpr unsigned long long e = 0xF0ull | 0x0Full;\n"
+               "constexpr unsigned long long f = 0xFFull ^ 0x0Full;\n"
+               "constexpr unsigned long long g = 1ull << 63;\n"
+               "constexpr unsigned long long h = g >> 32;\n"
+               "_Static_assert(a == 30000000000ull, \"\");\n"
+               "_Static_assert(d == 0xFFull, \"\");\n"
+               "_Static_assert(e == 0xFFull, \"\");\n"
+               "_Static_assert(f == 0xF0ull, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned long long comparisons", __LINE__,
+            SV("_Static_assert(1ull < 2ull, \"\");\n"
+               "_Static_assert(2ull > 1ull, \"\");\n"
+               "_Static_assert(3ull <= 3ull, \"\");\n"
+               "_Static_assert(3ull >= 3ull, \"\");\n"
+               "_Static_assert(5ull == 5ull, \"\");\n"
+               "_Static_assert(5ull != 6ull, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned negation", __LINE__,
+            SV("constexpr unsigned a = -1u;\n"
+               "return a > 1000000u;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: cast double to float", __LINE__,
+            SV("constexpr float f = (float)3.14;\n"
+               "return (int)(f * 100);\n"),
+            .exit_code = 314,
+        },
+        {
+            "constexpr: cast int to long long", __LINE__,
+            SV("constexpr long long a = (long long)42;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: type introspection in static_assert", __LINE__,
+            SV("_Static_assert((int).is_integer, \"\");\n"
+               "_Static_assert((float).is_float, \"\");\n"
+               "_Static_assert((int).is_arithmetic, \"\");\n"
+               "_Static_assert((int*).is_pointer, \"\");\n"
+               "_Static_assert((int).is_signed, \"\");\n"
+               "_Static_assert((unsigned).is_unsigned, \"\");\n"
+               "_Static_assert(!(int).is_float, \"\");\n"
+               "_Static_assert(!(int).is_pointer, \"\");\n"
+               "_Static_assert((const int).is_const, \"\");\n"
+               "_Static_assert(!(int).is_volatile, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: type introspection struct/enum", __LINE__,
+            SV("struct S { int x; };\n"
+               "enum E { A };\n"
+               "union U { int x; };\n"
+               "_Static_assert((struct S).is_struct, \"\");\n"
+               "_Static_assert((union U).is_union, \"\");\n"
+               "_Static_assert((enum E).is_enum, \"\");\n"
+               "_Static_assert((int[3]).is_array, \"\");\n"
+               "_Static_assert((int(int)).is_function, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: type sizeof/alignof", __LINE__,
+            SV("_Static_assert((int).sizeof_ == 4, \"\");\n"
+               "_Static_assert((char).sizeof_ == 1, \"\");\n"
+               "_Static_assert((int).alignof_ == 4, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: float mul div", __LINE__,
+            SV("constexpr float a = 3.0f * 4.0f;\n"
+               "constexpr float b = 12.0f / 3.0f;\n"
+               "return (int)a + (int)b;\n"),
+            .exit_code = 16,
+        },
+        {
+            "constexpr: double mul div", __LINE__,
+            SV("constexpr double a = 3.0 * 4.0;\n"
+               "constexpr double b = 12.0 / 3.0;\n"
+               "return (int)a + (int)b;\n"),
+            .exit_code = 16,
+        },
+        {
+            "constexpr: float comparison all ops", __LINE__,
+            SV("_Static_assert(1.0f == 1.0f, \"\");\n"
+               "_Static_assert(1.0f != 2.0f, \"\");\n"
+               "_Static_assert(1.0f < 2.0f, \"\");\n"
+               "_Static_assert(2.0f > 1.0f, \"\");\n"
+               "_Static_assert(1.0f <= 1.0f, \"\");\n"
+               "_Static_assert(1.0f >= 1.0f, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: double comparison all ops", __LINE__,
+            SV("_Static_assert(1.0 == 1.0, \"\");\n"
+               "_Static_assert(1.0 != 2.0, \"\");\n"
+               "_Static_assert(1.0 < 2.0, \"\");\n"
+               "_Static_assert(2.0 > 1.0, \"\");\n"
+               "_Static_assert(1.0 <= 1.0, \"\");\n"
+               "_Static_assert(1.0 >= 1.0, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
