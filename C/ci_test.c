@@ -4442,6 +4442,202 @@ TestFunction(test_interpreter){
                "return 1;\n"),
             .exit_code = 1,
         },
+        {
+            "atomic: __atomic_load (3-arg)", __LINE__,
+            SV("int x = 42;\n"
+               "int y = 0;\n"
+               "__atomic_load(&x, &y, __ATOMIC_SEQ_CST);\n"
+               "return y;\n"),
+            .exit_code = 42,
+        },
+        {
+            "atomic: __atomic_store (3-arg)", __LINE__,
+            SV("int x = 0;\n"
+               "int val = 99;\n"
+               "__atomic_store(&x, &val, __ATOMIC_SEQ_CST);\n"
+               "return x;\n"),
+            .exit_code = 99,
+        },
+        {
+            "atomic: __atomic_exchange (4-arg)", __LINE__,
+            SV("int x = 10;\n"
+               "int val = 20;\n"
+               "int old = 0;\n"
+               "__atomic_exchange(&x, &val, &old, __ATOMIC_SEQ_CST);\n"
+               "return old * 10 + x;\n"),
+            .exit_code = 120,
+        },
+        {
+            "atomic: __atomic_thread_fence", __LINE__,
+            SV("__atomic_thread_fence(__ATOMIC_SEQ_CST);\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic: __atomic_signal_fence", __LINE__,
+            SV("__atomic_signal_fence(__ATOMIC_SEQ_CST);\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "_InterlockedExchange16", __LINE__,
+            SV("short _InterlockedExchange16(short volatile*, short);\n"
+               "short volatile x = 5;\n"
+               "short old = _InterlockedExchange16(&x, 10);\n"
+               "return old + x;\n"),
+            .exit_code = 15,
+        },
+        {
+            "_InterlockedExchangeAdd16", __LINE__,
+            SV("short _InterlockedExchangeAdd16(short volatile*, short);\n"
+               "short volatile x = 10;\n"
+               "short old = _InterlockedExchangeAdd16(&x, 5);\n"
+               "return old + x;\n"),
+            .exit_code = 25,
+        },
+        {
+            "_InterlockedCompareExchange16", __LINE__,
+            SV("short _InterlockedCompareExchange16(short volatile*, short, short);\n"
+               "short volatile x = 10;\n"
+               "short old = _InterlockedCompareExchange16(&x, 42, 10);\n"
+               "return old + x;\n"),
+            .exit_code = 52,
+        },
+        {
+            "_InterlockedOr8", __LINE__,
+            SV("char _InterlockedOr8(char volatile*, char);\n"
+               "char volatile x = 0xF0;\n"
+               "char old = _InterlockedOr8(&x, 0x0F);\n"
+               "return (unsigned char)old + (unsigned char)x;\n"),
+            .exit_code = 0xF0 + 0xFF,
+        },
+        {
+            "_InterlockedXor8", __LINE__,
+            SV("char _InterlockedXor8(char volatile*, char);\n"
+               "char volatile x = (char)0xFF;\n"
+               "char old = _InterlockedXor8(&x, 0x0F);\n"
+               "return (unsigned char)x;\n"),
+            .exit_code = 0xF0,
+        },
+        {
+            "_InterlockedAnd8", __LINE__,
+            SV("char _InterlockedAnd8(char volatile*, char);\n"
+               "char volatile x = (char)0xFF;\n"
+               "char old = _InterlockedAnd8(&x, 0x0F);\n"
+               "return (unsigned char)x;\n"),
+            .exit_code = 0x0F,
+        },
+        {
+            "_InterlockedIncrement16", __LINE__,
+            SV("short _InterlockedIncrement16(short volatile*);\n"
+               "short volatile x = 10;\n"
+               "short r = _InterlockedIncrement16(&x);\n"
+               "return r + x;\n"),
+            .exit_code = 22,
+        },
+        {
+            "_InterlockedDecrement16", __LINE__,
+            SV("short _InterlockedDecrement16(short volatile*);\n"
+               "short volatile x = 10;\n"
+               "short r = _InterlockedDecrement16(&x);\n"
+               "return r + x;\n"),
+            .exit_code = 18,
+        },
+        {
+            "_InterlockedIncrement64", __LINE__,
+            SV("long long _InterlockedIncrement64(long long volatile*);\n"
+               "long long volatile x = 10;\n"
+               "long long r = _InterlockedIncrement64(&x);\n"
+               "return (int)(r + x);\n"),
+            .exit_code = 22,
+        },
+        {
+            "_InterlockedOr16", __LINE__,
+            SV("short _InterlockedOr16(short volatile*, short);\n"
+               "short volatile x = 0x00F0;\n"
+               "short old = _InterlockedOr16(&x, 0x000F);\n"
+               "return (int)(unsigned short)x;\n"),
+            .exit_code = 0xFF,
+        },
+        {
+            "_InterlockedAnd16", __LINE__,
+            SV("short _InterlockedAnd16(short volatile*, short);\n"
+               "short volatile x = (short)0x00FF;\n"
+               "short old = _InterlockedAnd16(&x, 0x000F);\n"
+               "return (int)(unsigned short)x;\n"),
+            .exit_code = 0x0F,
+        },
+        {
+            "_InterlockedXor16", __LINE__,
+            SV("short _InterlockedXor16(short volatile*, short);\n"
+               "short volatile x = (short)0x00FF;\n"
+               "short old = _InterlockedXor16(&x, 0x000F);\n"
+               "return (int)(unsigned short)x;\n"),
+            .exit_code = 0xF0,
+        },
+        {
+            "_InterlockedOr64", __LINE__,
+            SV("long long _InterlockedOr64(long long volatile*, long long);\n"
+               "long long volatile x = 0xF0;\n"
+               "long long old = _InterlockedOr64(&x, 0x0F);\n"
+               "return (int)x;\n"),
+            .exit_code = 0xFF,
+        },
+        {
+            "_InterlockedAnd64", __LINE__,
+            SV("long long _InterlockedAnd64(long long volatile*, long long);\n"
+               "long long volatile x = 0xFF;\n"
+               "long long old = _InterlockedAnd64(&x, 0x0F);\n"
+               "return (int)x;\n"),
+            .exit_code = 0x0F,
+        },
+        {
+            "_InterlockedXor64", __LINE__,
+            SV("long long _InterlockedXor64(long long volatile*, long long);\n"
+               "long long volatile x = 0xFF;\n"
+               "long long old = _InterlockedXor64(&x, 0x0F);\n"
+               "return (int)x;\n"),
+            .exit_code = 0xF0,
+        },
+        {
+            "_InterlockedExchangeAdd64", __LINE__,
+            SV("long long _InterlockedExchangeAdd64(long long volatile*, long long);\n"
+               "long long volatile x = 10;\n"
+               "long long old = _InterlockedExchangeAdd64(&x, 5);\n"
+               "return (int)(old + x);\n"),
+            .exit_code = 25,
+        },
+        {
+            "_InterlockedExchange64", __LINE__,
+            SV("long long _InterlockedExchange64(long long volatile*, long long);\n"
+               "long long volatile x = 10;\n"
+               "long long old = _InterlockedExchange64(&x, 42);\n"
+               "return (int)(old + x);\n"),
+            .exit_code = 52,
+        },
+        {
+            "_InterlockedCompareExchange8", __LINE__,
+            SV("char _InterlockedCompareExchange8(char volatile*, char, char);\n"
+               "char volatile x = 10;\n"
+               "char old = _InterlockedCompareExchange8(&x, 42, 10);\n"
+               "return old + x;\n"),
+            .exit_code = 52,
+        },
+        {
+            "pointer subtraction with array decay", __LINE__,
+            SV("int arr[10];\n"
+               "int *p = arr + 5;\n"
+               "return (int)(p - arr);\n"),
+            .exit_code = 5,
+        },
+        {
+            "FUCS basic", __LINE__,
+            SV("struct Vec2 { float x; float y; };\n"
+               "float length_sq(struct Vec2* v){ return v->x * v->x + v->y * v->y; }\n"
+               "struct Vec2 v = {3.0f, 4.0f};\n"
+               "return (int)v.length_sq();\n"),
+            .exit_code = 25,
+        },
     };
     int err;
     static int idx = 0;
