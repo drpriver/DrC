@@ -73,6 +73,7 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* tests = phony_target(ctx, "tests");
     BuildTarget* test = phony_target(ctx, "test");
     BuildTarget* selftests = phony_target(ctx, "selftests");
+    BuildTarget* coverage_tests = phony_target(ctx, "coverage-tests");
     add_dep(ctx, test, tests);
     static const struct {
         const char* file;
@@ -117,7 +118,49 @@ int main(int argc, char** argv, char** envp){
                     cmd_arg(&cmd->cmd, (LongString){a->length, a->data});
                 }
             add_dep(ctx, tests, cmd);
+
+            // Coverage variant
+            Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
+            BuildTarget* cov_bin = exe_target(ctx, cov_name->data, file, OS_NATIVE);
+            if(cov_bin->compiler_flavor != COMPILER_CL){
+                if(cov_bin->compiler_flavor == COMPILER_CLANG_CL)
+                    cmd_carg(&cov_bin->cmd, "/clang:--coverage");
+                else
+                    cmd_carg(&cov_bin->cmd, "--coverage");
+            }
+            if(test_files[i].needs_lffi){
+                if(BUILD_OS == OS_WINDOWS){
+                    cmd_carg(&cov_bin->cmd, "-IFetched/libffi");
+                    target_linkinp(ctx, cov_bin, ffi_lib);
+                }
+                else {
+                    if(BUILD_OS == OS_LINUX)
+                        target_linkarg(ctx, cov_bin, "-ldl");
+                    target_linkarg(ctx, cov_bin, "-lffi");
+                }
+            }
+            Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
+            BuildTarget* cov_cmd = cmd_target(ctx, cov_cmd_name->data);
+            cov_cmd->is_phony = 1;
+            target_prog(ctx, cov_cmd, cov_bin);
+            if(test_files[i].needs_lffi && ffi_dll)
+                add_dep(ctx, cov_cmd, ffi_dll);
+            cmd_carg(&cov_cmd->cmd, "--multithreaded");
+            add_dep(ctx, coverage_tests, cov_cmd);
         }
+        Atom cov_dir_name = b_atomize_f(ctx, "%s/coverage", ctx->build_dir->data);
+        BuildTarget* coverage_dir = directory_target(ctx, cov_dir_name->data);
+        BuildTarget* coverage = cmd_target(ctx, "coverage");
+        coverage->is_phony = 1;
+        add_deps(ctx, coverage, coverage_tests, coverage_dir);
+        cmd_prog(&coverage->cmd, BUILD_OS == OS_WINDOWS ? LS("py") : LS("python3"));
+        cmd_cargs(&coverage->cmd, "Tools/coverage.py", "--root", ".",
+            "--merge-mode-functions=merge-use-line-0",
+            "--exclude", "Drp/", "--exclude", "Vendored/", "--exclude", ".*_test\\.c",
+            "--markdown");
+        cmd_argf(&coverage->cmd, "--txt=%s/coverage/coverage.txt", ctx->build_dir->data);
+        cmd_argf(&coverage->cmd, "--html-details=%s/coverage/index.html", ctx->build_dir->data);
+        cmd_argf(&coverage->cmd, "--object-directory=%s", ctx->build_dir->data);
     }
     {
         // TODO: there should be a helper in drbuild for custom compilers.
@@ -387,6 +430,12 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         StringView name = {tgt->name->length, tgt->name->data};
         if(name.text[0] == '.') continue;
         if(sv_startswith(name, (StringView){ctx->build_dir->length, ctx->build_dir->data}))
+            continue;
+        if(sv_startswith(name, SV("run_coverage")))
+            continue;
+        if(sv_startswith(name, SV("coverage_")))
+            continue;
+        if(sv_equals(name, SV("coverage-tests")))
             continue;
         if(sv_equals(name, (SV("fish-completions"))))
             continue;
