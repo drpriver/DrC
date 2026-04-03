@@ -156,6 +156,7 @@ int main(int argc, char** argv, char** envp){
         cmd_prog(&coverage->cmd, BUILD_OS == OS_WINDOWS ? LS("py") : LS("python3"));
         cmd_cargs(&coverage->cmd, "Tools/coverage.py", "--root", ".",
             "--merge-mode-functions=merge-use-line-0",
+            "--gcov-ignore-parse-errors=negative_hits.warn_once_per_file",
             "--exclude", "Drp/", "--exclude", "Vendored/", "--exclude", ".*_test\\.c",
             "--markdown");
         cmd_argf(&coverage->cmd, "--txt=%s/coverage/coverage.txt", ctx->build_dir->data);
