@@ -2094,7 +2094,6 @@ TestFunction(test_parse_decls){
                 { SV("u"), SV("union U"), SV("{42}") },
             },
         },
-            // --- Method slot skipping tests ---
         {
             "method skipping: positional init", __LINE__,
             SV("struct Foo {\n"
@@ -2144,7 +2143,6 @@ TestFunction(test_parse_decls){
                 { SV("b"), SV("struct Bar"), SV("{@0 = 10, @4 = 20}") },
             },
         },
-        // --- Plan9 struct tests ---
         {
             "plan9: positional init", __LINE__,
             SV("struct Base { int x; int y; };\n"
@@ -2234,7 +2232,6 @@ TestFunction(test_parse_decls){
                 { SV("u"), SV("union UB"), SV("{(char)3}") },
             },
         },
-        // --- Vector type tests ---
         {
             "vector init: full", __LINE__,
             SV("typedef int v4si __attribute__((vector_size(16)));\n"
@@ -2345,7 +2342,6 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("int"), .init = SV("f(1, 2)") },
             },
         },
-        // --- Named argument tests ---
         {
             "named args", __LINE__,
             SV("int f(int a, int b);\n"
@@ -2390,7 +2386,6 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("int"), .init = SV("f(1, 2, 3)") },
             },
         },
-        // --- Function call implicit cast tests ---
         {
             "call: int arg to long param", __LINE__,
             SV("long f(long x);\n"
@@ -2439,7 +2434,6 @@ TestFunction(test_parse_decls){
                 { SV("r"), SV("int"), .init = SV("f((int)c)") },
             },
         },
-        // --- Lambda tests ---
         {
             "lambda: basic immediate call", __LINE__,
             SV("int r = int(int x, int y){ return x + y; }(3, 4);\n"),
@@ -2629,7 +2623,6 @@ TestFunction(test_parse_decls){
                "int a[\"Hello\"[4] - 'n'];\n"),
             .vars = {{SV("a"), SV("int[1]")}},
         },
-        // Wide string literal constant expressions
         {
             "sizeof L string as constant", __LINE__,
             SV("int a[sizeof(L\"hello\")];\n"),
@@ -3303,7 +3296,6 @@ TestFunction(test_parse_decls){
             SV("void f(int x) { printf(\"%x\", x); }\n"),
             .funcs = { { SV("f"), SV("void(int)") } },
         },
-        // __attribute__((format(printf, ...)))
         {
             "printf attr: udf valid", __LINE__,
             SV("__attribute__((format(printf, 1, 2)))\n"
@@ -3352,7 +3344,6 @@ TestFunction(test_parse_decls){
                 { SV("has_atomic"), SV("int") },
             },
         },
-        // C23 [[attribute]] syntax (6.7.13)
         {
             "[[nodiscard]] on function", __LINE__,
             SV("[[nodiscard]] int important_func(void);\n"),
@@ -3586,6 +3577,124 @@ TestFunction(test_parse_decls){
                "}\n"),
             .funcs = {
                 { SV("f"), SV("void(void)") },
+            },
+        },
+        {
+            "typeof basic", __LINE__,
+            SV("int x;\n"
+               "typeof(x) y;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+                { SV("y"), SV("int") },
+            },
+        },
+        {
+            "typeof pointer", __LINE__,
+            SV("int *p;\n"
+               "typeof(p) q;\n"),
+            .vars = {
+                { SV("p"), SV("int *") },
+                { SV("q"), SV("int *") },
+            },
+        },
+        {
+            "typeof_unqual strips const", __LINE__,
+            SV("const int x = 0;\n"
+               "typeof_unqual(x) y;\n"),
+            .vars = {
+                { SV("x"), SV("const int") },
+                { SV("y"), SV("int") },
+            },
+        },
+        {
+            "_Atomic type specifier", __LINE__,
+            SV("_Atomic int x;\n"),
+            .vars = {
+                { SV("x"), SV("_Atomic int") },
+            },
+            .skip = 1, // _Atomic parsing unimplemented
+        },
+        {
+            "_Atomic with parens", __LINE__,
+            SV("_Atomic(int) x;\n"),
+            .vars = {
+                { SV("x"), SV("_Atomic int") },
+            },
+            .skip = 1, // _Atomic parsing unimplemented
+        },
+        {
+            "alignas on variable", __LINE__,
+            SV("alignas(16) int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "_Alignas on variable", __LINE__,
+            SV("_Alignas(8) int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "constexpr variable", __LINE__,
+            SV("constexpr int x = 42;\n"),
+            .vars = {
+                { SV("x"), SV("const int") },
+            },
+        },
+        {
+            "thread_local variable", __LINE__,
+            SV("thread_local int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "_Thread_local variable", __LINE__,
+            SV("_Thread_local int x;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "__auto_type variable", __LINE__,
+            SV("__auto_type x = 42;\n"),
+            .vars = {
+                { SV("x"), SV("int") },
+            },
+        },
+        {
+            "struct with bitfields", __LINE__,
+            SV("struct S { unsigned a : 3; unsigned b : 5; };\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "struct with anonymous bitfield", __LINE__,
+            SV("struct S { unsigned a : 3; unsigned : 5; unsigned b : 8; };\n"
+               "struct S s;\n"),
+            .vars = {
+                { SV("s"), SV("struct S") },
+            },
+        },
+        {
+            "enum with underlying type", __LINE__,
+            SV("enum E : unsigned char { A, B, C };\n"
+               "enum E e;\n"),
+            .vars = {
+                { SV("e"), SV("enum E") },
+            },
+        },
+        {
+            "_Generic in function", __LINE__,
+            SV("int f(int x) {\n"
+               "    return _Generic(x, int: 1, float: 2, default: 3);\n"
+               "}\n"),
+            .funcs = {
+                { SV("f"), SV("int(int)") },
             },
         },
     };
@@ -4637,7 +4746,6 @@ TestFunction(test_parse_errors){
                "_Static_assert(arr[-1] == 0);\n"),
             SV("(test):2:1: error: static_assert expression is not a constant expression\n"),
         },
-        // printf format checking
         {
             "printf: wrong type for %d", __LINE__,
             SV("void f(void) { printf(\"%d\", \"hello\"); }\n"),
@@ -4753,7 +4861,6 @@ TestFunction(test_parse_errors){
             SV("void f(void) { printf(\"%\"); }\n"),
             SV("(test):1:23: error: incomplete format specifier at end of string\n"),
         },
-        // invalid length modifier + specifier combos
         {
             "printf: %hs invalid", __LINE__,
             SV("void f(void) { printf(\"%hs\", \"hi\"); }\n"),
@@ -4794,7 +4901,6 @@ TestFunction(test_parse_errors){
             SV("void f(void* p) { printf(\"%Lp\", p); }\n"),
             SV("(test):1:26: error: invalid length modifier for '%p' format specifier\n"),
         },
-        // wrong type for %lc, %ls, %Lf
         {
             "printf: %lc with char*", __LINE__,
             SV("void f(void) { printf(\"%lc\", \"hello\"); }\n"),
@@ -4810,7 +4916,6 @@ TestFunction(test_parse_errors){
             SV("void f(double x) { printf(\"%Lf\", x); }\n"),
             SV("(test):1:27: error: format specifier '%Lf' (argument 1) expects 'long double', but argument has type 'double'\n"),
         },
-        // __attribute__((format(printf, ...))) errors
         {
             "printf attr: udf wrong type", __LINE__,
             SV("__attribute__((format(printf, 1, 2)))\n"
@@ -4850,6 +4955,31 @@ TestFunction(test_parse_errors){
             "anonymous function definition", __LINE__,
             SV("void(void){}\n"),
             SV("(test):1:11: error: Expected ',' or ';'\n"),
+        },
+        {
+            "double int", __LINE__,
+            SV("double int x;\n"),
+            SV("(test):1:8: error: Second type in declaration\n"),
+        },
+        {
+            "int float", __LINE__,
+            SV("int float x;\n"),
+            SV("(test):1:5: error: Second type in declaration\n"),
+        },
+        {
+            "short long", __LINE__,
+            SV("short long x;\n"),
+            SV("(test):1:7: error: long after short\n"),
+        },
+        {
+            "long short", __LINE__,
+            SV("long short x;\n"),
+            SV("(test):1:6: error: short after long\n"),
+        },
+        {
+            "long long long", __LINE__,
+            SV("long long long x;\n"),
+            SV("(test):1:11: error: Duplicate long after long long in declaration\n"),
         },
     };
     static int idx = 0;

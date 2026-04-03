@@ -498,7 +498,7 @@ repl_builtin_command(CcParser* parser, StringView input){
     re = stripped(tail);
     if(sv_iequals(input, SV("all")))
         dump = DUMP_ALL;
-    if(sv_iequals(input, SV("symbols")))
+    else if(sv_iequals(input, SV("symbols")))
         dump = DUMP_SYMBOLS;
     else if(sv_iequals(input, SV("types")) || sv_iequals(input, SV("t")))
         dump = DUMP_TYPES;

@@ -3048,6 +3048,438 @@ TestFunction(test_interpreter){
                "return !i;\n"),
             .exit_code = 1,
         },
+        {
+            "float: preinc", __LINE__,
+            SV("float f = 2.5f;\n"
+               "return (int)++f;\n"),
+            .exit_code = 3,
+        },
+        {
+            "float: postinc", __LINE__,
+            SV("float f = 2.5f;\n"
+               "int old = (int)f++;\n"
+               "return old * 10 + (int)f;\n"),
+            .exit_code = 23,
+        },
+        {
+            "float: predec", __LINE__,
+            SV("float f = 3.5f;\n"
+               "return (int)--f;\n"),
+            .exit_code = 2,
+        },
+        {
+            "float: postdec", __LINE__,
+            SV("float f = 3.5f;\n"
+               "int old = (int)f--;\n"
+               "return old * 10 + (int)f;\n"),
+            .exit_code = 32,
+        },
+        {
+            "double: preinc", __LINE__,
+            SV("double d = 9.0;\n"
+               "return (int)++d;\n"),
+            .exit_code = 10,
+        },
+        {
+            "double: postdec", __LINE__,
+            SV("double d = 5.0;\n"
+               "int old = (int)d--;\n"
+               "return old * 10 + (int)d;\n"),
+            .exit_code = 54,
+        },
+        {
+            "pointer: preinc", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "int *p = arr;\n"
+               "return *++p;\n"),
+            .exit_code = 20,
+        },
+        {
+            "pointer: postinc", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "int *p = arr;\n"
+               "int val = *p++;\n"
+               "return val * 10 + *p;\n"),
+            .exit_code = 120,
+        },
+        {
+            "pointer: predec", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "int *p = arr + 2;\n"
+               "return *--p;\n"),
+            .exit_code = 20,
+        },
+        {
+            "pointer: postdec", __LINE__,
+            SV("int arr[3] = {10, 20, 30};\n"
+               "int *p = arr + 2;\n"
+               "int val = *p--;\n"
+               "return val * 10 + *p;\n"),
+            .exit_code = 320,
+        },
+        {
+            "float: addassign", __LINE__,
+            SV("float f = 2.5f;\n"
+               "f += 1.5f;\n"
+               "return (int)f;\n"),
+            .exit_code = 4,
+        },
+        {
+            "float: subassign", __LINE__,
+            SV("float f = 10.0f;\n"
+               "f -= 3.0f;\n"
+               "return (int)f;\n"),
+            .exit_code = 7,
+        },
+        {
+            "float: mulassign", __LINE__,
+            SV("float f = 3.0f;\n"
+               "f *= 4.0f;\n"
+               "return (int)f;\n"),
+            .exit_code = 12,
+        },
+        {
+            "float: divassign", __LINE__,
+            SV("double d = 21.0;\n"
+               "d /= 3.0;\n"
+               "return (int)d;\n"),
+            .exit_code = 7,
+        },
+        {
+            "int128: mulassign", __LINE__,
+            SV("unsigned __int128 a = 6;\n"
+               "a *= 7;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "int128: divassign unsigned", __LINE__,
+            SV("unsigned __int128 a = 42;\n"
+               "a /= 6;\n"
+               "return (int)a;\n"),
+            .exit_code = 7,
+        },
+        {
+            "int128: modassign unsigned", __LINE__,
+            SV("unsigned __int128 a = 17;\n"
+               "a %= 5;\n"
+               "return (int)a;\n"),
+            .exit_code = 2,
+        },
+        {
+            "int128: andassign", __LINE__,
+            SV("unsigned __int128 a = 0xFF;\n"
+               "a &= 0x0F;\n"
+               "return (int)a;\n"),
+            .exit_code = 15,
+        },
+        {
+            "int128: orassign", __LINE__,
+            SV("unsigned __int128 a = 0xF0;\n"
+               "a |= 0x0F;\n"
+               "return (int)a;\n"),
+            .exit_code = 255,
+        },
+        {
+            "int128: xorassign", __LINE__,
+            SV("unsigned __int128 a = 0xFF;\n"
+               "a ^= 0x0F;\n"
+               "return (int)a;\n"),
+            .exit_code = 240,
+        },
+        {
+            "int128: lshiftassign", __LINE__,
+            SV("unsigned __int128 a = 1;\n"
+               "a <<= 4;\n"
+               "return (int)a;\n"),
+            .exit_code = 16,
+        },
+        {
+            "int128: rshiftassign unsigned", __LINE__,
+            SV("unsigned __int128 a = 256;\n"
+               "a >>= 4;\n"
+               "return (int)a;\n"),
+            .exit_code = 16,
+        },
+        {
+            "int128: signed divassign", __LINE__,
+            SV("signed __int128 a = -42;\n"
+               "a /= 6;\n"
+               "return (int)a + 100;\n"),
+            .exit_code = 93,
+        },
+        {
+            "int128: signed modassign", __LINE__,
+            SV("signed __int128 a = -7;\n"
+               "a %= 3;\n"
+               "return (int)a + 100;\n"),
+            .exit_code = 99,
+        },
+        {
+            "int128: signed rshiftassign", __LINE__,
+            SV("signed __int128 a = -8;\n"
+               "a >>= 1;\n"
+               "return (int)a + 100;\n"),
+            .exit_code = 96,
+        },
+        {
+            "int128: unsigned mul", __LINE__,
+            SV("unsigned __int128 a = 1000;\n"
+               "unsigned __int128 b = 1000;\n"
+               "return (int)(a * b / 10000);\n"),
+            .exit_code = 100,
+        },
+        {
+            "int128: unsigned div", __LINE__,
+            SV("unsigned __int128 a = 100;\n"
+               "unsigned __int128 b = 7;\n"
+               "return (int)(a / b);\n"),
+            .exit_code = 14,
+        },
+        {
+            "int128: unsigned mod", __LINE__,
+            SV("unsigned __int128 a = 100;\n"
+               "unsigned __int128 b = 7;\n"
+               "return (int)(a % b);\n"),
+            .exit_code = 2,
+        },
+        {
+            "int128: unsigned and", __LINE__,
+            SV("unsigned __int128 a = 0xFF;\n"
+               "unsigned __int128 b = 0x0F;\n"
+               "return (int)(a & b);\n"),
+            .exit_code = 15,
+        },
+        {
+            "int128: unsigned or", __LINE__,
+            SV("unsigned __int128 a = 0xF0;\n"
+               "unsigned __int128 b = 0x0F;\n"
+               "return (int)(a | b);\n"),
+            .exit_code = 255,
+        },
+        {
+            "int128: unsigned xor", __LINE__,
+            SV("unsigned __int128 a = 0xFF;\n"
+               "unsigned __int128 b = 0x0F;\n"
+               "return (int)(a ^ b);\n"),
+            .exit_code = 240,
+        },
+        {
+            "int128: unsigned shl", __LINE__,
+            SV("unsigned __int128 a = 1;\n"
+               "return (int)(a << 8);\n"),
+            .exit_code = 256,
+        },
+        {
+            "int128: unsigned shr", __LINE__,
+            SV("unsigned __int128 a = 256;\n"
+               "return (int)(a >> 4);\n"),
+            .exit_code = 16,
+        },
+        {
+            "int128: unsigned eq", __LINE__,
+            SV("unsigned __int128 a = 42;\n"
+               "unsigned __int128 b = 42;\n"
+               "return a == b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: unsigned ne", __LINE__,
+            SV("unsigned __int128 a = 42;\n"
+               "unsigned __int128 b = 43;\n"
+               "return a != b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: unsigned lt", __LINE__,
+            SV("unsigned __int128 a = 10;\n"
+               "unsigned __int128 b = 20;\n"
+               "return a < b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: unsigned gt", __LINE__,
+            SV("unsigned __int128 a = 20;\n"
+               "unsigned __int128 b = 10;\n"
+               "return a > b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: unsigned le", __LINE__,
+            SV("unsigned __int128 a = 10;\n"
+               "unsigned __int128 b = 10;\n"
+               "return a <= b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_integer", __LINE__,
+            SV("return (int).is_integer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_float", __LINE__,
+            SV("return (float).is_float;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_float int false", __LINE__,
+            SV("return (int).is_float;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: is_pointer", __LINE__,
+            SV("return (int*).is_pointer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_pointer int false", __LINE__,
+            SV("return (int).is_pointer;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: is_struct", __LINE__,
+            SV("struct S { int x; };\n"
+               "return (struct S).is_struct;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_union", __LINE__,
+            SV("union U { int x; float f; };\n"
+               "return (union U).is_union;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_array", __LINE__,
+            SV("return (int[3]).is_array;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_enum", __LINE__,
+            SV("enum E { A, B };\n"
+               "return (enum E).is_enum;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_arithmetic int", __LINE__,
+            SV("return (int).is_arithmetic;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_arithmetic float", __LINE__,
+            SV("return (double).is_arithmetic;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_arithmetic enum", __LINE__,
+            SV("enum E { A };\n"
+               "return (enum E).is_arithmetic;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_arithmetic ptr false", __LINE__,
+            SV("return (int*).is_arithmetic;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: sizeof", __LINE__,
+            SV("return (int)(int).sizeof_;\n"),
+            .exit_code = 4,
+        },
+        {
+            "type introspection: alignof", __LINE__,
+            SV("return (int)(int).alignof_;\n"),
+            .exit_code = 4,
+        },
+        {
+            "type introspection: is_signed", __LINE__,
+            SV("return (int).is_signed;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_unsigned", __LINE__,
+            SV("return (unsigned).is_unsigned;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_const", __LINE__,
+            SV("return (const int).is_const;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_const false", __LINE__,
+            SV("return (int).is_const;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: is_volatile", __LINE__,
+            SV("return (volatile int).is_volatile;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_function", __LINE__,
+            SV("return (int(int)).is_function;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_callable fn ptr", __LINE__,
+            SV("return (int(*)(int)).is_callable;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_callable int false", __LINE__,
+            SV("return (int).is_callable;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: pointee", __LINE__,
+            SV("return (int*).pointee.is_integer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: count", __LINE__,
+            SV("return (int)(int[5]).count;\n"),
+            .exit_code = 5,
+        },
+        {
+            "type introspection: is_incomplete", __LINE__,
+            SV("struct S;\n"
+               "return (struct S).is_incomplete;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_incomplete false", __LINE__,
+            SV("struct S { int x; };\n"
+               "return (struct S).is_incomplete;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: is_variadic", __LINE__,
+            SV("return (int(int, ...)).is_variadic;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_variadic false", __LINE__,
+            SV("return (int(int)).is_variadic;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: unqual", __LINE__,
+            SV("return (const volatile int).unqual.is_const;\n"),
+            .exit_code = 0,
+        },
+        {
+            "type introspection: tag", __LINE__,
+            SV("struct Foo { int x; };\n"
+               "const char* s = (struct Foo).tag;\n"
+               "return s[0] == 'F' && s[1] == 'o' && s[2] == 'o';\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: name", __LINE__,
+            SV("const char* s = (int).name;\n"
+               "return s[0] == 'i' && s[1] == 'n' && s[2] == 't';\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
@@ -3227,7 +3659,6 @@ TestFunction(test_cross_target){
             .exit_code = 15,
             .target = CC_TARGET_AARCH64_LINUX,
         },
-        // sizeof(long) differs: 4 on windows, 8 on linux/macos
         {
             "windows sizeof long", __LINE__,
             SV("return sizeof(long);\n"),
@@ -3240,7 +3671,6 @@ TestFunction(test_cross_target){
             .exit_code = 8,
             .target = CC_TARGET_X86_64_LINUX,
         },
-        // struct layout with long: padding differs
         {
             "windows struct layout with long", __LINE__,
             SV("typedef struct { char c; long x; } S;\n"
@@ -3255,7 +3685,6 @@ TestFunction(test_cross_target){
             .exit_code = 16, // 1 + 7 pad + 8
             .target = CC_TARGET_X86_64_LINUX,
         },
-        // char signedness: unsigned on aarch64 linux, signed elsewhere
         {
             "aarch64 linux char unsigned", __LINE__,
             SV("char c = 255;\n"
@@ -3270,7 +3699,6 @@ TestFunction(test_cross_target){
             .exit_code = 1,
             .target = CC_TARGET_X86_64_LINUX,
         },
-        // long arithmetic: ensure values computed with target long size
         {
             "windows long overflow", __LINE__,
             SV("unsigned long x = 0xFFFFFFFF;\n"
@@ -3285,7 +3713,6 @@ TestFunction(test_cross_target){
             .exit_code = 1, // 64-bit doesn't wrap
             .target = CC_TARGET_X86_64_LINUX,
         },
-        // sizeof(long double) differs
         {
             "aarch64 macos sizeof long double", __LINE__,
             SV("return sizeof(long double);\n"),
@@ -3298,7 +3725,6 @@ TestFunction(test_cross_target){
             .exit_code = 16,
             .target = CC_TARGET_X86_64_LINUX,
         },
-        // size_t type differs: unsigned long on LP64, unsigned long long on windows
         {
             "windows sizeof size_t", __LINE__,
             SV("return sizeof(__SIZE_TYPE__);\n"),

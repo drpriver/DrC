@@ -1400,9 +1400,20 @@ TestFunction(test_condition){
             SV("#if __has_include(__FILE__)\n"
                "yes\n"
                "#endif"),
-            SV("\nyes\n"), 
+            SV("\nyes\n"),
         },
-
+        {"warning directive", __LINE__, 0,
+            SV("#warning test warning\nafter"),
+            SV("\nafter")},
+        {"error in false branch", __LINE__, 0,
+            SV("#if 0\n#error should not fire\n#endif\nok"),
+            SV("\n\n\nok")},
+        {"line directive", __LINE__, 0,
+            SV("#line 100\nvalue"),
+            SV("\nvalue")},
+        {"line directive with file", __LINE__, 0,
+            SV("#line 100 \"fake.c\"\nvalue"),
+            SV("\nvalue")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1533,6 +1544,12 @@ TestFunction(test_erroneous_condition){
         {"negate INT64_MIN", __LINE__,
             SV("#if -(-9223372036854775807 - 1)\n#endif"),
             SV("(test):1:5: error: overflow in negation in #if\n")},
+        {"error directive", __LINE__,
+            SV("#error this is an error message"),
+            SV("(test):1:2: error: #error this is an error message\n")},
+        {"error directive empty", __LINE__,
+            SV("#error\n"),
+            SV("(test):1:2: error: #error \n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1554,31 +1571,26 @@ TestFunction(test_if_eval){
     struct {
         const char* name; int line; _Bool disabled; StringView inp, exp;
     } test_cases[] = {
-        // Basic constants
         {"if 0", __LINE__, 0,
             SV("#if 0\nyes\n#endif"), SV("\n\n")},
         {"if 1", __LINE__, 0,
             SV("#if 1\nyes\n#endif"), SV("\nyes\n")},
         {"if 42", __LINE__, 0,
             SV("#if 42\nyes\n#endif"), SV("\nyes\n")},
-        // Hex
         {"hex 0x10", __LINE__, 0,
             SV("#if 0x10 == 16\nyes\n#endif"), SV("\nyes\n")},
         {"hex 0xFF", __LINE__, 0,
             SV("#if 0xFF == 255\nyes\n#endif"), SV("\nyes\n")},
         {"hex 0XA", __LINE__, 0,
             SV("#if 0XA == 10\nyes\n#endif"), SV("\nyes\n")},
-        // Octal
         {"octal 077", __LINE__, 0,
             SV("#if 077 == 63\nyes\n#endif"), SV("\nyes\n")},
         {"octal 010", __LINE__, 0,
             SV("#if 010 == 8\nyes\n#endif"), SV("\nyes\n")},
-        // Binary
         {"binary 0b101", __LINE__, 0,
             SV("#if 0b101 == 5\nyes\n#endif"), SV("\nyes\n")},
         {"binary 0B1111", __LINE__, 0,
             SV("#if 0B1111 == 15\nyes\n#endif"), SV("\nyes\n")},
-        // Integer suffixes
         {"suffix U", __LINE__, 0,
             SV("#if 42U == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix L", __LINE__, 0,
@@ -1591,7 +1603,6 @@ TestFunction(test_if_eval){
             SV("#if 42uLL == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix LLU", __LINE__, 0,
             SV("#if 100LLU == 100\nyes\n#endif"), SV("\nyes\n")},
-        // MSVC integer suffixes
         {"suffix i8", __LINE__, 0,
             SV("#if 42i8 == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix i16", __LINE__, 0,
@@ -1616,7 +1627,6 @@ TestFunction(test_if_eval){
             SV("#if 42I64 == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix Ui32 mixed case", __LINE__, 0,
             SV("#if 42Ui32 == 42\nyes\n#endif"), SV("\nyes\n")},
-        // Character constants
         {"char 'A'", __LINE__, 0,
             SV("#if 'A' == 65\nyes\n#endif"), SV("\nyes\n")},
         {"char '0'", __LINE__, 0,
@@ -1645,7 +1655,6 @@ TestFunction(test_if_eval){
             SV("#if '\\u0041' == 65\nyes\n#endif"), SV("\nyes\n")},
         {"char '\\U00000041'", __LINE__, 0,
             SV("#if '\\U00000041' == 65\nyes\n#endif"), SV("\nyes\n")},
-        // Unary operators
         {"unary !", __LINE__, 0,
             SV("#if !0\nyes\n#endif"), SV("\nyes\n")},
         {"unary ! truthy", __LINE__, 0,
@@ -1660,7 +1669,6 @@ TestFunction(test_if_eval){
             SV("#if -1 < 0\nyes\n#endif"), SV("\nyes\n")},
         {"unary - value", __LINE__, 0,
             SV("#if -5 + 5 == 0\nyes\n#endif"), SV("\nyes\n")},
-        // Arithmetic
         {"add", __LINE__, 0,
             SV("#if 1 + 2 == 3\nyes\n#endif"), SV("\nyes\n")},
         {"sub", __LINE__, 0,
@@ -1671,12 +1679,10 @@ TestFunction(test_if_eval){
             SV("#if 42 / 6 == 7\nyes\n#endif"), SV("\nyes\n")},
         {"mod", __LINE__, 0,
             SV("#if 17 % 5 == 2\nyes\n#endif"), SV("\nyes\n")},
-        // Shifts
         {"left shift", __LINE__, 0,
             SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
         {"right shift", __LINE__, 0,
             SV("#if 256 >> 4 == 16\nyes\n#endif"), SV("\nyes\n")},
-        // Relational
         {"less than true", __LINE__, 0,
             SV("#if 1 < 2\nyes\n#endif"), SV("\nyes\n")},
         {"less than false", __LINE__, 0,
@@ -1687,7 +1693,6 @@ TestFunction(test_if_eval){
             SV("#if 2 <= 2\nyes\n#endif"), SV("\nyes\n")},
         {"greater equal", __LINE__, 0,
             SV("#if 3 >= 3\nyes\n#endif"), SV("\nyes\n")},
-        // Equality
         {"equal true", __LINE__, 0,
             SV("#if 5 == 5\nyes\n#endif"), SV("\nyes\n")},
         {"equal false", __LINE__, 0,
@@ -1696,7 +1701,6 @@ TestFunction(test_if_eval){
             SV("#if 5 != 6\nyes\n#endif"), SV("\nyes\n")},
         {"not equal false", __LINE__, 0,
             SV("#if 5 != 5\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
-        // Bitwise
         {"bitwise and", __LINE__, 0,
             SV("#if (0xF0 & 0x0F) == 0\nyes\n#endif"), SV("\nyes\n")},
         {"bitwise and 2", __LINE__, 0,
@@ -1705,7 +1709,6 @@ TestFunction(test_if_eval){
             SV("#if (0xF0 | 0x0F) == 0xFF\nyes\n#endif"), SV("\nyes\n")},
         {"bitwise xor", __LINE__, 0,
             SV("#if (0xFF ^ 0x0F) == 0xF0\nyes\n#endif"), SV("\nyes\n")},
-        // Logical
         {"logical and tt", __LINE__, 0,
             SV("#if 1 && 1\nyes\n#endif"), SV("\nyes\n")},
         {"logical and tf", __LINE__, 0,
@@ -1718,7 +1721,6 @@ TestFunction(test_if_eval){
             SV("#if 1 || 0\nyes\n#endif"), SV("\nyes\n")},
         {"logical or ft", __LINE__, 0,
             SV("#if 0 || 1\nyes\n#endif"), SV("\nyes\n")},
-        // Ternary
         {"ternary true", __LINE__, 0,
             SV("#if (1 ? 2 : 3) == 2\nyes\n#endif"), SV("\nyes\n")},
         {"ternary false", __LINE__, 0,
@@ -1727,12 +1729,10 @@ TestFunction(test_if_eval){
             SV("#if (1 ? 1 ? 10 : 20 : 30) == 10\nyes\n#endif"), SV("\nyes\n")},
         {"ternary nested false", __LINE__, 0,
             SV("#if (0 ? 10 : 1 ? 20 : 30) == 20\nyes\n#endif"), SV("\nyes\n")},
-        // Parentheses
         {"parens override prec", __LINE__, 0,
             SV("#if (1 + 2) * 3 == 9\nyes\n#endif"), SV("\nyes\n")},
         {"nested parens", __LINE__, 0,
             SV("#if ((2 + 3) * (4 - 1)) == 15\nyes\n#endif"), SV("\nyes\n")},
-        // defined() combined with expressions
         {"defined && defined", __LINE__, 0,
             SV("#define FOO\n#define BAR\n#if defined(FOO) && defined(BAR)\nyes\n#endif"),
             SV("\n\n\nyes\n")},
@@ -1742,91 +1742,70 @@ TestFunction(test_if_eval){
         {"defined || defined", __LINE__, 0,
             SV("#define FOO\n#if defined(FOO) || defined(BAR)\nyes\n#endif"),
             SV("\n\nyes\n")},
-        // Macro expansion in #if
         {"macro value in if", __LINE__, 0,
             SV("#define X 42\n#if X == 42\nyes\n#endif"),
             SV("\n\nyes\n")},
         {"macro expr in if", __LINE__, 0,
             SV("#define A 10\n#define B 20\n#if A + B == 30\nyes\n#endif"),
             SV("\n\n\nyes\n")},
-        // #elif with expressions
         {"elif expression", __LINE__, 0,
             SV("#if 0\nno\n#elif 2 + 2 == 4\nyes\n#endif"),
             SV("\n\n\nyes\n")},
         {"elif chain", __LINE__, 0,
             SV("#if 0\na\n#elif 0\nb\n#elif 1\nc\n#elif 1\nd\n#endif"),
             SV("\n\n\n\n\nc\n\n\n")},
-        // Undefined macro evaluates to 0
         {"undefined macro is 0", __LINE__, 0,
             SV("#if UNDEFINED\nyes\n#else\nno\n#endif"),
             SV("\n\n\nno\n")},
         {"undefined macro == 0", __LINE__, 0,
             SV("#if UNDEFINED == 0\nyes\n#endif"),
             SV("\nyes\n")},
-        // true keyword
         {"true keyword", __LINE__, 0,
             SV("#if true\nyes\n#endif"),
             SV("\nyes\n")},
 
-        // ---- Precedence stress tests ----
-
-        // * binds tighter than +
         {"prec: + vs *", __LINE__, 0,
             SV("#if 1 + 2 * 3 == 7\nyes\n#endif"), SV("\nyes\n")},
         {"prec: * vs + reversed", __LINE__, 0,
             SV("#if 2 * 3 + 1 == 7\nyes\n#endif"), SV("\nyes\n")},
-        // - and * precedence
         {"prec: - vs *", __LINE__, 0,
             SV("#if 10 - 2 * 3 == 4\nyes\n#endif"), SV("\nyes\n")},
-        // / binds tighter than -
         {"prec: - vs /", __LINE__, 0,
             SV("#if 10 - 6 / 2 == 7\nyes\n#endif"), SV("\nyes\n")},
-        // % same precedence as *
         {"prec: % vs +", __LINE__, 0,
             SV("#if 10 + 7 % 3 == 11\nyes\n#endif"), SV("\nyes\n")},
-        // << binds tighter than ==, looser than +
         {"prec: << vs +", __LINE__, 0,
             SV("#if 1 << 2 + 1 == 8\nyes\n#endif"), SV("\nyes\n")},
         {"prec: << vs ==", __LINE__, 0,
             SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
-        // >> similar
         {"prec: >> vs +", __LINE__, 0,
             SV("#if 32 >> 2 + 1 == 4\nyes\n#endif"), SV("\nyes\n")},
-        // < binds tighter than ==
         {"prec: < vs ==", __LINE__, 0,
             SV("#if (1 < 2) == 1\nyes\n#endif"), SV("\nyes\n")},
-        // == binds tighter than &
         {"prec: == vs &", __LINE__, 0,
             SV("#if 3 & 1 == 1\nyes\n#endif"), SV("\nyes\n")},
         {"prec: == vs & explicit", __LINE__, 0,
             SV("#if (3 & 1) == 1\nyes\n#endif"), SV("\nyes\n")},
-        // & binds tighter than ^
         {"prec: & vs ^", __LINE__, 0,
             SV("#if (0xF & 0x3 ^ 0x1) == 2\nyes\n#endif"), SV("\nyes\n")},
-        // ^ binds tighter than |
         {"prec: ^ vs |", __LINE__, 0,
             SV("#if (1 | 2 ^ 3) == 1 | (2 ^ 3)\nyes\n#endif"), SV("\nyes\n")},
-        // | binds tighter than &&
         {"prec: | vs &&", __LINE__, 0,
             SV("#if 1 | 0 && 0 | 1\nyes\n#endif"), SV("\nyes\n")},
-        // && binds tighter than ||
         {"prec: && vs ||", __LINE__, 0,
             SV("#if 1 || 0 && 0\nyes\n#endif"), SV("\nyes\n")},
         {"prec: || && classic", __LINE__, 0,
             SV("#if 0 || 1 && 1\nyes\n#endif"), SV("\nyes\n")},
         {"prec: && || false path", __LINE__, 0,
             SV("#if 0 && 0 || 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
-        // || binds tighter than ?:
         {"prec: || vs ?:", __LINE__, 0,
             SV("#if (1 || 0 ? 10 : 20) == 10\nyes\n#endif"), SV("\nyes\n")},
-        // Ternary is right-associative
         {"ternary right-assoc", __LINE__, 0,
             SV("#if (1 ? 2 : 3 ? 4 : 5) == 2\nyes\n#endif"), SV("\nyes\n")},
         {"ternary right-assoc 2", __LINE__, 0,
             SV("#if (0 ? 2 : 1 ? 4 : 5) == 4\nyes\n#endif"), SV("\nyes\n")},
         {"ternary right-assoc 3", __LINE__, 0,
             SV("#if (0 ? 2 : 0 ? 4 : 5) == 5\nyes\n#endif"), SV("\nyes\n")},
-        // Left-associativity of arithmetic
         {"left-assoc sub", __LINE__, 0,
             SV("#if 10 - 3 - 2 == 5\nyes\n#endif"), SV("\nyes\n")},
         {"left-assoc div", __LINE__, 0,
@@ -1835,7 +1814,6 @@ TestFunction(test_if_eval){
             SV("#if 17 % 10 % 4 == 3\nyes\n#endif"), SV("\nyes\n")},
         {"left-assoc shift", __LINE__, 0,
             SV("#if 1 << 2 << 3 == 32\nyes\n#endif"), SV("\nyes\n")},
-        // Complex multi-operator expressions
         {"complex expr 1", __LINE__, 0,
             SV("#if 2 + 3 * 4 - 6 / 2 == 11\nyes\n#endif"), SV("\nyes\n")},
         {"complex expr 2", __LINE__, 0,
@@ -1844,7 +1822,6 @@ TestFunction(test_if_eval){
             SV("#if 0xFF & 0x0F | 0xF0 == 0xFF\nyes\n#endif"), SV("\nyes\n")},
         {"complex expr 4", __LINE__, 0,
             SV("#if 1 + 2 > 2 && 3 * 4 == 12\nyes\n#endif"), SV("\nyes\n")},
-        // Unary in complex expressions
         {"unary in expr", __LINE__, 0,
             SV("#if -1 + 2 == 1\nyes\n#endif"), SV("\nyes\n")},
         {"double negation", __LINE__, 0,
@@ -1853,26 +1830,33 @@ TestFunction(test_if_eval){
             SV("#if !0 && !0\nyes\n#endif"), SV("\nyes\n")},
         {"complement and mask", __LINE__, 0,
             SV("#if (~0xF0 & 0xFF) == 0x0F\nyes\n#endif"), SV("\nyes\n")},
-        // All comparison operators
         {"cmp chain", __LINE__, 0,
             SV("#if 1 < 2 && 2 > 1 && 3 <= 3 && 3 >= 3 && 4 == 4 && 4 != 5\nyes\n#endif"),
             SV("\nyes\n")},
-        // Large ternary chain
         {"ternary chain", __LINE__, 0,
             SV("#if (0 ? 1 : 0 ? 2 : 0 ? 3 : 4) == 4\nyes\n#endif"),
             SV("\nyes\n")},
-        // Shift precedence vs comparison
         {"shift vs compare", __LINE__, 0,
             SV("#if 1 << 4 > 10\nyes\n#endif"), SV("\nyes\n")},
-        // Nested defined with complex logic
         {"complex defined", __LINE__, 0,
             SV("#define A\n#define B\n#define C\n"
                "#if defined(A) && (defined(B) || defined(D)) && !defined(E)\nyes\n#endif"),
             SV("\n\n\n\nyes\n")},
-        // Bitwise ops full chain
         {"bitwise chain", __LINE__, 0,
             SV("#if ((0x0F & 0xFF) ^ 0x05 | 0x10) == 0x1A\nyes\n#endif"),
             SV("\nyes\n")},
+        {"defined no parens", __LINE__, 0,
+            SV("#define X\n#if defined X\nyes\n#endif"),
+            SV("\n\nyes\n")},
+        {"defined no parens undef", __LINE__, 0,
+            SV("#if defined NOPE\nyes\n#else\nno\n#endif"),
+            SV("\n\n\nno\n")},
+        {"has_c_attribute unknown", __LINE__, 0,
+            SV("#if __has_c_attribute(nonexistent_fake_attr)\nyes\n#else\nno\n#endif"),
+            SV("\n\n\nno\n")},
+        {"defined in ternary", __LINE__, 0,
+            SV("#define X\n#if defined(X) ? 1 : 0\nyes\n#endif"),
+            SV("\n\nyes\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1925,7 +1909,6 @@ TestFunction(test_include){
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("__pragma(once)\n#define VAL ok\n"),
             {0}, SV("\n\n\n\nok")},
-        // Include guard optimization tests
         {"include guard prevents double inclusion", __LINE__, 0,
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
