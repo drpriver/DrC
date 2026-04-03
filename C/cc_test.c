@@ -5258,6 +5258,71 @@ TestFunction(test_parse_errors){
             SVI("__auto_type __int128 x = 1;\n"),
             SVI("(test):1:13: error: __int128 after __auto_type\n"),
         },
+        {
+            "duplicate short", __LINE__,
+            SVI("short short x;\n"),
+            SVI("(test):1:7: error: Duplicate short in declaration\n"),
+        },
+        {
+            "short after __int128", __LINE__,
+            SVI("__int128 short x;\n"),
+            SVI("(test):1:10: error: short after __int128\n"),
+        },
+        {
+            "short after __auto_type", __LINE__,
+            SVI("__auto_type short x = 1;\n"),
+            SVI("(test):1:13: error: short after __auto_type\n"),
+        },
+        {
+            "extern after static", __LINE__,
+            SVI("static extern int x;\n"),
+            SVI("(test):1:8: error: extern after static\n"),
+        },
+        {
+            "extern after typedef", __LINE__,
+            SVI("typedef extern int x;\n"),
+            SVI("(test):1:9: error: extern after typedef\n"),
+        },
+        {
+            "extern after constexpr", __LINE__,
+            SVI("constexpr extern int x = 1;\n"),
+            SVI("(test):1:11: error: extern after constexpr\n"),
+        },
+        {
+            "static after extern", __LINE__,
+            SVI("extern static int x;\n"),
+            SVI("(test):1:8: error: static after extern\n"),
+        },
+        {
+            "static after typedef", __LINE__,
+            SVI("typedef static int x;\n"),
+            SVI("(test):1:9: error: static after typedef\n"),
+        },
+        {
+            "inline after typedef", __LINE__,
+            SVI("typedef inline int x;\n"),
+            SVI("(test):1:9: error: inline after typedef\n"),
+        },
+        {
+            "signed after __auto_type", __LINE__,
+            SVI("__auto_type signed x = 1;\n"),
+            SVI("(test):1:13: error: signed after __auto_type\n"),
+        },
+        {
+            "long after __int128", __LINE__,
+            SVI("__int128 long x;\n"),
+            SVI("(test):1:10: error: long after __int128\n"),
+        },
+        {
+            "double with int", __LINE__,
+            SVI("int double x;\n"),
+            SVI("(test):1:5: error: double with other types\n"),
+        },
+        {
+            "auto after typedef", __LINE__,
+            SVI("typedef auto x;\n"),
+            SVI("(test):1:9: error: auto after typedef\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

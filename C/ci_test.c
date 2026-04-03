@@ -4847,6 +4847,245 @@ TestFunction(test_interpreter){
                "return m[0][0] + m[1][0] + m[1][2];\n"),
             .exit_code = 10,
         },
+        {
+            "enum: implicit conversion to int", __LINE__,
+            SV("enum E { A = 1, B = 2, C = 3 };\n"
+               "int x = A + B + C;\n"
+               "return x;\n"),
+            .exit_code = 6,
+        },
+        {
+            "sizeof enum", __LINE__,
+            SV("enum E { X };\n"
+               "return sizeof(enum E) == sizeof(int);\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: comma expression in static_assert", __LINE__,
+            SV("_Static_assert((0, 1), \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: double to unsigned cast", __LINE__,
+            SV("constexpr unsigned a = (unsigned)42.7;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: unsigned to float cast", __LINE__,
+            SV("constexpr float f = (float)42u;\n"
+               "return (int)f;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: long long to unsigned cast", __LINE__,
+            SV("constexpr unsigned a = (unsigned)42ll;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: unsigned long long to int cast", __LINE__,
+            SV("constexpr int a = (int)42ull;\n"
+               "return a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: char to int cast", __LINE__,
+            SV("constexpr int a = (int)'A';\n"
+               "return a;\n"),
+            .exit_code = 65,
+        },
+        {
+            "constexpr: float to unsigned long long cast", __LINE__,
+            SV("constexpr unsigned long long a = (unsigned long long)42.5f;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: int to unsigned long long cast", __LINE__,
+            SV("constexpr unsigned long long a = (unsigned long long)42;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: unsigned to long long cast", __LINE__,
+            SV("constexpr long long a = (long long)42u;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: logical not unsigned", __LINE__,
+            SV("constexpr int a = !0u;\n"
+               "constexpr int b = !1u;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: logical not long long", __LINE__,
+            SV("constexpr int a = !0ll;\n"
+               "constexpr int b = !1ll;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: logical not unsigned long long", __LINE__,
+            SV("constexpr int a = !0ull;\n"
+               "constexpr int b = !1ull;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: logical not double", __LINE__,
+            SV("constexpr int a = !0.0;\n"
+               "constexpr int b = !1.0;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: negation long long", __LINE__,
+            SV("constexpr long long a = -42ll;\n"
+               "return (int)a + 100;\n"),
+            .exit_code = 58,
+        },
+        {
+            "constexpr: negation unsigned long long", __LINE__,
+            SV("constexpr unsigned long long a = -1ull;\n"
+               "return a > 100ull;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: bitwise not int", __LINE__,
+            SV("constexpr int a = ~0xFF;\n"
+               "return a & 0xFF;\n"),
+            .exit_code = 0,
+        },
+        {
+            "constexpr: bitwise not unsigned", __LINE__,
+            SV("constexpr unsigned a = ~0xFFu;\n"
+               "return (int)(a & 0xFFu);\n"),
+            .exit_code = 0,
+        },
+        {
+            "constexpr: bitwise not long long", __LINE__,
+            SV("constexpr long long a = ~0xFFll;\n"
+               "return (int)(a & 0xFFll);\n"),
+            .exit_code = 0,
+        },
+        {
+            "constexpr: bitwise not unsigned long long", __LINE__,
+            SV("constexpr unsigned long long a = ~0xFFull;\n"
+               "return (int)(a & 0xFFull);\n"),
+            .exit_code = 0,
+        },
+        {
+            "static_assert: int32 all binary ops", __LINE__,
+            SV("_Static_assert(100 - 58 == 42, \"\");\n"
+               "_Static_assert(6 * 7 == 42, \"\");\n"
+               "_Static_assert(84 / 2 == 42, \"\");\n"
+               "_Static_assert(85 % 43 == 42, \"\");\n"
+               "_Static_assert((0xFF & 0x2A) == 0x2A, \"\");\n"
+               "_Static_assert((0x20 | 0x0A) == 0x2A, \"\");\n"
+               "_Static_assert((0x3F ^ 0x15) == 0x2A, \"\");\n"
+               "_Static_assert((21 << 1) == 42, \"\");\n"
+               "_Static_assert((84 >> 1) == 42, \"\");\n"
+               "_Static_assert(42 < 43, \"\");\n"
+               "_Static_assert(43 > 42, \"\");\n"
+               "_Static_assert(42 <= 42, \"\");\n"
+               "_Static_assert(42 >= 42, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u8 string multi-byte char", __LINE__,
+            SV("unsigned char s[] = u8\"\\u00E9\";\n"
+               "return s[0] == 0xC3 && s[1] == 0xA9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u8 string 3-byte char", __LINE__,
+            SV("unsigned char s[] = u8\"\\u1234\";\n"
+               "return s[0] == 0xE1 && s[1] == 0x88 && s[2] == 0xB4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u8 string 4-byte char", __LINE__,
+            SV("unsigned char s[] = u8\"\\U0001F600\";\n"
+               "return s[0] == 0xF0 && s[1] == 0x9F && s[2] == 0x98 && s[3] == 0x80;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u string surrogate pair", __LINE__,
+            SV("unsigned short s[] = u\"\\U0001F600\";\n"
+               "return s[0] == 0xD83D && s[1] == 0xDE00;\n"),
+            .exit_code = 1,
+        },
+        {
+            "L string multi-char", __LINE__,
+            SV("int s[] = L\"\\u00E9\\u1234\";\n"
+               "return s[0] == 0xE9 && s[1] == 0x1234;\n"),
+            .exit_code = 1,
+        },
+        {
+            "U string high codepoints", __LINE__,
+            SV("unsigned int s[] = U\"\\U0001F600\\u00E9\";\n"
+               "return s[0] == 0x1F600 && s[1] == 0xE9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "string octal escape", __LINE__,
+            SV("char s[] = \"\\101\\102\\103\";\n"
+               "return s[0] == 'A' && s[1] == 'B' && s[2] == 'C';\n"),
+            .exit_code = 1,
+        },
+        {
+            "string hex escape", __LINE__,
+            SV("char s[] = \"\\x41\\x42\\x43\";\n"
+               "return s[0] == 'A' && s[1] == 'B' && s[2] == 'C';\n"),
+            .exit_code = 1,
+        },
+        {
+            "string all basic escapes", __LINE__,
+            SV("char s[] = \"\\a\\b\\f\\n\\r\\t\\v\\\\\\'\\\"\\?\";\n"
+               "return s[0] == 7 && s[1] == 8 && s[2] == 12 && s[3] == 10;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u16 string hex content", __LINE__,
+            SV("unsigned short s[] = u\"\\x41\\x42\";\n"
+               "return s[0] == 0x41 && s[1] == 0x42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "u32 string hex content", __LINE__,
+            SV("unsigned int s[] = U\"\\x41\\x42\";\n"
+               "return s[0] == 0x41 && s[1] == 0x42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "wchar string hex content", __LINE__,
+            SV("int s[] = L\"\\x41\\x42\";\n"
+               "return s[0] == 0x41 && s[1] == 0x42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: uint32 all binary ops", __LINE__,
+            SV("_Static_assert(100u - 58u == 42u, \"\");\n"
+               "_Static_assert(6u * 7u == 42u, \"\");\n"
+               "_Static_assert(84u / 2u == 42u, \"\");\n"
+               "_Static_assert(85u % 43u == 42u, \"\");\n"
+               "_Static_assert((0xFFu & 0x2Au) == 0x2Au, \"\");\n"
+               "_Static_assert((0x20u | 0x0Au) == 0x2Au, \"\");\n"
+               "_Static_assert((0x3Fu ^ 0x15u) == 0x2Au, \"\");\n"
+               "_Static_assert((21u << 1) == 42u, \"\");\n"
+               "_Static_assert((84u >> 1) == 42u, \"\");\n"
+               "_Static_assert(42u < 43u, \"\");\n"
+               "_Static_assert(43u > 42u, \"\");\n"
+               "_Static_assert(42u <= 42u, \"\");\n"
+               "_Static_assert(42u >= 42u, \"\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
