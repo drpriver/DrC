@@ -3743,6 +3743,171 @@ TestFunction(test_interpreter){
                "return x;\n"),
             .exit_code = 67,
         },
+        {
+            "constexpr: int arithmetic", __LINE__,
+            SV("constexpr int a = 3 + 4 * 5;\n"
+               "return a;\n"),
+            .exit_code = 23,
+        },
+        {
+            "constexpr: negation", __LINE__,
+            SV("constexpr int a = -42;\n"
+               "return a + 100;\n"),
+            .exit_code = 58,
+        },
+        {
+            "constexpr: logical not", __LINE__,
+            SV("constexpr int a = !0;\n"
+               "constexpr int b = !1;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: bitwise not", __LINE__,
+            SV("constexpr int a = ~0 & 0xFF;\n"
+               "return a;\n"),
+            .exit_code = 255,
+        },
+        {
+            "constexpr: shift", __LINE__,
+            SV("constexpr int a = 1 << 4;\n"
+               "constexpr int b = 256 >> 4;\n"
+               "return a + b;\n"),
+            .exit_code = 32,
+        },
+        {
+            "constexpr: comparison", __LINE__,
+            SV("constexpr int a = (3 < 5);\n"
+               "constexpr int b = (5 > 3);\n"
+               "constexpr int c = (3 <= 3);\n"
+               "constexpr int d = (3 >= 3);\n"
+               "constexpr int e = (3 == 3);\n"
+               "constexpr int f = (3 != 4);\n"
+               "return a + b + c + d + e + f;\n"),
+            .exit_code = 6,
+        },
+        {
+            "constexpr: bitwise ops", __LINE__,
+            SV("constexpr int a = 0xFF & 0x0F;\n"
+               "constexpr int b = 0xF0 | 0x0F;\n"
+               "constexpr int c = 0xFF ^ 0x0F;\n"
+               "return a + b - c;\n"),
+            .exit_code = 15 + 255 - 240,
+        },
+        {
+            "constexpr: modulo", __LINE__,
+            SV("constexpr int a = 17 % 5;\n"
+               "return a;\n"),
+            .exit_code = 2,
+        },
+        {
+            "constexpr: ternary", __LINE__,
+            SV("constexpr int a = 1 ? 10 : 20;\n"
+               "constexpr int b = 0 ? 10 : 20;\n"
+               "return a + b;\n"),
+            .exit_code = 30,
+        },
+        {
+            "constexpr: cast int to float", __LINE__,
+            SV("constexpr float f = (float)7;\n"
+               "return (int)f;\n"),
+            .exit_code = 7,
+        },
+        {
+            "constexpr: cast float to int", __LINE__,
+            SV("constexpr int a = (int)3.7f;\n"
+               "return a;\n"),
+            .exit_code = 3,
+        },
+        {
+            "constexpr: float arithmetic", __LINE__,
+            SV("constexpr float a = 2.5f + 1.5f;\n"
+               "return (int)a;\n"),
+            .exit_code = 4,
+        },
+        {
+            "constexpr: double arithmetic", __LINE__,
+            SV("constexpr double a = 10.0 - 3.0;\n"
+               "return (int)a;\n"),
+            .exit_code = 7,
+        },
+        {
+            "constexpr: float comparison", __LINE__,
+            SV("constexpr int a = (1.5f < 2.5f);\n"
+               "return a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: unsigned arithmetic", __LINE__,
+            SV("constexpr unsigned a = 10u + 32u;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: unsigned long long", __LINE__,
+            SV("constexpr unsigned long long a = 100ull * 2ull;\n"
+               "return (int)a;\n"),
+            .exit_code = 200,
+        },
+        {
+            "constexpr: logical and or", __LINE__,
+            SV("constexpr int a = (1 && 1);\n"
+               "constexpr int b = (1 && 0);\n"
+               "constexpr int c = (0 || 1);\n"
+               "constexpr int d = (0 || 0);\n"
+               "return a * 1000 + b * 100 + c * 10 + d;\n"),
+            .exit_code = 1010,
+        },
+        {
+            "constexpr: enum value", __LINE__,
+            SV("enum { A = 2 + 3, B = A * 2 };\n"
+               "return B;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: sizeof in constexpr", __LINE__,
+            SV("constexpr int a = sizeof(int) + sizeof(char);\n"
+               "return a;\n"),
+            .exit_code = 5,
+        },
+        {
+            "constexpr: float negation", __LINE__,
+            SV("constexpr float f = -3.0f;\n"
+               "return (int)f + 100;\n"),
+            .exit_code = 97,
+        },
+        {
+            "constexpr: double negation", __LINE__,
+            SV("constexpr double d = -7.0;\n"
+               "return (int)d + 100;\n"),
+            .exit_code = 93,
+        },
+        {
+            "constexpr: float logical not", __LINE__,
+            SV("constexpr int a = !0.0f;\n"
+               "constexpr int b = !1.0f;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 10,
+        },
+        {
+            "constexpr: long long arithmetic", __LINE__,
+            SV("constexpr long long a = 100ll + 200ll;\n"
+               "return (int)a;\n"),
+            .exit_code = 300,
+        },
+        {
+            "static_assert with arithmetic", __LINE__,
+            SV("_Static_assert(3 * 4 == 12, \"mul\");\n"
+               "_Static_assert(10 / 2 == 5, \"div\");\n"
+               "_Static_assert(17 % 5 == 2, \"mod\");\n"
+               "_Static_assert((0xFF & 0x0F) == 0x0F, \"and\");\n"
+               "_Static_assert((0xF0 | 0x0F) == 0xFF, \"or\");\n"
+               "_Static_assert((0xFF ^ 0x0F) == 0xF0, \"xor\");\n"
+               "_Static_assert((1 << 4) == 16, \"shl\");\n"
+               "_Static_assert((256 >> 4) == 16, \"shr\");\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
