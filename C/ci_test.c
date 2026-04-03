@@ -4033,6 +4033,32 @@ TestFunction(test_interpreter){
             .exit_code = 16,
         },
         {
+            "constexpr: explicit cast int to double", __LINE__,
+            SV("constexpr double d = (double)42;\n"
+               "return (int)d;\n"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: explicit cast double to float", __LINE__,
+            SV("constexpr float f = (float)3.14;\n"
+               "return (int)(f * 100.0f);\n"),
+            .exit_code = 314,
+        },
+        {
+            "constexpr: explicit cast float to double", __LINE__,
+            SV("constexpr double d = (double)2.5f;\n"
+               "return (int)(d * 10.0);\n"),
+            .exit_code = 25,
+        },
+        {
+            "int128: unsigned ge", __LINE__,
+            SV("unsigned __int128 a = 10;\n"
+               "unsigned __int128 b = 10;\n"
+               "unsigned __int128 c = 5;\n"
+               "return (a >= b) + (a >= c);\n"),
+            .exit_code = 2,
+        },
+        {
             "constexpr: float comparison all ops", __LINE__,
             SV("_Static_assert(1.0f == 1.0f, \"\");\n"
                "_Static_assert(1.0f != 2.0f, \"\");\n"
