@@ -28,6 +28,9 @@
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+enum {
+    EXCLUDE_FROM_MAKEFILE = 0x1,
+};
 
 static int mkfile(BuildCtx*, BuildTarget*);
 static int do_install(BuildCtx*, BuildTarget*);
@@ -74,6 +77,7 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* test = phony_target(ctx, "test");
     BuildTarget* selftests = phony_target(ctx, "selftests");
     BuildTarget* coverage_tests = phony_target(ctx, "coverage-tests");
+    coverage_tests->user_bits |= EXCLUDE_FROM_MAKEFILE;
     add_dep(ctx, test, tests);
     static const struct {
         const char* file;
@@ -124,6 +128,7 @@ int main(int argc, char** argv, char** envp){
             // Coverage variant
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
             BuildTarget* cov_bin = exe_target(ctx, cov_name->data, file, OS_NATIVE);
+            get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(cov_bin->compiler_flavor != COMPILER_CL){
                 if(cov_bin->compiler_flavor == COMPILER_CLANG_CL)
                     cmd_carg(&cov_bin->cmd, "/clang:--coverage");
@@ -144,6 +149,7 @@ int main(int argc, char** argv, char** envp){
             Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
             BuildTarget* cov_cmd = cmd_target(ctx, cov_cmd_name->data);
             cov_cmd->is_phony = 1;
+            cov_cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
             target_prog(ctx, cov_cmd, cov_bin);
             if(test_files[i].needs_lffi && ffi_dll)
                 add_dep(ctx, cov_cmd, ffi_dll);
@@ -312,6 +318,26 @@ int main(int argc, char** argv, char** envp){
         BuildTarget* compile_commands_json = get_target(ctx, "compile_commands.json");
         add_dep(ctx, tags, compile_commands_json);
     }
+    {
+        BuildTarget* docs = phony_target(ctx, "docs");
+        static const char* doc_files[] = {"README", "EXTENSIONS"};
+        for(size_t i = 0; i < sizeof doc_files / sizeof doc_files[0]; i++){
+            Atom md_name = b_atomize_f(ctx, "%s.md", doc_files[i]);
+            BuildTarget* out = alloc_targeta(ctx, md_name);
+            out->is_generated = 1;
+            out->user_bits |= EXCLUDE_FROM_MAKEFILE;
+            Atom cmd_name = b_atomize_f(ctx, "compile_%s", doc_files[i]);
+            BuildTarget* cmd = cmd_target(ctx, cmd_name->data);
+            cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
+            cmd_prog(&cmd->cmd, LS("dndc"));
+            Atom dnd_name = b_atomize_f(ctx, "%s.dnd", doc_files[i]);
+            target_src_inp(ctx, cmd, dnd_name->data);
+            cmd_cargs(&cmd->cmd, "--md", "--no-css");
+            target_argout(ctx, cmd, "-o", out);
+            add_dep(ctx, docs, out);
+        }
+    }
+    get_target(ctx, "fish-completions")->user_bits |= EXCLUDE_FROM_MAKEFILE;
     return execute_targets(ctx);
 }
 
@@ -424,26 +450,19 @@ copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
 static
 int
 mkfile(BuildCtx* ctx, BuildTarget* _tgt){
-    (void)_tgt;
     MStringBuilder sb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
     AtomMapItems items = AM_items(&ctx->targets);
     msb_write_literal(&sb, "BUILDTARGETS:=");
     size_t len = sb.cursor;
     for(size_t i = 0; i < items.count; i++){
         BuildTarget* tgt = items.data[i].p;
+        if(tgt == _tgt) continue;
+        if(tgt->user_bits & EXCLUDE_FROM_MAKEFILE)
+            continue;
         StringView name = {tgt->name->length, tgt->name->data};
         if(name.text[0] == '.') continue;
         if(sv_startswith(name, (StringView){ctx->build_dir->length, ctx->build_dir->data}))
             continue;
-        if(sv_startswith(name, SV("run_coverage")))
-            continue;
-        if(sv_startswith(name, SV("coverage_")))
-            continue;
-        if(sv_equals(name, SV("coverage-tests")))
-            continue;
-        if(sv_equals(name, (SV("fish-completions"))))
-            continue;
-        if(tgt == _tgt) continue;
         if(len + tgt->name->length + 1 > 60){
             msb_write_literal(&sb, "\\\n  ");
             len = 2;

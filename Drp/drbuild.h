@@ -501,6 +501,7 @@ struct BuildTarget {
         };
         uint8_t _bits2;
     };
+    uint16_t user_bits;
     const void* user_data;
     BCoro coro;
 };
