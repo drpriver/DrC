@@ -36,7 +36,7 @@ static int mkfile(BuildCtx*, BuildTarget*);
 static int do_install(BuildCtx*, BuildTarget*);
 static int fetch_libffi(BuildCtx*, BuildTarget*);
 static int copy_libffi_dll(BuildCtx*, BuildTarget*);
-static void link_libffi(BuildCtx*, BuildTarget*, BuildTarget* _Null_unspecified);
+static void link_libffi(BuildCtx*, BuildTarget*, enum OS, BuildTarget* _Null_unspecified);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
@@ -50,9 +50,6 @@ int main(int argc, char** argv, char** envp){
     add_dep(ctx, all, cpp);
 
     BuildTarget* cc = exe_target(ctx, "drc", "cc.c", ctx->target.os);
-    if(ctx->target.os == OS_LINUX || (ctx->target.os == OS_NATIVE && BUILD_OS == OS_LINUX)){
-        target_linkarg(ctx, cc, "-ldl");
-    }
     BuildTarget* ffi_lib = NULL;
     BuildTarget* ffi_dll = NULL;
     BuildTarget* fetch_ffi = coro_target(ctx, "fetch-libffi", fetch_libffi, NULL);
@@ -65,13 +62,11 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, copy_ffi, ffi_lib);
         add_dep(ctx, ffi_dll, copy_ffi);
         add_out(ctx, copy_ffi, ffi_dll);
-        cmd_carg(&cc->cmd, "-IFetched/libffi");
-        target_linkinp(ctx, cc, ffi_lib);
     }
     else {
         fetch_ffi->is_phony = 1;
-        target_linkarg(ctx, cc, "-lffi");
     }
+    link_libffi(ctx, cc, ctx->target.os, ffi_lib);
     add_dep(ctx, all, cc);
 
     BuildTarget* tests = phony_target(ctx, "tests");
@@ -101,7 +96,7 @@ int main(int argc, char** argv, char** envp){
             const char* cmd_name = test_files[i].cmd_name;
             BuildTarget* bin = exe_target(ctx, name, file, OS_NATIVE);
             if(test_files[i].needs_lffi)
-                link_libffi(ctx, bin, ffi_lib);
+                link_libffi(ctx, bin, OS_NATIVE, ffi_lib);
             add_dep(ctx, all, bin);
             BuildTarget* cmd = cmd_target(ctx, cmd_name);
             cmd->is_phony = 1;
@@ -128,7 +123,7 @@ int main(int argc, char** argv, char** envp){
                     cmd_carg(&cov_bin->cmd, "--coverage");
             }
             if(test_files[i].needs_lffi)
-                link_libffi(ctx, cov_bin, ffi_lib);
+                link_libffi(ctx, cov_bin, OS_NATIVE, ffi_lib);
             Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
             BuildTarget* cov_cmd = cmd_target(ctx, cov_cmd_name->data);
             cov_cmd->is_phony = 1;
@@ -201,7 +196,7 @@ int main(int argc, char** argv, char** envp){
         add_dep(ctx, all, cc_opt);
         ctx->target.native_sanitize = saved_ns;
         cmd_carg(&cc_opt->cmd, "-O2");
-        link_libffi(ctx, cc_opt, ffi_lib);
+        link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
 
         selfhost = cmd_target(ctx, "selfhost");
         selfhost->is_phony = 1;
@@ -424,13 +419,13 @@ copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
 
 static
 void
-link_libffi(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* _Null_unspecified ffi_lib){
-    if(BUILD_OS == OS_WINDOWS){
+link_libffi(BuildCtx* ctx, BuildTarget* tgt, enum OS os, BuildTarget* _Null_unspecified ffi_lib){
+    if(os == OS_WINDOWS || (os == OS_NATIVE && BUILD_OS == OS_WINDOWS)){
         cmd_carg(&tgt->cmd, "-IFetched/libffi");
         target_linkinp(ctx, tgt, ffi_lib);
     }
     else {
-        if(BUILD_OS == OS_LINUX)
+        if(os == OS_LINUX || (os == OS_NATIVE && BUILD_OS == OS_LINUX))
             target_linkarg(ctx, tgt, "-ldl");
         target_linkarg(ctx, tgt, "-lffi");
     }
