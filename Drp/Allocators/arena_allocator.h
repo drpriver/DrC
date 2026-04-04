@@ -10,7 +10,9 @@
 #include <assert.h>
 #include <stdint.h>
 #include "allocator.h"
+#ifndef ARENA_EXPLICIT_ALLOCATOR
 #include "mallocator.h"
+#endif
 
 
 #ifdef __clang__
@@ -40,6 +42,8 @@
 // independently and maintains a linked list of these big allocations.
 //
 typedef struct ArenaAllocator ArenaAllocator;
+static inline Allocator ArenaAllocator_base_allocator(const ArenaAllocator* aa);
+
 
 force_inline
 Allocator
@@ -90,8 +94,8 @@ Big_init(BigListNode* prev, BigAllocation* ba){
 
 static inline
 void*_Nullable
-Big_alloc(BigListNode* prev, size_t size){
-    BigAllocation* ba = Allocator_alloc(MALLOCATOR, size + sizeof(*ba));
+Big_alloc(ArenaAllocator* aa, BigListNode* prev, size_t size){
+    BigAllocation* ba = Allocator_alloc(ArenaAllocator_base_allocator(aa), size + sizeof(*ba));
     if(!ba) return NULL;
     Big_init(prev, ba);
     ba->size = size;
@@ -100,8 +104,8 @@ Big_alloc(BigListNode* prev, size_t size){
 
 static inline
 void*_Nullable
-Big_zalloc(BigListNode* prev, size_t size){
-    BigAllocation* ba = Allocator_zalloc(MALLOCATOR, size + sizeof(*ba));
+Big_zalloc(ArenaAllocator* aa, BigListNode* prev, size_t size){
+    BigAllocation* ba = Allocator_zalloc(ArenaAllocator_base_allocator(aa), size + sizeof(*ba));
     if(!ba) return NULL;
     Big_init(prev, ba);
     ba->size = size;
@@ -110,11 +114,11 @@ Big_zalloc(BigListNode* prev, size_t size){
 
 static inline
 void*_Nullable
-Big_realloc(void* a, size_t old, size_t size){
+Big_realloc(ArenaAllocator*aa, void* a, size_t old, size_t size){
     BigAllocation* ba = (BigAllocation*)a - 1;
     BigListNode* prev = ba->prev;
     BigListNode* next = ba->next;
-    ba = Allocator_realloc(MALLOCATOR, ba, old+sizeof(*ba), size+sizeof(*ba));
+    ba = Allocator_realloc(ArenaAllocator_base_allocator(aa), ba, old+sizeof(*ba), size+sizeof(*ba));
     if(!ba) return NULL;
     if(prev) prev->next = &ba->node;
     if(next) next->prev = &ba->node;
@@ -124,12 +128,12 @@ Big_realloc(void* a, size_t old, size_t size){
 
 static inline
 void
-Big_free(const void*_Nullable a, size_t size){
+Big_free(ArenaAllocator* aa, const void*_Nullable a, size_t size){
     if(!a) return;
     const BigAllocation* ba = (const BigAllocation*)a-1;
     BigListNode* prev = ba->prev;
     BigListNode* next = ba->next;
-    Allocator_free(MALLOCATOR, ba, size+sizeof(*ba));
+    Allocator_free(ArenaAllocator_base_allocator(aa), ba, size+sizeof(*ba));
     if(prev) prev->next = next;
     if(next) next->prev = prev;
 }
@@ -137,6 +141,9 @@ Big_free(const void*_Nullable a, size_t size){
 typedef struct Arena Arena;
 
 struct ArenaAllocator {
+    #ifdef ARENA_EXPLICIT_ALLOCATOR
+    Allocator base;
+    #endif
     Arena*_Nullable arena;
     BigListNode big_allocations;
 };
@@ -189,7 +196,7 @@ static inline
 warn_unused
 int
 ArenaAllocator_alloc_arena(ArenaAllocator* aa){
-    Arena* arena = Allocator_alloc(MALLOCATOR, sizeof(*arena));
+    Arena* arena = Allocator_alloc(ArenaAllocator_base_allocator(aa), sizeof(*arena));
     if(!arena) return 1;
     arena->prev = aa->arena;
     arena->used = 0;
@@ -209,7 +216,7 @@ void*_Nullable
 ArenaAllocator_alloc(ArenaAllocator* aa, size_t size){
     size = ArenaAllocator_round_size_up(size);
     if(size > BIG_ALLOC_THRESH)
-        return Big_alloc(&aa->big_allocations, size);
+        return Big_alloc(aa, &aa->big_allocations, size);
     if(!aa->arena){
         if(ArenaAllocator_alloc_arena(aa) != 0){
             return NULL;
@@ -235,7 +242,7 @@ void*_Nullable
 ArenaAllocator_zalloc(ArenaAllocator* aa, size_t size){
     size = ArenaAllocator_round_size_up(size);
     if(size > BIG_ALLOC_THRESH)
-        return Big_zalloc(&aa->big_allocations, size);
+        return Big_zalloc(aa, &aa->big_allocations, size);
     if(!aa->arena){
         if(ArenaAllocator_alloc_arena(aa) != 0){
             return NULL;
@@ -278,19 +285,19 @@ ArenaAllocator_realloc(ArenaAllocator* aa, void*_Nullable ptr, size_t old_size, 
     if(old_size == new_size) return ptr;
     if(old_size > BIG_ALLOC_THRESH){
         if(new_size > BIG_ALLOC_THRESH)
-            return Big_realloc((void*)ptr, old_size, new_size);
+            return Big_realloc(aa, (void*)ptr, old_size, new_size);
         // reallocing from a big allocation to an arena allocation.
         void* result = ArenaAllocator_alloc(aa, new_size);
         if(!result) return NULL;
         assert(old_size > new_size);
         memcpy(result, ptr, new_size);
-        Big_free(ptr, old_size);
+        Big_free(aa, ptr, old_size);
         return result;
     }
     if(new_size > BIG_ALLOC_THRESH){
         assert(old_size <= BIG_ALLOC_THRESH);
         // reallocing from arena allocation to big allocation
-        void* result = Big_alloc(&aa->big_allocations, new_size);
+        void* result = Big_alloc(aa, &aa->big_allocations, new_size);
         if(!result) return NULL;
         if(old_size){
             memcpy(result, ptr, old_size);
@@ -338,14 +345,14 @@ ArenaAllocator_free_all(ArenaAllocator*_Nullable aa){
     while(arena){
         Arena* to_free = arena;
         arena = arena->prev;
-        Allocator_free(MALLOCATOR, to_free, sizeof(*to_free));
+        Allocator_free(ArenaAllocator_base_allocator((ArenaAllocator*)aa), to_free, sizeof(*to_free));
     }
     BigAllocation* ba = (BigAllocation*)aa->big_allocations.next;
     assert(aa->big_allocations.prev == NULL);
     while(ba){
         BigAllocation* to_free = ba;
         ba = (BigAllocation*)ba->next;
-        Allocator_free(MALLOCATOR, to_free, sizeof(*to_free)+to_free->size);
+        Allocator_free(ArenaAllocator_base_allocator((ArenaAllocator*)aa), to_free, sizeof(*to_free)+to_free->size);
     }
     aa->arena = NULL;
     aa->big_allocations.next = NULL;
@@ -361,7 +368,7 @@ ArenaAllocator_reset(ArenaAllocator* aa){
     while(ba){
         BigAllocation* to_free = ba;
         ba = (BigAllocation*)ba->next;
-        Allocator_free(MALLOCATOR, to_free, sizeof(*to_free)+to_free->size);
+        Allocator_free(ArenaAllocator_base_allocator(aa), to_free, sizeof(*to_free)+to_free->size);
     }
     aa->big_allocations.next = NULL;
     aa->big_allocations.prev = NULL;
@@ -370,7 +377,7 @@ ArenaAllocator_reset(ArenaAllocator* aa){
         if(!arena->prev) break;
         Arena* to_free = arena;
         arena = arena->prev;
-        Allocator_free(MALLOCATOR, to_free, sizeof *to_free);
+        Allocator_free(ArenaAllocator_base_allocator(aa), to_free, sizeof *to_free);
     }
     if(arena) arena->used = 0;
     aa->arena = arena;
@@ -383,7 +390,7 @@ ArenaAllocator_free(ArenaAllocator*aa, const void*_Nullable ptr, size_t size){
     if(!size) return;
     size = ArenaAllocator_round_size_up(size);
     if(size > BIG_ALLOC_THRESH){
-        Big_free(ptr, size);
+        Big_free(aa, ptr, size);
         return;
     }
     Arena* arena = aa->arena;
@@ -411,6 +418,17 @@ ArenaAllocator_stats(const ArenaAllocator* aa){
         result.big_count++;
     }
     return result;
+}
+
+static inline
+Allocator
+ArenaAllocator_base_allocator(const ArenaAllocator* aa){
+    #ifdef ARENA_EXPLICIT_ALLOCATOR
+    return aa->base;
+    #else
+    (void)aa;
+    return MALLOCATOR;
+    #endif
 }
 
 #ifdef __clang__

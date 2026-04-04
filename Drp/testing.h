@@ -1115,7 +1115,22 @@ struct TestJobData {
 force_inline
 int
 test_atomic_increment(int*_Nonnull p){
-    return __atomic_fetch_add(p, 1, __ATOMIC_SEQ_CST);
+    return __atomic_fetch_add(p, 1, __ATOMIC_RELAXED);
+}
+force_inline
+int
+test_atomic_load_acquire(int*_Nonnull p){
+    return __atomic_load_n(p, __ATOMIC_ACQUIRE);
+}
+force_inline
+void
+test_atomic_store_release(int*_Nonnull p, int val){
+    __atomic_store_n(p, val, __ATOMIC_RELEASE);
+}
+force_inline
+_Bool
+test_atomic_cas(int*_Nonnull p, int expected, int desired){
+    return __atomic_compare_exchange_n(p, &expected, desired, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
 #elif defined(_MSC_VER)
@@ -1125,13 +1140,46 @@ test_atomic_increment(int*_Nonnull p){
     // _Static_assert(sizeof(LONG) == sizeof(int), "");
     return InterlockedIncrement((LONG volatile*)p)-1;
 }
+force_inline
+int
+test_atomic_load_acquire(int*_Nonnull p){
+    int val = *(volatile int*)p;
+    _ReadBarrier();
+    return val;
+}
+force_inline
+void
+test_atomic_store_release(int*_Nonnull p, int val){
+    _WriteBarrier();
+    *(volatile int*)p = val;
+}
+force_inline
+_Bool
+test_atomic_cas(int*_Nonnull p, int expected, int desired){
+    return InterlockedCompareExchange((LONG volatile*)p, desired, expected) == expected;
+}
 #else
 #include <stdatomic.h>
 force_inline
 int
 test_atomic_increment(int*_Nonnull p){
     _Static_assert(ATOMIC_INT_LOCK_FREE, "");
-    return atomic_fetch_add((_Atomic(int)*)p, 1);
+    return atomic_fetch_add_explicit((_Atomic(int)*)p, 1, memory_order_relaxed);
+}
+force_inline
+int
+test_atomic_load_acquire(int*_Nonnull p){
+    return atomic_load_explicit((_Atomic(int)*)p, memory_order_acquire);
+}
+force_inline
+void
+test_atomic_store_release(int*_Nonnull p, int val){
+    atomic_store_explicit((_Atomic(int)*)p, val, memory_order_release);
+}
+force_inline
+_Bool
+test_atomic_cas(int*_Nonnull p, int expected, int desired){
+    return atomic_compare_exchange_strong_explicit((_Atomic(int)*)p, &expected, desired, memory_order_acq_rel, memory_order_acquire);
 }
 #endif
 

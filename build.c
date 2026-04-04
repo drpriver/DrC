@@ -80,12 +80,14 @@ int main(int argc, char** argv, char** envp){
         const char* name;
         const char* cmd_name;
         _Bool needs_lffi;
+        _Bool skip_self_hosted;
     } test_files[] = {
-        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0},
-        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0},
-        {"C/cc_test.c", "cc_test", "run_cc_test", 0},
-        {"C/ci_test.c", "ci_test", "run_ci_test", 0},
-        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1},
+        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0, 0},
+        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0, 0},
+        {"C/cc_test.c", "cc_test", "run_cc_test", 0, 0},
+        {"C/ci_test.c", "ci_test", "run_ci_test", 0, 0},
+        {"C/ci_oom_test.c", "ci_oom_test", "run_ci_oom_test", 0, 1},
+        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1, 0},
     };
     {
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
@@ -231,6 +233,7 @@ int main(int argc, char** argv, char** envp){
             add_dep(ctx, selftests, selfhost);
 
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
+            if(test_files[i].skip_self_hosted) continue;
             Atom name = b_atomize_f(ctx, "self_%s", test_files[i].name);
             BuildTarget* cmd = cmd_target(ctx, name->data);
             cmd->is_phony = 1;
