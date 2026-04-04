@@ -339,7 +339,9 @@ cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView he
                     msb_write_char(sb, '/');
             }
             msb_write_str(sb, header_name.text, header_name.length);
-            if(fc_is_file(cpp->fc)){
+            int fc_err = fc_is_file(cpp->fc);
+            if(fc_err == FC_ERROR_OOM) return CPP_OOM_ERROR;
+            if(fc_err == FC_OK){
                 // fc_is_file consumed the path, rebuild it
                 if(dir.length){
                     msb_write_str(sb, dir.text, dir.length);
@@ -371,7 +373,9 @@ cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView he
             if(msb_peek(sb) != '/')
                 msb_write_char(sb, '/');
             msb_write_str(sb, header_name.text, header_name.length);
-            if(fc_is_file(cpp->fc)){
+            int fc_err = fc_is_file(cpp->fc);
+            if(fc_err == FC_ERROR_OOM) return CPP_OOM_ERROR;
+            if(fc_err == FC_OK){
                 // fc_is_file consumed the path, rebuild it
                 msb_write_str(sb, d.text, d.length);
                 if(d.text[d.length-1] != '/')
@@ -398,7 +402,9 @@ cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView he
                 msb_write_str(sb, header_name.text, fw_len);
                 msb_write_str(sb, ".framework/Headers/", 19);
                 msb_write_str(sb, remaining, remaining_len);
-                if(fc_is_file(cpp->fc)){
+                int fc_err = fc_is_file(cpp->fc);
+                if(fc_err == FC_ERROR_OOM) return CPP_OOM_ERROR;
+                if(fc_err == FC_OK){
                     // fc_is_file consumed the path, rebuild it
                     msb_write_str(sb, d.text, d.length);
                     if(d.text[d.length-1] != '/')
@@ -4894,9 +4900,7 @@ cpp_cache_builtin_header(CppPreprocessor* cpp, StringView name, StringView conte
     MStringBuilder* sb = fc_path_builder(cpp->fc);
     msb_write_str(sb, "<builtin>/", 10);
     msb_write_str(sb, name.text, name.length);
-    if(fc_cache_file(cpp->fc, content))
-        return CPP_OOM_ERROR;
-    return 0;
+    return fc_cache_file(cpp->fc, content);
 }
 
 static
@@ -6712,7 +6716,7 @@ cpp_include_file_via_file_cache(CppPreprocessor* cpp, StringView path){
     fc_write_path(cpp->fc, path.text, path.length);
     StringView txt;
     err = fc_read_file(cpp->fc, &txt);
-    if(err) return CPP_FILE_NOT_FOUND_ERROR;
+    if(err) return err;
     CppFrame init = {
         .file_id = (uint32_t)cpp->fc->map.count-1,
         .txt = txt,

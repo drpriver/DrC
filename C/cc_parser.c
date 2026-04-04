@@ -10577,7 +10577,9 @@ cc_register_extern_var(CcParser* p, StringView name, CcQualType type){
     var->name = a;
     var->type = type;
     var->extern_ = 1;
-    return cc_scope_insert_var(al, &p->global, a, var);
+    int err = cc_scope_insert_var(al, &p->global, a, var);
+    if(err) Allocator_free(al, var, sizeof *var);
+    return err;
 }
 
 static

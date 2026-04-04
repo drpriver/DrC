@@ -19,6 +19,9 @@ enum {
     _cc_runtime_error = 8,
     _cc_invalid_value_error = 9,
     _cc_symbol_not_found_error = 10,
+    _cc_io_error = 11,
+    _cc_not_a_file_error = 12,
+    _cc_already_cached_error = 13,
 };
 static const char* const _cc_error_names[] = {
     [_cc_no_error]                       = "No Error",
@@ -32,5 +35,8 @@ static const char* const _cc_error_names[] = {
     [_cc_runtime_error]                  = "Runtime error",
     [_cc_invalid_value_error]            = "Invalid value",
     [_cc_symbol_not_found_error]         = "Symbol not found",
+    [_cc_io_error]                       = "I/O error",
+    [_cc_not_a_file_error]               = "Not a file",
+    [_cc_already_cached_error]           = "Already cached",
 };
 #endif

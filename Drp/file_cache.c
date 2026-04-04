@@ -102,6 +102,10 @@ fc_create_entry(FileCache* fc){
         fc->map.data = data;
         fc->map.cap = new_cap;
     }
+    if(fc->path_builder.errored){
+        msb_destroy(&fc->path_builder);
+        return NULL;
+    }
     LongString path = msb_detach_ls(&fc->path_builder);
     uint32_t hash = hash_align1(path.text, path.length);
     uint32_t cap2 = (uint32_t)fc->map.cap*2;
@@ -124,21 +128,22 @@ fc_create_entry(FileCache* fc){
 }
 
 static
-_Bool
+int
 fc_is_file(FileCache* fc){
-    _Bool result = 0;
+    int result = FC_ERROR_NOT_FOUND;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
-        result = f->is_file;
+        result = f->is_file ? FC_OK : FC_ERROR_NOT_FILE;
         goto finally;
     }
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
+    if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
     {
         MStringBuilder16 wb = {.allocator = fc->allocator};
         msb16_write_utf8(&wb, f->path.text, f->path.length);
-        if(wb.errored){ msb16_destroy(&wb); goto finally; }
+        if(wb.errored){ msb16_destroy(&wb); result = FC_ERROR_OOM; goto finally; }
         msb16_nul_terminate(&wb);
         DWORD attrs = GetFileAttributesW((LPCWSTR)wb.data);
         msb16_destroy(&wb);
@@ -149,8 +154,8 @@ fc_is_file(FileCache* fc){
         }
         else {
             f->exists = 1;
-            result = !(attrs & FILE_ATTRIBUTE_DIRECTORY);
-            f->is_file = result;
+            f->is_file = !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+            result = f->is_file ? FC_OK : FC_ERROR_NOT_FILE;
         }
     }
     #else
@@ -164,10 +169,10 @@ fc_is_file(FileCache* fc){
     else {
         f->valid = 1;
         f->exists = 1;
-        result = S_ISREG(s.st_mode);
-        f->is_file = result;
+        f->is_file = S_ISREG(s.st_mode);
         f->size_cached = 1;
         f->data_size = s.st_size;
+        result = f->is_file ? FC_OK : FC_ERROR_NOT_FILE;
     }
     #endif
     finally:
@@ -178,7 +183,7 @@ fc_is_file(FileCache* fc){
 static
 int
 fc_read_file(FileCache* fc, StringView* outdata){
-    int result = ENOENT;
+    int result = FC_ERROR_NOT_FOUND;
     #ifdef _WIN32
     HANDLE fh = INVALID_HANDLE_VALUE;
     #else
@@ -188,12 +193,13 @@ fc_read_file(FileCache* fc, StringView* outdata){
     if(f && f->valid){
         if(f->data_cached){
             *outdata = (StringView){f->data.n_bytes, f->data.buff};
-            result = 0;
+            result = FC_OK;
             goto finally;
         }
     }
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
+    if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
     {
         MStringBuilder16 wb = {.allocator = fc->allocator};
@@ -207,7 +213,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
         f->valid = 1;
         f->unreadable = 1;
         f->is_file = 0;
-        result = ENOENT;
+        result = FC_ERROR_NOT_FOUND;
         goto finally;
     }
     LARGE_INTEGER size;
@@ -217,7 +223,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
         f->is_file = 0;
         f->size_cached = 0;
         f->data_cached = 0;
-        result = EIO;
+        result = FC_ERROR_IO;
         goto finally;
     }
     f->valid = 1;
@@ -228,7 +234,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
     void* data = Allocator_alloc(fc->allocator, f->data_size);
     if(!data){
         f->data_cached = 0;
-        result = ENOMEM;
+        result = FC_ERROR_OOM;
         goto finally;
     }
     size_t nread = 0;
@@ -238,12 +244,12 @@ fc_read_file(FileCache* fc, StringView* outdata){
         DWORD n;
         if(!ReadFile(fh, (char*)data + nread, to_read, &n, NULL)){
             Allocator_free(fc->allocator, data, f->data_size);
-            result = EIO;
+            result = FC_ERROR_IO;
             goto finally;
         }
         if(n == 0){
             Allocator_free(fc->allocator, data, f->data_size);
-            result = EIO;
+            result = FC_ERROR_IO;
             goto finally;
         }
         nread += n;
@@ -252,14 +258,14 @@ fc_read_file(FileCache* fc, StringView* outdata){
     f->data.buff = data;
     f->data.n_bytes = nread;
     *outdata = (StringView){f->data.n_bytes, f->data.buff};
-    result = 0;
+    result = FC_OK;
     #else
     fd = open(f->path.text, O_RDONLY);
     if(fd < 0){
         f->valid = 1;
         f->unreadable = 1;
         f->is_file = 0;
-        result = errno;
+        result = FC_ERROR_NOT_FOUND;
         goto finally;
     }
     struct stat s;
@@ -270,7 +276,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
         f->is_file = 0;
         f->size_cached = 0;
         f->data_cached = 0;
-        result = errno;
+        result = FC_ERROR_IO;
         goto finally;
     }
     else {
@@ -280,7 +286,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
             f->size_cached = 0;
             f->data_cached = 0;
             f->is_file = 0;
-            result = ENOTBLK;
+            result = FC_ERROR_NOT_FILE;
             goto finally;
         }
         f->is_file = 1;
@@ -290,7 +296,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
     void* data = Allocator_alloc(fc->allocator, f->data_size);
     if(!data){
         f->data_cached = 0;
-        result = ENOMEM;
+        result = FC_ERROR_OOM;
         goto finally;
     }
     size_t nread = 0;
@@ -301,13 +307,13 @@ fc_read_file(FileCache* fc, StringView* outdata){
         if(e < 0){
             if(errno == EINTR)
                 continue;
-            result = errno;
             Allocator_free(fc->allocator, data, f->data_size);
+            result = FC_ERROR_IO;
             goto finally;
         }
         if(e == 0){
-            result = EIO; // XXX: right code, but file size changed on us.
             Allocator_free(fc->allocator, data, f->data_size);
+            result = FC_ERROR_IO;
             goto finally;
         }
         nread += e;
@@ -316,7 +322,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
     f->data.buff = data;
     f->data.n_bytes = nread;
     *outdata = (StringView){f->data.n_bytes, f->data.buff};
-    result = 0;
+    result = FC_OK;
     #endif
     finally:
     #ifdef _WIN32
@@ -331,17 +337,18 @@ fc_read_file(FileCache* fc, StringView* outdata){
 static
 int
 fc_get_size(FileCache* fc, size_t* sz){
-    int result = ENOENT;
+    int result = FC_ERROR_NOT_FOUND;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
         if(f->size_cached){
             *sz = f->data_size;
-            result = 0;
+            result = FC_OK;
             goto finally;
         }
     }
     if(!fc->may_read_real_files) goto finally;
     if(!f) f = fc_create_entry(fc);
+    if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
     {
         MStringBuilder16 wb = {.allocator = fc->allocator};
@@ -354,7 +361,7 @@ fc_get_size(FileCache* fc, size_t* sz){
             f->valid = 1;
             f->exists = 0;
             f->is_file = 0;
-            result = ENOENT;
+            result = FC_ERROR_NOT_FOUND;
             goto finally;
         }
         LARGE_INTEGER size;
@@ -363,7 +370,7 @@ fc_get_size(FileCache* fc, size_t* sz){
             f->valid = 1;
             f->exists = 1;
             f->is_file = 0;
-            result = EIO;
+            result = FC_ERROR_IO;
             goto finally;
         }
         CloseHandle(fh);
@@ -373,7 +380,7 @@ fc_get_size(FileCache* fc, size_t* sz){
         f->size_cached = 1;
         f->data_size = (size_t)size.QuadPart;
         *sz = f->data_size;
-        result = 0;
+        result = FC_OK;
     }
     #else
     struct stat s;
@@ -382,7 +389,7 @@ fc_get_size(FileCache* fc, size_t* sz){
         f->valid = 1;
         f->exists = 0;
         f->is_file = 0;
-        result = errno;
+        result = FC_ERROR_NOT_FOUND;
     }
     else {
         f->valid = 1;
@@ -391,14 +398,14 @@ fc_get_size(FileCache* fc, size_t* sz){
             f->size_cached = 0;
             f->data_cached = 0;
             f->is_file = 0;
-            result = ENOTBLK;
+            result = FC_ERROR_NOT_FILE;
             goto finally;
         }
         f->is_file = 1;
         f->size_cached = 1;
         f->data_size = s.st_size;
         *sz = f->data_size;
-        result = 0;
+        result = FC_OK;
         goto finally;
     }
     #endif
@@ -410,15 +417,15 @@ fc_get_size(FileCache* fc, size_t* sz){
 static
 int
 fc_cache_file(FileCache* fc, StringView data){
-    int result = 0;
+    int result = FC_OK;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
-        result = 1;
+        result = FC_ERROR_ALREADY_CACHED;
         goto finally;
     }
     if(!f) f = fc_create_entry(fc);
     if(!f){
-        result = 1;
+        result = FC_ERROR_OOM;
         goto finally;
     }
     void* p = NULL;
@@ -426,7 +433,7 @@ fc_cache_file(FileCache* fc, StringView data){
         p = Allocator_dupe(fc->allocator, data.text, data.length);
         if(!p){
             f->valid = 0;
-            result = 1;
+            result = FC_ERROR_OOM;
             goto finally;
         }
     }

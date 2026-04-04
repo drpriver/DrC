@@ -18,6 +18,15 @@
 #endif
 #endif
 
+enum {
+    FC_OK                   = 0,  // _cc_no_error
+    FC_ERROR_OOM            = 1,  // _cc_oom_error
+    FC_ERROR_NOT_FOUND      = 5,  // _cc_file_not_found_error
+    FC_ERROR_IO             = 11, // _cc_io_error
+    FC_ERROR_NOT_FILE       = 12, // _cc_not_a_file_error
+    FC_ERROR_ALREADY_CACHED = 13, // _cc_already_cached_error
+};
+
 typedef struct FileCache FileCache;
 // Create a new file cache, allocated by the allocator.
 // The allocator is retained by the file cache for memory allocation.
@@ -32,22 +41,23 @@ static void fc_write_pathf(FileCache*, const char* fmt, ...);
 // For complicated path building, provides access to the caches path builder.
 typedef struct MStringBuilder MStringBuilder;
 static MStringBuilder* fc_path_builder(FileCache*);
-// Returns if the file exists and is a file, false otherwise.
-static _Bool fc_is_file(FileCache*);
+// Returns FC_OK if the file exists and is a regular file.
+// Returns FC_ERROR_NOT_FOUND if not found, FC_ERROR_OOM on allocation failure, etc.
+static int fc_is_file(FileCache*);
 // Attempts to read the file into data. Might be cached, might not be.
 // You might need to skip any BOM yourself. Not nul-terminated.
-// Returns 0 on success, errno or GetLastError() on failure.
+// Returns FC_OK on success, FC_ERROR_* on failure.
 static int fc_read_file(FileCache*, StringView* data);
 // Attempts to obtain the file's size.
 // Might be cached and so there is a possible race condition, but usually that is ok.
-// Returns 0 on success, errno or GetLastError() on failure.
+// Returns FC_OK on success, FC_ERROR_* on failure.
 static int fc_get_size(FileCache*, size_t* sz);
 // Caches a file into the cache, bypassing the filesystem
 // For virtual files or for overriding what the system thinks is actually
 // in the file.
 // Data is copied.
 // Still need to go through the `fc_write_path` API.
-// Returns 1 if the file is already in the cache (at least for now).
+// Returns FC_ERROR_ALREADY_CACHED if the file is already in the cache.
 static int fc_cache_file(FileCache*, StringView data);
 
 typedef struct CachedFile CachedFile;
