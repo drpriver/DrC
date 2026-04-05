@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "posixheader.h"
+#include "windowsheader.h"
 #include "file_cache.h"
 #include "MStringBuilder.h"
 #include "MStringBuilder16.h"
