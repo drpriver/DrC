@@ -1,6 +1,2 @@
 command script import lldb_stuff.py
-target stop-hook add -P lldb_stuff.StopHook
-command alias make platform shell make
-command alias ls platform shell ls
-command alias rm platform shell rm
 settings set target.process.stop-on-exec false

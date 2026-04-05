@@ -21,7 +21,7 @@ if __name__  == '__main__':
     import sys
     # sys.argv.extend(['--pool_size', '0'])
     import clangtags.__main__
-    clangtags.__main__.main()
+    # clangtags.__main__.main()
     with open('.vimrc') as fp:
         v = fp.read()
     line1, rest = v.split('\n', 1)

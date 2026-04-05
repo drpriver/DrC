@@ -1,7 +1,6 @@
 from __future__ import annotations
 import lldb
 import os
-import json
 
 def _read_atom_str(process, atom_ptr):
     """Read the string content of an Atom_ at the given address."""
@@ -64,15 +63,6 @@ def string_view_summary(valobj, internal_dict):
         return f'{pre}({result}..truncated)'
     return f'{pre}({result})'
 
-# --- CcQualType ---
-#
-# CcQualType is a bit-packed union:
-#   bits[0]   = is_const
-#   bits[1]   = is_volatile
-#   bits[2]   = is_atomic
-#   bits[3..] = ptr (if < CCBT_COUNT, it's a CcBasicTypeKind;
-#                     otherwise mask off low 3 bits to get a type pointer)
-
 _BASIC_NAMES = [
     '<invalid>', 'void', '_Bool', 'char', 'signed char', 'unsigned char',
     'short', 'unsigned short', 'int', 'unsigned int', 'long', 'unsigned long',
@@ -118,7 +108,6 @@ def _describe_qualtype(process, bits, depth=0):
     if quals & 1: qp += 'const '
     if quals & 2: qp += 'volatile '
     if quals & 4: qp += '_Atomic '
-    # Basic type: upper bits are a small enum value
     if ptr_val < _CCBT_COUNT:
         return f'{qp}{_BASIC_NAMES[ptr_val]}'
     type_ptr = bits & ~7
@@ -129,7 +118,6 @@ def _describe_qualtype(process, bits, depth=0):
     flags = int.from_bytes(kind_data, 'little')
     kind = flags & 0xf
     target = process.GetTarget()
-    # struct(3), union(4), enum(1)
     if kind in (1, 3, 4):
         prefix = {1: 'enum', 3: 'struct', 4: 'union'}[kind]
         type_name = {1: 'CcEnum', 3: 'CcStruct', 4: 'CcUnion'}[kind]
@@ -139,7 +127,6 @@ def _describe_qualtype(process, bits, depth=0):
         atom_ptr = val.GetChildMemberWithName('name').GetValueAsUnsigned(0)
         name = _read_atom_str(process, atom_ptr)
         return f'{qp}{prefix} {name}' if name else f'{qp}{prefix} <anon>'
-    # pointer(2)
     if kind == 2:
         is_restrict = (flags >> 4) & 1
         val = _make_typed_val(target, type_ptr, 'CcPointer')
@@ -153,7 +140,6 @@ def _describe_qualtype(process, bits, depth=0):
         if ptr_quals:
             return f'{inner} *{ptr_quals}'
         return f'{inner} *'
-    # array(6)
     if kind == 6:
         is_incomplete = (flags >> 6) & 1
         val = _make_typed_val(target, type_ptr, 'CcArray')
@@ -165,7 +151,6 @@ def _describe_qualtype(process, bits, depth=0):
             return f'{qp}{inner}[]'
         length = val.GetChildMemberWithName('length').GetValueAsUnsigned(0)
         return f'{qp}{inner}[{length}]'
-    # function(5)
     if kind == 5:
         is_variadic = (flags >> 4) & 1
         no_prototype = (flags >> 5) & 1
@@ -229,33 +214,6 @@ def stack_summary(valobj, internal_dict):
         children.append(objs.GetChildAtIndex(i))
     return '[\n  ' + ',\n  '.join(str(o) for o in children) + '\n]'
 
-IN_VIM = os.environ.get('VIM_TERMINAL')
-
-def recenter(debugger, command, result, internal_dict):
-    for thread in debugger.GetTargetAtIndex(0).process:
-        if (thread.GetStopReason() != lldb.eStopReasonNone) and (thread.GetStopReason() != lldb.eStopReasonInvalid):
-            frame = thread.GetSelectedFrame()
-            return _recenter(frame)
-
-def _recenter(frame:lldb.SBFrame) -> bool:
-    if not IN_VIM: return
-    le = frame.line_entry
-    f = le.file
-    l = le.line
-    if not l: return
-    if not f.fullpath: return
-    path = os.path.relpath(f.fullpath).replace(' ', '\\ ')
-    js = json.dumps(['call', 'Tapi_open', [path, l]])
-    print('\033]51;', js, '\07', end='', sep='', flush=True)
-    return
-
-class StopHook:
-    def __init__(self, target:lldb.SBTarget, extra_args:lldb.SBStructuredData, internal_dict:dict) -> None:
-        pass #?
-    def handle_stop(self, exe_ctx: lldb.SBExecutionContext, stream: lldb.SBStream) -> bool:
-        _recenter(exe_ctx.frame)
-        return True
-
 def __lldb_init_module(debugger, internal_dict):
     modname = os.path.splitext(os.path.basename(__file__))[0]
     debugger.HandleCommand(f'type summary add Atom -F {modname}.atom_summary')
@@ -264,4 +222,3 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand(f'type summary add CcQualType -F {modname}.ccqualtype_summary')
     debugger.HandleCommand(f'type synthetic add -x "^ma__" --python-class {modname}.MaSynth')
     debugger.HandleCommand(f'type summary add -x "^ma__" --expand --summary-string "${{var.count}}/${{var.capacity}} items"')
-    debugger.HandleCommand(f'command script add -f {modname}.recenter rc')
