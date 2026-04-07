@@ -1099,7 +1099,31 @@ TestFunction(test_interpreter){
             "char array truncation", __LINE__,
             SV("char t[3] = \"abc\";\n"
                "return t[2];\n"),
-            .exit_code = 'c', // null terminator dropped
+            .exit_code = 'c',
+        },
+        {
+            "nested char array truncation", __LINE__,
+            SV("char t[1][3] = {\"abc\"};\n"
+               "return t[0][2];\n"),
+            .exit_code = 'c',
+        },
+        {
+            "designated nested char array truncation", __LINE__,
+            SV("char t[1][3] = {[0] = \"abc\"};\n"
+               "return t[0][2];\n"),
+            .exit_code = 'c',
+        },
+        {
+            "static char array truncation", __LINE__,
+            SV("static char t[3] = \"abc\";\n"
+               "return t[2];\n"),
+            .exit_code = 'c',
+        },
+        {
+            "nested static char array truncation", __LINE__,
+            SV("char t[1][3] = {\"abc\"};\n"
+               "return t[0][1];\n"),
+            .exit_code = 'b',
         },
         {
             "L string array truncation", __LINE__,

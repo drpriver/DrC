@@ -7131,6 +7131,9 @@ cc_parse_init_value(CcParser* p, CcValueClass vc, CcQualType field_type, CcField
                 if(err) return err;
                 if(!arr->is_incomplete && arr->length < v->str.length - 1)
                     return cc_error(p, v->loc, "initializer string too long for array");
+                // Truncate string literal if needed.
+                if(!arr->is_incomplete && arr->length < ccqt_as_array(v->type)->length)
+                    v->type = field_type;
                 err = ma_push(CcInitEntry)(buf, cc_allocator(p),
                     ((CcInitEntry){.field_loc = field_loc, .value = v}));
                 if(err) return CC_OOM_ERROR;
@@ -10360,10 +10363,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     if(!arr) return CC_OOM_ERROR;
                     type = (CcQualType){.bits = (uintptr_t)arr | type.quals};
                 }
-                else if(target_arr->length < init_arr->length - 1){
+                else if(target_arr->length < init_arr->length - 1)
                     return cc_error(p, tok.loc, "initializer string too long for array");
-                }
-                // else: char t[3] = "abc" is valid (drops null terminator)
+                else if(target_arr->length < init_arr->length)
+                    // Truncate string literal if needed.
+                    initializer->type = type;
             }
             else {
                 // Check compatibility and insert implicit cast

@@ -553,10 +553,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
         if(ccqt_kind(expr->type) == CC_ARRAY){
-            // String literal may be truncated by the target array
-            // (e.g. char t[3] = "abc" drops the null terminator).
-            // The parser already validates this is legal.
-            if(sz > size) sz = (uint32_t)size;
+            if(sz > size)
+                return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
             memcpy(result, expr->text, sz);
             return 0;
         }
