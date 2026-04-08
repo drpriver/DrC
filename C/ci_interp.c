@@ -3400,16 +3400,20 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             if(err) goto finally;
             if(success) goto finally;
         }
-        // Try {path}/{name} verbatim
-        msb_reset(&sb);
-        msb_write_str(&sb, path->data, path->length);
-        if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
-        msb_write_str(&sb, sv.text, sv.length);
-        msb_nul_terminate(&sb);
-        if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
-        if(err) goto finally;
-        if(success) goto finally;
+        if(sv_endswith(sv, SV(".dylib"))
+        || sv_endswith(sv, SV(".dll"))
+        || sv_contains(sv, SV(".so"))){
+            // Try {path}/{name} verbatim
+            msb_reset(&sb);
+            msb_write_str(&sb, path->data, path->length);
+            if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
+            msb_write_str(&sb, sv.text, sv.length);
+            msb_nul_terminate(&sb);
+            if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
+            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            if(err) goto finally;
+            if(success) goto finally;
+        }
     }
     // Search framework paths for {path}/{name}.framework/{name} (macOS)
     if(ci_target(ci)->os == CC_OS_MACOS){
