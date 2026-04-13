@@ -585,6 +585,19 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "arithmetic with enums", __LINE__,
+            SVI("enum: unsigned {ZERO, ONE, TWO, THREE, FOUR, FIVE};\n"
+                "int a = ONE + TWO;\n"
+                "int b = THREE * FOUR + FIVE;\n"
+                "int c = ONE << TWO;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("int"), SVI("(int)((unsigned int)1 + (unsigned int)2)") },
+                { SVI("b"), SVI("int"), SVI("(int)(((unsigned int)3 * (unsigned int)4) + (unsigned int)5)") },
+                { SVI("c"), SVI("int"), SVI("(int)((unsigned int)1 << (unsigned int)2)") },
+            },
+        },
+        {
             "comparisons", __LINE__,
             SVI("int a = 1 < 2;\n"
                "int b = 3 == 4;\n"
@@ -5451,6 +5464,31 @@ TestFunction(test_parse_errors){
             SVI("typedef int T;\n"
                 "void f(void){ typedef T T; int T; }\n"),
             SVI("(test):2:33: error: redefinition of 'T' as a different kind of symbol\n"),
+        },
+        {
+            "arithmetic with _Type", __LINE__,
+            SVI("int x = int + 1;\n"),
+            SVI("(test):1:13: error: integer promotion requires integer type\n"),
+        },
+        {
+            "arithmetic with void", __LINE__,
+            SVI("int x = (void)1 + 1;\n"),
+            SVI("(test):1:17: error: usual arithmetic conversions on void\n"),
+        },
+        {
+            "arithmetic with _Type", __LINE__,
+            SVI("int x = 1 << int;\n"),
+            SVI("(test):1:11: error: integer promotion requires integer type\n"),
+        },
+        {
+            "arithmetic with struct", __LINE__,
+            SVI("int x = 1 << (struct {}){};\n"),
+            SVI("(test):1:11: error: integer promotion requires arithmetic type\n"),
+        },
+        {
+            "arithmetic with void", __LINE__,
+            SVI("int x = (void)1 << 1;\n"),
+            SVI("(test):1:17: error: integer promotion of void\n"),
         },
     };
     static int idx = 0;
