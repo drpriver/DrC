@@ -10174,8 +10174,41 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(!is_fndef)
                 return cc_error(p, tok.loc, "Expected ',' or ';'");
             _Bool eager = p->eager_parsing || p->current_func;
-            if(!eager){
-                // Collect tokens for lazy parsing
+            // Lookup existing forward declaration
+            CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
+            if(func){
+                if(func->defined)
+                    return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
+                err = cc_check_func_compat(p, func, declbase, type, tok.loc);
+                if(err) return err;
+            }
+            else {
+                func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                if(!func) return CC_OOM_ERROR;
+                func->name = name;
+                err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
+                if(err) return err;
+            }
+            func->type = ccqt_as_function(type);
+            func->loc = tok.loc;
+            func->mangle = asm_label;
+            func->defined = 1;
+            if(declbase->spec.sp_extern || declbase->spec.sp_static){
+                func->extern_ = declbase->spec.sp_extern;
+                func->static_ = declbase->spec.sp_static;
+            }
+            func->inline_ = declbase->spec.sp_inline;
+            func->printf_like = func->printf_like || is_printf_like;
+            func->params.count = param_names.count;
+            func->params.data = param_names.data;
+            if(eager){
+                func->enclosing = p->current_func;
+                err = cc_parse_func_body_inner(p, func, 1);
+                if(err) return err;
+                err = cc_expect_punct(p, CC_rbrace);
+                if(err) return err;
+            }
+            else {
                 Marray(CcToken)* body_tokens = cc_get_scratch(p);
                 if(!body_tokens) return CC_OOM_ERROR;
                 int depth = 1;
@@ -10194,69 +10227,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                         if(err) return err;
                     }
                 }
-                // Lookup existing forward declaration
-                CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
-                if(func){
-                    if(func->defined)
-                        return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
-                    err = cc_check_func_compat(p, func, declbase, type, tok.loc);
-                    if(err) return err;
-                }
-                else {
-                    func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-                    if(!func) return CC_OOM_ERROR;
-                    func->name = name;
-                    err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
-                    if(err) return err;
-                }
-                func->type = ccqt_as_function(type);
-                func->loc = tok.loc;
-                func->mangle = asm_label;
-                func->defined = 1;
-                if(declbase->spec.sp_extern || declbase->spec.sp_static){
-                    func->extern_ = declbase->spec.sp_extern;
-                    func->static_ = declbase->spec.sp_static;
-                }
-                func->inline_ = declbase->spec.sp_inline;
-                func->printf_like = func->printf_like || is_printf_like;
                 func->tokens = body_tokens;
-                func->params.count = param_names.count;
-                func->params.data = param_names.data;
-                return 0;
             }
-            // Eager parsing: parse body directly
-            CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
-            if(func){
-                if(func->defined)
-                    return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
-                err = cc_check_func_compat(p, func, declbase, type, tok.loc);
-                if(err) return err;
-            }
-            else {
-                func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-                if(!func) return CC_OOM_ERROR;
-                func->name = name;
-                err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
-                if(err) return err;
-            }
-            CcFunction* ftype = ccqt_as_function(type);
-            func->type = ftype;
-            func->loc = tok.loc;
-            func->mangle = asm_label;
-            func->defined = 1;
-            if(declbase->spec.sp_extern || declbase->spec.sp_static){
-                func->extern_ = declbase->spec.sp_extern;
-                func->static_ = declbase->spec.sp_static;
-            }
-            func->inline_ = declbase->spec.sp_inline;
-            func->printf_like = func->printf_like || is_printf_like;
-            func->params.count = param_names.count;
-            func->params.data = param_names.data;
-            func->enclosing = p->current_func;
-            err = cc_parse_func_body_inner(p, func, 1);
-            if(err) return err;
-            err = cc_expect_punct(p, CC_rbrace);
-            if(err) return err;
             return 0;
         }
         // For non-typedef, non-function variable declarations, insert
