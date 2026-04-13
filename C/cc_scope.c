@@ -136,6 +136,12 @@ static
 _Bool
 cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
     for(CcScope* s = scope; s; s = s->parent){
+        void* td = AM_get(&s->typedefs, name);
+        if(td){
+            out->kind = CC_SYM_TYPEDEF;
+            out->type.bits = (uintptr_t)td;
+            return 1;
+        }
         CcVariable* v = AM_get(&s->variables, name);
         if(v){
             out->kind = CC_SYM_VAR;
@@ -146,12 +152,6 @@ cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
         if(f){
             out->kind = CC_SYM_FUNC;
             out->func = f;
-            return 1;
-        }
-        void* td = AM_get(&s->typedefs, name);
-        if(td){
-            out->kind = CC_SYM_TYPEDEF;
-            out->type.bits = (uintptr_t)td;
             return 1;
         }
         CcEnumerator* e = AM_get(&s->enumerators, name);

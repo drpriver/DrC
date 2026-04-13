@@ -3839,6 +3839,22 @@ TestFunction(test_parse_decls){
                 { SVI("s"), SVI("struct S") },
             },
         },
+        {
+            "constexpr as typedef", __LINE__,
+            SVI("constexpr _Type T = int;\n"
+                "T x = 3;\n"),
+            .vars = {
+                { SVI("x"), SVI("int"), SVI("3")},
+            },
+        },
+        {
+            "constexpr infer as typedef", __LINE__,
+            SVI("constexpr T = int;\n"
+                "T x = 3;\n"),
+            .vars = {
+                { SVI("x"), SVI("int"), SVI("3")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

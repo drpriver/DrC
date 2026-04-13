@@ -10457,6 +10457,13 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;
+                if(var->constexpr_ && ccqt_bt_eq(type, CCBT__Type)){
+                    if(initializer->kind != CC_EXPR_VALUE){
+                        return cc_unreachable(p, initializer->loc, "should have already been const evaled");
+                    }
+                    err = cc_scope_insert_typedef(cc_allocator(p), p->current, var->name, initializer->type_value);
+                    if(err) return err;
+                }
                 if(var->automatic && p->current_func){
                     uint32_t sz, align;
                     err = cc_sizeof_as_uint(p, type, tok.loc, &sz);
@@ -10475,9 +10482,6 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     err = PM_put(&p->used_vars, cc_allocator(p), var, var);
                     if(err) return CC_OOM_ERROR;
                 }
-                // Function-scope statics: ci_resolve_refs evaluates
-                // the initializer once before execution (no re-init,
-                // no thread races). Everything else: runtime assign.
                 if(var && var->static_ && p->current_func){
                     var->interp_preinit = 1;
                     if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
