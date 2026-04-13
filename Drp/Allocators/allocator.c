@@ -76,10 +76,6 @@ Allocator_supports_free_all(Allocator a){
         case ALLOCATOR_TESTING:
             return 1;
 #endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            return 1;
-#endif
     }
     ALLOC_BAD();
 }
@@ -108,11 +104,6 @@ Allocator_free_all(Allocator a){
 #ifdef USE_TESTING_ALLOCATOR
         case ALLOCATOR_TESTING:
             testing_free_all(a._data);
-            return;
-#endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            gc_free_all(a._data);
             return;
 #endif
     }
@@ -151,10 +142,6 @@ Allocator_alloc(Allocator a, size_t size){
         case ALLOCATOR_TESTING:
             return testing_alloc(a._data, size);
 #endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            return gc_alloc(a._data, size);
-#endif
     }
     ALLOC_BAD();
     unreachable();
@@ -191,10 +178,6 @@ Allocator_zalloc(Allocator a, size_t size){
 #ifdef USE_TESTING_ALLOCATOR
         case ALLOCATOR_TESTING:
             return testing_zalloc(a._data, size);
-#endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            return gc_zalloc(a._data, size);
 #endif
     }
     ALLOC_BAD();
@@ -235,10 +218,6 @@ Allocator_realloc(Allocator a, void*_Nullable data, size_t orig_size, size_t siz
 #ifdef USE_TESTING_ALLOCATOR
         case ALLOCATOR_TESTING:
             return testing_realloc(a._data, data, orig_size, size);
-#endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            return gc_realloc(a._data, data, orig_size, size);
 #endif
     }
     ALLOC_BAD();
@@ -296,11 +275,6 @@ Allocator_free(Allocator a, const void*_Nullable data, size_t size){
             testing_free(a._data, data, size);
             return;
 #endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            gc_free(a._data, data, size);
-            return;
-#endif
     }
     ALLOC_BAD();
 }
@@ -338,10 +312,6 @@ Allocator_good_size(Allocator a, size_t size){
             #else
                 return size;
             #endif
-#endif
-#ifdef USE_GC_ALLOCATOR
-        case ALLOCATOR_GC:
-            return size;
 #endif
     }
     ALLOC_BAD();

@@ -75,9 +75,6 @@ enum AllocatorType {
     // Call testing_allocator_init early on.
     // Can also be configured to fail after a certain number of allocations.
 #endif
-#ifdef USE_GC_ALLOCATOR
-    ALLOCATOR_GC,
-#endif
 };
 
 typedef struct Allocator Allocator;
