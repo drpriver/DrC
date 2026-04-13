@@ -598,6 +598,116 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "UAC: integer promotion of small types", __LINE__,
+            SVI("char ca, cb; typeof(ca + cb) a;\n"
+                "signed char sc; typeof(sc + sc) b;\n"
+                "short sh; typeof(sh + sh) c;\n"
+                "unsigned char uc; typeof(uc + uc) d;\n"
+                "unsigned short us; typeof(us + us) e;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("int") },
+                { SVI("b"), SVI("int") },
+                { SVI("c"), SVI("int") },
+                { SVI("d"), SVI("int") },
+                { SVI("e"), SVI("int") },
+            },
+        },
+        {
+            "UAC: same-rank signed vs unsigned", __LINE__,
+            SVI("typeof(1 + 1u) a;\n"
+                "typeof(1u + 1) b;\n"
+                "typeof(1L + 1uL) c;\n"
+                "typeof(1LL + 1uLL) d;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("unsigned int") },
+                { SVI("b"), SVI("unsigned int") },
+                { SVI("c"), SVI("unsigned long") },
+                { SVI("d"), SVI("unsigned long long") },
+            },
+        },
+        {
+            "UAC: cross-rank signed wins on LP64", __LINE__,
+            SVI("typeof(1L + 1u) a;\n"
+                "typeof(1u + 1L) b;\n"
+                "typeof(1LL + 1u) c;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("long") },
+                { SVI("b"), SVI("long") },
+                { SVI("c"), SVI("long long") },
+            },
+        },
+        {
+            "UAC: cross-rank unsigned wins", __LINE__,
+            SVI("typeof(1uL + 1) a;\n"
+                "typeof(1 + 1uL) b;\n"
+                "typeof(1uL + 1L) c;\n"
+                "typeof(1uLL + 1L) d;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("unsigned long") },
+                { SVI("b"), SVI("unsigned long") },
+                { SVI("c"), SVI("unsigned long") },
+                { SVI("d"), SVI("unsigned long long") },
+            },
+        },
+        {
+            "UAC: signed higher rank but same size as unsigned", __LINE__,
+            SVI("typeof(1LL + 1uL) a;\n"
+                "typeof(1uL + 1LL) b;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("unsigned long long") },
+                { SVI("b"), SVI("unsigned long long") },
+            },
+        },
+        {
+            "UAC: ternary type unification", __LINE__,
+            SVI("typeof(1 ? 1 : 1u) a;\n"
+                "typeof(1 ? 1L : 1u) b;\n"
+                "typeof(1 ? 1.0f : 1) c;\n"
+                "typeof(1 ? 1.0 : 1.0f) d;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("unsigned int") },
+                { SVI("b"), SVI("long") },
+                { SVI("c"), SVI("float") },
+                { SVI("d"), SVI("double") },
+            },
+        },
+        {
+            "UAC: shift result follows promoted LHS", __LINE__,
+            SVI("unsigned char uc; typeof(uc << 1) a;\n"
+                "typeof(1u << 1L) b;\n"
+                "typeof(1L << 1u) c;\n"
+                "typeof(1uL << 1) d;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("int") },
+                { SVI("b"), SVI("unsigned int") },
+                { SVI("c"), SVI("long") },
+                { SVI("d"), SVI("unsigned long") },
+            },
+        },
+        {
+            "UAC: float mixed with integer", __LINE__,
+            SVI("char c; typeof(1.0f + c) a;\n"
+                "short s; typeof(1.0f + s) b;\n"
+                "typeof(1.0f + 1LL) c;\n"
+                "typeof(1.0 + 1.0f) d;\n"
+                "typeof(1.0L + 1.0) e;\n"
+              ),
+            .vars = {
+                { SVI("a"), SVI("float") },
+                { SVI("b"), SVI("float") },
+                { SVI("c"), SVI("float") },
+                { SVI("d"), SVI("double") },
+                { SVI("e"), SVI("long double") },
+            },
+        },
+        {
             "comparisons", __LINE__,
             SVI("int a = 1 < 2;\n"
                "int b = 3 == 4;\n"
@@ -3924,6 +4034,19 @@ TestFunction(test_parse_decls){
                 {SVI("Foo"), SVI("struct Foo")},
             },
         },
+        {
+            "plan9 structs", __LINE__,
+            SVI("struct Foo {int x;};\n"
+                "struct Bar { struct Foo; int y;};\n"
+                "struct Foo f = {3};\n"
+                "struct Bar b = {1, 2};\n"
+                "struct Foo* pf = &b;\n"),
+            .vars = {
+                {SVI("f"), SVI("struct Foo"), SVI("{3}")},
+                {SVI("b"), SVI("struct Bar"), SVI("{@0 = 1, @4 = 2}")},
+                {SVI("pf"), SVI("struct Foo *"), SVI("(struct Foo *)&b")},
+            },
+        }
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
