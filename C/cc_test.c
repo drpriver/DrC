@@ -5664,6 +5664,36 @@ TestFunction(test_parse_errors){
             SVI("(int*)1.f;\n"),
             SVI("(test):1:1: error: invalid cast\n"),
         },
+        {
+            "redecl as static", __LINE__,
+            SVI("int f(void);\n"
+                "static int f(void);\n"),
+            SVI("(test):2:19: error: static declaration of 'f' follows non-static declaration\n"),
+        },
+        {
+            "redecl diff return", __LINE__,
+            SVI("int f(void);\n"
+                "float f(void);\n"),
+            SVI("(test):2:14: error: conflicting return type for 'f'\n"),
+        },
+        {
+            "redecl diff variadic", __LINE__,
+            SVI("int f(int);\n"
+                "int f(int, ...);\n"),
+            SVI("(test):2:16: error: conflicting variadic specifier for 'f'\n"),
+        },
+        {
+            "redecl diff arity", __LINE__,
+            SVI("int f(int);\n"
+                "int f(int, int);\n"),
+            SVI("(test):2:16: error: conflicting number of parameters for 'f'\n"),
+        },
+        {
+            "redecl diff param type", __LINE__,
+            SVI("int f(int);\n"
+                "int f(float);\n"),
+            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
@@ -6546,6 +6576,149 @@ TestFunction(test_bitfield_abi){
     }
     TESTEND();
 }
+TestFunction(test_pragma_pack){
+    TESTBEGIN();
+    static struct pp_case {
+        const char* test; int line;
+        StringView input;
+        StringView expected_msg;
+        _Bool skip;
+    } cases[] = {
+        {
+            "pragma show", __LINE__,
+            SVI("#pragma pack(show)\n"
+            ),
+            SVI("(test):1:2: info: #pragma pack(show): 0\n"
+            ),
+        },
+        {
+            "pragma pack", __LINE__,
+            SVI("#pragma pack(1)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack()\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):2:2: info: #pragma pack(show): 1\n"
+                "(test):4:2: info: #pragma pack(show): 8\n"
+            ),
+        },
+        {
+            "all valid values", __LINE__,
+            SVI("#pragma pack(2)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack(4)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack(16)\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):2:2: info: #pragma pack(show): 2\n"
+                "(test):4:2: info: #pragma pack(show): 4\n"
+                "(test):6:2: info: #pragma pack(show): 16\n"
+            ),
+        },
+        {
+            "push and pop", __LINE__,
+            SVI("#pragma pack(4)\n"
+                "#pragma pack(push, 1)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack(pop)\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):3:2: info: #pragma pack(show): 1\n"
+                "(test):5:2: info: #pragma pack(show): 4\n"
+            ),
+        },
+        {
+            "push bare then pop", __LINE__,
+            SVI("#pragma pack(2)\n"
+                "#pragma pack(push)\n"
+                "#pragma pack(8)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack(pop)\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):4:2: info: #pragma pack(show): 8\n"
+                "(test):6:2: info: #pragma pack(show): 2\n"
+            ),
+        },
+        {
+            "push by identifier and pop by identifier", __LINE__,
+            SVI("#pragma pack(push, foo, 2)\n"
+                "#pragma pack(1)\n"
+                "#pragma pack(pop, foo)\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):4:2: info: #pragma pack(show): 0\n"),
+        },
+        {
+            "pop from empty stack warns", __LINE__,
+            SVI("#pragma pack(pop)\n"),
+            SVI("(test):1:2: warning: pack stack empty\n"),
+        },
+        {
+            "unrecognized command warns", __LINE__,
+            SVI("#pragma pack(bogus)\n"),
+            SVI("(test):1:2: warning: Unrecognized pragma pack() command\n"),
+        },
+        {
+            "invalid pack value warns", __LINE__,
+            SVI("#pragma pack(3)\n"
+                "#pragma pack(show)\n"
+            ),
+            SVI("(test):1:14: warning: value 3 invalid, treating as 8\n"
+                "(test):2:2: info: #pragma pack(show): 8\n"
+            ),
+        },
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        struct pp_case* c = &cases[i];
+        if(c->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        FileCache* fc = fc_create(al);
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CcParser cc = {
+            .cpp = {
+                .allocator = al,
+                .fc = fc,
+                .at = &at,
+                .logger = logger,
+                .env = &env,
+                .target = cc_target_test(),
+            },
+            .current = &cc.global,
+            .eager_parsing = 1,
+        };
+        fc_write_path(fc, "(test)", 6);
+        int err = fc_cache_file(fc, c->input);
+        if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto fin;}
+        err = cpp_define_builtin_macros(&cc.cpp);
+        if(err) {TestPrintf("%s:%d: failed to define\n", __FILE__, c->line); goto fin;}
+        err = cc_define_builtin_types(&cc);
+        if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto fin;}
+        err = cc_register_pragmas(&cc);
+        if(err) {TestPrintf("%s:%d: failed to register pragmas\n", __FILE__, c->line); goto fin;}
+        err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
+        if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
+        err = cc_parse_all(&cc);
+        TEST_stats.executed++;
+        StringView log = msb_borrow_sv(&log_sb);
+        test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
+        fin:
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.scratch_arena);
+    }
+    TESTEND();
+}
 
 int main(int argc, char** argv){
 #ifdef USE_TESTING_ALLOCATOR
@@ -6555,6 +6728,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_bitfield_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_pragma_pack, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
 #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();

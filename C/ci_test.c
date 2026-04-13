@@ -4241,6 +4241,18 @@ TestFunction(test_interpreter){
             .exit_code = 4,
         },
         {
+            "alignof union", __LINE__,
+            SVI("union U { char c; int i; };\n"
+               "return _Alignof(union U);\n"),
+            .exit_code = 4,
+        },
+        {
+            "alignof enum", __LINE__,
+            SVI("enum E: char { X };\n"
+               "return _Alignof(enum E);\n"),
+            .exit_code = 1,
+        },
+        {
             "unicode escape in string", __LINE__,
             SVI("const char* s = \"\\u0041\\u0042\";\n"
                "return s[0] + s[1];\n"),
@@ -4660,6 +4672,22 @@ TestFunction(test_interpreter){
                "float length_sq(struct Vec2* v){ return v->x * v->x + v->y * v->y; }\n"
                "struct Vec2 v = {3.0f, 4.0f};\n"
                "return (int)v.length_sq();\n"),
+            .exit_code = 25,
+        },
+        {
+            "FUCS again", __LINE__,
+            SVI("struct Vec2 { float x; float y; };\n"
+               "float length_sq(struct Vec2 v){ return v->x * v->x + v->y * v->y; }\n"
+               "struct Vec2 v = {3.0f, 4.0f};\n"
+               "return (int)v.length_sq();\n"),
+            .exit_code = 25,
+        },
+        {
+            "FUCS again again", __LINE__,
+            SVI("struct Vec2 { float x; float y; };\n"
+               "float length_sq(struct Vec2 v){ return v->x * v->x + v->y * v->y; }\n"
+               "struct Vec2 v = {3.0f, 4.0f};\n"
+               "return (int)(&v).length_sq();\n"),
             .exit_code = 25,
         },
         {
@@ -5110,6 +5138,26 @@ TestFunction(test_interpreter){
                "return 1;\n"),
             .exit_code = 1,
         },
+        {
+            "push_method", __LINE__,
+            SVI("(struct Foo {int x;}).push_method(get_x, int(struct Foo* self){return self.x;});\n"
+            "return (struct Foo){42}.get_x();\n"),
+            .exit_code = 42,
+        },
+        {
+            "sizeof vla", __LINE__,
+            SV("int x = 3;\n"
+            "return (int)sizeof(int[x]);\n"),
+            .exit_code = 12,
+            .skip = 1,
+        },
+        {
+            "sizeof vla in array", __LINE__,
+            SV("int x = 3;\n"
+            "return (int)sizeof(int[2][x]);\n"),
+            .exit_code = 24,
+            .skip = 1,
+        },
     };
     int err;
     static int idx = 0;
@@ -5429,6 +5477,71 @@ TestFunction(test_cross_target){
             SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 8,
             .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        // abi smoke tests... don't have a direct way to test them in the cross interpreter
+        {
+            "sysv", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "win64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "mac arm64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "linux arm64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = CC_TARGET_AARCH64_LINUX,
         },
     };
     int err;

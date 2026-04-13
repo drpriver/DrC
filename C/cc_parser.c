@@ -3651,18 +3651,18 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 fucs:;
                 if(!member_type.bits){
                     // FUCS: x.foo(args) -> foo(x, args)
-                    CcFunc* ufcs_func = cc_scope_lookup_func(p->current, member_name, CC_SCOPE_WALK_CHAIN);
-                    if(!ufcs_func){
+                    CcFunc* fucs_func = cc_scope_lookup_func(p->current, member_name, CC_SCOPE_WALK_CHAIN);
+                    if(!fucs_func){
                         if(tk == CC_STRUCT || tk == CC_UNION)
                             return cc_error(p, member.loc, "no member named '%s'", member_name->data);
                         return cc_error(p, member.loc, "not a struct or union");
                     }
-                    CcExpr* fnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, (CcQualType){.bits = (uintptr_t)ufcs_func->type}, 0);
+                    CcExpr* fnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, (CcQualType){.bits = (uintptr_t)fucs_func->type}, 0);
                     if(!fnode) return CC_OOM_ERROR;
-                    fnode->func = ufcs_func;
-                    err = PM_put(&p->used_funcs, cc_allocator(p), ufcs_func, ufcs_func);
+                    fnode->func = fucs_func;
+                    err = PM_put(&p->used_funcs, cc_allocator(p), fucs_func, fucs_func);
                     if(err) return CC_OOM_ERROR;
-                    if(ufcs_func->type->param_count > 0 && ccqt_kind(ufcs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
+                    if(fucs_func->type->param_count > 0 && ccqt_kind(fucs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
                         CcQualType addr_type;
                         err = cc_pointer_of(p, operand->type, &addr_type);
                         if(err) return err;
@@ -3671,7 +3671,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         addr->lhs = operand;
                         receiver = addr;
                     }
-                    else if(ufcs_func->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(ufcs_func->type->params[0]) != CC_POINTER){
+                    else if(fucs_func->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(fucs_func->type->params[0]) != CC_POINTER){
                         CcQualType deref_type;
                         err = cc_deref_type(p, operand->type, &deref_type, tok.loc);
                         if(err) return err;
@@ -7081,7 +7081,7 @@ cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_off
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '.')
                     return cc_error(p, peek.loc, "field designator in array initializer");
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbracket){
-                    cc_next_token(p, &peek); 
+                    cc_next_token(p, &peek);
                     SrcLoc desig_loc = peek.loc;
                     CcExpr* idx_expr;
                     err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &idx_expr);
