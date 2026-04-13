@@ -84,7 +84,6 @@ struct CcQualType {
 
 static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
 
-// Basic types are small values real pointers are large.
 static inline _Bool ccqt_is_basic(CcQualType t) { return t.ptr < CCBT_COUNT; }
 
 static
