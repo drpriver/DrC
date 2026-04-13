@@ -3855,6 +3855,32 @@ TestFunction(test_parse_decls){
                 { SVI("x"), SVI("int"), SVI("3")},
             },
         },
+        {
+            "tag and typedef same name", __LINE__,
+            SVI("struct S {int x;};\n"
+                "typedef int S;\n"
+                "S y = 3;\n"
+                "struct S s;\n"),
+            .vars = {
+                { SVI("y"), SVI("int"), SVI("3") },
+                { SVI("s"), SVI("struct S") },
+            },
+            .typedefs = {
+                { SVI("S"), SVI("int") },
+            },
+        },
+        {
+            "identical typedef redecl", __LINE__,
+            SVI("typedef int T;\n"
+                "typedef int T;\n"
+                "T x = 5;\n"),
+            .vars = {
+                { SVI("x"), SVI("int"), SVI("5") },
+            },
+            .typedefs = {
+                { SVI("T"), SVI("int") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -3991,6 +4017,7 @@ TestFunction(test_parse_errors){
         const char* test; int line;
         StringView input;
         StringView expected_msg;
+        _Bool skip;
     } cases[] = {
         {
             "static_assert(0) fails", __LINE__,
@@ -5339,9 +5366,76 @@ TestFunction(test_parse_errors){
             SVI("typedef auto x;\n"),
             SVI("(test):1:9: error: auto after typedef\n"),
         },
+        {
+            "redef var as typedef", __LINE__,
+            SVI("int x;\n"
+                "typedef float x;\n"),
+            SVI("(test):2:9: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef typedef as var", __LINE__,
+            SVI("typedef int x;\n"
+                "int x;\n"),
+            SVI("(test):2:5: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef var as function", __LINE__,
+            SVI("int x;\n"
+                "int x(void);\n"),
+            SVI("(test):2:5: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef var as function def", __LINE__,
+            SVI("int x;\n"
+                "int x(void){return 0;};\n"),
+            SVI("(test):2:12: error: Redefinition of 'x' as a different kind of symbol\n"),
+        },
+        {
+            "redef function as typedef", __LINE__,
+            SVI("int x(void);\n"
+                "typedef int x;\n"),
+            SVI("(test):2:9: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef enumerator as var", __LINE__,
+            SVI("enum {X};\n"
+                "int X;\n"),
+            SVI("(test):2:5: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef enumerator as typedef", __LINE__,
+            SVI("enum {X};\n"
+                "typedef int X;\n"),
+            SVI("(test):2:9: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "redef typedef as enumerator", __LINE__,
+            SVI("typedef int X;\n"
+                "enum {X};\n"),
+            SVI("(test):2:7: error: idk\n"),
+            .skip = 1,
+        },
+        {
+            "local redef typedef as var", __LINE__,
+            SVI("typedef int T;\n"
+                "void f(void){ T; int T; }\n"),
+            SVI("(test):2:22: error: idk\n"),
+            .skip = 1,
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        struct ErrorCase* c = &cases[i];
+        if(c->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         FileCache* fc = fc_create(al);
@@ -5362,7 +5456,6 @@ TestFunction(test_parse_errors){
             .current = &cc.global,
             .eager_parsing = 1,
         };
-        struct ErrorCase* c = &cases[i];
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, c->input);
         if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto fin;}

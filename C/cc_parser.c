@@ -10174,8 +10174,20 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(!is_fndef)
                 return cc_error(p, tok.loc, "Expected ',' or ';'");
             _Bool eager = p->eager_parsing || p->current_func;
-            // Lookup existing forward declaration
-            CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
+            CcSymbol sym;
+            CcFunc* func = NULL;
+            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            if(found){
+                switch(sym.kind){
+                    case CC_SYM_FUNC:
+                        func = sym.func;
+                        break;
+                    case CC_SYM_VAR:
+                    case CC_SYM_TYPEDEF:
+                    case CC_SYM_ENUMERATOR:
+                        return cc_error(p, tok.loc, "Redefinition of '%.*s' as a different kind of symbol", name->length, name->data);
+                }
+            }
             if(func){
                 if(func->defined)
                     return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
