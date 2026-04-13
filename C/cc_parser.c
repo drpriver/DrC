@@ -10414,7 +10414,20 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(err) return err;
         }
         else if(is_func_decl){
-            CcFunc* func = cc_scope_lookup_func(p->current, name, CC_SCOPE_NO_WALK);
+            CcSymbol sym;
+            CcFunc* func = NULL;
+            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            if(found){
+                switch(sym.kind){
+                    case CC_SYM_FUNC:
+                        func = sym.func;
+                        break;
+                    case CC_SYM_VAR:
+                    case CC_SYM_TYPEDEF:
+                    case CC_SYM_ENUMERATOR:
+                        return cc_error(p, tok.loc, "redefinition of '%.*s' as a different kind of symbol", name->length, name->data);
+                }
+            }
             if(func){
                 err = cc_check_func_compat(p, func, declbase, type, tok.loc);
                 if(err) return err;

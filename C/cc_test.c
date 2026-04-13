@@ -5382,8 +5382,7 @@ TestFunction(test_parse_errors){
             "redef var as function", __LINE__,
             SVI("int x;\n"
                 "int x(void);\n"),
-            SVI("(test):2:5: error: idk\n"),
-            .skip = 1,
+            SVI("(test):2:12: error: redefinition of 'x' as a different kind of symbol\n"),
         },
         {
             "redef var as function def", __LINE__,
