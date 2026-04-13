@@ -10253,14 +10253,20 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
             if(declbase->spec.sp_noreturn)
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
-            {
-                CcVariable* existing = cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK);
-                if(existing){
-                    if(p->current != &p->global)
-                        return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
-                    // merge tentative definitions
-                    var = existing;
-                    goto skip_var_alloc;
+            CcSymbol sym;
+            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            if(found){
+                switch(sym.kind){
+                    case CC_SYM_VAR:
+                        if(p->current != &p->global)
+                            return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
+                        // merge tentative definitions
+                        var = sym.var;
+                        goto skip_var_alloc;
+                    case CC_SYM_FUNC:
+                    case CC_SYM_TYPEDEF:
+                    case CC_SYM_ENUMERATOR:
+                        return cc_error(p, tok.loc, "redefinition of '%.*s' as a different kind of symbol", name->length, name->data);
                 }
             }
             var = Allocator_zalloc(cc_allocator(p), sizeof *var);

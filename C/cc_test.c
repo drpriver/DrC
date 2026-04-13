@@ -5377,8 +5377,7 @@ TestFunction(test_parse_errors){
             "redef typedef as var", __LINE__,
             SVI("typedef int x;\n"
                 "int x;\n"),
-            SVI("(test):2:5: error: idk\n"),
-            .skip = 1,
+            SVI("(test):2:6: error: redefinition of 'x' as a different kind of symbol\n"),
         },
         {
             "redef var as function", __LINE__,
@@ -5404,8 +5403,7 @@ TestFunction(test_parse_errors){
             "redef enumerator as var", __LINE__,
             SVI("enum {X};\n"
                 "int X;\n"),
-            SVI("(test):2:5: error: idk\n"),
-            .skip = 1,
+            SVI("(test):2:6: error: redefinition of 'X' as a different kind of symbol\n"),
         },
         {
             "redef enumerator as typedef", __LINE__,
@@ -5424,9 +5422,8 @@ TestFunction(test_parse_errors){
         {
             "local redef typedef as var", __LINE__,
             SVI("typedef int T;\n"
-                "void f(void){ T; int T; }\n"),
-            SVI("(test):2:22: error: idk\n"),
-            .skip = 1,
+                "void f(void){ typedef T T; int T; }\n"),
+            SVI("(test):2:33: error: redefinition of 'T' as a different kind of symbol\n"),
         },
     };
     static int idx = 0;
