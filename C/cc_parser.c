@@ -7328,6 +7328,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
                     if(err) return CC_OOM_ERROR;
                     existing = u;
+                    if(p->auto_typedef){
+                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)u});
+                        if(err) return err;
+                    }
                 }
             }
             else {
@@ -7341,6 +7345,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
                     if(err) return CC_OOM_ERROR;
                     existing = s;
+                    if(p->auto_typedef){
+                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)s});
+                        if(err) return err;
+                    }
                 }
             }
         }

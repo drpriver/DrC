@@ -6,11 +6,11 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#pragma typedef on // C++ style auto typedef
 #define S_(x) #x
 #define S(x) S_(x)
-#define DA(T) __ident("DA." S(T)) // unique name for any type.
+#define DA(T) __ident("DA(" S(T) ")") // unique name for any type.
 #defblock DA_DEF(T) // multiline macro
-typedef struct DA(T) DA(T);
 struct DA(T) {
     T* data;
     size_t count, capacity;
@@ -73,7 +73,6 @@ for(size_t i = 0; i < strings.count; i++){
 
 #define Optional(T) __ident("Optional(" S(T) ")")
 #defblock OPTIONAL_DEF(T)
-typedef struct Optional(T) Optional(T);
 // static if provides introspection
 static if(T.is_pointer){
     struct Optional(T){

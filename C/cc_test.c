@@ -3881,6 +3881,36 @@ TestFunction(test_parse_decls){
                 { SVI("T"), SVI("int") },
             },
         },
+        {
+            "pragma typedef", __LINE__,
+            SVI("#pragma typedef on\n"
+                "struct Foo {\n"
+                "    Foo* next;\n"
+                "};\n"
+                "Foo f = {0};\n"
+                "Foo f2 = {&f};\n"),
+            .vars = {
+                {SVI("f"), SVI("struct Foo"), SVI("{(struct Foo *)0}")},
+                {SVI("f2"), SVI("struct Foo"), SVI("{&f}")},
+            },
+            .typedefs = {
+                {SVI("Foo"), SVI("struct Foo")},
+            },
+        },
+        {
+            "pragma typedef (II)", __LINE__,
+            SVI("#pragma typedef on\n"
+                "struct Foo;\n"
+                "struct Foo;\n"
+                "struct Foo;\n"
+                "Foo* next;\n"),
+            .vars = {
+                {SVI("next"), SVI("struct Foo *")},
+            },
+            .typedefs = {
+                {SVI("Foo"), SVI("struct Foo")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -3917,6 +3947,8 @@ TestFunction(test_parse_decls){
         if(err) {TestPrintf("%s:%d: failed to define\n", __FILE__, c->line); goto finally;}
         err = cc_define_builtin_types(&cc);
         if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto finally;}
+        err = cc_register_pragmas(&cc);
+        if(err) {TestPrintf("%s:%d: failed to register pragmas", __FILE__, c->line); goto finally;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto finally;}
         err = cc_parse_all(&cc);
