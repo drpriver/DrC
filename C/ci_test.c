@@ -34,7 +34,7 @@ TestFunction(test_interpreter){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    struct tc {
+    static struct tc {
         const char* name; int line;
         StringView program;
         int exit_code;
@@ -42,12 +42,12 @@ TestFunction(test_interpreter){
     } testcases[] = {
         {
             "basic", __LINE__,
-            SV("return 13;\n"),
+            SVI("return 13;\n"),
             .exit_code = 13,
         },
         {
             "loops: for", __LINE__,
-            SV("int result = 0;\n"
+            SVI("int result = 0;\n"
                "for(int i = 0; i < 10; i++) result += i;\n"
                "return result;\n"),
             .exit_code = 45,
@@ -55,88 +55,88 @@ TestFunction(test_interpreter){
         // Arithmetic
         {
             "arith: add", __LINE__,
-            SV("return 3 + 4;\n"),
+            SVI("return 3 + 4;\n"),
             .exit_code = 7,
         },
         {
             "arith: sub", __LINE__,
-            SV("return 10 - 3;\n"),
+            SVI("return 10 - 3;\n"),
             .exit_code = 7,
         },
         {
             "arith: mul", __LINE__,
-            SV("return 6 * 7;\n"),
+            SVI("return 6 * 7;\n"),
             .exit_code = 42,
         },
         {
             "arith: div", __LINE__,
-            SV("return 42 / 6;\n"),
+            SVI("return 42 / 6;\n"),
             .exit_code = 7,
         },
         {
             "arith: mod", __LINE__,
-            SV("return 17 % 5;\n"),
+            SVI("return 17 % 5;\n"),
             .exit_code = 2,
         },
         {
             "arith: negative div", __LINE__,
-            SV("return -7 / 2;\n"),
+            SVI("return -7 / 2;\n"),
             .exit_code = -3,
         },
         {
             "arith: negative mod", __LINE__,
-            SV("return -7 % 3;\n"),
+            SVI("return -7 % 3;\n"),
             .exit_code = -1,
         },
         {
             "arith: precedence", __LINE__,
-            SV("return 2 + 3 * 4;\n"),
+            SVI("return 2 + 3 * 4;\n"),
             .exit_code = 14,
         },
         {
             "arith: parens", __LINE__,
-            SV("return (2 + 3) * 4;\n"),
+            SVI("return (2 + 3) * 4;\n"),
             .exit_code = 20,
         },
         {
             "arith: unary minus", __LINE__,
-            SV("return -(-5);\n"),
+            SVI("return -(-5);\n"),
             .exit_code = 5,
         },
         // Bitwise
         {
             "bitwise: and", __LINE__,
-            SV("return 0xFF & 0x0F;\n"),
+            SVI("return 0xFF & 0x0F;\n"),
             .exit_code = 15,
         },
         {
             "bitwise: or", __LINE__,
-            SV("return 0xF0 | 0x0F;\n"),
+            SVI("return 0xF0 | 0x0F;\n"),
             .exit_code = 255,
         },
         {
             "bitwise: xor", __LINE__,
-            SV("return 0xFF ^ 0x0F;\n"),
+            SVI("return 0xFF ^ 0x0F;\n"),
             .exit_code = 240,
         },
         {
             "bitwise: not", __LINE__,
-            SV("return ~0 & 0xFF;\n"),
+            SVI("return ~0 & 0xFF;\n"),
             .exit_code = 255,
         },
         {
             "bitwise: lshift", __LINE__,
-            SV("return 1 << 4;\n"),
+            SVI("return 1 << 4;\n"),
             .exit_code = 16,
         },
         {
             "bitwise: rshift", __LINE__,
-            SV("return 256 >> 4;\n"),
+            SVI("return 256 >> 4;\n"),
             .exit_code = 16,
         },
         {
             "bitwise: u64 and", __LINE__,
-            SV("union { double d; unsigned long long i; } u;\n"
+            SVI("union { double d; unsigned long long i; } u;\n"
                "u.d = 0.5;\n"
                "unsigned long long expmask = 0x7FF0000000000000ULL;\n"
                "unsigned long long result = u.i & expmask;\n"
@@ -145,7 +145,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitwise: u64 and sign", __LINE__,
-            SV("union { double d; unsigned long long i; } u;\n"
+            SVI("union { double d; unsigned long long i; } u;\n"
                "u.d = -1.0;\n"
                "unsigned long long signmask = 0x8000000000000000ULL;\n"
                "return (u.i & signmask) != 0;\n"),
@@ -153,7 +153,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitwise: u64 and frac", __LINE__,
-            SV("union { double d; unsigned long long i; } u;\n"
+            SVI("union { double d; unsigned long long i; } u;\n"
                "u.d = 1.0;\n"
                "unsigned long long fracmask = 0x000FFFFFFFFFFFFFULL;\n"
                "return (u.i & fracmask) == 0;\n"),
@@ -161,88 +161,88 @@ TestFunction(test_interpreter){
         },
         {
             "hex literal U promotion", __LINE__,
-            SV("unsigned long long x = 0x7FF0000000000000U;\n"
+            SVI("unsigned long long x = 0x7FF0000000000000U;\n"
                "return x != 0;\n"),
             .exit_code = 1,
         },
         {
             "hex literal no suffix promotion", __LINE__,
-            SV("unsigned long long x = 0x8000000000000000;\n"
+            SVI("unsigned long long x = 0x8000000000000000;\n"
                "return x != 0;\n"),
             .exit_code = 1,
         },
         // Comparison
         {
             "cmp: eq true", __LINE__,
-            SV("return 5 == 5;\n"),
+            SVI("return 5 == 5;\n"),
             .exit_code = 1,
         },
         {
             "cmp: eq false", __LINE__,
-            SV("return 5 == 6;\n"),
+            SVI("return 5 == 6;\n"),
             .exit_code = 0,
         },
         {
             "cmp: neq", __LINE__,
-            SV("return 5 != 6;\n"),
+            SVI("return 5 != 6;\n"),
             .exit_code = 1,
         },
         {
             "cmp: lt", __LINE__,
-            SV("return 3 < 5;\n"),
+            SVI("return 3 < 5;\n"),
             .exit_code = 1,
         },
         {
             "cmp: gt", __LINE__,
-            SV("return 5 > 3;\n"),
+            SVI("return 5 > 3;\n"),
             .exit_code = 1,
         },
         {
             "cmp: le", __LINE__,
-            SV("return 5 <= 5;\n"),
+            SVI("return 5 <= 5;\n"),
             .exit_code = 1,
         },
         {
             "cmp: ge", __LINE__,
-            SV("return 5 >= 6;\n"),
+            SVI("return 5 >= 6;\n"),
             .exit_code = 0,
         },
         // Logical
         {
             "logical: and true", __LINE__,
-            SV("return 1 && 2;\n"),
+            SVI("return 1 && 2;\n"),
             .exit_code = 1,
         },
         {
             "logical: and false", __LINE__,
-            SV("return 1 && 0;\n"),
+            SVI("return 1 && 0;\n"),
             .exit_code = 0,
         },
         {
             "logical: or", __LINE__,
-            SV("return 0 || 5;\n"),
+            SVI("return 0 || 5;\n"),
             .exit_code = 1,
         },
         {
             "logical: not", __LINE__,
-            SV("return !0;\n"),
+            SVI("return !0;\n"),
             .exit_code = 1,
         },
         {
             "logical: not truthy", __LINE__,
-            SV("return !42;\n"),
+            SVI("return !42;\n"),
             .exit_code = 0,
         },
         {
             "logical: short circuit and", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "0 && (x = 1);\n"
                "return x;\n"),
             .exit_code = 0,
         },
         {
             "logical: short circuit or", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "1 || (x = 1);\n"
                "return x;\n"),
             .exit_code = 0,
@@ -250,115 +250,115 @@ TestFunction(test_interpreter){
         // Ternary
         {
             "ternary: true", __LINE__,
-            SV("return 1 ? 10 : 20;\n"),
+            SVI("return 1 ? 10 : 20;\n"),
             .exit_code = 10,
         },
         {
             "ternary: false", __LINE__,
-            SV("return 0 ? 10 : 20;\n"),
+            SVI("return 0 ? 10 : 20;\n"),
             .exit_code = 20,
         },
         // Comma
         {
             "comma", __LINE__,
-            SV("return (1, 2, 3);\n"),
+            SVI("return (1, 2, 3);\n"),
             .exit_code = 3,
         },
         // Assignment operators
         {
             "assign: plus_eq", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "x += 5;\n"
                "return x;\n"),
             .exit_code = 15,
         },
         {
             "assign: minus_eq", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "x -= 3;\n"
                "return x;\n"),
             .exit_code = 7,
         },
         {
             "assign: mul_eq", __LINE__,
-            SV("int x = 6;\n"
+            SVI("int x = 6;\n"
                "x *= 7;\n"
                "return x;\n"),
             .exit_code = 42,
         },
         {
             "assign: div_eq", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "x /= 6;\n"
                "return x;\n"),
             .exit_code = 7,
         },
         {
             "assign: mod_eq", __LINE__,
-            SV("int x = 17;\n"
+            SVI("int x = 17;\n"
                "x %= 5;\n"
                "return x;\n"),
             .exit_code = 2,
         },
         {
             "assign: and_eq", __LINE__,
-            SV("int x = 0xFF;\n"
+            SVI("int x = 0xFF;\n"
                "x &= 0x0F;\n"
                "return x;\n"),
             .exit_code = 15,
         },
         {
             "assign: or_eq", __LINE__,
-            SV("int x = 0xF0;\n"
+            SVI("int x = 0xF0;\n"
                "x |= 0x0F;\n"
                "return x;\n"),
             .exit_code = 255,
         },
         {
             "assign: xor_eq", __LINE__,
-            SV("int x = 0xFF;\n"
+            SVI("int x = 0xFF;\n"
                "x ^= 0x0F;\n"
                "return x;\n"),
             .exit_code = 240,
         },
         {
             "assign: lshift_eq", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "x <<= 4;\n"
                "return x;\n"),
             .exit_code = 16,
         },
         {
             "assign: rshift_eq", __LINE__,
-            SV("int x = 256;\n"
+            SVI("int x = 256;\n"
                "x >>= 4;\n"
                "return x;\n"),
             .exit_code = 16,
         },
         {
             "assign: signed div_eq", __LINE__,
-            SV("int x = -6;\n"
+            SVI("int x = -6;\n"
                "x /= 2;\n"
                "return x + 100;\n"),
             .exit_code = 97,
         },
         {
             "assign: signed mod_eq", __LINE__,
-            SV("int x = -7;\n"
+            SVI("int x = -7;\n"
                "x %= 3;\n"
                "return x + 100;\n"),
             .exit_code = 99,
         },
         {
             "assign: signed rshift_eq", __LINE__,
-            SV("int x = -8;\n"
+            SVI("int x = -8;\n"
                "x >>= 1;\n"
                "return x + 100;\n"),
             .exit_code = 96,
         },
         {
             "assign: unsigned enum div_eq", __LINE__,
-            SV("typedef enum : unsigned { BIG = 3000000000u } E;\n"
+            SVI("typedef enum : unsigned { BIG = 3000000000u } E;\n"
                "E e = BIG;\n"
                "e /= 1000000000u;\n"
                "return (int)e;\n"),
@@ -367,26 +367,26 @@ TestFunction(test_interpreter){
         // Increment / Decrement
         {
             "prefix increment", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "return ++x;\n"),
             .exit_code = 6,
         },
         {
             "postfix increment", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "int y = x++;\n"
                "return y * 10 + x;\n"),
             .exit_code = 56,
         },
         {
             "prefix decrement", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "return --x;\n"),
             .exit_code = 4,
         },
         {
             "postfix decrement", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "int y = x--;\n"
                "return y * 10 + x;\n"),
             .exit_code = 54,
@@ -394,7 +394,7 @@ TestFunction(test_interpreter){
         // Cast
         {
             "cast: int to char truncation", __LINE__,
-            SV("int x = 257;\n"
+            SVI("int x = 257;\n"
                "char c = (char)x;\n"
                "return c;\n"),
             .exit_code = 1,
@@ -402,42 +402,42 @@ TestFunction(test_interpreter){
         // sizeof
         {
             "sizeof int", __LINE__,
-            SV("return sizeof(int);\n"),
+            SVI("return sizeof(int);\n"),
             .exit_code = 4,
         },
         {
             "sizeof char", __LINE__,
-            SV("return sizeof(char);\n"),
+            SVI("return sizeof(char);\n"),
             .exit_code = 1,
         },
         {
             "sizeof expr", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "return sizeof x;\n"),
             .exit_code = 4,
         },
         // If/else
         {
             "if: true branch", __LINE__,
-            SV("if(1) return 10;\n"
+            SVI("if(1) return 10;\n"
                "return 20;\n"),
             .exit_code = 10,
         },
         {
             "if: false branch", __LINE__,
-            SV("if(0) return 10;\n"
+            SVI("if(0) return 10;\n"
                "return 20;\n"),
             .exit_code = 20,
         },
         {
             "if: else", __LINE__,
-            SV("if(0) return 10;\n"
+            SVI("if(0) return 10;\n"
                "else return 20;\n"),
             .exit_code = 20,
         },
         {
             "if: else if chain", __LINE__,
-            SV("int x = 2;\n"
+            SVI("int x = 2;\n"
                "if(x == 0) return 0;\n"
                "else if(x == 1) return 1;\n"
                "else if(x == 2) return 2;\n"
@@ -447,7 +447,7 @@ TestFunction(test_interpreter){
         // While
         {
             "while", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "int s = 0;\n"
                "while(i < 5){ s += i; i++; }\n"
                "return s;\n"),
@@ -456,14 +456,14 @@ TestFunction(test_interpreter){
         // Do-while
         {
             "do while", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "do { i++; } while(i < 5);\n"
                "return i;\n"),
             .exit_code = 5,
         },
         {
             "do while: executes at least once", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "do { i++; } while(0);\n"
                "return i;\n"),
             .exit_code = 1,
@@ -471,14 +471,14 @@ TestFunction(test_interpreter){
         // For loop variants
         {
             "for: empty body", __LINE__,
-            SV("int i;\n"
+            SVI("int i;\n"
                "for(i = 0; i < 10; i++);\n"
                "return i;\n"),
             .exit_code = 10,
         },
         {
             "for: no init", __LINE__,
-            SV("int i = 5;\n"
+            SVI("int i = 5;\n"
                "for(; i < 10; i++);\n"
                "return i;\n"),
             .exit_code = 10,
@@ -486,14 +486,14 @@ TestFunction(test_interpreter){
         // Break / Continue
         {
             "break", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "while(1){ if(i == 5) break; i++; }\n"
                "return i;\n"),
             .exit_code = 5,
         },
         {
             "continue", __LINE__,
-            SV("int s = 0;\n"
+            SVI("int s = 0;\n"
                "for(int i = 0; i < 10; i++){\n"
                "  if(i % 2 == 0) continue;\n"
                "  s += i;\n"
@@ -503,7 +503,7 @@ TestFunction(test_interpreter){
         },
         {
             "break: nested loops", __LINE__,
-            SV("int s = 0;\n"
+            SVI("int s = 0;\n"
                "for(int i = 0; i < 5; i++){\n"
                "  for(int j = 0; j < 5; j++){\n"
                "    if(j == 2) break;\n"
@@ -516,7 +516,7 @@ TestFunction(test_interpreter){
         // Switch
         {
             "switch: match", __LINE__,
-            SV("int x = 2;\n"
+            SVI("int x = 2;\n"
                "switch(x){\n"
                "  case 1: return 10;\n"
                "  case 2: return 20;\n"
@@ -527,7 +527,7 @@ TestFunction(test_interpreter){
         },
         {
             "switch: default", __LINE__,
-            SV("int x = 99;\n"
+            SVI("int x = 99;\n"
                "switch(x){\n"
                "  case 1: return 10;\n"
                "  default: return 42;\n"
@@ -537,7 +537,7 @@ TestFunction(test_interpreter){
         },
         {
             "switch: fallthrough", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "int r = 0;\n"
                "switch(x){\n"
                "  case 1: r += 1;\n"
@@ -550,7 +550,7 @@ TestFunction(test_interpreter){
         },
         {
             "switch: unsigned enum", __LINE__,
-            SV("typedef enum : unsigned { A = 3000000000u, B = 100u } E;\n"
+            SVI("typedef enum : unsigned { A = 3000000000u, B = 100u } E;\n"
                "E e = A;\n"
                "switch(e){\n"
                "  case 100u: return 1;\n"
@@ -562,7 +562,7 @@ TestFunction(test_interpreter){
         // Goto
         {
             "goto: forward", __LINE__,
-            SV("goto end;\n"
+            SVI("goto end;\n"
                "return 1;\n"
                "end:\n"
                "return 0;\n"),
@@ -570,7 +570,7 @@ TestFunction(test_interpreter){
         },
         {
             "goto: backward (loop)", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "top:\n"
                "if(i >= 5) return i;\n"
                "i++;\n"
@@ -580,7 +580,7 @@ TestFunction(test_interpreter){
         // Blocks / scoping
         {
             "block: variable shadowing", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "{\n"
                "  int x = 2;\n"
                "  x = x + 10;\n"
@@ -591,14 +591,14 @@ TestFunction(test_interpreter){
         // Pointers
         {
             "pointer: address and deref", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "int *p = &x;\n"
                "return *p;\n"),
             .exit_code = 42,
         },
         {
             "pointer: write through", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "int *p = &x;\n"
                "*p = 42;\n"
                "return x;\n"),
@@ -606,21 +606,21 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: arithmetic", __LINE__,
-            SV("int arr[4] = {10, 20, 30, 40};\n"
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
                "int *p = arr;\n"
                "return *(p + 2);\n"),
             .exit_code = 30,
         },
         {
             "pointer: subscript", __LINE__,
-            SV("int arr[3] = {5, 10, 15};\n"
+            SVI("int arr[3] = {5, 10, 15};\n"
                "int *p = arr;\n"
                "return p[1];\n"),
             .exit_code = 10,
         },
         {
             "pointer: += compound assign", __LINE__,
-            SV("int arr[4] = {10, 20, 30, 40};\n"
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
                "int *p = arr;\n"
                "p += 2;\n"
                "return *p;\n"),
@@ -628,7 +628,7 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: -= compound assign", __LINE__,
-            SV("int arr[4] = {10, 20, 30, 40};\n"
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
                "int *p = arr + 3;\n"
                "p -= 2;\n"
                "return *p;\n"),
@@ -636,7 +636,7 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: difference", __LINE__,
-            SV("int arr[5] = {0};\n"
+            SVI("int arr[5] = {0};\n"
                "int *a = &arr[1];\n"
                "int *b = &arr[4];\n"
                "return (int)(b - a);\n"),
@@ -644,7 +644,7 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: sub array decay", __LINE__,
-            SV("typedef struct Foo { char data[10000]; } Foo;\n"
+            SVI("typedef struct Foo { char data[10000]; } Foo;\n"
                "Foo f;\n"
                "char* p = f.data;\n"
                "char* end = f.data + sizeof f.data;\n"
@@ -655,7 +655,7 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: ternary array decay cond", __LINE__,
-            SV("typedef struct Foo { char data[10000]; } Foo;\n"
+            SVI("typedef struct Foo { char data[10000]; } Foo;\n"
                "Foo f;\n"
                "char* c = f.data ? f.data : (void*)0;\n"
                "return c != f.data;\n"),
@@ -664,40 +664,40 @@ TestFunction(test_interpreter){
         // Arrays
         {
             "array: basic", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "return arr[0] + arr[1] + arr[2];\n"),
             .exit_code = 60,
         },
         {
             "array: zero init", __LINE__,
-            SV("int arr[5] = {0};\n"
+            SVI("int arr[5] = {0};\n"
                "return arr[0] + arr[1] + arr[4];\n"),
             .exit_code = 0,
         },
         {
             "array: partial init", __LINE__,
-            SV("int arr[5] = {1, 2};\n"
+            SVI("int arr[5] = {1, 2};\n"
                "return arr[0] + arr[1] + arr[2];\n"),
             .exit_code = 3,
         },
         // Struct
         {
             "struct: basic", __LINE__,
-            SV("struct point { int x; int y; };\n"
+            SVI("struct point { int x; int y; };\n"
                "struct point p = {3, 4};\n"
                "return p.x * 10 + p.y;\n"),
             .exit_code = 34,
         },
         {
             "struct: designated init", __LINE__,
-            SV("struct point { int x; int y; };\n"
+            SVI("struct point { int x; int y; };\n"
                "struct point p = {.y = 7, .x = 3};\n"
                "return p.x * 10 + p.y;\n"),
             .exit_code = 37,
         },
         {
             "struct: pointer arrow", __LINE__,
-            SV("struct point { int x; int y; };\n"
+            SVI("struct point { int x; int y; };\n"
                "struct point p = {5, 6};\n"
                "struct point *pp = &p;\n"
                "return pp->x * 10 + pp->y;\n"),
@@ -705,7 +705,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct: nested", __LINE__,
-            SV("struct inner { int val; };\n"
+            SVI("struct inner { int val; };\n"
                "struct outer { struct inner a; int b; };\n"
                "struct outer o = {{42}, 7};\n"
                "return o.a.val + o.b;\n"),
@@ -714,7 +714,7 @@ TestFunction(test_interpreter){
         // Union
         {
             "union: basic", __LINE__,
-            SV("union u { int i; char c; };\n"
+            SVI("union u { int i; char c; };\n"
                "union u v;\n"
                "v.i = 0;\n"
                "v.c = 5;\n"
@@ -724,21 +724,21 @@ TestFunction(test_interpreter){
         // Enum
         {
             "enum", __LINE__,
-            SV("enum color { RED, GREEN, BLUE };\n"
+            SVI("enum color { RED, GREEN, BLUE };\n"
                "enum color c = BLUE;\n"
                "return c;\n"),
             .exit_code = 2,
         },
         {
             "enum: explicit values", __LINE__,
-            SV("enum { A = 10, B, C = 20 };\n"
+            SVI("enum { A = 10, B, C = 20 };\n"
                "return A + B + C;\n"),
             .exit_code = 41,
         },
         // Typedef
         {
             "typedef", __LINE__,
-            SV("typedef int myint;\n"
+            SVI("typedef int myint;\n"
                "myint x = 42;\n"
                "return x;\n"),
             .exit_code = 42,
@@ -746,13 +746,13 @@ TestFunction(test_interpreter){
         // Functions
         {
             "function: basic call", __LINE__,
-            SV("int add(int a, int b){ return a + b; }\n"
+            SVI("int add(int a, int b){ return a + b; }\n"
                "return add(3, 4);\n"),
             .exit_code = 7,
         },
         {
             "function: recursion (factorial)", __LINE__,
-            SV("int fact(int n){\n"
+            SVI("int fact(int n){\n"
                "  if(n <= 1) return 1;\n"
                "  return n * fact(n - 1);\n"
                "}\n"
@@ -761,7 +761,7 @@ TestFunction(test_interpreter){
         },
         {
             "function: mutual recursion", __LINE__,
-            SV("int is_even(int n);\n"
+            SVI("int is_even(int n);\n"
                "int is_odd(int n);\n"
                "int is_even(int n){ if(n == 0) return 1; return is_odd(n - 1); }\n"
                "int is_odd(int n){ if(n == 0) return 0; return is_even(n - 1); }\n"
@@ -771,7 +771,7 @@ TestFunction(test_interpreter){
         // Function pointers
         {
             "function pointer", __LINE__,
-            SV("int add(int a, int b){ return a + b; }\n"
+            SVI("int add(int a, int b){ return a + b; }\n"
                "int (*fp)(int, int) = add;\n"
                "return fp(3, 4);\n"),
             .exit_code = 7,
@@ -780,7 +780,7 @@ TestFunction(test_interpreter){
         // Static locals
         {
             "static local", __LINE__,
-            SV("int counter(void){\n"
+            SVI("int counter(void){\n"
                "  static int n = 0;\n"
                "  return n++;\n"
                "}\n"
@@ -792,7 +792,7 @@ TestFunction(test_interpreter){
         // Global variables
         {
             "global variable", __LINE__,
-            SV("int g = 10;\n"
+            SVI("int g = 10;\n"
                "int get(void){ return g; }\n"
                "void set(int v){ g = v; }\n"
                "set(42);\n"
@@ -802,7 +802,7 @@ TestFunction(test_interpreter){
         // Type conversions
         {
             "unsigned wrap", __LINE__,
-            SV("unsigned int x = 0;\n"
+            SVI("unsigned int x = 0;\n"
                "x = x - 1;\n"
                "return (x > 1000) ? 1 : 0;\n"),
             .exit_code = 1,
@@ -810,46 +810,46 @@ TestFunction(test_interpreter){
         // Compound literals
         {
             "compound literal", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt p = (struct pt){.x=3, .y=4};\n"
                "return p.x + p.y;\n"),
             .exit_code = 7,
         },
         {
             "compound literal parens", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt p = ((struct pt){.x=3, .y=4});\n"
                "return p.x + p.y;\n"),
             .exit_code = 7,
         },
         {
             "compound literal lvalue", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt* p = &(struct pt){.x=3, .y=4};\n"
                "return p->x + p->y;\n"),
             .exit_code = 7,
         },
         {
             "compound literal lvalue parens", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt* p = &((struct pt){.x=3, .y=4});\n"
                "return p->x + p->y;\n"),
             .exit_code = 7,
         },
         {
             "compound literal member access", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "return (struct pt){.x=10, .y=20}.y;\n"),
             .exit_code = 20,
         },
         {
             "compound literal array subscript", __LINE__,
-            SV("return (int[]){10, 20, 30}[1];\n"),
+            SVI("return (int[]){10, 20, 30}[1];\n"),
             .exit_code = 20,
         },
         {
             "compound literal assignment", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt p = {0, 0};\n"
                "p = (struct pt){.x=5, .y=6};\n"
                "return p.x + p.y;\n"),
@@ -857,7 +857,7 @@ TestFunction(test_interpreter){
         },
         {
             "compound literal in struct init", __LINE__,
-            SV("struct Inner { int a; int b; };\n"
+            SVI("struct Inner { int a; int b; };\n"
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer o = { 1, (struct Inner){2, 3} };\n"
                "return o.x + o.inner.a + o.inner.b;\n"),
@@ -865,21 +865,21 @@ TestFunction(test_interpreter){
         },
         {
             "compound literal array lvalue", __LINE__,
-            SV("int *p = (int[]){10, 20, 30};\n"
+            SVI("int *p = (int[]){10, 20, 30};\n"
                "p[1] = 99;\n"
                "return p[1];\n"),
             .exit_code = 99,
         },
         {
             "compound literal member lvalue", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "(struct pt){.x=3, .y=4}.x = 10;\n"
                "return 0;\n"),
             .exit_code = 0,
         },
         {
             "compound literal deep lvalue", __LINE__,
-            SV("struct Inner { int a; int b; };\n"
+            SVI("struct Inner { int a; int b; };\n"
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer *p = &(struct Outer){.x=1, .inner={.a=2, .b=3}};\n"
                "p->inner.a = 42;\n"
@@ -888,7 +888,7 @@ TestFunction(test_interpreter){
         },
         {
             "compound literal array element lvalue", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "struct pt *p = (struct pt[]){ {1, 2}, {3, 4} };\n"
                "p[1].x = 50;\n"
                "return p[0].x + p[1].x + p[1].y;\n"),
@@ -896,14 +896,14 @@ TestFunction(test_interpreter){
         },
         {
             "compound literal member array decay", __LINE__,
-            SV("struct SmallStr { char txt[8]; };\n"
+            SVI("struct SmallStr { char txt[8]; };\n"
                "char *p = (struct SmallStr){\"hello\"}.txt;\n"
                "return p[1];\n"),
             .exit_code = 'e',
         },
         {
             "compound literal as function arg", __LINE__,
-            SV("struct pt { int x; int y; };\n"
+            SVI("struct pt { int x; int y; };\n"
                "int* bump(int* p) { *p += 10; return p; }\n"
                "int* q = bump(&(struct pt){3, 4}.x);\n"
                "return *q;\n"),
@@ -912,262 +912,262 @@ TestFunction(test_interpreter){
         // String literals
         {
             "string literal indexing", __LINE__,
-            SV("const char *s = \"hello\";\n"
+            SVI("const char *s = \"hello\";\n"
                "return s[1];\n"),
             .exit_code = 'e',
         },
         {
             "deref array variable", __LINE__,
-            SV("int arr[] = {10, 20, 30};\n"
+            SVI("int arr[] = {10, 20, 30};\n"
                "return *arr;\n"),
             .exit_code = 10,
         },
         {
             "reversed subscript string literal", __LINE__,
-            SV("return 1[\"hello\"];\n"),
+            SVI("return 1[\"hello\"];\n"),
             .exit_code = 'e',
         },
         {
             "reversed subscript array", __LINE__,
-            SV("int arr[] = {10, 20, 30};\n"
+            SVI("int arr[] = {10, 20, 30};\n"
                "return 2[arr];\n"),
             .exit_code = 30,
         },
         {
             "ternary string literal subscript", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "return (x ? \"abc\" : \"def\")[1];\n"),
             .exit_code = 'b',
         },
         {
             "ternary string literal subscript false", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "return (x ? \"abc\" : \"def\")[1];\n"),
             .exit_code = 'e',
         },
         {
             "deref string literal", __LINE__,
-            SV("return *\"hello\";\n"),
+            SVI("return *\"hello\";\n"),
             .exit_code = 'h',
         },
         {
             "deref L string literal", __LINE__,
-            SV("return *L\"hello\";\n"),
+            SVI("return *L\"hello\";\n"),
             .exit_code = 'h',
         },
         {
             "deref u string literal", __LINE__,
-            SV("return *u\"hello\";\n"),
+            SVI("return *u\"hello\";\n"),
             .exit_code = 'h',
         },
         {
             "deref U string literal", __LINE__,
-            SV("return *U\"hello\";\n"),
+            SVI("return *U\"hello\";\n"),
             .exit_code = 'h',
         },
         {
             "deref u8 string literal", __LINE__,
-            SV("return *u8\"hello\";\n"),
+            SVI("return *u8\"hello\";\n"),
             .exit_code = 'h',
         },
         // Wide string literals
         {
             "L string indexing", __LINE__,
-            SV("return L\"hello\"[1];\n"),
+            SVI("return L\"hello\"[1];\n"),
             .exit_code = 'e',
         },
         {
             "u string indexing", __LINE__,
-            SV("return u\"hello\"[0];\n"),
+            SVI("return u\"hello\"[0];\n"),
             .exit_code = 'h',
         },
         {
             "U string indexing", __LINE__,
-            SV("return U\"hello\"[2];\n"),
+            SVI("return U\"hello\"[2];\n"),
             .exit_code = 'l',
         },
         {
             "u8 string indexing", __LINE__,
-            SV("return u8\"hello\"[4];\n"),
+            SVI("return u8\"hello\"[4];\n"),
             .exit_code = 'o',
         },
         {
             "L string null terminator", __LINE__,
-            SV("return L\"hi\"[2];\n"),
+            SVI("return L\"hi\"[2];\n"),
             .exit_code = 0,
         },
         {
             "u string null terminator", __LINE__,
-            SV("return u\"hi\"[2];\n"),
+            SVI("return u\"hi\"[2];\n"),
             .exit_code = 0,
         },
         {
             "U string null terminator", __LINE__,
-            SV("return U\"hi\"[2];\n"),
+            SVI("return U\"hi\"[2];\n"),
             .exit_code = 0,
         },
         {
             "u8 string null terminator", __LINE__,
-            SV("return u8\"hi\"[2];\n"),
+            SVI("return u8\"hi\"[2];\n"),
             .exit_code = 0,
         },
         {
             "sizeof L string element", __LINE__,
-            SV("return sizeof(L\"x\"[0]);\n"),
+            SVI("return sizeof(L\"x\"[0]);\n"),
             .exit_code = 4, // sizeof(int)
         },
         {
             "sizeof u string element", __LINE__,
-            SV("return sizeof(u\"x\"[0]);\n"),
+            SVI("return sizeof(u\"x\"[0]);\n"),
             .exit_code = 2, // sizeof(unsigned short)
         },
         {
             "sizeof U string element", __LINE__,
-            SV("return sizeof(U\"x\"[0]);\n"),
+            SVI("return sizeof(U\"x\"[0]);\n"),
             .exit_code = 4, // sizeof(unsigned int)
         },
         {
             "sizeof u8 string element", __LINE__,
-            SV("return sizeof(u8\"x\"[0]);\n"),
+            SVI("return sizeof(u8\"x\"[0]);\n"),
             .exit_code = 1, // sizeof(unsigned char)
         },
         {
             "sizeof L string", __LINE__,
-            SV("return sizeof(L\"hello\");\n"),
+            SVI("return sizeof(L\"hello\");\n"),
             .exit_code = 24, // 6 * 4
         },
         {
             "sizeof u string", __LINE__,
-            SV("return sizeof(u\"hello\");\n"),
+            SVI("return sizeof(u\"hello\");\n"),
             .exit_code = 12, // 6 * 2
         },
         {
             "sizeof U string", __LINE__,
-            SV("return sizeof(U\"hello\");\n"),
+            SVI("return sizeof(U\"hello\");\n"),
             .exit_code = 24, // 6 * 4
         },
         {
             "sizeof u8 string", __LINE__,
-            SV("return sizeof(u8\"hello\");\n"),
+            SVI("return sizeof(u8\"hello\");\n"),
             .exit_code = 6, // 6 * 1
         },
         {
             "L string escape", __LINE__,
-            SV("return L\"a\\nb\"[1];\n"),
+            SVI("return L\"a\\nb\"[1];\n"),
             .exit_code = '\n',
         },
         {
             "L string UCN", __LINE__,
-            SV("return L\"\\u0041\"[0];\n"),
+            SVI("return L\"\\u0041\"[0];\n"),
             .exit_code = 'A',
         },
         {
             "u string UCN", __LINE__,
-            SV("return u\"\\u00E9\"[0];\n"),
+            SVI("return u\"\\u00E9\"[0];\n"),
             .exit_code = 233, // 0xE9
         },
         {
             "U string UCN above BMP", __LINE__,
-            SV("return U\"\\U0001F600\"[0] == 0x1F600;\n"),
+            SVI("return U\"\\U0001F600\"[0] == 0x1F600;\n"),
             .exit_code = 1,
         },
         {
             "L string array init", __LINE__,
-            SV("int arr[] = L\"AB\";\n"
+            SVI("int arr[] = L\"AB\";\n"
                "return arr[0] + arr[1];\n"),
             .exit_code = 'A' + 'B',
         },
         {
             "u string array init", __LINE__,
-            SV("unsigned short arr[] = u\"AB\";\n"
+            SVI("unsigned short arr[] = u\"AB\";\n"
                "return arr[0] + arr[1];\n"),
             .exit_code = 131, // 65 + 66
         },
         {
             "U string array init", __LINE__,
-            SV("unsigned arr[] = U\"AB\";\n"
+            SVI("unsigned arr[] = U\"AB\";\n"
                "return arr[0] + arr[1];\n"),
             .exit_code = 131, // 65 + 66
         },
         {
             "u8 string array init", __LINE__,
-            SV("unsigned char arr[] = u8\"AB\";\n"
+            SVI("unsigned char arr[] = u8\"AB\";\n"
                "return arr[0] + arr[1];\n"),
             .exit_code = 131, // 65 + 66
         },
         {
             "char array truncation", __LINE__,
-            SV("char t[3] = \"abc\";\n"
+            SVI("char t[3] = \"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
         {
             "nested char array truncation", __LINE__,
-            SV("char t[1][3] = {\"abc\"};\n"
+            SVI("char t[1][3] = {\"abc\"};\n"
                "return t[0][2];\n"),
             .exit_code = 'c',
         },
         {
             "designated nested char array truncation", __LINE__,
-            SV("char t[1][3] = {[0] = \"abc\"};\n"
+            SVI("char t[1][3] = {[0] = \"abc\"};\n"
                "return t[0][2];\n"),
             .exit_code = 'c',
         },
         {
             "static char array truncation", __LINE__,
-            SV("static char t[3] = \"abc\";\n"
+            SVI("static char t[3] = \"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
         {
             "nested static char array truncation", __LINE__,
-            SV("char t[1][3] = {\"abc\"};\n"
+            SVI("char t[1][3] = {\"abc\"};\n"
                "return t[0][1];\n"),
             .exit_code = 'b',
         },
         {
             "L string array truncation", __LINE__,
-            SV("int t[3] = L\"abc\";\n"
+            SVI("int t[3] = L\"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
         {
             "u string array truncation", __LINE__,
-            SV("unsigned short t[3] = u\"abc\";\n"
+            SVI("unsigned short t[3] = u\"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
         {
             "U string array truncation", __LINE__,
-            SV("unsigned t[3] = U\"abc\";\n"
+            SVI("unsigned t[3] = U\"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
         // Multidimensional array
         {
             "2d array", __LINE__,
-            SV("int m[2][3] = {{1,2,3},{4,5,6}};\n"
+            SVI("int m[2][3] = {{1,2,3},{4,5,6}};\n"
                "return m[1][2];\n"),
             .exit_code = 6,
         },
         // Deeply nested expressions
         {
             "nested ternary", __LINE__,
-            SV("int x = 3;\n"
+            SVI("int x = 3;\n"
                "return x == 1 ? 10 : x == 2 ? 20 : x == 3 ? 30 : 40;\n"),
             .exit_code = 30,
         },
         // Zero iteration
         {
             "zero iteration for", __LINE__,
-            SV("int s = 5;\n"
+            SVI("int s = 5;\n"
                "for(int i = 0; i < 0; i++) s += i;\n"
                "return s;\n"),
             .exit_code = 5,
         },
         {
             "zero iteration while", __LINE__,
-            SV("int s = 5;\n"
+            SVI("int s = 5;\n"
                "while(0) s = 0;\n"
                "return s;\n"),
             .exit_code = 5,
@@ -1175,14 +1175,14 @@ TestFunction(test_interpreter){
         // Unary plus
         {
             "unary plus", __LINE__,
-            SV("int x = -5;\n"
+            SVI("int x = -5;\n"
                "return +x;\n"),
             .exit_code = -5,
         },
         // Ternary: side effects only in taken branch
         {
             "ternary: no side effect in untaken", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "int y = 1 ? (x = 10) : (x = 20);\n"
                "return x;\n"),
             .exit_code = 10,
@@ -1190,14 +1190,14 @@ TestFunction(test_interpreter){
         // Cast: sign extension
         {
             "cast: sign extend char to int", __LINE__,
-            SV("char c = -1;\n"
+            SVI("char c = -1;\n"
                "int x = (int)c;\n"
                "return x;\n"),
             .exit_code = -1,
         },
         {
             "cast: unsigned enum to float", __LINE__,
-            SV("typedef enum : unsigned { V = 3000000000u } E;\n"
+            SVI("typedef enum : unsigned { V = 3000000000u } E;\n"
                "E e = V;\n"
                "double d = (double)e;\n"
                "return (int)(d / 1000000000.0);\n"),
@@ -1205,14 +1205,14 @@ TestFunction(test_interpreter){
         },
         {
             "cast: float to unsigned enum", __LINE__,
-            SV("typedef enum : unsigned { V = 0 } E;\n"
+            SVI("typedef enum : unsigned { V = 0 } E;\n"
                "E e = (E)3000000000.0;\n"
                "return (int)(e / 1000000000u);\n"),
             .exit_code = 3,
         },
         {
             "cast: float to unsigned long long enum", __LINE__,
-            SV("typedef enum : unsigned long long { V = 0 } E;\n"
+            SVI("typedef enum : unsigned long long { V = 0 } E;\n"
                "E e = (E)1e19;\n"
                "return (int)(e / (unsigned long long)1e18);\n"),
             .exit_code = 10,
@@ -1220,14 +1220,14 @@ TestFunction(test_interpreter){
         // Subscript equivalence *(a+i)
         {
             "subscript: *(a+i)", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "return *(arr + 2);\n"),
             .exit_code = 30,
         },
         // Return without value (void function)
         {
             "return void", __LINE__,
-            SV("void noop(void){ return; }\n"
+            SVI("void noop(void){ return; }\n"
                "noop();\n"
                "return 42;\n"),
             .exit_code = 42,
@@ -1235,7 +1235,7 @@ TestFunction(test_interpreter){
         // for(;;) infinite loop with break
         {
             "for: infinite with break", __LINE__,
-            SV("int i = 0;\n"
+            SVI("int i = 0;\n"
                "for(;;){ if(i == 7) break; i++; }\n"
                "return i;\n"),
             .exit_code = 7,
@@ -1243,35 +1243,35 @@ TestFunction(test_interpreter){
         // Empty statement
         {
             "empty statement", __LINE__,
-            SV(";;;\n"
+            SVI(";;;\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         // Integer types: short
         {
             "type: short", __LINE__,
-            SV("short s = 127;\n"
+            SVI("short s = 127;\n"
                "return s;\n"),
             .exit_code = 127,
         },
         // Integer types: long
         {
             "type: long", __LINE__,
-            SV("long l = 100;\n"
+            SVI("long l = 100;\n"
                "return (int)l;\n"),
             .exit_code = 100,
         },
         // Integer types: unsigned char
         {
             "type: unsigned char", __LINE__,
-            SV("unsigned char c = 200;\n"
+            SVI("unsigned char c = 200;\n"
                "return c;\n"),
             .exit_code = 200,
         },
         // Multi-level pointer
         {
             "pointer: multi-level", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "int *p = &x;\n"
                "int **pp = &p;\n"
                "return **pp;\n"),
@@ -1280,14 +1280,14 @@ TestFunction(test_interpreter){
         // Null pointer check
         {
             "pointer: null check", __LINE__,
-            SV("int *p = 0;\n"
+            SVI("int *p = 0;\n"
                "return p == 0;\n"),
             .exit_code = 1,
         },
         // Array decay to pointer
         {
             "array: decay to pointer", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "int *p = arr;\n"
                "return *p;\n"),
             .exit_code = 10,
@@ -1295,7 +1295,7 @@ TestFunction(test_interpreter){
         // Pointer comparison
         {
             "pointer: comparison", __LINE__,
-            SV("int arr[3] = {0};\n"
+            SVI("int arr[3] = {0};\n"
                "int *a = &arr[0];\n"
                "int *b = &arr[2];\n"
                "return a < b;\n"),
@@ -1304,7 +1304,7 @@ TestFunction(test_interpreter){
         // void* as generic pointer
         {
             "pointer: void star", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "void *v = &x;\n"
                "int *p = (int*)v;\n"
                "return *p;\n"),
@@ -1313,7 +1313,7 @@ TestFunction(test_interpreter){
         // Local variable without initializer
         {
             "decl: uninitialized local", __LINE__,
-            SV("int x;\n"
+            SVI("int x;\n"
                "x = 7;\n"
                "return x;\n"),
             .exit_code = 7,
@@ -1321,25 +1321,25 @@ TestFunction(test_interpreter){
         // Adjacent string literal concatenation
         {
             "string: adjacent concat", __LINE__,
-            SV("const char *s = \"hel\" \"lo\";\n"
+            SVI("const char *s = \"hel\" \"lo\";\n"
                "return s[3];\n"),
             .exit_code = 'l',
         },
         // Integer constants: hex and octal
         {
             "constant: hex", __LINE__,
-            SV("return 0x2A;\n"),
+            SVI("return 0x2A;\n"),
             .exit_code = 42,
         },
         {
             "constant: octal", __LINE__,
-            SV("return 052;\n"),
+            SVI("return 052;\n"),
             .exit_code = 42,
         },
         // Integer promotion: unsigned + signed
         {
             "promotion: unsigned arith", __LINE__,
-            SV("unsigned int a = 10;\n"
+            SVI("unsigned int a = 10;\n"
                "int b = 3;\n"
                "return (int)(a - b);\n"),
             .exit_code = 7,
@@ -1347,7 +1347,7 @@ TestFunction(test_interpreter){
         // Truncation on narrowing assignment
         {
             "promotion: narrowing truncation", __LINE__,
-            SV("int x = 0x1FF;\n"
+            SVI("int x = 0x1FF;\n"
                "unsigned char c = x;\n"
                "return c;\n"),
             .exit_code = 255,
@@ -1355,7 +1355,7 @@ TestFunction(test_interpreter){
         // Fibonacci (recursion)
         {
             "recursion: fibonacci", __LINE__,
-            SV("int fib(int n){\n"
+            SVI("int fib(int n){\n"
                "  if(n <= 1) return n;\n"
                "  return fib(n-1) + fib(n-2);\n"
                "}\n"
@@ -1365,7 +1365,7 @@ TestFunction(test_interpreter){
         // Early return from deep nesting
         {
             "early return from nesting", __LINE__,
-            SV("int find(void){\n"
+            SVI("int find(void){\n"
                "  for(int i = 0; i < 10; i++){\n"
                "    for(int j = 0; j < 10; j++){\n"
                "      if(i == 3 && j == 4) return i * 10 + j;\n"
@@ -1379,7 +1379,7 @@ TestFunction(test_interpreter){
         // Comma in for-loop
         {
             "for: comma in clauses", __LINE__,
-            SV("int a, b;\n"
+            SVI("int a, b;\n"
                "for(a = 0, b = 10; a < 5; a++, b--)\n"
                "  ;\n"
                "return a * 10 + b;\n"),
@@ -1388,21 +1388,21 @@ TestFunction(test_interpreter){
         // Struct: sizeof with padding
         {
             "struct: sizeof", __LINE__,
-            SV("struct s { char c; int i; };\n"
+            SVI("struct s { char c; int i; };\n"
                "return sizeof(struct s) >= 5;\n"),
             .exit_code = 1,
         },
         // Union: sizeof is max member
         {
             "union: sizeof", __LINE__,
-            SV("union u { char c; int i; };\n"
+            SVI("union u { char c; int i; };\n"
                "return sizeof(union u) == sizeof(int);\n"),
             .exit_code = 1,
         },
         // Cast between pointer types
         {
             "pointer: cast types", __LINE__,
-            SV("int x = 0x01020304;\n"
+            SVI("int x = 0x01020304;\n"
                "char *cp = (char*)&x;\n"
                "return *cp != 0;\n"),  // just check it doesn't crash; endian-independent
             .exit_code = 1,
@@ -1410,81 +1410,81 @@ TestFunction(test_interpreter){
         // Sizeof pointer
         {
             "sizeof pointer", __LINE__,
-            SV("return sizeof(int*) == sizeof(void*);\n"),
+            SVI("return sizeof(int*) == sizeof(void*);\n"),
             .exit_code = 1,
         },
         // Sizeof array
         {
             "sizeof array", __LINE__,
-            SV("int arr[10];\n"
+            SVI("int arr[10];\n"
                "return sizeof arr / sizeof arr[0];\n"),
             .exit_code = 10,
         },
         // Float / double
         {
             "float: basic arith", __LINE__,
-            SV("float f = 3.5f;\n"
+            SVI("float f = 3.5f;\n"
                "return (int)(f * 2.0f);\n"),
             .exit_code = 7,
         },
         {
             "double: basic arith", __LINE__,
-            SV("double d = 6.5;\n"
+            SVI("double d = 6.5;\n"
                "return (int)(d + 0.5);\n"),
             .exit_code = 7,
         },
         {
             "float: truncation to int", __LINE__,
-            SV("float f = 9.9f;\n"
+            SVI("float f = 9.9f;\n"
                "return (int)f;\n"),
             .exit_code = 9,
         },
         {
             "double: negative truncation", __LINE__,
-            SV("double d = -3.7;\n"
+            SVI("double d = -3.7;\n"
                "return (int)d;\n"),
             .exit_code = -3,
         },
         {
             "int to float to int", __LINE__,
-            SV("int a = 7;\n"
+            SVI("int a = 7;\n"
                "float f = (float)a;\n"
                "return (int)(f + 0.5f);\n"),
             .exit_code = 7,
         },
         {
             "float: comparison", __LINE__,
-            SV("float a = 1.5f;\n"
+            SVI("float a = 1.5f;\n"
                "float b = 2.5f;\n"
                "return a < b;\n"),
             .exit_code = 1,
         },
         {
             "double: sizeof", __LINE__,
-            SV("return sizeof(double);\n"),
+            SVI("return sizeof(double);\n"),
             .exit_code = 8,
         },
         {
             "float: sizeof", __LINE__,
-            SV("return sizeof(float);\n"),
+            SVI("return sizeof(float);\n"),
             .exit_code = 4,
         },
         {
             "float: division", __LINE__,
-            SV("float f = 10.0f / 3.0f;\n"
+            SVI("float f = 10.0f / 3.0f;\n"
                "return (int)(f * 3.0f);\n"),
             .exit_code = 10,
         },
         {
             "double: mixed arith with int", __LINE__,
-            SV("int a = 5;\n"
+            SVI("int a = 5;\n"
                "double d = a + 2.5;\n"
                "return (int)d;\n"),
             .exit_code = 7,
         },
         {
             "lambda (IIFE)", __LINE__,
-            SV("int x = int(){\n"
+            SVI("int x = int(){\n"
                "    return 42;\n"
                "}();\n"
                "return x;\n"),
@@ -1492,133 +1492,133 @@ TestFunction(test_interpreter){
         },
         {
             "lambda (IIFE)", __LINE__,
-            SV("return int(){\n"
+            SVI("return int(){\n"
                "    return 42;\n"
                "}();\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized", __LINE__,
-            SV("return (int(int x){ return x + 1; })(41);\n"),
+            SVI("return (int(int x){ return x + 1; })(41);\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized void", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "(void(int* p){ *p = 42; })(&x);\n"
                "return x;\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized multi param", __LINE__,
-            SV("return (int(int a, int b){ return a * b + 2; })(8, 5);\n"),
+            SVI("return (int(int a, int b){ return a * b + 2; })(8, 5);\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized in expr", __LINE__,
-            SV("int x = 10 + (int(int a){ return a * 2; })(16);\n"
+            SVI("int x = 10 + (int(int a){ return a * 2; })(16);\n"
                "return x;\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized nested", __LINE__,
-            SV("return (int(int x){ return x + 1; })((int(void){ return 41; })());\n"),
+            SVI("return (int(int x){ return x + 1; })((int(void){ return 41; })());\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) parenthesized no params", __LINE__,
-            SV("return (int(void){ return 42; })();\n"),
+            SVI("return (int(void){ return 42; })();\n"),
             .exit_code = 42,
         },
         {
             "lambda (IIFE) double parens", __LINE__,
-            SV("return ((int(void){ return 42; }))();\n"),
+            SVI("return ((int(void){ return 42; }))();\n"),
             .exit_code = 42,
         },
         {
             "auto decays lambda to function pointer", __LINE__,
-            SV("auto fp = int(int x){ return x + 1; };\n"
+            SVI("auto fp = int(int x){ return x + 1; };\n"
                "return fp(41);\n"),
             .exit_code = 42,
         },
         {
             "constexpr decays lambda to function pointer", __LINE__,
-            SV("constexpr fp = int(int x){ return x + 1; };\n"
+            SVI("constexpr fp = int(int x){ return x + 1; };\n"
                "return fp(41);\n"),
             .exit_code = 42,
         },
         {
             "auto decays array to pointer", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "auto p = arr;\n"
                "return p[1] + p[2];\n"),
             .exit_code = 50,
         },
         {
             "compare function pointers eq", __LINE__,
-            SV("auto fp = int(int x){ return x; };\n"
+            SVI("auto fp = int(int x){ return x; };\n"
                "auto fp2 = fp;\n"
                "return fp == fp2;\n"),
             .exit_code = 1,
         },
         {
             "compare function pointers ne", __LINE__,
-            SV("auto fp1 = int(void){ return 1; };\n"
+            SVI("auto fp1 = int(void){ return 1; };\n"
                "auto fp2 = int(void){ return 2; };\n"
                "return fp1 != fp2;\n"),
             .exit_code = 1,
         },
         {
             "function pointer == function", __LINE__,
-            SV("int g(int x){ return x; }\n"
+            SVI("int g(int x){ return x; }\n"
                "auto fp = g;\n"
                "return fp == g;\n"),
             .exit_code = 1,
         },
         {
             "function pointer != null", __LINE__,
-            SV("auto fp = int(void){ return 1; };\n"
+            SVI("auto fp = int(void){ return 1; };\n"
                "return fp != 0;\n"),
             .exit_code = 1,
         },
         // Atomics
         {
             "atomic: fetch_add", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "int old = __atomic_fetch_add(&x, 5, __ATOMIC_SEQ_CST);\n"
                "return old * 100 + x;\n"),
             .exit_code = 10 * 100 + 15,
         },
         {
             "atomic: fetch_sub", __LINE__,
-            SV("int x = 20;\n"
+            SVI("int x = 20;\n"
                "int old = __atomic_fetch_sub(&x, 7, __ATOMIC_SEQ_CST);\n"
                "return old * 100 + x;\n"),
             .exit_code = 20 * 100 + 13,
         },
         {
             "atomic: load", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "return __atomic_load_n(&x, __ATOMIC_SEQ_CST);\n"),
             .exit_code = 42,
         },
         {
             "atomic: store", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "__atomic_store_n(&x, 99, __ATOMIC_SEQ_CST);\n"
                "return x;\n"),
             .exit_code = 99,
         },
         {
             "atomic: exchange", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "int old = __atomic_exchange_n(&x, 20, __ATOMIC_SEQ_CST);\n"
                "return old * 100 + x;\n"),
             .exit_code = 10 * 100 + 20,
         },
         {
             "atomic: compare_exchange success", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "int expected = 10;\n"
                "_Bool ok = __atomic_compare_exchange_n(&x, &expected, 20, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
                "return ok * 100 + x;\n"),
@@ -1626,7 +1626,7 @@ TestFunction(test_interpreter){
         },
         {
             "atomic: compare_exchange failure", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "int expected = 99;\n"
                "_Bool ok = __atomic_compare_exchange_n(&x, &expected, 20, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
                "return ok * 1000 + expected * 10 + x;\n"),
@@ -1634,7 +1634,7 @@ TestFunction(test_interpreter){
         },
         {
             "atomic: fetch_add char", __LINE__,
-            SV("char x = 10;\n"
+            SVI("char x = 10;\n"
                "char old = __atomic_fetch_add(&x, 3, __ATOMIC_SEQ_CST);\n"
                "return old * 100 + x;\n"),
             .exit_code = 10 * 100 + 13,
@@ -1642,14 +1642,14 @@ TestFunction(test_interpreter){
         // Bitfields
         {
             "bitfield: read", __LINE__,
-            SV("struct S { int a : 3; int b : 5; };\n"
+            SVI("struct S { int a : 3; int b : 5; };\n"
                "struct S s = {3, 10};\n"
                "return s.a * 100 + s.b;\n"),
             .exit_code = 3 * 100 + 10,
         },
         {
             "bitfield: write", __LINE__,
-            SV("struct S { unsigned a : 3; unsigned b : 5; };\n"
+            SVI("struct S { unsigned a : 3; unsigned b : 5; };\n"
                "struct S s = {0};\n"
                "s.a = 5;\n"
                "s.b = 17;\n"
@@ -1658,7 +1658,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: write preserves adjacent", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {7, 0};\n"
                "s.b = 9;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1666,7 +1666,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow read", __LINE__,
-            SV("struct S { int a : 3; int b : 5; };\n"
+            SVI("struct S { int a : 3; int b : 5; };\n"
                "struct S s = {2, 15};\n"
                "struct S* p = &s;\n"
                "return p->a * 100 + p->b;\n"),
@@ -1674,7 +1674,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow write", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {0};\n"
                "struct S* p = &s;\n"
                "p->a = 11;\n"
@@ -1684,7 +1684,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: preinc", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = ++s.a;\n"
                "return r * 100 + s.a;\n"),
@@ -1692,7 +1692,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: postinc", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = s.a++;\n"
                "return r * 100 + s.a;\n"),
@@ -1700,7 +1700,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: predec", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = --s.b;\n"
                "return r * 100 + s.b;\n"),
@@ -1708,7 +1708,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: postdec", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "int r = s.b--;\n"
                "return r * 100 + s.b;\n"),
@@ -1716,7 +1716,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: inc preserves adjacent", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SVI("struct S { int a : 4; int b : 4; };\n"
                "struct S s = {7, 3};\n"
                "s.b++;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1724,7 +1724,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: addassign", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SVI("struct S { int a : 4; int b : 4; };\n"
                "struct S s = {2, 3};\n"
                "s.a += 5;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1732,7 +1732,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: subassign", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {9, 3};\n"
                "s.a -= 4;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1740,7 +1740,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: orassign", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SVI("struct S { int a : 4; int b : 4; };\n"
                "struct S s = {5, 3};\n"
                "s.a |= 2;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1748,7 +1748,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: andassign", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SVI("struct S { int a : 4; int b : 4; };\n"
                "struct S s = {7, 3};\n"
                "s.a &= 5;\n"
                "return s.a * 100 + s.b;\n"),
@@ -1756,7 +1756,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow preinc", __LINE__,
-            SV("struct S { unsigned a : 4; unsigned b : 4; };\n"
+            SVI("struct S { unsigned a : 4; unsigned b : 4; };\n"
                "struct S s = {5, 10};\n"
                "struct S* p = &s;\n"
                "int r = ++p->a;\n"
@@ -1765,7 +1765,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: arrow addassign", __LINE__,
-            SV("struct S { int a : 4; int b : 4; };\n"
+            SVI("struct S { int a : 4; int b : 4; };\n"
                "struct S s = {2, 3};\n"
                "struct S* p = &s;\n"
                "p->a += 5;\n"
@@ -1774,7 +1774,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed read -1", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -1;\n"
                "return s.a + 100;\n"),
@@ -1782,7 +1782,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed read min", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -8;\n"
                "return s.a + 100;\n"),
@@ -1790,7 +1790,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed read max", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = 7;\n"
                "return s.a + 100;\n"),
@@ -1798,7 +1798,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed 1-bit", __LINE__,
-            SV("struct S { signed a : 1; };\n"
+            SVI("struct S { signed a : 1; };\n"
                "struct S s = {0};\n"
                "s.a = -1;\n"
                "return s.a + 100;\n"),
@@ -1806,7 +1806,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed comparison", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -3;\n"
                "return s.a < 0 ? 1 : 0;\n"),
@@ -1814,14 +1814,14 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed arithmetic", __LINE__,
-            SV("struct S { unsigned a : 4; signed b : 4; };\n"
+            SVI("struct S { unsigned a : 4; signed b : 4; };\n"
                "struct S s = {5, -3};\n"
                "return s.a + s.b + 100;\n"),
             .exit_code = 102,
         },
         {
             "bitfield: signed preinc", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -3;\n"
                "int r = ++s.a;\n"
@@ -1830,7 +1830,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed postinc", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -3;\n"
                "int r = s.a++;\n"
@@ -1839,7 +1839,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed predec", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = 2;\n"
                "int r = --s.a;\n"
@@ -1848,7 +1848,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed addassign", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = -5;\n"
                "s.a += 2;\n"
@@ -1857,7 +1857,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed divassign", __LINE__,
-            SV("struct S { signed a : 8; };\n"
+            SVI("struct S { signed a : 8; };\n"
                "struct S s = {0};\n"
                "s.a = -7;\n"
                "s.a /= 3;\n"
@@ -1866,7 +1866,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed modassign", __LINE__,
-            SV("struct S { signed a : 8; };\n"
+            SVI("struct S { signed a : 8; };\n"
                "struct S s = {0};\n"
                "s.a = -7;\n"
                "s.a %= 3;\n"
@@ -1875,7 +1875,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed subassign", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "s.a = 3;\n"
                "s.a -= 5;\n"
@@ -1884,7 +1884,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: signed assign result", __LINE__,
-            SV("struct S { signed a : 4; };\n"
+            SVI("struct S { signed a : 4; };\n"
                "struct S s = {0};\n"
                "int r = (s.a = -3);\n"
                "return r + 100;\n"),
@@ -1892,7 +1892,7 @@ TestFunction(test_interpreter){
         },
         {
             "big string", __LINE__,
-            SV("enum {SIZE = 1<<16};\n"
+            SVI("enum {SIZE = 1<<16};\n"
                "char buff[SIZE] = \"hello\";\n"
                "int sum = 0;\n"
                "for(__SIZE_TYPE__ i = 0; i < SIZE && buff[i]; i++)\n"
@@ -1902,7 +1902,7 @@ TestFunction(test_interpreter){
         },
         {
             "varargs", __LINE__,
-            SV(
+            SVI(
                "#define va_start __builtin_va_start\n"
                "#define va_copy __builtin_va_copy\n"
                "#define va_arg __builtin_va_arg\n"
@@ -1940,88 +1940,88 @@ TestFunction(test_interpreter){
         // _Generic
         {
             "_Generic: basic int", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "return _Generic(x, int: 10, float: 20, default: 30);\n"),
             .exit_code = 10,
         },
         {
             "_Generic: basic float", __LINE__,
-            SV("float x = 1.0f;\n"
+            SVI("float x = 1.0f;\n"
                "return _Generic(x, int: 10, float: 20, default: 30);\n"),
             .exit_code = 20,
         },
         {
             "_Generic: default", __LINE__,
-            SV("double x = 1.0;\n"
+            SVI("double x = 1.0;\n"
                "return _Generic(x, int: 10, float: 20, default: 30);\n"),
             .exit_code = 30,
         },
         {
             "_Generic: lvalue conversion strips const", __LINE__,
-            SV("const int x = 1;\n"
+            SVI("const int x = 1;\n"
                "return _Generic(x, int: 10, default: 20);\n"),
             .exit_code = 10,
         },
         {
             "_Generic: pointer type", __LINE__,
-            SV("int* p = 0;\n"
+            SVI("int* p = 0;\n"
                "return _Generic(p, int*: 10, float*: 20, default: 30);\n"),
             .exit_code = 10,
         },
         {
             "_Generic: expression result used", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "int y = _Generic(x, int: x * 3, default: 0);\n"
                "return y;\n"),
             .exit_code = 15,
         },
         {
             "_Generic: default comes first", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "return _Generic(x, default: 0, int: 42);\n"),
             .exit_code = 42,
         },
         {
             "_Generic: type-name operand (C23)", __LINE__,
-            SV("return _Generic(int, int: 10, float: 20, default: 30);\n"),
+            SVI("return _Generic(int, int: 10, float: 20, default: 30);\n"),
             .exit_code = 10,
         },
         {
             "_Generic: type-name preserves const", __LINE__,
-            SV("return _Generic(const int, int: 10, const int: 20, default: 30);\n"),
+            SVI("return _Generic(const int, int: 10, const int: 20, default: 30);\n"),
             .exit_code = 20,
         },
         {
             "_Generic: nested in expression", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "return _Generic(x, int: 3, default: 0) + _Generic(x, int: 7, default: 0);\n"),
             .exit_code = 10,
         },
         // __builtin_add_overflow
         {
             "add_overflow: no overflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_add_overflow(3, 4, &r);\n"
                "return ov * 100 + r;\n"),
             .exit_code = 7,
         },
         {
             "add_overflow: signed overflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_add_overflow(2147483647, 1, &r);\n"
                "return ov;\n"),
             .exit_code = 1,
         },
         {
             "add_overflow: unsigned no overflow", __LINE__,
-            SV("unsigned r;\n"
+            SVI("unsigned r;\n"
                "int ov = __builtin_add_overflow(3u, 4u, &r);\n"
                "return ov * 100 + r;\n"),
             .exit_code = 7,
         },
         {
             "add_overflow: unsigned overflow", __LINE__,
-            SV("unsigned char r;\n"
+            SVI("unsigned char r;\n"
                "int ov = __builtin_add_overflow(200, 200, &r);\n"
                "return ov;\n"),
             .exit_code = 1,
@@ -2029,14 +2029,14 @@ TestFunction(test_interpreter){
         // __builtin_sub_overflow
         {
             "sub_overflow: no overflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_sub_overflow(10, 3, &r);\n"
                "return ov * 100 + r;\n"),
             .exit_code = 7,
         },
         {
             "sub_overflow: signed underflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_sub_overflow(-2147483647 - 1, 1, &r);\n"
                "return ov;\n"),
             .exit_code = 1,
@@ -2044,28 +2044,28 @@ TestFunction(test_interpreter){
         // __builtin_mul_overflow
         {
             "mul_overflow: no overflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_mul_overflow(6, 7, &r);\n"
                "return ov * 100 + r;\n"),
             .exit_code = 42,
         },
         {
             "mul_overflow: overflow", __LINE__,
-            SV("int r;\n"
+            SVI("int r;\n"
                "int ov = __builtin_mul_overflow(2147483647, 2, &r);\n"
                "return ov;\n"),
             .exit_code = 1,
         },
         {
             "add_overflow: negative into unsigned", __LINE__,
-            SV("unsigned r;\n"
+            SVI("unsigned r;\n"
                "int ov = __builtin_add_overflow(-1, 0, &r);\n"
                "return ov;\n"),
             .exit_code = 1,
         },
         {
             "add_overflow: mixed types no overflow", __LINE__,
-            SV("long r;\n"
+            SVI("long r;\n"
                "int ov = __builtin_add_overflow((short)100, 200u, &r);\n"
                "return ov * 1000 + (int)r;\n"),
             .exit_code = 300,
@@ -2073,79 +2073,79 @@ TestFunction(test_interpreter){
         // __builtin_popcount
         {
             "popcount: zero", __LINE__,
-            SV("return __builtin_popcount(0);\n"),
+            SVI("return __builtin_popcount(0);\n"),
             .exit_code = 0,
         },
         {
             "popcount: one", __LINE__,
-            SV("return __builtin_popcount(1);\n"),
+            SVI("return __builtin_popcount(1);\n"),
             .exit_code = 1,
         },
         {
             "popcount: power of two", __LINE__,
-            SV("return __builtin_popcount(1024);\n"),
+            SVI("return __builtin_popcount(1024);\n"),
             .exit_code = 1,
         },
         {
             "popcount: all bits", __LINE__,
-            SV("return __builtin_popcount(0xFFu);\n"),
+            SVI("return __builtin_popcount(0xFFu);\n"),
             .exit_code = 8,
         },
         {
             "popcount: mixed bits", __LINE__,
-            SV("return __builtin_popcount(0b10101010);\n"),
+            SVI("return __builtin_popcount(0b10101010);\n"),
             .exit_code = 4,
         },
         {
             "popcountll", __LINE__,
-            SV("return __builtin_popcountll(0xFFFFFFFFull);\n"),
+            SVI("return __builtin_popcountll(0xFFFFFFFFull);\n"),
             .exit_code = 32,
         },
         // __builtin_ctz
         {
             "ctz: 1", __LINE__,
-            SV("return __builtin_ctz(1);\n"),
+            SVI("return __builtin_ctz(1);\n"),
             .exit_code = 0,
         },
         {
             "ctz: power of two", __LINE__,
-            SV("return __builtin_ctz(8);\n"),
+            SVI("return __builtin_ctz(8);\n"),
             .exit_code = 3,
         },
         {
             "ctz: trailing zeros", __LINE__,
-            SV("return __builtin_ctz(0x100);\n"),
+            SVI("return __builtin_ctz(0x100);\n"),
             .exit_code = 8,
         },
         {
             "ctzll", __LINE__,
-            SV("return __builtin_ctzll(1ull << 32);\n"),
+            SVI("return __builtin_ctzll(1ull << 32);\n"),
             .exit_code = 32,
         },
         // __builtin_clz
         {
             "clz: 1", __LINE__,
-            SV("return __builtin_clz(1);\n"),
+            SVI("return __builtin_clz(1);\n"),
             .exit_code = 31,
         },
         {
             "clz: high bit", __LINE__,
-            SV("return __builtin_clz(0x80000000u);\n"),
+            SVI("return __builtin_clz(0x80000000u);\n"),
             .exit_code = 0,
         },
         {
             "clz: 16", __LINE__,
-            SV("return __builtin_clz(16);\n"),
+            SVI("return __builtin_clz(16);\n"),
             .exit_code = 27,
         },
         {
             "clzll", __LINE__,
-            SV("return __builtin_clzll(1ull << 32);\n"),
+            SVI("return __builtin_clzll(1ull << 32);\n"),
             .exit_code = 31,
         },
         {
             "typdef func forward decl", __LINE__,
-            SV("typedef int f(void);\n"
+            SVI("typedef int f(void);\n"
                 "f fn;\n"
                 "int x = fn();\n"
                 "int fn(void){return 3;}\n"
@@ -2154,7 +2154,7 @@ TestFunction(test_interpreter){
         },
         {
             "cpy", __LINE__,
-            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+            SVI("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"
                 "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
                 "   dst[i] = src[i];\n"
@@ -2166,7 +2166,7 @@ TestFunction(test_interpreter){
         },
         {
             "assign to fla", __LINE__,
-            SV( "typedef struct FLA {int x; int vals[];} FLA;\n"
+            SVI( "typedef struct FLA {int x; int vals[];} FLA;\n"
                 "char buff[32];\n"
                 "FLA* fla = (FLA*)buff;\n"
                 "int y = 8;\n"
@@ -2176,7 +2176,7 @@ TestFunction(test_interpreter){
         },
         {
             "assign to fake fla", __LINE__,
-            SV(
+            SVI(
                 "typedef struct FLA {int x; int vals[0];} FLA;\n"
                 "char buff[32];\n"
                 "FLA* fla = (FLA*)buff;\n"
@@ -2187,7 +2187,7 @@ TestFunction(test_interpreter){
         },
         {
             "assign to really fake fla", __LINE__,
-            SV( "typedef struct FLA {int x; int vals[1];} FLA;\n"
+            SVI( "typedef struct FLA {int x; int vals[1];} FLA;\n"
                 "char buff[32];\n"
                 "FLA* fla = (FLA*)buff;\n"
                 "int y = 8;\n"
@@ -2197,7 +2197,7 @@ TestFunction(test_interpreter){
         },
         {
             "cpy fla", __LINE__,
-            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+            SVI("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"
                 "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
                 "   dst[i] = src[i];\n"
@@ -2212,7 +2212,7 @@ TestFunction(test_interpreter){
         },
         {
             "cpy fake fla", __LINE__,
-            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+            SVI("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"
                 "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
                 "   dst[i] = src[i];\n"
@@ -2227,7 +2227,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct with union copy", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  union { unsigned long _bits; struct { unsigned type: 4; unsigned long _pad: 60; }; };\n"
                 "  union { struct { const char* text; unsigned long len; }; };\n"
                 "  unsigned long loc;\n"
@@ -2240,7 +2240,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct copy from pointer subscript", __LINE__,
-            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+            SVI("typedef struct { long a; long b; long c; long d; } Big;\n"
                 "Big g[2] = {{1,2,3,4},{5,6,7,8}};\n"
                 "int f(const Big* p){\n"
                 "  Big t = p[1];\n"
@@ -2251,7 +2251,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct copy from array", __LINE__,
-            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+            SVI("typedef struct { long a; long b; long c; long d; } Big;\n"
                 "Big arr[2] = {{1,2,3,4},{5,6,7,8}};\n"
                 "Big t = arr[1];\n"
                 "return (int)(t.a + t.d);\n"),
@@ -2259,7 +2259,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct with union alignment", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned file_id;\n"
                 "  union {\n"
                 "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
@@ -2273,7 +2273,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct union cursor via pointer", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned file_id;\n"
                 "  union {\n"
                 "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
@@ -2289,7 +2289,7 @@ TestFunction(test_interpreter){
         },
         {
             "tokenizer loop pattern", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned file_id;\n"
                 "  union {\n"
                 "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
@@ -2312,7 +2312,7 @@ TestFunction(test_interpreter){
         },
         {
             "cppframe layout", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned file_id;\n"
                 "  union {\n"
                 "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
@@ -2329,7 +2329,7 @@ TestFunction(test_interpreter){
         },
         {
             "switch negative case", __LINE__,
-            SV("int x = -1;\n"
+            SVI("int x = -1;\n"
                 "switch(x){\n"
                 "  case -1: return 1;\n"
                 "  default: return 0;\n"
@@ -2338,7 +2338,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct union field write", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned file_id;\n"
                 "  union {\n"
                 "    struct { unsigned line; unsigned column; __SIZE_TYPE__ cursor; };\n"
@@ -2354,7 +2354,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct copy in loop", __LINE__,
-            SV("typedef struct { long a; long b; long c; long d; } Big;\n"
+            SVI("typedef struct { long a; long b; long c; long d; } Big;\n"
                 "Big arr[3] = {{1,2,3,4},{5,6,7,8},{9,10,11,12}};\n"
                 "int sum = 0;\n"
                 "for(int i = 0; i < 3; i++){\n"
@@ -2366,7 +2366,7 @@ TestFunction(test_interpreter){
         },
         {
             "varargs no extra args", __LINE__,
-            SV("int f(int x, ...){\n"
+            SVI("int f(int x, ...){\n"
                 "  __builtin_va_list va;\n"
                 "  __builtin_va_start(va, x);\n"
                 "  __builtin_va_end(va);\n"
@@ -2377,7 +2377,7 @@ TestFunction(test_interpreter){
         },
         {
             "msvc __va_start/__va_end", __LINE__,
-            SV("typedef __builtin_va_list va_list;\n"
+            SVI("typedef __builtin_va_list va_list;\n"
                 "void __va_start(va_list*, ...);\n"
                 "void __va_end(va_list*);\n"
                 "int sum(int n, ...){\n"
@@ -2394,7 +2394,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchange", __LINE__,
-            SV("long _InterlockedExchange(long volatile*, long);\n"
+            SVI("long _InterlockedExchange(long volatile*, long);\n"
                 "long volatile x = 10;\n"
                 "long old = _InterlockedExchange(&x, 42);\n"
                 "return (int)(old + x);\n"),
@@ -2402,7 +2402,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedCompareExchange success", __LINE__,
-            SV("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+            SVI("long _InterlockedCompareExchange(long volatile*, long, long);\n"
                 "long volatile x = 10;\n"
                 "long old = _InterlockedCompareExchange(&x, 42, 10);\n"
                 "return (int)(old + x);\n"),
@@ -2410,7 +2410,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedCompareExchange failure", __LINE__,
-            SV("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+            SVI("long _InterlockedCompareExchange(long volatile*, long, long);\n"
                 "long volatile x = 10;\n"
                 "long old = _InterlockedCompareExchange(&x, 42, 99);\n"
                 "return (int)(old + x);\n"),
@@ -2418,7 +2418,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchange8", __LINE__,
-            SV("char _InterlockedExchange8(char volatile*, char);\n"
+            SVI("char _InterlockedExchange8(char volatile*, char);\n"
                 "char volatile x = 5;\n"
                 "char old = _InterlockedExchange8(&x, 7);\n"
                 "return old + x;\n"),
@@ -2426,7 +2426,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedCompareExchange64", __LINE__,
-            SV("long long _InterlockedCompareExchange64(long long volatile*, long long, long long);\n"
+            SVI("long long _InterlockedCompareExchange64(long long volatile*, long long, long long);\n"
                 "long long volatile x = 100;\n"
                 "long long old = _InterlockedCompareExchange64(&x, 200, 100);\n"
                 "return (int)(old + x);\n"),
@@ -2434,7 +2434,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedIncrement", __LINE__,
-            SV("long _InterlockedIncrement(long volatile*);\n"
+            SVI("long _InterlockedIncrement(long volatile*);\n"
                 "long volatile x = 10;\n"
                 "long new_val = _InterlockedIncrement(&x);\n"
                 "return (int)(new_val + x);\n"),
@@ -2442,7 +2442,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedDecrement", __LINE__,
-            SV("long _InterlockedDecrement(long volatile*);\n"
+            SVI("long _InterlockedDecrement(long volatile*);\n"
                 "long volatile x = 10;\n"
                 "long new_val = _InterlockedDecrement(&x);\n"
                 "return (int)(new_val + x);\n"),
@@ -2450,7 +2450,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchangeAdd", __LINE__,
-            SV("long _InterlockedExchangeAdd(long volatile*, long);\n"
+            SVI("long _InterlockedExchangeAdd(long volatile*, long);\n"
                 "long volatile x = 10;\n"
                 "long old = _InterlockedExchangeAdd(&x, 5);\n"
                 "return (int)(old + x);\n"),
@@ -2458,7 +2458,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedAnd", __LINE__,
-            SV("long _InterlockedAnd(long volatile*, long);\n"
+            SVI("long _InterlockedAnd(long volatile*, long);\n"
                 "long volatile x = 0xFF;\n"
                 "long old = _InterlockedAnd(&x, 0x0F);\n"
                 "return (int)(old + x);\n"),
@@ -2466,7 +2466,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedOr", __LINE__,
-            SV("long _InterlockedOr(long volatile*, long);\n"
+            SVI("long _InterlockedOr(long volatile*, long);\n"
                 "long volatile x = 0xF0;\n"
                 "long old = _InterlockedOr(&x, 0x0F);\n"
                 "return (int)(old + x);\n"),
@@ -2474,7 +2474,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedXor", __LINE__,
-            SV("long _InterlockedXor(long volatile*, long);\n"
+            SVI("long _InterlockedXor(long volatile*, long);\n"
                 "long volatile x = 0xFF;\n"
                 "long old = _InterlockedXor(&x, 0x0F);\n"
                 "return (int)(old + x);\n"),
@@ -2482,7 +2482,7 @@ TestFunction(test_interpreter){
         },
         {
             "_umul128", __LINE__,
-            SV("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
+            SVI("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
                 "unsigned long long hi;\n"
                 "unsigned long long lo = _umul128(0x100000000ULL, 0x100000000ULL, &hi);\n"
                 "return (int)(lo + hi);\n"),
@@ -2491,7 +2491,7 @@ TestFunction(test_interpreter){
         },
         {
             "_umul128 no overflow", __LINE__,
-            SV("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
+            SVI("unsigned long long _umul128(unsigned long long, unsigned long long, unsigned long long*);\n"
                 "unsigned long long hi;\n"
                 "unsigned long long lo = _umul128(7, 9, &hi);\n"
                 "return (int)(lo + hi);\n"),
@@ -2500,7 +2500,7 @@ TestFunction(test_interpreter){
         },
         {
             "cpy really fake fla", __LINE__,
-            SV("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
+            SVI("void cpy(void* d, void* s, __SIZE_TYPE__ sz){\n"
                 "char *dst = d, *src = s;\n"
                 "for(__SIZE_TYPE__ i = 0; i < sz; i++)\n"
                 "   dst[i] = src[i];\n"
@@ -2515,7 +2515,7 @@ TestFunction(test_interpreter){
         },
         {
             "negative subscript bitfield", __LINE__,
-            SV("typedef struct {\n"
+            SVI("typedef struct {\n"
                 "  unsigned type: 4;\n"
                 "  unsigned pad: 28;\n"
                 "} Tok;\n"
@@ -2529,14 +2529,14 @@ TestFunction(test_interpreter){
         },
         {
             "negative subscript no bitfield", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                 "int* end = arr + 3;\n"
                 "return end[-1];\n"),
             .exit_code = 30,
         },
         {
             "alloca basic", __LINE__,
-            SV("void* __builtin_alloca(__SIZE_TYPE__);\n"
+            SVI("void* __builtin_alloca(__SIZE_TYPE__);\n"
                 "void* p = __builtin_alloca(16);\n"
                 "int* ip = (int*)p;\n"
                 "ip[0] = 42;\n"
@@ -2546,7 +2546,7 @@ TestFunction(test_interpreter){
         },
         {
             "alloca in loop", __LINE__,
-            SV("void* __builtin_alloca(__SIZE_TYPE__);\n"
+            SVI("void* __builtin_alloca(__SIZE_TYPE__);\n"
                 "int sum = 0;\n"
                 "for(int i = 0; i < 5; i++){\n"
                 "  int* p = (int*)__builtin_alloca(sizeof(int));\n"
@@ -2558,7 +2558,7 @@ TestFunction(test_interpreter){
         },
         {
             "struct return dot", __LINE__,
-            SV("typedef struct Foo Foo;\n"
+            SVI("typedef struct Foo Foo;\n"
                "struct Foo {struct { struct { struct { int x;} c;} b; } a;} ;\n"
                "Foo foo(){ return (Foo){3};}\n"
                "return foo().a.b.c.x;\n"),
@@ -2566,7 +2566,7 @@ TestFunction(test_interpreter){
         },
         {
             "redecl after def keeps param names", __LINE__,
-            SV("static int add(int, int);\n"
+            SVI("static int add(int, int);\n"
                "static int add(int a, int b){ return a + b; }\n"
                "static int add(int, int);\n"
                "return add(17, 25);\n"),
@@ -2574,7 +2574,7 @@ TestFunction(test_interpreter){
         },
         {
             "compound literal self-assign", __LINE__,
-            SV("typedef struct v2f v2f;\n"
+            SVI("typedef struct v2f v2f;\n"
                "struct v2f { float x; float y; };\n"
                "v2f v = {1.0f, 2.0f};\n"
                "v = (v2f){v.y, v.x};\n"
@@ -2583,7 +2583,7 @@ TestFunction(test_interpreter){
         },
         {
             "array decay", __LINE__,
-            SV("typedef int I[1];\n"
+            SVI("typedef int I[1];\n"
                "I i;\n"
                "int* id(I i){ return i;}\n"
                "return i == id(i);\n"),
@@ -2592,21 +2592,21 @@ TestFunction(test_interpreter){
         // negative zero truthiness
         {
             "if neg zero double", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "if(x) return 1;\n"
                "return 0;\n"),
             .exit_code = 0,
         },
         {
             "if neg zero float", __LINE__,
-            SV("float x = -0.0f;\n"
+            SVI("float x = -0.0f;\n"
                "if(x) return 1;\n"
                "return 0;\n"),
             .exit_code = 0,
         },
         {
             "while neg zero", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "int n = 0;\n"
                "while(x){ n++; break; }\n"
                "return n;\n"),
@@ -2614,131 +2614,131 @@ TestFunction(test_interpreter){
         },
         {
             "lognot neg zero", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "return !x;\n"),
             .exit_code = 1,
         },
         {
             "logand neg zero", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "return x && 1;\n"),
             .exit_code = 0,
         },
         {
             "logor neg zero", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "return x || 0;\n"),
             .exit_code = 0,
         },
         {
             "ternary neg zero", __LINE__,
-            SV("double x = -0.0;\n"
+            SVI("double x = -0.0;\n"
                "return x ? 1 : 0;\n"),
             .exit_code = 0,
         },
         {
             "int128 signed div", __LINE__,
-            SV("__int128 a = -10;\n"
+            SVI("__int128 a = -10;\n"
                "__int128 b = 3;\n"
                "return (int)(a / b);\n"),
             .exit_code = (int)(-10 / 3),
         },
         {
             "int128 signed mod", __LINE__,
-            SV("__int128 a = -10;\n"
+            SVI("__int128 a = -10;\n"
                "__int128 b = 3;\n"
                "return (int)(a % b);\n"),
             .exit_code = (int)(-10 % 3),
         },
         {
             "int128 signed div both neg", __LINE__,
-            SV("__int128 a = -10;\n"
+            SVI("__int128 a = -10;\n"
                "__int128 b = -3;\n"
                "return (int)(a / b);\n"),
             .exit_code = (int)(-10 / -3),
         },
         {
             "int128 signed mod both neg", __LINE__,
-            SV("__int128 a = -10;\n"
+            SVI("__int128 a = -10;\n"
                "__int128 b = -3;\n"
                "return (int)(a % b);\n"),
             .exit_code = (int)(-10 % -3),
         },
         {
             "int128 signed lt neg", __LINE__,
-            SV("__int128 a = -1;\n"
+            SVI("__int128 a = -1;\n"
                "__int128 b = 1;\n"
                "return a < b;\n"),
             .exit_code = 1,
         },
         {
             "int128 signed gt neg", __LINE__,
-            SV("__int128 a = -1;\n"
+            SVI("__int128 a = -1;\n"
                "__int128 b = 1;\n"
                "return a > b;\n"),
             .exit_code = 0,
         },
         {
             "int128 signed le neg", __LINE__,
-            SV("__int128 a = -1;\n"
+            SVI("__int128 a = -1;\n"
                "__int128 b = -1;\n"
                "return a <= b;\n"),
             .exit_code = 1,
         },
         {
             "int128 signed ge neg", __LINE__,
-            SV("__int128 a = 1;\n"
+            SVI("__int128 a = 1;\n"
                "__int128 b = -1;\n"
                "return a >= b;\n"),
             .exit_code = 1,
         },
         {
             "int128 signed rshift", __LINE__,
-            SV("__int128 a = -4;\n"
+            SVI("__int128 a = -4;\n"
                "return (int)(a >> 1);\n"),
             .exit_code = -2,
         },
         // Float: NaN
         {
             "float: nan != nan", __LINE__,
-            SV("double n = 0.0 / 0.0;\n"
+            SVI("double n = 0.0 / 0.0;\n"
                "return n != n;\n"),
             .exit_code = 1,
         },
         {
             "float: nan not equal", __LINE__,
-            SV("double n = 0.0 / 0.0;\n"
+            SVI("double n = 0.0 / 0.0;\n"
                "return !(n == n);\n"),
             .exit_code = 1,
         },
         {
             "float: nan not less", __LINE__,
-            SV("double n = 0.0 / 0.0;\n"
+            SVI("double n = 0.0 / 0.0;\n"
                "return !(n < 0.0) && !(n > 0.0) && !(n == 0.0);\n"),
             .exit_code = 1,
         },
         // Float: infinity
         {
             "float: positive inf", __LINE__,
-            SV("double inf = 1.0 / 0.0;\n"
+            SVI("double inf = 1.0 / 0.0;\n"
                "return inf > 1000000.0;\n"),
             .exit_code = 1,
         },
         {
             "float: negative inf", __LINE__,
-            SV("double ninf = -1.0 / 0.0;\n"
+            SVI("double ninf = -1.0 / 0.0;\n"
                "return ninf < -1000000.0;\n"),
             .exit_code = 1,
         },
         {
             "float: inf + inf", __LINE__,
-            SV("double inf = 1.0 / 0.0;\n"
+            SVI("double inf = 1.0 / 0.0;\n"
                "return inf + inf == inf;\n"),
             .exit_code = 1,
         },
         {
             "float: inf - inf is nan", __LINE__,
-            SV("double inf = 1.0 / 0.0;\n"
+            SVI("double inf = 1.0 / 0.0;\n"
                "double r = inf - inf;\n"
                "return r != r;\n"),
             .exit_code = 1,
@@ -2746,13 +2746,13 @@ TestFunction(test_interpreter){
         // Float: negative zero
         {
             "float: neg zero equals zero", __LINE__,
-            SV("double nz = -0.0;\n"
+            SVI("double nz = -0.0;\n"
                "return nz == 0.0;\n"),
             .exit_code = 1,
         },
         {
             "float: 1/neg zero is neg inf", __LINE__,
-            SV("double nz = -0.0;\n"
+            SVI("double nz = -0.0;\n"
                "double r = 1.0 / nz;\n"
                "return r < -1000000.0;\n"),
             .exit_code = 1,
@@ -2760,24 +2760,24 @@ TestFunction(test_interpreter){
         // Shifts
         {
             "shift: by zero", __LINE__,
-            SV("return (42 << 0) + (42 >> 0) - 42;\n"),
+            SVI("return (42 << 0) + (42 >> 0) - 42;\n"),
             .exit_code = 42,
         },
         {
             "shift: 1u << 31", __LINE__,
-            SV("unsigned u = 1u << 31;\n"
+            SVI("unsigned u = 1u << 31;\n"
                "return u == 0x80000000u;\n"),
             .exit_code = 1,
         },
         {
             "shift: signed right negative", __LINE__,
-            SV("int x = -8;\n"
+            SVI("int x = -8;\n"
                "return (x >> 1) + 100;\n"),
             .exit_code = 96,
         },
         {
             "shift: mixed width", __LINE__,
-            SV("unsigned char c = 0xFF;\n"
+            SVI("unsigned char c = 0xFF;\n"
                "int r = c << 4;\n"
                "return r == 0xFF0;\n"),
             .exit_code = 1,
@@ -2785,20 +2785,20 @@ TestFunction(test_interpreter){
         // Initialization: designated array
         {
             "init: designated array", __LINE__,
-            SV("int a[5] = {[2] = 42, [4] = 99};\n"
+            SVI("int a[5] = {[2] = 42, [4] = 99};\n"
                "return a[0] + a[1] + a[2] + a[3] + a[4] - 99;\n"),
             .exit_code = 42,
         },
         {
             "init: designated overwrite", __LINE__,
-            SV("int a[3] = {1, 2, [0] = 10};\n"
+            SVI("int a[3] = {1, 2, [0] = 10};\n"
                "return a[0] + a[1];\n"),
             .exit_code = 12,
         },
         // Type system: anonymous struct/union
         {
             "anonymous union", __LINE__,
-            SV("struct S { int tag; union { int ival; double dval; }; };\n"
+            SVI("struct S { int tag; union { int ival; double dval; }; };\n"
                "struct S s;\n"
                "s.tag = 1;\n"
                "s.ival = 42;\n"
@@ -2807,14 +2807,14 @@ TestFunction(test_interpreter){
         },
         {
             "anonymous struct", __LINE__,
-            SV("struct S { struct { int x; int y; }; int z; };\n"
+            SVI("struct S { struct { int x; int y; }; int z; };\n"
                "struct S s = {{1, 2}, 3};\n"
                "return s.x + s.y + s.z;\n"),
             .exit_code = 6,
         },
         {
             "anon struct in union designated init", __LINE__,
-            SV("typedef unsigned uint32_t;\n"
+            SVI("typedef unsigned uint32_t;\n"
                "typedef union Goals Goals;\n"
                "union Goals {\n"
                "    struct {\n"
@@ -2827,21 +2827,21 @@ TestFunction(test_interpreter){
         },
         {
             "anon union in struct designated init", __LINE__,
-            SV("struct S { int tag; union { int ival; float fval; }; };\n"
+            SVI("struct S { int tag; union { int ival; float fval; }; };\n"
                "struct S s = {.tag = 10, .ival = 32};\n"
                "return s.tag + s.ival;\n"),
             .exit_code = 42,
         },
         {
             "anon struct in union positional init", __LINE__,
-            SV("union U { struct { int x; int y; }; };\n"
+            SVI("union U { struct { int x; int y; }; };\n"
                "union U u = {{5, 7}};\n"
                "return u.x + u.y;\n"),
             .exit_code = 12,
         },
         {
             "deeply nested anon: union>struct>union>struct", __LINE__,
-            SV("union Outer {\n"
+            SVI("union Outer {\n"
                "    struct {\n"
                "        union {\n"
                "            struct {\n"
@@ -2859,7 +2859,7 @@ TestFunction(test_interpreter){
         },
         {
             "deeply nested anon: struct>union>struct>union", __LINE__,
-            SV("struct Outer {\n"
+            SVI("struct Outer {\n"
                "    int tag;\n"
                "    union {\n"
                "        struct {\n"
@@ -2878,7 +2878,7 @@ TestFunction(test_interpreter){
         },
         {
             "anon struct in union: three fields", __LINE__,
-            SV("union V {\n"
+            SVI("union V {\n"
                "    struct { int a; int b; int c; };\n"
                "    long long arr[2];\n"
                "};\n"
@@ -2888,14 +2888,14 @@ TestFunction(test_interpreter){
         },
         {
             "anon struct in union: trailing comma", __LINE__,
-            SV("union W { struct { int x; int y; }; };\n"
+            SVI("union W { struct { int x; int y; }; };\n"
                "union W w = {.x = 40, .y = 2,};\n"
                "return w.x + w.y;\n"),
             .exit_code = 42,
         },
         {
             "anon struct in union: single field desig", __LINE__,
-            SV("union X { struct { int a; int b; }; int raw; };\n"
+            SVI("union X { struct { int a; int b; }; int raw; };\n"
                "union X x = {.b = 42};\n"
                "return x.b;\n"),
             .exit_code = 42,
@@ -2903,7 +2903,7 @@ TestFunction(test_interpreter){
         // Type system: _Static_assert
         {
             "_Static_assert", __LINE__,
-            SV("_Static_assert(sizeof(int) == 4, \"int must be 4 bytes\");\n"
+            SVI("_Static_assert(sizeof(int) == 4, \"int must be 4 bytes\");\n"
                "_Static_assert(1, \"true\");\n"
                "return 42;\n"),
             .exit_code = 42,
@@ -2911,7 +2911,7 @@ TestFunction(test_interpreter){
         // Type system: typedef chain
         {
             "typedef chain", __LINE__,
-            SV("typedef int myint;\n"
+            SVI("typedef int myint;\n"
                "typedef myint myint2;\n"
                "typedef myint2 *myint2_ptr;\n"
                "myint2 v = 42;\n"
@@ -2922,7 +2922,7 @@ TestFunction(test_interpreter){
         // Type system: array of function pointers
         {
             "array of function pointers", __LINE__,
-            SV("int add(int a, int b){ return a + b; }\n"
+            SVI("int add(int a, int b){ return a + b; }\n"
                "int mul(int a, int b){ return a * b; }\n"
                "int (*ops[2])(int, int) = {add, mul};\n"
                "return ops[0](3, 4) + ops[1](3, 4);\n"),
@@ -2931,7 +2931,7 @@ TestFunction(test_interpreter){
         // Control flow: switch default in middle
         {
             "switch: default in middle", __LINE__,
-            SV("int x = 99;\n"
+            SVI("int x = 99;\n"
                "int r = 0;\n"
                "switch(x){\n"
                "  case 1: r = 1; break;\n"
@@ -2944,7 +2944,7 @@ TestFunction(test_interpreter){
         // Control flow: nested continue
         {
             "nested continue", __LINE__,
-            SV("int count = 0;\n"
+            SVI("int count = 0;\n"
                "for(int i = 0; i < 5; i++){\n"
                "  for(int j = 0; j < 5; j++){\n"
                "    if(j == 2) continue;\n"
@@ -2958,14 +2958,14 @@ TestFunction(test_interpreter){
         // Pointer: negative index
         {
             "pointer: negative index", __LINE__,
-            SV("int arr[5] = {10, 20, 30, 40, 50};\n"
+            SVI("int arr[5] = {10, 20, 30, 40, 50};\n"
                "int *p = arr + 3;\n"
                "return p[-2];\n"),
             .exit_code = 20,
         },
         {
             "pointer: large unsigned index", __LINE__,
-            SV("char buf[4] = {0};\n"
+            SVI("char buf[4] = {0};\n"
                "char *p = buf;\n"
                "unsigned idx = 0x80000000u;\n"
                "char *q = p + idx;\n"
@@ -2975,7 +2975,7 @@ TestFunction(test_interpreter){
         // Linked list
         {
             "linked list", __LINE__,
-            SV("typedef struct Node Node;\n"
+            SVI("typedef struct Node Node;\n"
                "struct Node { int val; Node *next; };\n"
                "Node c = {3, 0};\n"
                "Node b = {2, &c};\n"
@@ -2987,7 +2987,7 @@ TestFunction(test_interpreter){
         },
         {
             "int128 index", __LINE__,
-            SV("signed __int128 i = -1;\n"
+            SVI("signed __int128 i = -1;\n"
                "int arr[3] = {1,2,3};\n"
                "int* p = arr + 2;\n"
                "return p[i];\n"),
@@ -2995,7 +2995,7 @@ TestFunction(test_interpreter){
         },
         {
             "int128 ptr-math", __LINE__,
-            SV("signed __int128 i = 2;\n"
+            SVI("signed __int128 i = 2;\n"
                "int arr[3] = {1,2,3};\n"
                "int* p = arr + i;\n"
                "return p[0];\n"),
@@ -3003,63 +3003,63 @@ TestFunction(test_interpreter){
         },
         {
             "int128 neg", __LINE__,
-            SV("signed __int128 i = -1;\n"
+            SVI("signed __int128 i = -1;\n"
                "return (int)-i;\n"),
             .exit_code = 1,
         },
         {
             "int128 not", __LINE__,
-            SV("signed __int128 i = -1;\n"
+            SVI("signed __int128 i = -1;\n"
                "return (int)~i;\n"),
             .exit_code = 0,
         },
         {
             "int128 lognot", __LINE__,
-            SV("signed __int128 i = -1;\n"
+            SVI("signed __int128 i = -1;\n"
                "return !i;\n"),
             .exit_code = 0,
         },
         {
             "int128 assign", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "signed __int128 i2; i2 = i;\n"
                "return (int)i2;\n"),
             .exit_code = 3,
         },
         {
             "int128 compassign", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "signed __int128 i2 = 1; i2 += i;\n"
                "return (int)i2;\n"),
             .exit_code = 4,
         },
         {
             "int128 post-inc", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "return (int)i++;\n"),
             .exit_code = 3,
         },
         {
             "int128 pre-inc", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "return (int)++i;\n"),
             .exit_code = 4,
         },
         {
             "int128 post-dec", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "return (int)i--;\n"),
             .exit_code = 3,
         },
         {
             "int128 pre-dec", __LINE__,
-            SV("signed __int128 i = 3;\n"
+            SVI("signed __int128 i = 3;\n"
                "return (int)--i;\n"),
             .exit_code = 2,
         },
         {
             "int128 ptr-sub", __LINE__,
-            SV("signed __int128 i = 1;\n"
+            SVI("signed __int128 i = 1;\n"
                "int arr[3] = {1,2,3};\n"
                "int* p = arr + 2;\n"
                "p = p - i;\n"
@@ -3068,59 +3068,59 @@ TestFunction(test_interpreter){
         },
         {
             "int128 lognot zero", __LINE__,
-            SV("signed __int128 i = 0;\n"
+            SVI("signed __int128 i = 0;\n"
                "return !i;\n"),
             .exit_code = 1,
         },
         {
             "float: preinc", __LINE__,
-            SV("float f = 2.5f;\n"
+            SVI("float f = 2.5f;\n"
                "return (int)++f;\n"),
             .exit_code = 3,
         },
         {
             "float: postinc", __LINE__,
-            SV("float f = 2.5f;\n"
+            SVI("float f = 2.5f;\n"
                "int old = (int)f++;\n"
                "return old * 10 + (int)f;\n"),
             .exit_code = 23,
         },
         {
             "float: predec", __LINE__,
-            SV("float f = 3.5f;\n"
+            SVI("float f = 3.5f;\n"
                "return (int)--f;\n"),
             .exit_code = 2,
         },
         {
             "float: postdec", __LINE__,
-            SV("float f = 3.5f;\n"
+            SVI("float f = 3.5f;\n"
                "int old = (int)f--;\n"
                "return old * 10 + (int)f;\n"),
             .exit_code = 32,
         },
         {
             "double: preinc", __LINE__,
-            SV("double d = 9.0;\n"
+            SVI("double d = 9.0;\n"
                "return (int)++d;\n"),
             .exit_code = 10,
         },
         {
             "double: postdec", __LINE__,
-            SV("double d = 5.0;\n"
+            SVI("double d = 5.0;\n"
                "int old = (int)d--;\n"
                "return old * 10 + (int)d;\n"),
             .exit_code = 54,
         },
         {
             "pointer: preinc", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "int *p = arr;\n"
                "return *++p;\n"),
             .exit_code = 20,
         },
         {
             "pointer: postinc", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "int *p = arr;\n"
                "int val = *p++;\n"
                "return val * 10 + *p;\n"),
@@ -3128,14 +3128,14 @@ TestFunction(test_interpreter){
         },
         {
             "pointer: predec", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "int *p = arr + 2;\n"
                "return *--p;\n"),
             .exit_code = 20,
         },
         {
             "pointer: postdec", __LINE__,
-            SV("int arr[3] = {10, 20, 30};\n"
+            SVI("int arr[3] = {10, 20, 30};\n"
                "int *p = arr + 2;\n"
                "int val = *p--;\n"
                "return val * 10 + *p;\n"),
@@ -3143,470 +3143,470 @@ TestFunction(test_interpreter){
         },
         {
             "float: addassign", __LINE__,
-            SV("float f = 2.5f;\n"
+            SVI("float f = 2.5f;\n"
                "f += 1.5f;\n"
                "return (int)f;\n"),
             .exit_code = 4,
         },
         {
             "float: subassign", __LINE__,
-            SV("float f = 10.0f;\n"
+            SVI("float f = 10.0f;\n"
                "f -= 3.0f;\n"
                "return (int)f;\n"),
             .exit_code = 7,
         },
         {
             "float: mulassign", __LINE__,
-            SV("float f = 3.0f;\n"
+            SVI("float f = 3.0f;\n"
                "f *= 4.0f;\n"
                "return (int)f;\n"),
             .exit_code = 12,
         },
         {
             "float: divassign", __LINE__,
-            SV("double d = 21.0;\n"
+            SVI("double d = 21.0;\n"
                "d /= 3.0;\n"
                "return (int)d;\n"),
             .exit_code = 7,
         },
         {
             "int128: mulassign", __LINE__,
-            SV("unsigned __int128 a = 6;\n"
+            SVI("unsigned __int128 a = 6;\n"
                "a *= 7;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "int128: divassign unsigned", __LINE__,
-            SV("unsigned __int128 a = 42;\n"
+            SVI("unsigned __int128 a = 42;\n"
                "a /= 6;\n"
                "return (int)a;\n"),
             .exit_code = 7,
         },
         {
             "int128: modassign unsigned", __LINE__,
-            SV("unsigned __int128 a = 17;\n"
+            SVI("unsigned __int128 a = 17;\n"
                "a %= 5;\n"
                "return (int)a;\n"),
             .exit_code = 2,
         },
         {
             "int128: andassign", __LINE__,
-            SV("unsigned __int128 a = 0xFF;\n"
+            SVI("unsigned __int128 a = 0xFF;\n"
                "a &= 0x0F;\n"
                "return (int)a;\n"),
             .exit_code = 15,
         },
         {
             "int128: orassign", __LINE__,
-            SV("unsigned __int128 a = 0xF0;\n"
+            SVI("unsigned __int128 a = 0xF0;\n"
                "a |= 0x0F;\n"
                "return (int)a;\n"),
             .exit_code = 255,
         },
         {
             "int128: xorassign", __LINE__,
-            SV("unsigned __int128 a = 0xFF;\n"
+            SVI("unsigned __int128 a = 0xFF;\n"
                "a ^= 0x0F;\n"
                "return (int)a;\n"),
             .exit_code = 240,
         },
         {
             "int128: lshiftassign", __LINE__,
-            SV("unsigned __int128 a = 1;\n"
+            SVI("unsigned __int128 a = 1;\n"
                "a <<= 4;\n"
                "return (int)a;\n"),
             .exit_code = 16,
         },
         {
             "int128: rshiftassign unsigned", __LINE__,
-            SV("unsigned __int128 a = 256;\n"
+            SVI("unsigned __int128 a = 256;\n"
                "a >>= 4;\n"
                "return (int)a;\n"),
             .exit_code = 16,
         },
         {
             "int128: signed divassign", __LINE__,
-            SV("signed __int128 a = -42;\n"
+            SVI("signed __int128 a = -42;\n"
                "a /= 6;\n"
                "return (int)a + 100;\n"),
             .exit_code = 93,
         },
         {
             "int128: signed modassign", __LINE__,
-            SV("signed __int128 a = -7;\n"
+            SVI("signed __int128 a = -7;\n"
                "a %= 3;\n"
                "return (int)a + 100;\n"),
             .exit_code = 99,
         },
         {
             "int128: signed rshiftassign", __LINE__,
-            SV("signed __int128 a = -8;\n"
+            SVI("signed __int128 a = -8;\n"
                "a >>= 1;\n"
                "return (int)a + 100;\n"),
             .exit_code = 96,
         },
         {
             "int128: unsigned mul", __LINE__,
-            SV("unsigned __int128 a = 1000;\n"
+            SVI("unsigned __int128 a = 1000;\n"
                "unsigned __int128 b = 1000;\n"
                "return (int)(a * b / 10000);\n"),
             .exit_code = 100,
         },
         {
             "int128: unsigned div", __LINE__,
-            SV("unsigned __int128 a = 100;\n"
+            SVI("unsigned __int128 a = 100;\n"
                "unsigned __int128 b = 7;\n"
                "return (int)(a / b);\n"),
             .exit_code = 14,
         },
         {
             "int128: unsigned mod", __LINE__,
-            SV("unsigned __int128 a = 100;\n"
+            SVI("unsigned __int128 a = 100;\n"
                "unsigned __int128 b = 7;\n"
                "return (int)(a % b);\n"),
             .exit_code = 2,
         },
         {
             "int128: unsigned and", __LINE__,
-            SV("unsigned __int128 a = 0xFF;\n"
+            SVI("unsigned __int128 a = 0xFF;\n"
                "unsigned __int128 b = 0x0F;\n"
                "return (int)(a & b);\n"),
             .exit_code = 15,
         },
         {
             "int128: unsigned or", __LINE__,
-            SV("unsigned __int128 a = 0xF0;\n"
+            SVI("unsigned __int128 a = 0xF0;\n"
                "unsigned __int128 b = 0x0F;\n"
                "return (int)(a | b);\n"),
             .exit_code = 255,
         },
         {
             "int128: unsigned xor", __LINE__,
-            SV("unsigned __int128 a = 0xFF;\n"
+            SVI("unsigned __int128 a = 0xFF;\n"
                "unsigned __int128 b = 0x0F;\n"
                "return (int)(a ^ b);\n"),
             .exit_code = 240,
         },
         {
             "int128: unsigned shl", __LINE__,
-            SV("unsigned __int128 a = 1;\n"
+            SVI("unsigned __int128 a = 1;\n"
                "return (int)(a << 8);\n"),
             .exit_code = 256,
         },
         {
             "int128: unsigned shr", __LINE__,
-            SV("unsigned __int128 a = 256;\n"
+            SVI("unsigned __int128 a = 256;\n"
                "return (int)(a >> 4);\n"),
             .exit_code = 16,
         },
         {
             "int128: unsigned eq", __LINE__,
-            SV("unsigned __int128 a = 42;\n"
+            SVI("unsigned __int128 a = 42;\n"
                "unsigned __int128 b = 42;\n"
                "return a == b;\n"),
             .exit_code = 1,
         },
         {
             "int128: unsigned ne", __LINE__,
-            SV("unsigned __int128 a = 42;\n"
+            SVI("unsigned __int128 a = 42;\n"
                "unsigned __int128 b = 43;\n"
                "return a != b;\n"),
             .exit_code = 1,
         },
         {
             "int128: unsigned lt", __LINE__,
-            SV("unsigned __int128 a = 10;\n"
+            SVI("unsigned __int128 a = 10;\n"
                "unsigned __int128 b = 20;\n"
                "return a < b;\n"),
             .exit_code = 1,
         },
         {
             "int128: unsigned gt", __LINE__,
-            SV("unsigned __int128 a = 20;\n"
+            SVI("unsigned __int128 a = 20;\n"
                "unsigned __int128 b = 10;\n"
                "return a > b;\n"),
             .exit_code = 1,
         },
         {
             "int128: unsigned le", __LINE__,
-            SV("unsigned __int128 a = 10;\n"
+            SVI("unsigned __int128 a = 10;\n"
                "unsigned __int128 b = 10;\n"
                "return a <= b;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_integer", __LINE__,
-            SV("return (int).is_integer;\n"),
+            SVI("return (int).is_integer;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_float", __LINE__,
-            SV("return (float).is_float;\n"),
+            SVI("return (float).is_float;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_float int false", __LINE__,
-            SV("return (int).is_float;\n"),
+            SVI("return (int).is_float;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: is_pointer", __LINE__,
-            SV("return (int*).is_pointer;\n"),
+            SVI("return (int*).is_pointer;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_pointer int false", __LINE__,
-            SV("return (int).is_pointer;\n"),
+            SVI("return (int).is_pointer;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: is_struct", __LINE__,
-            SV("struct S { int x; };\n"
+            SVI("struct S { int x; };\n"
                "return (struct S).is_struct;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_union", __LINE__,
-            SV("union U { int x; float f; };\n"
+            SVI("union U { int x; float f; };\n"
                "return (union U).is_union;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_array", __LINE__,
-            SV("return (int[3]).is_array;\n"),
+            SVI("return (int[3]).is_array;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_enum", __LINE__,
-            SV("enum E { A, B };\n"
+            SVI("enum E { A, B };\n"
                "return (enum E).is_enum;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_arithmetic int", __LINE__,
-            SV("return (int).is_arithmetic;\n"),
+            SVI("return (int).is_arithmetic;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_arithmetic float", __LINE__,
-            SV("return (double).is_arithmetic;\n"),
+            SVI("return (double).is_arithmetic;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_arithmetic enum", __LINE__,
-            SV("enum E { A };\n"
+            SVI("enum E { A };\n"
                "return (enum E).is_arithmetic;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_arithmetic ptr false", __LINE__,
-            SV("return (int*).is_arithmetic;\n"),
+            SVI("return (int*).is_arithmetic;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: sizeof", __LINE__,
-            SV("return (int)(int).sizeof_;\n"),
+            SVI("return (int)(int).sizeof_;\n"),
             .exit_code = 4,
         },
         {
             "type introspection: alignof", __LINE__,
-            SV("return (int)(int).alignof_;\n"),
+            SVI("return (int)(int).alignof_;\n"),
             .exit_code = 4,
         },
         {
             "type introspection: is_signed", __LINE__,
-            SV("return (int).is_signed;\n"),
+            SVI("return (int).is_signed;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_unsigned", __LINE__,
-            SV("return (unsigned).is_unsigned;\n"),
+            SVI("return (unsigned).is_unsigned;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_const", __LINE__,
-            SV("return (const int).is_const;\n"),
+            SVI("return (const int).is_const;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_const false", __LINE__,
-            SV("return (int).is_const;\n"),
+            SVI("return (int).is_const;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: is_volatile", __LINE__,
-            SV("return (volatile int).is_volatile;\n"),
+            SVI("return (volatile int).is_volatile;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_function", __LINE__,
-            SV("return (int(int)).is_function;\n"),
+            SVI("return (int(int)).is_function;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_callable fn ptr", __LINE__,
-            SV("return (int(*)(int)).is_callable;\n"),
+            SVI("return (int(*)(int)).is_callable;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_callable int false", __LINE__,
-            SV("return (int).is_callable;\n"),
+            SVI("return (int).is_callable;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: pointee", __LINE__,
-            SV("return (int*).pointee.is_integer;\n"),
+            SVI("return (int*).pointee.is_integer;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: count", __LINE__,
-            SV("return (int)(int[5]).count;\n"),
+            SVI("return (int)(int[5]).count;\n"),
             .exit_code = 5,
         },
         {
             "type introspection: is_incomplete", __LINE__,
-            SV("struct S;\n"
+            SVI("struct S;\n"
                "return (struct S).is_incomplete;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_incomplete false", __LINE__,
-            SV("struct S { int x; };\n"
+            SVI("struct S { int x; };\n"
                "return (struct S).is_incomplete;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: is_variadic", __LINE__,
-            SV("return (int(int, ...)).is_variadic;\n"),
+            SVI("return (int(int, ...)).is_variadic;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_variadic false", __LINE__,
-            SV("return (int(int)).is_variadic;\n"),
+            SVI("return (int(int)).is_variadic;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: unqual", __LINE__,
-            SV("return (const volatile int).unqual.is_const;\n"),
+            SVI("return (const volatile int).unqual.is_const;\n"),
             .exit_code = 0,
         },
         {
             "type introspection: tag", __LINE__,
-            SV("struct Foo { int x; };\n"
+            SVI("struct Foo { int x; };\n"
                "const char* s = (struct Foo).tag;\n"
                "return s[0] == 'F' && s[1] == 'o' && s[2] == 'o';\n"),
             .exit_code = 1,
         },
         {
             "type introspection: name", __LINE__,
-            SV("const char* s = (int).name;\n"
+            SVI("const char* s = (int).name;\n"
                "return s[0] == 'i' && s[1] == 'n' && s[2] == 't';\n"),
             .exit_code = 1,
         },
         {
             "atomic: fetch_and", __LINE__,
-            SV("int x = 0xFF;\n"
+            SVI("int x = 0xFF;\n"
                "int old = __atomic_fetch_and(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
                "return old * 10 + x;\n"),
             .exit_code = 0xFF * 10 + 0x0F,
         },
         {
             "atomic: fetch_or", __LINE__,
-            SV("int x = 0xF0;\n"
+            SVI("int x = 0xF0;\n"
                "int old = __atomic_fetch_or(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
                "return old + x - 0xFF;\n"),
             .exit_code = 0xF0,
         },
         {
             "atomic: fetch_xor", __LINE__,
-            SV("int x = 0xFF;\n"
+            SVI("int x = 0xFF;\n"
                "int old = __atomic_fetch_xor(&x, 0x0F, __ATOMIC_SEQ_CST);\n"
                "return old - x;\n"),
             .exit_code = 0xFF - 0xF0,
         },
         {
             "type introspection: fields count", __LINE__,
-            SV("struct S { int x; int y; int z; };\n"
+            SVI("struct S { int x; int y; int z; };\n"
                "return (int)(struct S).fields;\n"),
             .exit_code = 3,
         },
         {
             "type introspection: field name", __LINE__,
-            SV("struct S { int x; int y; };\n"
+            SVI("struct S { int x; int y; };\n"
                "struct __builtin_Field f = (struct S).field(0);\n"
                "return f.name[0] == 'x';\n"),
             .exit_code = 1,
         },
         {
             "type introspection: field offset", __LINE__,
-            SV("struct S { int x; int y; };\n"
+            SVI("struct S { int x; int y; };\n"
                "struct __builtin_Field f = (struct S).field(1);\n"
                "return (int)f.offset;\n"),
             .exit_code = 4,
         },
         {
             "type introspection: enumerators count", __LINE__,
-            SV("enum E { A, B, C, D };\n"
+            SVI("enum E { A, B, C, D };\n"
                "return (int)(enum E).enumerators;\n"),
             .exit_code = 4,
         },
         {
             "type introspection: enumerator value", __LINE__,
-            SV("enum E { A = 10, B = 20 };\n"
+            SVI("enum E { A = 10, B = 20 };\n"
                "struct __builtin_Enumerator e = (enum E).enumerator(1);\n"
                "return (int)e.value;\n"),
             .exit_code = 20,
         },
         {
             "type introspection: enumerator name", __LINE__,
-            SV("enum E { FOO = 1, BAR = 2 };\n"
+            SVI("enum E { FOO = 1, BAR = 2 };\n"
                "struct __builtin_Enumerator e = (enum E).enumerator(0);\n"
                "return e.name[0] == 'F' && e.name[1] == 'O' && e.name[2] == 'O';\n"),
             .exit_code = 1,
         },
         {
             "type introspection: return_type", __LINE__,
-            SV("return (int(int, int)).return_type.is_integer;\n"),
+            SVI("return (int(int, int)).return_type.is_integer;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: param_count", __LINE__,
-            SV("return (int)(int(int, float)).param_count;\n"),
+            SVI("return (int)(int(int, float)).param_count;\n"),
             .exit_code = 2,
         },
         {
             "type introspection: param_type", __LINE__,
-            SV("return (int(int, float)).param_type(1).is_float;\n"),
+            SVI("return (int(int, float)).param_type(1).is_float;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: element_type", __LINE__,
-            SV("return (int[5]).element_type.is_integer;\n"),
+            SVI("return (int[5]).element_type.is_integer;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: underlying_type", __LINE__,
-            SV("enum E : unsigned char { A };\n"
+            SVI("enum E : unsigned char { A };\n"
                "return (enum E).underlying_type.is_unsigned;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: castable_to", __LINE__,
-            SV("_Bool r = (int).is_castable_to(float);\n"
+            SVI("_Bool r = (int).is_castable_to(float);\n"
                "return r;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_callable_with", __LINE__,
-            SV("typedef int fn_t(int);\n"
+            SVI("typedef int fn_t(int);\n"
                "_Bool r = (fn_t).is_callable_with(int);\n"
                "return r;\n"),
             .exit_code = 1,
         },
         {
             "type introspection: is_callable_with false", __LINE__,
-            SV("struct S { int x; };\n"
+            SVI("struct S { int x; };\n"
                "typedef int fn_t(int);\n"
                "_Bool r = (fn_t).is_callable_with(struct S);\n"
                "return !r;\n"),
@@ -3614,7 +3614,7 @@ TestFunction(test_interpreter){
         },
         {
             "__builtin_intern", __LINE__,
-            SV("const char* __builtin_intern(const char*);\n"
+            SVI("const char* __builtin_intern(const char*);\n"
                "const char* a = __builtin_intern(\"hello\");\n"
                "const char* b = __builtin_intern(\"hello\");\n"
                "return a == b;\n"),
@@ -3622,60 +3622,60 @@ TestFunction(test_interpreter){
         },
         {
             "numeric literal: unsigned long", __LINE__,
-            SV("unsigned long x = 42ul;\n"
+            SVI("unsigned long x = 42ul;\n"
                "return (int)x;\n"),
             .exit_code = 42,
         },
         {
             "numeric literal: unsigned long long", __LINE__,
-            SV("unsigned long long x = 42ull;\n"
+            SVI("unsigned long long x = 42ull;\n"
                "return (int)x;\n"),
             .exit_code = 42,
         },
         {
             "numeric literal: long double", __LINE__,
-            SV("long double x = 7.0L;\n"
+            SVI("long double x = 7.0L;\n"
                "return (int)x;\n"),
             .exit_code = 7,
         },
         {
             "nullptr", __LINE__,
-            SV("int *p = nullptr;\n"
+            SVI("int *p = nullptr;\n"
                "return p == nullptr;\n"),
             .exit_code = 1,
         },
         {
             "true false", __LINE__,
-            SV("return true && !false;\n"),
+            SVI("return true && !false;\n"),
             .exit_code = 1,
         },
         {
             "_Generic: array decay to pointer", __LINE__,
-            SV("int arr[3] = {1, 2, 3};\n"
+            SVI("int arr[3] = {1, 2, 3};\n"
                "return _Generic(arr, int*: 1, default: 0);\n"),
             .exit_code = 1,
         },
         {
             "pointer: le comparison", __LINE__,
-            SV("int arr[3] = {0};\n"
+            SVI("int arr[3] = {0};\n"
                "return &arr[0] <= &arr[2];\n"),
             .exit_code = 1,
         },
         {
             "pointer: ge comparison", __LINE__,
-            SV("int arr[3] = {0};\n"
+            SVI("int arr[3] = {0};\n"
                "return &arr[2] >= &arr[0];\n"),
             .exit_code = 1,
         },
         {
             "pointer: le equal", __LINE__,
-            SV("int x;\n"
+            SVI("int x;\n"
                "return &x <= &x;\n"),
             .exit_code = 1,
         },
         {
             "bitfield: mulassign", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {5};\n"
                "s.a *= 3;\n"
                "return s.a;\n"),
@@ -3683,7 +3683,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: divassign unsigned", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {42};\n"
                "s.a /= 6;\n"
                "return s.a;\n"),
@@ -3691,7 +3691,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: modassign unsigned", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {17};\n"
                "s.a %= 5;\n"
                "return s.a;\n"),
@@ -3699,7 +3699,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: lshiftassign", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {1};\n"
                "s.a <<= 4;\n"
                "return s.a;\n"),
@@ -3707,7 +3707,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: rshiftassign unsigned", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {128};\n"
                "s.a >>= 3;\n"
                "return s.a;\n"),
@@ -3715,7 +3715,7 @@ TestFunction(test_interpreter){
         },
         {
             "bitfield: xorassign", __LINE__,
-            SV("struct S { unsigned a : 8; };\n"
+            SVI("struct S { unsigned a : 8; };\n"
                "struct S s = {0xFF};\n"
                "s.a ^= 0x0F;\n"
                "return s.a;\n"),
@@ -3723,85 +3723,85 @@ TestFunction(test_interpreter){
         },
         {
             "__builtin_huge_valf", __LINE__,
-            SV("float __builtin_huge_valf(void);\n"
+            SVI("float __builtin_huge_valf(void);\n"
                "float f = __builtin_huge_valf();\n"
                "return f > 1000000.0f;\n"),
             .exit_code = 1,
         },
         {
             "__builtin_huge_val", __LINE__,
-            SV("double __builtin_huge_val(void);\n"
+            SVI("double __builtin_huge_val(void);\n"
                "double d = __builtin_huge_val();\n"
                "return d > 1000000.0;\n"),
             .exit_code = 1,
         },
         {
             "__builtin_nanf", __LINE__,
-            SV("float __builtin_nanf(const char*);\n"
+            SVI("float __builtin_nanf(const char*);\n"
                "float f = __builtin_nanf(\"\");\n"
                "return f != f;\n"),
             .exit_code = 1,
         },
         {
             "__builtin_nan", __LINE__,
-            SV("double __builtin_nan(const char*);\n"
+            SVI("double __builtin_nan(const char*);\n"
                "double d = __builtin_nan(\"\");\n"
                "return d != d;\n"),
             .exit_code = 1,
         },
         {
             "char literal: wchar", __LINE__,
-            SV("int x = L'A';\n"
+            SVI("int x = L'A';\n"
                "return x;\n"),
             .exit_code = 65,
         },
         {
             "char literal: char16", __LINE__,
-            SV("unsigned short x = u'B';\n"
+            SVI("unsigned short x = u'B';\n"
                "return x;\n"),
             .exit_code = 66,
         },
         {
             "char literal: char32", __LINE__,
-            SV("unsigned x = U'C';\n"
+            SVI("unsigned x = U'C';\n"
                "return x;\n"),
             .exit_code = 67,
         },
         {
             "constexpr: int arithmetic", __LINE__,
-            SV("constexpr int a = 3 + 4 * 5;\n"
+            SVI("constexpr int a = 3 + 4 * 5;\n"
                "return a;\n"),
             .exit_code = 23,
         },
         {
             "constexpr: negation", __LINE__,
-            SV("constexpr int a = -42;\n"
+            SVI("constexpr int a = -42;\n"
                "return a + 100;\n"),
             .exit_code = 58,
         },
         {
             "constexpr: logical not", __LINE__,
-            SV("constexpr int a = !0;\n"
+            SVI("constexpr int a = !0;\n"
                "constexpr int b = !1;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: bitwise not", __LINE__,
-            SV("constexpr int a = ~0 & 0xFF;\n"
+            SVI("constexpr int a = ~0 & 0xFF;\n"
                "return a;\n"),
             .exit_code = 255,
         },
         {
             "constexpr: shift", __LINE__,
-            SV("constexpr int a = 1 << 4;\n"
+            SVI("constexpr int a = 1 << 4;\n"
                "constexpr int b = 256 >> 4;\n"
                "return a + b;\n"),
             .exit_code = 32,
         },
         {
             "constexpr: comparison", __LINE__,
-            SV("constexpr int a = (3 < 5);\n"
+            SVI("constexpr int a = (3 < 5);\n"
                "constexpr int b = (5 > 3);\n"
                "constexpr int c = (3 <= 3);\n"
                "constexpr int d = (3 >= 3);\n"
@@ -3812,7 +3812,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: bitwise ops", __LINE__,
-            SV("constexpr int a = 0xFF & 0x0F;\n"
+            SVI("constexpr int a = 0xFF & 0x0F;\n"
                "constexpr int b = 0xF0 | 0x0F;\n"
                "constexpr int c = 0xFF ^ 0x0F;\n"
                "return a + b - c;\n"),
@@ -3820,62 +3820,62 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: modulo", __LINE__,
-            SV("constexpr int a = 17 % 5;\n"
+            SVI("constexpr int a = 17 % 5;\n"
                "return a;\n"),
             .exit_code = 2,
         },
         {
             "constexpr: ternary", __LINE__,
-            SV("constexpr int a = 1 ? 10 : 20;\n"
+            SVI("constexpr int a = 1 ? 10 : 20;\n"
                "constexpr int b = 0 ? 10 : 20;\n"
                "return a + b;\n"),
             .exit_code = 30,
         },
         {
             "constexpr: cast int to float", __LINE__,
-            SV("constexpr float f = (float)7;\n"
+            SVI("constexpr float f = (float)7;\n"
                "return (int)f;\n"),
             .exit_code = 7,
         },
         {
             "constexpr: cast float to int", __LINE__,
-            SV("constexpr int a = (int)3.7f;\n"
+            SVI("constexpr int a = (int)3.7f;\n"
                "return a;\n"),
             .exit_code = 3,
         },
         {
             "constexpr: float arithmetic", __LINE__,
-            SV("constexpr float a = 2.5f + 1.5f;\n"
+            SVI("constexpr float a = 2.5f + 1.5f;\n"
                "return (int)a;\n"),
             .exit_code = 4,
         },
         {
             "constexpr: double arithmetic", __LINE__,
-            SV("constexpr double a = 10.0 - 3.0;\n"
+            SVI("constexpr double a = 10.0 - 3.0;\n"
                "return (int)a;\n"),
             .exit_code = 7,
         },
         {
             "constexpr: float comparison", __LINE__,
-            SV("constexpr int a = (1.5f < 2.5f);\n"
+            SVI("constexpr int a = (1.5f < 2.5f);\n"
                "return a;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: unsigned arithmetic", __LINE__,
-            SV("constexpr unsigned a = 10u + 32u;\n"
+            SVI("constexpr unsigned a = 10u + 32u;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: unsigned long long", __LINE__,
-            SV("constexpr unsigned long long a = 100ull * 2ull;\n"
+            SVI("constexpr unsigned long long a = 100ull * 2ull;\n"
                "return (int)a;\n"),
             .exit_code = 200,
         },
         {
             "constexpr: logical and or", __LINE__,
-            SV("constexpr int a = (1 && 1);\n"
+            SVI("constexpr int a = (1 && 1);\n"
                "constexpr int b = (1 && 0);\n"
                "constexpr int c = (0 || 1);\n"
                "constexpr int d = (0 || 0);\n"
@@ -3884,44 +3884,44 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: enum value", __LINE__,
-            SV("enum { A = 2 + 3, B = A * 2 };\n"
+            SVI("enum { A = 2 + 3, B = A * 2 };\n"
                "return B;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: sizeof in constexpr", __LINE__,
-            SV("constexpr int a = sizeof(int) + sizeof(char);\n"
+            SVI("constexpr int a = sizeof(int) + sizeof(char);\n"
                "return a;\n"),
             .exit_code = 5,
         },
         {
             "constexpr: float negation", __LINE__,
-            SV("constexpr float f = -3.0f;\n"
+            SVI("constexpr float f = -3.0f;\n"
                "return (int)f + 100;\n"),
             .exit_code = 97,
         },
         {
             "constexpr: double negation", __LINE__,
-            SV("constexpr double d = -7.0;\n"
+            SVI("constexpr double d = -7.0;\n"
                "return (int)d + 100;\n"),
             .exit_code = 93,
         },
         {
             "constexpr: float logical not", __LINE__,
-            SV("constexpr int a = !0.0f;\n"
+            SVI("constexpr int a = !0.0f;\n"
                "constexpr int b = !1.0f;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: long long arithmetic", __LINE__,
-            SV("constexpr long long a = 100ll + 200ll;\n"
+            SVI("constexpr long long a = 100ll + 200ll;\n"
                "return (int)a;\n"),
             .exit_code = 300,
         },
         {
             "static_assert with arithmetic", __LINE__,
-            SV("_Static_assert(3 * 4 == 12, \"mul\");\n"
+            SVI("_Static_assert(3 * 4 == 12, \"mul\");\n"
                "_Static_assert(10 / 2 == 5, \"div\");\n"
                "_Static_assert(17 % 5 == 2, \"mod\");\n"
                "_Static_assert((0xFF & 0x0F) == 0x0F, \"and\");\n"
@@ -3934,7 +3934,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: long long ops", __LINE__,
-            SV("constexpr long long a = 1000000000ll * 3ll;\n"
+            SVI("constexpr long long a = 1000000000ll * 3ll;\n"
                "constexpr long long b = a / 1000000ll;\n"
                "constexpr long long c = a % 1000000000ll;\n"
                "constexpr long long d = a & 0xFFll;\n"
@@ -3951,7 +3951,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: long long comparisons", __LINE__,
-            SV("_Static_assert(1ll < 2ll, \"\");\n"
+            SVI("_Static_assert(1ll < 2ll, \"\");\n"
                "_Static_assert(2ll > 1ll, \"\");\n"
                "_Static_assert(3ll <= 3ll, \"\");\n"
                "_Static_assert(3ll >= 3ll, \"\");\n"
@@ -3962,7 +3962,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned long long ops", __LINE__,
-            SV("constexpr unsigned long long a = 10000000000ull * 3ull;\n"
+            SVI("constexpr unsigned long long a = 10000000000ull * 3ull;\n"
                "constexpr unsigned long long b = a / 1000000ull;\n"
                "constexpr unsigned long long c = a % 1000000000ull;\n"
                "constexpr unsigned long long d = 0xFFFFFFFFFFFFFFFFull & 0xFFull;\n"
@@ -3979,7 +3979,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned long long comparisons", __LINE__,
-            SV("_Static_assert(1ull < 2ull, \"\");\n"
+            SVI("_Static_assert(1ull < 2ull, \"\");\n"
                "_Static_assert(2ull > 1ull, \"\");\n"
                "_Static_assert(3ull <= 3ull, \"\");\n"
                "_Static_assert(3ull >= 3ull, \"\");\n"
@@ -3990,25 +3990,25 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned negation", __LINE__,
-            SV("constexpr unsigned a = -1u;\n"
+            SVI("constexpr unsigned a = -1u;\n"
                "return a > 1000000u;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: cast double to float", __LINE__,
-            SV("constexpr float f = (float)3.14;\n"
+            SVI("constexpr float f = (float)3.14;\n"
                "return (int)(f * 100);\n"),
             .exit_code = 314,
         },
         {
             "constexpr: cast int to long long", __LINE__,
-            SV("constexpr long long a = (long long)42;\n"
+            SVI("constexpr long long a = (long long)42;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: type introspection in static_assert", __LINE__,
-            SV("_Static_assert((int).is_integer, \"\");\n"
+            SVI("_Static_assert((int).is_integer, \"\");\n"
                "_Static_assert((float).is_float, \"\");\n"
                "_Static_assert((int).is_arithmetic, \"\");\n"
                "_Static_assert((int*).is_pointer, \"\");\n"
@@ -4023,7 +4023,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: type introspection struct/enum", __LINE__,
-            SV("struct S { int x; };\n"
+            SVI("struct S { int x; };\n"
                "enum E { A };\n"
                "union U { int x; };\n"
                "_Static_assert((struct S).is_struct, \"\");\n"
@@ -4036,7 +4036,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: type sizeof/alignof", __LINE__,
-            SV("_Static_assert((int).sizeof_ == 4, \"\");\n"
+            SVI("_Static_assert((int).sizeof_ == 4, \"\");\n"
                "_Static_assert((char).sizeof_ == 1, \"\");\n"
                "_Static_assert((int).alignof_ == 4, \"\");\n"
                "return 1;\n"),
@@ -4044,39 +4044,39 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: float mul div", __LINE__,
-            SV("constexpr float a = 3.0f * 4.0f;\n"
+            SVI("constexpr float a = 3.0f * 4.0f;\n"
                "constexpr float b = 12.0f / 3.0f;\n"
                "return (int)a + (int)b;\n"),
             .exit_code = 16,
         },
         {
             "constexpr: double mul div", __LINE__,
-            SV("constexpr double a = 3.0 * 4.0;\n"
+            SVI("constexpr double a = 3.0 * 4.0;\n"
                "constexpr double b = 12.0 / 3.0;\n"
                "return (int)a + (int)b;\n"),
             .exit_code = 16,
         },
         {
             "constexpr: explicit cast int to double", __LINE__,
-            SV("constexpr double d = (double)42;\n"
+            SVI("constexpr double d = (double)42;\n"
                "return (int)d;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: explicit cast double to float", __LINE__,
-            SV("constexpr float f = (float)3.14;\n"
+            SVI("constexpr float f = (float)3.14;\n"
                "return (int)(f * 100.0f);\n"),
             .exit_code = 314,
         },
         {
             "constexpr: explicit cast float to double", __LINE__,
-            SV("constexpr double d = (double)2.5f;\n"
+            SVI("constexpr double d = (double)2.5f;\n"
                "return (int)(d * 10.0);\n"),
             .exit_code = 25,
         },
         {
             "int128: unsigned ge", __LINE__,
-            SV("unsigned __int128 a = 10;\n"
+            SVI("unsigned __int128 a = 10;\n"
                "unsigned __int128 b = 10;\n"
                "unsigned __int128 c = 5;\n"
                "return (a >= b) + (a >= c);\n"),
@@ -4084,7 +4084,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: float comparison all ops", __LINE__,
-            SV("_Static_assert(1.0f == 1.0f, \"\");\n"
+            SVI("_Static_assert(1.0f == 1.0f, \"\");\n"
                "_Static_assert(1.0f != 2.0f, \"\");\n"
                "_Static_assert(1.0f < 2.0f, \"\");\n"
                "_Static_assert(2.0f > 1.0f, \"\");\n"
@@ -4095,7 +4095,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: double comparison all ops", __LINE__,
-            SV("_Static_assert(1.0 == 1.0, \"\");\n"
+            SVI("_Static_assert(1.0 == 1.0, \"\");\n"
                "_Static_assert(1.0 != 2.0, \"\");\n"
                "_Static_assert(1.0 < 2.0, \"\");\n"
                "_Static_assert(2.0 > 1.0, \"\");\n"
@@ -4106,7 +4106,7 @@ TestFunction(test_interpreter){
         },
         {
             "__func__", __LINE__,
-            SV("int check(void){\n"
+            SVI("int check(void){\n"
                "    const char* n = __func__;\n"
                "    return n[0] == 'c' && n[1] == 'h';\n"
                "}\n"
@@ -4115,7 +4115,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned int ops", __LINE__,
-            SV("constexpr unsigned a = 100u + 50u;\n"
+            SVI("constexpr unsigned a = 100u + 50u;\n"
                "constexpr unsigned b = 100u - 30u;\n"
                "constexpr unsigned c = 10u * 5u;\n"
                "constexpr unsigned d = 42u / 6u;\n"
@@ -4131,7 +4131,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned comparisons", __LINE__,
-            SV("_Static_assert(1u < 2u, \"\");\n"
+            SVI("_Static_assert(1u < 2u, \"\");\n"
                "_Static_assert(2u > 1u, \"\");\n"
                "_Static_assert(1u <= 1u, \"\");\n"
                "_Static_assert(1u >= 1u, \"\");\n"
@@ -4142,7 +4142,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: int sub mul div", __LINE__,
-            SV("constexpr int a = 100 - 58;\n"
+            SVI("constexpr int a = 100 - 58;\n"
                "constexpr int b = 6 * 7;\n"
                "constexpr int c = 84 / 2;\n"
                "_Static_assert(a == 42, \"\");\n"
@@ -4153,49 +4153,49 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: unsigned long long negation", __LINE__,
-            SV("constexpr unsigned long long a = -1ull;\n"
+            SVI("constexpr unsigned long long a = -1ull;\n"
                "return a > 100ull;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: cast unsigned to signed", __LINE__,
-            SV("constexpr int a = (int)42u;\n"
+            SVI("constexpr int a = (int)42u;\n"
                "return a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: cast long long to int", __LINE__,
-            SV("constexpr int a = (int)42ll;\n"
+            SVI("constexpr int a = (int)42ll;\n"
                "return a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: unary plus", __LINE__,
-            SV("constexpr int a = +42;\n"
+            SVI("constexpr int a = +42;\n"
                "return a;\n"),
             .exit_code = 42,
         },
         {
             "designated arg: named", __LINE__,
-            SV("int add(int a, int b){ return a * 10 + b; }\n"
+            SVI("int add(int a, int b){ return a * 10 + b; }\n"
                "return add(.b = 2, .a = 3);\n"),
             .exit_code = 32,
         },
         {
             "designated arg: positional", __LINE__,
-            SV("int add(int a, int b){ return a * 10 + b; }\n"
+            SVI("int add(int a, int b){ return a * 10 + b; }\n"
                "return add([1] = 2, [0] = 3);\n"),
             .exit_code = 32,
         },
         {
             "designated arg: mixed", __LINE__,
-            SV("int f(int a, int b, int c){ return a * 100 + b * 10 + c; }\n"
+            SVI("int f(int a, int b, int c){ return a * 100 + b * 10 + c; }\n"
                "return f(1, .c = 3, .b = 2);\n"),
             .exit_code = 123,
         },
         {
             "pragma pack basic", __LINE__,
-            SV("#pragma pack(1)\n"
+            SVI("#pragma pack(1)\n"
                "struct S { char a; int b; };\n"
                "#pragma pack()\n"
                "return sizeof(struct S);\n"),
@@ -4203,7 +4203,7 @@ TestFunction(test_interpreter){
         },
         {
             "pragma pack push pop", __LINE__,
-            SV("#pragma pack(push, 1)\n"
+            SVI("#pragma pack(push, 1)\n"
                "struct S1 { char a; int b; };\n"
                "#pragma pack(pop)\n"
                "struct S2 { char a; int b; };\n"
@@ -4212,85 +4212,85 @@ TestFunction(test_interpreter){
         },
         {
             "string init char array", __LINE__,
-            SV("char s[6] = \"hello\";\n"
+            SVI("char s[6] = \"hello\";\n"
                "return s[0] + s[4];\n"),
             .exit_code = 'h' + 'o',
         },
         {
             "string init wchar array", __LINE__,
-            SV("int s[] = L\"abc\";\n"
+            SVI("int s[] = L\"abc\";\n"
                "return s[0] + s[2];\n"),
             .exit_code = 'a' + 'c',
         },
         {
             "empty braced scalar init", __LINE__,
-            SV("int x = {};\n"
+            SVI("int x = {};\n"
                "return x;\n"),
             .exit_code = 0,
         },
         {
             "_Countof", __LINE__,
-            SV("int arr[7];\n"
+            SVI("int arr[7];\n"
                "return _Countof(arr);\n"),
             .exit_code = 7,
         },
         {
             "alignof struct", __LINE__,
-            SV("struct S { char c; int i; };\n"
+            SVI("struct S { char c; int i; };\n"
                "return _Alignof(struct S);\n"),
             .exit_code = 4,
         },
         {
             "unicode escape in string", __LINE__,
-            SV("const char* s = \"\\u0041\\u0042\";\n"
+            SVI("const char* s = \"\\u0041\\u0042\";\n"
                "return s[0] + s[1];\n"),
             .exit_code = 'A' + 'B',
         },
         {
             "hex escape in string", __LINE__,
-            SV("const char* s = \"\\x41\\x42\\x43\";\n"
+            SVI("const char* s = \"\\x41\\x42\\x43\";\n"
                "return s[0] + s[1] + s[2];\n"),
             .exit_code = 'A' + 'B' + 'C',
         },
         {
             "octal escape in string", __LINE__,
-            SV("const char* s = \"\\101\\102\";\n"
+            SVI("const char* s = \"\\101\\102\";\n"
                "return s[0] + s[1];\n"),
             .exit_code = 'A' + 'B',
         },
         {
             "u8 string with unicode escape", __LINE__,
-            SV("unsigned char s[] = u8\"\\u00C0\";\n"
+            SVI("unsigned char s[] = u8\"\\u00C0\";\n"
                "return s[0];\n"),
             .exit_code = 0xC3, // UTF-8 encoding of U+00C0 first byte
         },
         {
             "U string with high codepoint", __LINE__,
-            SV("unsigned int s[] = U\"\\U0001F600\";\n"
+            SVI("unsigned int s[] = U\"\\U0001F600\";\n"
                "return s[0] == 0x1F600;\n"),
             .exit_code = 1,
         },
         {
             "u string with BMP char", __LINE__,
-            SV("unsigned short s[] = u\"\\u00E9\";\n"
+            SVI("unsigned short s[] = u\"\\u00E9\";\n"
                "return s[0];\n"),
             .exit_code = 0xE9,
         },
         {
             "L string with unicode escape", __LINE__,
-            SV("int s[] = L\"\\u00E9\";\n"
+            SVI("int s[] = L\"\\u00E9\";\n"
                "return s[0];\n"),
             .exit_code = 0xE9,
         },
         {
             "multichar literal", __LINE__,
-            SV("int x = 'AB';\n"
+            SVI("int x = 'AB';\n"
                "return x != 0;\n"),
             .exit_code = 1,
         },
         {
             "sizeof struct with method", __LINE__,
-            SV("struct S {\n"
+            SVI("struct S {\n"
                "    int x;\n"
                "    int get(struct S* self){ return self->x; }\n"
                "};\n"
@@ -4299,7 +4299,7 @@ TestFunction(test_interpreter){
         },
         {
             "call struct method", __LINE__,
-            SV("struct S {\n"
+            SVI("struct S {\n"
                "    int x;\n"
                "    int get(struct S* self){ return self->x; }\n"
                "};\n"
@@ -4309,26 +4309,26 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: int division", __LINE__,
-            SV("constexpr int a = 100 / 3;\n"
+            SVI("constexpr int a = 100 / 3;\n"
                "return a;\n"),
             .exit_code = 33,
         },
         {
             "constexpr: int modulo", __LINE__,
-            SV("constexpr int a = 100 % 3;\n"
+            SVI("constexpr int a = 100 % 3;\n"
                "return a;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: int shifts", __LINE__,
-            SV("constexpr int a = 5 << 2;\n"
+            SVI("constexpr int a = 5 << 2;\n"
                "constexpr int b = 20 >> 2;\n"
                "return a + b;\n"),
             .exit_code = 25,
         },
         {
             "constexpr: int bitwise", __LINE__,
-            SV("constexpr int a = 0xF & 0x3;\n"
+            SVI("constexpr int a = 0xF & 0x3;\n"
                "constexpr int b = 0x8 | 0x4;\n"
                "constexpr int c = 0xF ^ 0x3;\n"
                "return a + b + c;\n"),
@@ -4336,139 +4336,139 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr: long long division", __LINE__,
-            SV("constexpr long long a = 1000000000000ll / 3ll;\n"
+            SVI("constexpr long long a = 1000000000000ll / 3ll;\n"
                "return (int)(a % 1000);\n"),
             .exit_code = 333,
         },
         {
             "constexpr: long long modulo", __LINE__,
-            SV("constexpr long long a = 1000000000000ll % 7ll;\n"
+            SVI("constexpr long long a = 1000000000000ll % 7ll;\n"
                "return (int)a;\n"),
             .exit_code = (int)(1000000000000ll % 7ll),
         },
         {
             "constexpr: unsigned long long division", __LINE__,
-            SV("constexpr unsigned long long a = 1000000000000ull / 3ull;\n"
+            SVI("constexpr unsigned long long a = 1000000000000ull / 3ull;\n"
                "return (int)(a % 1000);\n"),
             .exit_code = 333,
         },
         {
             "constexpr: unsigned long long modulo", __LINE__,
-            SV("constexpr unsigned long long a = 1000000000000ull % 7ull;\n"
+            SVI("constexpr unsigned long long a = 1000000000000ull % 7ull;\n"
                "return (int)a;\n"),
             .exit_code = (int)(1000000000000ull % 7ull),
         },
         {
             "constexpr: unsigned int division", __LINE__,
-            SV("constexpr unsigned a = 100u / 3u;\n"
+            SVI("constexpr unsigned a = 100u / 3u;\n"
                "return (int)a;\n"),
             .exit_code = 33,
         },
         {
             "constexpr: unsigned int modulo", __LINE__,
-            SV("constexpr unsigned a = 100u % 3u;\n"
+            SVI("constexpr unsigned a = 100u % 3u;\n"
                "return (int)a;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection fields", __LINE__,
-            SV("struct S { int a; int b; int c; };\n"
+            SVI("struct S { int a; int b; int c; };\n"
                "_Static_assert((struct S).fields == 3, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection enumerators", __LINE__,
-            SV("enum E { A, B, C };\n"
+            SVI("enum E { A, B, C };\n"
                "_Static_assert((enum E).enumerators == 3, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection param_count", __LINE__,
-            SV("_Static_assert((int(int, float)).param_count == 2, \"\");\n"
+            SVI("_Static_assert((int(int, float)).param_count == 2, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection return_type", __LINE__,
-            SV("_Static_assert((int(void)).return_type.is_integer, \"\");\n"
+            SVI("_Static_assert((int(void)).return_type.is_integer, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection param_type", __LINE__,
-            SV("_Static_assert((int(int, float)).param_type(1).is_float, \"\");\n"
+            SVI("_Static_assert((int(int, float)).param_type(1).is_float, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection element_type", __LINE__,
-            SV("_Static_assert((int[5]).element_type.is_integer, \"\");\n"
+            SVI("_Static_assert((int[5]).element_type.is_integer, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection count", __LINE__,
-            SV("_Static_assert((int[7]).count == 7, \"\");\n"
+            SVI("_Static_assert((int[7]).count == 7, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection pointee", __LINE__,
-            SV("_Static_assert((int*).pointee.is_integer, \"\");\n"
+            SVI("_Static_assert((int*).pointee.is_integer, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection unqual", __LINE__,
-            SV("_Static_assert(!(const int).unqual.is_const, \"\");\n"
+            SVI("_Static_assert(!(const int).unqual.is_const, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection is_callable", __LINE__,
-            SV("_Static_assert((int(*)(int)).is_callable, \"\");\n"
+            SVI("_Static_assert((int(*)(int)).is_callable, \"\");\n"
                "_Static_assert(!(int).is_callable, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection is_variadic", __LINE__,
-            SV("_Static_assert((int(int, ...)).is_variadic, \"\");\n"
+            SVI("_Static_assert((int(int, ...)).is_variadic, \"\");\n"
                "_Static_assert(!(int(int)).is_variadic, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection is_incomplete", __LINE__,
-            SV("struct Fwd;\n"
+            SVI("struct Fwd;\n"
                "_Static_assert((struct Fwd).is_incomplete, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection underlying_type", __LINE__,
-            SV("enum E : unsigned char { X };\n"
+            SVI("enum E : unsigned char { X };\n"
                "_Static_assert((enum E).underlying_type.is_unsigned, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection is_castable_to", __LINE__,
-            SV("_Static_assert((int).is_castable_to(float), \"\");\n"
+            SVI("_Static_assert((int).is_castable_to(float), \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: type introspection is_callable_with", __LINE__,
-            SV("_Static_assert((int(int)).is_callable_with(int), \"\");\n"
+            SVI("_Static_assert((int(int)).is_callable_with(int), \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "atomic: __atomic_load (3-arg)", __LINE__,
-            SV("int x = 42;\n"
+            SVI("int x = 42;\n"
                "int y = 0;\n"
                "__atomic_load(&x, &y, __ATOMIC_SEQ_CST);\n"
                "return y;\n"),
@@ -4476,7 +4476,7 @@ TestFunction(test_interpreter){
         },
         {
             "atomic: __atomic_store (3-arg)", __LINE__,
-            SV("int x = 0;\n"
+            SVI("int x = 0;\n"
                "int val = 99;\n"
                "__atomic_store(&x, &val, __ATOMIC_SEQ_CST);\n"
                "return x;\n"),
@@ -4484,7 +4484,7 @@ TestFunction(test_interpreter){
         },
         {
             "atomic: __atomic_exchange (4-arg)", __LINE__,
-            SV("int x = 10;\n"
+            SVI("int x = 10;\n"
                "int val = 20;\n"
                "int old = 0;\n"
                "__atomic_exchange(&x, &val, &old, __ATOMIC_SEQ_CST);\n"
@@ -4493,19 +4493,19 @@ TestFunction(test_interpreter){
         },
         {
             "atomic: __atomic_thread_fence", __LINE__,
-            SV("__atomic_thread_fence(__ATOMIC_SEQ_CST);\n"
+            SVI("__atomic_thread_fence(__ATOMIC_SEQ_CST);\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "atomic: __atomic_signal_fence", __LINE__,
-            SV("__atomic_signal_fence(__ATOMIC_SEQ_CST);\n"
+            SVI("__atomic_signal_fence(__ATOMIC_SEQ_CST);\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "_InterlockedExchange16", __LINE__,
-            SV("short _InterlockedExchange16(short volatile*, short);\n"
+            SVI("short _InterlockedExchange16(short volatile*, short);\n"
                "short volatile x = 5;\n"
                "short old = _InterlockedExchange16(&x, 10);\n"
                "return old + x;\n"),
@@ -4513,7 +4513,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchangeAdd16", __LINE__,
-            SV("short _InterlockedExchangeAdd16(short volatile*, short);\n"
+            SVI("short _InterlockedExchangeAdd16(short volatile*, short);\n"
                "short volatile x = 10;\n"
                "short old = _InterlockedExchangeAdd16(&x, 5);\n"
                "return old + x;\n"),
@@ -4521,7 +4521,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedCompareExchange16", __LINE__,
-            SV("short _InterlockedCompareExchange16(short volatile*, short, short);\n"
+            SVI("short _InterlockedCompareExchange16(short volatile*, short, short);\n"
                "short volatile x = 10;\n"
                "short old = _InterlockedCompareExchange16(&x, 42, 10);\n"
                "return old + x;\n"),
@@ -4529,7 +4529,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedOr8", __LINE__,
-            SV("char _InterlockedOr8(char volatile*, char);\n"
+            SVI("char _InterlockedOr8(char volatile*, char);\n"
                "char volatile x = 0xF0;\n"
                "char old = _InterlockedOr8(&x, 0x0F);\n"
                "return (unsigned char)old + (unsigned char)x;\n"),
@@ -4537,7 +4537,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedXor8", __LINE__,
-            SV("char _InterlockedXor8(char volatile*, char);\n"
+            SVI("char _InterlockedXor8(char volatile*, char);\n"
                "char volatile x = (char)0xFF;\n"
                "char old = _InterlockedXor8(&x, 0x0F);\n"
                "return (unsigned char)x;\n"),
@@ -4545,7 +4545,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedAnd8", __LINE__,
-            SV("char _InterlockedAnd8(char volatile*, char);\n"
+            SVI("char _InterlockedAnd8(char volatile*, char);\n"
                "char volatile x = (char)0xFF;\n"
                "char old = _InterlockedAnd8(&x, 0x0F);\n"
                "return (unsigned char)x;\n"),
@@ -4553,7 +4553,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedIncrement16", __LINE__,
-            SV("short _InterlockedIncrement16(short volatile*);\n"
+            SVI("short _InterlockedIncrement16(short volatile*);\n"
                "short volatile x = 10;\n"
                "short r = _InterlockedIncrement16(&x);\n"
                "return r + x;\n"),
@@ -4561,7 +4561,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedDecrement16", __LINE__,
-            SV("short _InterlockedDecrement16(short volatile*);\n"
+            SVI("short _InterlockedDecrement16(short volatile*);\n"
                "short volatile x = 10;\n"
                "short r = _InterlockedDecrement16(&x);\n"
                "return r + x;\n"),
@@ -4569,7 +4569,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedIncrement64", __LINE__,
-            SV("long long _InterlockedIncrement64(long long volatile*);\n"
+            SVI("long long _InterlockedIncrement64(long long volatile*);\n"
                "long long volatile x = 10;\n"
                "long long r = _InterlockedIncrement64(&x);\n"
                "return (int)(r + x);\n"),
@@ -4577,7 +4577,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedOr16", __LINE__,
-            SV("short _InterlockedOr16(short volatile*, short);\n"
+            SVI("short _InterlockedOr16(short volatile*, short);\n"
                "short volatile x = 0x00F0;\n"
                "short old = _InterlockedOr16(&x, 0x000F);\n"
                "return (int)(unsigned short)x;\n"),
@@ -4585,7 +4585,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedAnd16", __LINE__,
-            SV("short _InterlockedAnd16(short volatile*, short);\n"
+            SVI("short _InterlockedAnd16(short volatile*, short);\n"
                "short volatile x = (short)0x00FF;\n"
                "short old = _InterlockedAnd16(&x, 0x000F);\n"
                "return (int)(unsigned short)x;\n"),
@@ -4593,7 +4593,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedXor16", __LINE__,
-            SV("short _InterlockedXor16(short volatile*, short);\n"
+            SVI("short _InterlockedXor16(short volatile*, short);\n"
                "short volatile x = (short)0x00FF;\n"
                "short old = _InterlockedXor16(&x, 0x000F);\n"
                "return (int)(unsigned short)x;\n"),
@@ -4601,7 +4601,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedOr64", __LINE__,
-            SV("long long _InterlockedOr64(long long volatile*, long long);\n"
+            SVI("long long _InterlockedOr64(long long volatile*, long long);\n"
                "long long volatile x = 0xF0;\n"
                "long long old = _InterlockedOr64(&x, 0x0F);\n"
                "return (int)x;\n"),
@@ -4609,7 +4609,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedAnd64", __LINE__,
-            SV("long long _InterlockedAnd64(long long volatile*, long long);\n"
+            SVI("long long _InterlockedAnd64(long long volatile*, long long);\n"
                "long long volatile x = 0xFF;\n"
                "long long old = _InterlockedAnd64(&x, 0x0F);\n"
                "return (int)x;\n"),
@@ -4617,7 +4617,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedXor64", __LINE__,
-            SV("long long _InterlockedXor64(long long volatile*, long long);\n"
+            SVI("long long _InterlockedXor64(long long volatile*, long long);\n"
                "long long volatile x = 0xFF;\n"
                "long long old = _InterlockedXor64(&x, 0x0F);\n"
                "return (int)x;\n"),
@@ -4625,7 +4625,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchangeAdd64", __LINE__,
-            SV("long long _InterlockedExchangeAdd64(long long volatile*, long long);\n"
+            SVI("long long _InterlockedExchangeAdd64(long long volatile*, long long);\n"
                "long long volatile x = 10;\n"
                "long long old = _InterlockedExchangeAdd64(&x, 5);\n"
                "return (int)(old + x);\n"),
@@ -4633,7 +4633,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedExchange64", __LINE__,
-            SV("long long _InterlockedExchange64(long long volatile*, long long);\n"
+            SVI("long long _InterlockedExchange64(long long volatile*, long long);\n"
                "long long volatile x = 10;\n"
                "long long old = _InterlockedExchange64(&x, 42);\n"
                "return (int)(old + x);\n"),
@@ -4641,7 +4641,7 @@ TestFunction(test_interpreter){
         },
         {
             "_InterlockedCompareExchange8", __LINE__,
-            SV("char _InterlockedCompareExchange8(char volatile*, char, char);\n"
+            SVI("char _InterlockedCompareExchange8(char volatile*, char, char);\n"
                "char volatile x = 10;\n"
                "char old = _InterlockedCompareExchange8(&x, 42, 10);\n"
                "return old + x;\n"),
@@ -4649,14 +4649,14 @@ TestFunction(test_interpreter){
         },
         {
             "pointer subtraction with array decay", __LINE__,
-            SV("int arr[10];\n"
+            SVI("int arr[10];\n"
                "int *p = arr + 5;\n"
                "return (int)(p - arr);\n"),
             .exit_code = 5,
         },
         {
             "FUCS basic", __LINE__,
-            SV("struct Vec2 { float x; float y; };\n"
+            SVI("struct Vec2 { float x; float y; };\n"
                "float length_sq(struct Vec2* v){ return v->x * v->x + v->y * v->y; }\n"
                "struct Vec2 v = {3.0f, 4.0f};\n"
                "return (int)v.length_sq();\n"),
@@ -4664,7 +4664,7 @@ TestFunction(test_interpreter){
         },
         {
             "pragma typedef auto", __LINE__,
-            SV("#pragma typedef on\n"
+            SVI("#pragma typedef on\n"
                "struct Point { int x; int y; };\n"
                "#pragma typedef off\n"
                "Point p = {3, 4};\n"
@@ -4673,7 +4673,7 @@ TestFunction(test_interpreter){
         },
         {
             "sizeof incomplete array param", __LINE__,
-            SV("int sum(int arr[], int n){\n"
+            SVI("int sum(int arr[], int n){\n"
                "    int s = 0;\n"
                "    for(int i = 0; i < n; i++) s += arr[i];\n"
                "    return s;\n"
@@ -4684,21 +4684,21 @@ TestFunction(test_interpreter){
         },
         {
             "ternary: null pointer branches", __LINE__,
-            SV("int x = 1;\n"
+            SVI("int x = 1;\n"
                "int *p = x ? &x : (void*)0;\n"
                "return *p;\n"),
             .exit_code = 1,
         },
         {
             "ternary: function pointer decay", __LINE__,
-            SV("int f(void) { return 42; }\n"
+            SVI("int f(void) { return 42; }\n"
                "int (*fp)(void) = 1 ? f : f;\n"
                "return fp();\n"),
             .exit_code = 42,
         },
         {
             "function pointer equality with function", __LINE__,
-            SV("int f(void) { return 1; }\n"
+            SVI("int f(void) { return 1; }\n"
                "int g(void) { return 2; }\n"
                "int (*fp)(void) = f;\n"
                "return (fp == f) + (fp != g);\n"),
@@ -4706,35 +4706,35 @@ TestFunction(test_interpreter){
         },
         {
             "pointer add with enum index", __LINE__,
-            SV("enum { IDX = 2 };\n"
+            SVI("enum { IDX = 2 };\n"
                "int arr[3] = {10, 20, 30};\n"
                "return arr[IDX];\n"),
             .exit_code = 30,
         },
         {
             "float: comparison le ge", __LINE__,
-            SV("float a = 1.5f;\n"
+            SVI("float a = 1.5f;\n"
                "float b = 2.5f;\n"
                "return (a <= b) + (b >= a) + (a <= a);\n"),
             .exit_code = 3,
         },
         {
             "double: comparison le ge", __LINE__,
-            SV("double a = 1.5;\n"
+            SVI("double a = 1.5;\n"
                "double b = 2.5;\n"
                "return (a <= b) + (b >= a) + (a <= a);\n"),
             .exit_code = 3,
         },
         {
             "float: mod via cast", __LINE__,
-            SV("float a = 7.5f;\n"
+            SVI("float a = 7.5f;\n"
                "int b = (int)a % 3;\n"
                "return b;\n"),
             .exit_code = 1,
         },
         {
             "struct init brace elision", __LINE__,
-            SV("struct Inner { int a; int b; };\n"
+            SVI("struct Inner { int a; int b; };\n"
                "struct Outer { struct Inner in; int c; };\n"
                "struct Outer o = {1, 2, 3};\n"
                "return o.in.a + o.in.b + o.c;\n"),
@@ -4742,27 +4742,27 @@ TestFunction(test_interpreter){
         },
         {
             "array init unsized", __LINE__,
-            SV("int arr[] = {10, 20, 30, 40, 50};\n"
+            SVI("int arr[] = {10, 20, 30, 40, 50};\n"
                "return sizeof arr / sizeof arr[0];\n"),
             .exit_code = 5,
         },
         {
             "union init first member", __LINE__,
-            SV("union U { int i; float f; };\n"
+            SVI("union U { int i; float f; };\n"
                "union U u = {42};\n"
                "return u.i;\n"),
             .exit_code = 42,
         },
         {
             "union init designated", __LINE__,
-            SV("union U { int i; char c; };\n"
+            SVI("union U { int i; char c; };\n"
                "union U u = {.c = 7};\n"
                "return u.c;\n"),
             .exit_code = 7,
         },
         {
             "nested designated init", __LINE__,
-            SV("struct Inner { int x; int y; };\n"
+            SVI("struct Inner { int x; int y; };\n"
                "struct Outer { struct Inner p; int z; };\n"
                "struct Outer o = {.p.x = 1, .p.y = 2, .z = 3};\n"
                "return o.p.x + o.p.y + o.z;\n"),
@@ -4770,93 +4770,93 @@ TestFunction(test_interpreter){
         },
         {
             "chained array designator", __LINE__,
-            SV("struct S { int arr[3]; };\n"
+            SVI("struct S { int arr[3]; };\n"
                "struct S s = {.arr[1] = 42};\n"
                "return s.arr[0] + s.arr[1] + s.arr[2];\n"),
             .exit_code = 42,
         },
         {
             "sizeof long double", __LINE__,
-            SV("return sizeof(long double) >= 8;\n"),
+            SVI("return sizeof(long double) >= 8;\n"),
             .exit_code = 1,
         },
         {
             "alignas struct member", __LINE__,
-            SV("struct S { alignas(16) int x; int y; };\n"
+            SVI("struct S { alignas(16) int x; int y; };\n"
                "return sizeof(struct S) >= 16;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: comma expression", __LINE__,
-            SV("constexpr int x = (1, 2, 42);\n"
+            SVI("constexpr int x = (1, 2, 42);\n"
                "return x;\n"),
             .exit_code = 42,
         },
         {
             "_Alignas with type", __LINE__,
-            SV("_Alignas(double) int x = 42;\n"
+            SVI("_Alignas(double) int x = 42;\n"
                "return x;\n"),
             .exit_code = 42,
         },
         {
             "signed/unsigned type parsing", __LINE__,
-            SV("signed x = -5;\n"
+            SVI("signed x = -5;\n"
                "unsigned y = 5;\n"
                "return x + (int)y;\n"),
             .exit_code = 0,
         },
         {
             "implicit int return", __LINE__,
-            SV("int f(void);\n"
+            SVI("int f(void);\n"
                "int f(void){ return 42; }\n"
                "return f();\n"),
             .exit_code = 42,
         },
         {
             "sizeof expression not evaluated", __LINE__,
-            SV("int x = 5;\n"
+            SVI("int x = 5;\n"
                "int s = sizeof(x++);\n"
                "return x * 10 + s;\n"),
             .exit_code = 54,
         },
         {
             "string literal comparison", __LINE__,
-            SV("const char* a = \"hello\";\n"
+            SVI("const char* a = \"hello\";\n"
                "const char* b = \"hello\";\n"
                "return a[0] == b[0];\n"),
             .exit_code = 1,
         },
         {
             "double to unsigned cast", __LINE__,
-            SV("double d = 42.7;\n"
+            SVI("double d = 42.7;\n"
                "unsigned u = (unsigned)d;\n"
                "return (int)u;\n"),
             .exit_code = 42,
         },
         {
             "unsigned to double cast", __LINE__,
-            SV("unsigned u = 42;\n"
+            SVI("unsigned u = 42;\n"
                "double d = (double)u;\n"
                "return (int)d;\n"),
             .exit_code = 42,
         },
         {
             "long double arith", __LINE__,
-            SV("long double a = 3.5L;\n"
+            SVI("long double a = 3.5L;\n"
                "long double b = 2.5L;\n"
                "return (int)(a + b);\n"),
             .exit_code = 6,
         },
         {
             "array of structs init", __LINE__,
-            SV("struct P { int x; int y; };\n"
+            SVI("struct P { int x; int y; };\n"
                "struct P arr[] = {{1,2},{3,4},{5,6}};\n"
                "return arr[0].x + arr[1].y + arr[2].x;\n"),
             .exit_code = 10,
         },
         {
             "switch: char value", __LINE__,
-            SV("char c = 'B';\n"
+            SVI("char c = 'B';\n"
                "switch(c){\n"
                "    case 'A': return 1;\n"
                "    case 'B': return 2;\n"
@@ -4867,144 +4867,144 @@ TestFunction(test_interpreter){
         },
         {
             "nested array init designator", __LINE__,
-            SV("int m[2][3] = {[1] = {4, 5, 6}};\n"
+            SVI("int m[2][3] = {[1] = {4, 5, 6}};\n"
                "return m[0][0] + m[1][0] + m[1][2];\n"),
             .exit_code = 10,
         },
         {
             "enum: implicit conversion to int", __LINE__,
-            SV("enum E { A = 1, B = 2, C = 3 };\n"
+            SVI("enum E { A = 1, B = 2, C = 3 };\n"
                "int x = A + B + C;\n"
                "return x;\n"),
             .exit_code = 6,
         },
         {
             "sizeof enum", __LINE__,
-            SV("enum E { X };\n"
+            SVI("enum E { X };\n"
                "return sizeof(enum E) == sizeof(int);\n"),
             .exit_code = 1,
         },
         {
             "constexpr: comma expression in static_assert", __LINE__,
-            SV("_Static_assert((0, 1), \"\");\n"
+            SVI("_Static_assert((0, 1), \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: double to unsigned cast", __LINE__,
-            SV("constexpr unsigned a = (unsigned)42.7;\n"
+            SVI("constexpr unsigned a = (unsigned)42.7;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: unsigned to float cast", __LINE__,
-            SV("constexpr float f = (float)42u;\n"
+            SVI("constexpr float f = (float)42u;\n"
                "return (int)f;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: long long to unsigned cast", __LINE__,
-            SV("constexpr unsigned a = (unsigned)42ll;\n"
+            SVI("constexpr unsigned a = (unsigned)42ll;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: unsigned long long to int cast", __LINE__,
-            SV("constexpr int a = (int)42ull;\n"
+            SVI("constexpr int a = (int)42ull;\n"
                "return a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: char to int cast", __LINE__,
-            SV("constexpr int a = (int)'A';\n"
+            SVI("constexpr int a = (int)'A';\n"
                "return a;\n"),
             .exit_code = 65,
         },
         {
             "constexpr: float to unsigned long long cast", __LINE__,
-            SV("constexpr unsigned long long a = (unsigned long long)42.5f;\n"
+            SVI("constexpr unsigned long long a = (unsigned long long)42.5f;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: int to unsigned long long cast", __LINE__,
-            SV("constexpr unsigned long long a = (unsigned long long)42;\n"
+            SVI("constexpr unsigned long long a = (unsigned long long)42;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: unsigned to long long cast", __LINE__,
-            SV("constexpr long long a = (long long)42u;\n"
+            SVI("constexpr long long a = (long long)42u;\n"
                "return (int)a;\n"),
             .exit_code = 42,
         },
         {
             "constexpr: logical not unsigned", __LINE__,
-            SV("constexpr int a = !0u;\n"
+            SVI("constexpr int a = !0u;\n"
                "constexpr int b = !1u;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: logical not long long", __LINE__,
-            SV("constexpr int a = !0ll;\n"
+            SVI("constexpr int a = !0ll;\n"
                "constexpr int b = !1ll;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: logical not unsigned long long", __LINE__,
-            SV("constexpr int a = !0ull;\n"
+            SVI("constexpr int a = !0ull;\n"
                "constexpr int b = !1ull;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: logical not double", __LINE__,
-            SV("constexpr int a = !0.0;\n"
+            SVI("constexpr int a = !0.0;\n"
                "constexpr int b = !1.0;\n"
                "return a * 10 + b;\n"),
             .exit_code = 10,
         },
         {
             "constexpr: negation long long", __LINE__,
-            SV("constexpr long long a = -42ll;\n"
+            SVI("constexpr long long a = -42ll;\n"
                "return (int)a + 100;\n"),
             .exit_code = 58,
         },
         {
             "constexpr: negation unsigned long long", __LINE__,
-            SV("constexpr unsigned long long a = -1ull;\n"
+            SVI("constexpr unsigned long long a = -1ull;\n"
                "return a > 100ull;\n"),
             .exit_code = 1,
         },
         {
             "constexpr: bitwise not int", __LINE__,
-            SV("constexpr int a = ~0xFF;\n"
+            SVI("constexpr int a = ~0xFF;\n"
                "return a & 0xFF;\n"),
             .exit_code = 0,
         },
         {
             "constexpr: bitwise not unsigned", __LINE__,
-            SV("constexpr unsigned a = ~0xFFu;\n"
+            SVI("constexpr unsigned a = ~0xFFu;\n"
                "return (int)(a & 0xFFu);\n"),
             .exit_code = 0,
         },
         {
             "constexpr: bitwise not long long", __LINE__,
-            SV("constexpr long long a = ~0xFFll;\n"
+            SVI("constexpr long long a = ~0xFFll;\n"
                "return (int)(a & 0xFFll);\n"),
             .exit_code = 0,
         },
         {
             "constexpr: bitwise not unsigned long long", __LINE__,
-            SV("constexpr unsigned long long a = ~0xFFull;\n"
+            SVI("constexpr unsigned long long a = ~0xFFull;\n"
                "return (int)(a & 0xFFull);\n"),
             .exit_code = 0,
         },
         {
             "static_assert: int32 all binary ops", __LINE__,
-            SV("_Static_assert(100 - 58 == 42, \"\");\n"
+            SVI("_Static_assert(100 - 58 == 42, \"\");\n"
                "_Static_assert(6 * 7 == 42, \"\");\n"
                "_Static_assert(84 / 2 == 42, \"\");\n"
                "_Static_assert(85 % 43 == 42, \"\");\n"
@@ -5022,79 +5022,79 @@ TestFunction(test_interpreter){
         },
         {
             "u8 string multi-byte char", __LINE__,
-            SV("unsigned char s[] = u8\"\\u00E9\";\n"
+            SVI("unsigned char s[] = u8\"\\u00E9\";\n"
                "return s[0] == 0xC3 && s[1] == 0xA9;\n"),
             .exit_code = 1,
         },
         {
             "u8 string 3-byte char", __LINE__,
-            SV("unsigned char s[] = u8\"\\u1234\";\n"
+            SVI("unsigned char s[] = u8\"\\u1234\";\n"
                "return s[0] == 0xE1 && s[1] == 0x88 && s[2] == 0xB4;\n"),
             .exit_code = 1,
         },
         {
             "u8 string 4-byte char", __LINE__,
-            SV("unsigned char s[] = u8\"\\U0001F600\";\n"
+            SVI("unsigned char s[] = u8\"\\U0001F600\";\n"
                "return s[0] == 0xF0 && s[1] == 0x9F && s[2] == 0x98 && s[3] == 0x80;\n"),
             .exit_code = 1,
         },
         {
             "u string surrogate pair", __LINE__,
-            SV("unsigned short s[] = u\"\\U0001F600\";\n"
+            SVI("unsigned short s[] = u\"\\U0001F600\";\n"
                "return s[0] == 0xD83D && s[1] == 0xDE00;\n"),
             .exit_code = 1,
         },
         {
             "L string multi-char", __LINE__,
-            SV("int s[] = L\"\\u00E9\\u1234\";\n"
+            SVI("int s[] = L\"\\u00E9\\u1234\";\n"
                "return s[0] == 0xE9 && s[1] == 0x1234;\n"),
             .exit_code = 1,
         },
         {
             "U string high codepoints", __LINE__,
-            SV("unsigned int s[] = U\"\\U0001F600\\u00E9\";\n"
+            SVI("unsigned int s[] = U\"\\U0001F600\\u00E9\";\n"
                "return s[0] == 0x1F600 && s[1] == 0xE9;\n"),
             .exit_code = 1,
         },
         {
             "string octal escape", __LINE__,
-            SV("char s[] = \"\\101\\102\\103\";\n"
+            SVI("char s[] = \"\\101\\102\\103\";\n"
                "return s[0] == 'A' && s[1] == 'B' && s[2] == 'C';\n"),
             .exit_code = 1,
         },
         {
             "string hex escape", __LINE__,
-            SV("char s[] = \"\\x41\\x42\\x43\";\n"
+            SVI("char s[] = \"\\x41\\x42\\x43\";\n"
                "return s[0] == 'A' && s[1] == 'B' && s[2] == 'C';\n"),
             .exit_code = 1,
         },
         {
             "string all basic escapes", __LINE__,
-            SV("char s[] = \"\\a\\b\\f\\n\\r\\t\\v\\\\\\'\\\"\\?\";\n"
+            SVI("char s[] = \"\\a\\b\\f\\n\\r\\t\\v\\\\\\'\\\"\\?\";\n"
                "return s[0] == 7 && s[1] == 8 && s[2] == 12 && s[3] == 10;\n"),
             .exit_code = 1,
         },
         {
             "u16 string hex content", __LINE__,
-            SV("unsigned short s[] = u\"\\x41\\x42\";\n"
+            SVI("unsigned short s[] = u\"\\x41\\x42\";\n"
                "return s[0] == 0x41 && s[1] == 0x42;\n"),
             .exit_code = 1,
         },
         {
             "u32 string hex content", __LINE__,
-            SV("unsigned int s[] = U\"\\x41\\x42\";\n"
+            SVI("unsigned int s[] = U\"\\x41\\x42\";\n"
                "return s[0] == 0x41 && s[1] == 0x42;\n"),
             .exit_code = 1,
         },
         {
             "wchar string hex content", __LINE__,
-            SV("int s[] = L\"\\x41\\x42\";\n"
+            SVI("int s[] = L\"\\x41\\x42\";\n"
                "return s[0] == 0x41 && s[1] == 0x42;\n"),
             .exit_code = 1,
         },
         {
             "static_assert: uint32 all binary ops", __LINE__,
-            SV("_Static_assert(100u - 58u == 42u, \"\");\n"
+            SVI("_Static_assert(100u - 58u == 42u, \"\");\n"
                "_Static_assert(6u * 7u == 42u, \"\");\n"
                "_Static_assert(84u / 2u == 42u, \"\");\n"
                "_Static_assert(85u % 43u == 42u, \"\");\n"
@@ -5199,7 +5199,7 @@ TestFunction(test_cross_target){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    struct tc {
+    static struct tc {
         const char* name; int line;
         StringView program;
         int exit_code;
@@ -5208,7 +5208,7 @@ TestFunction(test_cross_target){
     } testcases[] = {
         {
             "sysv va_list param", __LINE__,
-            SV(
+            SVI(
                "#define va_start __builtin_va_start\n"
                "#define va_arg __builtin_va_arg\n"
                "#define va_end __builtin_va_end\n"
@@ -5235,7 +5235,7 @@ TestFunction(test_cross_target){
         },
         {
             "sysv va_copy param", __LINE__,
-            SV(
+            SVI(
                "#define va_start __builtin_va_start\n"
                "#define va_arg __builtin_va_arg\n"
                "#define va_end __builtin_va_end\n"
@@ -5265,7 +5265,7 @@ TestFunction(test_cross_target){
         },
         {
             "aarch64 linux va_list param", __LINE__,
-            SV(
+            SVI(
                "#define va_start __builtin_va_start\n"
                "#define va_arg __builtin_va_arg\n"
                "#define va_end __builtin_va_end\n"
@@ -5291,101 +5291,101 @@ TestFunction(test_cross_target){
         },
         {
             "windows sizeof long", __LINE__,
-            SV("return sizeof(long);\n"),
+            SVI("return sizeof(long);\n"),
             .exit_code = 4,
             .target = CC_TARGET_X86_64_WINDOWS,
         },
         {
             "linux sizeof long", __LINE__,
-            SV("return sizeof(long);\n"),
+            SVI("return sizeof(long);\n"),
             .exit_code = 8,
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "windows struct layout with long", __LINE__,
-            SV("typedef struct { char c; long x; } S;\n"
+            SVI("typedef struct { char c; long x; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // 1 + 3 pad + 4
             .target = CC_TARGET_X86_64_WINDOWS,
         },
         {
             "linux struct layout with long", __LINE__,
-            SV("typedef struct { char c; long x; } S;\n"
+            SVI("typedef struct { char c; long x; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 16, // 1 + 7 pad + 8
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "aarch64 linux char unsigned", __LINE__,
-            SV("char c = 255;\n"
+            SVI("char c = 255;\n"
                "return c > 0;\n"),
             .exit_code = 1,
             .target = CC_TARGET_AARCH64_LINUX,
         },
         {
             "x86_64 linux char signed", __LINE__,
-            SV("char c = 255;\n"
+            SVI("char c = 255;\n"
                "return c < 0;\n"),
             .exit_code = 1,
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "windows long overflow", __LINE__,
-            SV("unsigned long x = 0xFFFFFFFF;\n"
+            SVI("unsigned long x = 0xFFFFFFFF;\n"
                "return (x + 1) == 0;\n"),
             .exit_code = 1, // 32-bit wraps
             .target = CC_TARGET_X86_64_WINDOWS,
         },
         {
             "linux long no overflow", __LINE__,
-            SV("unsigned long x = 0xFFFFFFFF;\n"
+            SVI("unsigned long x = 0xFFFFFFFF;\n"
                "return (x + 1) == 0x100000000;\n"),
             .exit_code = 1, // 64-bit doesn't wrap
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "aarch64 macos sizeof long double", __LINE__,
-            SV("return sizeof(long double);\n"),
+            SVI("return sizeof(long double);\n"),
             .exit_code = 8,
             .target = CC_TARGET_AARCH64_MACOS,
         },
         {
             "x86_64 linux sizeof long double", __LINE__,
-            SV("return sizeof(long double);\n"),
+            SVI("return sizeof(long double);\n"),
             .exit_code = 16,
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "windows sizeof size_t", __LINE__,
-            SV("return sizeof(__SIZE_TYPE__);\n"),
+            SVI("return sizeof(__SIZE_TYPE__);\n"),
             .exit_code = 8, // unsigned long long is 8
             .target = CC_TARGET_X86_64_WINDOWS,
         },
         // MSVC bitfield: different types don't share storage units
         {
             "msvc bitfield layout", __LINE__,
-            SV("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // short unit (2) + pad(2) + int unit (4)
             .target = CC_TARGET_X86_64_WINDOWS,
         },
         {
             "sysv bitfield layout", __LINE__,
-            SV("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 4, // both fit in one 4-byte unit
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "enum", __LINE__,
-            SV("enum Foo { X } ; typedef struct { enum Foo f : 8; unsigned int b: 8; } S;\n"
+            SVI("enum Foo { X } ; typedef struct { enum Foo f : 8; unsigned int b: 8; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 4, // enum then both fit in one 4-byte unit
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "msvc bitfield typed enum packs with underlying", __LINE__,
-            SV("enum A : unsigned int { A_VAL = 1 };\n"
+            SVI("enum A : unsigned int { A_VAL = 1 };\n"
                "enum B : unsigned int { B_VAL = 2 };\n"
                "typedef struct { enum A a: 4; unsigned int b: 1; enum B c: 1; } S;\n"
                "return sizeof(S);\n"),
@@ -5394,7 +5394,7 @@ TestFunction(test_cross_target){
         },
         {
             "msvc bitfield diff size enum starts new unit", __LINE__,
-            SV("enum A : unsigned short { A_VAL = 1 };\n"
+            SVI("enum A : unsigned short { A_VAL = 1 };\n"
                "typedef struct { enum A a: 4; unsigned int b: 1; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // short(2) + pad(2) + int(4)
@@ -5402,31 +5402,31 @@ TestFunction(test_cross_target){
         },
         {
             "alignof", __LINE__,
-            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 16,
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
             "alignof", __LINE__,
-            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 16,
             .target = CC_TARGET_AARCH64_LINUX,
         },
         {
             "alignof", __LINE__,
-            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 16,
             .target = CC_TARGET_X86_64_MACOS,
         },
         {
             "alignof", __LINE__,
-            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 8,
             .target = CC_TARGET_AARCH64_MACOS,
         },
         {
             "alignof", __LINE__,
-            SV("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 8,
             .target = CC_TARGET_X86_64_WINDOWS,
         },
