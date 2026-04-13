@@ -65,7 +65,7 @@ static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nul
 static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
-static int cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc);
+static int cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc);
 static void cc_print_type(MStringBuilder*, CcQualType t);
 static CcExpr* _Nullable cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type);
 static CcExpr* _Nullable cc_int64_expr(CcParser* p, SrcLoc loc, CcQualType type, int64_t);
@@ -376,31 +376,7 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
 static
 _Bool
 cc_explicit_castable(CcQualType from, CcQualType to){
-    if(from.bits == to.bits) return 1;
-    if(ccqt_is_basic(to) && to.basic.kind == CCBT_void) return 1;
-    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
-    if(fk == CC_ENUM){
-        from = ccqt_as_enum(from)->underlying;
-        fk = ccqt_kind(from);
-    }
-    if(tk == CC_ENUM){
-        to = ccqt_as_enum(to)->underlying;
-        tk = ccqt_kind(to);
-    }
-    if(tk == CC_ARRAY || tk == CC_FUNCTION) return 0;
-    if(tk == CC_STRUCT || tk == CC_UNION)
-        return from.ptr == to.ptr;
-    if(fk == CC_STRUCT || fk == CC_UNION) return 0;
-    if(fk == CC_BASIC && from.basic.kind == CCBT_void) return 0;
-    _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind));
-    _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(to.basic.kind));
-    if(f_arith && t_arith) return 1;
-    _Bool f_ptr = fk == CC_POINTER || (fk == CC_ARRAY && !ccqt_as_array(from)->is_vector) || fk == CC_FUNCTION || (fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t);
-    _Bool t_ptr = tk == CC_POINTER || (tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t);
-    if(f_ptr && t_ptr) return 1;
-    if(f_ptr && (tk == CC_BASIC && ccbt_is_integer(to.basic.kind))) return 1;
-    if(fk == CC_BASIC && ccbt_is_integer(from.basic.kind) && t_ptr) return 1;
-    return 0;
+    return cc_check_cast(0, from, to, (SrcLoc){0}) == 0;
 }
 
 static
@@ -645,47 +621,53 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     return 0;
 }
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnullable-to-nonnull-conversion"
+#endif
 static
 int
-cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
+cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc){
+    if(from.bits == to.bits) return 0;
     if(ccqt_is_basic(to) && to.basic.kind == CCBT_void) return 0;
-    CcTypeKind to_kind = ccqt_kind(to);
-    CcTypeKind from_kind = ccqt_kind(from);
-    if(to_kind == CC_ENUM){
-        to = ccqt_as_enum(to)->underlying;
-        to_kind = ccqt_kind(to);
+    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
+    if(fk == CC_ENUM){ from = ccqt_as_enum(from)->underlying; fk = ccqt_kind(from); }
+    if(tk == CC_ENUM){ to   = ccqt_as_enum(to)->underlying;   tk = ccqt_kind(to);   }
+    if(tk == CC_ARRAY){
+        if(p) cc_error(p, loc, "cannot cast to array type");
+        return CC_SYNTAX_ERROR;
     }
-    if(from_kind == CC_ENUM){
-        from = ccqt_as_enum(from)->underlying;
-        from_kind = ccqt_kind(from);
+    if(tk == CC_FUNCTION){
+        if(p) cc_error(p, loc, "cannot cast to function type");
+        return CC_SYNTAX_ERROR;
     }
-    if(to_kind == CC_ARRAY)
-        return cc_error(p, loc, "cannot cast to array type");
-    if(to_kind == CC_FUNCTION)
-        return cc_error(p, loc, "cannot cast to function type");
-    if(to_kind == CC_STRUCT || to_kind == CC_UNION){
-        if(from.ptr == to.ptr)
-            return 0;
-        return cc_error(p, loc, "cannot cast to struct or union type");
+    if(tk == CC_STRUCT || tk == CC_UNION){
+        if(from.ptr == to.ptr) return 0;
+        if(p) cc_error(p, loc, "cannot cast to struct or union type");
+        return CC_SYNTAX_ERROR;
     }
-    if(from_kind == CC_STRUCT || from_kind == CC_UNION)
-        return cc_error(p, loc, "cannot cast from struct or union type");
-    if(from_kind == CC_BASIC && from.basic.kind == CCBT_void)
-        return cc_error(p, loc, "cannot cast from void");
-    _Bool from_arith = from_kind == CC_BASIC && ccbt_is_arithmetic(from.basic.kind);
-    _Bool to_arith = to_kind == CC_BASIC && ccbt_is_arithmetic(to.basic.kind);
-    if(from_arith && to_arith)
-        return 0;
-    _Bool from_ptr = from_kind == CC_POINTER || (from_kind == CC_ARRAY && !ccqt_as_array(from)->is_vector) || from_kind == CC_FUNCTION || (from_kind == CC_BASIC && from.basic.kind == CCBT_nullptr_t);
-    _Bool to_ptr = to_kind == CC_POINTER || (to_kind == CC_BASIC && to.basic.kind == CCBT_nullptr_t);
-    if(from_ptr && to_ptr)
-        return 0;
-    if(from_ptr && to_kind == CC_BASIC && ccbt_is_integer(to.basic.kind))
-        return 0;
-    if(to_ptr && from_kind == CC_BASIC && ccbt_is_integer(from.basic.kind))
-        return 0;
-    return cc_error(p, loc, "invalid cast");
+    if(fk == CC_STRUCT || fk == CC_UNION){
+        if(p) cc_error(p, loc, "cannot cast from struct or union type");
+        return CC_SYNTAX_ERROR;
+    }
+    if(fk == CC_BASIC && from.basic.kind == CCBT_void){
+        if(p) cc_error(p, loc, "cannot cast from void");
+        return CC_SYNTAX_ERROR;
+    }
+    _Bool f_arith = fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind);
+    _Bool t_arith = tk == CC_BASIC && ccbt_is_arithmetic(to.basic.kind);
+    if(f_arith && t_arith) return 0;
+    _Bool f_ptr = fk == CC_POINTER || (fk == CC_ARRAY && !ccqt_as_array(from)->is_vector) || fk == CC_FUNCTION || (fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t);
+    _Bool t_ptr = tk == CC_POINTER || (tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t);
+    if(f_ptr && t_ptr) return 0;
+    if(f_ptr && tk == CC_BASIC && ccbt_is_integer(to.basic.kind)) return 0;
+    if(t_ptr && fk == CC_BASIC && ccbt_is_integer(from.basic.kind)) return 0;
+    if(p) cc_error(p, loc, "invalid cast");
+    return CC_SYNTAX_ERROR;
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 static
 int

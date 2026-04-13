@@ -4046,7 +4046,18 @@ TestFunction(test_parse_decls){
                 {SVI("b"), SVI("struct Bar"), SVI("{@0 = 1, @4 = 2}")},
                 {SVI("pf"), SVI("struct Foo *"), SVI("(struct Foo *)&b")},
             },
-        }
+        },
+        {
+            "struct/union cast ok", __LINE__,
+            SVI("struct Foo {int x;};\n"
+                "struct Foo f = (struct Foo)(struct Foo){1};\n"
+                "union U {int x;};\n"
+                "union U u = (union U)(union U){1};\n"),
+            .vars = {
+                {SVI("f"), SVI("struct Foo"), SVI("(struct Foo)(struct Foo){1}")},
+                {SVI("u"), SVI("union U"), SVI("(union U)(union U){1}")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -5612,6 +5623,46 @@ TestFunction(test_parse_errors){
             "arithmetic with void", __LINE__,
             SVI("int x = (void)1 << 1;\n"),
             SVI("(test):1:17: error: integer promotion of void\n"),
+        },
+        {
+            "array cast", __LINE__,
+            SVI("(int[2])1;\n"),
+            SVI("(test):1:1: error: cannot cast to array type\n"),
+        },
+        {
+            "func cast", __LINE__,
+            SVI("(int(int))1;\n"),
+            SVI("(test):1:1: error: cannot cast to function type\n"),
+        },
+        {
+            "struct cast", __LINE__,
+            SVI("(struct{int x;})1;\n"),
+            SVI("(test):1:1: error: cannot cast to struct or union type\n"),
+        },
+        {
+            "union cast", __LINE__,
+            SVI("(union{int x;})1;\n"),
+            SVI("(test):1:1: error: cannot cast to struct or union type\n"),
+        },
+        {
+            "void cast", __LINE__,
+            SVI("(int)(void)1;\n"),
+            SVI("(test):1:1: error: cannot cast from void\n"),
+        },
+        {
+            "int from struct cast", __LINE__,
+            SVI("(int)(struct {int x;}){1};\n"),
+            SVI("(test):1:1: error: cannot cast from struct or union type\n"),
+        },
+        {
+            "int from union cast", __LINE__,
+            SVI("(int)(union {int x;}){1};\n"),
+            SVI("(test):1:1: error: cannot cast from struct or union type\n"),
+        },
+        {
+            "pointer from float", __LINE__,
+            SVI("(int*)1.f;\n"),
+            SVI("(test):1:1: error: invalid cast\n"),
         },
     };
     static int idx = 0;
