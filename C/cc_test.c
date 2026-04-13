@@ -3137,6 +3137,68 @@ TestFunction(test_parse_decls){
                 {SVI("p"), SVI("const struct P")},
             },
         },
+        {
+            "constexpr float", __LINE__,
+              SVI("constexpr float g = (float)42;\n"
+                  "_Static_assert((int)g == 42);\n"
+                  "_Static_assert(g == 42.f);\n"
+                  "_Static_assert(g == 42.);\n"
+                  "_Static_assert(g == 41.f+1);\n"
+                  "_Static_assert(g == 41.f+(unsigned)1);\n"
+                  "_Static_assert(g == 41.f+(short)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned short)1);\n"
+                  "_Static_assert(g == 41.f+(char)1);\n"
+                  "_Static_assert(g == 41.f+(signed char)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned char)1);\n"
+                  "_Static_assert(g == 41.f+(long)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned long)1);\n"
+                  "_Static_assert(g == 41.f+(long long)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned long long)1);\n"
+                  "_Static_assert(g == 41.+1);\n"
+                  "_Static_assert(g == 41.+(unsigned)1);\n"
+                  "_Static_assert(g == 41.+(short)1);\n"
+                  "_Static_assert(g == 41.+(unsigned short)1);\n"
+                  "_Static_assert(g == 41.+(char)1);\n"
+                  "_Static_assert(g == 41.+(signed char)1);\n"
+                  "_Static_assert(g == 41.+(unsigned char)1);\n"
+                  "_Static_assert(g == 41.+(long)1);\n"
+                  "_Static_assert(g == 41.+(unsigned long)1);\n"
+                  "_Static_assert(g == 41.+(long long)1);\n"
+                  "_Static_assert(g == 41.+(unsigned long long)1);\n"),
+              .vars = {
+                  {SVI("g"), SVI("const float"), SVI("(float)42")},
+              },
+        },
+        {
+            "constexpr double", __LINE__,
+              SVI("constexpr double g = (double)42;\n"
+                  "_Static_assert((int)g == 42);\n"
+                  "_Static_assert(g == 42.);\n"
+                  "_Static_assert(g == 42.f);\n"
+                  "_Static_assert(g == 41.+(unsigned)1);\n"
+                  "_Static_assert(g == 41.+(short)1);\n"
+                  "_Static_assert(g == 41.+(unsigned short)1);\n"
+                  "_Static_assert(g == 41.+(char)1);\n"
+                  "_Static_assert(g == 41.+(signed char)1);\n"
+                  "_Static_assert(g == 41.+(unsigned char)1);\n"
+                  "_Static_assert(g == 41.+(long)1);\n"
+                  "_Static_assert(g == 41.+(unsigned long)1);\n"
+                  "_Static_assert(g == 41.+(long long)1);\n"
+                  "_Static_assert(g == 41.+(unsigned long long)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned)1);\n"
+                  "_Static_assert(g == 41.f+(short)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned short)1);\n"
+                  "_Static_assert(g == 41.f+(char)1);\n"
+                  "_Static_assert(g == 41.f+(signed char)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned char)1);\n"
+                  "_Static_assert(g == 41.f+(long)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned long)1);\n"
+                  "_Static_assert(g == 41.f+(long long)1);\n"
+                  "_Static_assert(g == 41.f+(unsigned long long)1);\n"),
+              .vars = {
+                  {SVI("g"), SVI("const double"), SVI("(double)42")},
+              },
+        },
         // printf format checking: valid cases
         {
             "printf: basic %d", __LINE__,
