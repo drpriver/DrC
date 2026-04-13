@@ -5412,8 +5412,7 @@ TestFunction(test_parse_errors){
             "redef typedef as enumerator", __LINE__,
             SVI("typedef int X;\n"
                 "enum {X};\n"),
-            SVI("(test):2:7: error: idk\n"),
-            .skip = 1,
+            SVI("(test):2:7: error: Redefinition of 'X' as a different kind of symbol\n"),
         },
         {
             "local redef typedef as var", __LINE__,

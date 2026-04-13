@@ -8209,11 +8209,16 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                 goto enum_err;
             }
             Atom ename = tok.ident.ident;
-            SrcLoc eloc = tok.loc;
-            if(cc_scope_lookup_enumerator(p->current, ename, CC_SCOPE_NO_WALK)){
-                err = cc_error(p, eloc, "Redefinition of enumerator '%s'", ename->data);
+            CcSymbol sym;
+            _Bool found = cc_scope_lookup_symbol(p->current, ename, CC_SCOPE_NO_WALK, &sym);
+            if(found){
+                if(sym.kind == CC_SYM_ENUMERATOR)
+                    err = cc_error(p, tok.loc, "Redefinition of enumerator '%s'", ename->data);
+                else
+                    err = cc_error(p, tok.loc, "Redefinition of '%s' as a different kind of symbol", ename->data);
                 goto enum_err;
             }
+            SrcLoc eloc = tok.loc;
             // Optional attributes after enumerator name
             {
                 CcAttributes enumerator_attrs = {0};
