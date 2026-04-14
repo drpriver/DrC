@@ -4198,8 +4198,6 @@ static CppPragmaFn cpp_builtin_pragma_once,
                    cpp_builtin_pragma_framework_path
                    ;
 
-// Define a macro that expands to a type name from a CcBasicTypeKind.
-// E.g. CCBT_unsigned_long -> "long unsigned int" (3 identifier tokens).
 static
 int
 cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
@@ -4324,70 +4322,6 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
     return cpp_define_obj_macro(cpp, name, toks, ntoks);
 }
 
-// Helper: return the unsigned counterpart of a basic type kind.
-static
-CcBasicTypeKind
-ccbt_unsigned_of(CcBasicTypeKind kind){
-    switch(kind){
-        case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: return CCBT_unsigned_char;
-        case CCBT_short: case CCBT_unsigned_short: return CCBT_unsigned_short;
-        case CCBT_int: case CCBT_unsigned: return CCBT_unsigned;
-        case CCBT_long: case CCBT_unsigned_long: return CCBT_unsigned_long;
-        case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_unsigned_long_long;
-        case CCBT_INVALID:
-        case CCBT_void:
-        case CCBT_bool:
-        case CCBT_int128:
-        case CCBT_unsigned_int128:
-        case CCBT_float16:
-        case CCBT_float:
-        case CCBT_double:
-        case CCBT_long_double:
-        case CCBT_float128:
-        case CCBT_float_complex:
-        case CCBT_double_complex:
-        case CCBT_long_double_complex:
-        case CCBT_nullptr_t:
-        case CCBT__Type:
-        case CCBT_COUNT:
-            return kind;
-        CASES_EXHAUSTED;
-    }
-}
-
-// Helper: return the signed counterpart of a basic type kind.
-static
-CcBasicTypeKind
-ccbt_signed_of(CcBasicTypeKind kind){
-    switch(kind){
-        case CCBT_char: case CCBT_signed_char: case CCBT_unsigned_char: return CCBT_signed_char;
-        case CCBT_short: case CCBT_unsigned_short: return CCBT_short;
-        case CCBT_int: case CCBT_unsigned: return CCBT_int;
-        case CCBT_long: case CCBT_unsigned_long: return CCBT_long;
-        case CCBT_long_long: case CCBT_unsigned_long_long: return CCBT_long_long;
-        case CCBT_INVALID:
-        case CCBT_void:
-        case CCBT_bool:
-        case CCBT_int128:
-        case CCBT_unsigned_int128:
-        case CCBT_float16:
-        case CCBT_float:
-        case CCBT_double:
-        case CCBT_long_double:
-        case CCBT_float128:
-        case CCBT_float_complex:
-        case CCBT_double_complex:
-        case CCBT_long_double_complex:
-        case CCBT_nullptr_t:
-        case CCBT__Type:
-        case CCBT_COUNT:
-            return kind;
-        CASES_EXHAUSTED;
-    }
-}
-
-// Helper: return the integer literal suffix for a basic type kind.
-// E.g. CCBT_long -> "L", CCBT_unsigned_long_long -> "ULL"
 static
 const char*
 ccbt_literal_suffix(CcBasicTypeKind kind){
@@ -4534,7 +4468,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFTYPE("__MAX_ALIGN_TYPE__",  t.max_align_type);
     DEFTYPE("__WINT_TYPE__",       t.wint_type);
     DEFTYPE("__INTMAX_TYPE__",     t.intmax_type);
-    DEFTYPE("__UINTMAX_TYPE__",    ccbt_unsigned_of(t.intmax_type));
+    DEFTYPE("__UINTMAX_TYPE__",    ccbt_to_unsigned(t.intmax_type));
     DEFTYPE("__SIG_ATOMIC_TYPE__", t.sig_atomic_type);
     DEFTYPE("__INT8_TYPE__",       CCBT_signed_char);
     DEFTYPE("__INT16_TYPE__",      CCBT_short);
@@ -4544,7 +4478,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFTYPE("__UINT8_TYPE__",      CCBT_unsigned_char);
     DEFTYPE("__UINT16_TYPE__",     CCBT_unsigned_short);
     DEFTYPE("__UINT32_TYPE__",     CCBT_unsigned);
-    DEFTYPE("__UINT64_TYPE__",     ccbt_unsigned_of(t.int64_type));
+    DEFTYPE("__UINT64_TYPE__",     ccbt_to_unsigned(t.int64_type));
     DEFTYPE("__UINT128_TYPE__",     CCBT_unsigned_int128);
     DEFTYPE("__INT_LEAST8_TYPE__",  CCBT_signed_char);
     DEFTYPE("__INT_LEAST16_TYPE__", CCBT_short);
@@ -4553,17 +4487,17 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFTYPE("__UINT_LEAST8_TYPE__",  CCBT_unsigned_char);
     DEFTYPE("__UINT_LEAST16_TYPE__", CCBT_unsigned_short);
     DEFTYPE("__UINT_LEAST32_TYPE__", CCBT_unsigned);
-    DEFTYPE("__UINT_LEAST64_TYPE__", ccbt_unsigned_of(t.int64_type));
+    DEFTYPE("__UINT_LEAST64_TYPE__", ccbt_to_unsigned(t.int64_type));
     DEFTYPE("__INTPTR_TYPE__",     t.intptr_type);
-    DEFTYPE("__UINTPTR_TYPE__",    ccbt_unsigned_of(t.intptr_type));
+    DEFTYPE("__UINTPTR_TYPE__",    ccbt_to_unsigned(t.intptr_type));
     DEFTYPE("__INT_FAST8_TYPE__",   t.int_fast8_type);
     DEFTYPE("__INT_FAST16_TYPE__",  t.int_fast16_type);
     DEFTYPE("__INT_FAST32_TYPE__",  t.int_fast32_type);
     DEFTYPE("__INT_FAST64_TYPE__",  t.int_fast64_type);
-    DEFTYPE("__UINT_FAST8_TYPE__",  ccbt_unsigned_of(t.int_fast8_type));
-    DEFTYPE("__UINT_FAST16_TYPE__", ccbt_unsigned_of(t.int_fast16_type));
-    DEFTYPE("__UINT_FAST32_TYPE__", ccbt_unsigned_of(t.int_fast32_type));
-    DEFTYPE("__UINT_FAST64_TYPE__", ccbt_unsigned_of(t.int_fast64_type));
+    DEFTYPE("__UINT_FAST8_TYPE__",  ccbt_to_unsigned(t.int_fast8_type));
+    DEFTYPE("__UINT_FAST16_TYPE__", ccbt_to_unsigned(t.int_fast16_type));
+    DEFTYPE("__UINT_FAST32_TYPE__", ccbt_to_unsigned(t.int_fast32_type));
+    DEFTYPE("__UINT_FAST64_TYPE__", ccbt_to_unsigned(t.int_fast64_type));
     // msvc fixed size types
     DEFTYPE("__int8",              CCBT_char);
     DEFTYPE("__int16",             CCBT_short);
@@ -4627,7 +4561,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEFUMAX("__UINT8_MAX__",      CCBT_unsigned_char);
         DEFUMAX("__UINT16_MAX__",     CCBT_unsigned_short);
         DEFUMAX("__UINT32_MAX__",     CCBT_unsigned);
-        DEFUMAX("__UINT64_MAX__",     ccbt_unsigned_of(t.int64_type));
+        DEFUMAX("__UINT64_MAX__",     ccbt_to_unsigned(t.int64_type));
 
         DEFSMAX("__INT_LEAST8_MAX__",  CCBT_signed_char);
         DEFSMAX("__INT_LEAST16_MAX__", CCBT_short);
@@ -4636,21 +4570,21 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEFUMAX("__UINT_LEAST8_MAX__",  CCBT_unsigned_char);
         DEFUMAX("__UINT_LEAST16_MAX__", CCBT_unsigned_short);
         DEFUMAX("__UINT_LEAST32_MAX__", CCBT_unsigned);
-        DEFUMAX("__UINT_LEAST64_MAX__", ccbt_unsigned_of(t.int64_type));
+        DEFUMAX("__UINT_LEAST64_MAX__", ccbt_to_unsigned(t.int64_type));
 
         DEFSMAX("__INT_FAST8_MAX__",  t.int_fast8_type);
         DEFSMAX("__INT_FAST16_MAX__", t.int_fast16_type);
         DEFSMAX("__INT_FAST32_MAX__", t.int_fast32_type);
         DEFSMAX("__INT_FAST64_MAX__", t.int_fast64_type);
-        DEFUMAX("__UINT_FAST8_MAX__",  ccbt_unsigned_of(t.int_fast8_type));
-        DEFUMAX("__UINT_FAST16_MAX__", ccbt_unsigned_of(t.int_fast16_type));
-        DEFUMAX("__UINT_FAST32_MAX__", ccbt_unsigned_of(t.int_fast32_type));
-        DEFUMAX("__UINT_FAST64_MAX__", ccbt_unsigned_of(t.int_fast64_type));
+        DEFUMAX("__UINT_FAST8_MAX__",  ccbt_to_unsigned(t.int_fast8_type));
+        DEFUMAX("__UINT_FAST16_MAX__", ccbt_to_unsigned(t.int_fast16_type));
+        DEFUMAX("__UINT_FAST32_MAX__", ccbt_to_unsigned(t.int_fast32_type));
+        DEFUMAX("__UINT_FAST64_MAX__", ccbt_to_unsigned(t.int_fast64_type));
 
         DEFSMAX("__INTPTR_MAX__",  t.intptr_type);
-        DEFUMAX("__UINTPTR_MAX__", ccbt_unsigned_of(t.intptr_type));
+        DEFUMAX("__UINTPTR_MAX__", ccbt_to_unsigned(t.intptr_type));
         DEFSMAX("__INTMAX_MAX__",  t.intmax_type);
-        DEFUMAX("__UINTMAX_MAX__", ccbt_unsigned_of(t.intmax_type));
+        DEFUMAX("__UINTMAX_MAX__", ccbt_to_unsigned(t.intmax_type));
         DEFUMAX("__SIZE_MAX__",    t.size_type);
         DEFSMAX("__PTRDIFF_MAX__", t.ptrdiff_type);
 
@@ -4756,9 +4690,9 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     {
         // Suffix for 64-bit literal depends on whether long is 64-bit
         const char* i64_suf  = ccbt_literal_suffix(t.int64_type);
-        const char* u64_suf  = ccbt_literal_suffix(ccbt_unsigned_of(t.int64_type));
+        const char* u64_suf  = ccbt_literal_suffix(ccbt_to_unsigned(t.int64_type));
         const char* imax_suf = ccbt_literal_suffix(t.intmax_type);
-        const char* umax_suf = ccbt_literal_suffix(ccbt_unsigned_of(t.intmax_type));
+        const char* umax_suf = ccbt_literal_suffix(ccbt_to_unsigned(t.intmax_type));
         // No-suffix: __INT8_C(c) -> c
         // With-suffix: __INT64_C(c) -> c ## L
         struct { StringView name; const char*_Nullable suffix; } c_macros[] = {
@@ -4874,24 +4808,23 @@ static
 int
 cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom a){
     if(!cpp_dir_exists(cpp, a->data))
-        return 0; // silently skip non-existent paths
+        return 0;
     StringView sv = {a->length, a->data};
     int err = ma_push(StringView)(arr, cpp->allocator, sv);
-    return err ? CPP_OOM_ERROR : 0;
+    return err;
 }
 
 static
 int
 cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr, const char* path){
     if(!cpp_dir_exists(cpp, path))
-        return 0; // silently skip non-existent paths
+        return 0;
     size_t len = strlen(path);
-    // Atomize so the string lives as long as the atom table.
     Atom a = AT_atomize(cpp->at, path, len);
     if(!a) return CPP_OOM_ERROR;
     StringView sv = {a->length, a->data};
     int err = ma_push(StringView)(arr, cpp->allocator, sv);
-    return err ? CPP_OOM_ERROR : 0;
+    return err;
 }
 
 static
@@ -5074,7 +5007,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#define atomic_flag_test_and_set_explicit(obj, order) __atomic_exchange_n(obj, 1, order)\n"
                               "#define atomic_flag_clear(obj) __atomic_store_n(obj, 0, __ATOMIC_SEQ_CST)\n"
                               "#define atomic_flag_clear_explicit(obj, order) __atomic_store_n(obj, 0, order)\n"
-                              // uh is this wrong?
+                              // uh is this wrong? lmao
                               "typedef _Bool atomic_flag;\n"
                               "#define ATOMIC_FLAG_INIT 0\n"
                            )},
