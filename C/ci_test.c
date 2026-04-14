@@ -5146,14 +5146,14 @@ TestFunction(test_interpreter){
         },
         {
             "sizeof vla", __LINE__,
-            SV("int x = 3;\n"
+            SVI("int x = 3;\n"
             "return (int)sizeof(int[x]);\n"),
             .exit_code = 12,
             .skip = 1,
         },
         {
             "sizeof vla in array", __LINE__,
-            SV("int x = 3;\n"
+            SVI("int x = 3;\n"
             "return (int)sizeof(int[2][x]);\n"),
             .exit_code = 24,
             .skip = 1,

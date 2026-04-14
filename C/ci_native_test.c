@@ -908,9 +908,24 @@ TestFunction(test_interp_fail){
     } testcases[] = {
         {
             "pragma lib", __LINE__,
-            SVI("#pragma lib \"hopethisdoesnotexist\"\n"
-                "return 0;\n"),
+            SVI("#pragma lib \"hopethisdoesnotexist\"\n"),
             SVI("(test):1:2: error: failed to load library 'hopethisdoesnotexist'\n"),
+        },
+        {
+            "pragma comment lib", __LINE__,
+            SVI("#pragma comment(lib, \"hopethisdoesnotexist\")\n"),
+            SVI("(test):1:2: error: failed to load library 'hopethisdoesnotexist'\n"),
+        },
+        {
+            "pragma framework", __LINE__,
+            SVI("#pragma framework \"hopethisdoesnotexist\"\n"),
+            SVI("(test):1:2: error: failed to load framework 'hopethisdoesnotexist'\n"),
+        },
+        {
+            "pragma pkg_config", __LINE__,
+            SVI("#pragma pkg_config \"hopethisdoesnotexist\"\n"),
+            // This always fails as we give an Environment without PATH
+            SVI("(test):1:2: error: 'pkg-config' not found in PATH\n"),
         },
         {
             "backtrace", __LINE__,
@@ -923,6 +938,16 @@ TestFunction(test_interp_fail){
                 "(test):2:16: error: 1\n"
                 "(test):3:16: error: 2\n"
                 "(test):5:1: error: 3\n"),
+        },
+        {
+            "__shell", __LINE__,
+            SVI("const char* foo = __shell(\"hopethisdoesnotexist\");\n"),
+            SVI("(test):1:19: error: __SHELL__: 'hopethisdoesnotexist' not found in PATH\n"),
+        },
+        {
+            "__shell again", __LINE__,
+            SVI("const char* foo = __shell(\"./hopethisdoesnotexist\");\n"),
+            SVI("(test):1:19: error: __SHELL__: './hopethisdoesnotexist' not found in PATH\n"),
         },
     };
     int err;
@@ -993,7 +1018,7 @@ TestFunction(test_interp_fail){
             if(err) goto finally;
         }
 
-        finally:
+        finally:;
         StringView sv = SV("");
         if(log_sb.cursor && !log_sb.errored)
             sv = msb_borrow_sv(&log_sb);
