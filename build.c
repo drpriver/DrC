@@ -117,10 +117,14 @@ int main(int argc, char** argv, char** envp){
             BuildTarget* cov_bin = exe_target(ctx, cov_name->data, file, OS_NATIVE);
             get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(cov_bin->compiler_flavor != COMPILER_CL){
-                if(cov_bin->compiler_flavor == COMPILER_CLANG_CL)
+                if(cov_bin->compiler_flavor == COMPILER_CLANG_CL){
                     cmd_carg(&cov_bin->cmd, "/clang:--coverage");
-                else
+                    cmd_carg(&cov_bin->cmd, "/clang:-fprofile-update=atomic");
+                }
+                else{
                     cmd_carg(&cov_bin->cmd, "--coverage");
+                    cmd_carg(&cov_bin->cmd, "-fprofile-update=atomic");
+                }
             }
             if(test_files[i].needs_lffi)
                 link_libffi(ctx, cov_bin, OS_NATIVE, ffi_lib);
