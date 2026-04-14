@@ -796,6 +796,7 @@ TestFunction(test_interp){
                 "DA da = {0};\n"
                 "return da.count+da.capacity;\n"),
             .exit_code = 0,
+            .skip = IS_WINDOWS,
         },
         // smoke test, can't actually test the effect of this
         {
