@@ -1224,6 +1224,66 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "_Self in named struct", __LINE__,
+            SVI("struct List { int v; _Self *next; };\n"
+               "struct List head;\n"
+               "struct List *p = head.next;\n"
+              ),
+            .vars = {
+                { SVI("head"), SVI("struct List") },
+                { SVI("p"), SVI("struct List *") },
+            },
+        },
+        {
+            "_Self in named union", __LINE__,
+            SVI("union U { int x; _Self *next; };\n"
+               "union U u;\n"
+               "union U *p = u.next;\n"
+              ),
+            .vars = {
+                { SVI("u"), SVI("union U") },
+                { SVI("p"), SVI("union U *") },
+            },
+        },
+        {
+            "_Self in anonymous struct via typedef", __LINE__,
+            SVI("typedef struct { int v; _Self *next; } Node;\n"
+               "Node n;\n"
+               "Node *p = n.next;\n"
+              ),
+            .vars = {
+                { SVI("n"), SVI("struct <anon>") },
+                { SVI("p"), SVI("struct <anon> *") },
+            },
+            .typedefs = {
+                { SVI("Node"), SVI("struct <anon>") },
+            },
+        },
+        {
+            "_Self in anonymous struct member", __LINE__,
+            SVI("struct Wrap { struct { int v; _Self *np; } inner; };\n"
+               "struct Wrap w;\n"
+               "int a[sizeof w.inner.np];\n"
+              ),
+            .vars = {
+                { SVI("w"), SVI("struct Wrap") },
+                { SVI("a"), SVI("int[8]") },
+            },
+        },
+        {
+            "_Self nested: refers to innermost tag", __LINE__,
+            SVI("struct Outer { struct Inner { int x; _Self *ip; } in; _Self *op; };\n"
+               "struct Outer o;\n"
+               "struct Outer *po = o.op;\n"
+               "struct Inner *pi = o.in.ip;\n"
+              ),
+            .vars = {
+                { SVI("o"), SVI("struct Outer") },
+                { SVI("po"), SVI("struct Outer *") },
+                { SVI("pi"), SVI("struct Inner *") },
+            },
+        },
+        {
             "plan9", __LINE__,
             SVI("struct Foo {int x;};\n"
                "struct Bar {struct Foo; int y;};\n"

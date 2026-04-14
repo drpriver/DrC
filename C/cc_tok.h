@@ -68,6 +68,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC_float,
     CC_const,
     CC__Type,
+    CC__Self,
     CC_short,
     CC_union,
     CC_while,

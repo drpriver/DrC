@@ -16,7 +16,7 @@ struct DA(T) {
     size_t count, capacity;
 
     // Methods
-    int push(DA(T) *self, T value){
+    int push(_Self *self, T value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:2;
             void* p = realloc(self.data, cap * sizeof *self.data);
@@ -27,7 +27,7 @@ struct DA(T) {
         self.data[self.count++] = value;
         return 0;
     }
-    int push_ref(DA(T) *self, T* value){
+    int push_ref(_Self *self, T* value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:2;
             void* p = realloc(self.data, cap * sizeof *self.data);
@@ -38,10 +38,10 @@ struct DA(T) {
         self.data[self.count++] = *value;
         return 0;
     }
-    void clear(DA(T) *self){
+    void clear(_Self *self){
         self.count = 0;
     }
-    void destroy(DA(T) *self){
+    void destroy(_Self *self){
         if(self.data) free(self.data);
         memset(self, 0, sizeof *self);
     }
@@ -77,10 +77,10 @@ for(size_t i = 0; i < strings.count; i++){
 static if(T.is_pointer){
     struct Optional(T){
         T value;
-        _Bool has_value(Optional(T)* self){ return self.value; }
-        void set(Optional(T)* self, T val){ self.value = val; }
-        void clear(Optional(T)* self){ self.value = NULL; }
-        void print(Optional(T)* self, const char* prefix){
+        _Bool has_value(_Self* self){ return self.value; }
+        void set(_Self* self, T val){ self.value = val; }
+        void clear(_Self* self){ self.value = NULL; }
+        void print(_Self* self, const char* prefix){
             if(!self.value) {
                 printf("%s: null\n", prefix);
                 return;
@@ -98,10 +98,10 @@ else {
     struct Optional(T){
         T value;
         _Bool _has_value;
-        _Bool has_value(Optional(T)* self){ return self._has_value; }
-        void set(Optional(T)* self, T val){ self.value = val; self._has_value = 1;}
-        void clear(Optional(T)* self){ self._has_value = 0;}
-        void print(Optional(T)* self, const char* prefix){
+        _Bool has_value(_Self* self){ return self._has_value; }
+        void set(_Self* self, T val){ self.value = val; self._has_value = 1;}
+        void clear(_Self* self){ self._has_value = 0;}
+        void print(_Self* self, const char* prefix){
             if(!self._has_value) {
                 printf("%s: null\n", prefix);
                 return;

@@ -437,6 +437,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC__Atomic:
             case CC_const: case CC_volatile: case CC_restrict:
             case CC__Type:
+            case CC__Self:
                 return 1;
             case CC_do:
             case CC_if:
@@ -3134,6 +3135,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             case CC__Float64x:
             case CC__Imaginary:
             case CC__Type:
+            case CC__Self:
             case CC___auto_type:
             case CC___int128:
             case CC_bool:
@@ -7334,6 +7336,24 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                 }
             }
         }
+        else {
+            // Anonymous struct/union: allocate incomplete placeholder so _Self
+            // inside the body can refer to it.
+            if(is_union){
+                CcUnion* u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                if(!u) return CC_OOM_ERROR;
+                *u = (CcUnion){.kind = CC_UNION, .loc = loc, .is_incomplete = 1};
+                existing = u;
+            }
+            else {
+                CcStruct* s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                if(!s) return CC_OOM_ERROR;
+                *s = (CcStruct){.kind = CC_STRUCT, .loc = loc, .is_incomplete = 1};
+                existing = s;
+            }
+        }
+        CcQualType saved_tag_type = p->current_tag_type;
+        p->current_tag_type = (CcQualType){.bits = (uintptr_t)existing};
         Marray(CcField) fields_arr = {0};
         for(;;){
             err = cc_peek(p, &tok);
@@ -7606,6 +7626,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
         }
         err = cc_expect_punct(p, CC_rbrace);
         if(err) goto struct_err;
+        p->current_tag_type = saved_tag_type;
         // Parse optional trailing attributes
         err = cc_parse_attributes(p, &attrs);
         if(err) goto struct_err;
@@ -7664,6 +7685,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
         return 0;
 
         struct_err:
+        p->current_tag_type = saved_tag_type;
         ma_cleanup(CcField)(&fields_arr, cc_allocator(p));
         return err;
     }
@@ -8021,6 +8043,18 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_unget(p, &tok);
                         }
                         *base_type = ccqt_basic(CCBT__Type);
+                        continue;
+                    case CC__Self:
+                        if(base_type->bits || spec->sp_typebits || !p->current_tag_type.bits){
+                            Atom a = AT_atomize(p->cpp.at, "_Self", 5);
+                            if(!a) return CC_OOM_ERROR;
+                            tok = (CcToken){
+                                .ident = {.type = CC_IDENTIFIER, .ident = a},
+                                .loc = tok.loc,
+                            };
+                            return cc_unget(p, &tok);
+                        }
+                        *base_type = p->current_tag_type;
                         continue;
                     case CC_bool:
                         if(base_type->bits)
@@ -9104,6 +9138,7 @@ cc_parse_statement(CcParser* p){
                 case CC_typeof_unqual:
                 case CC__Countof:
                 case CC__Type:
+                case CC__Self:
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");
                 case CC___attribute__: {
                     // __attribute__((fallthrough)); etc.
@@ -9272,6 +9307,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     case CC__Imaginary:
                     case CC__Noreturn:
                     case CC__Type:
+                    case CC__Self:
                     case CC___attribute__:
                     case CC___declspec:
                     case CC___auto_type:

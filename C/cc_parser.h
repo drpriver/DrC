@@ -181,6 +181,7 @@ struct CcParser {
     CcScope global;
     CcScope* current;
     CcFunc*_Nullable current_func;
+    CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
     #define CC_RECYCLE_EXPRS 1

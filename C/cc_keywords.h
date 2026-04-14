@@ -35,6 +35,7 @@
     X(while, while) \
     X(_Bool, bool) \
     X(_Type, _Type) \
+    X(_Self, _Self) \
 
 #define CCKWS6(X) \
     X(double, double) \

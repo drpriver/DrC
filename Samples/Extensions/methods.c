@@ -6,7 +6,7 @@ typedef struct DA DA;
 struct DA {
     int* data;
     size_t count, capacity;
-    int push(DA* self, int value){
+    int push(_Self* self, int value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:2;
             void* p = realloc(self.data, cap * sizeof *self.data);
@@ -17,17 +17,17 @@ struct DA {
         self.data[self.count++] = value;
         return 0;
     }
-    void dump(const DA* self){
+    void dump(const _Self* self){
         printf("[");
         for(size_t i = 0; i < self.count; i++){
             printf(i ?", %d":"%d", self.data[i]);
         }
         printf("]\n");
     }
-    void clear(DA*self){
+    void clear(_Self*self){
         self.count = 0;
     }
-    void destroy(DA* self){
+    void destroy(_Self* self){
         if(self.data) free(self.data);
         memset(self, 0, sizeof *self);
     }
