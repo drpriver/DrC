@@ -10,7 +10,7 @@ interpreted C code.
 
 A [REPL mode] is also offered.
 
-After building, try it out with <code>Bin/drc <a href=Samples/hello.c>Samples/hello.c</a></code>
+After building, try it out with <code>drc <a href=Samples/hello.c>Samples/hello.c</a></code>
 or peruse the other [Samples].
 
 Major Features Include:
@@ -64,18 +64,26 @@ Building::md
 C Interpreter::md
   C scripts, top level statements, no separate compile and run steps, no
   intermediate files.
-REPL mode::md
-  Run `Bin/drc` with `--repl` for a REPL experience, with interactive function calls etc.
   ::pre.console
-    $ Bin/drc --repl
+    $ cat hello.c
+    #!/usr/bin/env drc
+    #include <stdio.h>
+    printf("hello.c\n");
+    $ ./hello.c
+    hello.c
+REPL mode::md
+  Run `drc` with `--repl` for a REPL experience, with interactive function calls etc.
+  ::pre.console
+    $ drc --repl
     cc> #include <stdio.h>
     ... int x = 3;
-    ... for(int i = 0; i < 4; i++) printf("x = %d\n", x);
+    ... for(int i = 0; i < 4; i++)
+    ...     printf("x++ = %d\n", x++);
     ...
-    x = 3
-    x = 3
-    x = 3
-    x = 3
+    x++ = 3
+    x++ = 4
+    x++ = 5
+    x++ = 6
     cc> ^D
 Bindings-Free FFI::md
   `#include` real C headers, `#pragma lib` to load them. Also supports `#pragma
@@ -101,7 +109,20 @@ Native Threads::md
     pthread_join(t, NULL);
   This example also shows off our captureless-lambda extension.
 First Class Types::md
-  `_Type T = int; printf("%s\n", T.name)`, etc. Pass them as values, reflect
+  ::pre.C
+    _Type T = int;
+    printf("%s\n", T.name); // int
+    T = float;
+    printf("%s\n", T.name); // float
+    T = struct Foo {int x, y;};
+    printf("%s {\n", T.name); // struct Foo
+    for(int i = 0; i < T.fields; i++){
+        auto f = T.field(i);
+        printf("    %s %s;\n", f.type.name, f.name); // int x; int y;
+    }
+    printf("};\n");
+
+  Pass them as values, reflect
   over them, see the [json demo]
   ::links
     json demo = Samples/Extensions/json_parse.c
@@ -112,40 +133,19 @@ Static If::md
       enum {IT_IS_WEDNESDAY=1};
     }
     printf("IT_IS_WEDNESDAY: %d\n", IT_IS_WEDNESDAY); // only compiles on wednesday
-  More seriously:
-  ::pre.C
-    #define S_(x) #x
-    #define S(x) S_(x)
-    // __ident produces a single identifier token
-    // from catted strings, even if it has non-identifier characters.
-    #define Optional(T) __ident("Optional." S(T))
-    #defblock OPTIONAL_DEF(T)
-    typedef struct Optional(T) Optional(T);
-    static if(T.is_pointer){
-        // use NULL as sentinel
-        struct Optional(T){
-            T value;
-            _Bool has_value(Optional(T)* self){ return self.value; }
-        };
-    }
-    else {
-        struct Optional(T){
-            T value;
-            _Bool _has_value;
-            _Bool has_value(Optional(T)* self){ return self._has_value; }
-        };
-    }
-    #endblock
-    OPTIONAL_DEF(const char*);
-    OPTIONAL_DEF(int);
-    _Static_assert(sizeof(Optional(const char*)) == sizeof(const char*));
-    _Static_assert(sizeof(Optional(int)) > sizeof(int));
-  Unlike `#if`, `static if` has access to C-level information without the boilerplate of a procmacro.
 
 Procmacros::md
   Register a C function as a macro, call it as a macro, outputs get turned into
   pp-tokens, you can mix them into your source file for code generation and
   other things.
+  ::pre.C
+    int add(int a, int b){return a + b;}
+    #pragma procmacro add
+    #if add(1, 3) == add(2, 2)
+    enum {MATH_WORKS=1};
+    #else
+    #error "math doesn't work"
+    #endif
 
   Also, [power up preprocessor conditionals]:
   ::links
@@ -172,6 +172,63 @@ Methods and FUCS::md
   Define methods in struct body, auto deref, `.` and <code>-></code> merged,
   FUCS: Function Uniform Call Syntax to have `.func` notation with free
   functions.
+  ::pre.C
+    #include <stdlib.h>
+    #include <stdio.h>
+    typedef struct Ints Ints;
+    struct Ints {
+        int * data;
+        size_t count, capacity;
+        void push(Ints* self, int val){
+            if(self.count >= self.capacity){
+                size_t cap = self.capacity?2*self.capacity:4;
+                void* p = realloc(self.data, cap * sizeof *self.data);
+                if(!p) abort();
+                self.data = p;
+                self.capacity = cap;
+            }
+            self.data[self.count++] = val;
+        }
+    };
+    Ints i = {0};
+    i.push(1);
+    i.push(1);
+    // FUCS: regular function can be called like a method
+    int sum(Ints* ints){
+        int s = 0;
+        for(size_t i = 0; i < ints.count; i++){
+            s += ints.data[i];
+        }
+        return s;
+    }
+    printf("i.sum() = %d\n", i.sum());
+    // Or inject methods after the fact.
+    (Ints).push_method(fib, void(Ints*self){
+        if(self.count < 2) abort();
+        self.push(self.data[self.count-1] + self.data[self.count-2]);
+    });
+    for(size_t c = 0; c < 10; c++)
+        i.fib();
+    printf("i.sum() = %d\n", i.sum());
+    for(size_t c = 0; c < i.count; c++){
+        printf("%zu] %d\n", c, i.data[c]);
+    }
+  ::pre.console
+    $ drc methods.c
+    i.sum() = 2
+    i.sum() = 376
+    0] 1
+    1] 1
+    2] 2
+    3] 3
+    4] 5
+    5] 8
+    6] 13
+    7] 21
+    8] 34
+    9] 55
+    10] 89
+    11] 144
 Named Arguments::md
   Same syntax as designated initializers.
   ::pre.C
@@ -192,9 +249,9 @@ Self Hosting::md
   The C interpreter is able to run itself.
 
   ::pre.console
-    $ Bin/drc cc.c Samples/hello.c
+    $ drc cc.c Samples/hello.c
     Hello world
-    $ Bin/drc cc.c cc.c Samples/hello.c
+    $ drc cc.c cc.c Samples/hello.c
     Hello world
 ::css #import
   README.css
