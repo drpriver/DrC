@@ -15,7 +15,10 @@
 #include "Drp/compiler_warnings.h"
 #define TARGET_SETTINGS_EXTRA_FIELDS(X) \
     X(Atom, fuzz_cc, "--fuzz-cc", "Clang with libFuzzer support for building fuzz targets.", nil_atom) \
-    X(Atom, fuzz_sysroot, "--fuzz-sysroot", "Sysroot for the fuzz compiler.", nil_atom)
+    X(Atom, fuzz_sysroot, "--fuzz-sysroot", "Sysroot for the fuzz compiler.", nil_atom) \
+    X(Atom, prefix, "--prefix", "Install prefix. Overrides the PREFIX env var.", nil_atom) \
+    X(Atom, bindir, "--bindir", "Directory to install binaries into. Overrides the bindir env var.", nil_atom) \
+    X(Atom, destdir, "--destdir", "Staging directory prepended to install paths. Overrides the DESTDIR env var.", nil_atom)
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"
 #include "Drp/MStringBuilder.h"
@@ -319,17 +322,14 @@ static
 int
 do_install(BuildCtx* ctx, BuildTarget* tgt){
     BuildTarget*const* bins = (BuildTarget*const*)tgt->user_data;
-    Atom prefix = env_getenv2(&ctx->env, "PREFIX", sizeof "PREFIX" - 1);
-    Atom destdir = env_getenv2(&ctx->env, "DESTDIR", sizeof "DESTDIR" - 1);
-    Atom bindir_env = env_getenv2(&ctx->env, "bindir", sizeof "bindir" - 1);
-    if(!prefix && !bindir_env && BUILD_OS == OS_WINDOWS){
+    Atom prefix = ctx->target.prefix != nil_atom ? ctx->target.prefix : env_getenv2(&ctx->env, "PREFIX", sizeof "PREFIX" - 1);
+    Atom destdir = ctx->target.destdir != nil_atom ? ctx->target.destdir : env_getenv2(&ctx->env, "DESTDIR", sizeof "DESTDIR" - 1);
+    Atom bindir = ctx->target.bindir != nil_atom ? ctx->target.bindir : env_getenv2(&ctx->env, "bindir", sizeof "bindir" - 1);
+    if(!prefix && !bindir && BUILD_OS == OS_WINDOWS){
         b_loglvl(BLOG_ERROR, ctx, "PREFIX or bindir must be set on Windows for install\n");
         return 1;
     }
-    Atom bindir;
-    if(bindir_env)
-        bindir = bindir_env;
-    else
+    if(!bindir)
         bindir = b_atomize_f(ctx, "%s/bin", prefix ? prefix->data : "/usr/local");
     if(destdir)
         bindir = b_atomize_f(ctx, "%s%s", destdir->data, bindir->data);
