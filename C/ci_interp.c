@@ -17,6 +17,7 @@
 #include "cc_var.h"
 #include "cc_expr.h"
 #include "cc_target.h"
+#include "cc_scope.h"
 #include "cpp_preprocessor.h"
 #include "native_call.h"
 #include "ci_softnum.h"
@@ -45,6 +46,7 @@ enum {
     CI_INVALID_VALUE_ERROR = _cc_invalid_value_error,
     CI_LIBRARY_NOT_FOUND_ERROR = _cc_file_not_found_error,
     CI_SYMBOL_NOT_FOUND = _cc_symbol_not_found_error,
+    CI_SYMBOL_UNRESOLVED = _cc_symbol_unresolved_error,
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
@@ -3005,7 +3007,7 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     if(!func || !func->defined)
         return CI_SYMBOL_NOT_FOUND;
     if(!func->parsed)
-        return ci_error(ci, func->loc, "ICE: function '%s' not parsed before execution", func->name->data);
+        return CI_SYMBOL_UNRESOLVED;
     CcFunction* ftype = func->type;
     // Check arg count.
     if(nargs != ftype->param_count)
@@ -3085,6 +3087,38 @@ ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecifi
     *out_ret = ret;
     return 0;
 }
+static
+int
+ci_add_root(CiInterpreter* ci, StringView name){
+    AtomTable* at = ci_lock_atoms(ci);
+    Atom atom = AT_atomize(at, name.text, name.length);
+    ci_unlock_atoms(ci, at);
+    if(!atom) return CI_OOM_ERROR;
+    CcSymbol sym;
+    _Bool found = cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym);
+    if(!found) return CI_SYMBOL_NOT_FOUND;
+    int err = 0;
+    switch(sym.kind){
+        case CC_SYM_VAR:
+            err = PM_put(&ci->parser.used_vars, ci_allocator(ci), sym.var, sym.var);
+            break;
+        case CC_SYM_FUNC:
+            err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), sym.func, sym.func);
+            break;
+        case CC_SYM_TYPEDEF:
+        case CC_SYM_ENUMERATOR:
+            break;
+    }
+    return err;
+}
+
+static
+int
+ci_resolve_root(CiInterpreter* ci, StringView name){
+    int err = ci_add_root(ci, name);
+    if(err) return err;
+    return ci_resolve_refs(ci, 0);
+}
 
 static
 int
@@ -3103,8 +3137,6 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
             }
         }
     }
-    // Resolve functions. When libc_only, only resolve libc builtins.
-    // Otherwise resolve all (parsing bodies, dlsym, closures).
     for(size_t i = libc_only ? ci->resolved_libc : ci->resolved_funcs; i < p->used_funcs.count; i++){
         PointerMapItems items = PM_items(&p->used_funcs);
         CcFunc* func = (CcFunc*)(uintptr_t)items.data[i].key;
@@ -3164,9 +3196,6 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
             ci->resolved_vars = p->used_vars.count;
         }
         // Evaluate initializers for non-automatic variables.
-        // This must happen after all storage is allocated (initializers may
-        // reference other globals). Running this here (single-threaded, before
-        // execution) avoids re-initialization and thread races.
         {
             PointerMapItems items = PM_items(&p->used_vars);
             CiInterpFrame dummy_frame = {0};

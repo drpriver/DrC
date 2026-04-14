@@ -22,6 +22,7 @@ enum {
     _cc_io_error = 11,
     _cc_not_a_file_error = 12,
     _cc_already_cached_error = 13,
+    _cc_symbol_unresolved_error = 14,
 };
 static const char* const _cc_error_names[] = {
     [_cc_no_error]                       = "No Error",
@@ -38,5 +39,6 @@ static const char* const _cc_error_names[] = {
     [_cc_io_error]                       = "I/O error",
     [_cc_not_a_file_error]               = "Not a file",
     [_cc_already_cached_error]           = "Already cached",
+    [_cc_symbol_unresolved_error]        = "Symbol present but not resolved",
 };
 #endif

@@ -23,6 +23,7 @@
 #include "../Drp/msb_logger.h"
 #include "cc_parser.h"
 #include "cc_target.h"
+#include "cc_errors.h"
 #include "ci_interp.h"
 
 #ifdef __clang__
@@ -5628,12 +5629,391 @@ TestFunction(test_cross_target){
     }
     TESTEND();
 }
+TestFunction(test_ci_call_main){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    static struct tc {
+        const char* name; int line;
+        StringView program;
+        int argc;
+        char*_Null_unspecified argv[4];
+        char*_Null_unspecified envp[4];
+        int expected_ret;
+        _Bool expect_err;
+        StringView expected_msg;
+        _Bool skip;
+    } testcases[] = {
+        {
+            "no-arg main", __LINE__,
+            SVI("int main(void){ return 42; }\n"),
+            .argc = 0,
+            .expected_ret = 42,
+        },
+        {
+            "argc passthrough", __LINE__,
+            SVI("int main(int argc, char** argv){ return argc; }\n"),
+            .argc = 3,
+            .argv = {"prog", "a", "b"},
+            .expected_ret = 3,
+        },
+        {
+            "argv read", __LINE__,
+            SVI("int main(int argc, char** argv){ return argv[1][0]; }\n"),
+            .argc = 2,
+            .argv = {"prog", "Abc"},
+            .expected_ret = 'A',
+        },
+        {
+            "envp read", __LINE__,
+            SVI("int main(int argc, char** argv, char** envp){\n"
+                "    return envp[0][0];\n"
+                "}\n"),
+            .argc = 1,
+            .argv = {"prog"},
+            .envp = {"X=1"},
+            .expected_ret = 'X',
+        },
+        {
+            "argc + argv contents", __LINE__,
+            SVI("int main(int argc, char** argv){\n"
+                "    int sum = 0;\n"
+                "    for(int i = 0; i < argc; i++) sum += argv[i][0];\n"
+                "    return sum;\n"
+                "}\n"),
+            .argc = 3,
+            .argv = {"A", "B", "C"},
+            .expected_ret = 'A' + 'B' + 'C',
+        },
+        {
+            "no main defined", __LINE__,
+            SVI("int other(void){ return 0; }\n"),
+            .expect_err = 1,
+        },
+        {
+            "unsupported main signature", __LINE__,
+            SVI("int main(int x){ return x; }\n"),
+            .argc = 1,
+            .argv = {"prog"},
+            .expect_err = 1,
+            .expected_msg = SVI("(test):1:16: error: main has unsupported signature (1 params)\n"),
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        if(tc->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        fc_write_path(fc, "(test)", sizeof "(test)" - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
+        if(err){TestReport("failed to include"); goto finally;}
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        char*_Null_unspecified argv_buf[5] = {0};
+        for(int j = 0; j < tc->argc; j++) argv_buf[j] = tc->argv[j];
+        char*_Null_unspecified envp_buf[5] = {0};
+        for(int j = 0; j < (int)(sizeof tc->envp / sizeof tc->envp[0]); j++){
+            if(!tc->envp[j]) break;
+            envp_buf[j] = tc->envp[j];
+        }
+        int main_ret = 0;
+        err = ci_call_main(&interp, tc->argc, argv_buf, envp_buf, &main_ret);
+        if(tc->expect_err){
+            if(!err){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: expected ci_call_main to fail but it succeeded\n", __FILE__, tc->line);
+            }
+            err = 0;
+            StringView sv = log_sb.cursor && !log_sb.errored ? msb_borrow_sv(&log_sb) : SV("");
+            test_expect_equals_sv(tc->expected_msg, sv, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
+            goto cleanup;
+        }
+        if(err){TestPrintf("%s:%d: ci_call_main failed: err=%d\n", __FILE__, tc->line, err); goto finally;}
+        if(main_ret != tc->expected_ret){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->expected_ret, main_ret);
+        }
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        cleanup:
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
+
+TestFunction(test_ci_call_by_name){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    enum {MAX_ARGS = 4};
+    static struct tc {
+        const char* name; int line;
+        StringView program;
+        StringView func_name;
+        struct {
+            CcBasicTypeKind kind;
+            union {
+                int i;
+                double d;
+            };
+        } args[MAX_ARGS];
+        uint32_t nargs;
+        uint32_t call_nargs; // overrides nargs when > 0, for mismatch tests
+        int expected_ret;
+        int expect_err;
+        StringView expected_msg;
+        _Bool skip;
+    } testcases[] = {
+        {
+            "no args", __LINE__,
+            SVI("int zero(void){ return 99; }\n"),
+            .func_name = SVI("zero"),
+            .expected_ret = 99,
+        },
+        {
+            "add two ints", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"),
+            .func_name = SVI("add"),
+            .args = {{CCBT_int, .i=3}, {CCBT_int, .i=4}},
+            .expected_ret = 7,
+        },
+        {
+            "subtract", __LINE__,
+            SVI("int sub(int a, int b){ return a - b; }\n"),
+            .func_name = SVI("sub"),
+            .args = {{CCBT_int, .i=10}, {CCBT_int, .i=3}},
+            .expected_ret = 7,
+        },
+        {
+            "recursive fact", __LINE__,
+            SVI("int fact(int n){\n"
+                "    if(n <= 1) return 1;\n"
+                "    return n * fact(n-1);\n"
+                "}\n"),
+            .func_name = SVI("fact"),
+            .args = {{CCBT_int, .i=6}},
+            .expected_ret = 720,
+        },
+        {
+            "four int args", __LINE__,
+            SVI("int sum4(int a, int b, int c, int d){ return a+b+c+d; }\n"),
+            .func_name = SVI("sum4"),
+            .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}, {CCBT_int, .i=3}, {CCBT_int, .i=4}},
+            .expected_ret = 10,
+        },
+        {
+            "missing function", __LINE__,
+            SVI("int unrelated(void){ return 0; }\n"),
+            .func_name = SVI("does_not_exist"),
+            .expect_err = _cc_symbol_not_found_error,
+        },
+        {
+            "too few args", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"),
+            .func_name = SVI("add"),
+            .args = {{CCBT_int, .i=3}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:22: error: ci_call_by_name 'add': expected 2 args, got 1\n"),
+        },
+        {
+            "too many args", __LINE__,
+            SVI("int zero(void){ return 0; }\n"),
+            .func_name = SVI("zero"),
+            .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:15: error: ci_call_by_name 'zero': expected 0 args, got 2\n"),
+        },
+        {
+            "wrong arg type", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"),
+            .func_name = SVI("add"),
+            .args = {{CCBT_int, .i=3}, {CCBT_double, .d=4.}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:22: error: ci_call_by_name 'add': arg 1 type mismatch\n"),
+        },
+        {
+            "doubles", __LINE__,
+            SVI("int cmp(double a, double b){return a < b?-1: a > b? 1: 0;}\n"),
+            .func_name = SVI("cmp"),
+            .args = {{CCBT_double, .d=4}, {CCBT_double, .d=8}},
+            .expected_ret = -1,
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        if(tc->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        fc_write_path(fc, "(test)", sizeof "(test)" - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
+        if(err){TestReport("failed to include"); goto finally;}
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_add_root(&interp, tc->func_name);
+        if(err){
+            if(tc->expect_err) goto expected_error;
+            TestPrintf("%s:%d: ci_add_root failed: err=%d\n", __FILE__, tc->line, err);
+            goto finally;
+        }
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        CiArg ci_args[MAX_ARGS];
+        int nargs = 0;
+        for(uint32_t j = 0; j < MAX_ARGS; j++){
+            if(tc->args[j].kind == CCBT_INVALID)
+                break;
+            ci_args[nargs++] = (CiArg){
+                .data = &tc->args[j].d,
+                .size = interp.parser.cpp.target.sizeof_[tc->args[j].kind],
+                .type.basic.kind = tc->args[j].kind,
+            };
+        }
+        int ret = 0;
+        err = ci_call_by_name(&interp, tc->func_name, ci_args, nargs, &ret, sizeof ret);
+        if(tc->expect_err){
+            expected_error:;
+            if(!err){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: expected ci_call_by_name to fail but it succeeded\n", __FILE__, tc->line);
+            }
+            if(err != tc->expect_err){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: expected ci_call_by_name to fail with '%s' but it failed with '%s'\n", __FILE__, tc->line, _cc_error_names[tc->expect_err], _cc_error_names[err]);
+            }
+            err = 0;
+            StringView sv = log_sb.cursor && !log_sb.errored ? msb_borrow_sv(&log_sb) : SV("");
+            test_expect_equals_sv(tc->expected_msg, sv, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
+            goto cleanup;
+        }
+        if(err){TestPrintf("%s:%d: ci_call_by_name failed: err=%d\n", __FILE__, tc->line, err); goto finally;}
+        if(ret != tc->expected_ret){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->expected_ret, ret);
+        }
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        cleanup:
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();

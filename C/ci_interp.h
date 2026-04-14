@@ -89,6 +89,8 @@ static int ci_load_framework(CiInterpreter*, StringView);
 static int ci_call_by_name(CiInterpreter*, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size);
 static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret);
 static int ci_resolve_refs(CiInterpreter*, _Bool libc_only);
+static int ci_add_root(CiInterpreter*, StringView name);
+static int ci_resolve_root(CiInterpreter*, StringView name);
 static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 static int ci_register_sym(CiInterpreter*, StringView libname, StringView symname, void* sym);
 static AtomTable* ci_lock_atoms(CiInterpreter*);
