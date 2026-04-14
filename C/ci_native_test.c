@@ -760,12 +760,142 @@ TestFunction(test_interop){
     }
     TESTEND();
 }
+TestFunction(test_interp){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    struct tc {
+        const char* name; int line;
+        StringView program;
+        struct { StringView name; void* sym;} symbols[8];
+        int exit_code;
+        _Bool skip;
+    } testcases[] = {
+        {
+            "procmacro", __LINE__,
+            SVI("int add(int x, int y){return x + y;}\n"
+                "#pragma procmacro add\n"
+                "#if add(1, 2) == 3\n"
+                "return add(1, 2);\n"
+                "#endif"),
+            .exit_code = 3,
+        },
+        {
+            "procmacro codegen", __LINE__,
+            SVI("const char* dagen(_Type T){\n"
+                "     char buff[1024];\n"
+                "     snprintf(buff, sizeof buff,\n"
+                "       \"struct {\\n\"\n"
+                "       \"  %s *data;\\n\"\n"
+                "       \"  unsigned long count, capacity;\\n\"\n"
+                "       \"}\\n\", T.name);\n"
+                "     return __builtin_intern(buff);\n"
+                "}\n"
+                "#pragma procmacro dagen\n"
+                "constexpr DA = __mixin(dagen(int));\n"
+                "DA da = {0};\n"
+                "return da.count+da.capacity;\n"),
+            .exit_code = 0,
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        if(tc->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .procedural_macros = 1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        for(size_t s = 0; s < sizeof tc->symbols / sizeof tc->symbols[0]; s++){
+            if(!tc->symbols[s].sym) break;
+            err = ci_register_sym(&interp, SV("builtins"), tc->symbols[s].name, tc->symbols[s].sym);
+            if(err){TestReport("register sym failure"); goto finally;}
+        }
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
+        if(err) {TestReport("failed to include"); goto finally;}
+        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        CiInterpFrame* frame = &interp.top_frame;
+        frame->stmts = interp.parser.toplevel_statements.data;
+        frame->stmt_count = interp.parser.toplevel_statements.count;
+        while(frame->pc < frame->stmt_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) goto finally;
+        }
+        TEST_stats.executed++;
+        if(interp.exit_code != tc->exit_code){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
+        }
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
 
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interop, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_interp, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();
