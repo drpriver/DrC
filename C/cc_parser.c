@@ -3066,25 +3066,48 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 return 0;
             }
             case CC__Countof:{
-                err = cc_expect_punct(p, CC_lparen);
-                if(err) return err;
                 CcToken peek;
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 CcQualType arr_type;
-                if(cc_is_type_start(p, &peek)){
-                    err = cc_parse_type_name(p, &arr_type, NULL);
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
+                    err = cc_next_token(p, &peek);
+                    if(err) return err;
+                    CcToken peek2;
+                    err = cc_peek(p, &peek2);
+                    if(err) return err;
+                    if(cc_is_type_start(p, &peek2)){
+                        err = cc_parse_type_name(p, &arr_type, NULL);
+                        if(err) return err;
+                        err = cc_expect_punct(p, CC_rparen);
+                        if(err) return err;
+                        CcToken peek3;
+                        err = cc_peek(p, &peek3);
+                        if(err) return err;
+                        if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
+                            CcExpr* result;
+                            err = cc_parse_init_list(p, vc, &result, arr_type);
+                            if(err) return err;
+                            result->kind = CC_EXPR_COMPOUND_LITERAL;
+                            CcExpr* postfixed;
+                            err = cc_parse_postfix(p, vc, result, &postfixed);
+                            if(err) return err;
+                            arr_type = postfixed->type;
+                            cc_release_expr(p, postfixed);
+                        }
+                        goto countof_have_type;
+                    }
+                    err = cc_unget(p, &peek);
                     if(err) return err;
                 }
-                else {
+                {
                     CcExpr* expr = NULL;
-                    err = cc_parse_expr(p, CC_RUNTIME_VALUE, &expr);
+                    err = cc_parse_prefix(p, CC_RUNTIME_VALUE, &expr);
                     if(err) return err;
                     arr_type = expr->type;
                     cc_release_expr(p, expr);
                 }
-                err = cc_expect_punct(p, CC_rparen);
-                if(err) return err;
+                countof_have_type:;
                 if(ccqt_kind(arr_type) != CC_ARRAY)
                     return cc_error(p, tok.loc, "_Countof requires an array type");
                 CcArray* arr = ccqt_as_array(arr_type);
@@ -9088,6 +9111,7 @@ cc_parse_statement(CcParser* p){
                 case CC_alignof:
                 case CC_nullptr:
                 case CC__Generic:
+                case CC__Countof:
                 case CC_false:
                     goto expression_statement;
                 case CC_int:
@@ -9136,7 +9160,6 @@ cc_parse_statement(CcParser* p){
                 case CC_thread_local:
                 case CC_static_assert:
                 case CC_typeof_unqual:
-                case CC__Countof:
                 case CC__Type:
                 case CC__Self:
                     return cc_error(p, tok.loc, "Unexpected keyword in this position");

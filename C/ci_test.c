@@ -4236,6 +4236,36 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "_Countof no parens", __LINE__,
+            SVI("int arr[7];\n"
+               "return _Countof arr;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Countof type", __LINE__,
+            SVI("return _Countof(int[7]);\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Countof compound literal", __LINE__,
+            SVI("return _Countof(int[7]){0};\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Countof vla", __LINE__,
+            SVI("int x = 7;\n"
+                "return _Countof(int[x]);\n"),
+            .exit_code = 7,
+            .skip = 1,
+        },
+        {
+            "_Countof expression statement", __LINE__,
+            SVI("int arr[7];\n"
+                "_Countof(arr);\n"
+                "return _Countof(arr);\n"),
+            .exit_code = 7,
+        },
+        {
             "alignof struct", __LINE__,
             SVI("struct S { char c; int i; };\n"
                "return _Alignof(struct S);\n"),
