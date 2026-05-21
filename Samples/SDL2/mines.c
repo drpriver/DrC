@@ -426,6 +426,9 @@ int main(int argc, char** argv){
                         case SDLK_RIGHT:
                             if(cur_x < cells_x-1) cur_x++;
                             break;
+                        case SDLK_f:
+                            click(cur_x, cur_y, 1);
+                            break;
                         case SDLK_SPACE:
                         case SDLK_RETURN:
                             click(cur_x, cur_y, SDL_GetModState() & KMOD_SHIFT);

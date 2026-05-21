@@ -1585,10 +1585,12 @@ init_textures(void){
     init_chips();
 }
 
+#ifndef SOUND_DIR
 #ifdef __DIR__
-#define SND_DIR __DIR__ "/BjAudio/"
+#define SOUND_DIR __DIR__ "/BjAudio/"
 #else
-#define SND_DIR "Samples/SDL2/BjAudio/"
+#define SOUND_DIR "Samples/SDL2/BjAudio/"
+#endif
 #endif
 
 
@@ -1615,11 +1617,11 @@ init_sounds(void){
     #ifndef NO_SDL_MIXER
     char path[128];
     for(int i = 0; i < NUM_CARD_SNDS; i++){
-        SDL_snprintf(path, sizeof path, SND_DIR "card-slide-%d.ogg", i + 1);
+        SDL_snprintf(path, sizeof path, SOUND_DIR "card-slide-%d.ogg", i + 1);
         snd_card_slide[i] = Mix_LoadWAV(path);
     }
     for(int i = 0; i < NUM_CHIP_SNDS; i++){
-        SDL_snprintf(path, sizeof path, SND_DIR "chip-lay-%d.ogg", i + 1);
+        SDL_snprintf(path, sizeof path, SOUND_DIR "chip-lay-%d.ogg", i + 1);
         snd_chip_lay[i] = Mix_LoadWAV(path);
     }
     apply_volume();
