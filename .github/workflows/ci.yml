@@ -30,16 +30,22 @@ jobs:
       - run: ./build test -- --multithreaded --force-colors
   windows-x64:
     if: github.event_name != 'schedule'
-    runs-on: windows-latest
     strategy:
       matrix:
+        os: [windows-2022, windows-2025-vs2026]
         cc: [cl, clang, clang-cl]
+        include:
+          - os: windows-2022
+            vcvars: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
+          - os: windows-2025-vs2026
+            vcvars: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: cmd
     steps:
       - uses: actions/checkout@v6
-      - run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
+      - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
   macos:
     if: github.event_name != 'schedule'
     runs-on: macos-latest
