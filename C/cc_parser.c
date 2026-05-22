@@ -6189,7 +6189,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
         }
         case CC_TARGET_AARCH64_LINUX:
         case CC_TARGET_AARCH64_MACOS:{
-            if(s->size > 16 || s->alignment > 16) break;
+            if(s->size > 64 || s->alignment > 16) break;
             CcBasicTypeKind hfa_base = CCBT_INVALID;
             uint32_t hfa_count = 0;
             for(uint32_t i = 0; i < s->field_count; i++){
@@ -6274,7 +6274,7 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         }
         case CC_TARGET_AARCH64_LINUX:
         case CC_TARGET_AARCH64_MACOS:{
-            if(u->size > 16 || u->alignment > 16) break;
+            if(u->size > 64 || u->alignment > 16) break;
             CcBasicTypeKind hfa_base = CCBT_INVALID;
             for(uint32_t i = 0; i < u->field_count; i++){
                 if(u->fields[i].is_method) continue;

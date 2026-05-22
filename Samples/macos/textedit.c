@@ -5,20 +5,20 @@
 // registered dynamically via the ObjC runtime API, with their method
 // IMPs pointing to interpreted functions.
 //
-// Usage: Bin/cc Samples/textedit.c
 
 #ifndef __APPLE__
 #error "This only works on macos"
+_Static_assert(0, "This only works on macos");
 __builtin_abort();
 #endif
 
-#pragma lib "Cocoa"
+#pragma framework "Cocoa"
 #include <std.h>
 #include <objc/objc.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 
-// Core Graphics types (matching macOS CGGeometry)
+// Core Graphics types
 typedef struct { double x, y; } CGPoint;
 typedef struct { double width, height; } CGSize;
 typedef struct { CGPoint origin; CGSize size; } CGRect;
@@ -31,7 +31,6 @@ enum {
     NSWindowStyleMaskResizable      = 1 << 3,
 };
 
-// Forward declarations
 void doNew(id self, SEL _cmd, id sender);
 void doOpen(id self, SEL _cmd, id sender);
 void doSave(id self, SEL _cmd, id sender);
@@ -40,17 +39,9 @@ void appDidFinishLaunching(id self, SEL _cmd, id note);
 _Bool appShouldTerminate(id self, SEL _cmd, id app);
 void createMenuBar(void);
 
-// ---------------------------------------------------------------------------
-// objc_msgSend wrappers — ARM64 requires exact type signatures
-// ---------------------------------------------------------------------------
+SEL sel(const char* name){ return sel_registerName(name); }
 
-SEL sel(const char* name){
-    return sel_registerName(name);
-}
-
-id cls(const char* name){
-    return (id)objc_getClass(name);
-}
+id cls(const char* name){ return (id)objc_getClass(name); }
 
 // Tuple helpers: T((int, x)) -> int, N((int, x)) -> x
 #define T(t, n) t
@@ -76,39 +67,24 @@ MSG(const char*, msg_cstr)
 MSG(id,          msg_double, (double, a))
 MSG(id,          msg_double2,(double, a), (double, b))
 
-// Convenience: create NSString from C string
-id nsstr(const char* s){
-    return msg_str(cls("NSString"), "stringWithUTF8String:", s);
-}
-enum : unsigned long {
-    NSUTF8StringEncoding = 4ul,
-};
+id nsstr(const char* s){ return msg_str(cls("NSString"), "stringWithUTF8String:", s); }
+enum : unsigned long { NSUTF8StringEncoding = 4ul, };
 
-// Read file contents into an NSString (NSUTF8StringEncoding = 4)
 id nsstr_from_file(const char* path){
     return ((id(*)(id, SEL, id, unsigned long, id*))objc_msgSend)(
         cls("NSString"), sel("stringWithContentsOfFile:encoding:error:"),
         nsstr(path), NSUTF8StringEncoding, NULL);
 }
 
-// Write an NSString to a file (path is an NSString)
 _Bool nsstr_to_file(id string, id path){
     return ((_Bool(*)(id, SEL, id, _Bool, unsigned long, id*))objc_msgSend)(
         string, sel("writeToFile:atomically:encoding:error:"),
         path, (_Bool)1, NSUTF8StringEncoding, NULL);
 }
 
-// ---------------------------------------------------------------------------
-// Global state
-// ---------------------------------------------------------------------------
-
 id g_textView;
 id g_window;
 id g_filePath; // NSString, retained
-
-// ---------------------------------------------------------------------------
-// EditorController methods — interpreted functions used as ObjC methods
-// ---------------------------------------------------------------------------
 
 void doNew(id self, SEL _cmd, id sender){
     msgv_id(g_textView, "setString:", nsstr(""));
@@ -155,11 +131,6 @@ void doSaveAs(id self, SEL _cmd, id sender){
     msgv_id(g_window, "setTitle:", g_filePath);
 }
 
-// ---------------------------------------------------------------------------
-// Menu bar creation
-// ---------------------------------------------------------------------------
-
-// Helper: create a menu item with title, action, key equivalent, and target
 id menuItem(const char* title, const char* action, const char* key, id target){
     id item = msg(cls("NSMenuItem"), "alloc");
     item = ((id(*)(id, SEL, id, SEL, id))objc_msgSend)(
@@ -215,10 +186,6 @@ void createMenuBar(void){
     id app = msg(cls("NSApplication"), "sharedApplication");
     msgv_id(app, "setMainMenu:", mainMenu);
 }
-
-// ---------------------------------------------------------------------------
-// AppDelegate methods — also interpreted functions registered as ObjC methods
-// ---------------------------------------------------------------------------
 
 void appDidFinishLaunching(id self, SEL _cmd, id note){
     createMenuBar();
@@ -294,9 +261,6 @@ _Bool appShouldTerminate(id self, SEL _cmd, id app){
     return 1;
 }
 
-// ---------------------------------------------------------------------------
-// Register ObjC classes and run
-// ---------------------------------------------------------------------------
 
 // Create the AppDelegate class — an NSObject subclass whose methods are
 // implemented by the interpreted functions above.

@@ -67,6 +67,8 @@ struct LargeStruct { int a, b, c, d, e; };
 struct TwoFloatStruct { float x, y; };
 struct TwoDoubleStruct { double x, y; };
 struct FourFloatStruct { float a, b, c, d; };
+struct FourDoubleStruct { double a, b, c, d; };
+struct NestedRectStruct { struct { double x, y; } origin; struct { double w, h; } size; };
 struct FiveFloatStruct { float a, b, c, d, e; };
 struct IntDoubleStruct { int x; double y; };
 struct FloatFloatIntStruct { float a, b; int c; };
@@ -92,6 +94,12 @@ static struct TwoFloatStruct test_return_two_float_struct(float a, float b){
 }
 static struct FourFloatStruct test_return_four_float_struct(float a, float b, float c, float d){
     return (struct FourFloatStruct){a, b, c, d};
+}
+static int test_four_double_then_ints(struct FourDoubleStruct s, unsigned long u1, unsigned long u2, _Bool b){
+    return (int)(s.a + s.b + s.c + s.d) + (int)u1 + (int)u2 + (int)b;
+}
+static int test_nested_rect_then_ints(struct NestedRectStruct r, unsigned long u1, unsigned long u2, _Bool b){
+    return (int)(r.origin.x + r.origin.y + r.size.w + r.size.h) + (int)u1 + (int)u2 + (int)b;
 }
 
 // Eightbyte splitting
@@ -420,6 +428,24 @@ TestFunction(test_interop){
                "return (int)(s.a + s.b + s.c + s.d);\n"),
             {{SV("ret_four_float"), (void*)test_return_four_float_struct},},
             .exit_code = 10,
+        },
+        {
+            "4-double HFA followed by int args (CGRect-like)", __LINE__,
+            SV("struct S { double a, b, c, d; };\n"
+               "int hfa4_then_ints(struct S, unsigned long, unsigned long, _Bool);\n"
+               "struct S s = {1.0, 2.0, 3.0, 4.0};\n"
+               "return hfa4_then_ints(s, 100, 20, 1);\n"),
+            {{SV("hfa4_then_ints"), (void*)test_four_double_then_ints},},
+            .exit_code = 131,
+        },
+        {
+            "nested HFA followed by int args (actual CGRect layout)", __LINE__,
+            SV("struct R { struct { double x, y; } origin; struct { double w, h; } size; };\n"
+               "int nested_then_ints(struct R, unsigned long, unsigned long, _Bool);\n"
+               "struct R r = {{1.0, 2.0}, {3.0, 4.0}};\n"
+               "return nested_then_ints(r, 100, 20, 1);\n"),
+            {{SV("nested_then_ints"), (void*)test_nested_rect_then_ints},},
+            .exit_code = 131,
         },
         // ---- Eightbyte splitting ----
         {
