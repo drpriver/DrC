@@ -1,27 +1,23 @@
-// Text Editor — Objective-C classes backed by interpreted code
-//
-// Demonstrates creating ObjC classes at runtime with methods implemented
-// in interpreted C. The AppDelegate and EditorController classes are
-// registered dynamically via the ObjC runtime API, with their method
-// IMPs pointing to interpreted functions.
-//
+//usr/bin/env drc "$0" "$@"; exit
+// Text Editor - Objective-C classes backed by interpreted code
 
 #ifndef __APPLE__
 #error "This only works on macos"
 _Static_assert(0, "This only works on macos");
 __builtin_abort();
 #endif
+int __argc;
+const char** __argv;
 
 #pragma framework "Cocoa"
-#include <std.h>
-#include <objc/objc.h>
-#include <objc/runtime.h>
-#include <objc/message.h>
+#include "objc_helpers.h"
 
 // Core Graphics types
 typedef struct { double x, y; } CGPoint;
 typedef struct { double width, height; } CGSize;
 typedef struct { CGPoint origin; CGSize size; } CGRect;
+
+MSG(id,          msg_rect,   (CGRect, r))
 
 // NSWindow style masks
 enum {
@@ -38,36 +34,6 @@ void doSaveAs(id self, SEL _cmd, id sender);
 void appDidFinishLaunching(id self, SEL _cmd, id note);
 _Bool appShouldTerminate(id self, SEL _cmd, id app);
 void createMenuBar(void);
-
-SEL sel(const char* name){ return sel_registerName(name); }
-
-id cls(const char* name){ return (id)objc_getClass(name); }
-
-// Tuple helpers: T((int, x)) -> int, N((int, x)) -> x
-#define T(t, n) t
-#define N(t, n) n
-#define PARAM(a)  , T a N a
-#define CAST_T(a) , T a
-#define FWD(a)    , N a
-
-#define MSG(ret, name, ...) \
-    ret name(id self, const char* s __map(PARAM, __VA_ARGS__)){ \
-        return ((ret(*)(id, SEL __map(CAST_T, __VA_ARGS__)))objc_msgSend)(self, sel(s) __map(FWD, __VA_ARGS__)); }
-
-MSG(id,          msg)
-MSG(id,          msg_id,     (id, a))
-MSG(void,        msgv)
-MSG(void,        msgv_id,    (id, a))
-MSG(void,        msgv_bool,  (_Bool, a))
-MSG(void,        msgv_long,  (unsigned long, a))
-MSG(long,        msg_long)
-MSG(id,          msg_str,    (const char*, a))
-MSG(id,          msg_rect,   (CGRect, r))
-MSG(const char*, msg_cstr)
-MSG(id,          msg_double, (double, a))
-MSG(id,          msg_double2,(double, a), (double, b))
-
-id nsstr(const char* s){ return msg_str(cls("NSString"), "stringWithUTF8String:", s); }
 enum : unsigned long { NSUTF8StringEncoding = 4ul, };
 
 id nsstr_from_file(const char* path){
@@ -97,7 +63,7 @@ void doOpen(id self, SEL _cmd, id sender){
     msgv_bool(panel, "setCanChooseFiles:", 1);
     msgv_bool(panel, "setCanChooseDirectories:", 0);
 
-    long result = msg_long(panel, "runModal");
+    long result = msgl(panel, "runModal");
     if(result != 1) return;
 
     id path = msg(msg(panel, "URL"), "path");
@@ -120,7 +86,7 @@ void doSave(id self, SEL _cmd, id sender){
 
 void doSaveAs(id self, SEL _cmd, id sender){
     id panel = msg(cls("NSSavePanel"), "savePanel");
-    long result = msg_long(panel, "runModal");
+    long result = msgl(panel, "runModal");
     if(result != 1) return;
 
     id path = msg(msg(panel, "URL"), "path");
@@ -148,10 +114,10 @@ void createMenuBar(void){
 
     // -- App menu --
     id appItem = msg(msg(cls("NSMenuItem"), "alloc"), "init");
-    id appMenu = msg_id(msg(cls("NSMenu"), "alloc"), "initWithTitle:", nsstr("Dr Text"));
-    msgv_id(appMenu, "addItem:", menuItem("About Dr Text", "orderFrontStandardAboutPanel:", "", NULL));
+    id appMenu = msg_id(msg(cls("NSMenu"), "alloc"), "initWithTitle:", nsstr("DrText"));
+    msgv_id(appMenu, "addItem:", menuItem("About DrText", "orderFrontStandardAboutPanel:", "", NULL));
     msgv_id(appMenu, "addItem:", msg(cls("NSMenuItem"), "separatorItem"));
-    msgv_id(appMenu, "addItem:", menuItem("Quit Dr Text", "terminate:", "q", NULL));
+    msgv_id(appMenu, "addItem:", menuItem("Quit DrText", "terminate:", "q", NULL));
     msgv_id(appItem, "setSubmenu:", appMenu);
     msgv_id(mainMenu, "addItem:", appItem);
 
@@ -159,7 +125,7 @@ void createMenuBar(void){
     id fileItem = msg(msg(cls("NSMenuItem"), "alloc"), "init");
     id fileMenu = msg_id(msg(cls("NSMenu"), "alloc"), "initWithTitle:", nsstr("File"));
 
-    // Create controller for file actions (ObjC class backed by interpreted code)
+    // Create controller for file actions
     id controller = msg(msg(cls("EditorController"), "alloc"), "init");
 
     msgv_id(fileMenu, "addItem:", menuItem("New",     "doNew:",    "n", controller));
@@ -170,7 +136,7 @@ void createMenuBar(void){
     msgv_id(fileItem, "setSubmenu:", fileMenu);
     msgv_id(mainMenu, "addItem:", fileItem);
 
-    // -- Edit menu (responder chain handles these automatically) --
+    // -- Edit menu --
     id editItem = msg(msg(cls("NSMenuItem"), "alloc"), "init");
     id editMenu = msg_id(msg(cls("NSMenu"), "alloc"), "initWithTitle:", nsstr("Edit"));
     msgv_id(editMenu, "addItem:", menuItem("Undo",       "undo:",      "z", NULL));
@@ -257,46 +223,38 @@ void appDidFinishLaunching(id self, SEL _cmd, id note){
     msgv_bool(app, "activateIgnoringOtherApps:", 1);
 }
 
-_Bool appShouldTerminate(id self, SEL _cmd, id app){
-    return 1;
+_Bool appShouldTerminate(id self, SEL _cmd, id app){ return 1; }
+
+
+int main(int argc, const char** argv){
+    #ifndef __DRC__
+    __argc = argc;
+    __argv = argv;
+    #endif
+    // Create the AppDelegate class
+    Class AppDelegate = objc_allocateClassPair( (Class)objc_getClass("NSObject"), "AppDelegate", 0);
+    class_addMethod(AppDelegate, sel("applicationDidFinishLaunching:"), (IMP)appDidFinishLaunching, "v@:@");
+    class_addMethod(AppDelegate, sel("applicationShouldTerminateAfterLastWindowClosed:"), (IMP)appShouldTerminate, "B@:@");
+    objc_registerClassPair(AppDelegate);
+
+    // Create the EditorController class - handles File menu actions.
+    Class EditorController = objc_allocateClassPair((Class)objc_getClass("NSObject"), "EditorController", 0);
+    class_addMethod(EditorController, sel("doNew:"),    (IMP)doNew,    "v@:@");
+    class_addMethod(EditorController, sel("doOpen:"),   (IMP)doOpen,   "v@:@");
+    class_addMethod(EditorController, sel("doSave:"),   (IMP)doSave,   "v@:@");
+    class_addMethod(EditorController, sel("doSaveAs:"), (IMP)doSaveAs, "v@:@");
+    objc_registerClassPair(EditorController);
+
+    // Boot the application
+    id pool = msg(msg(cls("NSAutoreleasePool"), "alloc"), "init");
+    id bundle = msg(cls("NSBundle"), "mainBundle");
+    id info = msg(bundle, "infoDictionary");
+    ((void(*)(id, SEL, id, id))objc_msgSend)(info, sel("setObject:forKey:"), nsstr("DrText"), nsstr("CFBundleName"));
+    id app = msg(cls("NSApplication"), "sharedApplication");
+    msgv_long(app, "setActivationPolicy:", 0L); // NSApplicationActivationPolicyRegular
+    id delegate = msg(msg(cls("AppDelegate"), "alloc"), "init");
+    msgv_id(app, "setDelegate:", delegate);
+    // Run the event loop (does not return — run loop manages its own pools)
+    msgv(app, "run");
+    return 0;
 }
-
-
-// Create the AppDelegate class — an NSObject subclass whose methods are
-// implemented by the interpreted functions above.
-Class AppDelegate = objc_allocateClassPair(
-    (Class)objc_getClass("NSObject"), "AppDelegate", 0);
-class_addMethod(AppDelegate,
-    sel("applicationDidFinishLaunching:"),
-    (IMP)appDidFinishLaunching, "v@:@");
-class_addMethod(AppDelegate,
-    sel("applicationShouldTerminateAfterLastWindowClosed:"),
-    (IMP)appShouldTerminate, "B@:@");
-objc_registerClassPair(AppDelegate);
-
-// Create the EditorController class — handles File menu actions.
-Class EditorController = objc_allocateClassPair(
-    (Class)objc_getClass("NSObject"), "EditorController", 0);
-class_addMethod(EditorController, sel("doNew:"),    (IMP)doNew,    "v@:@");
-class_addMethod(EditorController, sel("doOpen:"),   (IMP)doOpen,   "v@:@");
-class_addMethod(EditorController, sel("doSave:"),   (IMP)doSave,   "v@:@");
-class_addMethod(EditorController, sel("doSaveAs:"), (IMP)doSaveAs, "v@:@");
-objc_registerClassPair(EditorController);
-
-// Boot the application
-id pool = msg(msg(cls("NSAutoreleasePool"), "alloc"), "init");
-
-// Set app name for menu bar (unbundled app trick)
-id bundle = msg(cls("NSBundle"), "mainBundle");
-id info = msg(bundle, "infoDictionary");
-((void(*)(id, SEL, id, id))objc_msgSend)(
-    info, sel("setObject:forKey:"), nsstr("Dr Text"), nsstr("CFBundleName"));
-
-id app = msg(cls("NSApplication"), "sharedApplication");
-msgv_long(app, "setActivationPolicy:", 0L); // NSApplicationActivationPolicyRegular
-
-id delegate = msg(msg(cls("AppDelegate"), "alloc"), "init");
-msgv_id(app, "setDelegate:", delegate);
-
-// Run the event loop (does not return — run loop manages its own pools)
-msgv(app, "run");
