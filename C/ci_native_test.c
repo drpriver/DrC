@@ -68,6 +68,7 @@ struct TwoFloatStruct { float x, y; };
 struct TwoDoubleStruct { double x, y; };
 struct FourFloatStruct { float a, b, c, d; };
 struct FourDoubleStruct { double a, b, c, d; };
+struct FiveDoubleStruct { double a, b, c, d, e; };
 struct NestedRectStruct { struct { double x, y; } origin; struct { double w, h; } size; };
 struct FiveFloatStruct { float a, b, c, d, e; };
 struct IntDoubleStruct { int x; double y; };
@@ -97,6 +98,9 @@ static struct FourFloatStruct test_return_four_float_struct(float a, float b, fl
 }
 static int test_four_double_then_ints(struct FourDoubleStruct s, unsigned long u1, unsigned long u2, _Bool b){
     return (int)(s.a + s.b + s.c + s.d) + (int)u1 + (int)u2 + (int)b;
+}
+static int test_five_double_then_ints(struct FiveDoubleStruct s, unsigned long u1, unsigned long u2, _Bool b){
+    return (int)(s.a + s.b + s.c + s.d+s.e) + (int)u1 + (int)u2 + (int)b;
 }
 static int test_nested_rect_then_ints(struct NestedRectStruct r, unsigned long u1, unsigned long u2, _Bool b){
     return (int)(r.origin.x + r.origin.y + r.size.w + r.size.h) + (int)u1 + (int)u2 + (int)b;
@@ -437,6 +441,15 @@ TestFunction(test_interop){
                "return hfa4_then_ints(s, 100, 20, 1);\n"),
             {{SV("hfa4_then_ints"), (void*)test_four_double_then_ints},},
             .exit_code = 131,
+        },
+        {
+            "5-double not-HFA followed by int args", __LINE__,
+            SV("struct S { double a, b, c, d, e; };\n"
+               "int func(struct S, unsigned long, unsigned long, _Bool);\n"
+               "struct S s = {1.0, 2.0, 3.0, 4.0, 5.0};\n"
+               "return func(s, 100, 20, 1);\n"),
+            {{SV("func"), (void*)test_five_double_then_ints},},
+            .exit_code = 136,
         },
         {
             "nested HFA followed by int args (actual CGRect layout)", __LINE__,

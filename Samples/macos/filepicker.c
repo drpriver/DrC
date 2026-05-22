@@ -4,7 +4,7 @@
 #error "This only works on macos"
 _Static_assert(0, "This only works on macos");
 #endif
-#pragma lib "Cocoa"
+#pragma framework "Cocoa"
 #include "objc_helpers.h"
 #include <stdio.h>
 
