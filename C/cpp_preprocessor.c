@@ -387,9 +387,11 @@ cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView he
         }
     }
     // Framework search: #include <Foo/Bar.h> -> {fwk}/Foo.framework/Headers/Bar.h
+    // The framework name is the first path component; any remaining components
+    // (e.g. <IOKit/hidsystem/IOLLEvent.h>) are a subpath under Headers/.
     if(cpp->framework_paths.count){
         const char* slash = memchr(header_name.text, '/', header_name.length);
-        if(slash && !memchr(slash+1, '/', header_name.text+header_name.length-slash-1)){
+        if(slash){
             size_t fw_len = (size_t)(slash - header_name.text);
             const char* remaining = slash + 1;
             size_t remaining_len = header_name.length - fw_len - 1;

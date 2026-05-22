@@ -108,7 +108,8 @@ typedef struct { StringView path; StringView content; } IncludeTestFile;
 static int
 cpp_expand_with_files(
         IncludeTestFile* files, size_t nfiles,
-        StringView* Ipaths, size_t nIpaths,
+        StringView* _Nullable Ipaths, size_t nIpaths,
+        StringView* _Nullable Fpaths, size_t nFpaths,
         StringView* out, const char* file, const char* func, int line){
     int result = 0;
     ArenaAllocator aa = {0};
@@ -130,6 +131,10 @@ cpp_expand_with_files(
     };
     for(size_t i = 0; i < nIpaths; i++){
         err = ma_push(StringView)(&cpp.Ipaths, a, Ipaths[i]);
+        if(err){ result = 1; goto finally; }
+    }
+    for(size_t i = 0; i < nFpaths; i++){
+        err = ma_push(StringView)(&cpp.framework_paths, a, Fpaths[i]);
         if(err){ result = 1; goto finally; }
     }
     for(size_t i = 0; i < nfiles; i++){
@@ -2005,6 +2010,54 @@ TestFunction(test_include){
             files, 2,
             test_cases[i].Ipath.length ? &test_cases[i].Ipath : NULL,
             test_cases[i].Ipath.length ? 1 : 0,
+            NULL, 0,
+            &result, __FILE__, __func__, test_cases[i].line);
+        TestExpectFalse(err);
+        if(err) continue;
+        if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
+        }
+        Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+
+TestFunction(test_framework_include){
+    TESTBEGIN();
+    // #include <Foo/Bar.h> resolves to {fwdir}/Foo.framework/Headers/Bar.h.
+    // A multi-component subpath <Foo/sub/Bar.h> must resolve to
+    // {fwdir}/Foo.framework/Headers/sub/Bar.h (e.g. <IOKit/hidsystem/IOLLEvent.h>).
+    struct {
+        const char* name; int line; int disabled;
+        StringView main_src;
+        StringView hdr_path; StringView hdr_content;
+        StringView expected;
+    } test_cases[] = {
+        {"single-component framework include", __LINE__, 0,
+            SV("#include <Cocoa/Cocoa.h>\nVALUE"),
+            SV("frameworks/Cocoa.framework/Headers/Cocoa.h"), SV("#define VALUE single\n"),
+            SV("\n\nsingle")},
+        {"multi-component framework subpath", __LINE__, 0,
+            SV("#include <IOKit/hidsystem/IOLLEvent.h>\nVALUE"),
+            SV("frameworks/IOKit.framework/Headers/hidsystem/IOLLEvent.h"), SV("#define VALUE nested\n"),
+            SV("\n\nnested")},
+    };
+    StringView fpath = SV("frameworks");
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+        if(test_cases[i].disabled){
+            TEST_stats.skipped++;
+            continue;
+        }
+        IncludeTestFile files[] = {
+            {SV("test/main.c"), test_cases[i].main_src},
+            {test_cases[i].hdr_path, test_cases[i].hdr_content},
+        };
+        StringView result;
+        int err = cpp_expand_with_files(
+            files, 2,
+            NULL, 0,
+            &fpath, 1,
             &result, __FILE__, __func__, test_cases[i].line);
         TestExpectFalse(err);
         if(err) continue;
@@ -2033,6 +2086,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_erroneous_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_if_eval, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_include, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_framework_include, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();
