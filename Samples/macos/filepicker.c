@@ -8,25 +8,25 @@ _Static_assert(0, "This only works on macos");
 #include "objc_helpers.h"
 #include <stdio.h>
 
-id app = msg(cls("NSApplication"), "sharedApplication");
-msgv_long(app, "setActivationPolicy:", 0L);
+id app = cls("NSApplication").msg("sharedApplication");
+app.msgv_long("setActivationPolicy:", 0L);
 
-id panel = msg(cls("NSOpenPanel"), "openPanel");
-msgv_bool(panel, "setCanChooseFiles:", 1);
-msgv_bool(panel, "setCanChooseDirectories:", 0);
-msgv_bool(panel, "setAllowsMultipleSelection:", 0);
-msgv_id(panel, "setMessage:", nsstr("Pick a file!"));
+id panel = cls("NSOpenPanel").msg("openPanel");
+panel.msgv_bool("setCanChooseFiles:", 1);
+panel.msgv_bool("setCanChooseDirectories:", 0);
+panel.msgv_bool("setAllowsMultipleSelection:", 0);
+panel.msgv_id("setMessage:", nsstr("Pick a file!"));
 
-msgv_bool(app, "activateIgnoringOtherApps:", 1);
-long result = msgl(panel, "runModal");
+app.msgv_bool("activateIgnoringOtherApps:", 1);
+long result = panel.msgl("runModal");
 if(result != 1){
     printf("Cancelled\n");
     return 0;
 }
-id url = msg(panel, "URL");
-id path = msg(url, "path");
-const char* pathStr = msg_cstr(path, "UTF8String");
+id url = panel.msg("URL");
+id path = url.msg("path");
+const char* pathStr = path.msg_cstr("UTF8String");
 printf("Opening: %s\n", pathStr);
 
-id workspace = msg(cls("NSWorkspace"), "sharedWorkspace");
-msgv_id(workspace, "openFile:", path);
+id workspace = cls("NSWorkspace").msg("sharedWorkspace");
+workspace.msgv_id("openFile:", path);
