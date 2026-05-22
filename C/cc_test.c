@@ -111,6 +111,26 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "block pointers", __LINE__,
+            SVI("typedef void (^dispatch_block_t)(void);\n"
+               "int (^blk)(int, int);\n"
+               "void (^b)(int);\n"   // same signature as f below: must stay distinct
+               "void (*f)(int);\n"
+               "void takes_block(void (^cb)(int));\n"
+              ),
+            .vars = {
+                { SVI("blk"), SVI("int (^)(int, int)") },
+                { SVI("b"), SVI("void (^)(int)") },
+                { SVI("f"), SVI("void (*)(int)") },
+            },
+            .funcs = {
+                { SVI("takes_block"), SVI("void(void (^)(int))") },
+            },
+            .typedefs = {
+                { SVI("dispatch_block_t"), SVI("void (^)(void)") },
+            },
+        },
+        {
             "arrays", __LINE__,
             SVI("int a[5];\n"
                "int b[3][4];\n"

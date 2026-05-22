@@ -28,6 +28,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_UNION,
     CC_FUNCTION,
     CC_ARRAY,
+    CC_BLOCK_POINTER,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -479,6 +480,12 @@ _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
     return k == CC_POINTER || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
+}
+
+static inline
+_Bool
+ccqt_is_block_ptr(CcQualType t){
+    return ccqt_kind(t) == CC_BLOCK_POINTER;
 }
 
 static inline CcEnum*     ccqt_as_enum    (CcQualType t){ return _ccqt_to_type_ptr(t); }

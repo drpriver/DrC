@@ -19,9 +19,9 @@
 
 static inline
 uint32_t
-cctc_hash_pointer(CcQualType pointee, _Bool restrict_){
+cctc_hash_pointer(CcQualType pointee, _Bool restrict_, _Bool is_block){
     uint64_t v = pointee.bits;
-    v = v * 0x9e3779b97f4a7c15ULL + restrict_;
+    v = v * 0x9e3779b97f4a7c15ULL + restrict_ + (is_block? 2u : 0u);
     return hash_align8(&v, sizeof v);
 }
 
@@ -66,8 +66,8 @@ cctc_table_grow(CcTypeTable* t, Allocator al){
 
 static inline
 _Bool
-cctc_pointer_eq(const CcPointer* a, CcQualType pointee, _Bool restrict_){
-    return a->pointee.bits == pointee.bits && a->restrict_ == (uint32_t)restrict_;
+cctc_pointer_eq(const CcPointer* a, CcQualType pointee, _Bool restrict_, _Bool is_block){
+    return a->pointee.bits == pointee.bits && a->restrict_ == (uint32_t)restrict_ && (a->kind == CC_BLOCK_POINTER) == is_block;
 }
 
 static inline
@@ -77,7 +77,7 @@ cctc_rebuild_pointers(CcTypeTable* t){
     uint32_t* idxes = cctc_idxes(t);
     for(uint32_t i = 0; i < t->count; i++){
         CcPointer* q = items[i];
-        uint32_t h = cctc_hash_pointer(q->pointee, q->restrict_);
+        uint32_t h = cctc_hash_pointer(q->pointee, q->restrict_, q->kind == CC_BLOCK_POINTER);
         uint32_t idx = fast_reduce32(h, 2 * t->cap);
         while(idxes[idx]){
             idx++;
@@ -90,9 +90,9 @@ cctc_rebuild_pointers(CcTypeTable* t){
 warn_unused
 static inline
 CcPointer* _Nullable
-cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool restrict_){
+cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool restrict_, _Bool is_block){
     CcTypeTable* t = &cache->pointers;
-    uint32_t hash = cctc_hash_pointer(pointee, restrict_);
+    uint32_t hash = cctc_hash_pointer(pointee, restrict_, is_block);
     if(t->count){
         void** items = t->data;
         uint32_t* idxes = cctc_idxes(t);
@@ -102,7 +102,7 @@ cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool re
             if(!i) break;
             i--;
             CcPointer* p = items[i];
-            if(cctc_pointer_eq(p, pointee, restrict_))
+            if(cctc_pointer_eq(p, pointee, restrict_, is_block))
                 return p;
             idx++;
             if(idx >= 2 * t->cap) idx = 0;
@@ -114,7 +114,7 @@ cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool re
     }
     CcPointer* p = Allocator_zalloc(al, sizeof *p);
     if(!p) return NULL;
-    p->kind = CC_POINTER;
+    p->kind = is_block ? CC_BLOCK_POINTER : CC_POINTER;
     p->restrict_ = restrict_;
     p->pointee = pointee;
     void** items = t->data;

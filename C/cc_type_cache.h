@@ -54,7 +54,7 @@ struct CcTypeCache {
     CcTypeTable functions;
 };
 
-warn_unused static inline CcPointer* _Nullable cc_intern_pointer(CcTypeCache*, Allocator, CcQualType pointee, _Bool restrict_);
+warn_unused static inline CcPointer* _Nullable cc_intern_pointer(CcTypeCache*, Allocator, CcQualType pointee, _Bool restrict_, _Bool is_block);
 warn_unused static inline CcArray* _Nullable cc_intern_array(CcTypeCache*, Allocator, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete, _Bool is_vector, uint32_t vector_size);
 warn_unused static inline CcFunction* _Nullable cc_intern_function(CcTypeCache*, Allocator, CcQualType return_type, const CcQualType* params, uint32_t param_count, _Bool is_variadic, _Bool no_prototype);
 

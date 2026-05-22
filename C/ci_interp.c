@@ -2435,6 +2435,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     case CC_FUNCTION:
                     case CC_BASIC:
                     case CC_POINTER:
+                    case CC_BLOCK_POINTER:
                         *(_Bool*)result = 0;
                 }
                 return 0;
@@ -4061,6 +4062,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             err = ci_unimplemented(ci, loc, "Unsupported return type pointer");
             goto cleanup;
         }
+        case CC_BLOCK_POINTER:
         case CC_STRUCT:
         case CC_UNION:
         case CC_FUNCTION:

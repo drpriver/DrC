@@ -9,13 +9,9 @@ __builtin_abort();
 int __argc;
 const char** __argv;
 
+#include <CoreFoundation/CFCGTypes.h>
 #pragma framework "Cocoa"
 #include "objc_helpers.h"
-
-// Core Graphics types
-typedef struct { double x, y; } CGPoint;
-typedef struct { double width, height; } CGSize;
-typedef struct { CGPoint origin; CGSize size; } CGRect;
 
 MSG(id,          msg_rect,   (CGRect, r))
 
