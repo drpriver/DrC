@@ -26,6 +26,7 @@ enum {IS_APPLE = 0};
 #include "Drp/msb_sprintf.h"
 LongString DRC_PATH;
 StringView COVDIR;
+char** ENVP;
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -40,6 +41,7 @@ TestFunction(test_snippets){
     CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
     AtomTable at = {.allocator=allocator_from_arena(&arena)};
     Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
+    env_parse_posix(&env, ENVP);
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         const char* name; int line;
@@ -184,6 +186,7 @@ TestFunction(test_samples){
     CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
     AtomTable at = {.allocator=allocator_from_arena(&arena)};
     Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
+    env_parse_posix(&env, ENVP);
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         int line;
@@ -348,7 +351,8 @@ TestFunction(test_samples){
 }
 
 
-int main(int argc, char** argv){
+int main(int argc, char** argv, char** envp){
+    ENVP = envp;
     RegisterTestFlags(test_snippets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_samples, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     ArgToParse kwargs[] = {
