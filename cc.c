@@ -226,6 +226,8 @@ int main(int argc, char** argv, char** envp){
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wcast-qual"
     #endif
+    if(eval_str.length)
+        script_argv_storage[script_argc++] = "-e";
     script_argv_storage[script_argc++] = (char*)filename.text;
     for(size_t i = 0; i < num_prog_args; i++)
         script_argv_storage[script_argc++] = (char*)prog_args[i];
@@ -251,6 +253,15 @@ int main(int argc, char** argv, char** envp){
         if(err) goto stringify_error;
         err = ci_register_sym(&interp, SV("builtins"), SV("__argv"), &script_argv);
         if(err) goto stringify_error;
+        // These need to bind to our symbols directly (no dynamic symbol on
+        // glibc and possibly wrong crt on windows).
+        // Just works on macos, but isn't worth the ifdef.
+        {
+            err = ci_register_sym(&interp, SV("crt"), SV("atexit"), (void*)&atexit);
+            if(err) goto stringify_error;
+            err = ci_register_sym(&interp, SV("crt"), SV("at_quick_exit"), (void*)&at_quick_exit);
+            if(err) goto stringify_error;
+        }
     }
     err = cc_register_pragmas(&interp.parser);
     if(err) goto stringify_error;
@@ -289,7 +300,7 @@ int main(int argc, char** argv, char** envp){
     if(filename.length && (sv_equals(filename, SV("-")) || sv_equals(filename, SV("/dev/stdin"))))
         filename = (StringView){0};
     if(eval_str.length){
-        filename = SV("(-e)");
+        filename = SV("-e");
         fc_write_path(fc, filename.text, filename.length);
         err = fc_cache_file(fc, eval_str);
         if(err) goto stringify_error;
@@ -425,7 +436,7 @@ int main(int argc, char** argv, char** envp){
         }
         // Call main if defined
         {
-            int result;
+            int result = 0;
             err = ci_call_main(&interp, script_argc, script_argv, envp, &result);
             if(!err) { err = result; goto fini;}
             if(err != _cc_symbol_not_found_error) goto stringify_error;

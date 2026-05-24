@@ -369,7 +369,7 @@ read_file_handle(int fd, Allocator a, LongString* outstr){
     }
 
     // For streams/pipes/stdin - read in chunks
-    enum {CHUNK_SIZE = 65536}; // 64KB chunks
+    enum {CHUNK_SIZE = 65536};
     size_t capacity = CHUNK_SIZE;
     size_t length = 0;
     char* buffer = Allocator_alloc(a, capacity);
@@ -377,7 +377,6 @@ read_file_handle(int fd, Allocator a, LongString* outstr){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         return result;
     }
-
     for(;;){
         if(length + CHUNK_SIZE > capacity){
             size_t new_capacity = capacity * 2;
@@ -390,7 +389,6 @@ read_file_handle(int fd, Allocator a, LongString* outstr){
             buffer = new_buffer;
             capacity = new_capacity;
         }
-
         ssize_t nread = read(fd, buffer + length, CHUNK_SIZE);
         if(nread < 0){
             if(errno == EINTR) continue; // Retry on interrupt
@@ -632,9 +630,8 @@ warn_unused
 FileError
 read_file_handle(HANDLE handle, Allocator a, LongString* outstr){
     FileError result = {0};
-
     LARGE_INTEGER size;
-    BOOL size_success = GetFileSizeEx(handle, &size);
+    BOOL size_success = GetFileType(handle) == FILE_TYPE_DISK && GetFileSizeEx(handle, &size);
     if(size_success){
         // Regular file with known size
         size_t nbytes = size.QuadPart;
@@ -692,9 +689,13 @@ read_file_handle(HANDLE handle, Allocator a, LongString* outstr){
         DWORD nread;
         BOOL read_success = ReadFile(handle, buffer + length, CHUNK_SIZE, &nread, NULL);
         if(!read_success){
+            DWORD e = GetLastError();
+            // end-of-stream for a pipe is ERROR_BROKEN_PIPE,
+            // which is not actually an error.
+            if(e == ERROR_BROKEN_PIPE) break;
             Allocator_free(a, buffer, capacity);
             result.errored = FILE_ERROR;
-            result.native_error = GetLastError();
+            result.native_error = e;
             return result;
         }
         if(nread == 0) break; // EOF

@@ -78,19 +78,32 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* coverage_tests = phony_target(ctx, "coverage-tests");
     coverage_tests->user_bits |= EXCLUDE_FROM_MAKEFILE;
     add_dep(ctx, test, tests);
+    BuildTarget* cc_opt;
+    {
+        // Optimized cc without sanitizers for self-hosted tests
+        _Bool saved_ns = ctx->target.native_sanitize;
+        ctx->target.native_sanitize = 0;
+        cc_opt = exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+        add_dep(ctx, all, cc_opt);
+        ctx->target.native_sanitize = saved_ns;
+        cmd_carg(&cc_opt->cmd, "-O2");
+        link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
+    }
     static const struct {
         const char* file;
         const char* name;
         const char* cmd_name;
         _Bool needs_lffi;
         _Bool skip_self_hosted;
+        _Bool needs_drc_path;
     } test_files[] = {
-        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0, 0},
-        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0, 0},
-        {"C/cc_test.c", "cc_test", "run_cc_test", 0, 0},
-        {"C/ci_test.c", "ci_test", "run_ci_test", 0, 0},
-        {"C/ci_oom_test.c", "ci_oom_test", "run_ci_oom_test", 0, 1},
-        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1, 0},
+        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0, 0, 0},
+        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0, 0, 0},
+        {"C/cc_test.c", "cc_test", "run_cc_test", 0, 0, 0},
+        {"C/ci_test.c", "ci_test", "run_ci_test", 0, 0, 0},
+        {"C/ci_oom_test.c", "ci_oom_test", "run_ci_oom_test", 0, 1, 0},
+        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1, 0, 0},
+        {"drc_test.c", "drc_test", "run_drc_test", 0, 0, 1},
     };
     {
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
@@ -106,6 +119,11 @@ int main(int argc, char** argv, char** envp){
             target_prog(ctx, cmd, bin);
             if(test_files[i].needs_lffi && ffi_dll)
                 add_dep(ctx, cmd, ffi_dll);
+            if(test_files[i].needs_drc_path){
+                add_dep(ctx, cmd, cc_opt);
+                cmd_carg(&cmd->cmd, "--drc");
+                cmd_aarg(&cmd->cmd, cc_opt->name);
+            }
             if(!ctx->dash_dash_args.count)
                 cmd_carg(&cmd->cmd, "--multithreaded");
             else
@@ -116,6 +134,7 @@ int main(int argc, char** argv, char** envp){
             add_dep(ctx, tests, cmd);
 
             // Coverage variant
+            if(test_files[i].needs_drc_path) continue; // just skip for now, since the drc exe would need the coverage
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
             BuildTarget* cov_bin = exe_target(ctx, cov_name->data, file, OS_NATIVE);
             get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
@@ -196,15 +215,6 @@ int main(int argc, char** argv, char** envp){
 
     BuildTarget* selfhost;
     {
-        // Optimized cc without sanitizers for self-hosted tests
-        _Bool saved_ns = ctx->target.native_sanitize;
-        ctx->target.native_sanitize = 0;
-        BuildTarget* cc_opt = exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
-        add_dep(ctx, all, cc_opt);
-        ctx->target.native_sanitize = saved_ns;
-        cmd_carg(&cc_opt->cmd, "-O2");
-        link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
-
         selfhost = cmd_target(ctx, "selfhost");
         selfhost->is_phony = 1;
         add_dep(ctx, selfhost, cc_opt);
@@ -225,6 +235,11 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_lffi && ffi_lib)
                 cmd_carg(&cmd->cmd, "-IFetched/libffi");
             cmd_carg(&cmd->cmd, test_files[i].file);
+            if(test_files[i].needs_drc_path){
+                add_dep(ctx, cmd, cc_opt);
+                cmd_carg(&cmd->cmd, "--drc");
+                cmd_aarg(&cmd->cmd, cc_opt->name);
+            }
             if(!ctx->dash_dash_args.count)
                 cmd_carg(&cmd->cmd, "--multithreaded");
             else

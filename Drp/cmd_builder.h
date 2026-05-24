@@ -62,6 +62,13 @@ cmd_arg(CmdBuilder* cmd, LongString arg){
     arg.text = Allocator_dupe(cmd->allocator, arg.text, arg.length+1);
     cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, arg);
 }
+static
+void
+cmd_arg_(CmdBuilder* cmd, LongString arg){
+    if(!cmd->args.count) cmd->errored = 1;
+    if(cmd->errored) return;
+    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, arg);
+}
 
 static
 void
