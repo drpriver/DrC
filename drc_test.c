@@ -100,6 +100,20 @@ TestFunction(test_snippets){
                 "world" EOL
             ),
         },
+        {
+            "__argc/__argv/argc/argv", __LINE__,
+            .program = LSI(
+                "#include <stdio.h>\n"
+                "for(int i = 1; i < __argc; i++) puts(__argv[i]);\n"
+                "puts(\"---\");\n"
+                "int main(int argc, char** argv){\n"
+                "   for(int i = 1; i < argc; i++) puts(argv[i]);\n"
+                "}\n"
+            ),
+            .expected_output=SVI(
+                "---" EOL
+            ),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

@@ -234,7 +234,10 @@ int main(int argc, char** argv, char** envp){
     #endif
     if(eval_str.length)
         script_argv_storage[script_argc++] = "-e";
-    script_argv_storage[script_argc++] = (char*)filename.text;
+    if(filename.text)
+        script_argv_storage[script_argc++] = (char*)filename.text;
+    else if(!eval_str.length)
+        script_argv_storage[script_argc++] = "(stdin)";
     for(size_t i = 0; i < num_prog_args; i++)
         script_argv_storage[script_argc++] = (char*)prog_args[i];
     #ifdef __GNUC__
