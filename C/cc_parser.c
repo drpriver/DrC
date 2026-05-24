@@ -2108,101 +2108,38 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__atomic_compare_exchange:
-                case CC__atomic_fetch_add:
-                case CC__atomic_fetch_sub:
-                case CC__atomic_fetch_and:
-                case CC__atomic_fetch_or:
-                case CC__atomic_fetch_xor:
-                case CC__atomic_load_n:
-                case CC__atomic_store_n:
-                case CC__atomic_exchange_n:
-                case CC__atomic_compare_exchange_n: {
+                case CC__atomic_compare_exchange:{
                     CcAtomicOp op;
-                    switch(builtin){
-                        case CC__atomic_fetch_add: op = CC_ATOMIC_FETCH_ADD; break;
-                        case CC__atomic_fetch_sub: op = CC_ATOMIC_FETCH_SUB; break;
-                        case CC__atomic_fetch_and: op = CC_ATOMIC_FETCH_AND; break;
-                        case CC__atomic_fetch_or:  op = CC_ATOMIC_FETCH_OR;  break;
-                        case CC__atomic_fetch_xor: op = CC_ATOMIC_FETCH_XOR; break;
-                        case CC__atomic_load_n:    op = CC_ATOMIC_LOAD_N;    break;
-                        case CC__atomic_store_n:   op = CC_ATOMIC_STORE_N;   break;
-                        case CC__atomic_exchange_n:op = CC_ATOMIC_EXCHANGE_N; break;
-                        case CC__atomic_compare_exchange_n: op = CC_ATOMIC_COMPARE_EXCHANGE_N; break;
-                        case CC__atomic_compare_exchange:   op = CC_ATOMIC_COMPARE_EXCHANGE;   break;
-                        case CC_BUILTIN_NONE:
-                        case CC__atomic_exchange:
-                        case CC__atomic_load:
-                        case CC__atomic_signal_fence:
-                        case CC__atomic_store:
-                        case CC__atomic_thread_fence:
-                        case CC__bt:
-                        case CC__builtin_abort:
-                        case CC__builtin_add_overflow:
-                        case CC__builtin_alloca:
-                        case CC__builtin_clz:
-                        case CC__builtin_clzl:
-                        case CC__builtin_clzll:
-                        case CC__builtin_constant_p:
-                        case CC__builtin_ctz:
-                        case CC__builtin_ctzl:
-                        case CC__builtin_ctzll:
-                        case CC__builtin_debugtrap:
-                        case CC__builtin_expect:
-                        case CC__builtin_huge_val:
-                        case CC__builtin_huge_valf:
-                        case CC__builtin_huge_vall:
-                        case CC__builtin_intern:
-                        case CC__builtin_mul_overflow:
-                        case CC__builtin_nan:
-                        case CC__builtin_nanf:
-                        case CC__builtin_offsetof:
-                        case CC__builtin_popcount:
-                        case CC__builtin_popcountl:
-                        case CC__builtin_popcountll:
-                        case CC__builtin_sub_overflow:
-                        case CC__builtin_trap:
-                        case CC__builtin_unreachable:
-                        case CC__builtin_va_arg:
-                        case CC__builtin_va_copy:
-                        case CC__builtin_va_end:
-                        case CC__builtin_va_start:
-                        case CC__func__:
-                        case CC__nan:
-                        case CC_InterlockedExchange:
-                        case CC_InterlockedExchange8:
-                        case CC_InterlockedExchange16:
-                        case CC_InterlockedExchange64:
-                        case CC_InterlockedCompareExchange:
-                        case CC_InterlockedCompareExchange8:
-                        case CC_InterlockedCompareExchange16:
-                        case CC_InterlockedCompareExchange64:
-                        case CC_InterlockedCompareExchange128:
-                        case CC_InterlockedIncrement:
-                        case CC_InterlockedIncrement16:
-                        case CC_InterlockedIncrement64:
-                        case CC_InterlockedDecrement:
-                        case CC_InterlockedDecrement16:
-                        case CC_InterlockedDecrement64:
-                        case CC_InterlockedExchangeAdd:
-                        case CC_InterlockedExchangeAdd8:
-                        case CC_InterlockedExchangeAdd16:
-                        case CC_InterlockedExchangeAdd64:
-                        case CC_InterlockedAnd:
-                        case CC_InterlockedAnd8:
-                        case CC_InterlockedAnd16:
-                        case CC_InterlockedAnd64:
-                        case CC_InterlockedOr:
-                        case CC_InterlockedOr8:
-                        case CC_InterlockedOr16:
-                        case CC_InterlockedOr64:
-                        case CC_InterlockedXor:
-                        case CC_InterlockedXor8:
-                        case CC_InterlockedXor16:
-                        case CC_InterlockedXor64:
-                        case CC__umul128:
-                        return cc_unreachable(p, tok.loc, "compiler broken??");
-                    }
+                    op = CC_ATOMIC_COMPARE_EXCHANGE;
+                    goto atomic_op;
+                case CC__atomic_fetch_add:
+                    op = CC_ATOMIC_FETCH_ADD;
+                    goto atomic_op;
+                case CC__atomic_fetch_sub:
+                    op = CC_ATOMIC_FETCH_SUB;
+                    goto atomic_op;
+                case CC__atomic_fetch_and:
+                    op = CC_ATOMIC_FETCH_AND;
+                    goto atomic_op;
+                case CC__atomic_fetch_or:
+                    op = CC_ATOMIC_FETCH_OR;
+                    goto atomic_op;
+                case CC__atomic_fetch_xor:
+                    op = CC_ATOMIC_FETCH_XOR;
+                    goto atomic_op;
+                case CC__atomic_load_n:
+                    op = CC_ATOMIC_LOAD_N;
+                    goto atomic_op;
+                case CC__atomic_store_n:
+                    op = CC_ATOMIC_STORE_N;
+                    goto atomic_op;
+                case CC__atomic_exchange_n:
+                    op = CC_ATOMIC_EXCHANGE_N;
+                    goto atomic_op;
+                case CC__atomic_compare_exchange_n:
+                    op = CC_ATOMIC_COMPARE_EXCHANGE_N;
+                    goto atomic_op;
+                atomic_op:; {
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
@@ -2314,6 +2251,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                }
                 case CC__atomic_thread_fence:
                 case CC__atomic_signal_fence: {
                     enum CcAtomicOp op = (builtin == CC__atomic_thread_fence) ? CC_ATOMIC_THREAD_FENCE : CC_ATOMIC_SIGNAL_FENCE;
@@ -2399,7 +2337,14 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, vc, &ptr_expr);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) != CC_POINTER)
+                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
+                        CcQualType t;
+                        err = cc_pointer_of(p, ccqt_as_array(ptr_expr->type)->element, &t);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
+                        if(err) return err;
+                    }
+                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
                         return cc_error(p, tok.loc, "first argument to interlocked builtin must be a pointer");
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, val_type, nargs);
                     if(!node) return CC_OOM_ERROR;
@@ -2441,7 +2386,14 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, vc, &ptr_expr);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) != CC_POINTER)
+                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
+                        CcQualType t;
+                        err = cc_pointer_of(p, ccqt_as_array(ptr_expr->type)->element, &t);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
+                        if(err) return err;
+                    }
+                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
                         return cc_error(p, tok.loc, "first argument to interlocked builtin must be a pointer");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -2459,7 +2411,14 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, vc, &ptr_expr);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) != CC_POINTER)
+                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
+                        CcQualType t;
+                        err = cc_pointer_of(p, ccqt_as_array(ptr_expr->type)->element, &t);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
+                        if(err) return err;
+                    }
+                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
                         return cc_error(p, tok.loc, "first argument to _InterlockedCompareExchange128 must be a pointer");
                     CcQualType ll_type = ccqt_basic(CCBT_long_long);
                     CcQualType ll_ptr_type;

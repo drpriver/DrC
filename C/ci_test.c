@@ -2418,6 +2418,34 @@ TestFunction(test_interpreter){
             .exit_code = 10 + 10,
         },
         {
+            "_InterlockedCompareExchange evaluates exchange operand once", __LINE__,
+            SVI("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+                "long volatile x = 10;\n"
+                "int calls = 0;\n"
+                "long old = _InterlockedCompareExchange(&x, (calls += 1, 42), 10);\n"
+                "return calls * 1000 + (int)(old + x);\n"),
+            .exit_code = 1 * 1000 + 10 + 42,
+        },
+        {
+            "_InterlockedCompareExchange with implicit decay", __LINE__,
+            SVI("long _InterlockedCompareExchange(long volatile*, long, long);\n"
+                "long volatile x[1] = {10};\n"
+                "int calls = 0;\n"
+                "long old = _InterlockedCompareExchange(x, (calls += 1, 42), 10);\n"
+                "return calls * 1000 + (int)(old + x[0]);\n"),
+            .exit_code = 1 * 1000 + 10 + 42,
+        },
+        {
+            "_InterlockedCompareExchange128 evaluates exchange operand once", __LINE__,
+            SVI("unsigned char _InterlockedCompareExchange128(long long volatile*, long long, long long, long long*);\n"
+                "_Alignas(16) long long volatile dst[2] = {1, 2};\n"
+                "_Alignas(16) long long cmp[2] = {1, 2};\n"
+                "int calls = 0;\n"
+                "unsigned char ok = _InterlockedCompareExchange128(dst, (calls += 1, 8), 5, cmp);\n"
+                "return calls * 10000 + (int)ok * 1000 + (int)dst[1] * 10 + (int)dst[0];\n"),
+            .exit_code = 1 * 10000 + 1 * 1000 + 8 * 10 + 5,
+        },
+        {
             "_InterlockedExchange8", __LINE__,
             SVI("char _InterlockedExchange8(char volatile*, char);\n"
                 "char volatile x = 5;\n"
