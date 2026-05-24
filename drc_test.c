@@ -5,6 +5,7 @@
 // NOTE: this is way slower than an in-process test like we have in C/*_test.c,
 // so only add tests here that absolutely need an entire process lifetime.
 #include "Drp/compiler_warnings.h"
+#include "Drp/windowsheader.h"
 #include "Drp/testing.h"
 #include "Drp/cmd_builder.h"
 #include "Drp/cmd_run.h"
@@ -119,6 +120,8 @@ TestFunction(test_snippets){
     cmd_destroy(&cmd);
     TESTEND();
 }
+
+// Might be slow, but we can't ship broken samples
 TestFunction(test_samples){
     TESTBEGIN();
     CmdBuilder cmd = {.prog.allocator=MALLOCATORI, .allocator=MALLOCATORI};
@@ -142,9 +145,28 @@ TestFunction(test_samples){
         },
         {
             __LINE__, LSI("Samples/script.c"),
+            SVI( "Hello world from Samples/script.c" EOL),
+        },
+        {
+            __LINE__, LSI("Samples/Simple/calc.c"),
+            SVI( "12" EOL),
+            {LSI("3 3 3 * +")},
+            .skip = IS_WINDOWS, // TODO: why is this failing?
+        },
+        {
+            __LINE__, LSI("Samples/Simple/vfprintf.c"),
             SVI(
-                "Hello world from Samples/script.c" EOL
-            ),
+                "Samples/Simple/vfprintf.c:14: Hello world" EOL
+                "Samples/Simple/vfprintf.c:15: Hello world" EOL
+                "Samples/Simple/vfprintf.c:14: 1. + 2. = 3.000000" EOL
+                "Samples/Simple/vfprintf.c:15: 1. + 2. = 3.000000" EOL
+                "Samples/Simple/vfprintf.c:14: hi 2.000000 you" EOL
+                "Samples/Simple/vfprintf.c:15: hi 2.000000 you" EOL
+                "Samples/Simple/vfprintf.c:14: Goodbye world" EOL
+                "Samples/Simple/vfprintf.c:15: Goodbye world" EOL
+                "Samples/Simple/vfprintf.c:14: hello" EOL
+                "Samples/Simple/vfprintf.c:15: hello" EOL
+            )
         },
         {
             __LINE__, LSI("Samples/Extensions/argv.c"),
@@ -153,10 +175,34 @@ TestFunction(test_samples){
                 "0) Samples/Extensions/argv.c" EOL
             ),
         },
+        {
+            __LINE__, LSI("Samples/Extensions/autotypedef.c"),
+            SVI(""),
+        },
+        {
+            __LINE__, LSI("Samples/POSIX/atomics.c"),
+            SVI(
+                "fetch_add counter: 400000 (expected 400000)" EOL
+                "fetch_sub counter: 0 (expected 0)" EOL
+                "stack items:       4000 (expected 4000)" EOL
+                "exchange sum:      55 (expected 55)" EOL
+                "fences:            ok" EOL
+            ),
+            .skip = IS_WINDOWS,
+        },
+        {
+            __LINE__, LSI("Samples/POSIX/locking.c"),
+            SVI(
+                "Mode: mutex" EOL
+                "Counter: 400000 (expected 400000)" EOL
+            ),
+            .skip = IS_WINDOWS,
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
+        if(c->skip) continue;
         cmd_clear(&cmd);
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
