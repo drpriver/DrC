@@ -36,23 +36,20 @@ int main(int argc, char** argv, char** envp){
     _Bool eager = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
-    AtomTable at = {.allocator=MALLOCATOR};
-    Environment env = {.allocator=MALLOCATOR, .at=&at};
+    static AtomTable at = {.allocator=MALLOCATORI};
+    static Environment env = {.allocator=MALLOCATORI, .at=&at};
     FileCache* fc = fc_create(MALLOCATOR);
-
     int err = env_parse_posix(&env, envp);
     if(err){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    CiInterpreter interp = {
+    // static so atexit callbacks with interpreted code work
+    static CiInterpreter interp = {
         .parser = {
             .cpp = {
-                .allocator = MALLOCATOR,
-                .fc = fc,
+                .allocator = MALLOCATORI,
                 .at = &at,
-                .logger = logger,
-                .target = cc_target_funcs[CC_TARGET_NATIVE](),
                 .env = &env,
             },
             .current = &interp.parser.global,
@@ -64,8 +61,6 @@ int main(int argc, char** argv, char** envp){
         .can_dlopen = 1,
         .procedural_macros = 1,
     };
-    LOCK_T_init(&interp.error_lock);
-    LOCK_T_init(&interp.atom_lock);
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
@@ -212,14 +207,18 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&parser, parse_err);
         return 1;
     }
-    // Re-apply target in case --target was given (overrides native default)
-    interp.parser.eager_parsing = eager;
+    LOCK_T_init(&interp.error_lock);
+    LOCK_T_init(&interp.atom_lock);
+    interp.parser.cpp.fc = fc;
+    interp.parser.cpp.logger = logger;
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
+    interp.parser.eager_parsing = eager;
     err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) goto stringify_error;
-    // Build argc/argv for __argc/__argv globals and ci_call_main.
-    int script_argc = 1 + (int)num_prog_args;
-    char* script_argv_storage[MAX_PROG_ARGS + 2];
+    // __argc, __argv and args to main
+    static int script_argc;
+    static char* script_argv_storage[MAX_PROG_ARGS + 2];
+    static char** script_argv = script_argv_storage;
     #ifdef __GNUC__
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wcast-qual"
@@ -227,16 +226,15 @@ int main(int argc, char** argv, char** envp){
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wcast-qual"
     #endif
-    script_argv_storage[0] = (char*)filename.text;
+    script_argv_storage[script_argc++] = (char*)filename.text;
     for(size_t i = 0; i < num_prog_args; i++)
-        script_argv_storage[1+i] = (char*)prog_args[i];
+        script_argv_storage[script_argc++] = (char*)prog_args[i];
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
     #elif defined __clang__
     #pragma clang diagnostic pop
     #endif
     script_argv_storage[script_argc] = NULL;
-    char** script_argv = script_argv_storage;
     err = cc_define_builtin_types(&interp.parser);
     if(err) goto stringify_error;
     {
@@ -264,12 +262,12 @@ int main(int argc, char** argv, char** envp){
     if(err) goto stringify_error;
     err = cpp_setup_builtin_headers(&interp.parser.cpp);
     if(err) goto stringify_error;
-    if(!cpp_nostdinc)
+    if(!cpp_nostdinc){
         err = cpp_setup_default_includes(&interp.parser.cpp);
-    if(err) goto stringify_error;
+        if(err) goto stringify_error;
+    }
     for(size_t i = 0; i < lib_paths.count; i++){
-        StringView p = lib_paths.data[i];
-        err = ci_append_lib_path(&interp, p);
+        err = ci_append_lib_path(&interp, lib_paths.data[i]);
         if(err) goto stringify_error;
     }
     for(size_t i = 0; i < libs.count; i++){
@@ -347,7 +345,7 @@ int main(int argc, char** argv, char** envp){
             .tab_completion_user_data = &completer_ctx,
             .tab_indent_width = 4,
         };
-        MStringBuilder msb = {.allocator=MALLOCATOR};
+        MStringBuilder msb = {.allocator=MALLOCATORI};
         int input_num = 0;
         for(;;){
             cc_parser_discard_input(&interp.parser);
@@ -405,7 +403,8 @@ int main(int argc, char** argv, char** envp){
         gi_destroy_ctx(&gi);
         ma_cleanup(StringView)(&completer_ctx.ordered, MALLOCATOR);
         msb_destroy(&msb);
-        return 0;
+        err = 0;
+        goto fini;
     }
     else {
         // Execute toplevel statements
@@ -420,17 +419,22 @@ int main(int argc, char** argv, char** envp){
         }
         if(dump)repl_builtin_command(&interp.parser, SV("/dump"));
         // Top-level return sets exit code
-        if(interp.exit_code != EXIT_CODE_SENTINEL)
-            return interp.exit_code;
+        if(interp.exit_code != EXIT_CODE_SENTINEL){
+            err = interp.exit_code;
+            goto fini;
+        }
         // Call main if defined
         {
-            int main_ret = 0;
-            err = ci_call_main(&interp, script_argc, script_argv, envp, &main_ret);
-            if(!err) return main_ret;
+            int result;
+            err = ci_call_main(&interp, script_argc, script_argv, envp, &result);
+            if(!err) { err = result; goto fini;}
             if(err != _cc_symbol_not_found_error) goto stringify_error;
+            err = 0;
+            goto fini;
         }
     }
-    return 0;
+    fini:;
+    return err;
     stringify_error:;
     const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
     fprintf(stderr, "Fail: %s\n", error_name);
