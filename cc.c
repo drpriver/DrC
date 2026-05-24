@@ -33,7 +33,7 @@ static _Bool repl_builtin_command(CcParser* parser, StringView input);
 static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 
 int main(int argc, char** argv, char** envp){
-    _Bool eager = 0;
+    _Bool eager = 0, syntax_only = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
     static AtomTable at = {.allocator=MALLOCATORI};
@@ -111,6 +111,12 @@ int main(int argc, char** argv, char** envp){
             .name = SV("--repl"),
             .dest = ARGDEST(&repl),
             .help = "Start an interactive C REPL.",
+        },
+        {
+            .name = SV("--syntax-only"),
+            .altname1 = SV("-fsyntax-only"),
+            .dest = ARGDEST(&syntax_only),
+            .help = "Don't run the code, just check syntax and type check",
         },
         {
             .name = SV("-L"),
@@ -342,11 +348,13 @@ int main(int argc, char** argv, char** envp){
     }
     err = cc_parse_all(&interp.parser);
     if(err) goto stringify_error;
-    err = ci_resolve_refs(&interp, 0);
-    if(err) goto stringify_error;
+    if(!syntax_only){
+        err = ci_resolve_refs(&interp, 0);
+        if(err) goto stringify_error;
+    }
     if(repl){
         // Execute any statements from the initial file before entering REPL.
-        {
+        if(!syntax_only){
             CiInterpFrame* frame = &interp.top_frame;
             frame->stmts = interp.parser.toplevel_statements.data;
             frame->stmt_count = interp.parser.toplevel_statements.count;
@@ -397,16 +405,18 @@ int main(int argc, char** argv, char** envp){
                 }
                 err = cc_parse_all(&interp.parser);
                 if(err){ msb.cursor = 0; continue; }
-                err = ci_resolve_refs(&interp, 0);
-                if(err){ msb.cursor = 0; continue; }
-                // Execute new statements
-                {
-                    CiInterpFrame* frame = &interp.top_frame;
-                    frame->stmts = interp.parser.toplevel_statements.data;
-                    frame->stmt_count = interp.parser.toplevel_statements.count;
-                    while(frame->pc < frame->stmt_count){
-                        err = ci_interp_step(&interp, frame);
-                        if(err) break;
+                if(!syntax_only){
+                    err = ci_resolve_refs(&interp, 0);
+                    if(err){ msb.cursor = 0; continue; }
+                    // Execute new statements
+                    {
+                        CiInterpFrame* frame = &interp.top_frame;
+                        frame->stmts = interp.parser.toplevel_statements.data;
+                        frame->stmt_count = interp.parser.toplevel_statements.count;
+                        while(frame->pc < frame->stmt_count){
+                            err = ci_interp_step(&interp, frame);
+                            if(err) break;
+                        }
                     }
                 }
                 msb.cursor = 0;
@@ -427,15 +437,21 @@ int main(int argc, char** argv, char** envp){
     else {
         // Execute toplevel statements
         enum { EXIT_CODE_SENTINEL = 0x4a544d }; // "JTM" = jump to main
-        interp.exit_code = EXIT_CODE_SENTINEL;
-        CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto stringify_error;
+        if(!syntax_only){
+            interp.exit_code = EXIT_CODE_SENTINEL;
+            CiInterpFrame* frame = &interp.top_frame;
+            frame->stmts = interp.parser.toplevel_statements.data;
+            frame->stmt_count = interp.parser.toplevel_statements.count;
+            while(frame->pc < frame->stmt_count){
+                err = ci_interp_step(&interp, frame);
+                if(err) goto stringify_error;
+            }
         }
         if(dump)repl_builtin_command(&interp.parser, SV("/dump"));
+        if(syntax_only){
+            err = 0;
+            goto fini;
+        }
         // Top-level return sets exit code
         if(interp.exit_code != EXIT_CODE_SENTINEL){
             err = interp.exit_code;

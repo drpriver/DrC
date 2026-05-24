@@ -130,6 +130,7 @@ TestFunction(test_samples){
         LongString program;
         StringView expected_output;
         LongString args[4];
+        _Bool syntax_only;
         _Bool skip;
     } testcases[] = {
         {
@@ -153,6 +154,13 @@ TestFunction(test_samples){
             {LSI("3 3 3 * +")},
             .skip = IS_WINDOWS, // TODO: why is this failing?
         },
+        { __LINE__, LSI("Samples/Simple/mandelbrot.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/Simple/primes.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/CLI/bf.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/CLI/hexdump.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/CLI/minigrep.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/CLI/sort.c"), .syntax_only = 1, },
+        { __LINE__, LSI("Samples/CLI/wc.c"), .syntax_only = 1, },
         {
             __LINE__, LSI("Samples/Simple/vfprintf.c"),
             SVI(
@@ -206,6 +214,8 @@ TestFunction(test_samples){
         cmd_clear(&cmd);
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
+        if(c->syntax_only)
+            cmd_arg_(&cmd, LS("--syntax-only"));
         cmd_arg_(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
             if(!c->args[a].text) break;
