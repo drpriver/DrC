@@ -78,16 +78,34 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* coverage_tests = b_phony_target(ctx, "coverage-tests");
     coverage_tests->user_bits |= EXCLUDE_FROM_MAKEFILE;
     b_add_dep(ctx, test, tests);
-    BuildTarget* cc_opt;
+    BuildTarget* cc_opt, *cc_cov;
     {
         // Optimized cc without sanitizers for self-hosted tests
         _Bool saved_ns = ctx->target.native_sanitize;
         ctx->target.native_sanitize = 0;
-        cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
-        b_add_dep(ctx, all, cc_opt);
+
+        {
+            cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+            b_add_dep(ctx, all, cc_opt);
+            b_arg(ctx, cc_opt, "-O2");
+            link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
+        }
+        {
+            cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", OS_NATIVE);
+            b_get_target(ctx, "cc_cov")->user_bits |= EXCLUDE_FROM_MAKEFILE;
+            if(cc_cov->compiler_flavor != COMPILER_CL){
+                if(cc_cov->compiler_flavor == COMPILER_CLANG_CL){
+                    b_arg(ctx, cc_cov, "/clang:--coverage");
+                    b_arg(ctx, cc_cov, "/clang:-fprofile-update=atomic");
+                }
+                else{
+                    b_arg(ctx, cc_cov, "--coverage");
+                    b_arg(ctx, cc_cov, "-fprofile-update=atomic");
+                }
+            }
+            link_libffi(ctx, cc_cov, OS_NATIVE, ffi_lib);
+        }
         ctx->target.native_sanitize = saved_ns;
-        b_arg(ctx, cc_opt, "-O2");
-        link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
     }
     static const struct {
         const char* file;
@@ -118,11 +136,8 @@ int main(int argc, char** argv, char** envp){
             cmd->is_phony = 1;
             if(test_files[i].needs_lffi && ffi_dll)
                 b_add_dep(ctx, cmd, ffi_dll);
-            if(test_files[i].needs_drc_path){
-                b_add_dep(ctx, cmd, cc_opt);
-                b_arg(ctx, cmd, "--drc");
-                b_aarg(ctx, cmd, cc_opt->name);
-            }
+            if(test_files[i].needs_drc_path)
+                b_arginp(ctx, cmd, "--drc", cc_opt);
             if(!ctx->dash_dash_args.count)
                 b_arg(ctx, cmd, "--multithreaded");
             else
@@ -131,7 +146,6 @@ int main(int argc, char** argv, char** envp){
             b_add_dep(ctx, tests, cmd);
 
             // Coverage variant
-            if(test_files[i].needs_drc_path) continue; // just skip for now, since the drc exe would need the coverage
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
             BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, OS_NATIVE);
             b_get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
@@ -153,6 +167,11 @@ int main(int argc, char** argv, char** envp){
             cov_cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(test_files[i].needs_lffi && ffi_dll)
                 b_add_dep(ctx, cov_cmd, ffi_dll);
+            if(test_files[i].needs_drc_path){
+                b_arginp(ctx, cov_cmd, "--drc", cc_cov);
+                b_arg(ctx, cov_cmd, "--covdir");
+                b_argf(ctx, cov_cmd, "%s/drc_test_coverage", ctx->build_dir->data);
+            }
             b_arg(ctx, cov_cmd, "--multithreaded");
             b_add_dep(ctx, coverage_tests, cov_cmd);
         }
@@ -163,8 +182,11 @@ int main(int argc, char** argv, char** envp){
         b_add_deps(ctx, coverage, coverage_tests, coverage_dir);
         b_args(ctx, coverage, "Tools/coverage.py", "--root", ".",
             "--merge-mode-functions=merge-use-line-0",
-            "--gcov-ignore-parse-errors=negative_hits.warn_once_per_file",
             "--exclude", "Drp/", "--exclude", "Vendored/", "--exclude", ".*_test\\.c",
+            "--exclude", "cc\\.c",
+            "--exclude", "cpp\\.c",
+            "--exclude", "cpp_args\\.h",
+            "--exclude", "cc_repl_completion\\.h",
             "--markdown");
         b_argf(ctx, coverage, "--txt=%s/coverage/coverage.txt", ctx->build_dir->data);
         b_argf(ctx, coverage, "--html-details=%s/coverage/index.html", ctx->build_dir->data);
@@ -220,11 +242,8 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_lffi && ffi_lib)
                 b_arg(ctx, cmd, "-IFetched/libffi");
             b_arg(ctx, cmd, test_files[i].file);
-            if(test_files[i].needs_drc_path){
-                b_add_dep(ctx, cmd, cc_opt);
-                b_arg(ctx, cmd, "--drc");
-                b_aarg(ctx, cmd, cc_opt->name);
-            }
+            if(test_files[i].needs_drc_path)
+                b_arginp(ctx, cmd, "--drc", cc_opt);
             if(!ctx->dash_dash_args.count)
                 b_arg(ctx, cmd, "--multithreaded");
             else

@@ -4,6 +4,8 @@
 // Runs tests via the actual compiler driver.
 // NOTE: this is way slower than an in-process test like we have in C/*_test.c,
 // so only add tests here that absolutely need an entire process lifetime.
+#define STB_SPRINTF_STATIC
+#define STB_SPRINTF_IMPLEMENTATION
 #include "Drp/compiler_warnings.h"
 #include "Drp/windowsheader.h"
 #ifdef __linux__
@@ -20,7 +22,10 @@ enum {IS_APPLE = 0};
 #include "Drp/cmd_builder.h"
 #include "Drp/cmd_run.h"
 #include "Drp/Allocators/mallocator.h"
+#include "Drp/Allocators/arena_allocator.h"
+#include "Drp/msb_sprintf.h"
 LongString DRC_PATH;
+StringView COVDIR;
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -31,7 +36,11 @@ LongString DRC_PATH;
 // NOTE: windows command line max length is shorter than you'd expect.
 TestFunction(test_snippets){
     TESTBEGIN();
-    CmdBuilder cmd = {.prog.allocator=MALLOCATORI, .allocator=MALLOCATORI};
+    ArenaAllocator arena = {0};
+    CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
+    AtomTable at = {.allocator=allocator_from_arena(&arena)};
+    Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
+    MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         const char* name; int line;
         LongString program;
@@ -116,6 +125,7 @@ TestFunction(test_snippets){
         },
     };
     static int idx = 0;
+    int err = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
         cmd_clear(&cmd);
@@ -128,27 +138,53 @@ TestFunction(test_snippets){
             cmd_arg(&cmd, c->args[a]);
         }
         LongString output = {0};
-        int err = cmd_run_capture(&cmd, NULL, MALLOCATOR, &output);
+        if(COVDIR.length){
+            msb_reset(&prefix);
+            msb_sprintf(&prefix, "%s/snippet_%zu", COVDIR.text, i);
+            if(prefix.errored){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+            StringView sv = msb_borrow_sv(&prefix);
+            err = env_setenv4(&env, "GCOV_PREFIX", sizeof "GCOV_PREFIX" -1, sv.text, sv.length);
+            if(err){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+            err = env_setenv4(&env, "GCOV_PREFIX_STRIP", sizeof "GCOV_PREFIX_STRIP" - 1, "999", sizeof "999" - 1);
+            if(err){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+        }
+        size_t envp_size = 0;
+        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size);
+        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->name, err);
             if(output.length){
                 TestPrintf("%s:%d output: '%s'\n", __FILE__, c->line, output.text);
             }
-            if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
             TEST_stats.failures++;
             continue;
         }
         test_expect_equals_sv(c->expected_output, LS_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
-        if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
+        if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }
-    cmd_destroy(&cmd);
+    ArenaAllocator_free_all(&arena);
     TESTEND();
 }
 
 // Might be slow, but we can't ship broken samples
 TestFunction(test_samples){
     TESTBEGIN();
-    CmdBuilder cmd = {.prog.allocator=MALLOCATORI, .allocator=MALLOCATORI};
+    ArenaAllocator arena = {0};
+    CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
+    AtomTable at = {.allocator=allocator_from_arena(&arena)};
+    Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
+    MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         int line;
         LongString program;
@@ -203,6 +239,22 @@ TestFunction(test_samples){
                 "Samples/Simple/vfprintf.c:15: hello" EOL
             )
         },
+        { __LINE__, LSI("Samples/Extensions/moremacros.c"), .syntax_only = 1},
+
+        { __LINE__, LSI("Samples/Extensions/__get.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/__mixin.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/_Type.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/defblock.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/enum_strings.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/fucs.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/json_parse.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/methods.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/moremacros.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/procmacro-if.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/procmacro.c"), .syntax_only = 1 },
+        { __LINE__, LSI("Samples/Extensions/static-if.c"), .syntax_only = 1, .skip = 1 },
         {
             __LINE__, LSI("Samples/Extensions/argv.c"),
             SVI(
@@ -241,6 +293,7 @@ TestFunction(test_samples){
         { __LINE__, LSI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = IS_WINDOWS},
     };
     static int idx = 0;
+    int err = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
         if(c->skip) continue;
@@ -255,20 +308,42 @@ TestFunction(test_samples){
             cmd_arg(&cmd, c->args[a]);
         }
         LongString output = {0};
-        int err = cmd_run_capture(&cmd, NULL, MALLOCATOR, &output);
+        if(COVDIR.length){
+            msb_reset(&prefix);
+            msb_sprintf(&prefix, "%s/snippet_%zu", COVDIR.text, i);
+            if(prefix.errored){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+            StringView sv = msb_borrow_sv(&prefix);
+            err = env_setenv4(&env, "GCOV_PREFIX", sizeof "GCOV_PREFIX" -1, sv.text, sv.length);
+            if(err){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+            err = env_setenv4(&env, "GCOV_PREFIX_STRIP", sizeof "GCOV_PREFIX_STRIP" - 1, "999", sizeof "999" - 1);
+            if(err){
+                TEST_stats.assert_failures++;
+                continue;
+            }
+        }
+        size_t envp_size = 0;
+        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size);
+        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->program.text, err);
             if(output.length){
                 TestPrintf("%s:%d output: '%s'\n", __FILE__, c->line, output.text);
             }
-            if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
             TEST_stats.failures++;
             continue;
         }
         test_expect_equals_sv(c->expected_output, LS_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
-        if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
+        if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }
-    cmd_destroy(&cmd);
+    ArenaAllocator_free_all(&arena);
     TESTEND();
 }
 
@@ -283,6 +358,13 @@ int main(int argc, char** argv){
             .help = "Path to drc binary",
             .min_num = 1, .max_num = 1,
             .required = 1,
+        },
+        {
+            .name = SV("--covdir"),
+            .dest = ARGDEST(&COVDIR),
+            .help = "Where to write coverage data to avoid collisions",
+            .min_num = 0, .max_num = 1,
+            .required = 0,
         },
     };
     ArgParseKwParams extra = {
