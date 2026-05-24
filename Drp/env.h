@@ -50,6 +50,7 @@ static char*_Nullable env_to_win32(Environment* env, Allocator a, size_t* alloc_
 static
 int
 env_parse_posix(Environment* env, char*_Null_unspecified*_Null_unspecified envp){
+    if(!envp) return 0;
     for(char** p = envp; *p; p++){
         const char* eq = strchr(*p, '=');
         if(!eq) continue;
@@ -181,6 +182,7 @@ env_getenv(Environment* env, Atom key){
     uint32_t idx = fast_reduce32(hash, cap);
     uint32_t i;
     const EnvKV* items= env->data;
+    if(!env->count) return NULL;
     uint32_t* idxes = (uint32_t*)((char*)env->data + cap*sizeof *items);
     while((i = idxes[idx])){
         const EnvKV* item = &items[i-1];

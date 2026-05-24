@@ -209,6 +209,12 @@ TestFunction(test_samples){
             ),
             .skip = IS_WINDOWS,
         },
+        { __LINE__, LSI("Samples/POSIX/dirwatch.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/http_get.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/http_server.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/ls.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/mandelbrot_multithreaded.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = IS_WINDOWS},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
