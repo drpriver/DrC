@@ -253,13 +253,20 @@ int main(int argc, char** argv, char** envp){
         if(err) goto stringify_error;
         err = ci_register_sym(&interp, SV("builtins"), SV("__argv"), &script_argv);
         if(err) goto stringify_error;
-        // These need to bind to our symbols directly (no dynamic symbol on
-        // glibc and possibly wrong crt on windows).
-        // Just works on macos, but isn't worth the ifdef.
-        {
-            err = ci_register_sym(&interp, SV("crt"), SV("atexit"), (void*)&atexit);
-            if(err) goto stringify_error;
-            err = ci_register_sym(&interp, SV("crt"), SV("at_quick_exit"), (void*)&at_quick_exit);
+        // This is kind of a hack, but on some platforms, certain symbols are provided
+        // only in the static crt for whatever reason. So there is no symbol for us
+        // to dlsym
+        static const struct {
+            StringView symname; void* sym;
+        } crt_syms[] = {
+            { SVI("atexit"), (void*)&atexit, },
+            { SVI("at_quick_exit"), (void*)&at_quick_exit, },
+            #if defined _WIN32
+            { SVI("printf"), (void*)&printf, },
+            #endif
+        };
+        for(size_t i = 0; i < arrlen(crt_syms); i++){
+            err = ci_register_sym(&interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
             if(err) goto stringify_error;
         }
     }

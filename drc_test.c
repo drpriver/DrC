@@ -119,10 +119,74 @@ TestFunction(test_snippets){
     cmd_destroy(&cmd);
     TESTEND();
 }
+TestFunction(test_samples){
+    TESTBEGIN();
+    CmdBuilder cmd = {.prog.allocator=MALLOCATORI, .allocator=MALLOCATORI};
+    static const struct Case {
+        int line;
+        LongString program;
+        StringView expected_output;
+        LongString args[4];
+        _Bool skip;
+    } testcases[] = {
+        {
+            __LINE__, LSI("Samples/hello.c"),
+            SVI("Hello world" EOL),
+        },
+        {
+            __LINE__, LSI("Samples/main.c"),
+            SVI(
+                "Hello from main!" EOL
+                "0) Samples/main.c" EOL
+            ),
+        },
+        {
+            __LINE__, LSI("Samples/script.c"),
+            SVI(
+                "Hello world from Samples/script.c" EOL
+            ),
+        },
+        {
+            __LINE__, LSI("Samples/Extensions/argv.c"),
+            SVI(
+                "argc: 1" EOL
+                "0) Samples/Extensions/argv.c" EOL
+            ),
+        },
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
+        const struct Case* c = &testcases[i];
+        cmd_clear(&cmd);
+        cmd_prog(&cmd, DRC_PATH);
+        msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
+        cmd_arg_(&cmd, c->program);
+        for(size_t a = 0; a < arrlen(c->args); a++){
+            if(!c->args[a].text) break;
+            cmd_arg_(&cmd, c->args[a]);
+        }
+        LongString output = {0};
+        int err = cmd_run_capture(&cmd, NULL, MALLOCATOR, &output);
+        if(err){
+            TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->program.text, err);
+            if(output.length){
+                TestPrintf("%s:%d output: '%s'\n", __FILE__, c->line, output.text);
+            }
+            if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+            TEST_stats.failures++;
+            continue;
+        }
+        test_expect_equals_sv(c->expected_output, LS_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
+        if(output.text) Allocator_free(MALLOCATOR, output.text, output.length+1);
+    }
+    cmd_destroy(&cmd);
+    TESTEND();
+}
 
 
 int main(int argc, char** argv){
     RegisterTestFlags(test_snippets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_samples, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     ArgToParse kwargs[] = {
         {
             .name = SV("--drc"),
