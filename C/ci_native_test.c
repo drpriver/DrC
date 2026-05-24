@@ -965,7 +965,7 @@ TestFunction(test_interp_fail){
             "pragma pkg_config", __LINE__,
             SVI("#pragma pkg_config \"hopethisdoesnotexist\"\n"),
             // This always fails as we give an Environment without PATH
-            SVI("(test):1:2: error: 'pkg-config' not found in PATH\n"),
+            SVI("(test):1:2: error: `pkg-config` not found in PATH\n"),
         },
         {
             "backtrace", __LINE__,

@@ -3716,12 +3716,11 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
                 err = 0;
                 goto finally;
             }
-            err = cpp_error(cpp, loc, "'pkg-config' not found in PATH");
+            err = cpp_error(cpp, loc, "`pkg-config` not found in PATH");
             cmd_destroy(&cmd);
             goto finally;
         }
-        cmd_carg(&cmd, "--cflags");
-        cmd_carg(&cmd, "--libs");
+        cmd_cargs(&cmd, "--cflags", "--libs");
         {
             Atom a = AT_atomize(ci->parser.cpp.at, pkg_name.text, pkg_name.length);
             if(!a){
@@ -3732,14 +3731,14 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         }
         size_t envp_size = 0;
         void* envp = env_to_envp(cpp->env, scratch, &envp_size);
-        if(!envp) {
+        if(!envp){
             err = CI_OOM_ERROR;
             goto finally;
         }
-        int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
+        err = cmd_run_capture(&cmd, envp, scratch, &output);
         cmd_destroy(&cmd);
         Allocator_free(scratch, envp, envp_size);
-        if(run_err){
+        if(err){
             if(optional) {
                 err = 0;
                 goto finally;
@@ -3758,7 +3757,6 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             #pragma warning(disable: 4090)
         #else
         #endif
-        // The cast is safe: we own the buffer from cmd_run_capture.
         char* cmdline = (char*)output.text;
         #if defined(__clang__) || defined(__GNUC__)
             #pragma GCC diagnostic pop
@@ -4224,10 +4222,10 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         cmd_destroy(&cmd);
         return CI_OOM_ERROR;
     }
-    int run_err = cmd_run_capture(&cmd, envp, scratch, &output);
+    err = cmd_run_capture(&cmd, envp, scratch, &output);
     cmd_destroy(&cmd);
     Allocator_free(scratch, envp, envp_size);
-    if(run_err){
+    if(err){
         if(output.text) Allocator_free(scratch, output.text, output.length + 1);
         return cpp_error(cpp, loc, "__SHELL__: command failed");
     }

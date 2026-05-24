@@ -57,7 +57,7 @@
 // ```
 
 //
-// Defining this X-macro allows you to add extra fields to the TargetSettings (ctx->target).
+// Defining this X-macro allows you to add extra fields to the BuildTargetSettings (ctx->target).
 // It will be configurable in the CLI and is remembered for each invocation.
 //
 // This example is for information needed for cross-compiling to windows targeting msvc.
@@ -69,52 +69,44 @@
     X(Atom, msvcinc, "--msvcinc", "Path to msvc include. For cross-compilation.", nil_atom) \
     X(Atom, msvclib, "--msvclib", "Path to msvc libs. For cross-compilation.", nil_atom) \
 
-#include "Drp/build.h"
+#include "Drp/drbuild.h"
 
 static int prep_targets(BuildCtx*);
 
 int main(int argc, char** argv, char** envp){
-    // build_ctx() returns a fully initialized ctx or NULL on error.
-    // build_ctx will rebuild this program if needed and exec the resulting
+    // b_build_ctx() returns a fully initialized ctx or NULL on error.
+    // b_build_ctx will rebuild this program if needed and exec the resulting
     // binary so this program is always up-to-date and you don't have to
     // re-bootstrap.
-    BuildCtx* ctx = build_ctx(argc, argv, envp, __FILE__);
+    BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
     // Can also just prep targets in main.
     int err = prep_targets(ctx);
     if(err) return err;
-    return execute_targets(ctx);
+    return b_execute_targets(ctx);
 }
-
-struct SdlDep {
-    const char* name, *othername, *version;
-};
-
-static const struct SdlDep SDL = {"SDL2", "SDL", "2.30.9"};
-// Async C script
 
 static
 int
 prep_targets(BuildCtx* ctx){
-    BuildTarget* all = phony_target(ctx, "all");
+    BuildTarget* all = b_phony_target(ctx, "all");
     // For tools that only run on the build machine, pass OS_NATIVE instead of ctx->target.os
-    BuildTarget* cg = exe_target(ctx, "codegen", "Tools/codegen.c", OS_NATIVE);
-    BuildTarget* codegen = cmd_target(ctx, "generate code");
-    target_prog(ctx, codegen, cg); // cg is the program invoked by codegen
-    target_src_inp(ctx, codegen, "decls.idl");
+    BuildTarget* cg = b_exe_target(ctx, "codegen", "Tools/codegen.c", OS_NATIVE);
+    BuildTarget* codegen = b_cmd_target_prog(ctx, "generate code", cg); // cg is the program invoked by codegen
+    b_src_inp(ctx, codegen, "decls.idl");
     // decls_h is a generated source file
-    BuildTarget* decls_h = gen_src_file(ctx, "decls.h");
-    target_argout(ctx, codegen, "-o", decls_h);
+    BuildTarget* decls_h = b_gen_src_file(ctx, "decls.h");
+    b_argout(ctx, codegen, "-o", decls_h);
 
     enum OS target_os = ctx->target.os;
     if(target_os == OS_NATIVE)
         target_os = BUILD_OS;
-    BuildTarget* game = exe_target(ctx, "game", "main,c", target_os);
-    add_dep(ctx, all, game);
+    BuildTarget* game = b_exe_target(ctx, "game", "main.c", target_os);
+    b_add_dep(ctx, all, game);
     // For other includes, we can pick up the dependency from parsing compiler
     // output. But as this is generated, we need to know about the dependency *before*
     // we compile the target.
-    add_dep(ctx, game, decls_h);
+    b_add_dep(ctx, game, decls_h);
 
     if(target_os == OS_WINDOWS){
         if(BUILD_OS != OS_WINDOWS){ // cross-compiling
@@ -135,33 +127,34 @@ prep_targets(BuildCtx* ctx){
             WINCHECK(msvclib);
             #undef WINCHECK
             if(werr) return 1;
-            cmd_cargs(&game->cmd, "-Wl,/subsystem:windows,/entry:mainCRTStartup");
-            cmd_cargs(&game->cmd, "-fuse-ld=lld");
+            b_args(ctx, game, "-Wl,/subsystem:windows,/entry:mainCRTStartup");
+            b_args(ctx, game, "-fuse-ld=lld");
+            b_args(ctx, game, "--no-standard-libraries");
             const char* winc = ctx->target.winsdkinc->data;
-            const char* wlib = ctx->target.winsdklib->data;
+            b_argf(ctx, game, "-I%s/ucrt", winc);
+            b_argf(ctx, game, "-I%s/shared", winc);
+            b_argf(ctx, game, "-I%s/um", winc);
+            b_argf(ctx, game, "-I%s/winrt", winc);
             const char* minc = ctx->target.msvcinc->data;
+            b_argf(ctx, game, "-I%s", minc);
+            const char* wlib = ctx->target.winsdklib->data;
+            b_argf(ctx, game, "-L%s/um/x64", wlib);
+            b_argf(ctx, game, "%s/um/x64/kernel32.Lib", wlib);
+            b_argf(ctx, game, "%s/um/x64/Uuid.Lib", wlib);
+            b_argf(ctx, game, "%s/ucrt/x64/libucrt.lib", wlib);
             const char* mlib = ctx->target.msvclib->data;
-            cmd_cargs(&game->cmd, "--no-standard-libraries");
-            cmd_argf(&game->cmd, "-I%s/ucrt", winc);
-            cmd_argf(&game->cmd, "-I%s/shared", winc);
-            cmd_argf(&game->cmd, "-I%s/um", winc);
-            cmd_argf(&game->cmd, "-I%s/winrt", winc);
-            cmd_argf(&game->cmd, "-I%s", minc);
-            cmd_argf(&game->cmd, "-L%s/um/x64", wlib);
-            cmd_argf(&game->cmd, "%s/um/x64/kernel32.Lib", wlib);
-            cmd_argf(&game->cmd, "%s/um/x64/Uuid.Lib", wlib);
-            cmd_argf(&game->cmd, "%s/ucrt/x64/libucrt.lib", wlib);
-            cmd_argf(&game->cmd, "%s/x64/libvcruntime.lib", mlib);
-            cmd_argf(&game->cmd, "%s/x64/libcmt.lib", mlib);
+            b_argf(ctx, game, "%s/x64/libvcruntime.lib", mlib);
+            b_argf(ctx, game, "%s/x64/libcmt.lib", mlib);
         }
         else {
-            cmd_cargs(&game->cmd, "/link", "/subsystem:windows", "/entry:mainCRTStartup");
+            b_args(ctx, game, "/link", "/subsystem:windows", "/entry:mainCRTStartup");
         }
     }
-
+    return 0;
 }
 
-#include "Drp/build.c"
+#include "Drp/drbuild.c"
+#include "Drp/Allocators/allocator.c"
 #endif
 
 #ifndef STB_SPRINTF_STATIC
@@ -353,10 +346,10 @@ b_guess_compiler_flavor(Atom cc);
 // Guesses the flavor of the compiler based on its name.
 //
 
-typedef struct TargetSettings TargetSettings;
+typedef struct BuildTargetSettings BuildTargetSettings;
 // ------------------------------------------
 // Settings for configuring the final target program.
-struct TargetSettings {
+struct BuildTargetSettings {
     Atom cc;
     enum CompilerFlavor compiler_flavor;
     enum OS os;
@@ -405,7 +398,7 @@ struct BuildCtx {
     Marray(Atom) build_targets;
     Marray(Atom) dash_dash_args; // args after the "--", for exec commands
 
-    TargetSettings target;
+    BuildTargetSettings target;
     union {
         GlobalCachedSettings cached;
         struct {
@@ -509,7 +502,7 @@ struct BuildTarget {
 
 static
 BuildCtx*_Nullable
-build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile);
+b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile);
 
 static
 Atom
@@ -602,213 +595,227 @@ b_printfv(BuildCtx* ctx, const char* fmt, va_list vap);
 
 static
 int
-mkdir_if_not_exists(BuildCtx* ctx, const char* path);
+b_mkdir_if_not_exists(BuildCtx* ctx, const char* path);
 
 static
 int
-mkdirs_if_not_exists(BuildCtx* ctx, LongString path);
+b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path);
 
 static
 int
-move_file(BuildCtx* ctx, const char* from, const char* to);
+b_move_file(BuildCtx* ctx, const char* from, const char* to);
 
 static
 int
-copy_file(BuildCtx* ctx, const char* from, const char* to);
+b_copy_file(BuildCtx* ctx, const char* from, const char* to);
 
 static
 int
-copy_directory(BuildCtx* ctx, const char* from, const char* to);
+b_copy_directory(BuildCtx* ctx, const char* from, const char* to);
 
 static
 int
-rm_file(BuildCtx* ctx, const char* path);
+b_rm_file(BuildCtx* ctx, const char* path);
 
 static
 int
-rm_directory(BuildCtx* ctx, const char* path);
+b_rm_directory(BuildCtx* ctx, const char* path);
 
 static
 void
-print_command(BuildCtx* ctx, CmdBuilder* cmd);
+b_print_command(BuildCtx* ctx, CmdBuilder* cmd);
 
 static
 void
-parse_depfiles(BuildCtx* ctx);
+b_parse_depfiles(BuildCtx* ctx);
 
 static
 int
-execute_targets(BuildCtx* ctx);
+b_execute_targets(BuildCtx* ctx);
 
-static Atom get_git_hash(BuildCtx*);
+static Atom b_get_git_hash(BuildCtx*);
 
 static inline
 void
-ta_pusha(BuildCtx* ctx, Marray(Atom)* m, Atom a);
-
-static inline
-BuildTarget*
-alloc_targeta(BuildCtx* ctx, Atom name);
+b_ta_pusha(BuildCtx* ctx, Marray(Atom)* m, Atom a);
 
 static inline
 BuildTarget*
-alloc_target(BuildCtx* ctx, const char* name);
+b_targeta(BuildCtx* ctx, Atom name);
+
+static inline
+BuildTarget*
+b_target(BuildCtx* ctx, const char* name);
 
 static
 inline
 BuildTarget* _Nullable
-get_target(BuildCtx* ctx, const char* name);
+b_get_target(BuildCtx* ctx, const char* name);
 
 static
 inline
 BuildTarget* _Nullable
-get_targeta(BuildCtx* ctx, Atom a);
+b_get_targeta(BuildCtx* ctx, Atom a);
 
 static inline
 BuildTarget*
-src_filea(BuildCtx* ctx, Atom path);
+b_src_filea(BuildCtx* ctx, Atom path);
 
 static inline
 BuildTarget*
-src_file(BuildCtx* ctx, const char* src);
+b_src_file(BuildCtx* ctx, const char* src);
 
 static inline
 BuildTarget*
-gen_src_file(BuildCtx* ctx, const char* src);
+b_gen_src_file(BuildCtx* ctx, const char* src);
 
 static inline
 void
-add_dep(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* dep);
+b_add_dep(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* dep);
 
 static inline
 void
-add_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
+b_add_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
 
 static inline
 void
-add_deps_(BuildCtx* ctx, BuildTarget* tgt, size_t dep_count, BuildTarget*_Nonnull*_Nonnull dep);
+b_add_deps_(BuildCtx* ctx, BuildTarget* tgt, size_t dep_count, BuildTarget*_Nonnull*_Nonnull dep);
 
-#define add_deps(ctx, tgt, ...) add_deps_(ctx, tgt, sizeof (BuildTarget*[]){__VA_ARGS__} / sizeof(BuildTarget*), (BuildTarget*[]){__VA_ARGS__})
-
-static inline
-void
-add_src_depa(BuildCtx* ctx, BuildTarget* tgt, Atom dep);
+#define b_add_deps(ctx, tgt, ...) b_add_deps_(ctx, tgt, sizeof (BuildTarget*[]){__VA_ARGS__} / sizeof(BuildTarget*), (BuildTarget*[]){__VA_ARGS__})
 
 static inline
 void
-add_src_dep(BuildCtx* ctx, BuildTarget* tgt, const char* dep);
+b_add_src_depa(BuildCtx* ctx, BuildTarget* tgt, Atom dep);
 
 static inline
-BuildTarget*
-cmd_target(BuildCtx* ctx, const char* name);
+void
+b_add_src_dep(BuildCtx* ctx, BuildTarget* tgt, const char* dep);
 
 static inline
 BuildTarget*
-exec_target(BuildCtx* ctx, const char* name, BuildTarget*);
+b_cmd_target(BuildCtx* ctx, const char* name, const char* prog);
 
 static inline
 BuildTarget*
-exe_target(BuildCtx* ctx, const char* name, const char* sr, enum OS target_os);
+b_cmd_target_prog(BuildCtx* ctx, const char* name, BuildTarget* prog);
 
 static inline
 BuildTarget*
-bin_target(BuildCtx* ctx, const char* name);
+b_exec_target(BuildCtx* ctx, const char* name, BuildTarget*);
 
 static inline
 BuildTarget*
-directory_target(BuildCtx* ctx, const char* name);
-
-static
-void
-print_target(BuildCtx* ctx, BuildTarget* tgt);
-
-static
-void
-target_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog);
-
-static
-void
-target_inp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp);
-
-static
-BuildTarget*
-phony_target(BuildCtx* ctx, const char* name);
-
-static
-BuildTarget*
-phony_targeta(BuildCtx* ctx, Atom name);
-
-static
-void
-target_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, BuildTarget*_Nonnull*_Nonnull inp);
-#define target_inps(ctx, tgt, ...) target_inps_(ctx, tgt, sizeof (BuildTarget*[]){__VA_ARGS__} / sizeof(BuildTarget*), (BuildTarget*[]){__VA_ARGS__})
-
-static
-void
-target_src_inp(BuildCtx* ctx, BuildTarget* tgt, const char* inp_);
-static
-void
-target_src_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull inp_);
-#define target_src_inps(ctx, tgt, ...) target_src_inps_(ctx, tgt, sizeof (const char*[]){__VA_ARGS__} / sizeof(const char*), (const char*[]){__VA_ARGS__})
-static
-void
-target_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
-
-static
-void
-target_argf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
-
-static
-void
-target_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
-
-static
-void
-target_argout(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* out);
-
-static
-void
-target_arginp(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* inp);
-
-static
-void
-target_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp);
-
-static
-void
-target_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
-
-static
-void
-target_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
-
-static
-void
-target_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp);
-
-static
-void
-target_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp);
-
-static
-void
-target_linklib(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
+b_exe_target(BuildCtx* ctx, const char* name, const char* sr, enum OS target_os);
 
 static inline
 BuildTarget*
-script_target(BuildCtx* ctx, const char* name, int (*script)(BuildCtx*, BuildTarget*), const void* _Null_unspecified);
+b_bin_target(BuildCtx* ctx, const char* name);
 
 static inline
 BuildTarget*
-script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*), const void* _Null_unspecified);
+b_directory_target(BuildCtx* ctx, const char* name);
+
+static
+void
+b_print_target(BuildCtx* ctx, BuildTarget* tgt);
+
+static
+void
+b_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog);
+
+static
+void
+b_inp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp);
+
+static
+BuildTarget*
+b_phony_target(BuildCtx* ctx, const char* name);
+
+static
+BuildTarget*
+b_phony_targeta(BuildCtx* ctx, Atom name);
+
+static
+void
+b_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, BuildTarget*_Nonnull*_Nonnull inp);
+#define b_inps(ctx, tgt, ...) b_inps_(ctx, tgt, sizeof (BuildTarget*[]){__VA_ARGS__} / sizeof(BuildTarget*), (BuildTarget*[]){__VA_ARGS__})
+
+static
+void
+b_src_inp(BuildCtx* ctx, BuildTarget* tgt, const char* inp_);
+static
+void
+b_src_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull inp_);
+#define b_src_inps(ctx, tgt, ...) b_src_inps_(ctx, tgt, sizeof (const char*[]){__VA_ARGS__} / sizeof(const char*), (const char*[]){__VA_ARGS__})
+
+static
+void
+b_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
+
+static
+void
+b_aarg(BuildCtx* ctx, BuildTarget* tgt, Atom arg);
+
+static
+void
+b_args_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull args);
+#define b_args(ctx, tgt, ...) b_args_(ctx, tgt, sizeof (const char*[]){__VA_ARGS__} / sizeof(const char*), (const char*[]){__VA_ARGS__})
+
+static
+void
+b_argf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
+
+static
+void
+b_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out);
+
+static
+void
+b_argout(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* out);
+
+static
+void
+b_arginp(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* inp);
+
+static
+void
+b_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp);
+
+static
+void
+b_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
+
+static
+void
+b_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...);
+
+static
+void
+b_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp);
+
+static
+void
+b_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp);
+
+static
+void
+b_linklib(BuildCtx* ctx, BuildTarget* tgt, const char* arg);
 
 static inline
 BuildTarget*
-coro_target(BuildCtx* ctx, const char* name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud);
+b_script_target(BuildCtx* ctx, const char* name, int (*script)(BuildCtx*, BuildTarget*), const void* _Null_unspecified);
 
 static inline
 BuildTarget*
-coro_targeta(BuildCtx* ctx, Atom name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud);
+b_script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*), const void* _Null_unspecified);
+
+static inline
+BuildTarget*
+b_coro_target(BuildCtx* ctx, const char* name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud);
+
+static inline
+BuildTarget*
+b_coro_targeta(BuildCtx* ctx, Atom name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud);
 
 static
 int

@@ -107,11 +107,11 @@ TestFunction(test_snippets){
         cmd_clear(&cmd);
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
-        cmd_arg_(&cmd, LS("-e"));
-        cmd_arg_(&cmd, c->program);
+        cmd_arg(&cmd, LS("-e"));
+        cmd_arg(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
             if(!c->args[a].text) break;
-            cmd_arg_(&cmd, c->args[a]);
+            cmd_arg(&cmd, c->args[a]);
         }
         LongString output = {0};
         int err = cmd_run_capture(&cmd, NULL, MALLOCATOR, &output);
@@ -234,11 +234,11 @@ TestFunction(test_samples){
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
         if(c->syntax_only)
-            cmd_arg_(&cmd, LS("--syntax-only"));
-        cmd_arg_(&cmd, c->program);
+            cmd_arg(&cmd, LS("--syntax-only"));
+        cmd_arg(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
             if(!c->args[a].text) break;
-            cmd_arg_(&cmd, c->args[a]);
+            cmd_arg(&cmd, c->args[a]);
         }
         LongString output = {0};
         int err = cmd_run_capture(&cmd, NULL, MALLOCATOR, &output);

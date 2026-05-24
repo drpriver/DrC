@@ -527,10 +527,10 @@ enum {
     TARGET_SETTINGS_EXTRA_FIELDS_COUNT,
 };
 
-static struct TargetSettingsInfo {
+static struct BuildTargetSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
     MemberInfo members[10 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
-} TI_TargetSettings;
+} TI_BuildTargetSettings;
 static struct GlobalCachedSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
     MemberInfo members[6];
@@ -595,7 +595,7 @@ static int read_from_json_file(BuildCtx* ctx, void* dst, const TypeInfo* ti, Ato
 
 static
 BuildCtx*_Nullable
-build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile){
+b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile){
     BuildCtx* ctx = Allocator_zalloc(MALLOCATOR, sizeof *ctx);
     if(!ctx) return NULL;
     if(0){
@@ -734,7 +734,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                 },
                 {
                     .name = b_atomize(ctx, "target"),
-                    .type = &TI_TargetSettings.type_info,
+                    .type = &TI_BuildTargetSettings.type_info,
                     .offset = offsetof(BuildCtx, target),
                     .noser = 1,
                     .nodeser = 1,
@@ -781,68 +781,68 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
                 },
             },
         };
-        TI_TargetSettings = (struct TargetSettingsInfo){
-            .name = b_atomize(ctx, "TargetSettings"),
-            .size = sizeof(TargetSettings),
-            .align = _Alignof(TargetSettings),
+        TI_BuildTargetSettings = (struct BuildTargetSettingsInfo){
+            .name = b_atomize(ctx, "BuildTargetSettings"),
+            .size = sizeof(BuildTargetSettings),
+            .align = _Alignof(BuildTargetSettings),
             .kind = TIK_STRUCT,
-            .length = sizeof TI_TargetSettings.members / sizeof TI_TargetSettings.members[0],
+            .length = sizeof TI_BuildTargetSettings.members / sizeof TI_BuildTargetSettings.members[0],
             .members = {
                 {
                     .name = b_atomize(ctx, "cc"),
                     .type = &TI_Atom.type_info,
-                    .offset = offsetof(TargetSettings, cc),
+                    .offset = offsetof(BuildTargetSettings, cc),
                 },
                 {
                     .name = b_atomize(ctx, "compiler_flavor"),
                     .type = &TI_CompilerFlavor.type_info,
-                    .offset = offsetof(TargetSettings, compiler_flavor),
+                    .offset = offsetof(BuildTargetSettings, compiler_flavor),
                 },
                 {
                     .name = b_atomize(ctx, "os"),
                     .type = &TI_OS.type_info,
-                    .offset = offsetof(TargetSettings, os),
+                    .offset = offsetof(BuildTargetSettings, os),
                 },
                 {
                     .name = b_atomize(ctx, "arch"),
                     .type = &TI_ARCHFAM.type_info,
-                    .offset = offsetof(TargetSettings, arch),
+                    .offset = offsetof(BuildTargetSettings, arch),
                 },
                 {
                     .name = b_atomize(ctx, "bits"),
                     .type = &TI_ARCHBITS.type_info,
-                    .offset = offsetof(TargetSettings, bits),
+                    .offset = offsetof(BuildTargetSettings, bits),
                 },
                 {
                     .name = b_atomize(ctx, "optimize"),
                     .type = &TI__Bool.type_info,
-                    .offset = offsetof(TargetSettings, optimize),
+                    .offset = offsetof(BuildTargetSettings, optimize),
                 },
                 {
                     .name = b_atomize(ctx, "no_debug_symbols"),
                     .type = &TI__Bool.type_info,
-                    .offset = offsetof(TargetSettings, no_debug_symbols),
+                    .offset = offsetof(BuildTargetSettings, no_debug_symbols),
                 },
                 {
                     .name = b_atomize(ctx, "sanitize"),
                     .type = &TI__Bool.type_info,
-                    .offset = offsetof(TargetSettings, sanitize),
+                    .offset = offsetof(BuildTargetSettings, sanitize),
                 },
                 {
                     .name = b_atomize(ctx, "native_sanitize"),
                     .type = &TI__Bool.type_info,
-                    .offset = offsetof(TargetSettings, native_sanitize),
+                    .offset = offsetof(BuildTargetSettings, native_sanitize),
                 },
                 {
                     .name = b_atomize(ctx, "tsan"),
                     .type = &TI__Bool.type_info,
-                    .offset = offsetof(TargetSettings, tsan),
+                    .offset = offsetof(BuildTargetSettings, tsan),
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                     #define X(ty, field, cli, help, def) { \
                         .name = b_atomize(ctx, #field), \
                         .type = BTypeInfo(ty), \
-                        .offset = offsetof(TargetSettings, field), \
+                        .offset = offsetof(BuildTargetSettings, field), \
                     },
                     TARGET_SETTINGS_EXTRA_FIELDS(X)
                     #undef X
@@ -1202,7 +1202,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     #endif
     if(ctx->build_dir && ctx->build_dir != nil_atom){
         ctx->settings_cache_path = b_atomize_f(ctx, "%s/settings.json", ctx->build_dir->data);
-        err = read_from_json_file(ctx, &ctx->target, &TI_TargetSettings.type_info, ctx->settings_cache_path);
+        err = read_from_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
         (void)err;
         err = 0;
     }
@@ -1244,7 +1244,7 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
     _Bool no_tsan = 0;
     _Bool debug_symbols = 0;
     _Bool no_rebuild = 0;
-    TargetSettings before_ap = ctx->target;
+    BuildTargetSettings before_ap = ctx->target;
     #define BARGDEST(x) _Generic(x, \
         int64_t*: ARGDEST((int64_t*)x), \
         uint64_t*: ARGDEST((uint64_t*)x), \
@@ -1537,9 +1537,9 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         (void)err;
         Atom settings_cache_path = b_atomize_f(ctx, "%s/settings.json", ctx->build_dir->data);
         if(settings_cache_path != ctx->settings_cache_path){
-            TargetSettings after_ap = ctx->target;
+            BuildTargetSettings after_ap = ctx->target;
             ctx->settings_cache_path = settings_cache_path;
-            err = read_from_json_file(ctx, &ctx->target, &TI_TargetSettings.type_info, ctx->settings_cache_path);
+            err = read_from_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
             (void)err;
             if(after_ap.cc != before_ap.cc) ctx->target.cc = after_ap.cc;
             if(after_ap.compiler_flavor != before_ap.compiler_flavor) ctx->target.compiler_flavor = after_ap.compiler_flavor;
@@ -1581,11 +1581,11 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
             i--;
         }
     }
-    if(has_clean) rm_directory(ctx, ctx->build_dir->data);
-    mkdirs_if_not_exists(ctx, AT_to_LS(ctx->build_dir));
-    mkdirs_if_not_exists(ctx, AT_to_LS(ctx->gen_dir));
-    mkdirs_if_not_exists(ctx, AT_to_LS(ctx->deps_dir));
-    write_to_json_file(ctx, &ctx->target, &TI_TargetSettings.type_info, ctx->settings_cache_path);
+    if(has_clean) b_rm_directory(ctx, ctx->build_dir->data);
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->build_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->gen_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->deps_dir));
+    write_to_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
     if(ctx->njobs == 0) ctx->njobs = 1;
     if(ctx->njobs < 0) ctx->njobs = b_num_cpus();
     if(ctx->target.os == OS_NATIVE)
@@ -1598,22 +1598,22 @@ build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified
         ctx->target.bits = ABITS_64;
 #endif
 
-    (void)phony_target(ctx, "clean");
+    (void)b_phony_target(ctx, "clean");
 
     {
-        BuildTarget* list = script_target(ctx, "list", list_targets, NULL);
+        BuildTarget* list = b_script_target(ctx, "list", list_targets, NULL);
         list->is_phony = 1;
     }
     {
-        BuildTarget* print = script_target(ctx, "print", print_ctx, NULL);
+        BuildTarget* print = b_script_target(ctx, "print", print_ctx, NULL);
         print->is_phony = 1;
     }
     {
-        BuildTarget* ccjs = script_target(ctx, "compile_commands.json", compile_commands, NULL);
+        BuildTarget* ccjs = b_script_target(ctx, "compile_commands.json", compile_commands, NULL);
         ccjs->is_phony = 1;
     }
     {
-        BuildTarget* fc = script_target(ctx, "fish-completions", fish_completions, NULL);
+        BuildTarget* fc = b_script_target(ctx, "fish-completions", fish_completions, NULL);
         fc->is_phony = 1;
     }
     return ctx;
@@ -1858,7 +1858,7 @@ b_printfv(BuildCtx* ctx, const char* fmt, va_list vap){
 
 static
 int
-mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
+b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
     MStringBuilder sb = {.allocator=tmp};
     int ret = 0;
@@ -1869,7 +1869,7 @@ mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
         if(!sep) break;
         msb_write_str(&sb, p, sep-p);
         LongString d = msb_borrow_ls(&sb);
-        int err = mkdir_if_not_exists(ctx, d.text);
+        int err = b_mkdir_if_not_exists(ctx, d.text);
         if(err){
             ret = err;
             goto finally;
@@ -1877,7 +1877,7 @@ mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
         p = sep+1;
         msb_write_char(&sb, BUILD_OS==OS_WINDOWS?'\\':'/');
     }
-    mkdir_if_not_exists(ctx, path.text);
+    b_mkdir_if_not_exists(ctx, path.text);
     finally:
     msb_destroy(&sb);
     return ret;
@@ -1885,7 +1885,7 @@ mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
 
 static
 int
-mkdir_if_not_exists(BuildCtx* ctx, const char* path){
+b_mkdir_if_not_exists(BuildCtx* ctx, const char* path){
     b_loglvl(BLOG_DEBUG, ctx, "mkdir(%s)\n", path);
     int ret = 0;
     if(BUILD_OS == OS_WINDOWS){
@@ -1921,7 +1921,7 @@ mkdir_if_not_exists(BuildCtx* ctx, const char* path){
 
 static
 int
-move_file(BuildCtx* ctx, const char* from, const char* to){
+b_move_file(BuildCtx* ctx, const char* from, const char* to){
     if(BUILD_OS == OS_WINDOWS){
         MStringBuilder16 msb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         int ok = 1;
@@ -1956,7 +1956,7 @@ move_file(BuildCtx* ctx, const char* from, const char* to){
 
 static
 int
-copy_file(BuildCtx* ctx, const char* from, const char* to){
+b_copy_file(BuildCtx* ctx, const char* from, const char* to){
     if(BUILD_OS == OS_WINDOWS){
         MStringBuilder16 msb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         int ok = 1;
@@ -2039,7 +2039,7 @@ copy_file(BuildCtx* ctx, const char* from, const char* to){
 
 static
 int
-copy_directory(BuildCtx* ctx, const char* from, const char* to){
+b_copy_directory(BuildCtx* ctx, const char* from, const char* to){
     if(BUILD_OS == OS_WINDOWS){
         MStringBuilder16 msb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         int ok = 1;
@@ -2094,7 +2094,7 @@ copy_directory(BuildCtx* ctx, const char* from, const char* to){
 
 static
 int
-rm_file(BuildCtx* ctx, const char* path){
+b_rm_file(BuildCtx* ctx, const char* path){
     if(BUILD_OS == OS_WINDOWS){
         MStringBuilder16 msb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         int ok = 1;
@@ -2120,7 +2120,7 @@ rm_file(BuildCtx* ctx, const char* path){
 
 static
 int
-rm_directory(BuildCtx* ctx, const char* path){
+b_rm_directory(BuildCtx* ctx, const char* path){
     CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
     cmd_prog(&cmd, LS("rm"));
     cmd_cargs(&cmd, "-rf", path);
@@ -2132,7 +2132,7 @@ rm_directory(BuildCtx* ctx, const char* path){
 
 static
 void
-print_command(BuildCtx* ctx, CmdBuilder* cmd){
+b_print_command(BuildCtx* ctx, CmdBuilder* cmd){
     if(ctx->logger.level <= BLOG_DEBUG){
         msb_nul_terminate(&cmd->prog);
         b_log(ctx, "%s: ", cmd->prog.data);
@@ -2170,8 +2170,8 @@ parse_vs_json_text(BuildCtx* ctx, LongString text, BuildTarget* target){
         if(sv_startswith(s, SV("c:\\\\program files")))
             continue;
         Atom path = b_normalize_patha(ctx, inc.atom);
-        BuildTarget* src = src_filea(ctx, path);
-        add_dep(ctx, target, src);
+        BuildTarget* src = b_src_filea(ctx, path);
+        b_add_dep(ctx, target, src);
     }
     finally:
     drjson_ctx_free_all(jsctx);
@@ -2237,7 +2237,7 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                                 if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%s'\n", __LINE__, msb_borrow_ls(current).text);
                                 Atom a = b_atomize2(ctx, s.text, s.length);
                                 if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%s' depends on '%s'\n", __LINE__, current_target->name->data, a->data);
-                                add_src_depa(ctx, current_target, a);
+                                b_add_src_depa(ctx, current_target, a);
                             }
                         }
                         else {
@@ -2273,9 +2273,9 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                     StringView s = msb_borrow_sv(&target);
                     Atom a = b_atomize2(ctx, s.text, s.length);
                     if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%.*s'\n", __LINE__, (int)a->length, a->data);
-                    current_target = get_targeta(ctx, a);
+                    current_target = b_get_targeta(ctx, a);
                     if(!current_target)
-                        current_target = get_targeta(ctx, b_normalize_patha(ctx, a));
+                        current_target = b_get_targeta(ctx, b_normalize_patha(ctx, a));
                     if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: current_target: %p\n", __LINE__, (void*)current_target);
                     break;
                 }
@@ -2311,7 +2311,7 @@ parse_depfile(BuildCtx* ctx, const char* filename){
         StringView name = {name_len, base.text};
         const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe"))) ? ".exe" : "";
         Atom target_name = b_atomize_f(ctx, "%s/%.*s%s", ctx->build_dir->data, (int)name_len, base.text, ext);
-        BuildTarget* target = get_targeta(ctx, target_name);
+        BuildTarget* target = b_get_targeta(ctx, target_name);
         if(target)
             parse_vs_json_text(ctx, text, target);
     }
@@ -2324,7 +2324,7 @@ parse_depfile(BuildCtx* ctx, const char* filename){
 
 static
 void
-parse_depfiles(BuildCtx* ctx){
+b_parse_depfiles(BuildCtx* ctx){
     if(BUILD_OS != OS_WINDOWS){
         MStringBuilder pattern = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         msb_write_str(&pattern, ctx->deps_dir->data, ctx->deps_dir->length);
@@ -2408,7 +2408,7 @@ _Static_assert(sizeof(intptr_t) == sizeof(HANDLE), "");
 static
 int
 sort_targets(BuildCtx* ctx, Atom a, Marray(Atom)* out){
-    BuildTarget* t = get_targeta(ctx, a);
+    BuildTarget* t = b_get_targeta(ctx, a);
     if(!t) return 1;
     enum {
         UNVISITED,
@@ -2419,7 +2419,7 @@ sort_targets(BuildCtx* ctx, Atom a, Marray(Atom)* out){
         return 0;
     t->visit_state = VISITING;
     MARRAY_FOR_EACH_VALUE(Atom, d, t->dependencies){
-        BuildTarget* t2 = get_targeta(ctx, d);
+        BuildTarget* t2 = b_get_targeta(ctx, d);
         if(t2->visit_state == UNVISITED){
             int err = sort_targets(ctx, d, out);
             if(err) return err;
@@ -2437,9 +2437,9 @@ sort_targets(BuildCtx* ctx, Atom a, Marray(Atom)* out){
 
 static
 int
-execute_targets(BuildCtx* ctx){
+b_execute_targets(BuildCtx* ctx){
     int err = 0;
-    parse_depfiles(ctx);
+    b_parse_depfiles(ctx);
     {
         AtomMapItems items = AM_items(&ctx->targets);
         for(size_t i = 0; i < items.count; i++){
@@ -2452,7 +2452,7 @@ execute_targets(BuildCtx* ctx){
         }
     }
     MARRAY_FOR_EACH_VALUE(Atom, b, ctx->build_targets){
-        BuildTarget* t = get_targeta(ctx, b);
+        BuildTarget* t = b_get_targeta(ctx, b);
         if(!t){
             b_loglvl(BLOG_ERROR, ctx, "Unknown target: '%s'\n", b->data);
             err = 1;
@@ -2490,7 +2490,7 @@ execute_targets(BuildCtx* ctx){
     for(;;){
         if(ctx->jobs.count != (size_t)ctx->njobs){
             for(size_t i = 0; i < sorted.count; i++){
-                BuildTarget* tgt = get_targeta(ctx, sorted.data[i]);
+                BuildTarget* tgt = b_get_targeta(ctx, sorted.data[i]);
                 if(tgt->is_src){
                     if(0) b_loglvl(BLOG_DEBUG, ctx, "%d: '%s' is_src\n", __LINE__, tgt->name->data);
                     tgt->visit_state = UP_TO_DATE;
@@ -2508,7 +2508,7 @@ execute_targets(BuildCtx* ctx){
                     }
                 }
                 MARRAY_FOR_EACH_VALUE(Atom, d, tgt->dependencies){
-                    BuildTarget* t = get_targeta(ctx, d);
+                    BuildTarget* t = b_get_targeta(ctx, d);
                     if(t->visit_state != UP_TO_DATE)
                         goto Skip;
                 }
@@ -2537,7 +2537,7 @@ execute_targets(BuildCtx* ctx){
                     const MTime* newest_in_mtime = NULL;
                     const MTime* oldest_out_mtime = NULL;
                     MARRAY_FOR_EACH_VALUE(Atom, d, tgt->dependencies){
-                        BuildTarget* t = get_targeta(ctx, d);
+                        BuildTarget* t = b_get_targeta(ctx, d);
                         if(!t) goto finally;
                         if(t->order_only) continue;
                         BuildFileInfo* fi = b_file_info(ctx, t->name->data, t->name->length);
@@ -2548,7 +2548,7 @@ execute_targets(BuildCtx* ctx){
                             newest_in_mtime = &fi->mtime;
                     }
                     MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs){
-                        BuildTarget* t = get_targeta(ctx, o);
+                        BuildTarget* t = b_get_targeta(ctx, o);
                         if(!t) goto finally;
                         BuildFileInfo* fi = b_file_info(ctx, t->name->data, t->name->length);
                         if(!fi->exists)
@@ -2584,7 +2584,7 @@ execute_targets(BuildCtx* ctx){
                             if(tgt->is_binary)
                                 b_file_info(ctx, tgt->name->data, tgt->name->length)->valid = 0;
                             MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs){
-                                get_targeta(ctx, o)->visit_state = UP_TO_DATE;
+                                b_get_targeta(ctx, o)->visit_state = UP_TO_DATE;
                                 b_file_info(ctx, o->data, o->length)->valid = 0;
                             }
                         }
@@ -2598,7 +2598,7 @@ execute_targets(BuildCtx* ctx){
                         if(tgt->is_binary)
                             b_file_info(ctx, tgt->name->data, tgt->name->length)->valid = 0;
                         MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs){
-                            get_targeta(ctx, o)->visit_state = UP_TO_DATE;
+                            b_get_targeta(ctx, o)->visit_state = UP_TO_DATE;
                             b_file_info(ctx, o->data, o->length)->valid = 0;
                         }
                     }
@@ -2682,7 +2682,7 @@ execute_targets(BuildCtx* ctx){
                 b_file_info(ctx, finished.target->name->data, finished.target->name->length)->valid = 0;
             MARRAY_FOR_EACH_VALUE(Atom, o, finished.target->outputs){
                 b_loglvl(BLOG_DEBUG, ctx, "%s is now finished\n", o->data);
-                get_targeta(ctx, o)->visit_state = UP_TO_DATE;
+                b_get_targeta(ctx, o)->visit_state = UP_TO_DATE;
                 b_file_info(ctx, o->data, o->length)->valid = 0;
             }
         }
@@ -2748,10 +2748,10 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
     Atom progpath = ctx->exe_path;
     Atom old = b_atomize_f(ctx, "%s.old", progpath->data);
     int err;
-    err = rm_file(ctx, old->data);
+    err = b_rm_file(ctx, old->data);
     (void)err;
     err = 0;
-    BuildTarget* build = alloc_targeta(ctx, (Atom)b_normalize_patha(ctx, ctx->exe_path));
+    BuildTarget* build = b_targeta(ctx, (Atom)b_normalize_patha(ctx, ctx->exe_path));
     build->is_compile_command = 1;
     Atom src = b_normalize_patha(ctx, ctx->src_path);
     Atom depfile = nil_atom;
@@ -2761,7 +2761,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
         CmdBuilder* cmd = &build->cmd;
         cmd->allocator = allocator_from_arena(&ctx->perm_aa);
         cmd_prog(cmd, AT_to_LS(ctx->build_cc));
-        target_src_inp(ctx, build, src->data);
+        b_src_inp(ctx, build, src->data);
         switch(ctx->build_compiler_flavor){
             case COMPILER__MAX:
             case COMPILER_UNKNOWN:
@@ -2777,8 +2777,8 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
                 depfile = b_atomize_f(ctx, "%s.deps", ctx->exe_path->data);
                 if(ctx->build_compiler_flavor == COMPILER_CLANG_CL){
                     cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
-                    cmd_argf(cmd, "/clang:-MF%s", depfile->data);
-                    cmd_argf(cmd, "/clang:-MT%s", b_normalize_patha(ctx, ctx->exe_path)->data);
+                    b_argf(ctx, build, "/clang:-MF%s", depfile->data);
+                    b_argf(ctx, build, "/clang:-MT%s", b_normalize_patha(ctx, ctx->exe_path)->data);
                 }
                 else {
                     cmd_cargs(cmd, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
@@ -2789,13 +2789,13 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
                 cmd_cargs(cmd, "/nologo", "/std:c11");
                 cmd_cargs(cmd, "/Zc:preprocessor", "/wd5105");
                 cmd_cargs(cmd, "/Zi", "/DEBUG");
-                cmd_argf(cmd, "/Fd:%s.pdb", b_normalize_patha(ctx, ctx->exe_path)->data);
-                cmd_argf(cmd, "/Fe:%s", b_normalize_patha(ctx, ctx->exe_path)->data);
+                b_argf(ctx, build, "/Fd:%s.pdb", b_normalize_patha(ctx, ctx->exe_path)->data);
+                b_argf(ctx, build, "/Fe:%s", b_normalize_patha(ctx, ctx->exe_path)->data);
                 depfile = b_atomize_f(ctx, "%s.deps.json", ctx->exe_path->data);
                 cmd_cargs(cmd, "/sourceDependencies", depfile->data);
                 break;
         }
-        cmd_argf(cmd, "-DDEFAULT_BUILD_COMPILER=\"%s\"", ctx->build_cc->data);
+        b_argf(ctx, build, "-DDEFAULT_BUILD_COMPILER=\"%s\"", ctx->build_cc->data);
         if(cmd->errored) return 1;
     }
     _Bool should_recompile = 0;
@@ -2822,21 +2822,21 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
         should_recompile = 1;
     }
     if(!should_recompile) return 0;
-    err = move_file(ctx, progpath->data, old->data);
+    err = b_move_file(ctx, progpath->data, old->data);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Unable to move '%s' to '%s'\n", progpath->data, old->data);
         return err;
     }
     cmd_resolve_prog_path(&build->cmd, &ctx->env, b_file_exists, ctx);
-    print_command(ctx, &build->cmd);
+    b_print_command(ctx, &build->cmd);
     err = cmd_run(&build->cmd, ctx->envp, NULL);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "cmd failed: %d\n", err);
-        move_file(ctx, old->data, progpath->data);
+        b_move_file(ctx, old->data, progpath->data);
         return err;
     }
     else {
-        err = rm_file(ctx, old->data);
+        err = b_rm_file(ctx, old->data);
         if(err)
             b_loglvl(BLOG_ERROR, ctx, "Error removing %s\n", old->data);
     }
@@ -2853,7 +2853,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
 
 static
 Atom
-get_git_hash(BuildCtx* ctx){
+b_get_git_hash(BuildCtx* ctx){
     if(ctx->git_hash) return ctx->git_hash;
     Atom result = nil_atom;
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
@@ -2888,14 +2888,14 @@ get_git_hash(BuildCtx* ctx){
 
 static inline
 void
-ta_pusha(BuildCtx* ctx, Marray(Atom)* m, Atom a){
+b_ta_pusha(BuildCtx* ctx, Marray(Atom)* m, Atom a){
     int err = ma_push(Atom)(m, allocator_from_arena(&ctx->perm_aa), a);
     if(err) b_oom(ctx);
 }
 
 static inline
 BuildTarget*
-alloc_targeta(BuildCtx* ctx, Atom name){
+b_targeta(BuildCtx* ctx, Atom name){
     BuildTarget* t = AM_get(&ctx->targets, name);
     if(t) b_debug_break(ctx, "target already allocated");
     t = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), sizeof *t);
@@ -2909,22 +2909,22 @@ alloc_targeta(BuildCtx* ctx, Atom name){
 
 static inline
 BuildTarget*
-alloc_target(BuildCtx* ctx, const char* name){
+b_target(BuildCtx* ctx, const char* name){
     Atom a = b_atomize(ctx, name);
-    return alloc_targeta(ctx, a);
+    return b_targeta(ctx, a);
 }
 
 static
 BuildTarget*
-phony_target(BuildCtx* ctx, const char* name){
+b_phony_target(BuildCtx* ctx, const char* name){
     Atom a = b_atomize(ctx, name);
-    return phony_targeta(ctx, a);
+    return b_phony_targeta(ctx, a);
 }
 
 static
 BuildTarget*
-phony_targeta(BuildCtx* ctx, Atom name){
-    BuildTarget* tgt = alloc_targeta(ctx, name);
+b_phony_targeta(BuildCtx* ctx, Atom name){
+    BuildTarget* tgt = b_targeta(ctx, name);
     tgt->is_phony = 1;
     return tgt;
 }
@@ -2932,7 +2932,7 @@ phony_targeta(BuildCtx* ctx, Atom name){
 static
 inline
 BuildTarget* _Nullable
-get_target(BuildCtx* ctx, const char* name){
+b_get_target(BuildCtx* ctx, const char* name){
     Atom a = b_atomize(ctx, name);
     return AM_get(&ctx->targets, a);
 }
@@ -2940,32 +2940,32 @@ get_target(BuildCtx* ctx, const char* name){
 static
 inline
 BuildTarget* _Nullable
-get_targeta(BuildCtx* ctx, Atom a){
+b_get_targeta(BuildCtx* ctx, Atom a){
     return AM_get(&ctx->targets, a);
 }
 
 static inline
 BuildTarget*
-src_filea(BuildCtx* ctx, Atom path){
+b_src_filea(BuildCtx* ctx, Atom path){
     path = (Atom)b_normalize_patha(ctx, path);
-    BuildTarget* t = get_targeta(ctx, path);
+    BuildTarget* t = b_get_targeta(ctx, path);
     if(t) return t;
-    t = alloc_targeta(ctx, path);
+    t = b_targeta(ctx, path);
     t->is_src = 1;
     return t;
 }
 static inline
 BuildTarget*
-src_file(BuildCtx* ctx, const char* src){
+b_src_file(BuildCtx* ctx, const char* src){
     Atom path = b_atomize(ctx, src);
-    return src_filea(ctx, path);
+    return b_src_filea(ctx, path);
 }
 
 static inline
 BuildTarget*
-gen_src_file(BuildCtx* ctx, const char* src){
+b_gen_src_file(BuildCtx* ctx, const char* src){
     Atom path = b_atomize_f(ctx, "%s/%s", ctx->gen_dir->data, src);
-    BuildTarget* t = src_filea(ctx, path);
+    BuildTarget* t = b_src_filea(ctx, path);
     t->is_src = 0;
     t->is_generated = 1;
     return t;
@@ -2973,44 +2973,44 @@ gen_src_file(BuildCtx* ctx, const char* src){
 
 static inline
 void
-add_dep(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* dep){
+b_add_dep(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* dep){
     MARRAY_FOR_EACH_VALUE(Atom, d, tgt->dependencies)
         if(d == dep->name) return;
-    ta_pusha(ctx, &tgt->dependencies, dep->name);
+    b_ta_pusha(ctx, &tgt->dependencies, dep->name);
 }
 static inline
 void
-add_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out){
+b_add_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out){
     MARRAY_FOR_EACH_VALUE(Atom, o, tgt->outputs)
         if(o == out->name) return;
-    ta_pusha(ctx, &tgt->outputs, out->name);
+    b_ta_pusha(ctx, &tgt->outputs, out->name);
 }
 static inline
 void
-add_deps_(BuildCtx* ctx, BuildTarget* tgt, size_t dep_count, BuildTarget*_Nonnull*_Nonnull dep){
+b_add_deps_(BuildCtx* ctx, BuildTarget* tgt, size_t dep_count, BuildTarget*_Nonnull*_Nonnull dep){
     for(size_t i = 0; i < dep_count; i++)
-        add_dep(ctx, tgt, dep[i]);
+        b_add_dep(ctx, tgt, dep[i]);
 }
 
 
 static inline
 void
-add_src_depa(BuildCtx* ctx, BuildTarget* tgt, Atom dep){
-    BuildTarget* t = get_targeta(ctx, dep);
-    if(!t) t = src_filea(ctx, dep);
+b_add_src_depa(BuildCtx* ctx, BuildTarget* tgt, Atom dep){
+    BuildTarget* t = b_get_targeta(ctx, dep);
+    if(!t) t = b_src_filea(ctx, dep);
     if(!t->is_src && !t->is_generated) b_debug_break(ctx, "t should be a generated src file");
-    add_dep(ctx, tgt, t);
+    b_add_dep(ctx, tgt, t);
 }
 static inline
 void
-add_src_dep(BuildCtx* ctx, BuildTarget* tgt, const char* dep){
+b_add_src_dep(BuildCtx* ctx, BuildTarget* tgt, const char* dep){
     Atom a = b_atomize(ctx, dep);
-    add_src_depa(ctx, tgt, a);
+    b_add_src_depa(ctx, tgt, a);
 }
 
 static inline
 BuildTarget*
-exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
+b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
     // char sep = BUILD_OS == OS_WINDOWS?'\\':'/';
     char sep = '/';
     Atom cc = ctx->target.cc;
@@ -3040,7 +3040,7 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
     }
     const char* ext = target_os == OS_WINDOWS?".exe":"";
     Atom binary = b_atomize_f(ctx, "%s%c%s%s", ctx->build_dir->data, sep, name, ext);
-    BuildTarget* target = alloc_targeta(ctx, binary);
+    BuildTarget* target = b_targeta(ctx, binary);
     target->is_binary = 1;
     target->is_cmd = 1;
     target->is_compile_command = 1;
@@ -3086,16 +3086,16 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
                 );
             }
             if(flavor == COMPILER_CLANG_CL){
-                cmd_argf(cmd, "/Fe:%s", binary->data);
-                cmd_argf(cmd, "/Fo%s/%s.obj", ctx->build_dir->data, name);
+                b_argf(ctx, target, "/Fe:%s", binary->data);
+                b_argf(ctx, target, "/Fo%s/%s.obj", ctx->build_dir->data, name);
                 cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
-                cmd_argf(cmd, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
-                cmd_argf(cmd, "/clang:-MT%s", binary->data);
+                b_argf(ctx, target, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
+                b_argf(ctx, target, "/clang:-MT%s", binary->data);
             }
             else {
                 cmd_cargs(cmd, "-o", binary->data);
                 cmd_cargs(cmd, "-MT", binary->data, "-MMD", "-MP", "-MF");
-                cmd_argf(cmd, "%s/%s.deps", ctx->deps_dir->data, name);
+                b_argf(ctx, target, "%s/%s.deps", ctx->deps_dir->data, name);
             }
             if(tsan && sanitize) cmd_cargs(cmd, "-fsanitize=thread,undefined");
             else if(tsan) cmd_cargs(cmd, "-fsanitize=thread");
@@ -3106,53 +3106,63 @@ exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_
             cmd_cargs(cmd, "/nologo", "/std:c11", "/Zc:preprocessor", "/wd5105");
             if(debug){
                 cmd_cargs(cmd, "/Zi", "/DEBUG");
-                cmd_argf(cmd, "/Fd:%s/%s.pdb", ctx->build_dir->data, name);
+                b_argf(ctx, target, "/Fd:%s/%s.pdb", ctx->build_dir->data, name);
             }
             if(optimize) cmd_cargs(cmd, "/O2");
-            cmd_argf(cmd, "/Fe:%s", binary->data);
-            cmd_argf(cmd, "/Fo:%s/%s.obj", ctx->build_dir->data, name);
+            b_argf(ctx, target, "/Fe:%s", binary->data);
+            b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->build_dir->data, name);
             cmd_carg(cmd, "/sourceDependencies");
-            cmd_argf(cmd, "%s/%s.deps.json", ctx->deps_dir->data, name);
+            b_argf(ctx, target, "%s/%s.deps.json", ctx->deps_dir->data, name);
             break;
     }
-    cmd_argf(cmd, "-I%s", ctx->gen_dir->data);
-    target_src_inp(ctx, target, src_dep);
+    b_argf(ctx, target, "-I%s", ctx->gen_dir->data);
+    b_src_inp(ctx, target, src_dep);
     if(target_os == OS_LINUX){
-        target_linkarg(ctx, target, "-lm");
-        target_linkarg(ctx, target, "-lpthread");
-        if(flavor == COMPILER_GCC) target_linkarg(ctx, target, "-latomic");
+        b_linkarg(ctx, target, "-lm");
+        b_linkarg(ctx, target, "-lpthread");
+        if(flavor == COMPILER_GCC) b_linkarg(ctx, target, "-latomic");
     }
     if(flavor == COMPILER_CLANG_CL)
-        target_linkarg(ctx, target, "clang_rt.builtins-x86_64.lib");
+        b_linkarg(ctx, target, "clang_rt.builtins-x86_64.lib");
     else if(flavor == COMPILER_CLANG && target_os == OS_WINDOWS)
-        target_linkarg(ctx, target, "-lclang_rt.builtins-x86_64");
-    BuildTarget* phony = phony_target(ctx, name);
-    add_dep(ctx, phony, target);
+        b_linkarg(ctx, target, "-lclang_rt.builtins-x86_64");
+    BuildTarget* phony = b_phony_target(ctx, name);
+    b_add_dep(ctx, phony, target);
     return target;
 }
 
 static inline
 BuildTarget*
-cmd_target(BuildCtx* ctx, const char* name){
-    BuildTarget* target = alloc_target(ctx, name);
+b_cmd_target(BuildCtx* ctx, const char* name, const char* prog){
+    BuildTarget* target = b_target(ctx, name);
     target->is_cmd = 1;
+    cmd_prog(&target->cmd, (LongString){strlen(prog), prog});
+    return target;
+}
+
+static inline
+BuildTarget*
+b_cmd_target_prog(BuildCtx* ctx, const char* name, BuildTarget* prog){
+    BuildTarget* target = b_target(ctx, name);
+    target->is_cmd = 1;
+    b_prog(ctx, target, prog);
     return target;
 }
 static inline
 BuildTarget*
-exec_target(BuildCtx* ctx, const char* name, BuildTarget* t){
-    BuildTarget* target = alloc_target(ctx, name);
+b_exec_target(BuildCtx* ctx, const char* name, BuildTarget* t){
+    BuildTarget* target = b_target(ctx, name);
     target->is_cmd = 1;
     target->should_exec = 1;
-    target_prog(ctx, target, t);
+    b_prog(ctx, target, t);
     return target;
 }
 
 static inline
 BuildTarget*
-bin_target(BuildCtx* ctx, const char* name){
+b_bin_target(BuildCtx* ctx, const char* name){
     Atom a = b_atomize_f(ctx, "%s/%s", ctx->build_dir->data, name);
-    BuildTarget* target = alloc_targeta(ctx, a);
+    BuildTarget* target = b_targeta(ctx, a);
     target->is_binary = 1;
     target->is_generated = 1;
     return target;
@@ -3160,23 +3170,23 @@ bin_target(BuildCtx* ctx, const char* name){
 
 static
 int
-mkdir_script(BuildCtx* ctx, BuildTarget* tgt){
+b_mkdir_script(BuildCtx* ctx, BuildTarget* tgt){
     b_log(ctx, "mkdir -p '%s'\n", tgt->name->data);
-    return mkdirs_if_not_exists(ctx, (LongString){tgt->name->length, tgt->name->data});
+    return b_mkdirs_if_not_exists(ctx, (LongString){tgt->name->length, tgt->name->data});
 }
 
 static inline
 BuildTarget*
-directory_target(BuildCtx* ctx, const char* name){
-    BuildTarget* t = script_target(ctx, name, mkdir_script, NULL);
+b_directory_target(BuildCtx* ctx, const char* name){
+    BuildTarget* t = b_script_target(ctx, name, b_mkdir_script, NULL);
     t->order_only = 1;
-    ta_pusha(ctx, &t->outputs, t->name);
+    b_ta_pusha(ctx, &t->outputs, t->name);
     return t;
 }
 
 static
 void
-print_target(BuildCtx* ctx, BuildTarget* tgt){
+b_print_target(BuildCtx* ctx, BuildTarget* tgt){
     b_log(ctx, "%s:", tgt->name->data);
     MARRAY_FOR_EACH_VALUE(Atom, d, tgt->dependencies)
         b_log(ctx, " \\\n  %s", d->data);
@@ -3184,121 +3194,135 @@ print_target(BuildCtx* ctx, BuildTarget* tgt){
 }
 static
 void
-target_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog){
+b_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     if(!prog->is_binary) b_debug_break(ctx, "prog is not a binary");
-    add_dep(ctx, tgt, prog);
+    b_add_dep(ctx, tgt, prog);
     cmd_prog(&tgt->cmd, (LongString){prog->name->length, prog->name->data});
 }
 
 static
 void
-target_inp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp){
+b_inp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
-    add_dep(ctx, tgt, inp);
-    cmd_arg(&tgt->cmd, (LongString){inp->name->length, inp->name->data});
+    b_add_dep(ctx, tgt, inp);
+    cmd_aarg(&tgt->cmd, inp->name);
 }
 static
 void
-target_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, BuildTarget*_Nonnull*_Nonnull inp){
+b_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, BuildTarget*_Nonnull*_Nonnull inp){
     for(size_t i = 0; i < n; i++)
-        target_inp(ctx, tgt, inp[i]);
+        b_inp(ctx, tgt, inp[i]);
 }
 
 static
 void
-target_src_inp(BuildCtx* ctx, BuildTarget* tgt, const char* inp_){
-    BuildTarget* inp = src_file(ctx, inp_);
+b_src_inp(BuildCtx* ctx, BuildTarget* tgt, const char* inp_){
+    BuildTarget* inp = b_src_file(ctx, inp_);
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
-    add_dep(ctx, tgt, inp);
+    b_add_dep(ctx, tgt, inp);
     cmd_arg(&tgt->cmd, (LongString){inp->name->length, inp->name->data});
 }
 static
 void
-target_src_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull inp_){
+b_src_inps_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull inp_){
     for(size_t i = 0; i < n; i++)
-        target_src_inp(ctx, tgt, inp_[i]);
+        b_src_inp(ctx, tgt, inp_[i]);
 }
 static
 void
-target_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
+b_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
     (void)ctx;
     cmd_arg(&tgt->cmd, (LongString){strlen(arg), arg});
 }
+
 static
 void
-target_argf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...){
+b_aarg(BuildCtx* ctx, BuildTarget* tgt, Atom arg){
     (void)ctx;
+    cmd_aarg(&tgt->cmd, arg);
+}
+
+static
+void
+b_args_(BuildCtx* ctx, BuildTarget* tgt, size_t n, const char*_Nonnull*_Nonnull args){
+    for(size_t i = 0; i < n; i++)
+        b_arg(ctx, tgt, args[i]);
+}
+static
+void
+b_argf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...){
     va_list vap;
     va_start(vap, fmt);
-    cmd_vargf(&tgt->cmd, fmt, vap);
+    Atom a = b_atomize_fv(ctx, fmt, vap);
     va_end(vap);
+    cmd_aarg(&tgt->cmd, a);
 }
 static
 void
-target_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out){
+b_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     if(!out->is_generated) b_debug_break(ctx, "out is is not generated");
-    add_dep(ctx, out, tgt);
+    b_add_dep(ctx, out, tgt);
     cmd_arg(&tgt->cmd, (LongString){out->name->length, out->name->data});
-    add_out(ctx, tgt, out);
+    b_add_out(ctx, tgt, out);
 }
 
 static
 void
-target_argout(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* out){
-    target_arg(ctx, tgt, arg);
-    target_out(ctx, tgt, out);
+b_argout(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* out){
+    b_arg(ctx, tgt, arg);
+    b_out(ctx, tgt, out);
 }
 static
 void
-target_arginp(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* inp){
-    target_arg(ctx, tgt, arg);
-    target_inp(ctx, tgt, inp);
+b_arginp(BuildCtx* ctx, BuildTarget *tgt, const char* arg, BuildTarget* inp){
+    b_arg(ctx, tgt, arg);
+    b_inp(ctx, tgt, inp);
 }
 static
 void
-target_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp){
-    target_arg(ctx, tgt, arg);
-    target_src_inp(ctx, tgt, inp);
+b_argsrc(BuildCtx* ctx, BuildTarget *tgt, const char* arg, const char* inp){
+    b_arg(ctx, tgt, arg);
+    b_src_inp(ctx, tgt, inp);
 }
 
 static
 void
-target_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
+b_linkarg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
     Atom a = b_atomize(ctx, arg);
-    ta_pusha(ctx, &tgt->linker_args, a);
+    b_ta_pusha(ctx, &tgt->linker_args, a);
 }
 
 static
 void
-target_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...){
+b_linkargf(BuildCtx* ctx, BuildTarget* tgt, const char* fmt, ...){
     va_list ap;
     va_start(ap, fmt);
     Atom a = b_atomize_fv(ctx, fmt, ap);
     va_end(ap);
-    ta_pusha(ctx, &tgt->linker_args, a);
+    b_ta_pusha(ctx, &tgt->linker_args, a);
 }
 static
 void
-target_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp){
-    add_dep(ctx, tgt, inp);
-    ta_pusha(ctx, &tgt->linker_args, inp->name);
+b_linkinp(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* inp){
+    b_add_dep(ctx, tgt, inp);
+    b_ta_pusha(ctx, &tgt->linker_args, inp->name);
 }
 
 static
 void
-target_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp){
+b_linkarginp(BuildCtx* ctx, BuildTarget* tgt, const char* arg, BuildTarget* inp){
     Atom a = b_atomize(ctx, arg);
-    ta_pusha(ctx, &tgt->linker_args, a);
-    add_dep(ctx, tgt, inp);
-    ta_pusha(ctx, &tgt->linker_args, inp->name);
+    b_ta_pusha(ctx, &tgt->linker_args, a);
+    b_add_dep(ctx, tgt, inp);
+    b_ta_pusha(ctx, &tgt->linker_args, inp->name);
 }
 
 static inline
 BuildTarget*
-script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
-    BuildTarget* t = alloc_targeta(ctx, name);
+b_script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
+    BuildTarget* t = b_targeta(ctx, name);
     t->is_script = 1;
     t->script = script;
     t->user_data = ud;
@@ -3307,15 +3331,15 @@ script_targeta(BuildCtx* ctx, Atom name, int (*script)(BuildCtx*, BuildTarget*),
 
 static inline
 BuildTarget*
-script_target(BuildCtx* ctx, const char* name, int (*script)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
+b_script_target(BuildCtx* ctx, const char* name, int (*script)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
     Atom a = b_atomize_f(ctx, "%s", name);
-    return script_targeta(ctx, a, script, ud);
+    return b_script_targeta(ctx, a, script, ud);
 }
 
 static inline
 BuildTarget*
-coro_targeta(BuildCtx* ctx, Atom name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
-    BuildTarget* t = alloc_targeta(ctx, name);
+b_coro_targeta(BuildCtx* ctx, Atom name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
+    BuildTarget* t = b_targeta(ctx, name);
     t->is_coro = 1;
     t->corop = coro;
     t->user_data = ud;
@@ -3324,9 +3348,9 @@ coro_targeta(BuildCtx* ctx, Atom name, int (*coro)(BuildCtx*, BuildTarget*), con
 
 static inline
 BuildTarget*
-coro_target(BuildCtx* ctx, const char* name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
+b_coro_target(BuildCtx* ctx, const char* name, int (*coro)(BuildCtx*, BuildTarget*), const void*_Null_unspecified ud){
     Atom a = b_atomize_f(ctx, "%s", name);
-    return coro_targeta(ctx, a, coro, ud);
+    return b_coro_targeta(ctx, a, coro, ud);
 }
 
 
@@ -3416,7 +3440,7 @@ write_to_json_file(BuildCtx* ctx, const void* src, const TypeInfo* ti, Atom path
                     #endif
                 }
                 if(!err){
-                    err = move_file(ctx, t.text, path->data);
+                    err = b_move_file(ctx, t.text, path->data);
                     if(err) b_loglvl(BLOG_DEBUG, ctx, "%d: fuck '%s'\n", __LINE__, path->data);
                 }
             }
@@ -3479,11 +3503,11 @@ b_run_cmd_async(BuildCtx* ctx, BuildTarget* target, CmdBuilder* cmd){
     intptr_t* proc = &ctx->jobs.processes[ctx->jobs.count];
     BuildJob* job = &ctx->jobs.jobs[ctx->jobs.count];
     cmd_resolve_prog_path(cmd, &ctx->env, b_file_exists, ctx);
-    print_command(ctx, cmd);
+    b_print_command(ctx, cmd);
     int err = cmd_run(cmd, ctx->envp, proc);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
-        print_command(ctx, cmd);
+        b_print_command(ctx, cmd);
         return err;
     }
     ctx->jobs.count++;
@@ -3499,11 +3523,11 @@ static
 int
 b_run_cmd_sync(BuildCtx* ctx, CmdBuilder* cmd){
     cmd_resolve_prog_path(cmd, &ctx->env, b_file_exists, ctx);
-    print_command(ctx, cmd);
+    b_print_command(ctx, cmd);
     int err = cmd_run(cmd, ctx->envp, NULL);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
-        print_command(ctx, cmd);
+        b_print_command(ctx, cmd);
         return err;
     }
     return 0;

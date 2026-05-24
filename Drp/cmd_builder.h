@@ -58,15 +58,6 @@ void
 cmd_arg(CmdBuilder* cmd, LongString arg){
     if(!cmd->args.count) cmd->errored = 1;
     if(cmd->errored) return;
-    // XXX: leaking arg
-    arg.text = Allocator_dupe(cmd->allocator, arg.text, arg.length+1);
-    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, arg);
-}
-static
-void
-cmd_arg_(CmdBuilder* cmd, LongString arg){
-    if(!cmd->args.count) cmd->errored = 1;
-    if(cmd->errored) return;
     cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, arg);
 }
 
@@ -83,30 +74,6 @@ cmd_aarg(CmdBuilder* cmd, Atom arg){
     if(cmd->errored) return;
     LongString a = {arg->length, arg->data};
     cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, a);
-}
-
-static
-void
-cmd_vargf(CmdBuilder* cmd, const char* fmt, va_list vap){
-    char buff[1024];
-    int n = vsnprintf(buff, sizeof buff, fmt, vap);
-    if(n < 0 || n > (int)sizeof buff){
-        cmd->errored = 1;
-        return;
-    }
-    cmd_arg(cmd, (LongString){n, buff});
-}
-
-static
-void
-#ifdef __GNUC__
-__attribute__((format(printf, 2, 3)))
-#endif
-cmd_argf(CmdBuilder* cmd, const char* fmt, ...){
-    va_list vap;
-    va_start(vap, fmt);
-    cmd_vargf(cmd, fmt, vap);
-    va_end(vap);
 }
 
 
