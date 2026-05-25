@@ -1,17 +1,13 @@
 // Runtime JSON parser using _Type introspection
-//
-// A single generic json_parse() function handles arbitrary structs,
-// integers, floats, strings, booleans, and enums — all dispatched
-// at runtime via _Type reflection. No code generation, no macros.
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
-// ---------------------------------------------------------------------------
-// Minimal JSON tokenizer
-// ---------------------------------------------------------------------------
+int json_parse(_Type T, const char** p, void* out);
+int json_write(_Type T, FILE* f, const void* data, int indent);
 
 void json_ws(const char** p){
     while(isspace((unsigned char)**p)) ++*p;
@@ -31,7 +27,7 @@ const char* json_string(const char** p){
     return __builtin_intern(buf);
 }
 
-// Skip a JSON value we don't care about (for unknown struct fields).
+// skip a json value
 void json_skip(const char** p){
     json_ws(p);
     if(**p == '"'){
@@ -64,25 +60,15 @@ void json_skip(const char** p){
     }
 }
 
-// ---------------------------------------------------------------------------
-// Generic JSON parser — dispatches on _Type at runtime
-// ---------------------------------------------------------------------------
-
-int json_parse(_Type T, const char** p, void* out);
-
 int json_parse(_Type T, const char** p, void* out){
     json_ws(p);
-
-    // const char*
-    if(T == (const char*)){
+    if(T == const char*){
         const char* s = json_string(p);
         if(!s) return -1;
         *(const char**)out = s;
         return 0;
     }
-
-    // _Bool — JSON true/false
-    if(T == (_Bool)){
+    if(T == _Bool){
         if(strncmp(*p, "true", 4) == 0){
             *(_Bool*)out = 1;
             *p += 4;
@@ -95,48 +81,53 @@ int json_parse(_Type T, const char** p, void* out){
         }
         return -1;
     }
-
-    // Enum — parse from JSON string, match enumerator names
     if(T.is_enum){
         const char* s = json_string(p);
         if(!s) return -1;
-        for(int i = 0; i < (int)T.enumerators; i++){
+        for(size_t i = 0; i < T.enumerators; i++){
             auto e = T.enumerator(i);
             if(strcmp(s, e.name) == 0){
-                if(T.sizeof_ <= 4) *(int*)out = (int)e.value;
-                else                *(long long*)out = e.value;
+                memcpy(out, &i, T.sizeof_);
                 return 0;
             }
         }
         fprintf(stderr, "json: unknown enumerator '%s' for %s\n", s, T.name);
         return -1;
     }
-
-    // Integers
     if(T.is_integer){
         char* end;
-        long long v = strtoll(*p, &end, 10);
-        if(end == *p) return -1;
-        *p = end;
-        if(T.sizeof_ == 1)      *(char*)out = (char)v;
-        else if(T.sizeof_ == 2) *(short*)out = (short)v;
-        else if(T.sizeof_ == 4) *(int*)out = (int)v;
-        else                     *(long long*)out = v;
-        return 0;
+        if(T.is_unsigned){
+            if(T.sizeof_ > 8) return 1;
+            unsigned long long v = strtoull(*p, &end, 10);
+            if(end == *p) return -1;
+            *p = end;
+            memcpy(out, &v, T.sizeof_);
+        }
+        else {
+            long long v = strtoll(*p, &end, 10);
+            if(end == *p) return -1;
+            *p = end;
+            switch(T.sizeof_){
+                case 1: *(int8_t*)out = (int8_t)v; break;
+                case 2: *(int16_t*)out = (int16_t)v; break;
+                case 4: *(int32_t*)out = (int32_t)v; break;
+                case 8: *(int64_t*)out = (int64_t)v; break;
+                default: return 1;
+            }
+            return 0;
+        }
     }
-
-    // Floats
     if(T.is_float){
         char* end;
         double v = strtod(*p, &end);
         if(end == *p) return -1;
         *p = end;
-        if(T.sizeof_ == 4) *(float*)out = (float)v;
-        else                *(double*)out = v;
+        if(T == float)
+            *(float*)out = (float)v;
+        else
+            *(double*)out = v;
         return 0;
     }
-
-    // Struct — parse JSON object, match keys to field names
     if(T.is_struct){
         if(**p != '{') return -1;
         ++*p;
@@ -155,40 +146,31 @@ int json_parse(_Type T, const char** p, void* out){
             json_ws(p);
             if(**p != ':') return -1;
             ++*p;
-            // Find matching field
-            _Bool found = 0;
-            for(int i = 0; i < (int)T.fields; i++){
+            for(size_t i = 0; i < T.fields; i++){
                 auto f = T.field(i);
                 if(strcmp(key, f.name) == 0){
                     int err = json_parse(f.type, p, (char*)out + f.offset);
                     if(err) return err;
-                    found = 1;
+                    goto found;
                     break;
                 }
             }
-            if(!found) json_skip(p); // ignore unknown fields
+            json_skip(p);
+            found:;
         }
     }
-
     fprintf(stderr, "json: unsupported type '%s'\n", T.name);
     return -1;
 }
-
-// ---------------------------------------------------------------------------
-// Generic JSON writer — dispatches on _Type at runtime
-// ---------------------------------------------------------------------------
-
-void json_write(_Type T, FILE* f, const void* data, int indent);
 
 void json_indent(FILE* f, int indent){
     for(int i = 0; i < indent; i++) fprintf(f, "  ");
 }
 
-void json_write(_Type T, FILE* f, const void* data, int indent){
-    // const char*
-    if(T == (const char*)){
+int json_write(_Type T, FILE* f, const void* data, int indent){
+    if(T == const char*){
         const char* s = *(const char**)data;
-        if(!s){ fprintf(f, "null"); return; }
+        if(!s){ fprintf(f, "null"); return 0;}
         fputc('"', f);
         for(const char* c = s; *c; c++){
             if(*c == '"') fprintf(f, "\\\"");
@@ -197,56 +179,82 @@ void json_write(_Type T, FILE* f, const void* data, int indent){
             else fputc(*c, f);
         }
         fputc('"', f);
-        return;
+        return 0;
     }
-
-    // _Bool
-    if(T == (_Bool)){
+    if(T == _Bool){
         fprintf(f, *(_Bool*)data ? "true" : "false");
-        return;
+        return 0;
     }
-
-    // Enum — write as string using enumerator name
     if(T.is_enum){
         long long v;
-        if(T.sizeof_ <= 4) v = *(int*)data;
-        else                v = *(long long*)data;
-        for(int i = 0; i < (int)T.enumerators; i++){
+        if(T.is_signed){
+            switch(T.sizeof_){
+                case 1: v = (long long)*(int8_t*)data; break;
+                case 2: v = (long long)*(int16_t*)data; break;
+                case 4: v = (long long)*(int32_t*)data; break;
+                case 8: v = (long long)*(int64_t*)data; break;
+                default: return 1;
+            }
+        }
+        else {
+            switch(T.sizeof_){
+                case 1: v = (long long)*(uint8_t*)data; break;
+                case 2: v = (long long)*(uint16_t*)data; break;
+                case 4: v = (long long)*(uint32_t*)data; break;
+                case 8: v = (long long)*(uint64_t*)data; break;
+                default: return 1;
+            }
+        }
+        for(size_t i = 0; i < T.enumerators; i++){
             auto e = T.enumerator(i);
             if(e.value == v){
                 fprintf(f, "\"%s\"", e.name);
-                return;
+                return 0;
             }
         }
-        fprintf(f, "%lld", v); // fallback: unknown enumerator
-        return;
+        fprintf(f, "%lld", v); // unknown enumerator
+        return 0;
     }
-
-    // Integers
     if(T.is_integer){
-        long long v;
-        if(T.sizeof_ == 1)      v = *(char*)data;
-        else if(T.sizeof_ == 2) v = *(short*)data;
-        else if(T.sizeof_ == 4) v = *(int*)data;
-        else                     v = *(long long*)data;
-        fprintf(f, "%lld", v);
-        return;
+        if(T.is_signed){
+            long long v;
+            switch(T.sizeof_){
+                case 1: v = (long long)*(int8_t*)data; break;
+                case 2: v = (long long)*(int16_t*)data; break;
+                case 4: v = (long long)*(int32_t*)data; break;
+                case 8: v = (long long)*(int64_t*)data; break;
+                default: return 1;
+            }
+            fprintf(f, "%lld", v);
+        }
+        else {
+            unsigned long long v;
+            switch(T.sizeof_){
+                case 1: v = (unsigned long long)*(uint8_t*)data; break;
+                case 2: v = (unsigned long long)*(uint16_t*)data; break;
+                case 4: v = (unsigned long long)*(uint32_t*)data; break;
+                case 8: v = (unsigned long long)*(uint64_t*)data; break;
+                default: return 1;
+            }
+            fprintf(f, "%llu", v);
+        }
+        return 0;
     }
-
-    // Floats
     if(T.is_float){
         double v;
-        if(T.sizeof_ == 4) v = *(float*)data;
-        else                v = *(double*)data;
+        if(T == float)
+            v = (double)*(float*)data;
+        else if(T == double)
+            v = *(double*)data;
+        else
+            return 1;
         fprintf(f, "%g", v);
-        return;
+        return 0;
     }
-
-    // Struct — write as JSON object
     if(T.is_struct){
         fprintf(f, "{\n");
-        int n = (int)T.fields;
-        for(int i = 0; i < n; i++){
+        size_t n = T.fields;
+        for(size_t i = 0; i < n; i++){
             auto field = T.field(i);
             json_indent(f, indent + 1);
             fprintf(f, "\"%s\": ", field.name);
@@ -256,23 +264,22 @@ void json_write(_Type T, FILE* f, const void* data, int indent){
         }
         json_indent(f, indent);
         fputc('}', f);
-        return;
+        return 0;
     }
-
-    fprintf(f, "null");
+    return 1;
 }
 
-// ---------------------------------------------------------------------------
-// Demo
-// ---------------------------------------------------------------------------
 
-typedef enum Role Role;
+//////////////////
+//
+//    Demo
+//
+
+#pragma typedef on
 enum Role { WARRIOR, MAGE, ROGUE, HEALER };
 
-typedef struct Vec2 Vec2;
 struct Vec2 { double x, y; };
 
-typedef struct Player Player;
 struct Player {
     const char* name;
     int hp;
@@ -283,13 +290,7 @@ struct Player {
 };
 
 void print_player(const Player* p){
-    const char* roles[] = {"WARRIOR","MAGE","ROGUE","HEALER"};
-    printf("  name:  %s\n", p->name);
-    printf("  hp:    %d\n", p->hp);
-    printf("  level: %d\n", p->level);
-    printf("  alive: %s\n", p->alive ? "true" : "false");
-    printf("  role:  %s\n", roles[p->role]);
-    printf("  pos:   (%.1f, %.1f)\n", p->pos.x, p->pos.y);
+    json_write(Player, stdout, p, 0);
 }
 
 // Parse a single player
@@ -354,4 +355,8 @@ printf("\n");
 
 printf("\n--- Round-trip: parse then write ---\n");
 json_write(typeof(p2), stdout, &p2, 0);
+printf("\n");
+
+printf("\n--- Inline type printing ---\n");
+json_write(struct Foo {int x; int y;}, stdout, &(struct Foo){1, 2}, 0);
 printf("\n");
