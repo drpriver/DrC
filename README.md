@@ -244,7 +244,7 @@ typedef struct Ints Ints;
 struct Ints {
     int * data;
     size_t count, capacity;
-    void push(Ints* self, int val){
+    void push(_Self* self, int val){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:4;
             void* p = realloc(self.data, cap * sizeof *self.data);
