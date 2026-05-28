@@ -82,6 +82,7 @@ struct CcQualType {
         } basic;
     };
 };
+#define CCQT_NONE (CcQualType){0}
 
 static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
 

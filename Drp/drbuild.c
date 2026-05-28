@@ -2768,31 +2768,31 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
             case COMPILER_GCC_MINGW:
             case COMPILER_GCC:
             case COMPILER_CLANG:
-                cmd_cargs(cmd, "-g");
+                b_args(ctx, build, "-g");
                 goto fallthrough;
             case COMPILER_CLANG_CL:
                 fallthrough:;
-                cmd_cargs(cmd, "-march=native");
-                cmd_cargs(cmd, "-o", ctx->exe_path->data);
+                b_args(ctx, build, "-march=native");
+                b_args(ctx, build, "-o", ctx->exe_path->data);
                 depfile = b_atomize_f(ctx, "%s.deps", ctx->exe_path->data);
                 if(ctx->build_compiler_flavor == COMPILER_CLANG_CL){
-                    cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
+                    b_args(ctx, build, "/clang:-MMD", "/clang:-MP");
                     b_argf(ctx, build, "/clang:-MF%s", depfile->data);
                     b_argf(ctx, build, "/clang:-MT%s", b_normalize_patha(ctx, ctx->exe_path)->data);
                 }
                 else {
-                    cmd_cargs(cmd, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
-                    cmd_aarg(cmd, depfile);
+                    b_args(ctx, build, "-MT", b_normalize_patha(ctx, ctx->exe_path)->data, "-MMD", "-MP", "-MF");
+                    b_aarg(ctx, build, depfile);
                 }
                 break;
             case COMPILER_CL:
-                cmd_cargs(cmd, "/nologo", "/std:c11");
-                cmd_cargs(cmd, "/Zc:preprocessor", "/wd5105");
-                cmd_cargs(cmd, "/Zi", "/DEBUG");
+                b_args(ctx, build, "/nologo", "/std:c11");
+                b_args(ctx, build, "/Zc:preprocessor", "/wd5105");
+                b_args(ctx, build, "/Zi", "/DEBUG");
                 b_argf(ctx, build, "/Fd:%s.pdb", b_normalize_patha(ctx, ctx->exe_path)->data);
                 b_argf(ctx, build, "/Fe:%s", b_normalize_patha(ctx, ctx->exe_path)->data);
                 depfile = b_atomize_f(ctx, "%s.deps.json", ctx->exe_path->data);
-                cmd_cargs(cmd, "/sourceDependencies", depfile->data);
+                b_args(ctx, build, "/sourceDependencies", depfile->data);
                 break;
         }
         b_argf(ctx, build, "-DDEFAULT_BUILD_COMPILER=\"%s\"", ctx->build_cc->data);
@@ -3050,8 +3050,8 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
     cmd_prog(cmd, AT_to_LS(cc));
     switch(flavor){
         case COMPILER_GCC_MINGW:
-            cmd_cargs(cmd, "-std=gnu11");
-            cmd_cargs(cmd, "-D__USE_MINGW_ANSI_STDIO=1");
+            b_args(ctx, target, "-std=gnu11");
+            b_args(ctx, target, "-D__USE_MINGW_ANSI_STDIO=1");
             goto fallthrough;
         case COMPILER__MAX:
         case COMPILER_UNKNOWN:
@@ -3059,27 +3059,27 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
         case COMPILER_CLANG:
             fallthrough:;
             if(flavor == COMPILER_CLANG && target_os != BUILD_OS && target_os == OS_WINDOWS){
-                cmd_cargs(cmd,
+                b_args(ctx, target,
                     "--target=x86_64-pc-windows-msvc",
                     "-nostdinc");
             }
-            if(debug) cmd_cargs(cmd, "-g");
+            if(debug) b_args(ctx, target, "-g");
             goto fallthrough2;
         case COMPILER_CLANG_CL:
             fallthrough2:;
             if(native)
-                cmd_cargs(cmd, "-march=native");
+                b_args(ctx, target, "-march=native");
             else if(arch == AFAM_x86){
                 if(!(target_os == OS_APPLE && flavor == COMPILER_CLANG)) // should be apple clang, but we don't sniff that
-                    // cmd_cargs(cmd, "-march=x86-64-v3");
+                    // b_args(ctx, target, "-march=x86-64-v3");
                     // Old compilers don't support the above flag.
-                    cmd_cargs(cmd, "-march=haswell");
+                    b_args(ctx, target, "-march=haswell");
             }
             else if(arch == AFAM_APPLE_UNIVERSAL){
-                cmd_cargs(cmd,
+                b_args(ctx, target,
                     "-arch", "x86_64",
                     "-Xarch_x86_64", "-march=haswell",
-                    "-Xarch_x86_64", "-mmacosx-version-min=10.11",
+                    "-Xarch_x86_64", "-mmacosx-version-min=10.15",
                     "-arch", "arm64",
                     "-Xarch_arm64", "-mcpu=apple-m1",
                     "-Xarch_arm64", "-mmacosx-version-min=11.0"
@@ -3088,30 +3088,30 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
             if(flavor == COMPILER_CLANG_CL){
                 b_argf(ctx, target, "/Fe:%s", binary->data);
                 b_argf(ctx, target, "/Fo%s/%s.obj", ctx->build_dir->data, name);
-                cmd_cargs(cmd, "/clang:-MMD", "/clang:-MP");
+                b_args(ctx, target, "/clang:-MMD", "/clang:-MP");
                 b_argf(ctx, target, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
                 b_argf(ctx, target, "/clang:-MT%s", binary->data);
             }
             else {
-                cmd_cargs(cmd, "-o", binary->data);
-                cmd_cargs(cmd, "-MT", binary->data, "-MMD", "-MP", "-MF");
+                b_args(ctx, target, "-o", binary->data);
+                b_args(ctx, target, "-MT", binary->data, "-MMD", "-MP", "-MF");
                 b_argf(ctx, target, "%s/%s.deps", ctx->deps_dir->data, name);
             }
-            if(tsan && sanitize) cmd_cargs(cmd, "-fsanitize=thread,undefined");
-            else if(tsan) cmd_cargs(cmd, "-fsanitize=thread");
-            else if(sanitize) cmd_cargs(cmd, "-fsanitize=address,undefined");
-            if(optimize) cmd_cargs(cmd, "-O2");
+            if(tsan && sanitize) b_args(ctx, target, "-fsanitize=thread,undefined");
+            else if(tsan) b_args(ctx, target, "-fsanitize=thread");
+            else if(sanitize) b_args(ctx, target, "-fsanitize=address,undefined");
+            if(optimize) b_args(ctx, target, "-O2");
             break;
         case COMPILER_CL:
-            cmd_cargs(cmd, "/nologo", "/std:c11", "/Zc:preprocessor", "/wd5105");
+            b_args(ctx, target, "/nologo", "/std:c11", "/Zc:preprocessor", "/wd5105");
             if(debug){
-                cmd_cargs(cmd, "/Zi", "/DEBUG");
+                b_args(ctx, target, "/Zi", "/DEBUG");
                 b_argf(ctx, target, "/Fd:%s/%s.pdb", ctx->build_dir->data, name);
             }
-            if(optimize) cmd_cargs(cmd, "/O2");
+            if(optimize) b_args(ctx, target, "/O2");
             b_argf(ctx, target, "/Fe:%s", binary->data);
             b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->build_dir->data, name);
-            cmd_carg(cmd, "/sourceDependencies");
+            b_args(ctx, target, "/sourceDependencies");
             b_argf(ctx, target, "%s/%s.deps.json", ctx->deps_dir->data, name);
             break;
     }

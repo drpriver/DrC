@@ -353,9 +353,9 @@ C::md
 
   `_Type`::md
     Types are first-class values of type `_Type`. A type name used
-    as an expression produces a `_Type` value. This is most useful
+    as an expression produces a `_Type` value. One use-case is
     inside proc macro functions where `_Type` parameters receive the
-    type passed by the caller.
+    type passed by the caller. It can also be used for runtime reflection.
 
     ::pre.C
       _Type T = int;

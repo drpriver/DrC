@@ -4200,6 +4200,41 @@ TestFunction(test_parse_decls){
                 {SVI("u"), SVI("union U"), SVI("(union U)(union U){1}")},
             },
         },
+        {
+            "const _Type -> _Type, etc.", __LINE__,
+            SVI("const _Type T = int;\n"
+                "_Type T2 = T;\n"
+                "const _Type T3 = T2\n"),
+            .vars = {
+                {SVI("T"), SVI("const _Type"), SVI("int")},
+                {SVI("T2"), SVI("_Type"), SVI("(_Type)T")},
+                {SVI("T3"), SVI("const _Type"), SVI("T2")},
+            },
+        },
+        {
+            "const int -> int, etc.", __LINE__,
+            SVI("const int x = 1;\n"
+                "int y = x;\n"
+                "const int z = y\n"),
+            .vars = {
+                {SVI("x"), SVI("const int"), SVI("1")},
+                {SVI("y"), SVI("int"), SVI("(int)x")},
+                {SVI("z"), SVI("const int"), SVI("y")},
+            },
+        },
+        {
+            "array init with other arrays (extension)", __LINE__,
+            SVI("int x[3] = {1,2,3};\n"
+                "int y[3] = x;\n"
+                "constexpr int z[3] = {4,5,6};\n"
+                "constexpr int a[3] = z;\n"),
+            .vars = {
+                {SVI("x"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}")},
+                {SVI("y"), SVI("int[3]"), SVI("x")},
+                {SVI("z"), SVI("const int[3]"), SVI("{@0 = 4, @4 = 5, @8 = 6}")},
+                {SVI("a"), SVI("const int[3]"), SVI("z")},
+            },
+        }
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

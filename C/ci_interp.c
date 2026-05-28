@@ -574,13 +574,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(!storage)
             return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
         CcQualType var_type = var->type;
-        // Array variables decay to pointer (but not vectors)
-        if(ccqt_kind(var_type) == CC_ARRAY && !ccqt_as_array(var_type)->is_vector){
-            if(sizeof storage > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof storage, size);
-            memcpy(result, &storage, sizeof storage);
-            return 0;
-        }
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, var_type, expr->loc, &sz);
         if(err) return err;

@@ -4688,15 +4688,13 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEFINT("__LDBL_HAS_QUIET_NAN__", 1);
         DEFINT("__DECIMAL_DIG__", 17); // depends on widest float type
     }
-    // __*_C function-like macros (token pasting)
+    // __*_C function-like macros
     {
         // Suffix for 64-bit literal depends on whether long is 64-bit
         const char* i64_suf  = ccbt_literal_suffix(t.int64_type);
         const char* u64_suf  = ccbt_literal_suffix(ccbt_to_unsigned(t.int64_type));
         const char* imax_suf = ccbt_literal_suffix(t.intmax_type);
         const char* umax_suf = ccbt_literal_suffix(ccbt_to_unsigned(t.intmax_type));
-        // No-suffix: __INT8_C(c) -> c
-        // With-suffix: __INT64_C(c) -> c ## L
         struct { StringView name; const char*_Nullable suffix; } c_macros[] = {
             {SVI("__INT8_C"),    NULL},
             {SVI("__INT16_C"),   NULL},

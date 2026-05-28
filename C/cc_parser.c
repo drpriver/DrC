@@ -22,7 +22,7 @@
 
 
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
-static int cc_parse_assignment_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_assignment_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out, CcQualType);
 static int cc_parse_ternary_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_infix(CcParser* p, CcValueClass, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_prefix(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
@@ -35,6 +35,7 @@ static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
+static int cc_expect_punct_supp(CcParser* p, CcPunct punct, const char*);
 static void _cc_release_expr(CcParser* p, CcExpr*, size_t nvalues);
 static void cc_release_expr(CcParser* p, CcExpr*);
 static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
@@ -332,6 +333,7 @@ _Bool
 cc_implicit_convertible(CcQualType from, CcQualType to){
     if(from.bits == to.bits) return 1;
     CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
+    if(fk == CC_BASIC && tk == CC_BASIC && from.basic.kind == to.basic.kind) return 1;
     _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind)) || fk == CC_ENUM;
     _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(to.basic.kind)) || tk == CC_ENUM;
     if(f_arith && t_arith) return 1;
@@ -1019,7 +1021,7 @@ static
 int
 cc_parse_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
     CcExpr* left;
-    int err = cc_parse_assignment_expr(p, vc, &left);
+    int err = cc_parse_assignment_expr(p, vc, &left, CCQT_NONE);
     if(err) return err;
     for(;;){
         CcToken tok;
@@ -1027,7 +1029,7 @@ cc_parse_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
             CcExpr* right;
-            err = cc_parse_assignment_expr(p, vc, &right);
+            err = cc_parse_assignment_expr(p, vc, &right, CCQT_NONE);
             if(err) return err;
             CcExpr* node = cc_make_expr(p, CC_EXPR_COMMA, tok.loc, right->type, 1);
             if(!node) return CC_OOM_ERROR;
@@ -1047,7 +1049,16 @@ cc_parse_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
 
 static
 int
-cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
+cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out, CcQualType optional_expected){
+    if(optional_expected.bits){
+        CcToken tok;
+        int err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
+            err = cc_parse_init_list(p, vc, out, optional_expected);
+            return err;
+        }
+    }
     CcExpr* left;
     int err = cc_parse_ternary_expr(p, vc, &left);
     if(err) return err;
@@ -1067,10 +1078,7 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
             CcToken peek_assign;
             err = cc_peek(p, &peek_assign);
             if(err) return err;
-            if(kind == CC_EXPR_ASSIGN && peek_assign.type == CC_PUNCTUATOR && peek_assign.punct.punct == CC_lbrace)
-                err = cc_parse_init_list(p, vc, &right, left->type);
-            else
-                err = cc_parse_assignment_expr(p, vc, &right);
+            err = cc_parse_assignment_expr(p, vc, &right, left->type);
             if(err) return err;
             if(kind != CC_EXPR_ASSIGN && kind != CC_EXPR_ADDASSIGN && kind != CC_EXPR_SUBASSIGN){
                 CcQualType lt = left->type;
@@ -1894,6 +1902,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
+            node->is_lvalue = 1;
             *out = node;
             return 0;
         }
@@ -1906,7 +1915,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, CC_lparen);
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg);
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, CC_rparen);
                     if(err) return err;
@@ -1962,7 +1971,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                                 return cc_error(p, next.loc, "subscript in __builtin_offsetof requires array type");
                             CcArray* arr = ccqt_as_array(cur);
                             CcExpr* idx_expr = NULL;
-                            err = cc_parse_assignment_expr(p, vc, &idx_expr);
+                            err = cc_parse_assignment_expr(p, vc, &idx_expr, CCQT_NONE);
                             if(err) return err;
                             int64_t idx;
                             err = cc_eval_integer(p, idx_expr, &idx);
@@ -2013,7 +2022,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     CcQualType ptr_type = ptr_expr->type;
                     if(ccqt_kind(ptr_type) != CC_POINTER)
@@ -2022,13 +2031,13 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* ret_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ret_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ret_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     // memorder (discard)
                     CcExpr* mo;
-                    err = cc_parse_assignment_expr(p, vc, &mo);
+                    err = cc_parse_assignment_expr(p, vc, &mo, CCQT_NONE);
                     if(err) return err;
                     cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
@@ -2048,19 +2057,19 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(ptr_expr->type) != CC_POINTER)
                         return cc_error(p, tok.loc, "first argument to __atomic_store must be a pointer");
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* val_expr;
-                    err = cc_parse_assignment_expr(p, vc, &val_expr);
+                    err = cc_parse_assignment_expr(p, vc, &val_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* mo;
-                    err = cc_parse_assignment_expr(p, vc, &mo);
+                    err = cc_parse_assignment_expr(p, vc, &mo, CCQT_NONE);
                     if(err) return err;
                     cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
@@ -2077,24 +2086,24 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(ptr_expr->type) != CC_POINTER)
                         return cc_error(p, tok.loc, "first argument to __atomic_exchange must be a pointer");
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* val_expr;
-                    err = cc_parse_assignment_expr(p, vc, &val_expr);
+                    err = cc_parse_assignment_expr(p, vc, &val_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* ret_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ret_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ret_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* mo;
-                    err = cc_parse_assignment_expr(p, vc, &mo);
+                    err = cc_parse_assignment_expr(p, vc, &mo, CCQT_NONE);
                     if(err) return err;
                     cc_release_expr(p, mo);
                     err = cc_expect_punct(p, ')');
@@ -2143,7 +2152,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     CcQualType ptr_type = ptr_expr->type;
                     if(ccqt_kind(ptr_type) != CC_POINTER)
@@ -2216,7 +2225,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     for(int i = 0; i < nargs; i++){
                         err = cc_expect_punct(p, ',');
                         if(err) return err;
-                        err = cc_parse_assignment_expr(p, vc, &node->values[i]);
+                        err = cc_parse_assignment_expr(p, vc, &node->values[i], CCQT_NONE);
                         if(err) return err;
                         err = cc_implicit_cast(p, node->values[i], arg_types[i], &node->values[i]);
                         if(err) return err;
@@ -2226,7 +2235,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         err = cc_expect_punct(p, ',');
                         if(err) return err;
                         CcExpr* const_expr;
-                        err = cc_parse_assignment_expr(p, vc, &const_expr);
+                        err = cc_parse_assignment_expr(p, vc, &const_expr, CCQT_NONE);
                         if(err) return err;
                         int64_t ev;
                         err = cc_eval_integer(p, const_expr, &ev);
@@ -2258,7 +2267,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* const_expr;
-                    err = cc_parse_assignment_expr(p, vc, &const_expr);
+                    err = cc_parse_assignment_expr(p, vc, &const_expr, CCQT_NONE);
                     if(err) return err;
                     int64_t ev;
                     err = cc_eval_integer(p, const_expr, &ev);
@@ -2335,7 +2344,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
                         CcQualType t;
@@ -2354,7 +2363,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     for(int i = 0; i < nargs; i++){
                         err = cc_expect_punct(p, ',');
                         if(err) return err;
-                        err = cc_parse_assignment_expr(p, vc, &node->values[i]);
+                        err = cc_parse_assignment_expr(p, vc, &node->values[i], CCQT_NONE);
                         if(err) return err;
                         err = cc_implicit_cast(p, node->values[i], val_type, &node->values[i]);
                         if(err) return err;
@@ -2384,7 +2393,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
                         CcQualType t;
@@ -2409,7 +2418,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ptr_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ptr_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ptr_expr, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
                         CcQualType t;
@@ -2431,19 +2440,19 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     node->lhs = ptr_expr;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
-                    err = cc_parse_assignment_expr(p, vc, &node->values[0]);
+                    err = cc_parse_assignment_expr(p, vc, &node->values[0], CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, node->values[0], ll_type, &node->values[0]);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
-                    err = cc_parse_assignment_expr(p, vc, &node->values[1]);
+                    err = cc_parse_assignment_expr(p, vc, &node->values[1], CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, node->values[1], ll_type, &node->values[1]);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
-                    err = cc_parse_assignment_expr(p, vc, &node->values[2]);
+                    err = cc_parse_assignment_expr(p, vc, &node->values[2], CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, node->values[2], ll_ptr_type, &node->values[2]);
                     if(err) return err;
@@ -2460,21 +2469,21 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* a;
-                    err = cc_parse_assignment_expr(p, vc, &a);
+                    err = cc_parse_assignment_expr(p, vc, &a, CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, a, ull_type, &a);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* b;
-                    err = cc_parse_assignment_expr(p, vc, &b);
+                    err = cc_parse_assignment_expr(p, vc, &b, CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, b, ull_type, &b);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* high_ptr;
-                    err = cc_parse_assignment_expr(p, vc, &high_ptr);
+                    err = cc_parse_assignment_expr(p, vc, &high_ptr, CCQT_NONE);
                     if(err) return err;
                     err = cc_implicit_cast(p, high_ptr, ull_ptr_type, &high_ptr);
                     if(err) return err;
@@ -2492,7 +2501,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ap_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ap_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ap_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
                     if(err) return err;
@@ -2503,7 +2512,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         err = cc_next_token(p, &peek); // consume comma
                         if(err) return err;
                         CcExpr* ignored;
-                        err = cc_parse_assignment_expr(p, vc, &ignored);
+                        err = cc_parse_assignment_expr(p, vc, &ignored, CCQT_NONE);
                         if(err) return err;
                         cc_release_expr(p, ignored);
                     }
@@ -2520,7 +2529,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ap_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ap_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ap_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -2537,7 +2546,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ap_expr;
-                    err = cc_parse_assignment_expr(p, vc, &ap_expr);
+                    err = cc_parse_assignment_expr(p, vc, &ap_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
                     if(err) return err;
@@ -2559,14 +2568,14 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* dest_expr;
-                    err = cc_parse_assignment_expr(p, vc, &dest_expr);
+                    err = cc_parse_assignment_expr(p, vc, &dest_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_va_list_to_ptr(p, tok.loc, &dest_expr);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* src_expr;
-                    err = cc_parse_assignment_expr(p, vc, &src_expr);
+                    err = cc_parse_assignment_expr(p, vc, &src_expr, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -2583,12 +2592,12 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC__builtin_expect:{
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
-                    err = cc_parse_assignment_expr(p, vc, out);
+                    err = cc_parse_assignment_expr(p, vc, out, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* unused;
-                    err = cc_parse_assignment_expr(p, vc, &unused);
+                    err = cc_parse_assignment_expr(p, vc, &unused, CCQT_NONE);
                     if(err) return err;
                     cc_release_expr(p, unused);
                     err = cc_expect_punct(p, ')');
@@ -2708,7 +2717,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* a;
-                    err = cc_parse_assignment_expr(p, vc, &a);
+                    err = cc_parse_assignment_expr(p, vc, &a, CCQT_NONE);
                     if(err) return err;
                     if(!ccqt_is_basic(a->type) || !ccbt_is_integer(a->type.basic.kind))
                         return cc_error(p, a->loc, "first argument to overflow builtin must be an integer type");
@@ -2717,7 +2726,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* b;
-                    err = cc_parse_assignment_expr(p, vc, &b);
+                    err = cc_parse_assignment_expr(p, vc, &b, CCQT_NONE);
                     if(err) return err;
                     if(!ccqt_is_basic(b->type) || !ccbt_is_integer(b->type.basic.kind))
                         return cc_error(p, b->loc, "second argument to overflow builtin must be an integer type");
@@ -2726,7 +2735,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* res;
-                    err = cc_parse_assignment_expr(p, vc, &res);
+                    err = cc_parse_assignment_expr(p, vc, &res, CCQT_NONE);
                     if(err) return err;
                     if(ccqt_kind(res->type) != CC_POINTER
                     || !ccqt_is_basic(ccqt_as_ptr(res->type)->pointee)
@@ -2750,7 +2759,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg);
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
                     if(!ccqt_is_basic(arg->type) || !ccbt_is_integer(arg->type.basic.kind))
                         return cc_error(p, arg->loc, "argument to popcount must be an integer type");
@@ -2773,7 +2782,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg);
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
                     if(!ccqt_is_basic(arg->type) || !ccbt_is_integer(arg->type.basic.kind))
                         return cc_error(p, arg->loc, "argument to ctz/clz must be an integer type");
@@ -2821,7 +2830,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* sz;
-                    err = cc_parse_assignment_expr(p, vc, &sz);
+                    err = cc_parse_assignment_expr(p, vc, &sz, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -2835,7 +2844,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg);
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
                     if(!cc_implicit_convertible(arg->type, p->const_char_star))
                         return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
@@ -2855,7 +2864,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg);
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
                     cc_release_expr(p, arg);
                     err = cc_expect_punct(p, ')');
@@ -2925,6 +2934,16 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 err = cc_parse_expr(p, vc, &inner);
                 if(err) return err;
                 err = cc_expect_punct(p, CC_rparen);
+                if(err) return err;
+                *out = inner;
+                return 0;
+            }
+            if(tok.punct.punct == CC_lbrace){
+                // Just treat similar to (), but without comma expression
+                CcExpr* inner;
+                err = cc_parse_assignment_expr(p, vc, &inner, CCQT_NONE);
+                if(err) return err;
+                err = cc_expect_punct_supp(p, CC_rbrace, " to end {}-enclosed expression without inferred type");
                 if(err) return err;
                 *out = inner;
                 return 0;
@@ -3198,7 +3217,7 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
     }
     else {
         CcExpr* condition;
-        err = cc_parse_assignment_expr(p, vc, &condition);
+        err = cc_parse_assignment_expr(p, vc, &condition, CCQT_NONE);
         if(err) return err;
         tswitch = condition->type;
         cc_release_expr(p, condition);
@@ -3252,11 +3271,11 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
         err = cc_expect_punct(p, ':');
         if(err) return err;
         if(is_match && !result){
-            err = cc_parse_assignment_expr(p, vc, &result);
+            err = cc_parse_assignment_expr(p, vc, &result, CCQT_NONE);
             if(err) return err;
         }
         else if(is_default){
-            err = cc_parse_assignment_expr(p, vc, &default_result);
+            err = cc_parse_assignment_expr(p, vc, &default_result, CCQT_NONE);
             if(err) return err;
         }
         else {
@@ -3499,7 +3518,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         err = cc_expect_punct(p, CC_comma);
                         if(err) return err;
                         CcExpr* func_expr;
-                        err = cc_parse_assignment_expr(p, vc, &func_expr);
+                        err = cc_parse_assignment_expr(p, vc, &func_expr, CCQT_NONE);
                         if(err) return err;
                         CcFunc* func;
                         if(func_expr->kind == CC_EXPR_FUNCTION)
@@ -3591,7 +3610,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         CcExpr* arg_val;
                         if(ti_op == CC_TYPE_FIELD || ti_op == CC_TYPE_PARAM_TYPE || ti_op == CC_TYPE_ENUMERATOR){
                             CcExpr* arg_expr;
-                            err = cc_parse_assignment_expr(p, vc, &arg_expr);
+                            err = cc_parse_assignment_expr(p, vc, &arg_expr, CCQT_NONE);
                             if(err) return err;
                             CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                             err = cc_implicit_cast(p, arg_expr, size_type, &arg_expr);
@@ -3609,7 +3628,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             }
                             else {
                                 CcExpr* arg_expr;
-                                err = cc_parse_assignment_expr(p, vc, &arg_expr);
+                                err = cc_parse_assignment_expr(p, vc, &arg_expr, CCQT_NONE);
                                 if(err) return err;
                                 arg_type = arg_expr->type;
                                 cc_release_expr(p, arg_expr);
@@ -3796,7 +3815,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         }
                         // Parse the value
                         CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, vc, &arg);
+                        err = cc_parse_assignment_expr(p, vc, &arg, ftype->params[idx]);
                         if(err) goto call_cleanup;
                         // Ensure args array is big enough
                         while(args.count <= idx){
@@ -3813,7 +3832,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     else if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_lbracket){
                         cc_next_token(p, &dot);
                         CcExpr* idx_expr;
-                        err = cc_parse_assignment_expr(p, vc, &idx_expr);
+                        err = cc_parse_assignment_expr(p, vc, &idx_expr, CCQT_NONE);
                         if(err) goto call_cleanup;
                         int64_t idx_signed;
                         err = cc_eval_integer(p, idx_expr, &idx_signed);
@@ -3836,7 +3855,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             goto call_cleanup;
                         }
                         CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, vc, &arg);
+                        err = cc_parse_assignment_expr(p, vc, &arg, ftype->params[idx]);
                         if(err) goto call_cleanup;
                         while(args.count <= idx){
                             err = pa_push(&args, call_al, NULL);
@@ -3855,7 +3874,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                                 positional_index++;
                         }
                         CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, vc, &arg);
+                        err = cc_parse_assignment_expr(p, vc, &arg, positional_index < ftype->param_count?ftype->params[positional_index]:CCQT_NONE);
                         if(err) goto call_cleanup;
                         if(has_named){
                             while(args.count <= positional_index){
@@ -3867,12 +3886,12 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                                 goto call_cleanup;
                             }
                             args.data[positional_index] = arg;
-                            positional_index++;
                         }
                         else {
                             err = pa_push(&args, call_al, arg);
                             if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
                         }
+                        positional_index++;
                     }
                     CcToken sep;
                     err = cc_next_token(p, &sep);
@@ -4318,9 +4337,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 msb_sprintf(sb, "\"%.*s\"", e->str.length - 1, e->text);
             }
             else if(ccqt_is_basic(e->type) && e->type.basic.kind == CCBT__Type){
-                msb_write_char(sb, '(');
                 cc_print_type(sb, (CcQualType){.bits = e->uinteger});
-                msb_write_char(sb, ')');
             }
             else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
                 if(e->type.basic.kind == CCBT_float)
@@ -5019,9 +5036,10 @@ cc_peek(CcParser* p, CcToken* tok){
     return cc_unget(p, tok);
 }
 
+static int cc_expect_punct(CcParser* p, CcPunct punct){ return cc_expect_punct_supp(p, punct, "");}
 static
 int
-cc_expect_punct(CcParser* p, CcPunct punct){
+cc_expect_punct_supp(CcParser* p, CcPunct punct, const char* supp){
     CcToken tok;
     int err = cc_next_token(p, &tok);
     if(err) return err;
@@ -5044,7 +5062,7 @@ cc_expect_punct(CcParser* p, CcPunct punct){
             buf[len++] = (char)v;
         }
         buf[len] = 0;
-        return cc_error(p, tok.loc, "Expected '%s'", buf);
+        return cc_error(p, tok.loc, "Expected '%s'%s", buf, supp);
     }
     return 0;
 }
@@ -5483,7 +5501,7 @@ cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttribut
             err = cc_next_token(p, &tok); // consume '('
             if(err) return err;
             CcExpr* expr = NULL;
-            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
             if(err) return err;
             if(!expr)
                 return cc_error(p, loc, "expected constant expression for aligned attribute");
@@ -5511,7 +5529,7 @@ cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttribut
         err = cc_expect_punct(p, CC_lparen);
         if(err) return err;
         CcExpr* expr = NULL;
-        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
         if(err) return err;
         if(!expr)
             return cc_error(p, loc, "expected constant expression for vector_size attribute");
@@ -5547,13 +5565,13 @@ cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttribut
         err = cc_expect_punct(p, CC_comma);
         if(err) return err;
         CcExpr* expr = NULL;
-        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
         if(err) return err;
         if(expr) cc_release_expr(p, expr);
         err = cc_expect_punct(p, CC_comma);
         if(err) return err;
         expr = NULL;
-        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
         if(err) return err;
         if(expr) cc_release_expr(p, expr);
         err = cc_expect_punct(p, CC_rparen);
@@ -5808,7 +5826,7 @@ cc_parse_declspec(CcParser* p, CcAttributes* attrs){
                 err = cc_expect_punct(p, CC_lparen);
                 if(err) return err;
                 CcExpr* expr = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
                 if(err) return err;
                 if(!expr)
                     return cc_error(p, tok.loc, "expected constant expression for __declspec(align)");
@@ -6616,7 +6634,7 @@ cc_parse_scalar_value(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull ou
             err = cc_peek(p, &peek);
             if(err) return err;
         }
-        err = cc_parse_assignment_expr(p, vc, out);
+        err = cc_parse_assignment_expr(p, vc, out, CCQT_NONE);
         if(err) return err;
         for(uint32_t i = 0; i < depth; i++){
             err = cc_peek(p, &peek);
@@ -6633,7 +6651,7 @@ cc_parse_scalar_value(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull ou
         }
         return 0;
     }
-    return cc_parse_assignment_expr(p, vc, out);
+    return cc_parse_assignment_expr(p, vc, out, CCQT_NONE);
 }
 
 static
@@ -6672,7 +6690,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
                 return cc_error(p, peek.loc, "index designator into non-array type");
             CcArray* a = ccqt_as_array(*sub);
             CcExpr* idx_expr;
-            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &idx_expr);
+            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &idx_expr, CCQT_NONE);
             if(err) return err;
             int64_t idx_signed;
             err = cc_eval_integer(p, idx_expr, &idx_signed);
@@ -6735,7 +6753,7 @@ cc_parse_init_value(CcParser* p, CcValueClass vc, CcQualType field_type, CcField
             || ek == cc_target(p)->char16_type
             || ek == cc_target(p)->char32_type){
                 CcExpr* v;
-                err = cc_parse_assignment_expr(p, vc, &v);
+                err = cc_parse_assignment_expr(p, vc, &v, CCQT_NONE);
                 if(err) return err;
                 if(!arr->is_incomplete && arr->length < v->str.length - 1)
                     return cc_error(p, v->loc, "initializer string too long for array");
@@ -6750,7 +6768,7 @@ cc_parse_init_value(CcParser* p, CcValueClass vc, CcQualType field_type, CcField
         }
         {
             CcExpr* v;
-            err = cc_parse_assignment_expr(p, vc, &v);
+            err = cc_parse_assignment_expr(p, vc, &v, CCQT_NONE);
             if(err) return err;
             if(positional)
                 return cc_init_apply_value(p, vc,field_type, field_loc, v, loc, buf);
@@ -7094,7 +7112,7 @@ cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_off
                     cc_next_token(p, &peek);
                     SrcLoc desig_loc = peek.loc;
                     CcExpr* idx_expr;
-                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &idx_expr);
+                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &idx_expr, CCQT_NONE);
                     if(err) return err;
                     int64_t idx_signed;
                     err = cc_eval_integer(p, idx_expr, &idx_signed);
@@ -7437,7 +7455,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     err = cc_next_token(p, &tok); // consume ':'
                     if(err) goto struct_err;
                     CcExpr* bw_expr = NULL;
-                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &bw_expr);
+                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &bw_expr, CCQT_NONE);
                     if(err) goto struct_err;
                     if(!bw_expr){
                         err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
@@ -7564,7 +7582,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_next_token(p, &tok); // consume ':'
                         if(err) goto struct_err;
                         CcExpr* bw_expr = NULL;
-                        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &bw_expr);
+                        err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &bw_expr, CCQT_NONE);
                         if(err) goto struct_err;
                         if(!bw_expr){
                             err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
@@ -7855,7 +7873,7 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                 err = cc_next_token(p, &tok); // consume '='
                 if(err) goto enum_err;
                 CcExpr* expr = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
                 if(err) goto enum_err;
                 if(!expr){
                     err = cc_error(p, tok.loc, "expected constant expression");
@@ -8232,7 +8250,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         }
                         else {
                             CcExpr* expr = NULL;
-                            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+                            err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
                             if(err) return err;
                             if(!expr)
                                 return cc_error(p, tok.loc, "expected expression in _Alignas");
@@ -9474,7 +9492,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             }
             else {
                 CcExpr* dim = NULL;
-                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &dim);
+                err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &dim, CCQT_NONE);
                 if(err) return err;
                 if(!dim) return cc_error(p, tok.loc, "Expected array dimension");
                 int64_t length;
@@ -9944,17 +9962,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 init_vc = CC_CONSTEXPR_VALUE;
             else if(var && !var->automatic && var->static_)
                 init_vc = CC_LINKTIME_VALUE;
-            CcToken peek_init;
-            err = cc_peek(p, &peek_init);
+            err = cc_parse_assignment_expr(p, init_vc, &initializer, type);
             if(err) return err;
-            if(peek_init.type == CC_PUNCTUATOR && peek_init.punct.punct == CC_lbrace){
-                err = cc_parse_init_list(p, init_vc, &initializer, type);
-                if(err) return err;
-            }
-            else {
-                err = cc_parse_assignment_expr(p, init_vc, &initializer);
-                if(err) return err;
-            }
             if(!initializer) return cc_error(p, tok.loc, "Expected expression after '='");
             err = cc_next_token(p, &tok);
             if(err) return err;
@@ -10194,7 +10203,7 @@ cc_handle_static_assert(CcParser* p){
     err = cc_expect_punct(p, CC_lparen);
     if(err) return err;
     CcExpr* expr = NULL;
-    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr);
+    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &expr, CCQT_NONE);
     if(err) return err;
     if(!expr)
         return cc_error(p, assert_loc, "expected expression in static_assert");

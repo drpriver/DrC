@@ -209,7 +209,7 @@ TestFunction(test_samples){
         },
         {
             __LINE__, LSI("Samples/script.c"),
-            SVI( "Hello world from Samples/script.c" EOL),
+            SVI( "Hello world from 'Samples/script.c'" EOL),
         },
         {
             __LINE__, LSI("Samples/Simple/calc.c"),
