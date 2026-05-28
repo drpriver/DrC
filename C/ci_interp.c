@@ -3300,7 +3300,7 @@ ci_preload_system_libs(CiInterpreter* ci){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro, ci_pragma_comment;
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro, ci_pragma_comment, ci_pragma_resolve;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
@@ -3317,6 +3317,8 @@ ci_register_pragmas(CiInterpreter*ci){
     if(err) return err;
     if(ci->procedural_macros){
         err = cpp_register_pragma(&ci->parser.cpp, SV("procmacro"), ci_pragma_procmacro, ci);
+        if(err) return err;
+        err = cpp_register_pragma(&ci->parser.cpp, SV("resolve"), ci_pragma_resolve, ci);
         if(err) return err;
     }
     return 0;
@@ -4095,6 +4097,80 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     err = ci_resolve_refs(ci, 1);
     if(err) return err;
     return cpp_define_builtin_func_macro(cpp, name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
+}
+
+static
+int
+ci_pragma_resolve(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
+    int err;
+    CiInterpreter* ci = ctx;
+    while(ntoks){
+    // Skip whitespace.
+        while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
+        if(!ntoks) return 0;
+        if(toks->type != CPP_IDENTIFIER)
+            return cpp_error(cpp, loc, "#pragma resolve: expected symbol name");
+        StringView name = toks->txt;
+        // Look up the function.
+        Atom atom = AT_get_atom(cpp->at, name.text, name.length);
+        if(!atom)
+            return cpp_error(cpp, loc, "#pragma resolve: unknown symbol '%.*s'", (int)name.length, name.text);
+        CcSymbol sym;
+        _Bool found = cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym);
+        if(!found)
+            return cpp_error(cpp, loc, "#pragma resolve: unknown symbol '%.*s'", (int)name.length, name.text);
+        switch(sym.kind){
+            case CC_SYM_VAR:
+                if(sym.var->interp_val) break;
+                if(sym.var->extern_ && !sym.var->initializer){
+                    LongString s = sym.var->mangle
+                        ? (LongString){sym.var->mangle->length, sym.var->mangle->data}
+                        : (LongString){sym.var->name->length, sym.var->name->data};
+                    void* addr;
+                    err = ci_dlsym(ci, sym.var->loc, s, "extern variable", &addr);
+                    if(err) return err;
+                    sym.var->interp_val = addr;
+                    break;
+                }
+                else {
+                    uint32_t sz;
+                    err = cc_sizeof_as_uint(&ci->parser, sym.var->type, sym.var->loc, &sz);
+                    if(err) return err;
+                    Allocator al = ci_allocator(ci);
+                    void* storage = Allocator_zalloc(al, sz);
+                    if(!storage) return CI_OOM_ERROR;
+                    sym.var->interp_val = storage;
+                    break;
+                }
+            case CC_SYM_FUNC:
+                if(!sym.func->defined){
+                    if(!sym.func->native_func && sym.func->name){
+                        LongString s = sym.func->mangle
+                            ? (LongString){sym.func->mangle->length, sym.func->mangle->data}
+                            : (LongString){sym.func->name->length, sym.func->name->data};
+                        void* addr;
+                        err = ci_dlsym(ci, sym.func->loc, s, "function", &addr);
+                        if(err) return err;
+                        sym.func->native_func = (void(*)(void))addr;
+                    }
+                    break;
+                }
+                if(!sym.func->parsed){
+                    err = cc_parse_func_body(&ci->parser, sym.func);
+                    if(err) return err;
+                }
+                if(!sym.func->native_func && sym.func->addr_taken){
+                    err = ci_create_closure(ci, sym.func);
+                    if(err) return err;
+                }
+                break;
+            case CC_SYM_TYPEDEF:
+            case CC_SYM_ENUMERATOR:
+                break;
+        }
+        toks++; ntoks--;
+    }
+    return 0;
 }
 
 static
