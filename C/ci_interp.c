@@ -2498,6 +2498,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                         .offset = 0,
                         .bitwidth = 0,
                         .bitoffset = 0,
+                        .is_bitfield = 0,
                     };
                 }
                 else {
@@ -2508,6 +2509,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                         .offset = f->offset,
                         .bitwidth = f->bitwidth,
                         .bitoffset = f->bitoffset,
+                        .is_bitfield = f->is_bitfield,
                     };
                 }
                 return 0;

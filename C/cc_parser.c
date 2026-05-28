@@ -10441,6 +10441,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("offset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, offset)},
             {SVI("bitwidth"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitwidth)},
             {SVI("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
+            {SVI("is_bitfield"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, is_bitfield)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]) * sizeof *fields);
         if(!fields) return CC_OOM_ERROR;
@@ -11882,7 +11883,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         f = &u->fields[idx];
                     }
                     // Build a CcInitList matching __builtin_Field layout
-                    uint32_t nfields = 6; // type, name, name_length, offset, bitwidth, bitoffset
+                    uint32_t nfields = 7; // type, name, name_length, offset, bitwidth, bitoffset, is_bitfield
                     CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + nfields * sizeof(CcInitEntry));
                     if(!il) { err = CC_OOM_ERROR; goto fini_introspection; }
                     il->loc = e->loc;
@@ -11924,6 +11925,10 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(!bo_val) { err = CC_OOM_ERROR; goto fini_introspection; }
                     il->entries[5].field_loc.byte_offset = offsetof(CiRtField, bitoffset);
                     il->entries[5].value = bo_val;
+                    CcExpr* is_bf_val = cc_uint64_expr(p, e->loc, ccqt_basic(CCBT_unsigned), f->is_bitfield);
+                    if(!is_bf_val) { err = CC_OOM_ERROR; goto fini_introspection; }
+                    il->entries[6].field_loc.byte_offset = offsetof(CiRtField, is_bitfield);
+                    il->entries[6].value = is_bf_val;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, p->builtin_field, 0);
                     if(!node) { err = CC_OOM_ERROR; goto fini_introspection; }
                     node->init_list = il;

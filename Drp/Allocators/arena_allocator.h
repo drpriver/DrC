@@ -181,14 +181,14 @@ _Static_assert(sizeof(Arena) == ARENA_SIZE, "");
 
 
 //
-// Rounds up to the nearest power of 8.
+// Rounds up to the nearest multiple of 16
 //
 force_inline
 size_t
 ArenaAllocator_round_size_up(size_t size){
-    size_t remainder = size & 7;
+    size_t remainder = size & 15;
     if(remainder)
-        size += 8 - remainder;
+        size += 16 - remainder;
     return size;
 }
 

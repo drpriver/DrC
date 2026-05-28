@@ -231,7 +231,8 @@ struct CiRtField {
     unsigned name_length,
              offset,
              bitwidth,
-             bitoffset;
+             bitoffset,
+             is_bitfield;
 };
 
 typedef struct CiRtEnumerator CiRtEnumerator;
