@@ -111,6 +111,7 @@ int json_parse_(_Type T, const char** p, void* out){
             if(end == *p) return -1;
             *p = end;
             memcpy(out, &v, T.sizeof_);
+            return 0;
         }
         else {
             long long v = strtoll(*p, &end, 10);

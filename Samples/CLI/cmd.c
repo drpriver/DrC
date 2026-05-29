@@ -2,7 +2,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if __has_include(<readline/readline.h>) || __has_include(<readline.h>)
+#include <readline/readline.h> <readline.h>
+#include <readline/history.h> <history.h>
+#pragma lib "readline"
 #pragma typedef on
+enum {HAS_READLINE=1};
+#else
+enum {HAS_READLINE=0};
+#endif
 
 unsigned long hash(const char* s){
     unsigned long h = 5381;
@@ -94,10 +102,10 @@ CMD(repeat, "repeat text N times: repeat 3 hello") {
 CMD(exit, "exit"){
     exit(0);
 }
- 
+
 CMD(big, "embiggen: big hello") {
     if(ctx->argc < 2){ printf("usage: big <text>\n"); return; }
- 
+
     static const char* G[128][5] = {
         ['A']={"  #  "," # # ","#####","#   #","#   #"},
         ['B']={"#### ","#   #","#### ","#   #","#### "},
@@ -141,7 +149,7 @@ CMD(big, "embiggen: big hello") {
         ['.']={"     ","     ","     ","     ","  #  "},
         [',']={"     ","     ","     ","  #  "," #   "},
     };
- 
+
     for(int i = 1; i < ctx->argc; i++){
         const char* word = ctx->argv[i];
         int len = (int)strlen(word);
@@ -179,16 +187,24 @@ void dispatch(Ctx* ctx){
     }
 }
 
-int split(char* line, char** argv, int max){
+int split(char* line, char** argv, int max) {
     int n = 0;
     char* p = line;
-    while(*p){
-        while(*p == ' ' || *p == '\t') p++;
-        if(!*p || *p == '\n') break;
-        if(n >= max) break;
-        argv[n++] = p;
-        while(*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-        if(*p) *p++ = '\0';
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (!*p) break;
+        if (n >= max) break;
+        if (*p == '"') {
+            p++;
+            argv[n++] = p;
+            while (*p && *p != '"') p++;
+            if (*p == '"') *p++ = '\0';
+        }
+        else {
+            argv[n++] = p;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+            if (*p) *p++ = '\0';
+        }
     }
     return n;
 }
@@ -199,11 +215,25 @@ Ctx ctx = { .running = true };
 
 printf("cmd shell  —  type 'help' to list commands\n");
 while(ctx.running){
-    printf("> ");
-    fflush(stdout);
-    if(!fgets(ctx.line, sizeof ctx.line, stdin)) break;
-    int argc = split(ctx.line, ctx.argv, 64);
-    if(!argc) continue;
+    static if(HAS_READLINE){
+        char* line = readline("> ");
+        if(!line) break;
+        if(!line[0]) {
+            free(line);
+            continue;
+        }
+        add_history(line);
+    }
+    else {
+        char* line = ctx.line;
+        printf("> "); fflush(stdout);
+        if(!fgets(ctx.line, sizeof ctx.line, stdin)) break;
+        if(!line[0] || line[0] == '\n') continue;
+    }
+    int argc = split(line, ctx.argv, _Countof ctx.argv);
     ctx.argc = argc;
-    dispatch(&ctx);
+    if(argc) dispatch(&ctx);
+    static if(HAS_READLINE){
+        free(line);
+    }
 }
