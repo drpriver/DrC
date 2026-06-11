@@ -6,7 +6,6 @@
 #include <stddef.h>
 #include "cc_stmt.h"
 #include "cc_expr.h"
-#include "ci_interp.h"
 #include "cc_parser.h"
 #include "cc_type.h"
 #include "../Drp/stringview.h"
