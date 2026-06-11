@@ -5442,6 +5442,119 @@ TestFunction(test_interpreter){
             .exit_code = 24,
             .skip = 1,
         },
+        {
+            "vla: object sizeof captures bound", __LINE__,
+            SVI("int n = 3;\n"
+               "int x[n++];\n"
+               "int y[n++];\n"
+               "int z[n];\n"
+               "return (int)(sizeof x + sizeof y + sizeof z);\n"),
+            .exit_code = 48,
+            .skip = 1,
+        },
+        {
+            "vla: sizeof type evaluates bound expression", __LINE__,
+            SVI("int n = 3;\n"
+               "int a = sizeof(int[n++]);\n"
+               "int b = sizeof(int[n++]);\n"
+               "return a + b + n;\n"),
+            .exit_code = 12 + 16 + 5,
+            .skip = 1,
+        },
+        {
+            "vla: sizeof object does not re-evaluate bound", __LINE__,
+            SVI("int n = 3;\n"
+               "int x[n++];\n"
+               "int a = sizeof x;\n"
+               "int b = sizeof x;\n"
+               "return a + b + n;\n"),
+            .exit_code = 12 + 12 + 4,
+            .skip = 1,
+        },
+        {
+            "vla: subscript storage", __LINE__,
+            SVI("int n = 4;\n"
+               "int x[n];\n"
+               "for(int i = 0; i < n; i++) x[i] = i + 1;\n"
+               "return x[0] + x[1] + x[2] + x[3];\n"),
+            .exit_code = 10,
+            .skip = 1,
+        },
+        {
+            "vla: nested sizeof captures each dimension", __LINE__,
+            SVI("int m = 2;\n"
+               "int n = 3;\n"
+               "int a[m++][n++];\n"
+               "return (int)(sizeof a + sizeof a[0] + m * 10 + n);\n"),
+            .exit_code = 24 + 12 + 34,
+            .skip = 1,
+        },
+        {
+            "vla: nested subscript storage", __LINE__,
+            SVI("int m = 2;\n"
+               "int n = 3;\n"
+               "int a[m][n];\n"
+               "a[0][0] = 1;\n"
+               "a[0][2] = 3;\n"
+               "a[1][0] = 10;\n"
+               "a[1][2] = 30;\n"
+               "return a[0][0] + a[0][2] + a[1][0] + a[1][2];\n"),
+            .exit_code = 44,
+            .skip = 1,
+        },
+        {
+            "vla: pointer arithmetic uses captured element size", __LINE__,
+            SVI("int n = 3;\n"
+               "int a[2][n++];\n"
+               "int (*p)[3] = a;\n"
+               "return (char*)(p + 1) - (char*)p + n;\n"),
+            .exit_code = 12 + 4,
+            .skip = 1,
+        },
+        {
+            "vla: typedef captures bound", __LINE__,
+            SVI("int n = 3;\n"
+               "typedef int A[n++];\n"
+               "A x;\n"
+               "n = 9;\n"
+               "A y;\n"
+               "return (int)(sizeof x + sizeof y + n);\n"),
+            .exit_code = 12 + 12 + 9,
+            .skip = 1,
+        },
+        {
+            "vla: pointer to typedef uses captured bound", __LINE__,
+            SVI("int n = 3;\n"
+               "typedef int A[n++];\n"
+               "A x;\n"
+               "A *p = &x;\n"
+               "n = 9;\n"
+               "return (int)sizeof *p + n;\n"),
+            .exit_code = 12 + 9,
+            .skip = 1,
+        },
+        {
+            "vla: parameter adjusts to pointer", __LINE__,
+            SVI("int sizeof_param(int n, int a[n]){\n"
+               "    return sizeof a == sizeof(int*);\n"
+               "}\n"
+               "int n = 3;\n"
+               "int a[n];\n"
+               "return sizeof_param(n, a);\n"),
+            .exit_code = 1,
+            .skip = 1,
+        },
+        {
+            "vla: multidimensional parameter keeps inner bound", __LINE__,
+            SVI("int sum(int rows, int cols, int a[rows][cols]){\n"
+               "    return a[1][2] + (int)sizeof a[0];\n"
+               "}\n"
+               "int a[2][3];\n"
+               "a[1][2] = 7;\n"
+               "return sum(2, 3, a);\n"),
+            .exit_code = 7 + 12,
+            .skip = 1,
+        },
     };
     int err;
     static int idx = 0;

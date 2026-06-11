@@ -706,7 +706,7 @@ TestFunction(test_interop){
                "return add((struct v2fd){.a.f=1, .b.f=2});\n"),
             {{SV("add"), (void*)test_v2fd_add}},
             .exit_code=3,
-            .skip = 1,
+            .skip = 1, // TODO: this passes on macos, verify on other systems
         },
     };
     int err;
