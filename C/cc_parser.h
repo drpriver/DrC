@@ -157,6 +157,8 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC_InterlockedXor16,
     CC_InterlockedXor64,
     CC__umul128,
+    CC__symbol,
+    CC__hotswap,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 

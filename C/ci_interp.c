@@ -89,6 +89,8 @@ ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
+static int ci_lookup_symbol(CiInterpreter*, SrcLoc, const char*, CcQualType, void*_Nullable*_Nonnull);
+static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
@@ -588,6 +590,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_CTZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
+        case CC_EXPR_SYMBOL:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -2882,6 +2885,28 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
     }
+    case CC_EXPR_SYMBOL: {
+        if(result == ci_discard_buf) return 0;
+        void* module = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
+        if(err) return err;
+        if(module)
+            return ci_error(ci, expr->loc, "__symbol with a non-null module is not implemented");
+        void* name_ptr = NULL;
+        err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
+        if(err) return err;
+        const char* name = name_ptr;
+        if(!name)
+            return ci_error(ci, expr->loc, "__symbol name must not be NULL");
+        CcQualType expected = ccqt_as_ptr(expr->type)->pointee;
+        void* sym = NULL;
+        err = ci_lookup_symbol(ci, expr->loc, name, expected, &sym);
+        if(err) return err;
+        if(sizeof sym > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof sym, size);
+        memcpy(result, &sym, sizeof sym);
+        return 0;
+    }
     case CC_EXPR_ALLOCA: {
         uint64_t sz = 0;
         int err = ci_interp_expr(ci, frame, expr->lhs, &sz, sizeof sz);
@@ -3382,6 +3407,87 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
     int err = ci_add_root(ci, name);
     if(err) return err;
     return ci_resolve_refs(ci, 0);
+}
+
+static
+int
+ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType expected, void*_Nullable*_Nonnull out){
+    size_t len = strlen(name);
+    *out = NULL;
+    AtomTable* at = ci_lock_atoms(ci);
+    Atom atom = AT_atomize(at, name, len);
+    ci_unlock_atoms(ci, at);
+    if(!atom) return CI_OOM_ERROR;
+
+    CcSymbol sym;
+    if(cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym)){
+        switch(sym.kind){
+            case CC_SYM_FUNC: {
+                CcFunc* func = sym.func;
+                CcQualType func_type = {.bits = (uintptr_t)func->type};
+                if(func_type.bits != expected.bits)
+                    return 0;
+                if(!func->defined){
+                    if(!func->native_func){
+                        LongString fsym = func->mangle
+                            ? (LongString){func->mangle->length, func->mangle->data}
+                            : (LongString){func->name->length, func->name->data};
+                        void* addr = NULL;
+                        int err = ci_try_dlsym(ci, fsym, &addr);
+                        if(err) return err;
+                        if(!addr) return 0;
+                        func->native_func = (void(*)(void))addr;
+                    }
+                    *out = (void*)func->native_func;
+                    return 0;
+                }
+                if(func->defined)
+                    func->addr_taken = 1;
+                int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
+                if(err) return CI_OOM_ERROR;
+                err = ci_resolve_refs(ci, 0);
+                if(err) return err;
+                if(!func->native_func)
+                    return ci_error(ci, loc, "__symbol: function '%s' has no address", name);
+                *out = (void*)func->native_func;
+                return 0;
+            }
+            case CC_SYM_VAR: {
+                CcVariable* var = sym.var;
+                if(var->type.bits != expected.bits)
+                    return 0;
+                if(var->automatic)
+                    return 0;
+                if(var->extern_ && !var->initializer){
+                    if(!var->interp_val){
+                        LongString vsym = var->mangle
+                            ? (LongString){var->mangle->length, var->mangle->data}
+                            : (LongString){var->name->length, var->name->data};
+                        void* addr = NULL;
+                        int err = ci_try_dlsym(ci, vsym, &addr);
+                        if(err) return err;
+                        if(!addr) return 0;
+                        var->interp_val = addr;
+                    }
+                    *out = var->interp_val;
+                    return 0;
+                }
+                int err = PM_put(&ci->parser.used_vars, ci_allocator(ci), var, var);
+                if(err) return CI_OOM_ERROR;
+                err = ci_resolve_refs(ci, 0);
+                if(err) return err;
+                if(!var->interp_val)
+                    return ci_error(ci, loc, "__symbol: variable '%s' has no storage", name);
+                *out = var->interp_val;
+                return 0;
+            }
+            case CC_SYM_TYPEDEF:
+            case CC_SYM_ENUMERATOR:
+                return 0;
+        }
+    }
+    (void)loc;
+    return 0;
 }
 
 static
@@ -4455,6 +4561,41 @@ ci_target(const CiInterpreter* ci){
 static
 int
 ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
+    void* p = NULL;
+    int err = ci_try_dlsym(ci, sym, &p);
+    if(err) return err;
+    if(!p){
+        if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
+            return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
+        #ifdef NO_NATIVE_CALL
+        return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
+        #elif defined _WIN32
+        ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+        HMODULE modules[256];
+        DWORD needed = 0;
+        if(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &needed)){
+            DWORD count = needed / sizeof(HMODULE);
+            if(count > 256) count = 256;
+            Logger* logger = ci->parser.cpp.logger;
+            for(DWORD i = 0; i < count; i++){
+                char name[256];
+                if(K32GetModuleBaseNameA(GetCurrentProcess(), modules[i], name, sizeof name))
+                    log_logf(logger, LOG_PRINT_ERROR, "  loaded: %s\n", name);
+            }
+        }
+        return CI_RUNTIME_ERROR;
+        #else
+        return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
+        #endif
+    }
+    *out = p;
+    return 0;
+}
+
+static
+int
+ci_try_dlsym(CiInterpreter* ci, LongString sym, void*_Nullable*_Nonnull out){
+    *out = NULL;
     // Try virtual libs first.
     Atom a = AT_get_atom(ci->parser.cpp.at, sym.text, sym.length);
     if(a){
@@ -4469,12 +4610,11 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
         }
     }
     if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
-        return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
+        return 0;
     void* p = NULL;
     #ifdef NO_NATIVE_CALL
         (void)p;
-        (void)out;
-        return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
+        return 0;
     #elif defined _WIN32
         // Search all loaded modules (like dlsym(RTLD_DEFAULT, ...)).
         {
@@ -4490,27 +4630,10 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
                 }
             }
         }
-        if(!p){
-            ci_error(ci, loc, "%s '%s' not found", what, sym.text);
-            HMODULE modules[256];
-            DWORD needed = 0;
-            if(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &needed)){
-                DWORD count = needed / sizeof(HMODULE);
-                if(count > 256) count = 256;
-                Logger* logger = ci->parser.cpp.logger;
-                for(DWORD i = 0; i < count; i++){
-                    char name[256];
-                    if(K32GetModuleBaseNameA(GetCurrentProcess(), modules[i], name, sizeof name))
-                        log_logf(logger, LOG_PRINT_ERROR, "  loaded: %s\n", name);
-                }
-            }
-            return CI_RUNTIME_ERROR;
-        }
     #else
         p = dlsym(RTLD_DEFAULT, sym.text);
         if(!p && sym.text[0] == '_')
             p = dlsym(RTLD_DEFAULT, sym.text+1);
-        if(!p) return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
     #endif
     *out = p;
     return 0;

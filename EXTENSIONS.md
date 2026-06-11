@@ -44,6 +44,7 @@
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
   * [`__argc` / `__argv`](#argc-argv)
+  * [`__symbol(module, name, type-name)`](#symbolmodule-name-type-name)
   * [`__shell(program, args...)`](#shellprogram-args)
   * [`#pragma lib "name"`](#pragma-lib-name)
   * [`#pragma lib_path "path"`](#pragma-libpath-path)
@@ -476,9 +477,9 @@ struct Base* bp = &d; // implicit conversion
 ### `_Type`
 
 Types are first-class values of type `_Type`. A type name used
-as an expression produces a `_Type` value. This is most useful
+as an expression produces a `_Type` value. One use-case is
 inside proc macro functions where `_Type` parameters receive the
-type passed by the caller.
+type passed by the caller. It can also be used for runtime reflection.
 
 ```C
 _Type T = int;
@@ -809,6 +810,40 @@ They work like standard C `argc`/`argv`.
 
 ```C
 const char* input = __argc > 1 ? __argv[1] : "default.txt";
+```
+
+### `__symbol(module, name, type-name)`
+
+Looks up a runtime symbol and returns a pointer to `type-name`.
+
+
+`module` pass `NULL` for global module.
+`name` is the symbol name to look up.
+`type-name` is the type of the symbol and the return value will be a
+pointer to this type.
+
+
+If the symbol is not known, cannot be resolved, or does not exactly match
+`type-name`, `__symbol` returns `NULL`.
+
+```C
+void myfp(void){
+    puts("hi");
+}
+
+void (*fp)(void) = __symbol(NULL, "myfp", typeof(*fp));
+if(fp)
+    fp();
+```
+
+
+For object symbols, pass the pointed-to object type.
+
+```C
+int counter;
+int* p = __symbol(NULL, "counter", typeof(*p));
+if(p)
+    *p += 1;
 ```
 
 ### `__shell(program, args...)`

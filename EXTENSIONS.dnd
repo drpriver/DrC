@@ -575,6 +575,34 @@ Interpreter-only::md
     ::pre.C
       const char* input = __argc > 1 ? __argv[1] : "default.txt";
 
+  `__symbol(module, name, type-name)`::md
+    Looks up a runtime symbol and returns a pointer to `type-name`.
+
+    `module` pass `NULL` for global module.
+    `name` is the symbol name to look up.
+    `type-name` is the type of the symbol and the return value will be a
+    pointer to this type.
+
+    If the symbol is not known, cannot be resolved, or does not exactly match
+    `type-name`, `__symbol` returns `NULL`.
+
+    ::pre.C
+      void myfp(void){
+          puts("hi");
+      }
+
+      void (*fp)(void) = __symbol(NULL, "myfp", typeof(*fp));
+      if(fp)
+          fp();
+
+    For object symbols, pass the pointed-to object type.
+
+    ::pre.C
+      int counter;
+      int* p = __symbol(NULL, "counter", typeof(*p));
+      if(p)
+          *p += 1;
+
   `__shell(program, args...)`::md
     `__shell()` (also spelled `__SHELL__()`) executes a
     command during preprocessing and expands to its stdout as a string literal.

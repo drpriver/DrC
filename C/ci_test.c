@@ -778,6 +778,26 @@ TestFunction(test_interpreter){
             .exit_code = 7,
             .skip = 0,
         },
+        {
+            "__symbol function", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = __symbol(0, \"add\", typeof(*fp));\n"
+               "return fp ? fp(3, 4) : 99;\n"),
+            .exit_code = 7,
+        },
+        {
+            "__symbol function type mismatch", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(void) = __symbol(0, \"add\", typeof(*fp));\n"
+               "return fp == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__symbol missing function", __LINE__,
+            SVI("int (*fp)(void) = __symbol(0, \"missing_function\", typeof(*fp));\n"
+               "return fp == 0;\n"),
+            .exit_code = 1,
+        },
         // Static locals
         {
             "static local", __LINE__,
@@ -799,6 +819,29 @@ TestFunction(test_interpreter){
                "set(42);\n"
                "return get();\n"),
             .exit_code = 42,
+        },
+        {
+            "__symbol global variable", __LINE__,
+            SVI("int g = 10;\n"
+               "int* p = __symbol(0, \"g\", typeof(*p));\n"
+               "if(!p) return 99;\n"
+               "*p = 42;\n"
+               "return g;\n"),
+            .exit_code = 42,
+        },
+        {
+            "__symbol variable type mismatch", __LINE__,
+            SVI("int g = 10;\n"
+               "long* p = __symbol(0, \"g\", typeof(*p));\n"
+               "return p == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__symbol missing extern", __LINE__,
+            SVI("extern int missing_extern_symbol;\n"
+               "int* p = __symbol(0, \"missing_extern_symbol\", typeof(*p));\n"
+               "return p == 0;\n"),
+            .exit_code = 1,
         },
         // Type conversions
         {

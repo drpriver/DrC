@@ -103,6 +103,7 @@ int main(int argc, char** argv, char** envp){
         },
         {
             .name = SV("-e"),
+            .altname1 = SV("--eval"),
             .dest = ARGDEST(&eval_str),
             .help = "Evaluate a string as C code.",
             .min_num = 0, .max_num = 1,
