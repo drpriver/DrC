@@ -2554,7 +2554,7 @@ b_execute_targets(BuildCtx* ctx){
                         if(!fi->exists)
                             goto do_command;
                         if(!oldest_out_mtime) oldest_out_mtime = &fi->mtime;
-                        if(b_cmp_mtime(&fi->mtime, oldest_out_mtime) > 0)
+                        if(b_cmp_mtime(&fi->mtime, oldest_out_mtime) < 0)
                             oldest_out_mtime = &fi->mtime;
                     }
                     if(tgt->is_binary){
@@ -2562,7 +2562,7 @@ b_execute_targets(BuildCtx* ctx){
                         if(!fi->exists)
                             goto do_command;
                         if(!oldest_out_mtime) oldest_out_mtime = &fi->mtime;
-                        if(b_cmp_mtime(&fi->mtime, oldest_out_mtime) > 0)
+                        if(b_cmp_mtime(&fi->mtime, oldest_out_mtime) < 0)
                             oldest_out_mtime = &fi->mtime;
                     }
                     if(!oldest_out_mtime || !newest_in_mtime){
