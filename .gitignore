@@ -1,4 +1,10 @@
 build
 build.cache.json
 build.deps
-Fetched
+Fetched/
+Bin/
+compile_commands.json
+tags
+*.dSYM/
+*.trace/
+Tools/pymodules/
