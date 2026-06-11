@@ -85,8 +85,10 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_CTZ,
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
-    CC_EXPR_SYMBOL, // __symbol(void*, const char*, type-name) -> type-name*
+    CC_EXPR_SYMBOL, // _Module.symbol(const char*, type-name) -> type-name*
     CC_EXPR_HOTSWAP, // __hotswap(function-pointer, function-pointer) -> int
+    CC_EXPR_COMPILE, // __compile(const char*) -> _Module
+    CC_EXPR_MODULE_RUN, // _Module.run() -> int
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
     CC_EXPR_UMUL128, // _umul128(a, b, &high) -> low
 };

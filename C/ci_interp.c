@@ -41,6 +41,7 @@
 enum {
     CI_NO_ERROR = _cc_no_error,
     CI_OOM_ERROR = _cc_oom_error,
+    CI_SYNTAX_ERROR = _cc_syntax_error,
     CI_UNREACHABLE_ERROR = _cc_unreachable_error,
     CI_UNIMPLEMENTED_ERROR = _cc_unimplemented_error,
     CI_RUNTIME_ERROR = _cc_runtime_error,
@@ -51,6 +52,11 @@ enum {
 };
 LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
+struct CiModule {
+    CcScope scope;
+    CcStatement* _Nullable stmts;
+    size_t stmt_count;
+};
 
 static char ci_discard_buf[8192];
 
@@ -92,7 +98,9 @@ static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
 static int ci_call_interpreted_func(CiInterpreter*, CiInterpFrame*, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size);
-static int ci_lookup_symbol(CiInterpreter*, SrcLoc, const char*, CcQualType, void*_Nullable*_Nonnull);
+static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
+static int ci_compile_module(CiInterpreter*, const char*, CiModule*_Nullable*_Nonnull);
+static int ci_resolve_module(CiInterpreter*, CiModule*);
 static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
@@ -597,6 +605,8 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -2865,24 +2875,70 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     }
     case CC_EXPR_SYMBOL: {
         if(result == ci_discard_buf) return 0;
-        void* module = NULL;
+        CiModule* module = NULL;
         int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
         if(err) return err;
-        if(module)
-            return ci_error(ci, expr->loc, "__symbol with a non-null module is not implemented");
+        if(module && PM_get(&ci->modules, module) != module)
+            return ci_error(ci, expr->loc, "_Module.symbol module is not valid");
         void* name_ptr = NULL;
         err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
         if(err) return err;
         const char* name = name_ptr;
         if(!name)
-            return ci_error(ci, expr->loc, "__symbol name must not be NULL");
+            return ci_error(ci, expr->loc, "_Module.symbol name must not be NULL");
         CcQualType expected = ccqt_as_ptr(expr->type)->pointee;
         void* sym = NULL;
-        err = ci_lookup_symbol(ci, expr->loc, name, expected, &sym);
+        err = ci_lookup_symbol(ci, expr->loc, module, name, expected, &sym);
         if(err) return err;
         if(sizeof sym > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof sym, size);
         memcpy(result, &sym, sizeof sym);
+        return 0;
+    }
+    case CC_EXPR_COMPILE: {
+        if(result == ci_discard_buf) return 0;
+        const char* source = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &source, sizeof source);
+        if(err) return err;
+        CiModule* module = NULL;
+        if(source){
+            err = ci_compile_module(ci, source, &module);
+            if(err == CI_OOM_ERROR) return err;
+        }
+        if(sizeof module > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof module, size);
+        memcpy(result, &module, sizeof module);
+        return 0;
+    }
+    case CC_EXPR_MODULE_RUN: {
+        CiModule* module = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
+        if(err) return err;
+        int ret = 1;
+        if(module && PM_get(&ci->modules, module) == module){
+            err = ci_resolve_module(ci, module);
+            if(err) return err;
+            CiInterpFrame module_frame = {
+                .parent = frame,
+                .stmts = module->stmts,
+                .stmt_count = module->stmt_count,
+                .return_buf = ci_discard_buf,
+                .return_size = sizeof ci_discard_buf,
+            };
+            ret = 0;
+            while(module_frame.pc < module_frame.stmt_count){
+                err = ci_interp_step(ci, &module_frame);
+                if(err){
+                    ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
+                    return err;
+                }
+            }
+            ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
+        }
+        if(result == ci_discard_buf) return 0;
+        if(sizeof ret > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
+        memcpy(result, &ret, sizeof ret);
         return 0;
     }
     case CC_EXPR_HOTSWAP: {
@@ -3452,7 +3508,90 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
 
 static
 int
-ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType expected, void*_Nullable*_Nonnull out){
+ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Nonnull out){
+    *out = NULL;
+    CiModule* module = Allocator_zalloc(ci_allocator(ci), sizeof *module);
+    if(!module) return CI_OOM_ERROR;
+    module->scope.parent = &ci->parser.global;
+
+    CcParser* p = &ci->parser;
+    CcScope* old_current = p->current;
+    size_t old_toplevel_count = p->toplevel_statements.count;
+    int err = 0;
+
+    ci_lock_resolver(ci);
+    p->current = &module->scope;
+    cc_parser_discard_input(p);
+
+    fc_write_pathf(p->cpp.fc, "<__compile:%zu>", ci->next_module_id++);
+    err = fc_cache_file(p->cpp.fc, (StringView){strlen(source), source});
+    if(err) goto done;
+    err = cpp_include_file_via_file_cache(&p->cpp, LS_to_SV(p->cpp.fc->map.data[p->cpp.fc->map.count - 1].path));
+    if(err) goto done;
+    err = cc_parse_all(p);
+    if(err) goto done;
+    module->stmt_count = p->toplevel_statements.count - old_toplevel_count;
+    if(module->stmt_count){
+        size_t sz = module->stmt_count * sizeof *module->stmts;
+        module->stmts = Allocator_alloc(ci_allocator(ci), sz);
+        if(!module->stmts){
+            err = CI_OOM_ERROR;
+            goto done;
+        }
+        memcpy(module->stmts, p->toplevel_statements.data + old_toplevel_count, sz);
+    }
+    p->toplevel_statements.count = old_toplevel_count;
+
+    AtomMapItems funcs = AM_items(&module->scope.functions);
+    for(size_t i = 0; i < funcs.count; i++){
+        CcFunc* func = funcs.data[i].p;
+        if(!func || !func->defined || func->parsed) continue;
+        err = cc_parse_func_body(p, func);
+        if(err) goto done;
+    }
+
+    err = PM_put(&ci->modules, ci_allocator(ci), module, module);
+    if(err){
+        err = CI_OOM_ERROR;
+        goto done;
+    }
+    *out = module;
+    done:
+    p->current = old_current;
+    p->toplevel_statements.count = old_toplevel_count;
+    if(err)
+        cc_parser_discard_input(p);
+    ci_unlock_resolver(ci);
+    return err;
+}
+
+static
+int
+ci_resolve_module_unlocked(CiInterpreter* ci, CiModule* module){
+    Allocator al = ci_allocator(ci);
+    AtomMapItems vars = AM_items(&module->scope.variables);
+    for(size_t i = 0; i < vars.count; i++){
+        CcVariable* var = vars.data[i].p;
+        if(!var || var->automatic) continue;
+        if(var->extern_ && !var->initializer) continue;
+        int err = PM_put(&ci->parser.used_vars, al, var, var);
+        if(err) return CI_OOM_ERROR;
+    }
+    return ci_resolve_refs(ci, 0);
+}
+
+static
+int
+ci_resolve_module(CiInterpreter* ci, CiModule* module){
+    ci_lock_resolver(ci);
+    int err = ci_resolve_module_unlocked(ci, module);
+    ci_unlock_resolver(ci);
+    return err;
+}
+
+static
+int
+ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* name, CcQualType expected, void*_Nullable*_Nonnull out){
     size_t len = strlen(name);
     *out = NULL;
     AtomTable* at = ci_lock_atoms(ci);
@@ -3463,7 +3602,9 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
     int ret = 0;
     ci_lock_resolver(ci);
     CcSymbol sym;
-    if(cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym)){
+    CcScope* scope = module ? &module->scope : &ci->parser.global;
+    int walk = module ? CC_SCOPE_WALK_CHAIN : CC_SCOPE_NO_WALK;
+    if(cc_scope_lookup_symbol(scope, atom, walk, &sym)){
         switch(sym.kind){
             case CC_SYM_FUNC: {
                 CcFunc* func = sym.func;
@@ -3491,7 +3632,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
                 err = ci_resolve_refs(ci, 0);
                 if(err){ ret = err; goto done; }
                 if(!func->native_func)
-                    { ret = ci_error(ci, loc, "__symbol: function '%s' has no address", name); goto done; }
+                    { ret = ci_error(ci, loc, "_Module.symbol: function '%s' has no address", name); goto done; }
                 *out = (void*)func->native_func;
                 goto done;
             }
@@ -3520,7 +3661,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
                 err = ci_resolve_refs(ci, 0);
                 if(err){ ret = err; goto done; }
                 if(!var->interp_val)
-                    { ret = ci_error(ci, loc, "__symbol: variable '%s' has no storage", name); goto done; }
+                    { ret = ci_error(ci, loc, "_Module.symbol: variable '%s' has no storage", name); goto done; }
                 *out = var->interp_val;
                 goto done;
             }

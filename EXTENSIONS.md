@@ -44,7 +44,7 @@
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
   * [`__argc` / `__argv`](#argc-argv)
-  * [`__symbol(module, name, type-name)`](#symbolmodule-name-type-name)
+  * [`_Module` / `__compile(source)`](#module-compilesource)
   * [`__hotswap(original, replacement)`](#hotswaporiginal-replacement)
   * [`__shell(program, args...)`](#shellprogram-args)
   * [`#pragma lib "name"`](#pragma-lib-name)
@@ -813,28 +813,46 @@ They work like standard C `argc`/`argv`.
 const char* input = __argc > 1 ? __argv[1] : "default.txt";
 ```
 
-### `__symbol(module, name, type-name)`
+### `_Module` / `__compile(source)`
 
-Looks up a runtime symbol and returns a pointer to `type-name`.
-
-
-`module` pass `NULL` for global module.
-`name` is the symbol name to look up.
-`type-name` is the type of the symbol and the return value will be a
-pointer to this type.
+`_Module` is an opaque interpreter module handle. Internally it is a
+typedef for a pointer to `__builtin_Module`, so it can be compared with
+`NULL` and passed around like any other pointer.
 
 
-If the symbol is not known, cannot be resolved, or does not exactly match
-`type-name`, `__symbol` returns `NULL`.
+`__root_module()` returns a `_Module` handle for the interpreter's global
+scope.
+
+
+`__compile(source)` parses `source` as C code in a new overlay scope whose
+parent is the global scope. Declarations in the compiled source are visible
+through the returned module handle, and code in the module can refer to
+global declarations. The compiled source does not insert its declarations
+into the global scope.
+
+
+`__compile` returns `NULL` if parsing fails. Diagnostics are still emitted.
+Top-level statements are stored in the module and are not run
+automatically. Call `module.run()` to execute them. It returns `0` on
+success and nonzero if the module handle is `NULL` or invalid.
 
 ```C
-void myfp(void){
-    puts("hi");
-}
+_Module m = __compile("int add(int a, int b){ return a + b; }");
+if(!m)
+    return 1;
 
-void (*fp)(void) = __symbol(NULL, "myfp", typeof(*fp));
-if(fp)
-    fp();
+int (*add)(int, int) = m.symbol("add", typeof(*add));
+printf("%d\n", add(2, 3));
+```
+
+
+Use `module.symbol(name, type-name)` to look up a runtime symbol. It
+returns a pointer to `type-name`, or `NULL` if the symbol is not known,
+cannot be resolved, or does not exactly match `type-name`.
+
+```C
+_Module root = __root_module();
+int (*mainish)(void) = root.symbol("mainish", typeof(*mainish));
 ```
 
 
@@ -842,9 +860,18 @@ For object symbols, pass the pointed-to object type.
 
 ```C
 int counter;
-int* p = __symbol(NULL, "counter", typeof(*p));
+int* p = __root_module().symbol("counter", typeof(*p));
 if(p)
     *p += 1;
+```
+
+
+Top-level statements can be used for explicit setup.
+
+```C
+_Module m = __compile("int x; x = 42;");
+m.run();
+int* x = m.symbol("x", typeof(*x));
 ```
 
 ### `__hotswap(original, replacement)`

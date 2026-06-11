@@ -994,9 +994,9 @@ TestFunction(test_interp_fail){
             SVI("(test):1:19: error: __SHELL__: './hopethisdoesnotexist' not found in PATH\n"),
         },
         {
-            "__symbol lazy parse failure", __LINE__,
+            "_Module.symbol lazy parse failure", __LINE__,
             SVI("void bad(void){ nope; }\n"
-                "__symbol(nullptr, \"bad\", void(void))();\n"),
+                "__root_module().symbol(\"bad\", void(void))();\n"),
             SVI("(test):1:17: error: undeclared identifier 'nope'\n"),
         },
     };

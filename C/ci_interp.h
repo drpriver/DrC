@@ -44,6 +44,8 @@ struct CiVirtualLib {
     AtomMap(void*) symbols;
 };
 
+typedef struct CiModule CiModule;
+
 typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
     CcParser parser;
@@ -60,6 +62,7 @@ struct CiInterpreter {
     AtomMap(CiVirtualLib*) virtual_libs;
     AtomMap opened_libs;
     AtomMap lib_paths;
+    PointerMap(CiModule*, CiModule*) modules;
     PointerMap(CcFunction*, NativeCallCache*) ffi_cache;
     BidiPointerMap(CcFunc*, void(*)(void)) closure_map;
     LOCK_T error_lock,
@@ -68,7 +71,8 @@ struct CiInterpreter {
     size_t resolved_variadic,
            resolved_libc,
            resolved_funcs,
-           resolved_vars;
+           resolved_vars,
+           next_module_id;
 };
 
 typedef struct CiArg CiArg;

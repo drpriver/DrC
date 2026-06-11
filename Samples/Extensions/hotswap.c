@@ -30,6 +30,7 @@ int print(int x, int y){printf("x=%d, y=%d\n", x, y); return 0;}
 int x = 3;
 int y = 2;
 char *line;
+_Module root = nullptr;
 for(;;){
     free(line);
     line = readline("> ");
@@ -37,7 +38,7 @@ for(;;){
     if(!line[0]) continue;
     add_history(line);
     {
-        typeof(&math) sym = __symbol(NULL, line, typeof(*sym));
+        typeof(&math) sym = root.symbol(line, typeof(*sym));
         if(sym){
             __hotswap(math, sym);
             printf("math(%d, %d) = %d\n", x, y, math(x,y));
@@ -51,7 +52,7 @@ for(;;){
             printf("math(%d, %d) = %d\n", x, y, math(x,y));
             continue;
     }
-    int* p = __symbol(NULL, line, int);
+    int* p = root.symbol(line, int);
     if(p) {
         ++*p;
         printf("++%s -> %d\n", line, *p);

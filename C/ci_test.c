@@ -779,24 +779,68 @@ TestFunction(test_interpreter){
             .skip = 0,
         },
         {
-            "__symbol function", __LINE__,
+            "_Module.symbol function", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
-               "int (*fp)(int, int) = __symbol(0, \"add\", typeof(*fp));\n"
+               "int (*fp)(int, int) = __root_module().symbol(\"add\", typeof(*fp));\n"
                "return fp ? fp(3, 4) : 99;\n"),
             .exit_code = 7,
         },
         {
-            "__symbol function type mismatch", __LINE__,
+            "_Module.symbol function type mismatch", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
-               "int (*fp)(void) = __symbol(0, \"add\", typeof(*fp));\n"
+               "int (*fp)(void) = __root_module().symbol(\"add\", typeof(*fp));\n"
                "return fp == 0;\n"),
             .exit_code = 1,
         },
         {
-            "__symbol missing function", __LINE__,
-            SVI("int (*fp)(void) = __symbol(0, \"missing_function\", typeof(*fp));\n"
+            "_Module.symbol missing function", __LINE__,
+            SVI("int (*fp)(void) = __root_module().symbol(\"missing_function\", typeof(*fp));\n"
                "return fp == 0;\n"),
             .exit_code = 1,
+        },
+        {
+            "__compile module symbol", __LINE__,
+            SVI("_Module m = __compile(\"int f(void){ return 42; }\");\n"
+               "if(!m) return 99;\n"
+               "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
+               "return fp ? fp() : 98;\n"),
+            .exit_code = 42,
+        },
+        {
+            "__compile module method symbol", __LINE__,
+            SVI("_Module m = __compile(\"int f(void){ return 7; }\");\n"
+               "if(!m) return 99;\n"
+               "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
+               "return fp ? fp() : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "__compile module sees global", __LINE__,
+            SVI("int g(void){ return 5; }\n"
+               "_Module m = __compile(\"int f(void){ return g() + 2; }\");\n"
+               "if(!m) return 99;\n"
+               "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
+               "return fp ? fp() : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "__compile module shadows global", __LINE__,
+            SVI("int f(void){ return 1; }\n"
+               "_Module m = __compile(\"int f(void){ return 7; }\");\n"
+               "if(!m) return 99;\n"
+               "int (*mf)(void) = m.symbol(\"f\", typeof(*mf));\n"
+               "int (*rf)(void) = __root_module().symbol(\"f\", typeof(*rf));\n"
+               "return mf() * 10 + rf();\n"),
+            .exit_code = 71,
+        },
+        {
+            "__compile module run", __LINE__,
+            SVI("_Module m = __compile(\"int x = 1; x = x + 41;\");\n"
+               "if(!m) return 99;\n"
+               "if(m.run()) return 98;\n"
+               "int* x = m.symbol(\"x\", typeof(*x));\n"
+               "return x ? *x : 97;\n"),
+            .exit_code = 42,
         },
         {
             "__hotswap direct call", __LINE__,
@@ -855,25 +899,25 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
-            "__symbol global variable", __LINE__,
+            "_Module.symbol global variable", __LINE__,
             SVI("int g = 10;\n"
-               "int* p = __symbol(0, \"g\", typeof(*p));\n"
+               "int* p = __root_module().symbol(\"g\", typeof(*p));\n"
                "if(!p) return 99;\n"
                "*p = 42;\n"
                "return g;\n"),
             .exit_code = 42,
         },
         {
-            "__symbol variable type mismatch", __LINE__,
+            "_Module.symbol variable type mismatch", __LINE__,
             SVI("int g = 10;\n"
-               "long* p = __symbol(0, \"g\", typeof(*p));\n"
+               "long* p = __root_module().symbol(\"g\", typeof(*p));\n"
                "return p == 0;\n"),
             .exit_code = 1,
         },
         {
-            "__symbol missing extern", __LINE__,
+            "_Module.symbol missing extern", __LINE__,
             SVI("extern int missing_extern_symbol;\n"
-               "int* p = __symbol(0, \"missing_extern_symbol\", typeof(*p));\n"
+               "int* p = __root_module().symbol(\"missing_extern_symbol\", typeof(*p));\n"
                "return p == 0;\n"),
             .exit_code = 1,
         },

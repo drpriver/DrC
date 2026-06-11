@@ -1610,6 +1610,8 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_INTERN:
             case CC_EXPR_SYMBOL:
             case CC_EXPR_HOTSWAP:
+            case CC_EXPR_COMPILE:
+            case CC_EXPR_MODULE_RUN:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
                 return CC_UNREACHABLE_ERROR;
@@ -1887,6 +1889,8 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_INTERN:
                 case CC_EXPR_SYMBOL:
                 case CC_EXPR_HOTSWAP:
+                case CC_EXPR_COMPILE:
+                case CC_EXPR_MODULE_RUN:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
                     return CC_UNREACHABLE_ERROR;
@@ -2897,37 +2901,32 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__symbol:{
+                case CC__compile:{
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
-                    CcExpr* module;
-                    err = cc_parse_assignment_expr(p, vc, &module, CCQT_NONE);
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
-                    err = cc_implicit_cast(p, module, p->void_star, &module);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ',');
-                    if(err) return err;
-                    CcExpr* name;
-                    err = cc_parse_assignment_expr(p, vc, &name, CCQT_NONE);
-                    if(err) return err;
-                    if(!cc_implicit_convertible(name->type, p->const_char_star))
-                        return cc_error(p, name->loc, "__symbol second argument must be convertible to const char*");
-                    err = cc_implicit_cast(p, name, p->const_char_star, &name);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ',');
-                    if(err) return err;
-                    CcQualType symbol_type;
-                    err = cc_parse_type_name(p, &symbol_type, NULL);
-                    if(err) return err;
-                    CcQualType result_type;
-                    err = cc_pointer_of(p, symbol_type, &result_type);
+                    if(!cc_implicit_convertible(arg->type, p->const_char_star))
+                        return cc_error(p, arg->loc, "__compile argument must be convertible to const char*");
+                    err = cc_implicit_cast(p, arg, p->const_char_star, &arg);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_SYMBOL, tok.loc, result_type, 1);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_COMPILE, tok.loc, p->builtin_module, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->lhs = module;
-                    node->values[0] = name;
+                    node->lhs = arg;
+                    *out = node;
+                    return 0;
+                }
+                case CC__root_module:{
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_value_expr(p, tok.loc, p->builtin_module);
+                    if(!node) return CC_OOM_ERROR;
+                    node->uinteger = 0;
                     *out = node;
                     return 0;
                 }
@@ -3603,6 +3602,47 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 CcTypeKind tk = ccqt_kind(agg_type);
                 if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
                     return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
+                if(tk == CC_STRUCT && p->builtin_module.bits && agg_type.ptr == ccqt_as_ptr(p->builtin_module)->pointee.ptr){
+                    if(member_name->length == sizeof "symbol" - 1 && memcmp(member_name->data, "symbol", sizeof "symbol" - 1) == 0){
+                        err = cc_expect_punct(p, '(');
+                        if(err) return err;
+                        CcExpr* name;
+                        err = cc_parse_assignment_expr(p, vc, &name, CCQT_NONE);
+                        if(err) return err;
+                        if(!cc_implicit_convertible(name->type, p->const_char_star))
+                            return cc_error(p, name->loc, "_Module.symbol first argument must be convertible to const char*");
+                        err = cc_implicit_cast(p, name, p->const_char_star, &name);
+                        if(err) return err;
+                        err = cc_expect_punct(p, ',');
+                        if(err) return err;
+                        CcQualType symbol_type;
+                        err = cc_parse_type_name(p, &symbol_type, NULL);
+                        if(err) return err;
+                        CcQualType result_type;
+                        err = cc_pointer_of(p, symbol_type, &result_type);
+                        if(err) return err;
+                        err = cc_expect_punct(p, ')');
+                        if(err) return err;
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_SYMBOL, tok.loc, result_type, 1);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        node->values[0] = name;
+                        operand = node;
+                        continue;
+                    }
+                    if(member_name->length == sizeof "run" - 1 && memcmp(member_name->data, "run", sizeof "run" - 1) == 0){
+                        err = cc_expect_punct(p, '(');
+                        if(err) return err;
+                        err = cc_expect_punct(p, ')');
+                        if(err) return err;
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_RUN, tok.loc, ccqt_basic(CCBT_int), 0);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        operand = node;
+                        continue;
+                    }
+                    return cc_error(p, member.loc, "no member named '%s'", member_name->data);
+                }
                 if(tk == CC_STRUCT){
                     CcStruct* s = ccqt_as_struct(agg_type);
                     cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type, &method);
@@ -4495,6 +4535,8 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
@@ -5239,6 +5281,8 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_CTZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
         case CC_EXPR_SYMBOL:
@@ -5452,6 +5496,8 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_SUB_OVERFLOW:
         case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
@@ -10681,6 +10727,27 @@ cc_define_builtin_types(CcParser* p){
         if(err) return CC_OOM_ERROR;
     }
 
+    {
+        Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Module");
+        if(!name) return CC_OOM_ERROR;
+        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        if(!s) return CC_OOM_ERROR;
+        *s = (CcStruct){
+            .kind = CC_STRUCT,
+            .is_incomplete = 1,
+            .name = name,
+        };
+        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        if(err) return CC_OOM_ERROR;
+        CcQualType module_struct = {.bits = (uintptr_t)s};
+        err = cc_pointer_of(p, module_struct, &p->builtin_module);
+        if(err) return err;
+        Atom module_typedef = AT_ATOMIZE(p->cpp.at, "_Module");
+        if(!module_typedef) return CC_OOM_ERROR;
+        err = cc_scope_insert_typedef(al, &p->global, module_typedef, p->builtin_module);
+        if(err) return CC_OOM_ERROR;
+    }
+
     // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
     Atom int128_name = AT_atomize(p->cpp.at, "__int128_t", 10);
     Atom uint128_name = AT_atomize(p->cpp.at, "__uint128_t", 11);
@@ -10783,8 +10850,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("_InterlockedXor16"), CC_InterlockedXor16},
             {SVI("_InterlockedXor64"), CC_InterlockedXor64},
             {SVI("_umul128"), CC__umul128},
-            {SVI("__symbol"), CC__symbol},
+            {SVI("__root_module"), CC__root_module},
             {SVI("__hotswap"), CC__hotswap},
+            {SVI("__compile"), CC__compile},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
@@ -12345,6 +12413,8 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
         case CC_EXPR_UMUL128:
             return 1;
     }

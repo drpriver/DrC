@@ -157,8 +157,9 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC_InterlockedXor16,
     CC_InterlockedXor64,
     CC__umul128,
-    CC__symbol,
+    CC__root_module,
     CC__hotswap,
+    CC__compile,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
 
@@ -210,6 +211,7 @@ struct CcParser {
                const_void_star,
                builtin_field,
                builtin_enumerator,
+               builtin_module,
                builtin_va_list,
                builtin_va_list_ptr;
 };
