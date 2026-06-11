@@ -1,12 +1,14 @@
 BUILDTARGETS:=clean list print compile_commands.json all \
-  drcpp drc fetch-libffi tests test selftests cpp_test \
-  run_cpp_test cc_lex_test run_cc_lex_test cc_test \
+  drcpp drc fetch-libffi tests test selftests cc_opt \
+  cpp_test run_cpp_test cc_lex_test run_cc_lex_test cc_test \
   run_cc_test ci_test run_ci_test ci_oom_test \
   run_ci_oom_test ci_native_test run_ci_native_test \
-  coverage cc_fuzz run_cc_fuzz cc_opt selfhost \
+  ci_concurrent_test run_ci_concurrent_test drc_test \
+  run_drc_test coverage cc_fuzz run_cc_fuzz selfhost \
   self_cpp_test self_cc_lex_test self_cc_test self_ci_test \
-  self_ci_native_test run_drcpp debug_drcpp run_drc \
-  debug_drc repl install tags docs
+  self_ci_native_test self_ci_concurrent_test self_drc_test \
+  run_drcpp debug_drcpp run_drc debug_drc repl install tags \
+  docs
 UNKNOWN:=$(filter-out $(BUILDTARGETS) build build.exe Makefile,$(MAKECMDGOALS))
 .PHONY: $(BUILDTARGETS) $(UNKNOWN)
 

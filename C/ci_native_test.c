@@ -745,6 +745,7 @@ TestFunction(test_interop){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -882,6 +883,7 @@ TestFunction(test_interp){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -1028,6 +1030,7 @@ TestFunction(test_interp_fail){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}

@@ -1598,6 +1598,28 @@ TestFunction(test_interpreter){
             .exit_code = 20 * 100 + 13,
         },
         {
+            "atomic: add_fetch", __LINE__,
+            SVI("int x = 10;\n"
+               "int now = __atomic_add_fetch(&x, 5, __ATOMIC_SEQ_CST);\n"
+               "return now * 100 + x;\n"),
+            .exit_code = 15 * 100 + 15,
+        },
+        {
+            "atomic: sub_fetch", __LINE__,
+            SVI("int x = 20;\n"
+               "int now = __atomic_sub_fetch(&x, 7, __ATOMIC_SEQ_CST);\n"
+               "return now * 100 + x;\n"),
+            .exit_code = 13 * 100 + 13,
+        },
+        {
+            "atomic: pointer add_fetch scales", __LINE__,
+            SVI("int arr[4] = {1, 2, 3, 4};\n"
+               "int *p = arr;\n"
+               "int *now = __atomic_add_fetch(&p, 2, __ATOMIC_SEQ_CST);\n"
+               "return now == arr + 2 && p == arr + 2 && *p == 3;\n"),
+            .exit_code = 1,
+        },
+        {
             "atomic: load", __LINE__,
             SVI("int x = 42;\n"
                "return __atomic_load_n(&x, __ATOMIC_SEQ_CST);\n"),
@@ -1639,6 +1661,209 @@ TestFunction(test_interpreter){
                "char old = __atomic_fetch_add(&x, 3, __ATOMIC_SEQ_CST);\n"
                "return old * 100 + x;\n"),
             .exit_code = 10 * 100 + 13,
+        },
+        {
+            "atomic type: object load/store", __LINE__,
+            SVI("_Atomic int x = 1;\n"
+               "int y = x;\n"
+               "x = 5;\n"
+               "return y * 10 + x;\n"),
+            .exit_code = 15,
+        },
+        {
+            "atomic type: pointer dereference load/store", __LINE__,
+            SVI("_Atomic int x = 3;\n"
+               "_Atomic int *p = &x;\n"
+               "*p = 7;\n"
+               "return x * 10 + *p;\n"),
+            .exit_code = 77,
+        },
+        {
+            "atomic type: member and subscript load/store", __LINE__,
+            SVI("struct S { _Atomic int x; } s = {1};\n"
+               "_Atomic int arr[2] = {2, 3};\n"
+               "s.x = 9;\n"
+               "arr[1] = 4;\n"
+               "return s.x * 10 + arr[1];\n"),
+            .exit_code = 94,
+        },
+        {
+            "atomic type: pre/post increment", __LINE__,
+            SVI("_Atomic int x = 10;\n"
+               "int a = x++;\n"
+               "int b = ++x;\n"
+               "return a * 100 + b * 10 + x;\n"),
+            .exit_code = 10 * 100 + 12 * 10 + 12,
+        },
+        {
+            "atomic type: compound assignment", __LINE__,
+            SVI("_Atomic int x = 3;\n"
+               "int a = (x += 4);\n"
+               "int b = (x *= 2);\n"
+               "int c = (x ^= 5);\n"
+               "return a * 100 + b * 10 + c;\n"),
+            .exit_code = 7 * 100 + 14 * 10 + 11,
+        },
+        {
+            "atomic type: compound assignment matrix", __LINE__,
+            SVI("_Atomic int x = 64;\n"
+               "int ok = 1;\n"
+               "ok = ok && ((x -= 4) == 60);\n"
+               "ok = ok && ((x /= 3) == 20);\n"
+               "ok = ok && ((x %= 7) == 6);\n"
+               "ok = ok && ((x |= 8) == 14);\n"
+               "ok = ok && ((x &= 11) == 10);\n"
+               "ok = ok && ((x ^= 3) == 9);\n"
+               "ok = ok && ((x <<= 2) == 36);\n"
+               "ok = ok && ((x >>= 1) == 18);\n"
+               "return ok && x == 18;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic type: signed char compound assignment", __LINE__,
+            SVI("_Atomic signed char x = -3;\n"
+               "x += 1;\n"
+               "return x + 10;\n"),
+            .exit_code = 8,
+        },
+        {
+            "atomic type: enum read-modify-write", __LINE__,
+            SVI("enum E { A = 1, B = 2, C = 3 };\n"
+               "_Atomic enum E x = A;\n"
+               "x++;\n"
+               "x += 1;\n"
+               "return x;\n"),
+            .exit_code = 3,
+        },
+        {
+            "atomic type: bool load/store", __LINE__,
+            SVI("_Atomic bool x = false;\n"
+               "bool a = x;\n"
+               "x = true;\n"
+               "return a * 10 + x;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic type: atomic pointer", __LINE__,
+            SVI("int a = 1, b = 2;\n"
+               "int * _Atomic p = &a;\n"
+               "*p = 3;\n"
+               "p = &b;\n"
+               "*p = 4;\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 34,
+        },
+        {
+            "atomic type: exact-size aggregate load/store", __LINE__,
+            SVI("struct S1 { char x; };\n"
+               "struct S2 { short x; };\n"
+               "struct S4 { int x; };\n"
+               "struct S8 { long long x; };\n"
+               "struct S16 { long long x, y; };\n"
+               "_Static_assert(sizeof(struct S1) == 1, \"\");\n"
+               "_Static_assert(sizeof(struct S2) == 2, \"\");\n"
+               "_Static_assert(sizeof(struct S4) == 4, \"\");\n"
+               "_Static_assert(sizeof(struct S8) == 8, \"\");\n"
+               "_Static_assert(sizeof(struct S16) == 16, \"\");\n"
+               "_Atomic(struct S1) a1 = {1};\n"
+               "_Atomic(struct S2) a2 = {2};\n"
+               "_Atomic(struct S4) a4 = {3};\n"
+               "_Atomic(struct S8) a8 = {4};\n"
+               "_Atomic(struct S16) a16 = {5, 6};\n"
+               "struct S1 b1 = {7}; struct S2 b2 = {8}; struct S4 b4 = {9};\n"
+               "struct S8 b8 = {10}; struct S16 b16 = {11, 12};\n"
+               "a1 = b1; a2 = b2; a4 = b4; a8 = b8; a16 = b16;\n"
+               "b1 = a1; b2 = a2; b4 = a4; b8 = a8; b16 = a16;\n"
+               "return b1.x == 7 && b2.x == 8 && b4.x == 9 && b8.x == 10 && b16.x == 11 && b16.y == 12;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic type: array element load/store", __LINE__,
+            SVI("_Atomic int a[2] = {2, 3};\n"
+               "a[0] = 4;\n"
+               "return a[0] * 10 + a[1];\n"),
+            .exit_code = 43,
+        },
+        {
+            "atomic type: typedef", __LINE__,
+            SVI("typedef _Atomic int AI;\n"
+               "AI x = 6;\n"
+               "x += 1;\n"
+               "return x;\n"),
+            .exit_code = 7,
+        },
+        {
+            "atomic type: volatile atomic", __LINE__,
+            SVI("volatile _Atomic int x = 1;\n"
+               "x = 2;\n"
+               "return x;\n"),
+            .exit_code = 2,
+        },
+        {
+            "atomic type: function parameter and return", __LINE__,
+            SVI("_Atomic int id(_Atomic int x){ return x; }\n"
+               "return id(7);\n"),
+            .exit_code = 7,
+        },
+        {
+            "atomic type: generic lvalue conversion", __LINE__,
+            SVI("_Atomic int x = 0;\n"
+               "return _Generic(x, _Atomic int: 1, int: 2, default: 3);\n"),
+            .exit_code = 2,
+        },
+        {
+            "atomic type: type-name generic preserves atomic", __LINE__,
+            SVI("return _Generic(_Atomic int, _Atomic int: 1, int: 2, default: 3);\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic type: sizeof alignof match unqualified", __LINE__,
+            SVI("return sizeof(_Atomic int) == sizeof(int)\n"
+               "    && _Alignof(_Atomic int) == _Alignof(int);\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic type: struct whole-object load", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S b = a;\n"
+               "return b.x * 10 + b.y;\n"),
+            .exit_code = 12,
+        },
+        {
+            "atomic type: struct whole-object store", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S b = {3, 4};\n"
+               "a = b;\n"
+               "struct S c = a;\n"
+               "return c.x * 10 + c.y;\n"),
+            .exit_code = 34,
+        },
+        {
+            "atomic type: 16-byte struct whole-object load/store", __LINE__,
+            SVI("struct S { long long x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S b = {3, 4};\n"
+               "a = b;\n"
+               "struct S c = a;\n"
+               "return c.x * 10 + c.y;\n"),
+            .exit_code = 34,
+        },
+        {
+            "atomic type: nested atomic field inside non-atomic aggregate", __LINE__,
+            SVI("struct S { _Atomic int x; int y; } s = {1, 2};\n"
+               "s.x += 3;\n"
+               "return s.x * 10 + s.y;\n"),
+            .exit_code = 42,
+        },
+        {
+            "atomic type: address escape through cast", __LINE__,
+            SVI("_Atomic int x = 5;\n"
+               "int *p = (int*)&x;\n"
+               "*p = 6;\n"
+               "return x;\n"),
+            .exit_code = 6,
         },
         // Bitfields
         {
@@ -5302,6 +5527,388 @@ TestFunction(test_interpreter){
     }
     TESTEND();
 }
+
+TestFunction(test_interpreter_builtin_headers){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    struct tc {
+        const char* name; int line;
+        StringView program;
+        int exit_code;
+    } testcases[] = {
+        {
+            "stdatomic: typedefs use atomic-qualified types", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = ATOMIC_VAR_INIT(1);\n"
+               "atomic_init(&x, 2);\n"
+               "int old = atomic_fetch_add(&x, 5);\n"
+               "return old * 10 + atomic_load(&x);\n"),
+            .exit_code = 27,
+        },
+        {
+            "stdatomic: bitwise fetch operations return old value", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_uint x = 0xF0u;\n"
+               "unsigned a = atomic_fetch_or(&x, 0x0Fu);\n"
+               "unsigned b = atomic_fetch_and_explicit(&x, 0x33u, memory_order_seq_cst);\n"
+               "unsigned c = atomic_fetch_xor(&x, 0x30u);\n"
+               "return (a == 0xF0u) && (b == 0xFFu) && (c == 0x33u) && (x == 0x03u);\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: parenthesized _Atomic remains keyword after include", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "_Atomic(int) x = 4;\n"
+               "atomic_store(&x, 9);\n"
+               "return atomic_load(&x);\n"),
+            .exit_code = 9,
+        },
+        {
+            "stdatomic: exchange and compare-exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 10;\n"
+               "int old = atomic_exchange(&x, 20);\n"
+               "int expected = 20;\n"
+               "bool ok1 = atomic_compare_exchange_strong(&x, &expected, 30);\n"
+               "expected = 99;\n"
+               "bool ok2 = atomic_compare_exchange_weak_explicit(&x, &expected, 40, memory_order_seq_cst, memory_order_relaxed);\n"
+               "return old == 10 && ok1 && !ok2 && expected == 30 && x == 30;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: flag test and clear", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_flag f = ATOMIC_FLAG_INIT;\n"
+               "bool a = atomic_flag_test_and_set(&f);\n"
+               "bool b = atomic_flag_test_and_set_explicit(&f, memory_order_seq_cst);\n"
+               "atomic_flag_clear(&f);\n"
+               "bool c = atomic_flag_test_and_set(&f);\n"
+               "return !a && b && !c;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: scalar typedef load store", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_bool b = false;\n"
+               "atomic_char c = 1;\n"
+               "atomic_long l = 2;\n"
+               "atomic_llong ll = 3;\n"
+               "atomic_store(&b, true);\n"
+               "atomic_store_explicit(&c, 4, memory_order_release);\n"
+               "atomic_store(&l, 5);\n"
+               "atomic_store(&ll, 6);\n"
+               "return atomic_load_explicit(&b, memory_order_acquire)\n"
+               "    && atomic_load(&c) == 4\n"
+               "    && atomic_load(&l) == 5\n"
+               "    && atomic_load(&ll) == 6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: atomic_init aggregate initializer", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) s;\n"
+               "atomic_init(&s, {3, 4});\n"
+               "struct S t = s;\n"
+               "return t.x * 10 + t.y;\n"),
+            .exit_code = 34,
+        },
+        {
+            "stdatomic: volatile atomic object API", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "volatile atomic_int x = 0;\n"
+               "atomic_store(&x, 3);\n"
+               "int a = atomic_load(&x);\n"
+               "atomic_store_explicit(&x, 4, memory_order_release);\n"
+               "int b = atomic_load_explicit(&x, memory_order_acquire);\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 34,
+        },
+        {
+            "stdatomic: remaining integer typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_schar sc = -1;\n"
+               "atomic_uchar uc = 2;\n"
+               "atomic_short sh = 3;\n"
+               "atomic_ushort ush = 4;\n"
+               "atomic_ulong ul = 5;\n"
+               "atomic_ullong ull = 6;\n"
+               "atomic_store(&sc, -7);\n"
+               "atomic_store(&uc, 8);\n"
+               "atomic_store(&sh, -9);\n"
+               "atomic_store(&ush, 10);\n"
+               "atomic_store(&ul, 11);\n"
+               "atomic_store(&ull, 12);\n"
+               "return atomic_load(&sc) == -7\n"
+               "    && atomic_load(&uc) == 8\n"
+               "    && atomic_load(&sh) == -9\n"
+               "    && atomic_load(&ush) == 10\n"
+               "    && atomic_load(&ul) == 11\n"
+               "    && atomic_load(&ull) == 12;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: atomic_is_lock_free", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 0;\n"
+               "atomic_llong y = 0;\n"
+               "return atomic_is_lock_free(&x) && atomic_is_lock_free(&y);\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: fetch macro evaluates object argument once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int arr[2] = {10, 20};\n"
+               "int idx = 0;\n"
+               "int calls = 0;\n"
+               "atomic_int *next(void){ calls++; return &arr[idx++]; }\n"
+               "int old = atomic_fetch_add(next(), 5);\n"
+               "return calls == 1 && idx == 1 && old == 10 && arr[0] == 15 && arr[1] == 20;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: compare exchange macro evaluates desired once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 1;\n"
+               "int expected = 1;\n"
+               "int calls = 0;\n"
+               "int desired(void){ calls++; return 2; }\n"
+               "bool ok = atomic_compare_exchange_strong(&x, &expected, desired());\n"
+               "return ok && calls == 1 && expected == 1 && x == 2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: pointer fetch add and sub", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "int arr[5] = {1, 2, 3, 4, 5};\n"
+               "_Atomic(int*) p = arr;\n"
+               "int *old_add = atomic_fetch_add(&p, 2);\n"
+               "int *old_sub = atomic_fetch_sub_explicit(&p, 1, memory_order_seq_cst);\n"
+               "return old_add == arr && old_sub == arr + 2 && p == arr + 1 && *p == 2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: least fast and max typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int_least8_t a = 1;\n"
+               "atomic_uint_least16_t b = 2;\n"
+               "atomic_int_least32_t c = 3;\n"
+               "atomic_uint_least64_t d = 4;\n"
+               "atomic_int_fast8_t e = 5;\n"
+               "atomic_uint_fast16_t f = 6;\n"
+               "atomic_int_fast32_t g = 7;\n"
+               "atomic_uint_fast64_t h = 8;\n"
+               "atomic_intmax_t i = 9;\n"
+               "atomic_uintmax_t j = 10;\n"
+               "atomic_store(&a, -11);\n"
+               "atomic_store(&b, 12);\n"
+               "atomic_store(&c, -13);\n"
+               "atomic_store(&d, 14);\n"
+               "atomic_store(&e, -15);\n"
+               "atomic_store(&f, 16);\n"
+               "atomic_store(&g, -17);\n"
+               "atomic_store(&h, 18);\n"
+               "atomic_store(&i, -19);\n"
+               "atomic_store(&j, 20);\n"
+               "return atomic_load(&a) == -11\n"
+               "    && atomic_load(&b) == 12\n"
+               "    && atomic_load(&c) == -13\n"
+               "    && atomic_load(&d) == 14\n"
+               "    && atomic_load(&e) == -15\n"
+               "    && atomic_load(&f) == 16\n"
+               "    && atomic_load(&g) == -17\n"
+               "    && atomic_load(&h) == 18\n"
+               "    && atomic_load(&i) == -19\n"
+               "    && atomic_load(&j) == 20;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: pointer sized typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_intptr_t ip = 1;\n"
+               "atomic_uintptr_t up = 2;\n"
+               "atomic_size_t sz = 3;\n"
+               "atomic_ptrdiff_t pd = -4;\n"
+               "atomic_store(&ip, -5);\n"
+               "atomic_store(&up, 6);\n"
+               "atomic_store(&sz, 7);\n"
+               "atomic_store(&pd, -8);\n"
+               "return atomic_load(&ip) == -5\n"
+               "    && atomic_load(&up) == 6\n"
+               "    && atomic_load(&sz) == 7\n"
+               "    && atomic_load(&pd) == -8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: character typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_char16_t c16 = 1;\n"
+               "atomic_char32_t c32 = 2;\n"
+               "atomic_wchar_t wc = 3;\n"
+               "atomic_store(&c16, 4);\n"
+               "atomic_store(&c32, 5);\n"
+               "atomic_store(&wc, 6);\n"
+               "return atomic_load(&c16) == 4 && atomic_load(&c32) == 5 && atomic_load(&wc) == 6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: kill dependency evaluates once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "int calls = 0;\n"
+               "int next(void){ calls++; return 7; }\n"
+               "int x = kill_dependency(next());\n"
+               "return calls * 10 + x;\n"),
+            .exit_code = 17,
+        },
+        {
+            "stdatomic: fence macros accept memory orders", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_thread_fence(memory_order_seq_cst);\n"
+               "atomic_thread_fence(memory_order_acquire);\n"
+               "atomic_signal_fence(memory_order_release);\n"
+               "atomic_signal_fence(memory_order_relaxed);\n"
+               "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: aggregate exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S desired = {3, 4};\n"
+               "struct S old = atomic_exchange(&a, desired);\n"
+               "struct S now = atomic_load(&a);\n"
+               "return old.x == 1 && old.y == 2 && now.x == 3 && now.y == 4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: aggregate compare exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S expected = {1, 2};\n"
+               "struct S desired = {3, 4};\n"
+               "bool ok1 = atomic_compare_exchange_strong(&a, &expected, desired);\n"
+               "expected = (struct S){9, 9};\n"
+               "desired = (struct S){5, 6};\n"
+               "bool ok2 = atomic_compare_exchange_weak(&a, &expected, desired);\n"
+               "struct S now = atomic_load(&a);\n"
+               "return ok1 && !ok2 && expected.x == 3 && expected.y == 4 && now.x == 3 && now.y == 4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: aggregate load and store explicit", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S b = {7, 8};\n"
+               "atomic_store_explicit(&a, b, memory_order_release);\n"
+               "struct S c = atomic_load_explicit(&a, memory_order_acquire);\n"
+               "return c.x * 10 + c.y;\n"),
+            .exit_code = 78,
+        },
+        {
+            "stdatomic: scalar atomic_init evaluates arguments once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int a[2] = {1, 2};\n"
+               "int idx = 0;\n"
+               "int calls = 0;\n"
+               "atomic_int *next_obj(void){ calls++; return &a[idx++]; }\n"
+               "int next_val(void){ calls++; return 9; }\n"
+               "atomic_init(next_obj(), next_val());\n"
+               "return calls == 2 && idx == 1 && a[0] == 9 && a[1] == 2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "stdatomic: atomic flag is atomic-qualified", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "return _Generic(atomic_flag, _Atomic bool: 1, bool: 2, default: 3);\n"),
+            .exit_code = 1,
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_TEST](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_setup_builtin_headers(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
+        if(err) {TestReport("failed to include"); goto finally;}
+        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        CiInterpFrame* frame = &interp.top_frame;
+        frame->stmts = interp.parser.toplevel_statements.data;
+        frame->stmt_count = interp.parser.toplevel_statements.count;
+        while(frame->pc < frame->stmt_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) goto finally;
+        }
+        TEST_stats.executed++;
+        if(interp.exit_code != tc->exit_code){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
+        }
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
 TestFunction(test_cross_target){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -6069,6 +6676,7 @@ int main(int argc, char** argv){
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_interpreter_builtin_headers, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

@@ -121,6 +121,7 @@ int main(int argc, char** argv, char** envp){
         {"C/ci_test.c", "ci_test", "run_ci_test", 0, 0, 0},
         {"C/ci_oom_test.c", "ci_oom_test", "run_ci_oom_test", 0, 1, 0},
         {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1, 0, 0},
+        {"C/ci_concurrent_test.c", "ci_concurrent_test", "run_ci_concurrent_test", 1, 0, 0},
         {"drc_test.c", "drc_test", "run_drc_test", 0, 0, 1},
     };
     {

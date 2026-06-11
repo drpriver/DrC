@@ -313,6 +313,74 @@ cc_require_scalar(CcParser* p, CcExpr* e, SrcLoc loc, const char* context){
 
 static
 int
+cc_check_atomic_object_access(CcParser* p, CcQualType type, SrcLoc loc){
+    if(!type.is_atomic) return 0;
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(p, type, loc, &sz);
+    if(err) return err;
+    if(!sz || (sz & (sz - 1)))
+        return cc_error(p, loc, "atomic operand size %u is not a power of 2", sz);
+    if(sz > cc_target(p)->atomic_lock_free_max)
+        return cc_error(p, loc, "atomic operand size %u exceeds target's maximum lock-free size %u", sz, cc_target(p)->atomic_lock_free_max);
+    switch(sz){
+        case 1: case 2: case 4: case 8: case 16:
+            return 0;
+        default:
+            return cc_error(p, loc, "unsupported atomic operand size %u", sz);
+    }
+}
+
+static
+int
+cc_check_atomic_integer_rmw(CcParser* p, CcQualType type, SrcLoc loc){
+    if(!type.is_atomic) return 0;
+    CcQualType base = type;
+    base.is_atomic = 0;
+    if(!ccqt_is_basic(base) && ccqt_kind(base) == CC_ENUM)
+        base = ccqt_as_enum(base)->underlying;
+    if(!ccqt_is_basic(base) || !ccbt_is_integer(base.basic.kind))
+        return cc_error(p, loc, "atomic read-modify-write requires integer atomic type");
+    return cc_check_atomic_object_access(p, type, loc);
+}
+
+static
+int
+cc_check_atomic_type_specifier_type(CcParser* p, CcQualType type, SrcLoc loc){
+    CcTypeKind kind = ccqt_kind(type);
+    if(kind == CC_ARRAY)
+        return cc_error(p, loc, "_Atomic type name shall not refer to an array type");
+    if(kind == CC_FUNCTION)
+        return cc_error(p, loc, "_Atomic type name shall not refer to a function type");
+    if(type.is_atomic)
+        return cc_error(p, loc, "_Atomic type name shall not refer to an atomic type");
+    if(type.is_const || type.is_volatile)
+        return cc_error(p, loc, "_Atomic type name shall not refer to a qualified type");
+    return 0;
+}
+
+static
+int
+cc_check_atomic_memory_order(CcParser* p, CcAtomicOp op, unsigned order, SrcLoc loc, _Bool failure_order){
+    if(order >= CC_MO_COUNT)
+        return cc_error(p, loc, "invalid memory order value %u", order);
+    if(failure_order){
+        if(order == CC_MO_RELEASE || order == CC_MO_ACQ_REL)
+            return cc_error(p, loc, "atomic compare-exchange failure order cannot be release or acq_rel");
+        return 0;
+    }
+    if(op == CC_ATOMIC_LOAD || op == CC_ATOMIC_LOAD_N){
+        if(order == CC_MO_RELEASE || order == CC_MO_ACQ_REL)
+            return cc_error(p, loc, "atomic load memory order cannot be release or acq_rel");
+    }
+    if(op == CC_ATOMIC_STORE || op == CC_ATOMIC_STORE_N){
+        if(order == CC_MO_CONSUME || order == CC_MO_ACQUIRE || order == CC_MO_ACQ_REL)
+            return cc_error(p, loc, "atomic store memory order cannot be consume, acquire, or acq_rel");
+    }
+    return 0;
+}
+
+static
+int
 cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     if(!ccqt_is_basic(t)){
         CcTypeKind kind = ccqt_kind(t);
@@ -1082,15 +1150,25 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
             if(err) return err;
             if(kind != CC_EXPR_ASSIGN && kind != CC_EXPR_ADDASSIGN && kind != CC_EXPR_SUBASSIGN){
                 CcQualType lt = left->type;
+                lt.is_atomic = 0;
                 if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
                 if(!ccqt_is_basic(lt) || !ccbt_is_arithmetic(lt.basic.kind)){
                     return cc_error(p, tok.loc, "compound assignment requires arithmetic operands");
                 }
             }
+            if(kind == CC_EXPR_ASSIGN){
+                err = cc_check_atomic_object_access(p, left->type, tok.loc);
+                if(err) return err;
+            }
+            else {
+                err = cc_check_atomic_integer_rmw(p, left->type, tok.loc);
+                if(err) return err;
+            }
             if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
             || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
             || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
                 CcQualType lt = left->type;
+                lt.is_atomic = 0;
                 if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
                 if(!ccqt_is_basic(lt) || !ccbt_is_integer(lt.basic.kind))
                     return cc_error(p, tok.loc, "operator requires integer operands");
@@ -1103,6 +1181,8 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
                     return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
             }
             else {
+                err = cc_check_atomic_object_access(p, right->type, right->loc);
+                if(err) return err;
                 err = cc_implicit_cast(p, right, left->type, &right);
                 if(err) return err;
             }
@@ -1737,10 +1817,14 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(operand->type.is_const)
                         return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                     {
-                        CcTypeKind tk = ccqt_kind(operand->type);
+                        CcQualType operand_type = operand->type;
+                        operand_type.is_atomic = 0;
+                        CcTypeKind tk = ccqt_kind(operand_type);
                         if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                             return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                     }
+                    err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                    if(err) return err;
                     result_type = operand->type;
                     break;
                 case CC_EXPR_VALUE:
@@ -2127,6 +2211,12 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC__atomic_fetch_sub:
                     op = CC_ATOMIC_FETCH_SUB;
                     goto atomic_op;
+                case CC__atomic_add_fetch:
+                    op = CC_ATOMIC_ADD_FETCH;
+                    goto atomic_op;
+                case CC__atomic_sub_fetch:
+                    op = CC_ATOMIC_SUB_FETCH;
+                    goto atomic_op;
                 case CC__atomic_fetch_and:
                     op = CC_ATOMIC_FETCH_AND;
                     goto atomic_op;
@@ -2165,10 +2255,22 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         return cc_error(p, tok.loc, "atomic operand size %u is not a power of 2", pointee_sz);
                     if(pointee_sz > cc_target(p)->atomic_lock_free_max)
                         return cc_error(p, tok.loc, "atomic operand size %u exceeds target's maximum lock-free size %u", pointee_sz, cc_target(p)->atomic_lock_free_max);
-                    if((op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_FETCH_AND || op == CC_ATOMIC_FETCH_OR || op == CC_ATOMIC_FETCH_XOR) && pointee_sz > 8)
+                    if((op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_ADD_FETCH || op == CC_ATOMIC_SUB_FETCH || op == CC_ATOMIC_FETCH_AND || op == CC_ATOMIC_FETCH_OR || op == CC_ATOMIC_FETCH_XOR) && pointee_sz > 8)
                         return cc_error(p, tok.loc, "atomic arithmetic not supported for operand size %u", pointee_sz);
                     CcQualType result_type;
                     CcQualType arg_types[2];
+                    CcQualType unatomic_pointee = pointee;
+                    unatomic_pointee.is_atomic = 0;
+                    _Bool pointer_fetch_addsub = (op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_ADD_FETCH || op == CC_ATOMIC_SUB_FETCH)
+                                               && ccqt_kind(unatomic_pointee) == CC_POINTER;
+                    CcQualType rmw_base = unatomic_pointee;
+                    if(!ccqt_is_basic(rmw_base) && ccqt_kind(rmw_base) == CC_ENUM)
+                        rmw_base = ccqt_as_enum(rmw_base)->underlying;
+                    _Bool integer_rmw_base = ccqt_is_basic(rmw_base) && ccbt_is_integer(rmw_base.basic.kind);
+                    if((op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_ADD_FETCH || op == CC_ATOMIC_SUB_FETCH) && !pointer_fetch_addsub && !integer_rmw_base)
+                        return cc_error(p, tok.loc, "atomic fetch add/sub requires integer or pointer type");
+                    if((op == CC_ATOMIC_FETCH_AND || op == CC_ATOMIC_FETCH_OR || op == CC_ATOMIC_FETCH_XOR) && !integer_rmw_base)
+                        return cc_error(p, tok.loc, "atomic fetch bitwise operation requires integer type");
                     int nargs, nconst;
                     switch(op){
                         case CC_ATOMIC_LOAD_N:
@@ -2184,12 +2286,14 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                             break;
                         case CC_ATOMIC_FETCH_ADD:
                         case CC_ATOMIC_FETCH_SUB:
+                        case CC_ATOMIC_ADD_FETCH:
+                        case CC_ATOMIC_SUB_FETCH:
                         case CC_ATOMIC_FETCH_AND:
                         case CC_ATOMIC_FETCH_OR:
                         case CC_ATOMIC_FETCH_XOR:
                         case CC_ATOMIC_EXCHANGE_N:
                             result_type = pointee;
-                            arg_types[0] = pointee;
+                            arg_types[0] = pointer_fetch_addsub ? ccqt_basic(cc_target(p)->ptrdiff_type) : pointee;
                             nargs = 1;
                             nconst = 1;
                             break;
@@ -2248,11 +2352,17 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                             return cc_error(p, eloc, "invalid memory order value %u", const_vals[i]);
                     }
                     if(op == CC_ATOMIC_COMPARE_EXCHANGE || op == CC_ATOMIC_COMPARE_EXCHANGE_N){
+                        err = cc_check_atomic_memory_order(p, op, const_vals[1], tok.loc, 0);
+                        if(err) return err;
+                        err = cc_check_atomic_memory_order(p, op, const_vals[2], tok.loc, 1);
+                        if(err) return err;
                         node->atomic.weak = const_vals[0];
                         node->atomic.memorder = const_vals[1];
                         node->atomic.fail_memorder = const_vals[2];
                     }
                     else {
+                        err = cc_check_atomic_memory_order(p, op, const_vals[0], tok.loc, 0);
+                        if(err) return err;
                         node->atomic.memorder = const_vals[0];
                     }
                     err = cc_expect_punct(p, ')');
@@ -2627,6 +2737,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         case CC__atomic_exchange_n:
                         case CC__atomic_fetch_add:
                         case CC__atomic_fetch_sub:
+                        case CC__atomic_add_fetch:
+                        case CC__atomic_sub_fetch:
                         case CC__atomic_load:
                         case CC__atomic_load_n:
                         case CC__atomic_signal_fence:
@@ -3400,10 +3512,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 if(operand->type.is_const)
                     return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                 {
-                    CcTypeKind tk = ccqt_kind(operand->type);
+                    CcQualType operand_type = operand->type;
+                    operand_type.is_atomic = 0;
+                    CcTypeKind tk = ccqt_kind(operand_type);
                     if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                         return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                 }
+                err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                if(err) return err;
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTINC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
@@ -3418,10 +3534,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 if(operand->type.is_const)
                     return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                 {
-                    CcTypeKind tk = ccqt_kind(operand->type);
+                    CcQualType operand_type = operand->type;
+                    operand_type.is_atomic = 0;
+                    CcTypeKind tk = ccqt_kind(operand_type);
                     if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                         return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                 }
+                err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                if(err) return err;
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTDEC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
@@ -3481,6 +3601,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 CcQualType member_type = {0};
                 CcFunc* _Null_unspecified method = NULL;
                 CcTypeKind tk = ccqt_kind(agg_type);
+                if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
+                    return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
                 if(tk == CC_STRUCT){
                     CcStruct* s = ccqt_as_struct(agg_type);
                     cc_lookup_field(s->fields, s->field_count, member_name, &floc, &member_type, &method);
@@ -5177,6 +5299,8 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_ATOMIC_STORE_N:
                 case CC_ATOMIC_FETCH_ADD:
                 case CC_ATOMIC_FETCH_SUB:
+                case CC_ATOMIC_ADD_FETCH:
+                case CC_ATOMIC_SUB_FETCH:
                 case CC_ATOMIC_FETCH_AND:
                 case CC_ATOMIC_FETCH_OR:
                 case CC_ATOMIC_FETCH_XOR:
@@ -7471,6 +7595,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     bitwidth = (uint64_t)bw_i;
                     member_type = member_base.type;
                     is_bitfield = 1;
+                    if(member_type.is_atomic){
+                        err = cc_error(p, tok.loc, "atomic bitfields are not supported");
+                        goto struct_err;
+                    }
                     if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
                        && ccqt_kind(member_type) != CC_ENUM){
                         err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
@@ -7597,6 +7725,10 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         }
                         bitwidth = (uint64_t)bw_i;
                         is_bitfield = 1;
+                        if(member_type.is_atomic){
+                            err = cc_error(p, tok.loc, "atomic bitfields are not supported");
+                            goto struct_err;
+                        }
                         if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
                            && ccqt_kind(member_type) != CC_ENUM){
                             err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
@@ -8280,8 +8412,28 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             return cc_error(p, tok.loc, "typedef after function specifier");
                         spec->sp_typedef = 1;
                         continue;
-                    case CC__Atomic:
-                        return cc_unimplemented(p, tok.loc, "_Atomic parsing in declaration");
+                    case CC__Atomic: {
+                        CcToken peek;
+                        err = cc_peek(p, &peek);
+                        if(err) return err;
+                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
+                            if(base_type->bits)
+                                return cc_error(p, tok.loc, "Second type in declaration");
+                            if(spec->sp_typebits)
+                                return cc_error(p, tok.loc, "Second type in declaration");
+                            err = cc_next_token(p, &peek); // consume '('
+                            if(err) return err;
+                            err = cc_parse_type_name(p, base_type, NULL);
+                            if(err) return err;
+                            err = cc_check_atomic_type_specifier_type(p, *base_type, tok.loc);
+                            if(err) return err;
+                            err = cc_expect_punct(p, CC_rparen);
+                            if(err) return err;
+                            base_type->is_atomic = 1;
+                        }
+                        spec->sp_atomic = 1;
+                        continue;
+                    }
                     case CC__BitInt:
                         return cc_unimplemented(p, tok.loc, "_BitInt parsing in declaration");
                     case CC__Complex:
@@ -9290,6 +9442,13 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     if(b.spec.sp_const) b.type.is_const = 1;
     if(b.spec.sp_volatile) b.type.is_volatile = 1;
     if(b.spec.sp_atomic) b.type.is_atomic = 1;
+    if(b.type.is_atomic){
+        CcTypeKind tk = ccqt_kind(b.type);
+        if(tk == CC_ARRAY)
+            return cc_error(p, b.loc, "_Atomic qualifier shall not modify an array type");
+        if(tk == CC_FUNCTION)
+            return cc_error(p, b.loc, "_Atomic qualifier shall not modify a function type");
+    }
     *declbase = b;
     return 0;
 }
@@ -10022,6 +10181,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             }
             else {
                 // Check compatibility and insert implicit cast
+                err = cc_check_atomic_object_access(p, initializer->type, initializer->loc);
+                if(err) return err;
+                err = cc_check_atomic_object_access(p, type, tok.loc);
+                if(err) return err;
                 CcQualType target = type;
                 target.is_const = 0;
                 target.is_volatile = 0;
@@ -10119,6 +10282,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             // Reject incomplete types without initializer.
             if(!initializer && !declbase->spec.sp_extern){
                 CcTypeKind tk = ccqt_kind(type);
+                if(tk == CC_BASIC && type.basic.kind == CCBT_void)
+                    return cc_error(p, tok.loc, "variable has incomplete type 'void'");
                 if(tk == CC_ARRAY && ccqt_as_array(type)->is_incomplete && p->current_func)
                     return cc_error(p, tok.loc, "variable '%.*s' has incomplete array type", name->length, name->data);
                 if(tk == CC_STRUCT && ccqt_as_struct(type)->is_incomplete)
@@ -10527,6 +10692,8 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__FUNCTION__"), CC__func__},
             {SVI("__atomic_fetch_add"), CC__atomic_fetch_add},
             {SVI("__atomic_fetch_sub"), CC__atomic_fetch_sub},
+            {SVI("__atomic_add_fetch"), CC__atomic_add_fetch},
+            {SVI("__atomic_sub_fetch"), CC__atomic_sub_fetch},
             {SVI("__atomic_fetch_and"), CC__atomic_fetch_and},
             {SVI("__atomic_fetch_or"),  CC__atomic_fetch_or},
             {SVI("__atomic_fetch_xor"), CC__atomic_fetch_xor},

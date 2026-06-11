@@ -80,6 +80,8 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__func__,
     CC__atomic_fetch_add, // (ptr, val, memorder)
     CC__atomic_fetch_sub, // (ptr, val, memorder)
+    CC__atomic_add_fetch, // (ptr, val, memorder)
+    CC__atomic_sub_fetch, // (ptr, val, memorder)
     CC__atomic_fetch_and, // (ptr, val, memorder)
     CC__atomic_fetch_or,  // (ptr, val, memorder)
     CC__atomic_fetch_xor, // (ptr, val, memorder)

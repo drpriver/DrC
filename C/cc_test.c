@@ -3877,7 +3877,6 @@ TestFunction(test_parse_decls){
             .vars = {
                 { SVI("x"), SVI("_Atomic int") },
             },
-            .skip = 1, // _Atomic parsing unimplemented
         },
         {
             "_Atomic with parens", __LINE__,
@@ -3885,7 +3884,75 @@ TestFunction(test_parse_decls){
             .vars = {
                 { SVI("x"), SVI("_Atomic int") },
             },
-            .skip = 1, // _Atomic parsing unimplemented
+        },
+        {
+            "_Atomic qualified base", __LINE__,
+            SVI("const _Atomic int x;\n"
+               "volatile _Atomic unsigned y;\n"),
+            .vars = {
+                { SVI("x"), SVI("const _Atomic int") },
+                { SVI("y"), SVI("volatile _Atomic unsigned int") },
+            },
+        },
+        {
+            "_Atomic pointer declarators", __LINE__,
+            SVI("_Atomic int *p;\n"
+               "int * _Atomic q;\n"),
+            .vars = {
+                { SVI("p"), SVI("_Atomic int *") },
+                { SVI("q"), SVI("int *_Atomic ") },
+            },
+        },
+        {
+            "_Atomic array spellings", __LINE__,
+            SVI("_Atomic int a[4];\n"),
+            .vars = {
+                { SVI("a"), SVI("_Atomic int[4]") },
+            },
+        },
+        {
+            "_Atomic typedef target", __LINE__,
+            SVI("typedef _Atomic int AI;\n"
+               "typedef int I;\n"
+               "AI x;\n"
+               "_Atomic(I) y;\n"
+               "_Atomic AI z;\n"),
+            .vars = {
+                { SVI("x"), SVI("_Atomic int") },
+                { SVI("y"), SVI("_Atomic int") },
+                { SVI("z"), SVI("_Atomic int") },
+            },
+            .typedefs = {
+                { SVI("AI"), SVI("_Atomic int") },
+                { SVI("I"), SVI("int") },
+            },
+        },
+        {
+            "duplicate _Atomic qualifier is idempotent", __LINE__,
+            SVI("_Atomic _Atomic int x;\n"),
+            .vars = {
+                { SVI("x"), SVI("_Atomic int") },
+            },
+        },
+        {
+            "_Atomic function parameter and return", __LINE__,
+            SVI("_Atomic int f(_Atomic int x);\n"
+               "_Atomic int (*fp)(void);\n"
+               "int (* _Atomic ap)(void);\n"),
+            .funcs = {
+                { SVI("f"), SVI("_Atomic int(_Atomic int)") },
+            },
+            .vars = {
+                { SVI("fp"), SVI("_Atomic int (*)(void)") },
+                { SVI("ap"), SVI("int (*_Atomic )(void)") },
+            },
+        },
+        {
+            "_Atomic struct object", __LINE__,
+            SVI("_Atomic(struct S { int x, y; }) a;\n"),
+            .vars = {
+                { SVI("a"), SVI("_Atomic struct S") },
+            },
         },
         {
             "alignas on variable", __LINE__,
@@ -4374,6 +4441,7 @@ TestFunction(test_parse_errors){
         StringView input;
         StringView expected_msg;
         _Bool skip;
+        _Bool builtin_headers;
     } cases[] = {
         {
             "static_assert(0) fails", __LINE__,
@@ -5633,6 +5701,248 @@ TestFunction(test_parse_errors){
             SVI("(test):1:14: error: constexpr after thread_local\n"),
         },
         {
+            "_Atomic type specifier followed by second type", __LINE__,
+            SVI("_Atomic(int) long x;\n"),
+            SVI("(test):1:14: error: Second type in declaration\n"),
+        },
+        {
+            "_Atomic type specifier with empty parens", __LINE__,
+            SVI("_Atomic() x;\n"),
+            SVI("(test):1:9: error: Expected type name\n"),
+        },
+        {
+            "_Atomic type specifier with array type name", __LINE__,
+            SVI("_Atomic(int[4]) x;\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to an array type\n"),
+        },
+        {
+            "_Atomic type specifier with function type name", __LINE__,
+            SVI("typedef int F(void);\n"
+               "_Atomic(F) x;\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a function type\n"),
+        },
+        {
+            "_Atomic type specifier with atomic type name", __LINE__,
+            SVI("typedef _Atomic int AI;\n"
+               "_Atomic(AI) x;\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to an atomic type\n"),
+        },
+        {
+            "_Atomic type specifier with const type name", __LINE__,
+            SVI("_Atomic(const int) x;\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type\n"),
+        },
+        {
+            "_Atomic type specifier with volatile type name", __LINE__,
+            SVI("_Atomic(volatile int) x;\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type\n"),
+        },
+        {
+            "_Atomic type specifier with const typedef type name", __LINE__,
+            SVI("typedef const int CI;\n"
+               "_Atomic(CI) x;\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type\n"),
+        },
+        {
+            "_Atomic type specifier with volatile typedef type name", __LINE__,
+            SVI("typedef volatile int VI;\n"
+               "_Atomic(VI) x;\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type\n"),
+        },
+        {
+            "_Atomic type specifier with typedef array type name", __LINE__,
+            SVI("typedef int A[4];\n"
+               "_Atomic(A) x;\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to an array type\n"),
+        },
+        {
+            "_Atomic qualifier with typedef array type", __LINE__,
+            SVI("typedef int A[4];\n"
+               "_Atomic A x;\n"),
+            SVI("(test):2:1: error: _Atomic qualifier shall not modify an array type\n"),
+        },
+        {
+            "_Atomic qualifier with typedef function type", __LINE__,
+            SVI("typedef int F(void);\n"
+               "_Atomic F x;\n"),
+            SVI("(test):2:1: error: _Atomic qualifier shall not modify a function type\n"),
+        },
+        {
+            "_Atomic void object", __LINE__,
+            SVI("_Atomic void x;\n"),
+            SVI("(test):1:15: error: variable has incomplete type 'void'\n"),
+        },
+        {
+            "member access on atomic struct", __LINE__,
+            SVI("_Atomic(struct S { int x, y; }) a;\n"
+               "int f(void){ return a.x; }\n"),
+            SVI("(test):2:23: error: member access on atomic struct or union is undefined behavior\n"),
+        },
+        {
+            "member access through pointer to atomic struct", __LINE__,
+            SVI("_Atomic(struct S { int x, y; }) a;\n"
+               "int f(void){ _Atomic(struct S)* p = &a; return p->x; }\n"),
+            SVI("(test):2:51: error: member access on atomic struct or union is undefined behavior\n"),
+        },
+        {
+            "atomic bitfield", __LINE__,
+            SVI("struct S { _Atomic int x: 3; };\n"),
+            SVI("(test):1:25: error: atomic bitfields are not supported\n"),
+        },
+        {
+            "anonymous atomic bitfield", __LINE__,
+            SVI("struct S { _Atomic int : 3; };\n"),
+            SVI("(test):1:24: error: atomic bitfields are not supported\n"),
+        },
+        {
+            "odd-size atomic aggregate load", __LINE__,
+            SVI("_Atomic(struct S { char x[3]; }) a;\n"
+               "struct S s = a;\n"),
+            SVI("(test):2:14: error: atomic operand size 3 is not a power of 2\n"),
+        },
+        {
+            "oversize atomic aggregate load", __LINE__,
+            SVI("_Atomic(struct S { long long a, b, c; }) x;\n"
+               "struct S s = x;\n"),
+            SVI("(test):2:14: error: atomic operand size 24 is not a power of 2\n"),
+        },
+        {
+            "odd-size atomic aggregate store", __LINE__,
+            SVI("_Atomic(struct S { char x[3]; }) a;\n"
+               "struct S s;\n"
+               "void f(void){ a = s; }\n"),
+            SVI("(test):3:17: error: atomic operand size 3 is not a power of 2\n"),
+        },
+        {
+            "prefix increment atomic float", __LINE__,
+            SVI("_Atomic float f;\n"
+               "void g(void){ ++f; }\n"),
+            SVI("(test):2:15: error: atomic read-modify-write requires integer atomic type\n"),
+        },
+        {
+            "compound assignment atomic float", __LINE__,
+            SVI("_Atomic float f;\n"
+               "void g(void){ f += 1.0f; }\n"),
+            SVI("(test):2:17: error: atomic read-modify-write requires integer atomic type\n"),
+        },
+        {
+            "compound assignment atomic struct", __LINE__,
+            SVI("_Atomic(struct S { int x; }) s;\n"
+               "void g(void){ s += s; }\n"),
+            SVI("(test):2:17: error: atomic read-modify-write requires integer atomic type\n"),
+        },
+        {
+            "atomic fetch add on aggregate", __LINE__,
+            SVI("struct S { int x; } s;\n"
+               "int f(void){ return __atomic_fetch_add(&s, s, __ATOMIC_SEQ_CST).x; }\n"),
+            SVI("(test):2:21: error: atomic fetch add/sub requires integer or pointer type\n"),
+        },
+        {
+            "atomic fetch bitwise on pointer", __LINE__,
+            SVI("int x;\n"
+               "int *p = &x;\n"
+               "int *f(void){ return __atomic_fetch_or(&p, 1, __ATOMIC_SEQ_CST); }\n"),
+            SVI("(test):3:22: error: atomic fetch bitwise operation requires integer type\n"),
+        },
+        {
+            "atomic load with release memory order", __LINE__,
+            SVI("int x;\n"
+               "int f(void){ return __atomic_load_n(&x, __ATOMIC_RELEASE); }\n"),
+            SVI("(test):2:21: error: atomic load memory order cannot be release or acq_rel\n"),
+        },
+        {
+            "atomic load with acq_rel memory order", __LINE__,
+            SVI("int x;\n"
+               "int f(void){ return __atomic_load_n(&x, __ATOMIC_ACQ_REL); }\n"),
+            SVI("(test):2:21: error: atomic load memory order cannot be release or acq_rel\n"),
+        },
+        {
+            "atomic store with acquire memory order", __LINE__,
+            SVI("int x;\n"
+               "void f(void){ __atomic_store_n(&x, 1, __ATOMIC_ACQUIRE); }\n"),
+            SVI("(test):2:15: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"),
+        },
+        {
+            "atomic store with consume memory order", __LINE__,
+            SVI("int x;\n"
+               "void f(void){ __atomic_store_n(&x, 1, __ATOMIC_CONSUME); }\n"),
+            SVI("(test):2:15: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"),
+        },
+        {
+            "atomic store with acq_rel memory order", __LINE__,
+            SVI("int x;\n"
+               "void f(void){ __atomic_store_n(&x, 1, __ATOMIC_ACQ_REL); }\n"),
+            SVI("(test):2:15: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"),
+        },
+        {
+            "atomic compare-exchange with release failure order", __LINE__,
+            SVI("int x;\n"
+               "int f(void){ int e = 0; return __atomic_compare_exchange_n(&x, &e, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELEASE); }\n"),
+            SVI("(test):2:32: error: atomic compare-exchange failure order cannot be release or acq_rel\n"),
+        },
+        {
+            "atomic compare-exchange with acq_rel failure order", __LINE__,
+            SVI("int x;\n"
+               "int f(void){ int e = 0; return __atomic_compare_exchange_n(&x, &e, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_ACQ_REL); }\n"),
+            SVI("(test):2:32: error: atomic compare-exchange failure order cannot be release or acq_rel\n"),
+        },
+        {
+            "atomic load with invalid memory order value", __LINE__,
+            SVI("int x;\n"
+               "int f(void){ return __atomic_load_n(&x, 99); }\n"),
+            SVI("(test):2:41: error: invalid memory order value 99\n"),
+        },
+        {
+            "atomic load with non-constant memory order", __LINE__,
+            SVI("int x;\n"
+               "int f(int order){ return __atomic_load_n(&x, order); }\n"),
+            SVI("(test):2:46: error: memory order must be a constant expression\n"),
+        },
+        {
+            "stdatomic macro load with release memory order", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x;\n"
+               "int f(void){ return atomic_load_explicit(&x, memory_order_release); }\n"),
+            SVI("<builtin>/__stdatomic_ops.h:7:42: error: atomic load memory order cannot be release or acq_rel\n"
+                "<builtin>/nmmintrin.h:3:21: ... expanded from here\n"),
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic macro store with acquire memory order", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x;\n"
+               "void f(void){ atomic_store_explicit(&x, 1, memory_order_acquire); }\n"),
+            SVI("<builtin>/__stdatomic_ops.h:5:50: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"
+                "<builtin>/nmmintrin.h:3:15: ... expanded from here\n"),
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic macro compare exchange with release failure order", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x;\n"
+               "int f(void){ int e = 0; return atomic_compare_exchange_strong_explicit(&x, &e, 1, memory_order_seq_cst, memory_order_release); }\n"),
+            SVI("<builtin>/__stdatomic_ops.h:11:79: error: atomic compare-exchange failure order cannot be release or acq_rel\n"
+                "<builtin>/nmmintrin.h:3:32: ... expanded from here\n"),
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic flag clear with acquire memory order", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_flag f = ATOMIC_FLAG_INIT;\n"
+               "void g(void){ atomic_flag_clear_explicit(&f, memory_order_acquire); }\n"),
+            SVI("<builtin>/__stdatomic_ops.h:29:48: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"
+                "<builtin>/nmmintrin.h:3:15: ... expanded from here\n"),
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic thread fence with non-constant memory order", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "void g(memory_order order){ atomic_thread_fence(order); }\n"),
+            SVI("<builtin>/nmmintrin.h:2:49: error: memory order must be a constant expression\n"
+                "<builtin>/nmmintrin.h:2:29: ... expanded from here\n"),
+            .builtin_headers = 1,
+        },
+        {
             "unsigned after __auto_type", __LINE__,
             SVI("__auto_type unsigned x = 1;\n"),
             SVI("(test):1:13: error: unsigned after __auto_type\n"),
@@ -5904,6 +6214,10 @@ TestFunction(test_parse_errors){
         if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto fin;}
         err = cpp_define_builtin_macros(&cc.cpp);
         if(err) {TestPrintf("%s:%d: failed to define\n", __FILE__, c->line); goto fin;}
+        if(c->builtin_headers){
+            err = cpp_setup_builtin_headers(&cc.cpp);
+            if(err) {TestPrintf("%s:%d: failed to setup builtin headers\n", __FILE__, c->line); goto fin;}
+        }
         err = cc_define_builtin_types(&cc);
         if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto fin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));

@@ -218,6 +218,203 @@ ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
 
 static
 int
+ci_atomic_check_size(CiInterpreter* ci, SrcLoc loc, uint32_t sz){
+    if(!sz || (sz & (sz - 1)))
+        return ci_error(ci, loc, "atomic operand size %u is not a power of 2", sz);
+    if(sz > ci_target(ci)->atomic_lock_free_max)
+        return ci_error(ci, loc, "atomic operand size %u exceeds target's maximum lock-free size %u", sz, ci_target(ci)->atomic_lock_free_max);
+    switch(sz){
+        case 1: case 2: case 4: case 8: case 16:
+            return 0;
+        default:
+            return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    }
+}
+
+static
+int
+ci_load_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* src, void* dest){
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
+    if(err) return err;
+    if(!type.is_atomic){
+        memcpy(dest, src, sz);
+        return 0;
+    }
+    err = ci_atomic_check_size(ci, loc, sz);
+    if(err) return err;
+    #ifdef _MSC_VER
+    switch(sz){
+        case 1:  *(uint8_t*)dest  = (uint8_t)_InterlockedOr8((volatile char*)src, 0); break;
+        case 2:  *(uint16_t*)dest = (uint16_t)_InterlockedOr16((volatile short*)src, 0); break;
+        case 4:  *(uint32_t*)dest = (uint32_t)_InterlockedOr((volatile long*)src, 0); break;
+        case 8:  *(uint64_t*)dest = (uint64_t)_InterlockedOr64((volatile long long*)src, 0); break;
+        case 16: { __int64 tmp[2] = {0}; _InterlockedCompareExchange128((volatile __int64*)src, 0, 0, tmp); memcpy(dest, tmp, 16); break; }
+        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    }
+    #else
+    typedef struct { _Alignas(16) char bytes[16]; } CiAtomic16;
+    switch(sz){
+        case 1:  __atomic_load(( uint8_t*)src, ( uint8_t*)dest, __ATOMIC_SEQ_CST); break;
+        case 2:  __atomic_load((uint16_t*)src, (uint16_t*)dest, __ATOMIC_SEQ_CST); break;
+        case 4:  __atomic_load((uint32_t*)src, (uint32_t*)dest, __ATOMIC_SEQ_CST); break;
+        case 8:  __atomic_load((uint64_t*)src, (uint64_t*)dest, __ATOMIC_SEQ_CST); break;
+        case 16: __atomic_load((CiAtomic16*)src, (CiAtomic16*)dest, __ATOMIC_SEQ_CST); break;
+        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    }
+    #endif
+    return 0;
+}
+
+static
+int
+ci_store_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* dest, void* src){
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
+    if(err) return err;
+    if(!type.is_atomic){
+        memcpy(dest, src, sz);
+        return 0;
+    }
+    err = ci_atomic_check_size(ci, loc, sz);
+    if(err) return err;
+    #ifdef _MSC_VER
+    switch(sz){
+        case 1:  _InterlockedExchange8((volatile char*)dest, *(char*)src); break;
+        case 2:  _InterlockedExchange16((volatile short*)dest, *(short*)src); break;
+        case 4:  _InterlockedExchange((volatile long*)dest, *(long*)src); break;
+        case 8:  _InterlockedExchange64((volatile long long*)dest, *(long long*)src); break;
+        case 16: {
+            __int64 nv[2]; memcpy(nv, src, 16);
+            __int64 cmp[2] = {0};
+            while(!_InterlockedCompareExchange128((volatile __int64*)dest, nv[1], nv[0], cmp)){}
+            break;
+        }
+        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    }
+    #else
+    typedef struct { _Alignas(16) char bytes[16]; } CiAtomic16;
+    switch(sz){
+        case 1:  __atomic_store(( uint8_t*)dest, ( uint8_t*)src, __ATOMIC_SEQ_CST); break;
+        case 2:  __atomic_store((uint16_t*)dest, (uint16_t*)src, __ATOMIC_SEQ_CST); break;
+        case 4:  __atomic_store((uint32_t*)dest, (uint32_t*)src, __ATOMIC_SEQ_CST); break;
+        case 8:  __atomic_store((uint64_t*)dest, (uint64_t*)src, __ATOMIC_SEQ_CST); break;
+        case 16: __atomic_store((CiAtomic16*)dest, (CiAtomic16*)src, __ATOMIC_SEQ_CST); break;
+        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    }
+    #endif
+    return 0;
+}
+
+static
+uint64_t
+ci_atomic_rmw_compute(uint32_t op, uint64_t left, uint64_t right, _Bool is_unsigned){
+    switch(op){
+        case CC_EXPR_PREINC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_ADDASSIGN:
+            return left + right;
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_POSTDEC:
+        case CC_EXPR_SUBASSIGN:
+            return left - right;
+        case CC_EXPR_MULASSIGN:
+            return left * right;
+        case CC_EXPR_DIVASSIGN:
+            if(is_unsigned) return right ? left / right : 0;
+            return right ? (uint64_t)((int64_t)left / (int64_t)right) : 0;
+        case CC_EXPR_MODASSIGN:
+            if(is_unsigned) return right ? left % right : 0;
+            return right ? (uint64_t)((int64_t)left % (int64_t)right) : 0;
+        case CC_EXPR_BITANDASSIGN:
+            return left & right;
+        case CC_EXPR_BITORASSIGN:
+            return left | right;
+        case CC_EXPR_BITXORASSIGN:
+            return left ^ right;
+        case CC_EXPR_LSHIFTASSIGN:
+            return left << right;
+        case CC_EXPR_RSHIFTASSIGN:
+            if(is_unsigned) return left >> right;
+            return (uint64_t)((int64_t)left >> right);
+        default:
+            return left;
+    }
+}
+
+static
+int
+ci_atomic_integer_rmw(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* ptr,
+    uint32_t op, uint64_t rhs, _Bool result_is_old, void* result){
+    CcQualType unqual = type;
+    unqual.quals = 0;
+    if(!ccqt_is_basic(unqual) && ccqt_kind(unqual) == CC_ENUM)
+        unqual = ccqt_as_enum(unqual)->underlying;
+    if(!(ccqt_is_basic(unqual) && ccbt_is_integer(unqual.basic.kind)))
+        return ci_error(ci, loc, "atomic read-modify-write requires integer atomic type");
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
+    if(err) return err;
+    err = ci_atomic_check_size(ci, loc, sz);
+    if(err) return err;
+    if(sz > 8)
+        return ci_error(ci, loc, "atomic read-modify-write unsupported for operand size %u", sz);
+    _Bool is_unsigned = ccqt_is_unsigned(type, !ci_target(ci)->char_is_signed);
+    #ifdef _MSC_VER
+    #define CI_ATOMIC_RMW_MSVC_CASE(T, ST, IT, intrinsic) do { \
+        volatile IT* iptr = (volatile IT*)ptr; \
+        IT expected = *iptr; \
+        IT old; \
+        IT desired; \
+        do { \
+            old = expected; \
+            T typed_old = (T)old; \
+            uint64_t left = is_unsigned ? (uint64_t)typed_old : (uint64_t)(int64_t)(ST)typed_old; \
+            T typed_desired = (T)ci_atomic_rmw_compute(op, left, rhs, is_unsigned); \
+            desired = (IT)typed_desired; \
+            expected = intrinsic(iptr, desired, old); \
+        } while(expected != old); \
+        T typed_result = (T)(result_is_old ? old : desired); \
+        ci_write_uint(result, sz, (uint64_t)typed_result); \
+        return 0; \
+    } while(0)
+    switch(sz){
+        case 1: CI_ATOMIC_RMW_MSVC_CASE(uint8_t, int8_t, char, _InterlockedCompareExchange8);
+        case 2: CI_ATOMIC_RMW_MSVC_CASE(uint16_t, int16_t, short, _InterlockedCompareExchange16);
+        case 4: CI_ATOMIC_RMW_MSVC_CASE(uint32_t, int32_t, long, _InterlockedCompareExchange);
+        case 8: CI_ATOMIC_RMW_MSVC_CASE(uint64_t, int64_t, long long, _InterlockedCompareExchange64);
+        default: break;
+    }
+    #undef CI_ATOMIC_RMW_MSVC_CASE
+    return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    #else
+    #define CI_ATOMIC_RMW_CASE(T, ST) do { \
+        T expected; \
+        __atomic_load((T*)ptr, &expected, __ATOMIC_SEQ_CST); \
+        T old; \
+        T desired; \
+        do { \
+            old = expected; \
+            uint64_t left = is_unsigned ? (uint64_t)old : (uint64_t)(int64_t)(ST)old; \
+            desired = (T)ci_atomic_rmw_compute(op, left, rhs, is_unsigned); \
+        } while(!__atomic_compare_exchange((T*)ptr, &expected, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)); \
+        ci_write_uint(result, sz, (uint64_t)(result_is_old ? old : desired)); \
+        return 0; \
+    } while(0)
+    switch(sz){
+        case 1: CI_ATOMIC_RMW_CASE(uint8_t, int8_t);
+        case 2: CI_ATOMIC_RMW_CASE(uint16_t, int16_t);
+        case 4: CI_ATOMIC_RMW_CASE(uint32_t, int32_t);
+        case 8: CI_ATOMIC_RMW_CASE(uint64_t, int64_t);
+        default: break;
+    }
+    #undef CI_ATOMIC_RMW_CASE
+    return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
+    #endif
+}
+
+static
+int
 ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
     uint32_t _type_sz;
     // Incomplete arrays (FLA, zero-length arrays) have unknown size.
@@ -579,8 +776,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memcpy(result, storage, sz);
-        return 0;
+        return ci_load_object(ci, expr->loc, var_type, storage, result);
     }
     case CC_EXPR_FUNCTION: {
         if(result == ci_discard_buf) return 0;
@@ -736,13 +932,21 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         if(sz > lval_size)
             return ci_error(ci, expr->loc, "interpreter: assignment exceeds lvalue storage");
-        err = ci_interp_expr(ci, frame,expr->values[0], lval, lval_size);
-        if(err) return err;
+        if(lhs->type.is_atomic){
+            _Alignas(16) char atomic_value[16] = {0};
+            err = ci_interp_expr(ci, frame, expr->values[0], atomic_value, sizeof atomic_value);
+            if(err) return err;
+            err = ci_store_object(ci, expr->loc, lhs->type, lval, atomic_value);
+            if(err) return err;
+        }
+        else {
+            err = ci_interp_expr(ci, frame,expr->values[0], lval, lval_size);
+            if(err) return err;
+        }
         if(result == ci_discard_buf) return 0;
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memcpy(result, lval, sz);
-        return 0;
+        return ci_load_object(ci, expr->loc, lhs->type, lval, result);
     }
     case CC_EXPR_COMMA: {
         int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
@@ -785,8 +989,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(result == ci_discard_buf) return 0;
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memcpy(result, ptr_val, sz);
-        return 0;
+        return ci_load_object(ci, expr->loc, expr->type, ptr_val, result);
     }
     case CC_EXPR_DOT: {
         if(result == ci_discard_buf) return 0;
@@ -813,7 +1016,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 memcpy(result, &val, sz < size ? sz : size);
             }
             else {
-                memcpy(result, temp + off, sz);
+                err = ci_load_object(ci, expr->loc, expr->type, temp + off, result);
+                if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
             }
             Allocator_free(ci_allocator(ci), temp, base_sz);
             return 0;
@@ -832,7 +1036,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             memcpy(result, &val, sz < size ? sz : size);
         }
         else {
-            memcpy(result, (char*)base + off, sz);
+            return ci_load_object(ci, expr->loc, expr->type, (char*)base + off, result);
         }
         return 0;
     }
@@ -855,7 +1059,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             memcpy(result, &val, sz < size ? sz : size);
         }
         else {
-            memcpy(result, (char*)ptr_val + off, sz);
+            return ci_load_object(ci, expr->loc, expr->type, (char*)ptr_val + off, result);
         }
         return 0;
     }
@@ -870,8 +1074,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(result == ci_discard_buf) return 0;
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memcpy(result, addr, sz);
-        return 0;
+        return ci_load_object(ci, expr->loc, expr->type, addr, result);
     }
     case CC_EXPR_NEG: {
         CiUint128 val = {0};
@@ -984,6 +1187,12 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
         if(sz > size)
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
+        if(lhs->type.is_atomic){
+            _Alignas(8) char tmp[8] = {0};
+            void* out = result == ci_discard_buf ? tmp : result;
+            return ci_atomic_integer_rmw(ci, expr->loc, lhs->type, lval,
+                expr->kind, 1, !is_pre, out);
+        }
         _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
         if(is_float){
             double d = ci_read_float(lval, expr->type.basic.kind);
@@ -1401,6 +1610,15 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         err = ci_interp_expr(ci, frame,expr->values[0], &rbuf, sizeof rbuf);
         if(err) return err;
+
+        if(lhs->type.is_atomic){
+            _Bool rhs_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
+            uint64_t rhs = ci_read_int_any(&rbuf, rsz, rhs_unsigned);
+            _Alignas(8) char tmp[8] = {0};
+            void* out = result == ci_discard_buf ? tmp : result;
+            return ci_atomic_integer_rmw(ci, expr->loc, lhs->type, lval,
+                expr->kind, rhs, 0, out);
+        }
 
         if(ccqt_kind(expr->type) == CC_POINTER){
             CcPointer* pt = ccqt_as_ptr(expr->type);
@@ -1915,8 +2133,25 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         // fetch_add, fetch_sub, store_n, exchange_n: values[0]=val
         _Alignas(16) char val_buf[16] = {0};
-        err = ci_interp_expr(ci, frame, expr->values[0], val_buf, sz);
+        uint32_t val_sz;
+        err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->values[0]->loc, &val_sz);
         if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->values[0], val_buf, val_sz);
+        if(err) return err;
+        CcQualType atomic_obj_type = ccqt_as_ptr(expr->lhs->type)->pointee;
+        CcQualType unatomic_obj_type = atomic_obj_type;
+        unatomic_obj_type.is_atomic = 0;
+        if((op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_ADD_FETCH || op == CC_ATOMIC_SUB_FETCH) && ccqt_kind(unatomic_obj_type) == CC_POINTER){
+            CcQualType delta_type = expr->values[0]->type;
+            _Bool delta_unsigned = 0;
+            if(ccqt_is_basic(delta_type))
+                delta_unsigned = ccbt_is_unsigned(delta_type.basic.kind, !ci_target(ci)->char_is_signed);
+            int64_t delta = ci_read_int_any(val_buf, val_sz, delta_unsigned);
+            uint32_t elem_sz;
+            err = cc_sizeof_as_uint(&ci->parser, ccqt_as_ptr(unatomic_obj_type)->pointee, expr->loc, &elem_sz);
+            if(err) return err;
+            ci_write_uint(val_buf, sz, (uint64_t)delta * elem_sz);
+        }
         #ifdef _MSC_VER
         #define ATOMIC_FETCH_ADD_DISPATCH() \
             switch(sz){ \
@@ -1926,6 +2161,17 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case 8:  *(uint64_t*)result = (uint64_t)_InterlockedExchangeAdd64((volatile long long*)ptr, *(long long*)val_buf); break; \
                 default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
             }
+        /* MSVC ExchangeAdd intrinsics return the old value; add/sub-fetch fix up only the local result. */ \
+        #define ATOMIC_ADD_FETCH_DISPATCH() do { \
+            ATOMIC_FETCH_ADD_DISPATCH(); \
+            switch(sz){ \
+                case 1:  *( uint8_t*)result += *( uint8_t*)val_buf; break; \
+                case 2:  *(uint16_t*)result += *(uint16_t*)val_buf; break; \
+                case 4:  *(uint32_t*)result += *(uint32_t*)val_buf; break; \
+                case 8:  *(uint64_t*)result += *(uint64_t*)val_buf; break; \
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
+            } \
+        } while(0)
         #define ATOMIC_FETCH_SUB_DISPATCH() \
             switch(sz){ \
                 case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedExchangeAdd8((volatile char*)ptr, -(*(char*)val_buf)); break; \
@@ -1934,6 +2180,16 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case 8:  *(uint64_t*)result = (uint64_t)_InterlockedExchangeAdd64((volatile long long*)ptr, -(*(long long*)val_buf)); break; \
                 default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
             }
+        #define ATOMIC_SUB_FETCH_DISPATCH() do { \
+            ATOMIC_FETCH_SUB_DISPATCH(); \
+            switch(sz){ \
+                case 1:  *( uint8_t*)result -= *( uint8_t*)val_buf; break; \
+                case 2:  *(uint16_t*)result -= *(uint16_t*)val_buf; break; \
+                case 4:  *(uint32_t*)result -= *(uint32_t*)val_buf; break; \
+                case 8:  *(uint64_t*)result -= *(uint64_t*)val_buf; break; \
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
+            } \
+        } while(0)
         #else
         #define ATOMIC_FETCH_ADD_DISPATCH() \
             switch(sz){ \
@@ -1941,6 +2197,14 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case 2:  *(uint16_t*)result = __atomic_fetch_add((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
                 case 4:  *(uint32_t*)result = __atomic_fetch_add((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
                 case 8:  *(uint64_t*)result = __atomic_fetch_add((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
+            }
+        #define ATOMIC_ADD_FETCH_DISPATCH() \
+            switch(sz){ \
+                case 1:  *( uint8_t*)result = __atomic_add_fetch(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 2:  *(uint16_t*)result = __atomic_add_fetch((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 4:  *(uint32_t*)result = __atomic_add_fetch((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 8:  *(uint64_t*)result = __atomic_add_fetch((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
                 default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
             }
         #define ATOMIC_FETCH_SUB_DISPATCH() \
@@ -1951,10 +2215,20 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 case 8:  *(uint64_t*)result = __atomic_fetch_sub((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
                 default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
             }
+        #define ATOMIC_SUB_FETCH_DISPATCH() \
+            switch(sz){ \
+                case 1:  *( uint8_t*)result = __atomic_sub_fetch(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 2:  *(uint16_t*)result = __atomic_sub_fetch((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 4:  *(uint32_t*)result = __atomic_sub_fetch((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                case 8:  *(uint64_t*)result = __atomic_sub_fetch((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
+                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
+            }
         #endif
         switch(op){
             case CC_ATOMIC_FETCH_ADD: ATOMIC_FETCH_ADD_DISPATCH(); break;
             case CC_ATOMIC_FETCH_SUB: ATOMIC_FETCH_SUB_DISPATCH(); break;
+            case CC_ATOMIC_ADD_FETCH: ATOMIC_ADD_FETCH_DISPATCH(); break;
+            case CC_ATOMIC_SUB_FETCH: ATOMIC_SUB_FETCH_DISPATCH(); break;
             case CC_ATOMIC_FETCH_AND:
             #ifdef _MSC_VER
                 switch(sz){
