@@ -603,6 +603,34 @@ Interpreter-only::md
       if(p)
           *p += 1;
 
+  `__hotswap(original, replacement)`::md
+    Replaces the interpreted function reached by `original` with
+    `replacement` at runtime. Both arguments must be function expressions or
+    function pointers with the same exact function pointer type.
+
+    Returns `0` on success and nonzero on failure.
+
+    Calls to the original function are redirected to the replacement after the
+    swap. This applies to both direct interpreted calls and calls through
+    interpreter-created function pointers. Chained swaps are followed.
+
+    ::pre.C
+      int f(void){ return 1; }
+      int g(void){ return 2; }
+
+      if(__hotswap(f, g) == 0)
+          printf("%d\n", f()); // prints 2
+
+    The replacement must have the same type as the original.
+
+    ::pre.C
+      void old_tick(void){ puts("old"); }
+      void new_tick(void){ puts("new"); }
+
+      void (*fp)(void) = old_tick;
+      __hotswap(fp, new_tick);
+      fp(); // prints "new"
+
   `__shell(program, args...)`::md
     `__shell()` (also spelled `__SHELL__()`) executes a
     command during preprocessing and expands to its stdout as a string literal.

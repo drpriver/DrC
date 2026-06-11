@@ -216,6 +216,7 @@ int main(int argc, char** argv, char** envp){
     }
     LOCK_T_init(&interp.error_lock);
     LOCK_T_init(&interp.atom_lock);
+    LOCK_T_init(&interp.resolve_lock);
     interp.parser.cpp.fc = fc;
     interp.parser.cpp.logger = logger;
     interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();

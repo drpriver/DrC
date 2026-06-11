@@ -1609,6 +1609,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_ALLOCA:
             case CC_EXPR_INTERN:
             case CC_EXPR_SYMBOL:
+            case CC_EXPR_HOTSWAP:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
                 return CC_UNREACHABLE_ERROR;
@@ -1885,6 +1886,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ALLOCA:
                 case CC_EXPR_INTERN:
                 case CC_EXPR_SYMBOL:
+                case CC_EXPR_HOTSWAP:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
                     return CC_UNREACHABLE_ERROR;
@@ -2929,8 +2931,45 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__hotswap:
-                    return cc_unimplemented(p, tok.loc, "TODO");
+                case CC__hotswap:{
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* old_func;
+                    err = cc_parse_assignment_expr(p, vc, &old_func, CCQT_NONE);
+                    if(err) return err;
+                    if(ccqt_kind(old_func->type) == CC_FUNCTION){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, old_func->type, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, old_func, ptr_type, &old_func);
+                        if(err) return err;
+                    }
+                    if(ccqt_kind(old_func->type) != CC_POINTER
+                    || ccqt_kind(ccqt_as_ptr(old_func->type)->pointee) != CC_FUNCTION)
+                        return cc_error(p, old_func->loc, "__hotswap first argument must be a function pointer");
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    CcExpr* new_func;
+                    err = cc_parse_assignment_expr(p, vc, &new_func, CCQT_NONE);
+                    if(err) return err;
+                    if(ccqt_kind(new_func->type) == CC_FUNCTION){
+                        CcQualType ptr_type;
+                        err = cc_pointer_of(p, new_func->type, &ptr_type);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, new_func, ptr_type, &new_func);
+                        if(err) return err;
+                    }
+                    if(new_func->type.bits != old_func->type.bits)
+                        return cc_error(p, new_func->loc, "__hotswap function pointer types must match");
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_HOTSWAP, tok.loc, ccqt_basic(CCBT_int), 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = old_func;
+                    node->values[0] = new_func;
+                    *out = node;
+                    return 0;
+                }
                 case CC__builtin_nanf:
                 case CC__builtin_nan:
                 case CC__nan:{
@@ -4455,6 +4494,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
@@ -5202,6 +5242,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
         case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
             return 1;
         case CC_EXPR_VALUE:
         case CC_EXPR_VARIABLE:
@@ -5410,6 +5451,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_SUBSCRIPT:
         case CC_EXPR_SUB_OVERFLOW:
         case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
@@ -10913,6 +10955,7 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
     if(!f->defined) return CC_UNREACHABLE_ERROR;
     if(f->parsed) return 0;
     Marray(CcToken)* tokens = f->tokens;
+    if(!tokens) return CC_SYNTAX_ERROR;
     // Append EOF sentinel so parsing doesn't fall through to the main stream.
     CcToken eof_tok = {.type = CC_EOF};
     int eof_err = ma_push(CcToken)(tokens, cc_allocator(p), eof_tok);
@@ -12301,6 +12344,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
         case CC_EXPR_UMUL128:
             return 1;
     }

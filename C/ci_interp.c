@@ -32,6 +32,7 @@
 #include "../Drp/bit_util.h"
 #include "../Drp/msb_atomize.h"
 #include "../Drp/switch_macros.h"
+#include "../Drp/atomics.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -89,8 +90,12 @@ ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static int ci_interp_call(CiInterpreter*, CiInterpFrame* caller, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame);
+static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
+static int ci_call_interpreted_func(CiInterpreter*, CiInterpFrame*, CcFunc*, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size);
 static int ci_lookup_symbol(CiInterpreter*, SrcLoc, const char*, CcQualType, void*_Nullable*_Nonnull);
 static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
+static void ci_lock_resolver(CiInterpreter*);
+static void ci_unlock_resolver(CiInterpreter*);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
@@ -591,6 +596,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -1762,22 +1768,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(callee->kind == CC_EXPR_FUNCTION){
             CcFunc* func = callee->func;
             ftype = func->type;
-            if(func->defined){
-                CiInterpFrame* callee_frame = NULL;
-                int err = ci_interp_call(ci, frame, func, expr->values, nargs, result, size, &callee_frame);
-                if(err) return err;
-                while(callee_frame->pc < callee_frame->stmt_count){
-                    err = ci_interp_step(ci, callee_frame);
-                    if(err){
-                        ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
-                        Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
-                        return err;
-                    }
-                }
-                ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
-                Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
-                return 0;
-            }
+            if(func->defined)
+                return ci_call_interpreted_func(ci, frame, func, expr->values, nargs, result, size);
             fn = func->native_func;
             if(!fn)
                 return ci_error(ci, expr->loc, "ICE: function '%s' not resolved before execution",
@@ -1804,22 +1796,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         // Check if this is a closure wrapping an interpreted function.
         {
             CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
-            if(interp_func){
-                CiInterpFrame* callee_frame = NULL;
-                int err = ci_interp_call(ci, frame, interp_func, expr->values, nargs, result, size, &callee_frame);
-                if(err) return err;
-                while(callee_frame->pc < callee_frame->stmt_count){
-                    err = ci_interp_step(ci, callee_frame);
-                    if(err){
-                        ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
-                        Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
-                        return err;
-                    }
-                }
-                ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
-                Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
-                return 0;
-            }
+            if(interp_func)
+                return ci_call_interpreted_func(ci, frame, interp_func, expr->values, nargs, result, size);
         }
         // Native call path: build args, look up CIF, call.
         uint32_t nvarargs = (ftype->is_variadic && nargs > ftype->param_count) ? nargs - ftype->param_count : 0;
@@ -2907,6 +2885,29 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         memcpy(result, &sym, sizeof sym);
         return 0;
     }
+    case CC_EXPR_HOTSWAP: {
+        void (*old_ptr)(void) = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &old_ptr, sizeof old_ptr);
+        if(err) return err;
+        void (*new_ptr)(void) = NULL;
+        err = ci_interp_expr(ci, frame, expr->values[0], &new_ptr, sizeof new_ptr);
+        if(err) return err;
+        int ret = 1;
+        CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
+        CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
+        if(old_func == new_func){
+            ret = 0;
+        }
+        else if(old_func && new_func && old_func->type == new_func->type){
+            drp_atomic_ptr_store(&old_func->hotswap, new_func);
+            ret = 0;
+        }
+        if(result == ci_discard_buf) return 0;
+        if(sizeof ret > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
+        memcpy(result, &ret, sizeof ret);
+        return 0;
+    }
     case CC_EXPR_ALLOCA: {
         uint64_t sz = 0;
         int err = ci_interp_expr(ci, frame, expr->lhs, &sz, sizeof sz);
@@ -3226,6 +3227,42 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
 // Evaluates arguments and sets up parameter storage.
 // Does NOT run the step loop — the caller must drive stepping.
 static
+CcFunc*_Nullable
+ci_hotswap_target(CcFunc* func){
+    for(int depth = 0; func; depth++){
+        CcFunc* next = drp_atomic_ptr_load(&func->hotswap);
+        if(!next) break;
+        if(depth >= 32) return NULL;
+        func = next;
+    }
+    return func;
+}
+
+static
+int
+ci_call_interpreted_func(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size){
+    SrcLoc loc = func->loc;
+    CcFunc* target = ci_hotswap_target(func);
+    if(!target)
+        return ci_error(ci, loc, "hotswap cycle detected");
+    func = target;
+    CiInterpFrame* callee_frame = NULL;
+    int err = ci_interp_call(ci, caller, func, args, nargs, result, size, &callee_frame);
+    if(err) return err;
+    while(callee_frame->pc < callee_frame->stmt_count){
+        err = ci_interp_step(ci, callee_frame);
+        if(err){
+            ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
+            Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+            return err;
+        }
+    }
+    ci_free_alloca_list(ci_allocator(ci), callee_frame->alloca_list);
+    Allocator_free(ci_allocator(ci), callee_frame, sizeof(CiInterpFrame) + callee_frame->data_length);
+    return 0;
+}
+
+static
 int
 ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_Nonnull* _Nonnull args, uint32_t nargs, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull out_frame){
     int err;
@@ -3295,6 +3332,10 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return CI_SYMBOL_NOT_FOUND;
+    CcFunc* target = ci_hotswap_target(func);
+    if(!target)
+        return ci_error(ci, (SrcLoc){0}, "hotswap cycle detected");
+    func = target;
     if(!func->parsed)
         return CI_SYMBOL_UNRESOLVED;
     CcFunction* ftype = func->type;
@@ -3419,6 +3460,8 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
     ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
 
+    int ret = 0;
+    ci_lock_resolver(ci);
     CcSymbol sym;
     if(cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym)){
         switch(sym.kind){
@@ -3426,7 +3469,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
                 CcFunc* func = sym.func;
                 CcQualType func_type = {.bits = (uintptr_t)func->type};
                 if(func_type.bits != expected.bits)
-                    return 0;
+                    goto done;
                 if(!func->defined){
                     if(!func->native_func){
                         LongString fsym = func->mangle
@@ -3434,30 +3477,30 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
                             : (LongString){func->name->length, func->name->data};
                         void* addr = NULL;
                         int err = ci_try_dlsym(ci, fsym, &addr);
-                        if(err) return err;
-                        if(!addr) return 0;
+                        if(err){ ret = err; goto done; }
+                        if(!addr) goto done;
                         func->native_func = (void(*)(void))addr;
                     }
                     *out = (void*)func->native_func;
-                    return 0;
+                    goto done;
                 }
                 if(func->defined)
                     func->addr_taken = 1;
                 int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
-                if(err) return CI_OOM_ERROR;
+                if(err){ ret = CI_OOM_ERROR; goto done; }
                 err = ci_resolve_refs(ci, 0);
-                if(err) return err;
+                if(err){ ret = err; goto done; }
                 if(!func->native_func)
-                    return ci_error(ci, loc, "__symbol: function '%s' has no address", name);
+                    { ret = ci_error(ci, loc, "__symbol: function '%s' has no address", name); goto done; }
                 *out = (void*)func->native_func;
-                return 0;
+                goto done;
             }
             case CC_SYM_VAR: {
                 CcVariable* var = sym.var;
                 if(var->type.bits != expected.bits)
-                    return 0;
+                    goto done;
                 if(var->automatic)
-                    return 0;
+                    goto done;
                 if(var->extern_ && !var->initializer){
                     if(!var->interp_val){
                         LongString vsym = var->mangle
@@ -3465,29 +3508,30 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, const char* name, CcQualType exp
                             : (LongString){var->name->length, var->name->data};
                         void* addr = NULL;
                         int err = ci_try_dlsym(ci, vsym, &addr);
-                        if(err) return err;
-                        if(!addr) return 0;
+                        if(err){ ret = err; goto done; }
+                        if(!addr) goto done;
                         var->interp_val = addr;
                     }
                     *out = var->interp_val;
-                    return 0;
+                    goto done;
                 }
                 int err = PM_put(&ci->parser.used_vars, ci_allocator(ci), var, var);
-                if(err) return CI_OOM_ERROR;
+                if(err){ ret = CI_OOM_ERROR; goto done; }
                 err = ci_resolve_refs(ci, 0);
-                if(err) return err;
+                if(err){ ret = err; goto done; }
                 if(!var->interp_val)
-                    return ci_error(ci, loc, "__symbol: variable '%s' has no storage", name);
+                    { ret = ci_error(ci, loc, "__symbol: variable '%s' has no storage", name); goto done; }
                 *out = var->interp_val;
-                return 0;
+                goto done;
             }
             case CC_SYM_TYPEDEF:
             case CC_SYM_ENUMERATOR:
-                return 0;
+                goto done;
         }
     }
-    (void)loc;
-    return 0;
+done:
+    ci_unlock_resolver(ci);
+    return ret;
 }
 
 static
@@ -3498,7 +3542,9 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
     if(!libc_only){
         // Add main() as a root if it exists.
         {
-            Atom main_atom = AT_atomize(p->cpp.at, "main", 4);
+            AtomTable* at = ci_lock_atoms(ci);
+            Atom main_atom = AT_atomize(at, "main", 4);
+            ci_unlock_atoms(ci, at);
             if(!main_atom) return CI_OOM_ERROR;
             CcFunc* main_func = cc_scope_lookup_func(&p->global, main_atom, CC_SCOPE_NO_WALK);
             if(main_func && main_func->defined){
@@ -4753,6 +4799,16 @@ void
 ci_unlock_atoms(CiInterpreter* ci, AtomTable* at){
     ci->parser.cpp.at = at;
     LOCK_T_unlock(&ci->atom_lock);
+}
+static
+void
+ci_lock_resolver(CiInterpreter* ci){
+    LOCK_T_lock(&ci->resolve_lock);
+}
+static
+void
+ci_unlock_resolver(CiInterpreter* ci){
+    LOCK_T_unlock(&ci->resolve_lock);
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -136,7 +136,7 @@ typedef void*_Nullable ThreadReturnValue;
 //          return 0;
 //      }
 //
-#define THREADFUNC(name) ThreadReturnValue (name)(void*_Nullable thread_arg)
+#define THREADFUNC(name) ThreadReturnValue name(void*_Nullable thread_arg)
 typedef THREADFUNC(thread_func);
 
 //

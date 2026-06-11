@@ -62,8 +62,9 @@ struct CiInterpreter {
     AtomMap lib_paths;
     PointerMap(CcFunction*, NativeCallCache*) ffi_cache;
     BidiPointerMap(CcFunc*, void(*)(void)) closure_map;
-    LOCK_T error_lock;
-    LOCK_T atom_lock;
+    LOCK_T error_lock,
+           atom_lock,
+           resolve_lock;
     size_t resolved_variadic,
            resolved_libc,
            resolved_funcs,

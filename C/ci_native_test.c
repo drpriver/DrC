@@ -746,6 +746,7 @@ TestFunction(test_interop){
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -884,6 +885,7 @@ TestFunction(test_interp){
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -991,6 +993,12 @@ TestFunction(test_interp_fail){
             SVI("const char* foo = __shell(\"./hopethisdoesnotexist\");\n"),
             SVI("(test):1:19: error: __SHELL__: './hopethisdoesnotexist' not found in PATH\n"),
         },
+        {
+            "__symbol lazy parse failure", __LINE__,
+            SVI("void bad(void){ nope; }\n"
+                "__symbol(nullptr, \"bad\", void(void))();\n"),
+            SVI("(test):1:17: error: undeclared identifier 'nope'\n"),
+        },
     };
     int err;
     static int idx = 0;
@@ -1031,6 +1039,7 @@ TestFunction(test_interp_fail){
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -1066,6 +1075,7 @@ TestFunction(test_interp_fail){
         if(log_sb.cursor && !log_sb.errored)
             sv = msb_borrow_sv(&log_sb);
         test_expect_equals_sv(tc->expected_msg, sv, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
+        if(err && sv_equals(tc->expected_msg, sv)) err = 0;
         if(err) TEST_stats.failures++;
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);

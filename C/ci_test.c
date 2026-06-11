@@ -798,6 +798,40 @@ TestFunction(test_interpreter){
                "return fp == 0;\n"),
             .exit_code = 1,
         },
+        {
+            "__hotswap direct call", __LINE__,
+            SVI("int f(void){ return 1; }\n"
+               "int g(void){ return 2; }\n"
+               "int err = __hotswap(f, g);\n"
+               "return err ? 99 : f();\n"),
+            .exit_code = 2,
+        },
+        {
+            "__hotswap indirect call", __LINE__,
+            SVI("int f(void){ return 1; }\n"
+               "int g(void){ return 2; }\n"
+               "int (*p)(void) = f;\n"
+               "int err = __hotswap(f, g);\n"
+               "return err ? 99 : p();\n"),
+            .exit_code = 2,
+        },
+        {
+            "__hotswap chain", __LINE__,
+            SVI("int f(void){ return 1; }\n"
+               "int g(void){ return 2; }\n"
+               "int h(void){ return 3; }\n"
+               "__hotswap(f, g);\n"
+               "__hotswap(g, h);\n"
+               "return f();\n"),
+            .exit_code = 3,
+        },
+        {
+            "__hotswap null replacement fails", __LINE__,
+            SVI("int f(void){ return 1; }\n"
+               "int (*p)(void) = 0;\n"
+               "return __hotswap(f, p) != 0;\n"),
+            .exit_code = 1,
+        },
         // Static locals
         {
             "static local", __LINE__,
@@ -5635,6 +5669,8 @@ TestFunction(test_interpreter){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -6015,6 +6051,8 @@ TestFunction(test_interpreter_builtin_headers){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -6402,6 +6440,8 @@ TestFunction(test_cross_target){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -6556,6 +6596,8 @@ TestFunction(test_ci_call_main){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -6751,6 +6793,8 @@ TestFunction(test_ci_call_by_name){
             },
         };
         LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}

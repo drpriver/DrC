@@ -160,6 +160,8 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
         },
     };
     LOCK_T_init(&interp.error_lock);
+    LOCK_T_init(&interp.atom_lock);
+    LOCK_T_init(&interp.resolve_lock);
     interp.parser.cpp.synth_arena.base = al;
     interp.parser.scratch_arena.base = al;
     fc_write_path(fc, "(oom-test)", sizeof "(oom-test)" - 1);

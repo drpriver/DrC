@@ -45,6 +45,7 @@
   * [Native FFI](#native-ffi)
   * [`__argc` / `__argv`](#argc-argv)
   * [`__symbol(module, name, type-name)`](#symbolmodule-name-type-name)
+  * [`__hotswap(original, replacement)`](#hotswaporiginal-replacement)
   * [`__shell(program, args...)`](#shellprogram-args)
   * [`#pragma lib "name"`](#pragma-lib-name)
   * [`#pragma lib_path "path"`](#pragma-libpath-path)
@@ -844,6 +845,40 @@ int counter;
 int* p = __symbol(NULL, "counter", typeof(*p));
 if(p)
     *p += 1;
+```
+
+### `__hotswap(original, replacement)`
+
+Replaces the interpreted function reached by `original` with
+`replacement` at runtime. Both arguments must be function expressions or
+function pointers with the same exact function pointer type.
+
+
+Returns `0` on success and nonzero on failure.
+
+
+Calls to the original function are redirected to the replacement after the
+swap. This applies to both direct interpreted calls and calls through
+interpreter-created function pointers. Chained swaps are followed.
+
+```C
+int f(void){ return 1; }
+int g(void){ return 2; }
+
+if(__hotswap(f, g) == 0)
+    printf("%d\n", f()); // prints 2
+```
+
+
+The replacement must have the same type as the original.
+
+```C
+void old_tick(void){ puts("old"); }
+void new_tick(void){ puts("new"); }
+
+void (*fp)(void) = old_tick;
+__hotswap(fp, new_tick);
+fp(); // prints "new"
 ```
 
 ### `__shell(program, args...)`
