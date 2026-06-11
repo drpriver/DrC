@@ -999,6 +999,16 @@ TestFunction(test_interp_fail){
                 "__root_module().symbol(\"bad\", void(void))();\n"),
             SVI("(test):1:17: error: undeclared identifier 'nope'\n"),
         },
+        {
+            "_Type expression rejects declarator name", __LINE__,
+            SVI("_Type T = int name;\n"),
+            SVI("(test):1:11: error: unexpected declarator name 'name' in type expression\n"),
+        },
+        {
+            "_Module.type rejects declarator name", __LINE__,
+            SVI("_Type T = __root_module().type(\"int name\");\n"),
+            SVI("(test):1:26: error: unexpected declarator name 'name' in type expression\n"),
+        },
     };
     int err;
     static int idx = 0;

@@ -580,6 +580,63 @@ cc_parse_type_name(CcParser* p, CcQualType* out, Marray(Atom)* _Nullable param_n
 
 static
 int
+cc_parse_abstract_type_name(CcParser* p, CcQualType* out){
+    CcDeclBase base = {0};
+    int err = cc_parse_declaration_specifier(p, &base);
+    if(err) return err;
+    if(!base.spec.bits && !base.type.bits){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        return cc_error(p, peek.loc, "Expected type name");
+    }
+    err = cc_resolve_specifiers(p, &base);
+    if(err) return err;
+    if(base.spec.sp_infer_type)
+        return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
+    CcQualType head = {0};
+    CcQualType* tail = &head;
+    Atom name = NULL;
+    err = cc_parse_declarator(p, &head, &tail, &name, NULL);
+    if(err) return err;
+    if(name)
+        return cc_error(p, base.loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
+    *tail = base.type;
+    *out = cc_intern_qualtype(p, head);
+    return 0;
+}
+
+static
+int
+cc_parse_type_string(CcParser* p, CcScope* scope, SrcLoc loc, StringView source, CcQualType* out){
+    *out = (CcQualType){0};
+    CcScope* old_current = p->current;
+    int err = 0;
+    p->current = scope;
+    cc_parser_discard_input(p);
+    CppFrame frame = {
+        .txt = source,
+        .file_id = loc.is_actually_a_pointer ? ((SrcLocExp*)((uintptr_t)loc.pointer.bits << 1))->file_id : loc.file_id,
+        .line = loc.is_actually_a_pointer ? ((SrcLocExp*)((uintptr_t)loc.pointer.bits << 1))->line : loc.line,
+        .column = loc.is_actually_a_pointer ? ((SrcLocExp*)((uintptr_t)loc.pointer.bits << 1))->column : loc.column,
+    };
+    err = ma_push(CppFrame)(&p->cpp.frames, p->cpp.allocator, frame);
+    if(err){ err = CC_OOM_ERROR; goto done; }
+    err = cc_parse_abstract_type_name(p, out);
+    if(err) goto done;
+    CcToken tok;
+    err = cc_next_token(p, &tok);
+    if(err) goto done;
+    if(tok.type != CC_EOF)
+        err = cc_error(p, tok.loc, "unexpected token after type name");
+    done:
+    p->current = old_current;
+    cc_parser_discard_input(p);
+    return err;
+}
+
+static
+int
 cc_parse_lambda_body(CcParser* p, CcValueClass vc, SrcLoc loc, CcQualType type, Marray(Atom)* param_names, CcExpr* _Nullable* _Nonnull out){
     int err;
     CcToken tok;
@@ -622,8 +679,13 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
     CcQualType head = {0};
     CcQualType* tail = &head;
     Marray(Atom) param_names = {0};
-    err = cc_parse_declarator(p, &head, &tail, NULL, &param_names);
+    Atom name = NULL;
+    err = cc_parse_declarator(p, &head, &tail, &name, &param_names);
     if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
+    if(name){
+        ma_cleanup(Atom)(&param_names, cc_allocator(p));
+        return cc_error(p, loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
+    }
     *tail = base.type;
     CcQualType type = cc_intern_qualtype(p, head);
     CcToken peek;
@@ -1612,6 +1674,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_HOTSWAP:
             case CC_EXPR_COMPILE:
             case CC_EXPR_MODULE_RUN:
+            case CC_EXPR_MODULE_TYPE:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
                 return CC_UNREACHABLE_ERROR;
@@ -1891,6 +1954,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_HOTSWAP:
                 case CC_EXPR_COMPILE:
                 case CC_EXPR_MODULE_RUN:
+                case CC_EXPR_MODULE_TYPE:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
                     return CC_UNREACHABLE_ERROR;
@@ -3641,6 +3705,25 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                         continue;
                     }
+                    if(member_name->length == sizeof "type" - 1 && memcmp(member_name->data, "type", sizeof "type" - 1) == 0){
+                        err = cc_expect_punct(p, '(');
+                        if(err) return err;
+                        CcExpr* name;
+                        err = cc_parse_assignment_expr(p, vc, &name, CCQT_NONE);
+                        if(err) return err;
+                        if(!cc_implicit_convertible(name->type, p->const_char_star))
+                            return cc_error(p, name->loc, "_Module.type first argument must be convertible to const char*");
+                        err = cc_implicit_cast(p, name, p->const_char_star, &name);
+                        if(err) return err;
+                        err = cc_expect_punct(p, ')');
+                        if(err) return err;
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_TYPE, tok.loc, ccqt_basic(CCBT__Type), 1);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        node->values[0] = name;
+                        operand = node;
+                        continue;
+                    }
                     return cc_error(p, member.loc, "no member named '%s'", member_name->data);
                 }
                 if(tk == CC_STRUCT){
@@ -4537,6 +4620,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
@@ -5283,6 +5367,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_INTERN:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
         case CC_EXPR_SYMBOL:
@@ -5498,6 +5583,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
@@ -12415,6 +12501,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_UMUL128:
             return 1;
     }

@@ -417,6 +417,22 @@ fc_get_size(FileCache* fc, size_t* sz){
 
 static
 int
+fc_intern_path(FileCache* fc, uint32_t* out_file_id){
+    int result = FC_OK;
+    CachedFile* f = fc_get_entry(fc);
+    if(!f) f = fc_create_entry(fc);
+    if(!f){
+        result = FC_ERROR_OOM;
+        goto finally;
+    }
+    *out_file_id = (uint32_t)(f - fc->map.data);
+    finally:
+    msb_reset(&fc->path_builder);
+    return result;
+}
+
+static
+int
 fc_cache_file(FileCache* fc, StringView data){
     int result = FC_OK;
     CachedFile* f = fc_get_entry(fc);

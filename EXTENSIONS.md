@@ -866,6 +866,18 @@ if(p)
 ```
 
 
+Use `module.type(source)` to parse a type name string as `_Type` in the
+module's scope. The root module parses in global scope; compiled modules
+can parse their own typedefs, structs, unions, and enums.
+
+```C
+_Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
+_Type T = m.type("struct S");
+if(T.is_struct)
+    printf("%s\n", T.name);
+```
+
+
 Top-level statements can be used for explicit setup.
 
 ```C

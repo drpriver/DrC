@@ -843,6 +843,50 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "__compile owns source", __LINE__,
+            SVI("char src[] = \"const char* f(void){ return \\\"ok\\\"; }\";\n"
+               "_Module m = __compile(src);\n"
+               "if(!m) return 99;\n"
+               "for(int i = 0; src[i]; i++) src[i] = '?';\n"
+               "const char* (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
+               "if(!fp) return 98;\n"
+               "const char* s = fp();\n"
+               "return s[0] == 'o' && s[1] == 'k' && s[2] == 0 ? 7 : 97;\n"),
+            .exit_code = 7,
+        },
+        {
+            "__compile synthetic file", __LINE__,
+            SVI("_Module m = __compile(\"const char* file(void){ return __FILE__; }\");\n"
+               "if(!m) return 99;\n"
+               "const char* (*file)(void) = m.symbol(\"file\", typeof(*file));\n"
+               "if(!file) return 98;\n"
+               "const char* s = file();\n"
+               "return s[0] == '<' && s[1] == '_' && s[2] == '_' && s[3] == 'c' ? 7 : 97;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module.type root", __LINE__,
+            SVI("_Type T = __root_module().type(\"int*\");\n"
+               "return T.is_pointer && T.pointee == int ? 7 : 99;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module.type module typedef", __LINE__,
+            SVI("_Module m = __compile(\"typedef int MyInt;\");\n"
+               "if(!m) return 99;\n"
+               "_Type T = m.type(\"MyInt\");\n"
+               "return T == int ? 7 : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module.type module struct", __LINE__,
+            SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\");\n"
+               "if(!m) return 99;\n"
+               "_Type T = m.type(\"struct S\");\n"
+               "return T.is_struct && T.fields == 1 ? 7 : 98;\n"),
+            .exit_code = 7,
+        },
+        {
             "__hotswap direct call", __LINE__,
             SVI("int f(void){ return 1; }\n"
                "int g(void){ return 2; }\n"

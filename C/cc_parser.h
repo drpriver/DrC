@@ -225,6 +225,7 @@ static int cc_register_pragmas(CcParser*);
 static int cc_register_extern_var(CcParser*, StringView name, CcQualType type);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
+static int cc_parse_type_string(CcParser*, CcScope*, SrcLoc loc, StringView source, CcQualType*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
 

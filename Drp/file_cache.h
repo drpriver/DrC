@@ -59,6 +59,9 @@ static int fc_get_size(FileCache*, size_t* sz);
 // Still need to go through the `fc_write_path` API.
 // Returns FC_ERROR_ALREADY_CACHED if the file is already in the cache.
 static int fc_cache_file(FileCache*, StringView data);
+// Ensures the current path builder contents have a cache entry and returns its
+// index, without caching file data or probing the filesystem.
+static int fc_intern_path(FileCache*, uint32_t* out_file_id);
 
 typedef struct CachedFile CachedFile;
 struct CachedFile {

@@ -56,6 +56,7 @@ struct CiModule {
     CcScope scope;
     CcStatement* _Nullable stmts;
     size_t stmt_count;
+    StringView source;
 };
 
 static char ci_discard_buf[8192];
@@ -101,6 +102,7 @@ static int ci_call_interpreted_func(CiInterpreter*, CiInterpFrame*, CcFunc*, CcE
 static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
 static int ci_compile_module(CiInterpreter*, const char*, CiModule*_Nullable*_Nonnull);
 static int ci_resolve_module(CiInterpreter*, CiModule*);
+static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
 static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
@@ -607,6 +609,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -2941,6 +2944,28 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         memcpy(result, &ret, sizeof ret);
         return 0;
     }
+    case CC_EXPR_MODULE_TYPE: {
+        if(result == ci_discard_buf) return 0;
+        CiModule* module = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
+        if(err) return err;
+        if(module && PM_get(&ci->modules, module) != module)
+            return ci_error(ci, expr->loc, "_Module.type module is not valid");
+        void* name_ptr = NULL;
+        err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
+        if(err) return err;
+        const char* name = name_ptr;
+        if(!name)
+            return ci_error(ci, expr->loc, "_Module.type name must not be NULL");
+        CcQualType type = {0};
+        err = ci_parse_module_type(ci, expr->loc, module, name, &type);
+        if(err) return err;
+        uintptr_t bits = type.bits;
+        if(sizeof bits > size)
+            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof bits, size);
+        memcpy(result, &bits, sizeof bits);
+        return 0;
+    }
     case CC_EXPR_HOTSWAP: {
         void (*old_ptr)(void) = NULL;
         int err = ci_interp_expr(ci, frame, expr->lhs, &old_ptr, sizeof old_ptr);
@@ -3513,6 +3538,13 @@ ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Non
     CiModule* module = Allocator_zalloc(ci_allocator(ci), sizeof *module);
     if(!module) return CI_OOM_ERROR;
     module->scope.parent = &ci->parser.global;
+    size_t source_len = strlen(source);
+    char* source_copy = "";
+    if(source_len){
+        source_copy = Allocator_dupe(ci_allocator(ci), source, source_len);
+        if(!source_copy) return CI_OOM_ERROR;
+    }
+    module->source = (StringView){source_len, source_copy};
 
     CcParser* p = &ci->parser;
     CcScope* old_current = p->current;
@@ -3524,10 +3556,17 @@ ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Non
     cc_parser_discard_input(p);
 
     fc_write_pathf(p->cpp.fc, "<__compile:%zu>", ci->next_module_id++);
-    err = fc_cache_file(p->cpp.fc, (StringView){strlen(source), source});
+    uint32_t file_id = 0;
+    err = fc_intern_path(p->cpp.fc, &file_id);
     if(err) goto done;
-    err = cpp_include_file_via_file_cache(&p->cpp, LS_to_SV(p->cpp.fc->map.data[p->cpp.fc->map.count - 1].path));
-    if(err) goto done;
+    CppFrame frame = {
+        .file_id = file_id,
+        .txt = module->source,
+        .line = 1,
+        .column = 1,
+    };
+    err = ma_push(CppFrame)(&p->cpp.frames, p->cpp.allocator, frame);
+    if(err){ err = CI_OOM_ERROR; goto done; }
     err = cc_parse_all(p);
     if(err) goto done;
     module->stmt_count = p->toplevel_statements.count - old_toplevel_count;
@@ -3586,6 +3625,20 @@ ci_resolve_module(CiInterpreter* ci, CiModule* module){
     ci_lock_resolver(ci);
     int err = ci_resolve_module_unlocked(ci, module);
     ci_unlock_resolver(ci);
+    return err;
+}
+
+static
+int
+ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* source, CcQualType* out){
+    *out = (CcQualType){0};
+    CcParser* p = &ci->parser;
+    int err = 0;
+
+    ci_lock_resolver(ci);
+    err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, (StringView){strlen(source), source}, out);
+    ci_unlock_resolver(ci);
+    (void)loc;
     return err;
 }
 
