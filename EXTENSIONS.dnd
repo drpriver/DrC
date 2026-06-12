@@ -618,15 +618,27 @@ Interpreter-only::md
       if(p)
           *p += 1;
 
-    Use `module.type(source)` to parse a type name string as `_Type` in the
+    Use `module.parse_type(source)` to parse a type name string as `_Type` in the
     module's scope. The root module parses in global scope; compiled modules
     can parse their own typedefs, structs, unions, and enums.
 
     ::pre.C
       _Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
-      _Type T = m.type("struct S");
+      _Type T = m.parse_type("struct S");
       if(T.is_struct)
           printf("%s\n", T.name);
+
+    Modules expose declarations through reflection. Counts
+    return `size_t`; entries return `_ModuleMember`, whose fields are
+    `name`, `name_length`, `type`, and `address`. `address` is populated
+    for functions and non-automatic variables when resolvable, and is `NULL`
+    for type declarations.
+
+    ::pre.C
+      for(size_t i = 0; i < m.func_count; i++){
+          _ModuleMember f = m.func(i);
+          printf("%.*s : %s\n", (int)f.name_length, f.name, f.type.name);
+      }
 
     Top-level statements can be used for explicit setup.
 

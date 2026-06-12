@@ -89,7 +89,8 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_HOTSWAP, // __hotswap(function-pointer, function-pointer) -> int
     CC_EXPR_COMPILE, // __compile(const char*) -> _Module
     CC_EXPR_MODULE_RUN, // _Module.run() -> int
-    CC_EXPR_MODULE_TYPE, // _Module.type(const char*) -> _Type
+    CC_EXPR_MODULE_TYPE, // _Module.parse_type(const char*) -> _Type
+    CC_EXPR_MODULE_REFLECT, // _Module reflection methods/properties; op in extra field
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
     CC_EXPR_UMUL128, // _umul128(a, b, &high) -> low
 };
@@ -181,6 +182,17 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
 };
 TYPEDEF_ENUM(CcTypeIntrospectionOp, uint32_t);
 
+enum CcModuleOp TYPED_ENUM(uint32_t) {
+    CC_MODULE_NONE = 0,
+    CC_MODULE_FUNC_COUNT,
+    CC_MODULE_FUNC,
+    CC_MODULE_VAR_COUNT,
+    CC_MODULE_VAR,
+    CC_MODULE_TYPE_COUNT,
+    CC_MODULE_TYPE,
+};
+TYPEDEF_ENUM(CcModuleOp, uint32_t);
+
 typedef struct CcStatement CcStatement;
 typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
@@ -260,6 +272,13 @@ struct CcExpr {
             uint32_t is_lvalue: 1;
             uint32_t _pad;
         } type_introspection;
+        struct {
+            CcExprKind kind: 8;
+            CcModuleOp op: 8;
+            uint32_t _padding:15;
+            uint32_t is_lvalue: 1;
+            uint32_t _pad;
+        } module;
     };
     SrcLoc loc;
     CcQualType type;

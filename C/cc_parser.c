@@ -1675,6 +1675,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_COMPILE:
             case CC_EXPR_MODULE_RUN:
             case CC_EXPR_MODULE_TYPE:
+            case CC_EXPR_MODULE_REFLECT:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
                 return CC_UNREACHABLE_ERROR;
@@ -1955,6 +1956,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_COMPILE:
                 case CC_EXPR_MODULE_RUN:
                 case CC_EXPR_MODULE_TYPE:
+                case CC_EXPR_MODULE_REFLECT:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
                     return CC_UNREACHABLE_ERROR;
@@ -3705,14 +3707,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                         continue;
                     }
-                    if(member_name->length == sizeof "type" - 1 && memcmp(member_name->data, "type", sizeof "type" - 1) == 0){
+                    if(member_name->length == sizeof "parse_type" - 1 && memcmp(member_name->data, "parse_type", sizeof "parse_type" - 1) == 0){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         CcExpr* name;
                         err = cc_parse_assignment_expr(p, vc, &name, CCQT_NONE);
                         if(err) return err;
                         if(!cc_implicit_convertible(name->type, p->const_char_star))
-                            return cc_error(p, name->loc, "_Module.type first argument must be convertible to const char*");
+                            return cc_error(p, name->loc, "_Module.parse_type first argument must be convertible to const char*");
                         err = cc_implicit_cast(p, name, p->const_char_star, &name);
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
@@ -3721,6 +3723,54 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         if(!node) return CC_OOM_ERROR;
                         node->lhs = operand;
                         node->values[0] = name;
+                        operand = node;
+                        continue;
+                    }
+                    CcModuleOp module_op = CC_MODULE_NONE;
+                    CcQualType module_result_type = ccqt_basic(cc_target(p)->size_type);
+                    _Bool module_method = 0;
+                    StringView mname = {member_name->length, member_name->data};
+                    if(sv_equals(mname, SV("func_count")))
+                        module_op = CC_MODULE_FUNC_COUNT;
+                    else if(sv_equals(mname, SV("func"))){
+                        module_op = CC_MODULE_FUNC;
+                        module_result_type = p->builtin_module_member;
+                        module_method = 1;
+                    }
+                    else if(sv_equals(mname, SV("var_count")))
+                        module_op = CC_MODULE_VAR_COUNT;
+                    else if(sv_equals(mname, SV("var"))){
+                        module_op = CC_MODULE_VAR;
+                        module_result_type = p->builtin_module_member;
+                        module_method = 1;
+                    }
+                    else if(sv_equals(mname, SV("type_count"))){
+                        module_op = CC_MODULE_TYPE_COUNT;
+                    }
+                    else if(sv_equals(mname, SV("type"))){
+                        module_op = CC_MODULE_TYPE;
+                        module_result_type = p->builtin_module_member;
+                        module_method = 1;
+                    }
+                    if(module_op != CC_MODULE_NONE){
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_REFLECT, tok.loc, module_result_type, module_method ? 1 : 0);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        node->module.op = module_op;
+                        if(module_method){
+                            err = cc_expect_punct(p, '(');
+                            if(err) return err;
+                            CcExpr* idx;
+                            err = cc_parse_assignment_expr(p, vc, &idx, CCQT_NONE);
+                            if(err) return err;
+                            if(!cc_implicit_convertible(idx->type, ccqt_basic(cc_target(p)->size_type)))
+                                return cc_error(p, idx->loc, "_Module reflection index must be convertible to size_t");
+                            err = cc_implicit_cast(p, idx, ccqt_basic(cc_target(p)->size_type), &idx);
+                            if(err) return err;
+                            err = cc_expect_punct(p, ')');
+                            if(err) return err;
+                            node->values[0] = idx;
+                        }
                         operand = node;
                         continue;
                     }
@@ -4621,6 +4671,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
         case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
@@ -5368,6 +5419,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
         case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
         case CC_EXPR_SYMBOL:
@@ -5584,6 +5636,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
         case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
@@ -10814,6 +10867,47 @@ cc_define_builtin_types(CcParser* p){
     }
 
     {
+        struct f {StringView name; CcQualType type; size_t offset;} memberinfos[] = {
+            {SVI("type"), ccqt_basic(CCBT__Type), offsetof(CiRtModuleMember, type)},
+            {SVI("name"), p->const_char_star, offsetof(CiRtModuleMember, name)},
+            {SVI("name_length"), ccqt_basic(cc_target(p)->size_type), offsetof(CiRtModuleMember, name_length)},
+            {SVI("address"), p->void_star, offsetof(CiRtModuleMember, address)},
+        };
+        CcField* fields = Allocator_zalloc(al, (sizeof memberinfos / sizeof memberinfos[0]) * sizeof *fields);
+        if(!fields) return CC_OOM_ERROR;
+        for(size_t i = 0; i < sizeof memberinfos / sizeof memberinfos[0]; i++){
+            struct f* f = &memberinfos[i];
+            Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
+            if(!a) return CC_OOM_ERROR;
+            CcField* field = &fields[i];
+            field->type = f->type;
+            field->name = a;
+            field->offset = (unsigned)f->offset;
+        }
+        Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_ModuleMember");
+        if(!name) return CC_OOM_ERROR;
+        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        if(!s) return CC_OOM_ERROR;
+        *s = (CcStruct){
+            .kind = CC_STRUCT,
+            .name = name,
+            .field_count = sizeof memberinfos / sizeof memberinfos[0],
+            .fields = fields,
+        };
+        err = cc_compute_struct_layout(p, s, 0);
+        if(err) return err;
+        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        if(err) return CC_OOM_ERROR;
+        p->builtin_module_member = (CcQualType){.bits = (uintptr_t)s};
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_module_member);
+        if(err) return CC_OOM_ERROR;
+        Atom public_name = AT_ATOMIZE(p->cpp.at, "_ModuleMember");
+        if(!public_name) return CC_OOM_ERROR;
+        err = cc_scope_insert_typedef(al, &p->global, public_name, p->builtin_module_member);
+        if(err) return CC_OOM_ERROR;
+    }
+
+    {
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Module");
         if(!name) return CC_OOM_ERROR;
         CcStruct* s = Allocator_zalloc(al, sizeof *s);
@@ -12502,6 +12596,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
         case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
             return 1;
     }

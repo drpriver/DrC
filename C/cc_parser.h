@@ -211,6 +211,7 @@ struct CcParser {
                const_void_star,
                builtin_field,
                builtin_enumerator,
+               builtin_module_member,
                builtin_module,
                builtin_va_list,
                builtin_va_list_ptr;
@@ -240,6 +241,14 @@ struct CiRtField {
              bitwidth,
              bitoffset,
              is_bitfield;
+};
+
+typedef struct CiRtModuleMember CiRtModuleMember;
+struct CiRtModuleMember {
+    CcQualType type;
+    const char* name;
+    size_t name_length;
+    void* _Nullable address;
 };
 
 typedef struct CiRtEnumerator CiRtEnumerator;

@@ -1005,8 +1005,8 @@ TestFunction(test_interp_fail){
             SVI("(test):1:11: error: unexpected declarator name 'name' in type expression\n"),
         },
         {
-            "_Module.type rejects declarator name", __LINE__,
-            SVI("_Type T = __root_module().type(\"int name\");\n"),
+            "_Module.parse_type rejects declarator name", __LINE__,
+            SVI("_Type T = __root_module().parse_type(\"int name\");\n"),
             SVI("(test):1:26: error: unexpected declarator name 'name' in type expression\n"),
         },
     };

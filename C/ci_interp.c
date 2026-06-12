@@ -103,6 +103,7 @@ static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const ch
 static int ci_compile_module(CiInterpreter*, const char*, CiModule*_Nullable*_Nonnull);
 static int ci_resolve_module(CiInterpreter*, CiModule*);
 static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
+static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
 static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
@@ -610,6 +611,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_RUN:
         case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
@@ -2950,13 +2952,13 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
         if(err) return err;
         if(module && PM_get(&ci->modules, module) != module)
-            return ci_error(ci, expr->loc, "_Module.type module is not valid");
+            return ci_error(ci, expr->loc, "_Module.parse_type module is not valid");
         void* name_ptr = NULL;
         err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
         if(err) return err;
         const char* name = name_ptr;
         if(!name)
-            return ci_error(ci, expr->loc, "_Module.type name must not be NULL");
+            return ci_error(ci, expr->loc, "_Module.parse_type name must not be NULL");
         CcQualType type = {0};
         err = ci_parse_module_type(ci, expr->loc, module, name, &type);
         if(err) return err;
@@ -2965,6 +2967,50 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof bits, size);
         memcpy(result, &bits, sizeof bits);
         return 0;
+    }
+    case CC_EXPR_MODULE_REFLECT: {
+        if(result == ci_discard_buf) return 0;
+        CiModule* module = NULL;
+        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
+        if(err) return err;
+        if(module && PM_get(&ci->modules, module) != module)
+            return ci_error(ci, expr->loc, "_Module reflection module is not valid");
+        size_t idx = 0;
+        switch(expr->module.op){
+            case CC_MODULE_FUNC:
+            case CC_MODULE_VAR:
+            case CC_MODULE_TYPE:
+                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
+                if(err) return err;
+                break;
+            case CC_MODULE_FUNC_COUNT:
+            case CC_MODULE_VAR_COUNT:
+            case CC_MODULE_TYPE_COUNT:
+            case CC_MODULE_NONE:
+                break;
+        }
+        CiRtModuleMember member = {0};
+        err = ci_reflect_module(ci, expr->loc, module, expr->module.op, idx, &member);
+        if(err) return err;
+        switch(expr->module.op){
+            case CC_MODULE_FUNC_COUNT:
+            case CC_MODULE_VAR_COUNT:
+            case CC_MODULE_TYPE_COUNT:
+                if(sizeof member.name_length > size)
+                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof member.name_length, size);
+                memcpy(result, &member.name_length, sizeof member.name_length);
+                return 0;
+            case CC_MODULE_FUNC:
+            case CC_MODULE_VAR:
+            case CC_MODULE_TYPE:
+                if(sizeof member > size)
+                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof member, size);
+                memcpy(result, &member, sizeof member);
+                return 0;
+            case CC_MODULE_NONE:
+                return CI_UNREACHABLE_ERROR;
+        }
+        return CI_UNREACHABLE_ERROR;
     }
     case CC_EXPR_HOTSWAP: {
         void (*old_ptr)(void) = NULL;
@@ -3640,6 +3686,201 @@ ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, c
     ci_unlock_resolver(ci);
     (void)loc;
     return err;
+}
+
+static
+size_t
+ci_count_atom_items(AtomMapItems items){
+    size_t count = 0;
+    for(size_t i = 0; i < items.count; i++)
+        count += items.data[i].p != NULL;
+    return count;
+}
+
+static
+int
+ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModuleMember* out){
+    void* address = NULL;
+    if(!func->defined){
+        if(!func->native_func){
+            LongString fsym = func->mangle
+                ? (LongString){func->mangle->length, func->mangle->data}
+                : (LongString){func->name->length, func->name->data};
+            int err = ci_try_dlsym(ci, fsym, &address);
+            if(err) return err;
+            if(address)
+                func->native_func = (void(*)(void))address;
+        }
+        address = (void*)func->native_func;
+    }
+    else {
+        func->addr_taken = 1;
+        int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
+        if(err) return CI_OOM_ERROR;
+        err = ci_resolve_refs(ci, 0);
+        if(err) return err;
+        address = (void*)func->native_func;
+    }
+    *out = (CiRtModuleMember){
+        .type = (CcQualType){.bits = (uintptr_t)func->type},
+        .name = func->name ? func->name->data : "",
+        .name_length = func->name ? func->name->length : 0,
+        .address = address,
+    };
+    (void)loc;
+    return 0;
+}
+
+static
+int
+ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModuleMember* out){
+    void* address = NULL;
+    if(!var->automatic){
+        if(var->extern_ && !var->initializer){
+            if(!var->interp_val){
+                LongString vsym = var->mangle
+                    ? (LongString){var->mangle->length, var->mangle->data}
+                    : (LongString){var->name->length, var->name->data};
+                int err = ci_try_dlsym(ci, vsym, &address);
+                if(err) return err;
+                if(address)
+                    var->interp_val = address;
+            }
+            address = var->interp_val;
+        }
+        else {
+            int err = PM_put(&ci->parser.used_vars, ci_allocator(ci), var, var);
+            if(err) return CI_OOM_ERROR;
+            err = ci_resolve_refs(ci, 0);
+            if(err) return err;
+            address = var->interp_val;
+        }
+    }
+    *out = (CiRtModuleMember){
+        .type = var->type,
+        .name = var->name ? var->name->data : "",
+        .name_length = var->name ? var->name->length : 0,
+        .address = address,
+    };
+    (void)loc;
+    return 0;
+}
+
+static
+int
+ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
+    AtomMapItems typedefs = AM_items(&scope->typedefs);
+    for(size_t i = 0; i < typedefs.count; i++){
+        if(!typedefs.data[i].p) continue;
+        if(idx--) continue;
+        *out = (CiRtModuleMember){
+            .type = (CcQualType){.bits = (uintptr_t)typedefs.data[i].p},
+            .name = typedefs.data[i].atom ? typedefs.data[i].atom->data : "",
+            .name_length = typedefs.data[i].atom ? typedefs.data[i].atom->length : 0,
+            .address = NULL,
+        };
+        return 0;
+    }
+    AtomMapItems structs = AM_items(&scope->structs);
+    for(size_t i = 0; i < structs.count; i++){
+        if(!structs.data[i].p) continue;
+        if(idx--) continue;
+        CcStruct* s = structs.data[i].p;
+        *out = (CiRtModuleMember){
+            .type = (CcQualType){.bits = (uintptr_t)s},
+            .name = s->name ? s->name->data : "",
+            .name_length = s->name ? s->name->length : 0,
+            .address = NULL,
+        };
+        return 0;
+    }
+    AtomMapItems unions = AM_items(&scope->unions);
+    for(size_t i = 0; i < unions.count; i++){
+        if(!unions.data[i].p) continue;
+        if(idx--) continue;
+        CcUnion* u = unions.data[i].p;
+        *out = (CiRtModuleMember){
+            .type = (CcQualType){.bits = (uintptr_t)u},
+            .name = u->name ? u->name->data : "",
+            .name_length = u->name ? u->name->length : 0,
+            .address = NULL,
+        };
+        return 0;
+    }
+    AtomMapItems enums = AM_items(&scope->enums);
+    for(size_t i = 0; i < enums.count; i++){
+        if(!enums.data[i].p) continue;
+        if(idx--) continue;
+        CcEnum* e = enums.data[i].p;
+        *out = (CiRtModuleMember){
+            .type = (CcQualType){.bits = (uintptr_t)e},
+            .name = e->name ? e->name->data : "",
+            .name_length = e->name ? e->name->length : 0,
+            .address = NULL,
+        };
+        return 0;
+    }
+    return CI_SYMBOL_NOT_FOUND;
+}
+
+static
+int
+ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcModuleOp op, size_t idx, CiRtModuleMember* out){
+    memset(out, 0, sizeof *out);
+    CcScope* scope = module ? &module->scope : &ci->parser.global;
+    int ret = 0;
+    ci_lock_resolver(ci);
+    switch(op){
+        case CC_MODULE_FUNC_COUNT:
+            out->name_length = ci_count_atom_items(AM_items(&scope->functions));
+            break;
+        case CC_MODULE_VAR_COUNT:
+            out->name_length = ci_count_atom_items(AM_items(&scope->variables));
+            break;
+        case CC_MODULE_TYPE_COUNT:
+            out->name_length =
+                ci_count_atom_items(AM_items(&scope->typedefs))
+                + ci_count_atom_items(AM_items(&scope->structs))
+                + ci_count_atom_items(AM_items(&scope->unions))
+                + ci_count_atom_items(AM_items(&scope->enums));
+            break;
+        case CC_MODULE_FUNC: {
+            AtomMapItems items = AM_items(&scope->functions);
+            CcFunc* func = NULL;
+            for(size_t i = 0; i < items.count; i++){
+                if(!items.data[i].p) continue;
+                if(idx--) continue;
+                func = items.data[i].p;
+                break;
+            }
+            if(!func){ ret = ci_error(ci, loc, "_Module.func index out of range"); break; }
+            ret = ci_reflect_func_unlocked(ci, loc, func, out);
+            break;
+        }
+        case CC_MODULE_VAR: {
+            AtomMapItems items = AM_items(&scope->variables);
+            CcVariable* var = NULL;
+            for(size_t i = 0; i < items.count; i++){
+                if(!items.data[i].p) continue;
+                if(idx--) continue;
+                var = items.data[i].p;
+                break;
+            }
+            if(!var){ ret = ci_error(ci, loc, "_Module.var index out of range"); break; }
+            ret = ci_reflect_var_unlocked(ci, loc, var, out);
+            break;
+        }
+        case CC_MODULE_TYPE:
+            ret = ci_reflect_type_from_maps(out, scope, idx);
+            if(ret == CI_SYMBOL_NOT_FOUND)
+                ret = ci_error(ci, loc, "_Module.type index out of range");
+            break;
+        case CC_MODULE_NONE:
+            ret = CI_UNREACHABLE_ERROR;
+            break;
+    }
+    ci_unlock_resolver(ci);
+    return ret;
 }
 
 static

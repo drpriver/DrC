@@ -865,25 +865,43 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
-            "_Module.type root", __LINE__,
-            SVI("_Type T = __root_module().type(\"int*\");\n"
+            "_Module.parse_type root", __LINE__,
+            SVI("_Type T = __root_module().parse_type(\"int*\");\n"
                "return T.is_pointer && T.pointee == int ? 7 : 99;\n"),
             .exit_code = 7,
         },
         {
-            "_Module.type module typedef", __LINE__,
+            "_Module.parse_type module typedef", __LINE__,
             SVI("_Module m = __compile(\"typedef int MyInt;\");\n"
                "if(!m) return 99;\n"
-               "_Type T = m.type(\"MyInt\");\n"
+               "_Type T = m.parse_type(\"MyInt\");\n"
                "return T == int ? 7 : 98;\n"),
             .exit_code = 7,
         },
         {
-            "_Module.type module struct", __LINE__,
+            "_Module.parse_type module struct", __LINE__,
             SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\");\n"
                "if(!m) return 99;\n"
-               "_Type T = m.type(\"struct S\");\n"
+               "_Type T = m.parse_type(\"struct S\");\n"
                "return T.is_struct && T.fields == 1 ? 7 : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module reflection counts", __LINE__,
+            SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\");\n"
+               "if(!m) return 99;\n"
+               "return m.func_count == 1 && m.var_count == 1 && m.type_count == 2 ? 7 : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module reflection entries", __LINE__,
+            SVI("_Module m = __compile(\"typedef int T; int f(void){return 3;} int x;\");\n"
+               "if(!m) return 99;\n"
+               "_ModuleMember f = m.func(0);\n"
+               "_ModuleMember v = m.var(0);\n"
+               "_ModuleMember t = m.type(0);\n"
+               "if(!f.address || !v.address || t.address) return 98;\n"
+               "return f.type.is_function && v.type == int && t.type == int ? 7 : 96;\n"),
             .exit_code = 7,
         },
         {
