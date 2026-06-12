@@ -59,6 +59,11 @@ for(int step = 0; step < STEPS; step++){
     }
     memcpy(grid, next, sizeof grid);
     // small delay
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 80000000};
-    nanosleep(&ts, (struct timespec*)0);
+    #ifdef _WIN32
+        extern void Sleep(unsigned);
+        Sleep(80);
+    #else
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 80000000};
+        nanosleep(&ts, (struct timespec*)0);
+    #endif
 }

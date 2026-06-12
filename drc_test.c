@@ -247,9 +247,9 @@ TestFunction(test_samples){
         { __LINE__, LSI("Samples/CLI/minigrep.c"), .syntax_only = 1, },
         { __LINE__, LSI("Samples/CLI/sort.c"), .syntax_only = 1, },
         { __LINE__, LSI("Samples/CLI/wc.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/TUI/life.c"), .syntax_only = 1, .skip=IS_WINDOWS},
-        { __LINE__, LSI("Samples/TUI/mines.c"), .syntax_only = 1, .skip=IS_WINDOWS},
-        { __LINE__, LSI("Samples/TUI/rule110.c"), .syntax_only = 1, .skip=IS_WINDOWS},
+        { __LINE__, LSI("Samples/TUI/life.c"), .syntax_only = 1},
+        { __LINE__, LSI("Samples/TUI/mines.c"), .syntax_only = 1, .skip=IS_WINDOWS}, // uses termios
+        { __LINE__, LSI("Samples/TUI/rule110.c"), .syntax_only = 1},
         {
             __LINE__, LSI("Samples/Simple/vfprintf.c"),
             SVI(
