@@ -512,27 +512,58 @@ repl_builtin_command(CcParser* parser, StringView input){
         DUMP_ALL = DUMP_SYMBOLS | DUMP_MACROS,
     } dump = DUMP_NONE;
 
-    if(sv_iequals(input, SV("help")) || sv_equals(input, SV("?"))){
-        log_printf(l, "[regex] in a command filters the output.\n"
+    if(sv_iequals(input, SV("help")) || sv_equals(input, SV("h")) || sv_equals(input, SV("?"))){
+        log_printf(l, "\r[regex] in a command filters the output.\n"
              "The regex matches the entire symbol name, so pad with .* if you need it.\n"
              "REPL commands:\n"
-             "  help                  - show this message\n"
-             "  dump types    [regex] - dump typedefs, structs, unions, enums\n"
-             "  dump typedefs [regex] - dump typedefs\n"
-             "  dump structs  [regex] - dump struct tags (detailed)\n"
-             "  dump unions   [regex] - dump union tags (detailed)\n"
-             "  dump enums    [regex] - dump enum tags (detailed)\n"
-             "  dump vars     [regex] - dump global variables\n"
-             "  dump funcs    [regex] - dump global functions\n"
-             "  dump macros   [regex] - dump preprocessor macros\n"
-             "  dump symbols  [regex] - dump everything but macros\n"
-             "  dump          [regex] - dump everything\n"
-             "  dump all      [regex] - dump everything\n"
+             "  /help                  - show this message\n"
+             "  /save <filename>       - save the current repl session to filename\n"
+             "  /q, /quit, /exit       - exit\n"
+             "  /dump types    [regex] - dump typedefs, structs, unions, enums\n"
+             "  /dump typedefs [regex] - dump typedefs\n"
+             "  /dump structs  [regex] - dump struct tags (detailed)\n"
+             "  /dump unions   [regex] - dump union tags (detailed)\n"
+             "  /dump enums    [regex] - dump enum tags (detailed)\n"
+             "  /dump vars     [regex] - dump global variables\n"
+             "  /dump funcs    [regex] - dump global functions\n"
+             "  /dump macros   [regex] - dump preprocessor macros\n"
+             "  /dump symbols  [regex] - dump everything but macros\n"
+             "  /dump          [regex] - dump everything\n"
+             "  /dump all      [regex] - dump everything\n"
         );
         return 1;
     }
     StringView tail = {0};
     sv_split1(input, ' ', &input, &tail);
+    if(sv_iequals(input, SV("save"))){
+        input = stripped(tail);
+        if(!input.length)
+            return 1;
+        MStringBuilder sb = {.allocator=MALLOCATOR};
+        MStringBuilder path = {.allocator = MALLOCATOR};
+        for(size_t i = 0; i < parser->cpp.fc->map.count; i++){
+            CachedFile* f = &parser->cpp.fc->map.data[i];
+            if(sv_startswith(LS_to_SV(f->path), SV("(repl"))){
+                msb_sprintf(&sb, "// %s\n", f->path.text);
+                msb_write_str(&sb, f->data.buff, f->data.n_bytes);
+                if(msb_peek(&sb) != '\n')
+                    msb_write_char(&sb, '\n');
+            }
+        }
+        if(sb.errored) goto finish_save;
+        msb_write_str(&path, input.text, input.length);
+        if(path.cursor < 3 || path.data[path.cursor-1] != 'c' || path.data[path.cursor-2] != '.')
+            msb_write_literal(&path, ".c");
+        msb_nul_terminate(&path);
+        if(path.errored) goto finish_save;
+        FileError fe = write_file(path.data, sb.data, sb.cursor);
+        if(fe.errored) goto finish_save;
+        log_printf(l, "\rSaved to '%s'\n", path.data);
+        finish_save:
+        msb_destroy(&sb);
+        msb_destroy(&path);
+        return 1;
+    }
     if(!sv_iequals(input, SV("dump")) && !sv_iequals(input, SV("d")))
         return 1;
     input = stripped(tail);
