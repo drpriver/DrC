@@ -300,7 +300,7 @@ TestFunction(test_samples){
                 "exchange sum:      55 (expected 55)" EOL
                 "fences:            ok" EOL
             ),
-            .skip = IS_WINDOWS,
+            .skip = !IS_POSIX,
         },
         {
             __LINE__, LSI("Samples/POSIX/locking.c"),
@@ -311,11 +311,11 @@ TestFunction(test_samples){
             .skip = IS_WINDOWS,
         },
         { __LINE__, LSI("Samples/POSIX/dirwatch.c"), .syntax_only = 1, .skip = !IS_APPLE}, // TODO: is this supposed to work on linux?
-        { __LINE__, LSI("Samples/POSIX/http_get.c"), .syntax_only = 1, .skip = IS_WINDOWS},
-        { __LINE__, LSI("Samples/POSIX/http_server.c"), .syntax_only = 1, .skip = IS_WINDOWS},
-        { __LINE__, LSI("Samples/POSIX/ls.c"), .syntax_only = 1, .skip = IS_WINDOWS},
-        { __LINE__, LSI("Samples/POSIX/mandelbrot_multithreaded.c"), .syntax_only = 1, .skip = IS_WINDOWS},
-        { __LINE__, LSI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = IS_WINDOWS},
+        { __LINE__, LSI("Samples/POSIX/http_get.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, LSI("Samples/POSIX/http_server.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, LSI("Samples/POSIX/ls.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, LSI("Samples/POSIX/mandelbrot_multithreaded.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, LSI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = !IS_POSIX},
     };
     static int idx = 0;
     int err = 0;
