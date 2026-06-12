@@ -178,8 +178,8 @@ int main(int argc, char** argv, char** envp){
         },
     };
     ArgParser parser = {
-        .name = argv[0]?argv[0]:"cc",
-        .description = "cc",
+        .name = argv[0]?argv[0]:"drc",
+        .description = "C interpreter",
         .positional.args = pos_args,
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
