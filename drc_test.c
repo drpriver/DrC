@@ -239,7 +239,6 @@ TestFunction(test_samples){
             __LINE__, LSI("Samples/Simple/calc.c"),
             SVI( "12" EOL),
             {LSI("3 3 3 * +")},
-            .skip = IS_WINDOWS, // TODO: why is this failing?
         },
         { __LINE__, LSI("Samples/Simple/mandelbrot.c"), .syntax_only = 1, },
         { __LINE__, LSI("Samples/Simple/primes.c"), .syntax_only = 1, },
