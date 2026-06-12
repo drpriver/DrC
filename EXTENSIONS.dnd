@@ -580,13 +580,13 @@ Interpreter-only::md
     This means you can write a script that `#include`s a library's
     headers and immediately starts using it.
 
-  `__argc` / `__argv`::md
-    `__argc` and `__argv` are predeclared globals (`extern int __argc`
-    and `extern char** __argv`) available in both script mode and `main()`.
+  `_Argc` / `_Argv`::md
+    `_Argc` and `_Argv` are predeclared globals (`extern int _Argc`
+    and `extern char** _Argv`) available in both script mode and `main()`.
     They work like standard C `argc`/`argv`.
 
     ::pre.C
-      const char* input = __argc > 1 ? __argv[1] : "default.txt";
+      const char* input = _Argc > 1 ? _Argv[1] : "default.txt";
 
   `_Module` / `__compile(source)`::md
     `_Module` is an opaque interpreter module handle. Internally it is a

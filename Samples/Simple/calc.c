@@ -4,7 +4,7 @@
 
 double stack[64];
 int sp = 0;
-const char* expr = __argc > 1 ? __argv[1] : "3 4 + 2 * 10 3 - /";
+const char* expr = _Argc > 1 ? _Argv[1] : "3 4 + 2 * 10 3 - /";
 char tok[64];
 for(int n; sscanf(expr, "%63s%n", tok, &n) == 1; expr += n){
     if(sp >= 2 && tok[1] == '\0' && (*tok=='+' || *tok=='-' || *tok=='*' || *tok=='/')){

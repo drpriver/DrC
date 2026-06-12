@@ -93,10 +93,10 @@ TestFunction(test_snippets){
             ),
         },
         {
-            "__argc/__argv/argc/argv", __LINE__,
+            "_Argc/_Argv/argc/argv", __LINE__,
             .program = LSI(
                 "#include <stdio.h>\n"
-                "for(int i = 1; i < __argc; i++) puts(__argv[i]);\n"
+                "for(int i = 1; i < _Argc; i++) puts(_Argv[i]);\n"
                 "puts(\"---\");\n"
                 "int main(int argc, char** argv){\n"
                 "   for(int i = 1; i < argc; i++) puts(argv[i]);\n"
@@ -112,10 +112,10 @@ TestFunction(test_snippets){
             ),
         },
         {
-            "__argc/__argv/argc/argv", __LINE__,
+            "_Argc/_Argv/argc/argv", __LINE__,
             .program = LSI(
                 "#include <stdio.h>\n"
-                "for(int i = 1; i < __argc; i++) puts(__argv[i]);\n"
+                "for(int i = 1; i < _Argc; i++) puts(_Argv[i]);\n"
                 "puts(\"---\");\n"
                 "int main(int argc, char** argv){\n"
                 "   for(int i = 1; i < argc; i++) puts(argv[i]);\n"

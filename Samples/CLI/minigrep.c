@@ -6,8 +6,8 @@
 // Supports: . * + ? | () [] [^] ^ $
 //   Bin/cc ./minigrep < file.txt
 
-const char* pattern = __argc > 1 ? __argv[1] : ".*";
-const char* input = __argc > 2 ? __argv[2] : NULL;
+const char* pattern = _Argc > 1 ? _Argv[1] : ".*";
+const char* input = _Argc > 2 ? _Argv[2] : NULL;
 
 // --- NFA compiler ---
 

@@ -6,8 +6,8 @@
 _Static_assert(0, "This only works on macos");
 __builtin_abort();
 #endif
-int __argc;
-const char** __argv;
+int _Argc;
+const char** _Argv;
 
 #include <CoreFoundation/CFCGTypes.h>
 #pragma framework "Cocoa"
@@ -203,7 +203,7 @@ void appDidFinishLaunching(id self, SEL _cmd, id note){
     ((void(*)(id, SEL, CGSize))objc_msgSend)(window, sel("setMinSize:"), minSize);
 
     // Open file from command line argument if given
-    const char* initialPath = __argc > 1 ? __argv[1] : NULL;
+    const char* initialPath = _Argc > 1 ? _Argv[1] : NULL;
     if(initialPath){
         id contents = nsstr_from_file(initialPath);
         if(contents){
@@ -224,8 +224,8 @@ _Bool appShouldTerminate(id self, SEL _cmd, id app){ return 1; }
 
 int main(int argc, const char** argv){
     #ifndef __DRC__
-    __argc = argc;
-    __argv = argv;
+    _Argc = argc;
+    _Argv = argv;
     #endif
     // Create the AppDelegate class
     Class AppDelegate = objc_allocateClassPair( (Class)objc_getClass("NSObject"), "AppDelegate", 0);

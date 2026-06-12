@@ -43,7 +43,7 @@
   * [`#pragma typedef`](#pragma-typedef)
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
-  * [`__argc` / `__argv`](#argc-argv)
+  * [`_Argc` / `_Argv`](#argc-argv)
   * [`_Module` / `__compile(source)`](#module-compilesource)
   * [`__hotswap(original, replacement)`](#hotswaporiginal-replacement)
   * [`__shell(program, args...)`](#shellprogram-args)
@@ -818,14 +818,14 @@ loaded native libraries at call time using libffi.
 This means you can write a script that `#include`s a library's
 headers and immediately starts using it.
 
-### `__argc` / `__argv`
+### `_Argc` / `_Argv`
 
-`__argc` and `__argv` are predeclared globals (`extern int __argc`
-and `extern char** __argv`) available in both script mode and `main()`.
+`_Argc` and `_Argv` are predeclared globals (`extern int _Argc`
+and `extern char** _Argv`) available in both script mode and `main()`.
 They work like standard C `argc`/`argv`.
 
 ```C
-const char* input = __argc > 1 ? __argv[1] : "default.txt";
+const char* input = _Argc > 1 ? _Argv[1] : "default.txt";
 ```
 
 ### `_Module` / `__compile(source)`

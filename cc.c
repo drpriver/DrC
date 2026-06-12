@@ -223,7 +223,7 @@ int main(int argc, char** argv, char** envp){
     interp.parser.eager_parsing = eager;
     err = cpp_define_builtin_macros(&interp.parser.cpp);
     if(err) goto stringify_error;
-    // __argc, __argv and args to main
+    // _Argc, _Argv and args to main
     static int script_argc;
     static char* script_argv_storage[MAX_PROG_ARGS + 2];
     static char** script_argv = script_argv_storage;
@@ -256,13 +256,13 @@ int main(int argc, char** argv, char** envp){
         if(err) goto stringify_error;
         err = cc_pointer_of(&interp.parser, char_star, &char_star_star);
         if(err) goto stringify_error;
-        err = cc_register_extern_var(&interp.parser, SV("__argc"), ccqt_basic(CCBT_int));
+        err = cc_register_extern_var(&interp.parser, SV("_Argc"), ccqt_basic(CCBT_int));
         if(err) goto stringify_error;
-        err = cc_register_extern_var(&interp.parser, SV("__argv"), char_star_star);
+        err = cc_register_extern_var(&interp.parser, SV("_Argv"), char_star_star);
         if(err) goto stringify_error;
-        err = ci_register_sym(&interp, SV("builtins"), SV("__argc"), &script_argc);
+        err = ci_register_sym(&interp, SV("builtins"), SV("_Argc"), &script_argc);
         if(err) goto stringify_error;
-        err = ci_register_sym(&interp, SV("builtins"), SV("__argv"), &script_argv);
+        err = ci_register_sym(&interp, SV("builtins"), SV("_Argv"), &script_argv);
         if(err) goto stringify_error;
         // This is kind of a hack, but on some platforms, certain symbols are provided
         // only in the static crt for whatever reason. So there is no symbol for us
