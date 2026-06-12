@@ -361,6 +361,19 @@ C::md
       _Type T = int;
       if(T.is_integer) printf("yes\n");
 
+    `_Type` values can also be used in `switch` statements. Case labels are
+    constant `_Type` expressions. In most reflective code, switch on `.unqual`
+    so `const`, `volatile`, and `_Atomic` qualifiers do not affect dispatch.
+
+    ::pre.C
+      const char* type_kind(_Type T){
+          switch(T.unqual){
+              case int: return "int";
+              case char*: return "char pointer";
+              default: return "other";
+          }
+      }
+
     Properties::md
       ::table
         Property | Type | Description

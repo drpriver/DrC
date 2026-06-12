@@ -125,6 +125,30 @@ TestFunction(test_snippets){
                 "---" EOL
             ),
         },
+        {
+            "switch _Type", __LINE__,
+            .program = LSI(
+                "#include <stdio.h>\n"
+                "const char* name(_Type T){\n"
+                "    switch(T){\n"
+                "        case int: return \"int\";\n"
+                "        case char*: return \"char*\";\n"
+                "        default: return \"other\";\n"
+                "    }\n"
+                "}\n"
+                "puts(name(int));\n"
+                "puts(name(char*));\n"
+                "puts(name(double));\n"
+                "_Type P = int*;\n"
+                "puts(name(P.pointee));\n"
+            ),
+            .expected_output=SVI(
+                "int" EOL
+                "char*" EOL
+                "other" EOL
+                "int" EOL
+            ),
+        },
     };
     static int idx = 0;
     int err = 0;

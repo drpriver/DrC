@@ -8907,6 +8907,7 @@ cc_backpatch_break(CcParser* p, size_t body_start, uint32_t break_target){
 typedef struct CcSwitchCtx CcSwitchCtx;
 struct CcSwitchCtx {
     Marray(CcSwitchEntry) entries;
+    CcQualType type;
     uint32_t default_target;
     _Bool has_default;
 };
@@ -9305,8 +9306,8 @@ cc_parse_statement(CcParser* p){
                         CcQualType st = switch_expr->type;
                         if(!ccqt_is_basic(st) && ccqt_kind(st) == CC_ENUM)
                             st = ccqt_as_enum(st)->underlying;
-                        if(!ccqt_is_basic(st) || !ccbt_is_integer(st.basic.kind))
-                            return cc_error(p, tok.loc, "switch requires integer expression");
+                        if(!ccqt_is_basic(st) || (!ccbt_is_integer(st.basic.kind) && st.basic.kind != CCBT__Type))
+                            return cc_error(p, tok.loc, "switch requires integer or _Type expression");
                         if(st.basic.kind == CCBT_int128 || st.basic.kind == CCBT_unsigned_int128)
                             return cc_error(p, tok.loc, "__int128 is not supported in switch");
                     }
@@ -9322,7 +9323,7 @@ cc_parse_statement(CcParser* p){
                     }
                     // Parse switch body
                     {
-                        CcSwitchCtx ctx = {0};
+                        CcSwitchCtx ctx = {.type = switch_expr->type};
                         CcSwitchCtx* prev_ctx = p->switch_ctx;
                         p->switch_ctx = &ctx;
                         p->loop_depth++; // for break
@@ -9380,12 +9381,28 @@ cc_parse_statement(CcParser* p){
                     if(err) return err;
                     err = cc_expect_punct(p, ':');
                     if(err) return err;
-                    int64_t case_i;
-                    err = cc_eval_integer(p, case_expr, &case_i);
-                    cc_release_expr(p, case_expr);
-                    if(err)
-                        return cc_error(p, tok.loc, "case label must be a constant integer expression");
-                    uint64_t case_val = (uint64_t)case_i;
+                    uint64_t case_val;
+                    if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
+                        CcExpr* case_val_expr;
+                        err = cc_eval_expr(p, case_expr, &case_val_expr);
+                        cc_release_expr(p, case_expr);
+                        if(err)
+                            return cc_error(p, tok.loc, "case label must be a constant _Type expression");
+                        if(!ccqt_bt_eq(case_val_expr->type, CCBT__Type)){
+                            cc_release_expr(p, case_val_expr);
+                            return cc_error(p, tok.loc, "case label type does not match _Type switch expression");
+                        }
+                        case_val = case_val_expr->type_value.bits;
+                        cc_release_expr(p, case_val_expr);
+                    }
+                    else {
+                        int64_t case_i;
+                        err = cc_eval_integer(p, case_expr, &case_i);
+                        cc_release_expr(p, case_expr);
+                        if(err)
+                            return cc_error(p, tok.loc, "case label must be a constant integer expression");
+                        case_val = (uint64_t)case_i;
+                    }
                     Marray(CcStatement)* stmts = p->current_func
                         ? &p->current_func->body
                         : &p->toplevel_statements;

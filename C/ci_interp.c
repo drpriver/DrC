@@ -54,8 +54,7 @@ LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 
 struct CiModule {
     CcScope scope;
-    CcStatement* _Nullable stmts;
-    size_t stmt_count;
+    Marray(CcStatement) stmts;
     StringView source;
 };
 
@@ -84,6 +83,8 @@ struct CiAapcs64VaList {
 };
 static Allocator ci_allocator(CiInterpreter*);
 static Allocator ci_scratch_allocator(CiInterpreter*);
+
+static Allocator cc_allocator(CcParser*);
 
 static
 void
@@ -2925,8 +2926,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(err) return err;
             CiInterpFrame module_frame = {
                 .parent = frame,
-                .stmts = module->stmts,
-                .stmt_count = module->stmt_count,
+                .stmts = module->stmts.data,
+                .stmt_count = module->stmts.count,
                 .return_buf = ci_discard_buf,
                 .return_size = sizeof ci_discard_buf,
             };
@@ -3310,8 +3311,9 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             uint64_t val = 0;
             int err = ci_interp_expr(ci, frame,stmt->switch_expr, &val, sizeof val);
             if(err) return err;
-            // Sign-extend or zero-extend to 64 bits based on the switch expression type.
-            {
+            // Sign-extend or zero-extend integer switches to 64 bits.
+            // _Type switches already produce the canonical type bits.
+            if(!ccqt_bt_eq(stmt->switch_expr->type, CCBT__Type)){
                 CcQualType st = stmt->switch_expr->type;
                 uint32_t ssz;
                 err = cc_sizeof_as_uint(&ci->parser, st, stmt->loc, &ssz);
@@ -3580,24 +3582,32 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
 static
 int
 ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Nonnull out){
+    int err = 0;
     *out = NULL;
+    ci_lock_resolver(ci);
+    CcParser* p = &ci->parser;
+    _Bool eager = p->eager_parsing;
+    CcScope* old_current = p->current;
+    Marray(CcStatement) old = p->toplevel_statements;
+
     CiModule* module = Allocator_zalloc(ci_allocator(ci), sizeof *module);
-    if(!module) return CI_OOM_ERROR;
+    if(!module){
+        err = CI_OOM_ERROR;
+        goto done;
+    }
     module->scope.parent = &ci->parser.global;
     size_t source_len = strlen(source);
     char* source_copy = "";
     if(source_len){
+        // TODO: maybe this should just go through the file cache?
         source_copy = Allocator_dupe(ci_allocator(ci), source, source_len);
-        if(!source_copy) return CI_OOM_ERROR;
+        if(!source_copy){
+            err = CI_OOM_ERROR;
+            goto done;
+        }
     }
     module->source = (StringView){source_len, source_copy};
-
-    CcParser* p = &ci->parser;
-    CcScope* old_current = p->current;
-    size_t old_toplevel_count = p->toplevel_statements.count;
-    int err = 0;
-
-    ci_lock_resolver(ci);
+    p->toplevel_statements = module->stmts;
     p->current = &module->scope;
     cc_parser_discard_input(p);
 
@@ -3613,27 +3623,10 @@ ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Non
     };
     err = ma_push(CppFrame)(&p->cpp.frames, p->cpp.allocator, frame);
     if(err){ err = CI_OOM_ERROR; goto done; }
+    p->eager_parsing = 1;
     err = cc_parse_all(p);
+    module->stmts = p->toplevel_statements;
     if(err) goto done;
-    module->stmt_count = p->toplevel_statements.count - old_toplevel_count;
-    if(module->stmt_count){
-        size_t sz = module->stmt_count * sizeof *module->stmts;
-        module->stmts = Allocator_alloc(ci_allocator(ci), sz);
-        if(!module->stmts){
-            err = CI_OOM_ERROR;
-            goto done;
-        }
-        memcpy(module->stmts, p->toplevel_statements.data + old_toplevel_count, sz);
-    }
-    p->toplevel_statements.count = old_toplevel_count;
-
-    AtomMapItems funcs = AM_items(&module->scope.functions);
-    for(size_t i = 0; i < funcs.count; i++){
-        CcFunc* func = funcs.data[i].p;
-        if(!func || !func->defined || func->parsed) continue;
-        err = cc_parse_func_body(p, func);
-        if(err) goto done;
-    }
 
     err = PM_put(&ci->modules, ci_allocator(ci), module, module);
     if(err){
@@ -3642,10 +3635,15 @@ ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Non
     }
     *out = module;
     done:
+    p->eager_parsing = eager;
     p->current = old_current;
-    p->toplevel_statements.count = old_toplevel_count;
-    if(err)
+    p->toplevel_statements = old;
+    if(err){
         cc_parser_discard_input(p);
+        ma_cleanup(CcStatement)(&module->stmts, cc_allocator(p));
+        // XXX: cleanup module
+        //   probably just its scope and its storage itself.
+    }
     ci_unlock_resolver(ci);
     return err;
 }
@@ -3662,6 +3660,7 @@ ci_resolve_module_unlocked(CiInterpreter* ci, CiModule* module){
         int err = PM_put(&ci->parser.used_vars, al, var, var);
         if(err) return CI_OOM_ERROR;
     }
+    // XXX: why do we only iterate over vars?
     return ci_resolve_refs(ci, 0);
 }
 

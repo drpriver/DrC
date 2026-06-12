@@ -4973,7 +4973,7 @@ TestFunction(test_parse_errors){
         {
             "switch float", __LINE__,
             SVI("switch(1.0){}\n"),
-            SVI("(test):1:1: error: switch requires integer expression\n"),
+            SVI("(test):1:1: error: switch requires integer or _Type expression\n"),
         },
         {
             "duplicate case", __LINE__,
