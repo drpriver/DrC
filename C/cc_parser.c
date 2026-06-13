@@ -3107,6 +3107,12 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
         }
         case CC_PUNCTUATOR:
             if(tok.punct.punct == CC_lparen){
+                CcToken peek;
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '{'){
+                    return cc_error(p, peek.loc, "GNU statement-expressions are unsupported");
+                }
                 CcExpr* inner;
                 err = cc_parse_expr(p, vc, &inner);
                 if(err) return err;

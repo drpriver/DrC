@@ -1,4 +1,4 @@
-#include <std.h>
+#include <stdio.h>
 enum {W=80};
 enum {STEPS=60};
 unsigned char cells[W];
