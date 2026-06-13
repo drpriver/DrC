@@ -392,6 +392,10 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
             *out = ccqt_as_array(t)->element;
             return 0;
         }
+        if(kind == CC_SLICE){
+            *out = ccqt_as_slice(t)->pointee;
+            return 0;
+        }
     }
     return cc_error(p, loc, "dereferencing non-pointer type");
 }
@@ -852,6 +856,13 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             *out = node;
             return 0;
         }
+        case CC_SLICE:{
+            CcExpr* node = cc_value_expr(p, loc, size_type);
+            if(!node) return CC_OOM_ERROR;
+            node->uinteger = 2*tgt->sizeof_[CCBT_nullptr_t]; // struct {uintptr len; T* data;}
+            *out = node;
+            return 0;
+        }
         case CC_ARRAY:{
             CcArray* arr = ccqt_as_array(t);
             if(arr->is_vector){
@@ -943,6 +954,7 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
         }
         case CC_BLOCK_POINTER:
         case CC_POINTER:
+        case CC_SLICE:
             align = cfg->alignof_[CCBT_nullptr_t];
             break;
         case CC_ARRAY: {
@@ -995,6 +1007,10 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_BLOCK_POINTER:
         case CC_POINTER: {
             *out = tgt->sizeof_[CCBT_nullptr_t];
+            return 0;
+        }
+        case CC_SLICE: {
+            *out = 2*tgt->sizeof_[CCBT_nullptr_t];
             return 0;
         }
         case CC_ARRAY: {
@@ -1053,6 +1069,7 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             return 0;
         case CC_BLOCK_POINTER:
         case CC_POINTER:
+        case CC_SLICE:
             *out = tgt->alignof_[CCBT_nullptr_t];
             return 0;
         case CC_ARRAY: {
@@ -3426,6 +3443,7 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
         case CC_BLOCK_POINTER:
         case CC_STRUCT:
         case CC_UNION:
+        case CC_SLICE:
             break;
         }
     }
@@ -3620,9 +3638,24 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 continue;
             }
             case CC_lbracket:{
+                CcToken peek;
                 CcExpr* index;
-                err = cc_parse_expr(p, vc, &index);
+                err = cc_peek(p, &peek);
                 if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+                    index = cc_uint64_expr(p, tok.loc, ccqt_basic(cc_target(p)->size_type), 0);
+                    if(!index) return CC_OOM_ERROR;
+                    // don't advance cursor, just insert a 0
+                }
+                else {
+                    err = cc_parse_expr(p, vc, &index);
+                    if(err) return err;
+                }
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+                    return cc_unimplemented(p, peek.loc, "TODO: parse slices");
+                }
                 err = cc_expect_punct(p, CC_rbracket);
                 if(err) return err;
                 {
@@ -3955,6 +3988,19 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                     }
                     continue;
+                }
+                else if(tk == CC_SLICE){
+                    StringView mname = {member_name->length, member_name->data};
+                    if(sv_equals(mname, SV("count")) || sv_equals(mname, SV("length"))){
+                        member_type = ccqt_basic(ccbt_to_unsigned(cc_target(p)->intptr_type));
+                    }
+                    else if(sv_equals(mname, SV("data"))){
+                        err = cc_pointer_of(p, ccqt_as_slice(agg_type)->pointee, &member_type);
+                        if(err) return err;
+                        floc.byte_offset = cc_target(p)->sizeof_[CCBT_nullptr_t];
+                    }
+                    else
+                        return cc_error(p, member.loc, "not a struct or union");
                 }
                 else {
                 }
@@ -4374,6 +4420,14 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
             if(p->restrict_) msb_write_literal(sb, "restrict ");
             return;
         }
+        case CC_SLICE: {
+            if(t.is_const) msb_write_literal(sb, "const ");
+            if(t.is_volatile) msb_write_literal(sb, "volatile ");
+            if(t.is_atomic) msb_write_literal(sb, "_Atomic ");
+            CcSlice* s = ccqt_as_slice(t);
+            cc_print_type_pre(sb, s->pointee);
+            return;
+        }
         case CC_ARRAY: {
             if(t.is_const) msb_write_literal(sb, "const ");
             if(t.is_volatile) msb_write_literal(sb, "volatile ");
@@ -4428,6 +4482,12 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
             if(cc_type_needs_parens(p->pointee))
                 msb_write_char(sb, ')');
             cc_print_type_post(sb, p->pointee);
+            return;
+        }
+        case CC_SLICE:{
+            CcSlice* s = ccqt_as_slice(t);
+            msb_write_literal(sb, "[:]");
+            cc_print_type_post(sb, s->pointee);
             return;
         }
         case CC_ARRAY: {
@@ -4543,6 +4603,15 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                     return;
                 CASES_EXHAUSTED;
             }
+        }
+        case CC_SLICE:{
+            struct {
+                uintptr_t count;
+                void* data;
+            } slice;
+            memcpy(&slice, data, sizeof slice);
+            msb_sprintf(sb, "{%zu, %p}\n", (size_t)slice.count, slice.data);
+            return;
         }
         case CC_BLOCK_POINTER:
         case CC_POINTER: {
@@ -5728,6 +5797,15 @@ cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
 
 static
 int
+cc_slice_of(CcParser* p, CcQualType pointee, CcQualType* out){
+    CcSlice* slice = cc_intern_slice(&p->type_cache, cc_allocator(p), pointee, 0);
+    if(!slice) return CC_OOM_ERROR;
+    *out = (CcQualType){.bits = (uintptr_t)slice};
+    return 0;
+}
+
+static
+int
 cc_block_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0, 1);
     if(!ptr) return CC_OOM_ERROR;
@@ -6213,6 +6291,7 @@ cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type){
         case CC_BASIC:    return tc->sizeof_[type.basic.kind];
         case CC_POINTER:  return tc->sizeof_[CCBT_nullptr_t];
         case CC_BLOCK_POINTER: return tc->sizeof_[CCBT_nullptr_t];
+        case CC_SLICE:    return 2*tc->sizeof_[CCBT_nullptr_t];
         case CC_FUNCTION: return tc->sizeof_[CCBT_nullptr_t];
         case CC_ENUM:     return cc_type_sizeof_assume_complete(tc, ccqt_as_enum(type)->underlying);
         case CC_STRUCT:   return ccqt_as_struct(type)->size;
@@ -6276,6 +6355,13 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
             if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
             return 0;
+        case CC_SLICE: // XXX: idk if this is right.
+            if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
+            if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
+            off += 8;
+            if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
+            if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
+            return 0;
         case CC_ENUM:
             return cc_sysv_classify_type(tc, ccqt_as_enum(type)->underlying, off, cls);
         case CC_STRUCT:
@@ -6318,6 +6404,7 @@ cc_arm64_hfa_check(const CcTargetConfig* tc, CcQualType type, CcBasicTypeKind ba
         case CC_POINTER:
         case CC_FUNCTION:
         case CC_ENUM:
+        case CC_SLICE:
             return CCBT_INVALID;
         case CC_STRUCT:{
             CcStruct* s = ccqt_as_struct(type);
@@ -7504,6 +7591,7 @@ cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_off
     case CC_POINTER:
     case CC_BLOCK_POINTER:
     case CC_FUNCTION:
+    case CC_SLICE:
         return cc_error(p, loc, "cannot initialize type with initializer list");
     }
     return 0;
@@ -8568,6 +8656,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                                     }
                                     break;
                                 }
+                                case CC_SLICE:
                                 case CC_BLOCK_POINTER:
                                 case CC_POINTER:
                                     align_val = cc_target(p)->alignof_[CCBT_nullptr_t];
@@ -9694,71 +9783,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                     case CC_const:    const_    = 1; continue;
                     case CC_volatile: volatile_ = 1; continue;
                     case CC__Atomic:  atomic_   = 1; continue;
-                    case CC__BitInt:
-                    case CC__Complex:
-                    case CC__Countof:
-                    case CC__Decimal128:
-                    case CC__Decimal32:
-                    case CC__Decimal64:
-                    case CC__Float128:
-                    case CC__Float16:
-                    case CC__Float32:
-                    case CC__Float32x:
-                    case CC__Float64:
-                    case CC__Float64x:
-                    case CC__Generic:
-                    case CC__Imaginary:
-                    case CC__Noreturn:
-                    case CC__Type:
-                    case CC__Self:
-                    case CC___attribute__:
-                    case CC___declspec:
-                    case CC___auto_type:
-                    case CC___int128:
-                    case CC_alignas:
-                    case CC_alignof:
-                    case CC_asm:
-                    case CC_auto:
-                    case CC_bool:
-                    case CC_break:
-                    case CC_case:
-                    case CC_char:
-                    case CC_constexpr:
-                    case CC_continue:
-                    case CC_default:
-                    case CC_do:
-                    case CC_double:
-                    case CC_else:
-                    case CC_enum:
-                    case CC_extern:
-                    case CC_false:
-                    case CC_float:
-                    case CC_for:
-                    case CC_goto:
-                    case CC_if:
-                    case CC_inline:
-                    case CC_int:
-                    case CC_long:
-                    case CC_nullptr:
-                    case CC_register:
-                    case CC_return:
-                    case CC_short:
-                    case CC_signed:
-                    case CC_sizeof:
-                    case CC_static:
-                    case CC_static_assert:
-                    case CC_struct:
-                    case CC_switch:
-                    case CC_thread_local:
-                    case CC_true:
-                    case CC_typedef:
-                    case CC_typeof:
-                    case CC_typeof_unqual:
-                    case CC_union:
-                    case CC_unsigned:
-                    case CC_void:
-                    case CC_while:
-                    break;
+                    default: break;
                 }
             }
             err = cc_unget(p, &tok);
@@ -9834,6 +9859,19 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 if(err) return err;
                 err = cc_parse_c23_attributes(p, &p->attributes);
                 if(err) return err;
+                continue;
+            }
+            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+                err = cc_next_token(p, &peek);
+                if(err) return err;
+                err = cc_expect_punct(p, ']');
+                if(err) return err;
+                CcSlice* s = Allocator_zalloc(cc_scratch_allocator(p), sizeof *s);
+                if(!s) return CC_OOM_ERROR;
+                s->kind = CC_SLICE;
+                s->pointee = **out_tail;
+                **out_tail = (CcQualType){.bits = (uintptr_t)s};
+                *out_tail = &s->pointee;
                 continue;
             }
             CcArray* arr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *arr);
@@ -10030,6 +10068,14 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
             ptr_type.quals |= quals;
             return ptr_type;
         }
+        case CC_SLICE: {
+            CcSlice* old = ccqt_as_slice(t);
+            CcQualType pointee = cc_intern_qualtype(p, old->pointee);
+            CcQualType ptr_type;
+            if(cc_slice_of(p, pointee, &ptr_type)) return t;
+            ptr_type.quals |= quals;
+            return ptr_type;
+        }
         case CC_BLOCK_POINTER: {
             CcPointer* old = ccqt_as_ptr(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
@@ -10135,7 +10181,14 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     if(!ccqt_is_basic(elem) && ccqt_kind(elem) == CC_FUNCTION)
                         return cc_error(p, declbase->loc, "array of functions is not allowed");
                 }
-                if(tk == CC_FUNCTION){
+                else if(tk == CC_SLICE){
+                    CcQualType elem = ccqt_as_slice(type)->pointee;
+                    if(ccqt_is_basic(elem) && elem.basic.kind == CCBT_void)
+                        return cc_error(p, declbase->loc, "slice of void is not allowed"); // maybe we should allow this actually for bounds-checked untyped buffers?
+                    if(!ccqt_is_basic(elem) && ccqt_kind(elem) == CC_FUNCTION)
+                        return cc_error(p, declbase->loc, "slice of functions is not allowed");
+                }
+                else if(tk == CC_FUNCTION){
                     CcQualType ret = ccqt_as_function(type)->return_type;
                     if(!ccqt_is_basic(ret)){
                         CcTypeKind rk = ccqt_kind(ret);
@@ -12203,7 +12256,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_UNION:    is_incomplete = ccqt_as_union(qt)->is_incomplete; break;
                         case CC_ARRAY:    is_incomplete = ccqt_as_array(qt)->is_incomplete; break;
                         case CC_ENUM:     is_incomplete = ccqt_as_enum(qt)->is_incomplete; break;
-                        case CC_FUNCTION: case CC_BASIC: case CC_POINTER: case CC_BLOCK_POINTER: is_incomplete = 0; break;
+                        case CC_FUNCTION: case CC_BASIC: case CC_POINTER: case CC_BLOCK_POINTER: case CC_SLICE: is_incomplete = 0; break;
                     }
                     INTRES(is_incomplete);
                 }

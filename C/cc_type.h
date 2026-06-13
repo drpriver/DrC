@@ -29,6 +29,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_FUNCTION,
     CC_ARRAY,
     CC_BLOCK_POINTER,
+    CC_SLICE,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -108,6 +109,20 @@ struct CC_ALIGN(8) CcPointer {
     CcQualType pointee;
 };
 _Static_assert(_Alignof(CcPointer)==8, "");
+
+typedef struct CcSlice CcSlice;
+struct CC_ALIGN(8) CcSlice {
+    union {
+        uint32_t _bits;
+        struct {
+            CcTypeKind kind: 4;
+            uint32_t restrict_: 1;
+            uint32_t _padding: 27;
+        };
+    };
+    CcQualType pointee;
+};
+_Static_assert(_Alignof(CcSlice)==8, "");
 
 typedef struct CcExpr CcExpr;
 
@@ -491,6 +506,7 @@ ccqt_is_block_ptr(CcQualType t){
 
 static inline CcEnum*     ccqt_as_enum    (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcPointer*  ccqt_as_ptr     (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcSlice*    ccqt_as_slice   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }

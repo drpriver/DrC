@@ -71,6 +71,12 @@ cctc_pointer_eq(const CcPointer* a, CcQualType pointee, _Bool restrict_, _Bool i
 }
 
 static inline
+_Bool
+cctc_slice_eq(const CcSlice* a, CcQualType pointee, _Bool restrict_){
+    return a->pointee.bits == pointee.bits && a->restrict_ == (uint32_t)restrict_;
+}
+
+static inline
 void
 cctc_rebuild_pointers(CcTypeTable* t){
     void** items = t->data;
@@ -128,6 +134,49 @@ cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool re
     }
     idxes[idx] = slot + 1;
     return p;
+}
+
+warn_unused
+static inline
+CcSlice* _Nullable
+cc_intern_slice(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool restrict_){
+    CcTypeTable* t = &cache->slices;
+    uint32_t hash = cctc_hash_pointer(pointee, restrict_, 0);
+    if(t->count){
+        void** items = t->data;
+        uint32_t* idxes = cctc_idxes(t);
+        uint32_t idx = fast_reduce32(hash, 2 * t->cap);
+        for(;;){
+            uint32_t i = idxes[idx];
+            if(!i) break;
+            i--;
+            CcSlice* s = items[i];
+            if(cctc_slice_eq(s, pointee, restrict_))
+                return s;
+            idx++;
+            if(idx >= 2 * t->cap) idx = 0;
+        }
+    }
+    if(t->count >= t->cap){
+        if(cctc_table_grow(t, al) != 0) return NULL;
+        cctc_rebuild_pointers(t);
+    }
+    CcSlice* s = Allocator_zalloc(al, sizeof *s);
+    if(!s) return NULL;
+    s->kind = CC_SLICE;
+    s->restrict_ = restrict_;
+    s->pointee = pointee;
+    void** items = t->data;
+    uint32_t* idxes = cctc_idxes(t);
+    uint32_t slot = t->count++;
+    items[slot] = s;
+    uint32_t idx = fast_reduce32(hash, 2 * t->cap);
+    while(idxes[idx]){
+        idx++;
+        if(idx >= 2 * t->cap) idx = 0;
+    }
+    idxes[idx] = slot + 1;
+    return s;
 }
 
 // Array interning (fixed-size and incomplete only, not VLAs)

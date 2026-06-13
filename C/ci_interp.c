@@ -511,14 +511,31 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
                 _Bool skip_check = !base_size
                     || base_expr->kind == CC_EXPR_ARROW
                     || base_expr->kind == CC_EXPR_DOT;
-                if(!skip_check && (idx < 0 || (uint64_t)idx * elem_sz + elem_sz > base_size))
+                // XXX: > _Countof instead of >= to allow taking address of
+                // 1-past-the-end which is allowed, but maybe we need a flag to
+                // say we're in that state
+                if(!skip_check && (idx < 0 || (uint64_t)idx * elem_sz > base_size))
                     return ci_error(ci, expr->loc, "array subscript out of bounds");
                 *out = (char*)base + idx * elem_sz;
+            }
+            else if(ccqt_kind(base_type) == CC_SLICE){
+                struct {
+                    uintptr_t count;
+                    void* data;
+                } slice;
+                err = ci_interp_expr(ci, frame, base_expr, &slice, sizeof slice);
+                if(err) return err;
+                // XXX: > slice.count instead of >= to allow taking address of
+                // 1-past-the-end which is allowed, but maybe we need a flag to
+                // say we're in that state
+                if(idx < 0 || (uintptr_t)idx > slice.count)
+                    return ci_error(ci, expr->loc, "slice subscript out of bounds");
+                *out = (char*)slice.data + idx * elem_sz;
             }
             else {
                 // Pointer: eval base as rvalue
                 void* ptr_val = NULL;
-                err = ci_interp_expr(ci, frame,base_expr, &ptr_val, sizeof ptr_val);
+                err = ci_interp_expr(ci, frame, base_expr, &ptr_val, sizeof ptr_val);
                 if(err) return err;
                 *out = (char*)ptr_val + idx * elem_sz;
             }
@@ -615,6 +632,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
+        // case CC_EXPR_SLICE:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
         CASES_EXHAUSTED;
     }
@@ -2694,6 +2712,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                     case CC_BASIC:
                     case CC_POINTER:
                     case CC_BLOCK_POINTER:
+                    case CC_SLICE:
                         *(_Bool*)result = 0;
                 }
                 return 0;
@@ -4916,6 +4935,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         case CC_UNION:
         case CC_FUNCTION:
         case CC_ARRAY:
+        case CC_SLICE:
             err = ci_unimplemented(ci, loc, "Unsupported return type");
             goto cleanup;
     }
