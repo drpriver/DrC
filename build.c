@@ -86,12 +86,14 @@ int main(int argc, char** argv, char** envp){
 
         {
             cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+            cc_opt->is_compile_command = 0; // exclude from compile_commands.json
             b_add_dep(ctx, all, cc_opt);
             b_arg(ctx, cc_opt, "-O2");
             link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
         }
         {
             cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", OS_NATIVE);
+            cc_cov->is_compile_command = 0; // exclude from compile_commands.json
             b_get_target(ctx, "cc_cov")->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(cc_cov->compiler_flavor != COMPILER_CL){
                 if(cc_cov->compiler_flavor == COMPILER_CLANG_CL){
@@ -150,6 +152,7 @@ int main(int argc, char** argv, char** envp){
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
             BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, OS_NATIVE);
             b_get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
+            cov_bin->is_compile_command = 0; // exclude from compile_commands.json
             if(cov_bin->compiler_flavor != COMPILER_CL){
                 if(cov_bin->compiler_flavor == COMPILER_CLANG_CL){
                     b_arg(ctx, cov_bin, "/clang:--coverage");
