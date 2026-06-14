@@ -5830,6 +5830,53 @@ TestFunction(test_interpreter){
                 "return i;\n"),
             .exit_code = 1,
         },
+        {
+            "slice function param", __LINE__,
+            SVI("int sum(int v[:]){\n"
+                "    int t = 0;\n"
+                "    for(int i = 0; i < v.length; i++) t += v[i];\n"
+                "    return t;\n"
+                "}\n"
+                "int a[4] = {1,2,3,4};\n"
+                "return sum(a[1:4]);\n"),
+            .exit_code = 2 + 3 + 4,
+        },
+        {
+            "mutate through slice param", __LINE__,
+            SVI("void fill(int v[:]){\n"
+                "    for(int i = 0; i < v.length; i++) v[i] = i + 1;\n"
+                "}\n"
+                "int a[4] = {0,0,0,0};\n"
+                "fill(a[:]);\n"
+                "return a[0] + a[1] + a[2] + a[3];\n"),
+            .exit_code = 1 + 2 + 3 + 4,
+        },
+        {
+            "slice return value", __LINE__,
+            SVI("int g[4] = {5,6,7,8};\n"
+                "int mid(void)[:]{ return g[1:3]; }\n"
+                "int s[:] = mid();\n"
+                "return s.length * 10 + s[0];\n"),
+            .exit_code = 2 * 10 + 6,
+        },
+        {
+            "slice member assignment", __LINE__,
+            SVI("int x[3] = {0,0,0};\n"
+                "int s[:];\n"
+                "s.data = x;\n"
+                "s.length = _Countof x;\n"
+                "for(int i = 0; i < s.length; i++) s[i] = i + 4;\n"
+                "return x[0] + x[1] + x[2];\n"),
+            .exit_code = 4 + 5 + 6,
+        },
+        {
+            "slice whole assignment", __LINE__,
+            SVI("int a[4] = {1,2,3,4};\n"
+                "int s[:];\n"
+                "s = a[1:3];\n"
+                "return s.length * 10 + s[0];\n"),
+            .exit_code = 2 * 10 + 2,
+        },
     };
     int err;
     static int idx = 0;
