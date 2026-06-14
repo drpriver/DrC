@@ -75,7 +75,7 @@ struct CcQualType {
         };
         struct {
             uintptr_t quals: 3,
-                      _ptr: sizeof(uintptr_t)*8-3;
+                      unqual: sizeof(uintptr_t)*8-3;
         };
         struct {
             uintptr_t _quals: 3;

@@ -1039,7 +1039,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         return ci_load_object(ci, expr->loc, expr->type, ptr_val, result);
     }
     case CC_EXPR_DOT: {
-        if(result == ci_discard_buf) return 0;
         uint64_t off = expr->field_loc.byte_offset;
         uint32_t sz;
         int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
@@ -1055,6 +1054,10 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(!temp) return CI_OOM_ERROR;
             err = ci_interp_expr(ci, frame, base_expr, temp, base_sz);
             if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
+            if(result == ci_discard_buf){
+                Allocator_free(ci_allocator(ci), temp, base_sz);
+                return 0;
+            }
             if(expr->field_loc.bit_width){
                 uint64_t val = ci_bitfield_read(temp + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
                 _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
@@ -1075,6 +1078,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(err) return err;
         if(off + sz > base_size)
             return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
+        if(result == ci_discard_buf) return 0;
         if(expr->field_loc.bit_width){
             uint64_t val = ci_bitfield_read((char*)base + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
             _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);

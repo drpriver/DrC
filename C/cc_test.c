@@ -6306,6 +6306,13 @@ TestFunction(test_parse_errors){
                 "int x = *s;\n"),
             SVI("(test):3:9: error: dereferencing non-pointer type\n"),
         },
+        {
+            "slice ternary incompatible element type", __LINE__,
+            SVI("int a[2];\n"
+                "char b[2];\n"
+                "int s[:] = 0 ? a[:] : b[:];\n"),
+            SVI("(test):3:14: error: incompatible operand types for ternary\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

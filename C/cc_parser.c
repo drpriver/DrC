@@ -1372,21 +1372,15 @@ cc_parse_ternary_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull 
             CcQualType pointee;
             if(tvoid || evoid){
                 pointee = ccqt_basic(CCBT_void);
-                pointee.is_const    = tpointee.is_const    | epointee.is_const;
-                pointee.is_volatile = tpointee.is_volatile | epointee.is_volatile;
-                pointee.is_atomic   = tpointee.is_atomic   | epointee.is_atomic;
+                pointee.quals = tpointee.quals | epointee.quals;
             }
             else {
                 pointee = tpointee;
-                pointee.is_const    |= epointee.is_const;
-                pointee.is_volatile |= epointee.is_volatile;
-                pointee.is_atomic   |= epointee.is_atomic;
+                pointee.quals |= epointee.quals;
             }
             err = cc_pointer_of(p, pointee, &common);
             if(err) return err;
-            common.is_const    = ttype.is_const    | etype.is_const;
-            common.is_volatile = ttype.is_volatile | etype.is_volatile;
-            common.is_atomic   = ttype.is_atomic   | etype.is_atomic;
+            common.quals = ttype.quals | etype.quals;
         }
         else if(tptr && ccqt_is_basic(else_expr->type)){
             _Bool is_npc = else_expr->kind == CC_EXPR_VALUE
@@ -1412,6 +1406,16 @@ cc_parse_ternary_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull 
         }
         else if((tk == CC_STRUCT || tk == CC_UNION) && then_expr->type.ptr == else_expr->type.ptr){
             common = then_expr->type;
+        }
+        else if(tk == CC_SLICE && ek == CC_SLICE){
+            CcQualType tpointee = ccqt_as_slice(then_expr->type)->pointee;
+            CcQualType epointee = ccqt_as_slice(else_expr->type)->pointee;
+            if(tpointee.unqual != epointee.unqual)
+                return cc_error(p, tok.loc, "incompatible operand types for ternary");
+            CcQualType pointee = {.quals = tpointee.quals | epointee.quals, .unqual = tpointee.unqual};
+            err = cc_slice_of(p, pointee, &common);
+            if(err) return err;
+            common.quals = then_expr->type.quals | else_expr->type.quals;
         }
         else {
             err = cc_usual_arithmetic(p, then_expr->type, else_expr->type, &common, tok.loc);
@@ -7158,8 +7162,7 @@ cc_get_fields(CcQualType t, CcField*_Nullable*_Nonnull out_fields, uint32_t* out
 static
 int
 cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, CcFieldLoc field_loc, Marray(CcInitEntry)* buf){
-    CcQualType t = target;
-    t.is_const = 0; t.is_volatile = 0; t.is_atomic = 0;
+    CcQualType t = {.unqual=target.unqual};
     CcExpr* casted;
     int err = cc_implicit_cast(p, value, t, &casted);
     if(err) return err;
@@ -7284,8 +7287,7 @@ int
 cc_init_apply_value(CcParser* p, CcValueClass vc, CcQualType field_type, CcFieldLoc field_loc, CcExpr* value, SrcLoc loc, Marray(CcInitEntry)* buf){
     if(value->kind == CC_EXPR_COMPOUND_LITERAL)
         value->kind = CC_EXPR_INIT_LIST;
-    CcQualType unqual = field_type;
-    unqual.is_const = 0; unqual.is_volatile = 0; unqual.is_atomic = 0;
+    CcQualType unqual = {.unqual=field_type.unqual};
     CcTypeKind ftk = ccqt_kind(unqual);
     if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY){
         if(cc_implicit_convertible(value->type, unqual))
@@ -7370,10 +7372,7 @@ static
 int
 cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_offset, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value){
     int err;
-    CcQualType unqual = target;
-    unqual.is_const = 0;
-    unqual.is_volatile = 0;
-    unqual.is_atomic = 0;
+    CcQualType unqual = {.unqual=target.unqual};
     CcTypeKind tk = ccqt_kind(unqual);
     switch(tk){
     case CC_STRUCT: {
@@ -7778,8 +7777,7 @@ cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out
             CcExpr* v;
             err = cc_parse_scalar_value(p, vc, &v);
             if(err) return err;
-            CcQualType t = target_type;
-            t.is_const = 0; t.is_volatile = 0; t.is_atomic = 0;
+            CcQualType t = {.unqual=target_type.unqual};
             err = cc_implicit_cast(p, v, t, &v);
             if(err) return err;
             err = cc_peek(p, &peek);
@@ -9017,11 +9015,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             *base_type = expr->type;
                             cc_release_expr(p, expr);
                         }
-                        if(unqual){
-                            base_type->is_const = 0;
-                            base_type->is_volatile = 0;
-                            base_type->is_atomic = 0;
-                        }
+                        if(unqual) base_type->quals = 0;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         continue;
@@ -10607,10 +10601,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 if(err) return err;
                 err = cc_check_atomic_object_access(p, type, tok.loc);
                 if(err) return err;
-                CcQualType target = type;
-                target.is_const = 0;
-                target.is_volatile = 0;
-                target.is_atomic = 0;
+                CcQualType target = {.unqual=type.unqual};
                 err = cc_implicit_cast(p, initializer, target, &initializer);
                 if(err) return err;
             }

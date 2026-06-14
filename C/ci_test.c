@@ -5806,6 +5806,30 @@ TestFunction(test_interpreter){
                 "return i;\n"),
             .exit_code = 1,
         },
+        {
+            "slice ternary", __LINE__,
+            SVI("int a[2] = {1,2};\n"
+                "int b[2] = {3,4};\n"
+                "int s[:] = 0 ? a[:] : b[:];\n"
+                "return s.count * 10 + s[0];\n"),
+            .exit_code = 23,
+        },
+        {
+            "slice ternary combines const", __LINE__,
+            SVI("int a[2] = {1,2};\n"
+                "const int b[2] = {3,4};\n"
+                "const int s[:] = 1 ? a[:] : b[:];\n"
+                "return s.count * 10 + s[0];\n"),
+            .exit_code = 21,
+        },
+        {
+            "discarded slice field evaluates base", __LINE__,
+            SVI("int i = 0;\n"
+                "int a[4] = {1,2,3,4};\n"
+                "a[i++:].count;\n"
+                "return i;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
