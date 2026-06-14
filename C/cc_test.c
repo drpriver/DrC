@@ -4301,7 +4301,60 @@ TestFunction(test_parse_decls){
                 {SVI("z"), SVI("const int[3]"), SVI("{@0 = 4, @4 = 5, @8 = 6}")},
                 {SVI("a"), SVI("const int[3]"), SVI("z")},
             },
-        }
+        },
+        {
+            "slice decl", __LINE__,
+            SVI("int x[:];\n"
+                "int y[:] = x[:];\n"),
+            .vars = {
+                {SVI("x"), SVI("int[:]")},
+                {SVI("y"), SVI("int[:]"), SVI("x[:]")},
+            },
+        },
+        {
+            "slice array expressions", __LINE__,
+            SVI("int x[3];\n"
+                "int a[:] = x[:];\n"
+                "int b[:] = x[1:];\n"
+                "int c[:] = x[:1];\n"
+                "int d[:] = x[1:1];\n"
+            ),
+            .vars = {
+                {SVI("x"), SVI("int[3]")},
+                {SVI("a"), SVI("int[:]"), SVI("x[:]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[1:]")},
+                {SVI("c"), SVI("int[:]"), SVI("x[:1]")},
+                {SVI("d"), SVI("int[:]"), SVI("x[1:1]")},
+            },
+        },
+        {
+            "slice slice expressions", __LINE__,
+            SVI("int x[:];\n"
+                "int a[:] = x[:];\n"
+                "int b[:] = x[1:];\n"
+                "int c[:] = x[:1];\n"
+                "int d[:] = x[1:1];\n"
+            ),
+            .vars = {
+                {SVI("x"), SVI("int[:]")},
+                {SVI("a"), SVI("int[:]"), SVI("x[:]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[1:]")},
+                {SVI("c"), SVI("int[:]"), SVI("x[:1]")},
+                {SVI("d"), SVI("int[:]"), SVI("x[1:1]")},
+            },
+        },
+        {
+            "slice pointer expressions", __LINE__,
+            SVI("int *x;\n"
+                "int a[:] = x[:1];\n"
+                "int b[:] = x[1:1];\n"
+            ),
+            .vars = {
+                {SVI("x"), SVI("int *")},
+                {SVI("a"), SVI("int[:]"), SVI("x[:1]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[1:1]")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -6180,6 +6233,34 @@ TestFunction(test_parse_errors){
             SVI("int f(int);\n"
                 "int f(float);\n"),
             SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'\n"),
+        },
+        {
+            "slice pointer expressions both", __LINE__,
+            SVI("int *x;\n"
+                "int a[:] = x[:];\n"
+            ),
+            SVI("(test):2:13: error: slice of pointer requires upper bound\n"),
+        },
+        {
+            "slice pointer expressions lo", __LINE__,
+            SVI("int *x;\n"
+                "int a[:] = x[0:];\n"
+            ),
+            SVI("(test):2:13: error: slice of pointer requires upper bound\n"),
+        },
+        {
+            "slice incomplete array expressions lo", __LINE__,
+            SVI("int x[];\n"
+                "int a[:] = x[:];\n"
+            ),
+            SVI("(test):2:13: error: slice of incomplete array requires upper bound\n"),
+        },
+        {
+            "slice incomplete array expressions both", __LINE__,
+            SVI("int x[];\n"
+                "int a[:] = x[0:];\n"
+            ),
+            SVI("(test):2:13: error: slice of incomplete array requires upper bound\n"),
         },
     };
     static int idx = 0;

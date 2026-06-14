@@ -5738,6 +5738,36 @@ TestFunction(test_interpreter){
             .exit_code = 7 + 12,
             .skip = 1,
         },
+        {
+            "slice array", __LINE__,
+            SVI("int x[4] = {1,2,3,4};\n"
+                "int s1[:] = x[:];\n"
+                "int s2[:] = x[1:];\n"
+                "int s3[:] = x[:3];\n"
+                "int s4[:] = x[2:4];\n"
+                "return s1[0] + 10*s2[0] + 100*s3[0]+1000*s4[0];\n"),
+            .exit_code = 1 + 10*2 + 100*1+1000*3,
+        },
+        {
+            "slice slice", __LINE__,
+            SVI("int a[4] = {1,2,3,4};\n"
+                "int x[:] = a[:];\n"
+                "int s1[:] = x[:];\n"
+                "int s2[:] = x[1:];\n"
+                "int s3[:] = x[:3];\n"
+                "int s4[:] = x[2:4];\n"
+                "return s1[0] + 10*s2[0] + 100*s3[0]+1000*s4[0];\n"),
+            .exit_code = 1 + 10*2 + 100*1+1000*3,
+        },
+        {
+            "slice pointer", __LINE__,
+            SVI("int a[4] = {1,2,3,4};\n"
+                "int *x = a;\n"
+                "int s3[:] = x[:3];\n"
+                "int s4[:] = x[2:4];\n"
+                "return 100*s3[0]+1000*s4[0];\n"),
+            .exit_code = 100*1+1000*3,
+        },
     };
     int err;
     static int idx = 0;

@@ -3672,6 +3672,10 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     err = cc_peek(p, &peek);
                     if(err) return err;
                     if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
+                        if(ccqt_kind(operand->type) == CC_POINTER)
+                            return cc_error(p, tok.loc, "slice of pointer requires upper bound");
+                        if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_as_array(operand->type)->is_incomplete)
+                            return cc_error(p, tok.loc, "slice of incomplete array requires upper bound");
                         err = cc_next_token(p, &peek);
                         if(err) return err;
                         CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_ALL, tok.loc, slice_type, 0);
@@ -3719,6 +3723,10 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     err = cc_peek(p, &peek);
                     if(err) return err;
                     if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
+                        if(ccqt_kind(operand->type) == CC_POINTER)
+                            return cc_error(p, tok.loc, "slice of pointer requires upper bound");
+                        if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_as_array(operand->type)->is_incomplete)
+                            return cc_error(p, tok.loc, "slice of incomplete array requires upper bound");
                         err = cc_next_token(p, &peek);
                         if(err) return err;
                         CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_LO, tok.loc, slice_type, 1);

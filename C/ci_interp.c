@@ -3328,7 +3328,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(ccqt_kind(base->type) == CC_ARRAY){
             CcArray* a = ccqt_as_array(base->type);
             if(a->is_incomplete)
-                return ci_unimplemented(ci, expr->loc, "TODO: reject [lo:] on incomplete arrays");
+                return ci_unreachable(ci, expr->loc, "slice of incomplete array without upper bound");
             size_t hi_idx = a->length;
             if((size_t)lo_idx > a->length)
                 return ci_error(ci, lo->loc, "low slice subscript out of bounds");
@@ -3354,7 +3354,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return 0;
         }
         else {
-            return ci_unimplemented(ci, expr->loc, "TODO: reject [lo:] on pointers");
+            return ci_unreachable(ci, expr->loc, "slice of pointer without upper bound");
         }
     }
     case CC_EXPR_SLICE_HI:{
@@ -3414,7 +3414,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(ccqt_kind(base->type) == CC_ARRAY){
             CcArray* a = ccqt_as_array(base->type);
             if(a->is_incomplete)
-                return ci_unimplemented(ci, expr->loc, "TODO: reject [:] on incomplete arrays");
+                return ci_unreachable(ci, expr->loc, "slice of incomplete array without upper bound");
             size_t addr_size;
             CiRtSlice *out = result;
             err = ci_interp_lvalue(ci, frame, expr->lhs, &out->data, &addr_size);
@@ -3426,7 +3426,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             return ci_interp_expr(ci, frame, expr->lhs, result, size);
         }
         else {
-            return ci_unimplemented(ci, expr->loc, "TODO: reject [:] on pointers");
+            return ci_unreachable(ci, expr->loc, "slice of pointer without upper bound");
         }
     }
     }
