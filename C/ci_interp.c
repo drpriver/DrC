@@ -480,7 +480,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_ARROW: {
             // ptr->member: eval ptr, add field offset
             void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, frame,expr->values[0], &ptr_val, sizeof ptr_val);
+            int err = ci_interp_expr(ci, frame, expr->values[0], &ptr_val, sizeof ptr_val);
             if(err) return err;
             *out = (char*)ptr_val + expr->field_loc.byte_offset;
             return 0;

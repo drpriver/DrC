@@ -3296,6 +3296,16 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* expr = NULL;
                     err = cc_parse_prefix(p, CC_RUNTIME_VALUE, &expr);
                     if(err) return err;
+                    if(ccqt_kind(expr->type) == CC_SLICE){
+                        if(vc != CC_RUNTIME_VALUE)
+                            return cc_error(p, expr->loc, "Can only _Countof a slice at runtime");
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_DOT, expr->loc, ccqt_basic(cc_target(p)->size_type), 1);
+                        if(!node) return CC_OOM_ERROR;
+                        node->field_loc = (CcFieldLoc){.byte_offset = offsetof(CiRtSlice, count)};
+                        node->values[0] = expr;
+                        *out = node;
+                        return 0;
+                    }
                     arr_type = expr->type;
                     cc_release_expr(p, expr);
                 }
@@ -4072,7 +4082,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 else if(tk == CC_SLICE){
                     StringView mname = {member_name->length, member_name->data};
                     if(sv_equals(mname, SV("count")) || sv_equals(mname, SV("length"))){
-                        member_type = ccqt_basic(ccbt_to_unsigned(cc_target(p)->intptr_type));
+                        member_type = ccqt_basic(cc_target(p)->size_type);
                         floc.byte_offset = offsetof(CiRtSlice, count);
                     }
                     else if(sv_equals(mname, SV("data"))){
