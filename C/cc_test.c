@@ -4355,6 +4355,31 @@ TestFunction(test_parse_decls){
                 {SVI("b"), SVI("int[:]"), SVI("x[1:1]")},
             },
         },
+        {
+            "slice allows const", __LINE__,
+            SVI("int x[] = {1,2,3}\n;"
+                "const int s[:] = x[:];\n"),
+            .vars = {
+                {SVI("x"), SVI("int[3]")},
+                {SVI("s"), SVI("const int[:]"), SVI("(const int[:])x[:]")},
+            },
+        },
+        {
+            "slice string literals", __LINE__,
+            SVI("const char s[:] = \"hello world\"[:];\n"),
+            .vars = {
+                {SVI("s"), SVI("const char[:]"), SVI("(const char[:])\"hello world\"[:]")},
+            },
+        },
+        {
+            "slice cast", __LINE__,
+            SVI("const char s[:];\n"
+                "char cs[:] = (char[:])s;\n"),
+            .vars = {
+                {SVI("s"), SVI("const char[:]")},
+                {SVI("cs"), SVI("char[:]"), SVI("(char[:])s")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -6261,6 +6286,18 @@ TestFunction(test_parse_errors){
                 "int a[:] = x[0:];\n"
             ),
             SVI("(test):2:13: error: slice of incomplete array requires upper bound\n"),
+        },
+        {
+            "slice preserves quals", __LINE__,
+            SVI("const int x[] = {1,2,3}\n;"
+                "int s[:] = x[:];\n"),
+            SVI("(test):2:14: error: cannot implicitly convert from 'const int[:]' to 'int[:]'\n"),
+        },
+        {
+            "invalid slice cast", __LINE__,
+            SVI("const int s[:];\n"
+                "char cs[:] = (char[:])s;\n"),
+            SVI("(test):2:14: error: cannot cast to slice of different type\n"),
         },
     };
     static int idx = 0;

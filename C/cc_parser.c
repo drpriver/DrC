@@ -435,6 +435,18 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
         }
         return 0;
     }
+    if(fk == CC_SLICE && tk == CC_SLICE){
+        CcQualType fp = ccqt_as_slice(from)->pointee;
+        CcQualType tp = ccqt_as_slice(to)->pointee;
+        if(fp.ptr == tp.ptr){
+            if((fp.is_const    && !tp.is_const)
+            || (fp.is_volatile && !tp.is_volatile)
+            || (fp.is_atomic   && !tp.is_atomic))
+                return 0;
+            return 1;
+        }
+        return 0;
+    }
     if(fk == CC_ARRAY && tk == CC_POINTER && !ccqt_as_array(from)->is_vector) return 1;
     if(fk == CC_FUNCTION && tk == CC_POINTER) return 1;
     if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t && tk == CC_POINTER) return 1;
@@ -791,6 +803,12 @@ cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc)
     }
     if(fk == CC_BASIC && from.basic.kind == CCBT_void){
         if(p) cc_error(p, loc, "cannot cast from void");
+        return CC_SYNTAX_ERROR;
+    }
+    if(fk == CC_SLICE && tk == CC_SLICE){
+        if(ccqt_as_slice(from)->pointee.ptr == ccqt_as_slice(to)->pointee.ptr)
+            return 0;
+        if(p) cc_error(p, loc, "cannot cast to slice of different type");
         return CC_SYNTAX_ERROR;
     }
     _Bool f_arith = fk == CC_BASIC && ccbt_is_arithmetic(from.basic.kind);

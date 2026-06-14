@@ -5768,6 +5768,12 @@ TestFunction(test_interpreter){
                 "return 100*s3[0]+1000*s4[0];\n"),
             .exit_code = 100*1+1000*3,
         },
+        {
+            "slice string literal", __LINE__,
+            SVI("const char s[:] = \"hello\"[:];\n"
+                "return (int)s.count + s[0];\n"),
+            .exit_code = (int)sizeof "hello" + 'h',
+        },
     };
     int err;
     static int idx = 0;

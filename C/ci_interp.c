@@ -850,6 +850,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7)){
             return ci_interp_expr(ci, frame, operand, result, size);
         }
+        if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE){ // qualified slice cast
+            return ci_interp_expr(ci, frame, operand, result, size);
+        }
         // Array-to-pointer decay: get address of array data (not vectors).
         if(ccqt_kind(from) == CC_ARRAY && !ccqt_as_array(from)->is_vector){
             if(result == ci_discard_buf) return 0;
