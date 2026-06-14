@@ -41,6 +41,7 @@ static void cc_release_expr(CcParser* p, CcExpr*);
 static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
 warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
+warn_unused static int cc_slice_of(CcParser* p, CcQualType pointee, CcQualType* out);
 warn_unused static int cc_block_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
@@ -1695,6 +1696,10 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_MODULE_REFLECT:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
+            case CC_EXPR_SLICE:
+            case CC_EXPR_SLICE_LO:
+            case CC_EXPR_SLICE_HI:
+            case CC_EXPR_SLICE_ALL:
                 return CC_UNREACHABLE_ERROR;
         }
         CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 1);
@@ -1976,6 +1981,10 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_MODULE_REFLECT:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
+                case CC_EXPR_SLICE:
+                case CC_EXPR_SLICE_ALL:
+                case CC_EXPR_SLICE_LO:
+                case CC_EXPR_SLICE_HI:
                     return CC_UNREACHABLE_ERROR;
             }
             CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 0);
@@ -3639,28 +3648,99 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
             }
             case CC_lbracket:{
                 CcToken peek;
-                CcExpr* index;
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
-                    index = cc_uint64_expr(p, tok.loc, ccqt_basic(cc_target(p)->size_type), 0);
-                    if(!index) return CC_OOM_ERROR;
-                    // don't advance cursor, just insert a 0
-                }
-                else {
-                    err = cc_parse_expr(p, vc, &index);
+                    CcQualType elem_type;
+                    err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                     if(err) return err;
+                    CcQualType slice_type;
+                    err = cc_slice_of(p, elem_type, &slice_type);
+                    if(err) return err;
+                    err = cc_next_token(p, &peek);
+                    if(err) return err;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
+                        err = cc_next_token(p, &peek);
+                        if(err) return err;
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_ALL, tok.loc, slice_type, 0);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        operand = node;
+                        continue;
+                    }
+                    CcExpr* hi;
+                    err = cc_parse_expr(p, vc, &hi);
+                    if(err) return err;
+                    CcQualType hi_type = hi->type;
+                    if(ccqt_kind(hi_type) == CC_ENUM)
+                        hi_type = ccqt_as_enum(hi_type)->underlying;
+                    if(!ccqt_is_basic(hi_type) || !ccbt_is_integer(hi_type.basic.kind))
+                        return cc_error(p, hi->loc, "slice subscript requires integer type");
+                    err = cc_expect_punct(p, CC_rbracket);
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_HI, tok.loc, slice_type, 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = operand;
+                    node->values[0] = hi;
+                    operand = node;
+                    continue;
                 }
+                CcExpr* index;
+                err = cc_parse_expr(p, vc, &index);
+                if(err) return err;
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
-                    return cc_unimplemented(p, peek.loc, "TODO: parse slices");
+                    CcQualType elem_type;
+                    err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
+                    if(err) return err;
+                    CcQualType slice_type;
+                    err = cc_slice_of(p, elem_type, &slice_type);
+                    if(err) return err;
+                    CcQualType idx_type = index->type;
+                    if(ccqt_kind(idx_type) == CC_ENUM)
+                        idx_type = ccqt_as_enum(idx_type)->underlying;
+                    if(!ccqt_is_basic(idx_type) || !ccbt_is_integer(idx_type.basic.kind))
+                        return cc_error(p, index->loc, "slice subscript requires integer type");
+                    err = cc_next_token(p, &peek);
+                    if(err) return err;
+                    err = cc_peek(p, &peek);
+                    if(err) return err;
+                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
+                        err = cc_next_token(p, &peek);
+                        if(err) return err;
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_LO, tok.loc, slice_type, 1);
+                        if(!node) return CC_OOM_ERROR;
+                        node->lhs = operand;
+                        node->values[0] = index;
+                        operand = node;
+                        continue;
+                    }
+                    CcExpr* hi;
+                    err = cc_parse_expr(p, vc, &hi);
+                    if(err) return err;
+                    CcQualType hi_type = hi->type;
+                    if(ccqt_kind(hi_type) == CC_ENUM)
+                        hi_type = ccqt_as_enum(hi_type)->underlying;
+                    if(!ccqt_is_basic(hi_type) || !ccbt_is_integer(hi_type.basic.kind))
+                        return cc_error(p, hi->loc, "slice subscript requires integer type");
+                    err = cc_expect_punct(p, CC_rbracket);
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE, tok.loc, slice_type, 2);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = operand;
+                    node->values[0] = index;
+                    node->values[1] = hi;
+                    operand = node;
+                    continue;
                 }
                 err = cc_expect_punct(p, CC_rbracket);
                 if(err) return err;
                 {
                     CcQualType idx_type = index->type;
-                    if(!ccqt_is_basic(idx_type) && ccqt_kind(idx_type) == CC_ENUM)
+                    if(ccqt_kind(idx_type) == CC_ENUM)
                         idx_type = ccqt_as_enum(idx_type)->underlying;
                     _Bool idx_int = ccqt_is_basic(idx_type) && ccbt_is_integer(idx_type.basic.kind);
                     _Bool idx_ptr = ccqt_is_pointer_like(idx_type);
@@ -3993,11 +4073,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     StringView mname = {member_name->length, member_name->data};
                     if(sv_equals(mname, SV("count")) || sv_equals(mname, SV("length"))){
                         member_type = ccqt_basic(ccbt_to_unsigned(cc_target(p)->intptr_type));
+                        floc.byte_offset = offsetof(CiRtSlice, count);
                     }
                     else if(sv_equals(mname, SV("data"))){
                         err = cc_pointer_of(p, ccqt_as_slice(agg_type)->pointee, &member_type);
                         if(err) return err;
-                        floc.byte_offset = cc_target(p)->sizeof_[CCBT_nullptr_t];
+                        // XXX: should this use target?
+                        // All of our supported platforms match the host though, so idk.
+                        floc.byte_offset = offsetof(CiRtSlice, data);
                     }
                     else
                         return cc_error(p, member.loc, "not a struct or union");
@@ -4605,10 +4688,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             }
         }
         case CC_SLICE:{
-            struct {
-                uintptr_t count;
-                void* data;
-            } slice;
+            CiRtSlice slice;
             memcpy(&slice, data, sizeof slice);
             msb_sprintf(sb, "{%zu, %p}\n", (size_t)slice.count, slice.data);
             return;
@@ -4823,6 +4903,30 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             cc_print_expr(sb, e->lhs);
             msb_write_char(sb, '[');
             cc_print_expr(sb, e->values[0]);
+            msb_write_char(sb, ']');
+            return;
+        case CC_EXPR_SLICE_ALL:
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, "[:]");
+            return;
+        case CC_EXPR_SLICE_LO:
+            cc_print_expr(sb, e->lhs);
+            msb_write_char(sb, '[');
+            cc_print_expr(sb, e->values[0]);
+            msb_write_literal(sb, ":]");
+            return;
+        case CC_EXPR_SLICE_HI:
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, "[:");
+            cc_print_expr(sb, e->values[0]);
+            msb_write_char(sb, ']');
+            return;
+        case CC_EXPR_SLICE:
+            cc_print_expr(sb, e->lhs);
+            msb_write_char(sb, '[');
+            cc_print_expr(sb, e->values[0]);
+            msb_write_char(sb, ':');
+            cc_print_expr(sb, e->values[1]);
             msb_write_char(sb, ']');
             return;
         case CC_EXPR_TERNARY:
@@ -5624,6 +5728,14 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
             return 0;
+        case CC_EXPR_SLICE:
+            return 2;
+        case CC_EXPR_SLICE_LO:
+            return 1;
+        case CC_EXPR_SLICE_HI:
+            return 1;
+        case CC_EXPR_SLICE_ALL:
+            return 0;
     }
     return 0;
 }
@@ -5716,6 +5828,10 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
         case CC_EXPR_VA:
+        case CC_EXPR_SLICE:
+        case CC_EXPR_SLICE_LO:
+        case CC_EXPR_SLICE_HI:
+        case CC_EXPR_SLICE_ALL:
             if(e->lhs)
                 cc_release_expr(p, e->lhs);
             break;
@@ -12549,6 +12665,12 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_LSHIFTASSIGN:
         case CC_EXPR_RSHIFTASSIGN:
+            return 1;
+        case CC_EXPR_SLICE:
+        case CC_EXPR_SLICE_HI:
+        case CC_EXPR_SLICE_LO:
+        case CC_EXPR_SLICE_ALL:
+            // maybe we should support this? idk
             return 1;
         case CC_EXPR_CALL:
             return 1;

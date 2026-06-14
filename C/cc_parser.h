@@ -258,6 +258,11 @@ struct CiRtEnumerator {
     long long value;
 };
 
+typedef struct CiRtSlice CiRtSlice;
+struct CiRtSlice {
+    size_t count;
+    void* data;
+};
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

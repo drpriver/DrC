@@ -93,9 +93,10 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_MODULE_REFLECT, // _Module reflection methods/properties; op in extra field
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
     CC_EXPR_UMUL128, // _umul128(a, b, &high) -> low
-    // CC_EXPR_SLICE, // [lo:hi]
-    // CC_EXPR_SLICE_L, // [lo:]
-    // CC_EXPR_SLICE_R, // [:hi]
+    CC_EXPR_SLICE_ALL, // [:]
+    CC_EXPR_SLICE, // [lo:hi]
+    CC_EXPR_SLICE_LO, // [lo:]
+    CC_EXPR_SLICE_HI, // [:hi]
 };
 
 TYPEDEF_ENUM(CcExprKind, uint32_t);
