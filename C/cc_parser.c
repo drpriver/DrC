@@ -4732,7 +4732,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
         case CC_SLICE:{
             CiRtSlice slice;
             memcpy(&slice, data, sizeof slice);
-            msb_sprintf(sb, "{%zu, %p}\n", (size_t)slice.count, slice.data);
+            msb_sprintf(sb, "{%zu, %p}", (size_t)slice.count, slice.data);
             return;
         }
         case CC_BLOCK_POINTER:
