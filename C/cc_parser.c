@@ -1889,6 +1889,8 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         err = cc_implicit_cast(p, operand, ptr_type, &operand);
                         if(err) return err;
                     }
+                    if(ccqt_kind(operand->type) == CC_SLICE)
+                        return cc_error(p, tok.loc, "dereferencing non-pointer type");
                     err = cc_deref_type(p, operand->type, &result_type, tok.loc);
                     if(err) return err;
                     break;

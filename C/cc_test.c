@@ -6299,6 +6299,13 @@ TestFunction(test_parse_errors){
                 "char cs[:] = (char[:])s;\n"),
             SVI("(test):2:14: error: cannot cast to slice of different type\n"),
         },
+        {
+            "slice dereference", __LINE__,
+            SVI("int a[2];\n"
+                "int s[:] = a[:];\n"
+                "int x = *s;\n"),
+            SVI("(test):3:9: error: dereferencing non-pointer type\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){

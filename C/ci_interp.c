@@ -3243,7 +3243,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_STATEMENT_EXPRESSION:
         return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
     case CC_EXPR_SLICE:{
-        if(result == ci_discard_buf) return 0;
         if(size < sizeof(CiRtSlice))
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
         int err;
@@ -3281,6 +3280,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             size_t addr_size;
             err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = (size_t)(hi_idx - lo_idx);
             out->data = (char*)addr + lo_idx * elem_sz;
@@ -3294,6 +3294,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 return ci_error(ci, hi->loc, "high slice subscript out of bounds");
             if((size_t)lo_idx > slice.count)
                 return ci_error(ci, lo->loc, "low slice subscript out of bounds");
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = (size_t)(hi_idx - lo_idx);
             out->data = (char*)slice.data + lo_idx * elem_sz;
@@ -3303,6 +3304,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             void* addr;
             err = ci_interp_expr(ci, frame, expr->lhs, &addr, sizeof addr);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = (size_t)(hi_idx - lo_idx);
             out->data = (char*)addr + lo_idx * elem_sz;
@@ -3310,7 +3312,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
     }
     case CC_EXPR_SLICE_LO:{
-        if(result == ci_discard_buf) return 0;
         if(size < sizeof(CiRtSlice))
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
         int err;
@@ -3339,6 +3340,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             size_t addr_size;
             err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = (size_t)(hi_idx - lo_idx);
             out->data = (char*)addr + lo_idx * elem_sz;
@@ -3351,6 +3353,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             size_t hi_idx = slice.count;
             if((size_t)lo_idx > slice.count)
                 return ci_error(ci, lo->loc, "low slice subscript out of bounds");
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = (size_t)(hi_idx - lo_idx);
             out->data = (char*)slice.data + lo_idx * elem_sz;
@@ -3361,7 +3364,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
     }
     case CC_EXPR_SLICE_HI:{
-        if(result == ci_discard_buf) return 0;
         if(size < sizeof(CiRtSlice))
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
         int err;
@@ -3384,8 +3386,11 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             CiRtSlice *out = result;
             size_t addr_size;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &out->data, &addr_size);
+            void* addr;
+            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
+            out->data = addr;
             out->count = (size_t)hi_idx;
             return 0;
         }
@@ -3395,21 +3400,24 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(err) return err;
             if((size_t)hi_idx > slice.count)
                 return ci_error(ci, hi->loc, "high slice subscript out of bounds");
+            if(result == ci_discard_buf) return 0;
             CiRtSlice *out = result;
             out->count = hi_idx;
             out->data = slice.data;
             return 0;
         }
         else { // rvalue
-            CiRtSlice *out = result;
-            err = ci_interp_expr(ci, frame, expr->lhs, &out->data, sizeof out->data);
+            void* addr;
+            err = ci_interp_expr(ci, frame, expr->lhs, &addr, sizeof addr);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
+            CiRtSlice *out = result;
+            out->data = addr;
             out->count = (size_t)hi_idx;
             return 0;
         }
     }
     case CC_EXPR_SLICE_ALL:{
-        if(result == ci_discard_buf) return 0;
         if(size < sizeof(CiRtSlice))
             return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
         int err;
@@ -3419,9 +3427,12 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(a->is_incomplete)
                 return ci_unreachable(ci, expr->loc, "slice of incomplete array without upper bound");
             size_t addr_size;
-            CiRtSlice *out = result;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &out->data, &addr_size);
+            void* addr;
+            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
             if(err) return err;
+            if(result == ci_discard_buf) return 0;
+            CiRtSlice *out = result;
+            out->data = addr;
             out->count = a->length;
             return 0;
         }

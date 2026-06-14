@@ -5774,6 +5774,38 @@ TestFunction(test_interpreter){
                 "return (int)s.count + s[0];\n"),
             .exit_code = (int)sizeof "hello" + 'h',
         },
+        {
+            "discarded slice evaluates both bounds", __LINE__,
+            SVI("int i = 0;\n"
+                "int a[4] = {1,2,3,4};\n"
+                "a[i++:i++ + 2];\n"
+                "return i;\n"),
+            .exit_code = 2,
+        },
+        {
+            "discarded low slice evaluates bound", __LINE__,
+            SVI("int i = 0;\n"
+                "int a[4] = {1,2,3,4};\n"
+                "a[i++:];\n"
+                "return i;\n"),
+            .exit_code = 1,
+        },
+        {
+            "discarded high slice evaluates bound", __LINE__,
+            SVI("int i = 0;\n"
+                "int a[4] = {1,2,3,4};\n"
+                "a[:i++];\n"
+                "return i;\n"),
+            .exit_code = 1,
+        },
+        {
+            "discarded all slice evaluates base", __LINE__,
+            SVI("int i = 0;\n"
+                "int a[4] = {1,2,3,4};\n"
+                "(i++, a)[:];\n"
+                "return i;\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
