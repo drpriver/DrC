@@ -447,6 +447,20 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
         }
         return 0;
     }
+    // Complete array decays to a slice of its element type, like x[:]. Pointers
+    // and incomplete arrays stay explicit since they have no known length.
+    if(fk == CC_ARRAY && tk == CC_SLICE){
+        CcArray* a = ccqt_as_array(from);
+        if(a->is_incomplete || a->is_vector) return 0;
+        CcQualType ep = a->element;
+        CcQualType tp = ccqt_as_slice(to)->pointee;
+        if(ep.ptr != tp.ptr) return 0;
+        if((ep.is_const    && !tp.is_const)
+        || (ep.is_volatile && !tp.is_volatile)
+        || (ep.is_atomic   && !tp.is_atomic))
+            return 0;
+        return 1;
+    }
     if(fk == CC_ARRAY && tk == CC_POINTER && !ccqt_as_array(from)->is_vector) return 1;
     if(fk == CC_FUNCTION && tk == CC_POINTER) return 1;
     if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t && tk == CC_POINTER) return 1;
@@ -807,6 +821,17 @@ cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc)
     }
     if(fk == CC_SLICE && tk == CC_SLICE){
         if(ccqt_as_slice(from)->pointee.ptr == ccqt_as_slice(to)->pointee.ptr)
+            return 0;
+        if(p) cc_error(p, loc, "cannot cast to slice of different type");
+        return CC_SYNTAX_ERROR;
+    }
+    if(fk == CC_ARRAY && tk == CC_SLICE){
+        CcArray* a = ccqt_as_array(from);
+        if(a->is_incomplete || a->is_vector){
+            if(p) cc_error(p, loc, "cannot cast to slice from incomplete array or vector");
+            return CC_SYNTAX_ERROR;
+        }
+        if(a->element.ptr == ccqt_as_slice(to)->pointee.ptr)
             return 0;
         if(p) cc_error(p, loc, "cannot cast to slice of different type");
         return CC_SYNTAX_ERROR;
@@ -4025,6 +4050,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     case CC_TYPE_IS_STRUCT:
                     case CC_TYPE_IS_UNION:
                     case CC_TYPE_IS_ARRAY:
+                    case CC_TYPE_IS_SLICE:
                     case CC_TYPE_IS_FUNCTION:
                     case CC_TYPE_IS_ENUM:
                     case CC_TYPE_IS_CONST:
@@ -5739,6 +5765,7 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_TYPE_FIELDS:
                 case CC_TYPE_IS_ARITHMETIC:
                 case CC_TYPE_IS_ARRAY:
+                case CC_TYPE_IS_SLICE:
                 case CC_TYPE_IS_ATOMIC:
                 case CC_TYPE_IS_CALLABLE:
                 case CC_TYPE_IS_CONST:
@@ -11277,6 +11304,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("is_struct"), CC_TYPE_IS_STRUCT},
             {SVI("is_union"), CC_TYPE_IS_UNION},
             {SVI("is_array"), CC_TYPE_IS_ARRAY},
+            {SVI("is_slice"), CC_TYPE_IS_SLICE},
             {SVI("is_function"), CC_TYPE_IS_FUNCTION},
             {SVI("is_enum"), CC_TYPE_IS_ENUM},
             {SVI("is_const"), CC_TYPE_IS_CONST},
@@ -12385,6 +12413,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_IS_STRUCT:     INTRES(ccqt_kind(qt) == CC_STRUCT);
                 case CC_TYPE_IS_UNION:      INTRES(ccqt_kind(qt) == CC_UNION);
                 case CC_TYPE_IS_ARRAY:      INTRES(ccqt_kind(qt) == CC_ARRAY);
+                case CC_TYPE_IS_SLICE:      INTRES(ccqt_kind(qt) == CC_SLICE);
                 case CC_TYPE_IS_FUNCTION:   INTRES(ccqt_kind(qt) == CC_FUNCTION);
                 case CC_TYPE_IS_ENUM:       INTRES(ccqt_kind(qt) == CC_ENUM);
                 case CC_TYPE_IS_CONST:      INTRES(qt.is_const);

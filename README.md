@@ -11,6 +11,7 @@
 * [Bindings-Free FFI](#bindings-free-ffi)
 * [Native Threads](#native-threads)
 * [First Class Types](#first-class-types)
+* [Slices](#slices)
 * [Static If](#static-if)
 * [Procmacros](#procmacros)
 * [Methods and FUCS](#methods-and-fucs)
@@ -180,6 +181,26 @@ printf("};\n");
 
 Pass them as values, reflect
 over them, see the [json demo](Samples/Extensions/json_parse.c)
+
+## Slices
+
+Fixes "C's biggest mistake".
+
+```C
+int sum(int vals[:]){ // slice is {count, data}
+  int result = 0;
+  for(size_t i = 0; i < vals.count; i++){
+    result += vals[i];
+  }
+  return result;
+}
+int a[] = {1,2,3,4};
+printf("sum(a) = %d\n", sum(a)); // arrays implicitly convert to slice, preserving bounds info
+int oob(int vals[:]){
+  return vals[99]; // length is known, so implementation can emit array-bounds-check
+}
+oob(a[:2]); // error: slice subscript out of bounds
+```
 
 ## Static If
 

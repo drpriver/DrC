@@ -155,6 +155,7 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_IS_STRUCT,
     CC_TYPE_IS_UNION,
     CC_TYPE_IS_ARRAY,
+    CC_TYPE_IS_SLICE,
     CC_TYPE_IS_FUNCTION,
     CC_TYPE_IS_ENUM,
     CC_TYPE_IS_CONST,

@@ -126,6 +126,22 @@ First Class Types::md
   over them, see the [json demo]
   ::links
     json demo = Samples/Extensions/json_parse.c
+Slices::md
+  Fixes "C's biggest mistake".
+  ::pre.C
+    int sum(int vals[:]){ // slice is {count, data}
+      int result = 0;
+      for(size_t i = 0; i < vals.count; i++){
+        result += vals[i];
+      }
+      return result;
+    }
+    int a[] = {1,2,3,4};
+    printf("sum(a) = %d\n", sum(a)); // arrays implicitly convert to slice, preserving bounds info
+    int oob(int vals[:]){
+      return vals[99]; // length is known, so implementation can emit array-bounds-check
+    }
+    oob(a[:2]); // error: slice subscript out of bounds
 Static If::md
   Include or exclude statements/decls based on compile time expressions.
   ::pre.C

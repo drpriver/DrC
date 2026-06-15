@@ -3815,6 +3815,11 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "type introspection: is_slice", __LINE__,
+            SVI("return (int[:]).is_slice;\n"),
+            .exit_code = 1,
+        },
+        {
             "type introspection: is_enum", __LINE__,
             SVI("enum E { A, B };\n"
                "return (enum E).is_enum;\n"),
@@ -4467,6 +4472,7 @@ TestFunction(test_interpreter){
                "_Static_assert((union U).is_union, \"\");\n"
                "_Static_assert((enum E).is_enum, \"\");\n"
                "_Static_assert((int[3]).is_array, \"\");\n"
+               "_Static_assert((int[:]).is_slice, \"\");\n"
                "_Static_assert((int(int)).is_function, \"\");\n"
                "return 1;\n"),
             .exit_code = 1,
@@ -5876,6 +5882,72 @@ TestFunction(test_interpreter){
                 "s = a[1:3];\n"
                 "return s.length * 10 + s[0];\n"),
             .exit_code = 2 * 10 + 2,
+        },
+        {
+            "array converts to slice in init", __LINE__,
+            SVI("int a[4] = {1,2,3,4};\n"
+                "int s[:] = a;\n"
+                "return s.length * 10 + s[0];\n"),
+            .exit_code = 4 * 10 + 1,
+        },
+        {
+            "array converts to slice as arg", __LINE__,
+            SVI("int sum(int v[:]){\n"
+                "    int t = 0;\n"
+                "    for(int i = 0; i < v.length; i++) t += v[i];\n"
+                "    return t;\n"
+                "}\n"
+                "int a[4] = {1,2,3,4};\n"
+                "return sum(a);\n"),
+            .exit_code = 1 + 2 + 3 + 4,
+        },
+        {
+            "array converts to slice on return", __LINE__,
+            SVI("int g[4] = {5,6,7,8};\n"
+                "int all(void)[:]{ return g; }\n"
+                "int s[:] = all();\n"
+                "return s.length * 10 + s[0];\n"),
+            .exit_code = 4 * 10 + 5,
+        },
+        {
+            "string literal converts to slice", __LINE__,
+            SVI("const char s[:] = \"hello\";\n"
+                "return (int)s.count + s[0];\n"),
+            .exit_code = (int)sizeof "hello" + 'h',
+        },
+        {
+            "array converts to const slice", __LINE__,
+            SVI("int a[3] = {2,4,6};\n"
+                "const int s[:] = a;\n"
+                "return s.count * 10 + s[1];\n"),
+            .exit_code = 3 * 10 + 4,
+        },
+        {
+            "_Generic on array does not pick slice arm", __LINE__,
+            SVI("int a[4] = {0,0,0,0};\n"
+                "return _Generic(a, int*: 1, int[:]: 2, default: 3);\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Generic on slice picks slice arm", __LINE__,
+            SVI("int a[4] = {0,0,0,0};\n"
+                "int s[:] = a[:];\n"
+                "return _Generic(s, int*: 1, int[:]: 2, default: 3);\n"),
+            .exit_code = 2,
+        },
+        {
+            "explicit array to slice cast", __LINE__,
+            SVI("int a[4] = {1,2,3,4};\n"
+                "int s[:] = (int[:])a;\n"
+                "return s.length * 10 + s[0];\n"),
+            .exit_code = 4 * 10 + 1,
+        },
+        {
+            "explicit array to slice cast drops const", __LINE__,
+            SVI("const int a[3] = {2,4,6};\n"
+                "int s[:] = (int[:])a;\n"
+                "return s.count * 10 + s[1];\n"),
+            .exit_code = 3 * 10 + 4,
         },
     };
     int err;

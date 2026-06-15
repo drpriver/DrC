@@ -4380,6 +4380,26 @@ TestFunction(test_parse_decls){
                 {SVI("cs"), SVI("char[:]"), SVI("(char[:])s")},
             },
         },
+        {
+            "array implicitly converts to slice", __LINE__,
+            SVI("int a[3];\n"
+                "int s[:] = a;\n"
+                "const int cs[:] = a;\n"),
+            .vars = {
+                {SVI("a"), SVI("int[3]")},
+                {SVI("s"), SVI("int[:]"), SVI("(int[:])a")},
+                {SVI("cs"), SVI("const int[:]"), SVI("(const int[:])a")},
+            },
+        },
+        {
+            "explicit array to slice cast", __LINE__,
+            SVI("const int a[3];\n"
+                "int s[:] = (int[:])a;\n"),
+            .vars = {
+                {SVI("a"), SVI("const int[3]")},
+                {SVI("s"), SVI("int[:]"), SVI("(int[:])a")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
@@ -6292,6 +6312,18 @@ TestFunction(test_parse_errors){
             SVI("const int x[] = {1,2,3}\n;"
                 "int s[:] = x[:];\n"),
             SVI("(test):2:14: error: cannot implicitly convert from 'const int[:]' to 'int[:]'\n"),
+        },
+        {
+            "array to slice drops const", __LINE__,
+            SVI("const int a[3] = {1,2,3};\n"
+                "int s[:] = a;\n"),
+            SVI("(test):2:12: error: cannot implicitly convert from 'const int[3]' to 'int[:]'\n"),
+        },
+        {
+            "explicit array to slice different type", __LINE__,
+            SVI("int a[3];\n"
+                "char s[:] = (char[:])a;\n"),
+            SVI("(test):2:13: error: cannot cast to slice of different type\n"),
         },
         {
             "invalid slice cast", __LINE__,

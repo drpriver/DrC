@@ -853,6 +853,20 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE){ // qualified slice cast
             return ci_interp_expr(ci, frame, operand, result, size);
         }
+        // Array-to-slice conversion: {count = array length, data = &array[0]}.
+        if(ccqt_kind(from) == CC_ARRAY && ccqt_kind(to) == CC_SLICE){
+            if(size < sizeof(CiRtSlice))
+                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
+            void* ptr;
+            size_t lval_size;
+            int err = ci_interp_lvalue(ci, frame, operand, &ptr, &lval_size);
+            if(err) return err;
+            if(result == ci_discard_buf) return 0;
+            CiRtSlice* out = result;
+            out->count = ccqt_as_array(from)->length;
+            out->data = ptr;
+            return 0;
+        }
         // Array-to-pointer decay: get address of array data (not vectors).
         if(ccqt_kind(from) == CC_ARRAY && !ccqt_as_array(from)->is_vector){
             if(result == ci_discard_buf) return 0;
@@ -2642,6 +2656,10 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             }
             case CC_TYPE_IS_ARRAY: {
                 *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY;
+                return 0;
+            }
+            case CC_TYPE_IS_SLICE: {
+                *(_Bool*)result = ccqt_kind(qt) == CC_SLICE;
                 return 0;
             }
             case CC_TYPE_IS_FUNCTION: {

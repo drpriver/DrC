@@ -30,6 +30,7 @@
   * [`.` and `-&gt;` interchangeable](#and-interchangeable)
   * [Function Uniform Call Syntax (FUCS)](#function-uniform-call-syntax-fucs)
   * [Plan9 struct embedding](#plan9-struct-embedding)
+  * [Slices](#slices)
   * [`_Type`](#type)
     * [Properties](#properties)
     * [Methods](#methods)
@@ -475,6 +476,120 @@ struct Derived d2 = {1, 2, 3};
 struct Base* bp = &d; // implicit conversion
 ```
 
+### Slices
+
+A slice is a `{count, data}` pair view to an array (fat pointer).
+
+
+The runtime representation is a two-word struct, equivalent to
+`struct { size_t count; T* data; }`.
+
+```C
+int x[:];        // a slice of int
+const char s[:]; // a slice of const char
+size_t count;
+count = _Countof x;
+count = x.count; // same as _Countof x
+count = x.length; // alias for x.count
+int* data = x.data; // underlying pointer to first element
+                    // (could be null or one-past-the-end of an array)
+```
+
+
+Slices are created either by implicit conversion from an array, explicit
+cast from an array or by slicing a pointer, array or another slice.
+
+```C
+int x[4] = {1, 2, 3, 4};
+// either bound is optional
+int a[:] = x[:];   // {1, 2, 3, 4}, length 4
+int b[:] = x[1:];  // {2, 3, 4},    length 3
+int c[:] = x[:3];  // {1, 2, 3},    length 3
+// interval is [lo:hi), where hi is excluded
+int d[:] = x[2:4]; // {3, 4},       length 2
+int *p = x;
+int e[:] = p[:2] // length 2
+int f[:] = x; // length 4
+```
+
+
+Incomplete arrays and pointers must include the `hi` bound as they don't
+care length information by themself.
+
+```C
+int* p = x;
+int e[:] = p[:3];  // ok, length 3
+int f[:] = p[:];   // error: slice of pointer requires upper bound
+
+const char hello[:] = "hello"; // length 6, includes the NUL
+```
+
+
+Slices can be subscripted directly, like arrays. They cannot be derefenced
+with `*` and do not implicitly convert to pointers.
+
+```C
+int sum(int v[:]){
+    int t = 0;
+    for(int i = 0; i < v.length; i++) t += v[i];
+    return t;
+}
+int a[3] = {1,2,3};
+sum(a); // pass an array to a slice parameter
+```
+
+
+Slices are first-class: they can be passed to and returned from
+functions. Declaring a function returning a slice looks weird
+(in the same way that returning function pointers looks weird).
+If you don't like this, use a typedef.
+
+```C
+#include <ctype.h>
+#include <stdio.h>
+char strip(char s[:])[:]{ // slice as param, returns slice
+    while(s.length && isspace(s[0])){
+        s.length--;
+        s.data++;
+    }
+    while(s.length && (!s[s.count-1] || isspace(s[s.count-1])))
+        s.length--;
+    return s;
+}
+
+char msg[:] = "  this is some text with space  "[:];
+printf("before: '%.*s'\n", (int)msg.length, msg.data);
+msg = strip(msg);
+printf("stripped: '%.*s'\n", (int)msg.length, msg.data);
+```
+
+
+A whole slice may be assigned at once, or its
+`.data` and `.count` members set individually.
+
+```C
+int s[:];
+s = a[1:3];          // whole-slice assignment
+s.data = x;          // or set the members directly
+s.count = _Countof x;
+```
+
+
+Qualifiers are part of the element type, implicit conversions follow the same rules
+as pointers. Explicit casts only allow casting to same underlying type as
+otherwise the count would be invalid.
+
+```C
+const int ci[:] = a[:];     // ok: adds const
+int bad[:] = ci;            // error: cannot drop const implicitly
+char cs[:] = (char[:])s;    // ok: cast changes qualifiers
+char no[:] = (char[:])ci;   // error: cannot cast to slice of different type
+```
+
+
+Slices of `void` and slices of functions are not allowed.
+We might allow slices of `void` at some point.
+
 ### `_Type`
 
 Types are first-class values of type `_Type`. A type name used
@@ -542,6 +657,9 @@ const char* type_kind(_Type T){
 </tr>
 <tr>
 <td>`.is_array`</td><td>`_Bool`</td><td>True for array types</td>
+</tr>
+<tr>
+<td>`.is_slice`</td><td>`_Bool`</td><td>True for slice types</td>
 </tr>
 <tr>
 <td>`.is_function`</td><td>`_Bool`</td><td>True for function types</td>
