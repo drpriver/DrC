@@ -3855,7 +3855,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
                     return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
                 if(tk == CC_STRUCT && p->builtin_module.bits && agg_type.ptr == ccqt_as_ptr(p->builtin_module)->pointee.ptr){
-                    if(member_name->length == sizeof "symbol" - 1 && memcmp(member_name->data, "symbol", sizeof "symbol" - 1) == 0){
+                    StringView mname = {member_name->length, member_name->data};
+                    if(sv_equals(mname, SV("symbol"))){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         CcExpr* name;
@@ -3882,7 +3883,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                         continue;
                     }
-                    if(member_name->length == sizeof "run" - 1 && memcmp(member_name->data, "run", sizeof "run" - 1) == 0){
+                    if(sv_equals(mname, SV("run"))){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
@@ -3893,7 +3894,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                         continue;
                     }
-                    if(member_name->length == sizeof "parse_type" - 1 && memcmp(member_name->data, "parse_type", sizeof "parse_type" - 1) == 0){
+                    if(sv_equals(mname, SV("parse_type"))){
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         CcExpr* name;
@@ -3915,7 +3916,6 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     CcModuleOp module_op = CC_MODULE_NONE;
                     CcQualType module_result_type = ccqt_basic(cc_target(p)->size_type);
                     _Bool module_method = 0;
-                    StringView mname = {member_name->length, member_name->data};
                     if(sv_equals(mname, SV("func_count")))
                         module_op = CC_MODULE_FUNC_COUNT;
                     else if(sv_equals(mname, SV("func"))){
@@ -4200,9 +4200,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     mnode->func = method;
                     err = PM_put(&p->used_funcs, cc_allocator(p), method, method);
                     if(err) return CC_OOM_ERROR;
-                    if(mkind == CC_EXPR_ARROW)
-                        receiver = operand;
-                    else {
+                    if(method->type->param_count > 0 && ccqt_kind(method->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
                         CcQualType addr_type;
                         err = cc_pointer_of(p, operand->type, &addr_type);
                         if(err) return err;
@@ -4210,6 +4208,19 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         if(!addr) return CC_OOM_ERROR;
                         addr->lhs = operand;
                         receiver = addr;
+                    }
+                    else if(method->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(method->type->params[0]) != CC_POINTER){
+                        CcQualType deref_type;
+                        err = cc_deref_type(p, operand->type, &deref_type, tok.loc);
+                        if(err) return err;
+                        CcExpr* deref = cc_make_expr(p, CC_EXPR_DEREF, tok.loc, deref_type, 0);
+                        if(!deref) return CC_OOM_ERROR;
+                        deref->lhs = operand;
+                        deref->is_lvalue = 1;
+                        receiver = deref;
+                    }
+                    else {
+                        receiver = operand;
                     }
                     operand = mnode;
                     continue;

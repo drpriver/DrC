@@ -29,6 +29,7 @@ struct CiAllocaBlock {
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
     CiInterpFrame*_Null_unspecified parent;
+    Atom name;
     size_t pc;
     size_t stmt_count;
     CcStatement*_Null_unspecified stmts;

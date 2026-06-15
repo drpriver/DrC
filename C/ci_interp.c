@@ -728,6 +728,7 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
         }
     }
     *frame = (CiInterpFrame){
+        .name = func->name,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = rvalue,
@@ -3660,6 +3661,7 @@ ci_interp_call(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, CcExpr*_N
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
+        .name = func->name,
         .parent = caller,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
@@ -3728,6 +3730,7 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
+        .name = func->name,
         .stmts = func->body.data,
         .stmt_count = func->body.count,
         .return_buf = result,
@@ -5441,7 +5444,7 @@ ci_backtrace(CiInterpreter* ci, CiInterpFrame* f, int level){
     if(!f->stmts) return 1;
     if(f->pc >= f->stmt_count) return 1;
     CcStatement* stmt = &f->stmts[f->pc];
-    ci_error(ci, stmt->loc, "%d", level);
+    ci_error(ci, stmt->loc, "%s: %d", f->name?f->name->data:"(top level)", level);
     if(!f->parent) return 0;
     return ci_backtrace(ci, f->parent, level+1);
 }
