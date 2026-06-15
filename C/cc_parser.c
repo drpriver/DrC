@@ -3350,7 +3350,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                             return cc_error(p, expr->loc, "Can only _Countof a slice at runtime");
                         CcExpr* node = cc_make_expr(p, CC_EXPR_DOT, expr->loc, ccqt_basic(cc_target(p)->size_type), 1);
                         if(!node) return CC_OOM_ERROR;
-                        node->field_loc = (CcFieldLoc){.byte_offset = offsetof(CiRtSlice, count)};
+                        node->field_loc.byte_offset = offsetof(CiRtSlice, count);
                         node->values[0] = expr;
                         *out = node;
                         return 0;
