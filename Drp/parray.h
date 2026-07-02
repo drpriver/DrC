@@ -28,6 +28,7 @@ struct Parray {
     size_t count, capacity;
     void*_Null_unspecified*_Null_unspecified data;
 };
+#define Parray(x) Parray
 
 static
 warn_unused

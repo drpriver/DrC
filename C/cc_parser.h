@@ -162,6 +162,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__compile,
 };
 TYPEDEF_ENUM(CcBuiltinFunc, uintptr_t);
+typedef struct CcStmtSink CcStmtSink;
 
 typedef struct CcParser CcParser;
 struct CcParser {
@@ -189,6 +190,7 @@ struct CcParser {
     CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
     FreeList(Marray(CcToken)) scratch_tokens;
+    FreeList(CcStmtSink) scratch_stmt_sinks;
     #define CC_RECYCLE_EXPRS 1
     #if CC_RECYCLE_EXPRS
     FreeList(CcExpr) exprs[3];
@@ -197,6 +199,7 @@ struct CcParser {
     uint32_t loop_depth;
     uint32_t switch_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
+    CcStmtSink* _Null_unspecified stmt_sink;
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;
     PointerMap used_funcs; // CcFunc* set (value = key)

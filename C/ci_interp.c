@@ -3594,6 +3594,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CC_STMT_DEFAULT:
         case CC_STMT_BREAK:
         case CC_STMT_CONTINUE:
+        case CC_STMT_COMPOUND: // tree-only, flattened away by lowering
             return CI_UNREACHABLE_ERROR;
     }
     return ci_unimplemented(ci, stmt->loc, "unsupported statement kind");

@@ -199,6 +199,7 @@ enum CcModuleOp TYPED_ENUM(uint32_t) {
 TYPEDEF_ENUM(CcModuleOp, uint32_t);
 
 typedef struct CcStatement CcStatement;
+typedef struct CcStmtNode CcStmtNode;
 typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
 typedef struct CcExpr CcExpr;
@@ -303,6 +304,8 @@ struct CcExpr {
         CcInitList* init_list;
         CcFieldLoc field_loc; // CC_EXPR_DOT, CC_EXPR_ARROW: resolved field offset+bitfield info
         CcQualType type_value; // for expressions of type type
+        CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
+                               // value/type = trailing CC_STMT_EXPR's expr
     };
     CcExpr*_Nonnull values[];
 };
