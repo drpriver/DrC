@@ -599,6 +599,85 @@ TestFunction(test_interpreter){
             .exit_code = 12,
         },
         {
+            "flat expr: && || normalize to 0/1", __LINE__,
+            SVI("int r = (5 && 7) + (0 || 3) * 10;\n"
+               "return r;\n"),
+            .exit_code = 11,
+        },
+        {
+            "flat expr: && short circuits side effect", __LINE__,
+            SVI("int n = 0;\n"
+               "int r = 0 && (n = 5);\n"
+               "return n * 10 + r;\n"),
+            .exit_code = 0,
+        },
+        {
+            "flat expr: || short circuits side effect", __LINE__,
+            SVI("int n = 0;\n"
+               "int r = 1 || (n = 5);\n"
+               "return n * 10 + r;\n"),
+            .exit_code = 1,
+        },
+        {
+            "flat expr: && short circuits in if condition", __LINE__,
+            SVI("int n = 0;\n"
+               "if(0 && (n = 5)) return 9;\n"
+               "if(1 && (n = 3)) return n;\n"
+               "return 9;\n"),
+            .exit_code = 3,
+        },
+        {
+            "flat expr: || short circuits in if condition", __LINE__,
+            SVI("int n = 0;\n"
+               "if(1 || (n = 5)) return n;\n"
+               "return 9;\n"),
+            .exit_code = 0,
+        },
+        {
+            "flat expr: && value is canonical in switch", __LINE__,
+            SVI("switch(5 && 7){\n"
+               "  case 0: return 10;\n"
+               "  case 1: return 11;\n"
+               "  default: return 12;\n"
+               "}\n"),
+            .exit_code = 11,
+        },
+        {
+            "flat expr: negative zero is falsy", __LINE__,
+            SVI("double z = -0.0;\n"
+               "if(z) return 1;\n"
+               "while(z) return 2;\n"
+               "return z ? 3 : 4;\n"),
+            .exit_code = 4,
+        },
+        {
+            "flat expr: ternary in condition", __LINE__,
+            SVI("int f(int a){\n"
+               "    int n = 0;\n"
+               "    if(a ? a - 1 : a + 1) n += 1;\n"
+               "    while(n < (a ? 3 : 1)) n++;\n"
+               "    return n;\n"
+               "}\n"
+               "return f(0) * 10 + f(2);\n"),
+            .exit_code = 13,
+        },
+        {
+            "flat expr: comma in condition", __LINE__,
+            SVI("int n = 0;\n"
+               "int x = (n = 4, n + 1);\n"
+               "if((n = 7, 0)) return 1;\n"
+               "return x * 10 + n;\n"),
+            .exit_code = 57,
+        },
+        {
+            "flat expr: nested short circuit in loop cond", __LINE__,
+            SVI("int i = 0, evals = 0;\n"
+               "int bump(void){ evals++; return 1; }\n"
+               "while(i < 3 && bump()){ i++; }\n"
+               "return i * 10 + evals;\n"),
+            .exit_code = 33,
+        },
+        {
             "lowering: temp slot recycling stress", __LINE__,
             SVI("int f(void){\n"
                "    int total = 0;\n"

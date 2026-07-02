@@ -3507,19 +3507,33 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CI_OP_JUMP:
             frame->pc = op->jump;
             return 0;
+        case CI_OP_ISTRUE: {
+            const void* src = (char*)frame->slots + op->src;
+            _Bool v;
+            if(op->extra)
+                v = ci_read_float(src, (CcBasicTypeKind)op->extra) != 0.0;
+            else if(op->src_size > 8){
+                CiUint128 u;
+                ci_uint128_read(&u, src, op->src_size);
+                v = ci_uint128_nonzero(u);
+            }
+            else
+                v = ci_read_uint(src, op->src_size) != 0;
+            ci_write_uint((char*)frame->slots + op->slot, op->slot_size, v);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_JUMP_FALSE: {
-            // TODO: lower so that we dont need type here
             const void* cond = (char*)frame->slots + op->slot;
-            if(!ci_is_truthy(cond, op->expr->type, op->slot_size))
+            if(ci_read_uint(cond, op->slot_size) == 0)
                 frame->pc = op->jump;
             else
                 frame->pc++;
             return 0;
         }
         case CI_OP_JUMP_TRUE: {
-            // TODO: lower so that we dont need type here
             const void* cond = (char*)frame->slots + op->slot;
-            if(ci_is_truthy(cond, op->expr->type, op->slot_size))
+            if(ci_read_uint(cond, op->slot_size) != 0)
                 frame->pc = op->jump;
             else
                 frame->pc++;
@@ -3534,21 +3548,14 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_SWITCH: {
-            // TODO: lower so that we dont need type here
             const void* src = (char*)frame->slots + op->slot;
+            // Sign-extend or zero-extend to 64 bits; extra = unsignedness,
+            // decided at lowering.
             uint64_t val;
-            // Sign-extend or zero-extend integer switches to 64 bits.
-            // _Type switches already produce the canonical type bits.
-            if(ccqt_bt_eq(op->expr->type, CCBT__Type))
+            if(op->extra)
                 val = ci_read_uint(src, op->slot_size);
-            else {
-                CcQualType st = op->expr->type;
-                _Bool is_unsigned = ccqt_is_unsigned(st, !ci_target(ci)->char_is_signed);
-                if(is_unsigned)
-                    val = ci_read_uint(src, op->slot_size);
-                else
-                    val = (uint64_t)ci_read_int(src, op->slot_size);
-            }
+            else
+                val = (uint64_t)ci_read_int(src, op->slot_size);
             size_t count = op->sw.count;
             const CcSwitchEntry* table = op->sw.table;
             // Binary search for matching case

@@ -60,8 +60,22 @@ struct CiLowerCtx {
     Marray(CiBackpatchTarget) backpatches;
 };
 
+// A value produced by expression lowering: which slot it lives in, and whether
+// it already holds a canonical 0/1 integer (so conditional jumps can test it
+// without normalizing through CI_OP_ISTRUE).
+typedef struct CiLowerVal CiLowerVal;
+struct CiLowerVal {
+    uint32_t slot;
+    uint32_t size;
+    _Bool canonical;
+};
+#define CI_NO_SLOT UINT32_MAX
+
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
 static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
+static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out);
+static int ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, SrcLoc loc);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -82,7 +96,6 @@ static
 int
 ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
     int err;
-    CcParser* p = &ci->parser;
     switch(n->kind){
         case CC_STMT_NULL:
             return 0;
@@ -105,30 +118,18 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             return 0;
         }
         case CC_STMT_IF: {
-            uint32_t cond_slot, cond_size;
             CcExpr* cond = n->exprs[0];
-            err = cc_sizeof_as_uint(p, cond->type, n->loc, &cond_size);
-            if(err) return err;
-            err = ci_alloc_slot(ctx, cond_size, cond_size, &cond_slot);
+            CiLowerVal v;
+            err = ci_lower_cond(ci, ctx, cond, &v);
             if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
-                .kind = CI_OP_EVAL_INTO,
-                .slot = cond_slot,
-                .slot_size = cond_size,
-                .loc = cond->loc,
-                .expr = cond,
-            };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
                 .kind = CI_OP_JUMP_FALSE,
-                .slot = cond_slot,
-                .slot_size = cond_size,
+                .slot = v.slot,
+                .slot_size = v.size,
                 .loc = n->loc,
-                .expr = cond,
             };
             ptrdiff_t jump = (char*)&op->jump - (char*)ctx->out->data;
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
@@ -152,31 +153,19 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             return 0;
         }
         case CC_STMT_WHILE: {
-            uint32_t cond_slot, cond_size;
             CcExpr* cond = n->exprs[0];
-            err = cc_sizeof_as_uint(p, cond->type, n->loc, &cond_size);
-            if(err) return err;
-            err = ci_alloc_slot(ctx, cond_size, cond_size, &cond_slot);
-            if(err) return err;
             uint32_t cond_idx = (uint32_t)ctx->out->count;
+            CiLowerVal v;
+            err = ci_lower_cond(ci, ctx, cond, &v);
+            if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
-                .kind = CI_OP_EVAL_INTO,
-                .slot = cond_slot,
-                .slot_size = cond_size,
-                .loc = cond->loc,
-                .expr = cond,
-            };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
                 .kind = CI_OP_JUMP_FALSE,
-                .slot = cond_slot,
-                .slot_size = cond_size,
+                .slot = v.slot,
+                .slot_size = v.size,
                 .loc = n->loc,
-                .expr = cond,
             };
             ptrdiff_t jump = (char*)&op->jump - (char*)ctx->out->data;
             size_t backpatch_start = ctx->backpatches.count;
@@ -201,30 +190,18 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
             uint32_t cond_idx = (uint32_t)ctx->out->count;
-            uint32_t cond_slot, cond_size;
-            err = cc_sizeof_as_uint(p, cond->type, n->loc, &cond_size);
-            if(err) return err;
-            err = ci_alloc_slot(ctx, cond_size, cond_size, &cond_slot);
+            CiLowerVal v;
+            err = ci_lower_cond(ci, ctx, cond, &v);
             if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
-                .kind = CI_OP_EVAL_INTO,
-                .slot = cond_slot,
-                .slot_size = cond_size,
-                .loc = cond->loc,
-                .expr = cond,
-            };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
                 .kind = CI_OP_JUMP_TRUE,
-                .slot = cond_slot,
-                .slot_size = cond_size,
+                .slot = v.slot,
+                .slot_size = v.size,
                 .loc = n->loc,
                 .jump = body_start,
-                .expr = cond,
             };
             ci_backpatch_break_continue(ctx, backpatch_start, (uint32_t)ctx->out->count, cond_idx);
             return 0;
@@ -248,28 +225,16 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             uint32_t top_idx = (uint32_t)ctx->out->count;
             ptrdiff_t jump = -1;
             if(cond){
-                uint32_t cond_slot, cond_size;
-                err = cc_sizeof_as_uint(p, cond->type, n->loc, &cond_size);
+                CiLowerVal v;
+                err = ci_lower_cond(ci, ctx, cond, &v);
                 if(err) return err;
-                err = ci_alloc_slot(ctx, cond_size, cond_size, &cond_slot);
-                if(err) return err;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .kind = CI_OP_EVAL_INTO,
-                    .slot = cond_slot,
-                    .slot_size = cond_size,
-                    .loc = cond->loc,
-                    .expr = cond,
-                };
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .kind = CI_OP_JUMP_FALSE,
-                    .slot = cond_slot,
-                    .slot_size = cond_size,
+                    .slot = v.slot,
+                    .slot_size = v.size,
                     .loc = n->loc,
-                    .expr = cond,
                 };
                 jump = (char*)&op->jump - (char*)ctx->out->data;
             }
@@ -300,29 +265,22 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_SWITCH: {
             CcExpr* e = n->exprs[0];
-            uint32_t val_slot, val_size;
-            err = cc_sizeof_as_uint(p, e->type, n->loc, &val_size);
+            CiLowerVal v;
+            err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
             if(err) return err;
-            err = ci_alloc_slot(ctx, val_size, val_size, &val_slot);
-            if(err) return err;
+            // _Type switches already produce the canonical type bits;
+            // treat them as unsigned.
+            _Bool is_unsigned = ccqt_bt_eq(e->type, CCBT__Type)
+                || ccqt_is_unsigned(e->type, !ci_target(ci)->char_is_signed);
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
-                .kind = CI_OP_EVAL_INTO,
-                .slot = val_slot,
-                .slot_size = val_size,
-                .loc = e->loc,
-                .expr = e,
-            };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
                 .kind = CI_OP_SWITCH,
-                .slot = val_slot,
-                .slot_size = val_size,
+                .slot = v.slot,
+                .slot_size = v.size,
                 .loc = n->loc,
-                .expr = e,
+                .extra = is_unsigned,
             };
             uint32_t sw_idx = (uint32_t)(op - ctx->out->data);
             size_t backpatch_start = ctx->backpatches.count;
@@ -441,6 +399,183 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
     }
     return ci_error(ci, n->loc, "ICE: unknown statement kind in lowering at %s:%d", __FILE__, __LINE__);
+}
+
+// Flatten an expression into ops leaving its value in a slot.
+// Control-flow expressions (&&, ||, ?:, comma) lower to jumps; every other
+// kind falls back to CI_OP_EVAL_INTO of the (sub)tree until it grows its own
+// ops. dest is the requested slot, or CI_NO_SLOT to allocate one.
+static
+int
+ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    int err;
+    CcParser* p = &ci->parser;
+    uint32_t size;
+    err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
+    if(err) return err;
+    if(dest == CI_NO_SLOT){
+        err = ci_alloc_slot(ctx, size, size, &dest);
+        if(err) return err;
+    }
+    out->slot = dest;
+    out->size = size;
+    out->canonical = 0;
+    switch((uint32_t)e->kind){
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR: {
+            // dest = istrue(lhs); if(!dest) goto end; dest = istrue(rhs); end:
+            // (|| jumps on true instead)
+            CcExpr* lhs = e->lhs;
+            CcExpr* rhs = e->values[0];
+            uint32_t temp = ctx->temp;
+            CiLowerVal v;
+            err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &v);
+            if(err) return err;
+            err = ci_lower_istrue(ctx, &v, lhs->type, dest, size, lhs->loc);
+            if(err) return err;
+            ctx->temp = temp;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .kind = e->kind == CC_EXPR_LOGAND? CI_OP_JUMP_FALSE : CI_OP_JUMP_TRUE,
+                .slot = dest,
+                .slot_size = size,
+                .loc = e->loc,
+            };
+            ptrdiff_t jump = (char*)&op->jump - (char*)ctx->out->data;
+            err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
+            if(err) return err;
+            err = ci_lower_istrue(ctx, &v, rhs->type, dest, size, rhs->loc);
+            if(err) return err;
+            ctx->temp = temp;
+            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            out->canonical = 1;
+            return 0;
+        }
+        case CC_EXPR_TERNARY: {
+            // cond; if(!cond) goto else; dest = then; goto end; else: dest = else; end:
+            uint32_t temp = ctx->temp;
+            CiLowerVal v;
+            err = ci_lower_cond(ci, ctx, e->lhs, &v);
+            if(err) return err;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .kind = CI_OP_JUMP_FALSE,
+                .slot = v.slot,
+                .slot_size = v.size,
+                .loc = e->loc,
+            };
+            ptrdiff_t jump = (char*)&op->jump - (char*)ctx->out->data;
+            ctx->temp = temp;
+            err = ci_lower_expr(ci, ctx, e->values[0], dest, &v);
+            if(err) return err;
+            ctx->temp = temp;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .kind = CI_OP_JUMP,
+                .loc = e->loc,
+            };
+            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            jump = (char*)&op->jump - (char*)ctx->out->data;
+            err = ci_lower_expr(ci, ctx, e->values[1], dest, &v);
+            if(err) return err;
+            ctx->temp = temp;
+            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            return 0;
+        }
+        case CC_EXPR_COMMA: {
+            CcExpr* lhs = e->lhs;
+            uint32_t temp = ctx->temp;
+            if(ccqt_bt_eq(lhs->type, CCBT_void)){
+                CiOp* op;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_EVAL,
+                    .expr = lhs,
+                    .loc = lhs->loc,
+                };
+            }
+            else {
+                CiLowerVal v;
+                err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &v);
+                if(err) return err;
+            }
+            ctx->temp = temp;
+            return ci_lower_expr(ci, ctx, e->values[0], dest, out);
+        }
+        default: {
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .kind = CI_OP_EVAL_INTO,
+                .slot = dest,
+                .slot_size = size,
+                .expr = e,
+                .loc = e->loc,
+            };
+            switch((uint32_t)e->kind){
+                case CC_EXPR_LOGNOT:
+                case CC_EXPR_EQ:
+                case CC_EXPR_NE:
+                case CC_EXPR_LT:
+                case CC_EXPR_GT:
+                case CC_EXPR_LE:
+                case CC_EXPR_GE:
+                    // the evaluator writes these as canonical 0/1
+                    out->canonical = 1;
+                    break;
+                default:
+                    break;
+            }
+            return 0;
+        }
+    }
+}
+
+// Lower a condition expression and normalize it so a conditional jump can
+// test its slot without knowing the type.
+static
+int
+ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out){
+    int err = ci_lower_expr(ci, ctx, cond, CI_NO_SLOT, out);
+    if(err) return err;
+    if(out->canonical) return 0;
+    uint32_t slot;
+    err = ci_alloc_slot(ctx, 1, 1, &slot);
+    if(err) return err;
+    err = ci_lower_istrue(ctx, out, cond->type, slot, 1, cond->loc);
+    if(err) return err;
+    out->slot = slot;
+    out->size = 1;
+    out->canonical = 1;
+    return 0;
+}
+
+static
+int
+ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, SrcLoc loc){
+    uint32_t float_kind = 0;
+    if(ccqt_is_basic(src_type) && ccbt_is_float(src_type.basic.kind))
+        float_kind = (uint32_t)src_type.basic.kind;
+    CiOp* op;
+    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_ISTRUE,
+        .slot = dest,
+        .slot_size = dest_size,
+        .src = v->slot,
+        .src_size = v->size,
+        .extra = float_kind,
+        .loc = loc,
+    };
+    return 0;
 }
 
 static

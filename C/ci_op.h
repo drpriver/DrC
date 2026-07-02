@@ -17,12 +17,15 @@
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,             // evaluate expr, discard result
     CI_OP_EVAL_INTO,        // evaluate expr into slots[slot..slot+slot_size)
+    CI_OP_ISTRUE,           // slots[slot] = slot_size-byte 0/1 of truthy(slots[src..src+src_size));
+                            // extra = CcBasicTypeKind when the source is a float, else 0
     CI_OP_JUMP,             // pc = jump
-    CI_OP_JUMP_FALSE,       // if !truthy(slots[slot]) pc = jump; expr provides the type
-    CI_OP_JUMP_TRUE,        // if truthy(slots[slot]) pc = jump; expr provides the type
+    CI_OP_JUMP_FALSE,       // if !slots[slot] pc = jump; slot holds a canonical 0/1
+    CI_OP_JUMP_TRUE,        // if slots[slot] pc = jump; slot holds a canonical 0/1
     CI_OP_RETURN,           // evaluate expr (nullable) into return_buf; pc = end
     CI_OP_SWITCH,           // multi-way conditional jump on slots[slot]; binary
-                            // search sw.table, no match: pc = jump (default/exit)
+                            // search sw.table, no match: pc = jump (default/exit);
+                            // extra = 1 if the value is unsigned
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
@@ -30,7 +33,9 @@ typedef struct CiOp CiOp;
 struct CiOp {
     CiOpKind kind;
     uint32_t jump;
-    uint32_t slot, slot_size;
+    uint32_t slot, slot_size; // destination (or tested) slot
+    uint32_t src, src_size;   // source slot
+    uint32_t extra;           // op-specific immediate
     SrcLoc loc;
     CcExpr* _Null_unspecified expr;
     struct {
