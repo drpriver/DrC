@@ -678,6 +678,52 @@ TestFunction(test_interpreter){
             .exit_code = 33,
         },
         {
+            "flat expr: var condition re-read each iteration", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 3, n = 0;\n"
+               "    while(x){ x--; n++; }\n"
+               "    if(x) return 99;\n"
+               "    return n + 40;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 43,
+        },
+        {
+            "flat expr: ternary selects var into return", __LINE__,
+            SVI("int f(int c){ int b = 7, d = 9; return c ? b : d; }\n"
+               "return f(1) * 10 + f(0);\n"),
+            .exit_code = 79,
+        },
+        {
+            "flat expr: struct ternary return", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "struct P f(int c){ struct P x = {1,2}, y = {3,4}; return c ? x : y; }\n"
+               "return f(1).a * 10 + f(0).b;\n"),
+            .exit_code = 14,
+        },
+        {
+            "flat expr: discarded ternary side effects", __LINE__,
+            SVI("int n = 0;\n"
+               "1 ? (void)(n = 5) : (void)(n = 6);\n"
+               "0 ? (void)(n += 100) : (void)(n += 10);\n"
+               "return n;\n"),
+            .exit_code = 15,
+        },
+        {
+            "flat expr: comma statement", __LINE__,
+            SVI("int n = 0;\n"
+               "n = 3, n++;\n"
+               "return n;\n"),
+            .exit_code = 4,
+        },
+        {
+            "flat expr: return short circuit", __LINE__,
+            SVI("int f(int a, int b){ return a && b; }\n"
+               "int g(int a, int b){ return a || b; }\n"
+               "return f(2,0)*100 + f(2,3)*10 + g(0,0);\n"),
+            .exit_code = 10,
+        },
+        {
             "lowering: temp slot recycling stress", __LINE__,
             SVI("int f(void){\n"
                "    int total = 0;\n"

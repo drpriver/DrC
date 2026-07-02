@@ -979,9 +979,9 @@ TestFunction(test_interp_fail){
                 "void foo(void){__bt();}\n"
                 "baz();\n"),
             SVI("(test):4:16: error: foo: 0\n"
-                "(test):2:16: error: bar: 1\n"
-                "(test):3:16: error: baz: 2\n"
-                "(test):5:1: error: (top level): 3\n"),
+                "(test):2:19: error: bar: 1\n"
+                "(test):3:19: error: baz: 2\n"
+                "(test):5:4: error: (top level): 3\n"),
         },
         {
             "backtrace indirect", __LINE__,
@@ -1014,15 +1014,15 @@ TestFunction(test_interp_fail){
                 "}\n"
             ),
             SVI("(test):25:9: error: c: 0\n"
-                "(test):13:5: error: a: 1\n"
-                "(test):22:9: error: c: 2\n"
-                "(test):13:5: error: a: 3\n"
-                "(test):22:9: error: c: 4\n"
-                "(test):13:5: error: a: 5\n"
-                "(test):22:9: error: c: 6\n"
-                "(test):17:5: error: b: 7\n"
-                "(test):13:5: error: a: 8\n"
-                "(test):5:1: error: (top level): 9\n"),
+                "(test):13:7: error: a: 1\n"
+                "(test):22:11: error: c: 2\n"
+                "(test):13:7: error: a: 3\n"
+                "(test):22:11: error: c: 4\n"
+                "(test):13:7: error: a: 5\n"
+                "(test):22:11: error: c: 6\n"
+                "(test):17:7: error: b: 7\n"
+                "(test):13:7: error: a: 8\n"
+                "(test):5:3: error: (top level): 9\n"),
         },
         {
             "__shell", __LINE__,

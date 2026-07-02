@@ -3504,6 +3504,16 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_CONST: {
+            memcpy((char*)frame->slots + op->slot, &op->imm, op->slot_size);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_COPY: {
+            memmove((char*)frame->slots + op->slot, (char*)frame->slots + op->src, op->slot_size);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_JUMP:
             frame->pc = op->jump;
             return 0;
@@ -3544,6 +3554,13 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 int err = ci_interp_expr(ci, frame, op->expr, frame->return_buf, frame->return_size);
                 if(err) return err;
             }
+            frame->pc = frame->op_count;
+            return 0;
+        }
+        case CI_OP_RETURN_SLOT: {
+            if(op->src_size > frame->return_size)
+                return CI_RESULT_TOO_SMALL(ci, op->loc, op->src_size, frame->return_size);
+            memcpy(frame->return_buf, (char*)frame->slots + op->src, op->src_size);
             frame->pc = frame->op_count;
             return 0;
         }
