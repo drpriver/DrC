@@ -4372,6 +4372,28 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "statement expression: int result", __LINE__,
+            SVI("int f =  ({ int x = 1; x + 2; }); \n"),
+            .vars = {
+                {SVI("f"), SVI("int"), SVI("<unimpl>")},
+            },
+        },
+        {
+            "statement expression: void results", __LINE__,
+            SVI("({ int x = 1; }); ({ });\n"),
+        },
+        {
+            "statement expression: sizeof", __LINE__,
+            SVI("int x = sizeof ({ int x = 1; x; });\n"),
+            .vars = {
+                {SVI("x"), SVI("int"), SVI("(int)4")},
+            },
+        },
+        {
+            "statement expression: goto parses", __LINE__,
+            SVI("if(({ goto hello; 1; })) return 1; hello:; return 0;\n"),
+        },
+        {
             "slice cast", __LINE__,
             SVI("const char s[:];\n"
                 "char cs[:] = (char[:])s;\n"),

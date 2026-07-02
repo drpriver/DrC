@@ -3195,7 +3195,60 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '{'){
-                    return cc_error(p, peek.loc, "GNU statement-expressions are unsupported");
+                    err = cc_next_token(p, &tok);
+                    if(err) return err;
+                    // statement expression
+                    err = cc_push_scope(p);
+                    if(err) return err;
+                    CcStmtSink* sink = cc_push_stmt_sink(p);
+                    if(!sink){
+                        cc_pop_scope(p);
+                        return CC_OOM_ERROR;
+                    }
+                    for(;;){
+                        err = cc_peek(p, &peek);
+                        if(err) goto end_block;
+                        if(peek.type == CC_EOF){
+                            err = cc_error(p, tok.loc, "Unterminated statement expression");
+                            goto end_block;
+                        }
+                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'){
+                            cc_next_token(p, &peek); // consume '}'
+                            break;
+                        }
+                        err = cc_parse_one(p);
+                        if(err) goto end_block;
+                    }
+                    end_block:
+                    cc_pop_scope(p);
+                    if(err){
+                        cc_pop_stmt_sink(p, sink);
+                        return err;
+                    }
+                    CcStmtNode* node = NULL;
+                    err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 1, &node);
+                    cc_pop_stmt_sink(p, sink);
+                    if(err) return CC_OOM_ERROR;
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err){
+                        cc_free_stmt_tree(p, node);
+                        return err;
+                    }
+                    CcQualType t = ccqt_basic(CCBT_void);
+                    if(node->count){
+                        CcStmtNode* last = node->stmts[node->count-1];
+                        if(last->kind == CC_STMT_EXPR){
+                            t = last->exprs[0]->type;
+                        }
+                    }
+                    CcExpr* val = cc_make_expr(p, CC_EXPR_STATEMENT_EXPRESSION, tok.loc, t, 0);
+                    if(!val){
+                        cc_free_stmt_tree(p, node);
+                        return CC_OOM_ERROR;
+                    }
+                    val->stmt_body = node;
+                    *out = val;
+                    return 0;
                 }
                 CcExpr* inner;
                 err = cc_parse_expr(p, vc, &inner);
@@ -5864,6 +5917,9 @@ cc_release_expr(CcParser* p, CcExpr* e){
                 Allocator_free(cc_allocator(p), e->init_list, sizeof(CcInitList) + e->init_list->count * sizeof(CcInitEntry));
             }
             break;
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            cc_free_stmt_tree(p, e->stmt_body);
+            break;
         case CC_EXPR_ADD:
         case CC_EXPR_ADDASSIGN:
         case CC_EXPR_ADDR:
@@ -5913,7 +5969,6 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_RSHIFT:
         case CC_EXPR_RSHIFTASSIGN:
         case CC_EXPR_SIZEOF_VMT:
-        case CC_EXPR_STATEMENT_EXPRESSION:
         case CC_EXPR_SUB:
         case CC_EXPR_SUBASSIGN:
         case CC_EXPR_SUBSCRIPT:
