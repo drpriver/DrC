@@ -195,9 +195,9 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     if(err) goto cleanup;
     {
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto cleanup;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto cleanup;
         }

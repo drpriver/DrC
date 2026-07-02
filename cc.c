@@ -364,9 +364,9 @@ int main(int argc, char** argv, char** envp){
         // Execute any statements from the initial file before entering REPL.
         if(!syntax_only){
             CiInterpFrame* frame = &interp.top_frame;
-            frame->stmts = interp.parser.toplevel_statements.data;
-            frame->stmt_count = interp.parser.toplevel_statements.count;
-            while(frame->pc < frame->stmt_count){
+            err = ci_lower_toplevel(&interp);
+            if(err) goto stringify_error;
+            while(frame->pc < frame->op_count){
                 err = ci_interp_step(&interp, frame);
                 if(err) goto stringify_error;
             }
@@ -419,9 +419,9 @@ int main(int argc, char** argv, char** envp){
                     // Execute new statements
                     {
                         CiInterpFrame* frame = &interp.top_frame;
-                        frame->stmts = interp.parser.toplevel_statements.data;
-                        frame->stmt_count = interp.parser.toplevel_statements.count;
-                        while(frame->pc < frame->stmt_count){
+                        err = ci_lower_toplevel(&interp);
+                        if(err) break;
+                        while(frame->pc < frame->op_count){
                             err = ci_interp_step(&interp, frame);
                             if(err) break;
                         }
@@ -448,9 +448,9 @@ int main(int argc, char** argv, char** envp){
         if(!syntax_only){
             interp.exit_code = EXIT_CODE_SENTINEL;
             CiInterpFrame* frame = &interp.top_frame;
-            frame->stmts = interp.parser.toplevel_statements.data;
-            frame->stmt_count = interp.parser.toplevel_statements.count;
-            while(frame->pc < frame->stmt_count){
+            err = ci_lower_toplevel(&interp);
+            if(err) goto stringify_error;
+            while(frame->pc < frame->op_count){
                 err = ci_interp_step(&interp, frame);
                 if(err) goto stringify_error;
             }

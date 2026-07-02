@@ -7,6 +7,7 @@
 #include "../Drp/pointer_map.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/free_list.h"
+#include "../Drp/parray.h"
 #include "../Drp/Allocators/arena_allocator.h"
 #include "cc_tok.h"
 #include "cc_type.h"
@@ -20,11 +21,6 @@
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CcToken
-#include "../Drp/Marray.h"
-#endif
-#ifndef MARRAY_CCSTATMENT
-#define MARRAY_CCSTATMENT
-#define MARRAY_T CcStatement
 #include "../Drp/Marray.h"
 #endif
 typedef struct CcPackRecord CcPackRecord;
@@ -175,8 +171,7 @@ struct CcParser {
                     _padding:29;
         };
     };
-    Marray(CcStatement) toplevel_statements; // only allowed in repl/script mode.
-    AtomMap(uintptr_t) toplevel_labels; // label name -> statement index (1-based, like CcFunc.labels)
+    Parray(CcStmtNode) toplevel_nodes;
     CppPreprocessor cpp;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
@@ -199,6 +194,7 @@ struct CcParser {
     uint32_t loop_depth;
     uint32_t switch_depth;
     struct CcSwitchCtx* _Nullable switch_ctx;
+    CcLabelCtx toplevel_label_ctx;
     CcStmtSink* _Null_unspecified stmt_sink;
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;

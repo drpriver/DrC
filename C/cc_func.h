@@ -7,6 +7,7 @@
 #include "srcloc.h"
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
+#include "../Drp/parray.h"
 #include "cc_stmt.h"
 #include "cc_tok.h"
 #include "cc_type.h"
@@ -16,15 +17,19 @@
 #define MARRAY_T CcToken
 #include "../Drp/Marray.h"
 #endif
-#ifndef MARRAY_CCSTATMENT
-#define MARRAY_CCSTATMENT
-#define MARRAY_T CcStatement
-#include "../Drp/Marray.h"
-#endif
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+
+typedef struct CiFuncOps CiFuncOps;
+typedef struct CcVariable CcVariable;
+
+typedef struct CcLabelCtx CcLabelCtx;
+struct CcLabelCtx {
+    AtomMap(CcStmtNode) labels;
+    Parray(CcStmtNode) gotos;
+};
 
 typedef struct CcFunc CcFunc;
 struct CcFunc {
@@ -43,16 +48,17 @@ struct CcFunc {
              libc_builtin: 1,
              printf_like: 1,
              _padding: 24;
-    uint32_t frame_size; // size of params + automatic local vars
-    Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body. 
+    uint32_t frame_size; // size of params + automatic local vars + temporaries;
+    Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.
-    Marray(CcStatement) body;
+    CcStmtNode*_Nullable body_tree; // set when parsed; owned by this func
+    CiFuncOps*_Nullable interp_ops; // executable form; created and owned by ci_lower
     struct {
         size_t count;
         Atom _Nullable*_Null_unspecified data;
     } params;
-    struct CcVariable*_Nullable*_Null_unspecified param_vars; // set during body parsing, parallel to params
-    AtomMap(uintptr_t) labels; // label name -> statement index in body: NOTE: we're punning the pointers, it's not pointers to uintptr_t
+    CcVariable*_Nullable*_Null_unspecified param_vars; // set during body parsing, parallel to params
+    CcLabelCtx label_ctx;
     CcFunc*_Nullable hotswap;
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
     void*_Nullable native_closure; // NativeClosure*, managed by native_call.c

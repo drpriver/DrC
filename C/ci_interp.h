@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "cc_stmt.h"
 #include "cc_expr.h"
+#include "ci_op.h"
 #include "cc_parser.h"
 #include "cc_type.h"
 #include "../Drp/stringview.h"
@@ -31,8 +32,11 @@ struct CiInterpFrame {
     CiInterpFrame*_Null_unspecified parent;
     Atom name;
     size_t pc;
-    size_t stmt_count;
-    CcStatement*_Null_unspecified stmts;
+    size_t op_count;
+    const CiOp*_Null_unspecified ops;
+    void*_Null_unspecified slots; // params/locals/temps storage; the frame's
+                                  // trailing data for call frames, an
+                                  // interpreter-owned buffer for the top frame
     void* return_buf;
     size_t return_size;
     size_t data_length; // after this is the data, but we can't use a FLA and also embed in CcInterpreter
@@ -51,6 +55,12 @@ typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
     CcParser parser;
     CiInterpFrame top_frame;
+    Marray(CiOp) toplevel_ops;
+    AtomMap(uintptr_t) toplevel_labels; // label -> toplevel op index + 1
+    size_t toplevel_lowered; // count of parser.toplevel_nodes already lowered
+    uint32_t toplevel_slot_size; // bytes of slot storage the toplevel ops need
+    uint32_t toplevel_slots_cap;
+    void*_Null_unspecified toplevel_slots;
     union {
         uint32_t flags;
         struct {
@@ -85,6 +95,8 @@ struct CiArg {
 
 static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_expr(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void* result, size_t size);
+static int ci_lower_func(CiInterpreter*, CcFunc*);
+static int ci_lower_toplevel(CiInterpreter*);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_preload_system_libs(CiInterpreter*);

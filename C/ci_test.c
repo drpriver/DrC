@@ -578,6 +578,176 @@ TestFunction(test_interpreter){
                "goto top;\n"),
             .exit_code = 5,
         },
+        {
+            "goto: forward within function", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 1;\n"
+               "    goto skip;\n"
+               "    x = 99;\n"
+               "skip:\n"
+               "    x += 2;\n"
+               "    return x;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 3,
+        },
+        {
+            "goto: same label name in two functions", __LINE__,
+            SVI("int f(void){ goto out; out: return 1; }\n"
+               "int g(void){ goto out; out: return 2; }\n"
+               "return f() * 10 + g();\n"),
+            .exit_code = 12,
+        },
+        #define SKIP_GNU_STMT_EXPR 1
+        // Statement expressions
+        {
+            "stmt expr: basic value", __LINE__,
+            SVI("int x = ({ int a = 2; a * 3; });\n"
+               "return x;\n"),
+            .exit_code = 6,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: goto out through call args", __LINE__,
+            SVI("int calls = 0;\n"
+               "int foo(int x){ calls++; return x; }\n"
+               "int goto_out(void){\n"
+               "    foo(({ goto hello; 1; }));\n"
+               "    return 100;\n"
+               "hello:\n"
+               "    return 42;\n"
+               "}\n"
+               "return goto_out() + calls;\n"),
+            .exit_code = 42,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: return inside, not taken", __LINE__,
+            SVI("int f(int n){\n"
+               "    int r = 10 + ({ if(n > 3) return -n; n * 2; });\n"
+               "    return r;\n"
+               "}\n"
+               "return f(2);\n"),
+            .exit_code = 14,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: return inside, taken", __LINE__,
+            SVI("int f(int n){\n"
+               "    int r = 10 + ({ if(n > 3) return -n; n * 2; });\n"
+               "    return r;\n"
+               "}\n"
+               "return -f(5);\n"),
+            .exit_code = 5,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: loop condition re-evaluated", __LINE__,
+            SVI("int i = 0, total = 0;\n"
+               "while(({ int t = i < 5; i++; t; })){\n"
+               "    total += i;\n"
+               "}\n"
+               "return total;\n"),
+            .exit_code = 15,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: break from body binds enclosing loop", __LINE__,
+            SVI("int total = 0;\n"
+               "for(int i = 0;; i++){\n"
+               "    total += ({ if(i == 4) break; i * 10; });\n"
+               "}\n"
+               "return total;\n"),
+            .exit_code = 60,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: if condition with goto out", __LINE__,
+            SVI("if(({ goto hello; 1; })) return 1;\n"
+               "return 2;\n"
+               "hello:\n"
+               "return 7;\n"),
+            .exit_code = 7,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: && short circuits body", __LINE__,
+            SVI("int n = 0;\n"
+               "int r = 0 && ({ n = 1; 1; });\n"
+               "return n * 10 + r;\n"),
+            .exit_code = 0,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: && normalizes to 0/1", __LINE__,
+            SVI("return 1 && ({ 5; });\n"),
+            .exit_code = 1,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: || short circuits body", __LINE__,
+            SVI("int n = 0;\n"
+               "int r = 1 || ({ n = 1; 0; });\n"
+               "return n * 10 + r;\n"),
+            .exit_code = 1,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: ternary arms", __LINE__,
+            SVI("int f(int a){\n"
+               "    int x = a && ({ int y = ({ a + 1; }); y * 2; });\n"
+               "    int z = a ? ({ x + 3; }) : ({ x + 4; });\n"
+               "    return x + z;\n"
+               "}\n"
+               "return f(0) * 10 + f(2);\n"),
+            .exit_code = 45,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: labels are function scoped", __LINE__,
+            SVI("int f(void){\n"
+               "    int acc = 0;\n"
+               "    acc += ({ goto fwd; 999; });\n"
+               "fwd:\n"
+               "    acc += 7;\n"
+               "    if(acc < 20) goto back;\n"
+               "    return acc;\n"
+               "back:\n"
+               "    acc += ({ int q = 6; back2: q += 1; if(q < 10) goto back2; q; });\n"
+               "    goto fwd;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 24,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: struct value", __LINE__,
+            SVI("struct Pair { int a, b; };\n"
+               "struct Pair p = ({ struct Pair t = {3, 4}; t; });\n"
+               "return p.a * 10 + p.b;\n"),
+            .exit_code = 34,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: void as expression statement", __LINE__,
+            SVI("int n = 0;\n"
+               "({ n += 5; (void)0; });\n"
+               "({ n += 6; });\n"
+               "return n;\n"),
+            .exit_code = 11,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
+        {
+            "stmt expr: toplevel ternary arm", __LINE__,
+            SVI("int total = 0;\n"
+               "for(int i = 0;; i++){\n"
+               "    total += ({ if(i == 4) break; i * 10; });\n"
+               "}\n"
+               "int z = total > 50 ? ({ total + 1; }) : 0;\n"
+               "return z;\n"),
+            .exit_code = 61,
+            .skip = SKIP_GNU_STMT_EXPR,
+        },
         // Blocks / scoping
         {
             "block: variable shadowing", __LINE__,
@@ -6012,9 +6182,9 @@ TestFunction(test_interpreter){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }
@@ -6396,9 +6566,9 @@ TestFunction(test_interpreter_builtin_headers){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }
@@ -6783,9 +6953,9 @@ TestFunction(test_cross_target){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }

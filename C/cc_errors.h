@@ -23,6 +23,7 @@ enum {
     _cc_not_a_file_error = 12,
     _cc_already_cached_error = 13,
     _cc_symbol_unresolved_error = 14,
+    _cc_overflow_error = 15,
 };
 static const char* const _cc_error_names[] = {
     [_cc_no_error]                       = "No Error",

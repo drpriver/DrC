@@ -5098,7 +5098,7 @@ TestFunction(test_parse_errors){
         {
             "duplicate case", __LINE__,
             SVI("switch(1){ case 1: break; case 1: break; }\n"),
-            SVI("(test):1:1: error: duplicate case value '1'\n"),
+            SVI("(test):1:27: error: duplicate case value '1'\n"),
         },
         {
             "if struct condition", __LINE__,
@@ -6366,6 +6366,25 @@ TestFunction(test_parse_errors){
                 "char b[2];\n"
                 "int s[:] = 0 ? a[:] : b[:];\n"),
             SVI("(test):3:14: error: incompatible operand types for ternary\n"),
+        },
+        {
+            "goto nowhere", __LINE__,
+            SVI("void foo(void){goto nowhere;}\n"),
+            SVI("(test):1:16: error: Use of undeclared label 'nowhere'\n"),
+        },
+        {
+            "duplicate label", __LINE__,
+            SVI("void foo(void){\n"
+                "x: ;\n"
+                "x: ;\n"
+                "}\n"),
+            SVI("(test):3:1: error: Duplicate label 'x'\n"),
+        },
+        {
+            "goto label in another function", __LINE__,
+            SVI("void foo(void){x: ;}\n"
+                "void bar(void){goto x;}\n"),
+            SVI("(test):2:16: error: Use of undeclared label 'x'\n"),
         },
     };
     static int idx = 0;

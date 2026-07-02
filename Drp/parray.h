@@ -1,6 +1,7 @@
 #ifndef DRP_PARRAY_H
 #define DRP_PARRAY_H
 #include <stddef.h>
+#include <string.h>
 #include "Allocators/allocator.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -72,6 +73,27 @@ pa_push(Parray* pa, Allocator a, void*_Null_unspecified value){
     #if defined(__GNUC__) && !defined(__clang__)
     #pragma GCC diagnostic pop
     #endif
+    return 0;
+}
+
+static
+warn_unused
+int
+pa_extend(Parray* pa, Allocator a, size_t count, void*_Null_unspecified*_Null_unspecified values){
+    int err = pa_ensure_additional(pa, a, count);
+    if(err) return err;
+    memmove(pa->data+pa->count, values, count*sizeof *values);
+    pa->count += count;
+    return 0;
+}
+static
+warn_unused
+int
+pa_zextend(Parray* pa, Allocator a, size_t count){
+    int err = pa_ensure_additional(pa, a, count);
+    if(err) return err;
+    memset(pa->data+pa->count, 0, count*sizeof *pa->data);
+    pa->count += count;
     return 0;
 }
 

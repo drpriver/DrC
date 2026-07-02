@@ -777,9 +777,9 @@ TestFunction(test_interop){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }
@@ -916,9 +916,9 @@ TestFunction(test_interp){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }
@@ -1114,9 +1114,9 @@ TestFunction(test_interp_fail){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        frame->stmts = interp.parser.toplevel_statements.data;
-        frame->stmt_count = interp.parser.toplevel_statements.count;
-        while(frame->pc < frame->stmt_count){
+        err = ci_lower_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
         }

@@ -63,6 +63,8 @@ static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_No
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
+static CcLabelCtx* cc_label_ctx(CcParser* p);
+static int cc_check_gotos(CcParser* p, CcLabelCtx* ctx);
 static int cc_parse_type_name(CcParser* p, CcQualType* out, Marray(Atom)* _Nullable param_names);
 static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
@@ -96,7 +98,6 @@ static CcStmtSink*_Nullable cc_push_stmt_sink(CcParser*);
 static void cc_pop_stmt_sink(CcParser*, CcStmtSink*);
 static int cc_sink_push(CcParser*, CcStmtNode*);
 static int cc_finalize_stmt_list(CcParser*, SrcLoc, Parray(CcStmtNode)*, _Bool always_compound, CcStmtNode*_Nullable*_Nonnull out);
-static int cc_lower_stmts(CcParser*, Parray(CcStmtNode)*, Marray(CcStatement)* out, AtomMap(uintptr_t)* labels);
 static int cc_has_builtin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
 static uint32_t cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type);
 static int cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc);
@@ -209,7 +210,6 @@ static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
-static int cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels);
 static int cc_skip_braced_block(CcParser* p);
 
 static
@@ -4389,9 +4389,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         err = cc_parse_assignment_expr(p, vc, &arg, ftype->params[idx]);
                         if(err) goto call_cleanup;
                         // Ensure args array is big enough
-                        while(args.count <= idx){
-                            err = pa_push(&args, call_al, NULL);
-                            if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                        if(args.count <= idx){
+                            err = pa_zextend(&args, call_al, idx-args.count+1);
+                            if(err) goto call_cleanup;
                         }
                         if(args.data[idx] != NULL){
                             err = cc_error(p, name_tok.loc, "duplicate argument for parameter '%.*s'", name->length, name->data);
@@ -4428,9 +4428,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         CcExpr* arg;
                         err = cc_parse_assignment_expr(p, vc, &arg, ftype->params[idx]);
                         if(err) goto call_cleanup;
-                        while(args.count <= idx){
-                            err = pa_push(&args, call_al, NULL);
-                            if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                        if(args.count <= idx){
+                            err = pa_zextend(&args, call_al, idx-args.count+1);
+                            if(err) goto call_cleanup;
                         }
                         if(args.data[idx] != NULL){
                             err = cc_error(p, dot.loc, "duplicate argument for position %u", (unsigned)idx);
@@ -4448,9 +4448,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         err = cc_parse_assignment_expr(p, vc, &arg, positional_index < ftype->param_count?ftype->params[positional_index]:CCQT_NONE);
                         if(err) goto call_cleanup;
                         if(has_named){
-                            while(args.count <= positional_index){
-                                err = pa_push(&args, call_al, NULL);
-                                if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
+                            if(args.count <= positional_index){
+                                err = pa_zextend(&args, call_al, positional_index-args.count+1);
+                                if(err) goto call_cleanup;
                             }
                             if(args.data[positional_index] != NULL){
                                 err = cc_error(p, arg->loc, "argument position %u already filled by named argument", (unsigned)positional_index);
@@ -5282,6 +5282,8 @@ int
 cc_parse_all(CcParser* p){
     int err = 0;
     CcToken tok;
+    CcLabelCtx* lctx = cc_label_ctx(p);
+    size_t goto_mark = lctx->gotos.count;
     CcStmtSink* sink = cc_push_stmt_sink(p);
     if(!sink) return CC_OOM_ERROR;
     for(;;){
@@ -5293,13 +5295,18 @@ cc_parse_all(CcParser* p){
         if(err) break;
     }
     if(!err)
-        err = cc_lower_stmts(p, &sink->stmts, &p->toplevel_statements, &p->toplevel_labels);
+        err = cc_check_gotos(p, lctx);
+    if(err){
+        // this batch's goto nodes may be freed with the failed batch
+        lctx->gotos.count = goto_mark;
+    }
+    if(!err){
+        err = pa_extend(&p->toplevel_nodes, cc_allocator(p), sink->stmts.count, sink->stmts.data);
+        if(err) err = CC_OOM_ERROR;
+        if(!err) sink->stmts.count = 0;
+    }
     cc_pop_stmt_sink(p, sink);
-    if(err) return err;
-    return cc_resolve_gotos(p,
-        p->toplevel_statements.data,
-        p->toplevel_statements.count,
-        &p->toplevel_labels);
+    return err;
 }
 
 static
@@ -5307,6 +5314,26 @@ void
 cc_parser_discard_input(CcParser* p){
     p->pending.count = 0;
     cpp_discard_all_input(&p->cpp);
+}
+
+static
+CcLabelCtx*
+cc_label_ctx(CcParser* p){
+    if(p->current_func)
+        return &((CcFunc*_Nonnull)p->current_func)->label_ctx;
+    return &p->toplevel_label_ctx;
+}
+
+static
+int
+cc_check_gotos(CcParser* p, CcLabelCtx* ctx){
+    for(size_t i = 0; i < ctx->gotos.count; i++){
+        CcStmtNode* g = ctx->gotos.data[i];
+        if(!AM_get(&ctx->labels, g->label))
+            return cc_error(p, g->loc, "Use of undeclared label '%.*s'", g->label->length, g->label->data);
+    }
+    ctx->gotos.count = 0;
+    return 0;
 }
 
 static
@@ -9186,23 +9213,6 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
 }
 
 static
-int
-cc_resolve_gotos(CcParser* p, CcStatement* stmts, size_t count, const AtomMap(uintptr_t)* labels){
-    for(size_t i = 0; i < count; i++){
-        CcStatement* s = &stmts[i];
-        if(s->kind != CC_STMT_GOTO) continue;
-        if(!s->goto_label) continue;
-        Atom label = s->goto_label;
-        void* v = AM_get(labels, label);
-        if(!v)
-            return cc_error(p, s->loc, "Use of undeclared label '%.*s'", label->length, label->data);
-        s->targets[0] = (uint32_t)((uintptr_t)v - 1);
-        s->goto_label = NULL; // clear the temp
-    }
-    return 0;
-}
-
-static
 CcStmtNode*_Nullable
 cc_stmt_node(CcParser* p, CcStmtKind k, SrcLoc loc, uint32_t count){
     CcStmtNode* n = Allocator_zalloc(cc_allocator(p), sizeof(CcStmtNode) + count * sizeof(CcStmtNode*));
@@ -9305,313 +9315,8 @@ typedef struct CcSwitchCtx CcSwitchCtx;
 struct CcSwitchCtx {
     CcQualType type;
     _Bool has_default;
+    Marray(CcSwitchEntry) cases; // for duplicate detection; targets unused
 };
-
-static
-void
-cc_backpatch_break_continue(Marray(CcStatement)* stmts, size_t body_start, uint32_t break_target, uint32_t continue_target){
-    for(size_t i = body_start; i < stmts->count; i++){
-        CcStatement* s = &stmts->data[i];
-        if(s->kind == CC_STMT_BREAK){
-            s->kind = CC_STMT_GOTO;
-            s->targets[0] = break_target;
-        }
-        else if(s->kind == CC_STMT_CONTINUE){
-            s->kind = CC_STMT_GOTO;
-            s->targets[0] = continue_target;
-        }
-    }
-}
-
-static
-void
-cc_backpatch_break(Marray(CcStatement)* stmts, size_t body_start, uint32_t break_target){
-    for(size_t i = body_start; i < stmts->count; i++){
-        CcStatement* s = &stmts->data[i];
-        if(s->kind == CC_STMT_BREAK){
-            s->kind = CC_STMT_GOTO;
-            s->targets[0] = break_target;
-        }
-    }
-}
-
-static
-int
-cc_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b){
-    (void)ctx;
-    const CcSwitchEntry* ea = a;
-    const CcSwitchEntry* eb = b;
-    if(ea->value < eb->value) return -1;
-    if(ea->value > eb->value) return 1;
-    return 0;
-}
-
-typedef struct CcLowerSwitch CcLowerSwitch;
-struct CcLowerSwitch {
-    Marray(CcSwitchEntry) entries;
-    uint32_t default_target;
-    _Bool has_default;
-};
-
-typedef struct CcLowerCtx CcLowerCtx;
-struct CcLowerCtx {
-    Marray(CcStatement)* out;
-    AtomMap(uintptr_t)* labels;
-    CcLowerSwitch* _Nullable sw; // innermost switch being lowered
-};
-
-static
-int
-cc_lower_flat(CcParser* p, CcLowerCtx* ctx, CcStmtKind k, SrcLoc loc, uint32_t* idx){
-    int err;
-    CcStatement* s;
-    err = ma_zalloc(CcStatement)(ctx->out, cc_allocator(p), &s);
-    if(err) return CC_OOM_ERROR;
-    s->kind = k;
-    s->loc = loc;
-    *idx = (uint32_t)(s - ctx->out->data);
-    return 0;
-}
-
-static
-int
-cc_lower_stmt(CcParser* p, CcLowerCtx* ctx, CcStmtNode*_Nullable n){
-    int err;
-    uint32_t idx;
-    if(!n) return 0;
-    switch(n->kind){
-        case CC_STMT_NULL:
-            return cc_lower_flat(p, ctx, CC_STMT_NULL, n->loc, &idx);
-        case CC_STMT_EXPR: {
-            err = cc_lower_flat(p, ctx, CC_STMT_EXPR, n->loc, &idx);
-            if(err) return err;
-            ctx->out->data[idx].exprs[0] = n->exprs[0];
-            n->exprs[0] = NULL;
-            return 0;
-        }
-        case CC_STMT_COMPOUND: {
-            for(uint32_t i = 0; i < n->count; i++){
-                err = cc_lower_stmt(p, ctx, n->stmts[i]);
-                if(err) return err;
-            }
-            return 0;
-        }
-        case CC_STMT_IF: {
-            // Without else:
-            //   N: CC_STMT_IF          -- cond check, targets[0]=EXIT
-            //   N+1..M: then-body
-            //   EXIT: next stmt
-            //
-            // With else:
-            //   N: CC_STMT_IF          -- cond check, targets[0]=ELSE
-            //   N+1..M: then-body
-            //   M+1: CC_STMT_GOTO(EXIT) -- skip else
-            //   ELSE..X: else-body
-            //   EXIT: next stmt
-            uint32_t if_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_IF, n->loc, &if_idx);
-            if(err) return err;
-            ctx->out->data[if_idx].exprs[0] = n->exprs[0];
-            n->exprs[0] = NULL;
-            err = cc_lower_stmt(p, ctx, n->stmts[0]);
-            if(err) return err;
-            if(n->stmts[1]){
-                uint32_t goto_idx;
-                err = cc_lower_flat(p, ctx, CC_STMT_GOTO, n->loc, &goto_idx);
-                if(err) return err;
-                ctx->out->data[if_idx].targets[0] = (uint32_t)ctx->out->count;
-                err = cc_lower_stmt(p, ctx, n->stmts[1]);
-                if(err) return err;
-                ctx->out->data[goto_idx].targets[0] = (uint32_t)ctx->out->count;
-            }
-            else {
-                ctx->out->data[if_idx].targets[0] = (uint32_t)ctx->out->count;
-            }
-            return 0;
-        }
-        case CC_STMT_WHILE: {
-            //   N: CC_STMT_WHILE       -- cond check, targets[0]=EXIT
-            //   N+1..M: body stmts
-            //   M+1: CC_STMT_GOTO(N)   -- back-edge
-            //   EXIT: next stmt
-            uint32_t while_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_WHILE, n->loc, &while_idx);
-            if(err) return err;
-            ctx->out->data[while_idx].exprs[0] = n->exprs[0];
-            n->exprs[0] = NULL;
-            err = cc_lower_stmt(p, ctx, n->stmts[0]);
-            if(err) return err;
-            uint32_t goto_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_GOTO, n->loc, &goto_idx);
-            if(err) return err;
-            ctx->out->data[goto_idx].targets[0] = while_idx;
-            uint32_t break_target = (uint32_t)ctx->out->count;
-            ctx->out->data[while_idx].targets[0] = break_target;
-            cc_backpatch_break_continue(ctx->out, while_idx + 1, break_target, while_idx);
-            return 0;
-        }
-        case CC_STMT_DOWHILE: {
-            //   N..M: body stmts
-            //   M+1: CC_STMT_DOWHILE   -- cond check, targets[0]=N
-            //   M+2: next stmt
-            uint32_t body_start = (uint32_t)ctx->out->count;
-            err = cc_lower_stmt(p, ctx, n->stmts[0]);
-            if(err) return err;
-            uint32_t dw_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_DOWHILE, n->loc, &dw_idx);
-            if(err) return err;
-            ctx->out->data[dw_idx].exprs[0] = n->exprs[0];
-            n->exprs[0] = NULL;
-            ctx->out->data[dw_idx].targets[0] = body_start;
-            cc_backpatch_break_continue(ctx->out, body_start, dw_idx + 1, dw_idx);
-            return 0;
-        }
-        case CC_STMT_FOR: {
-            //   [init stmts]
-            //   N: CC_STMT_FOR            -- cond check (exprs[1]), targets[0]=EXIT
-            //   N+1..M: body stmts
-            //   M+1: CC_STMT_EXPR(inc)    -- if inc exists
-            //   M+2: CC_STMT_GOTO(N)      -- back-edge
-            //   EXIT: next stmt
-            err = cc_lower_stmt(p, ctx, n->stmts[0]); // init
-            if(err) return err;
-            uint32_t for_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_FOR, n->loc, &for_idx);
-            if(err) return err;
-            ctx->out->data[for_idx].exprs[1] = n->exprs[0]; // cond lives in exprs[1] in flat form
-            n->exprs[0] = NULL;
-            err = cc_lower_stmt(p, ctx, n->stmts[1]); // body
-            if(err) return err;
-            // continue target = inc (or back-edge goto if no inc)
-            uint32_t continue_target = (uint32_t)ctx->out->count;
-            if(n->exprs[1]){
-                uint32_t inc_idx;
-                err = cc_lower_flat(p, ctx, CC_STMT_EXPR, n->loc, &inc_idx);
-                if(err) return err;
-                ctx->out->data[inc_idx].exprs[0] = n->exprs[1];
-                n->exprs[1] = NULL;
-            }
-            uint32_t goto_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_GOTO, n->loc, &goto_idx);
-            if(err) return err;
-            ctx->out->data[goto_idx].targets[0] = for_idx;
-            uint32_t break_target = (uint32_t)ctx->out->count;
-            ctx->out->data[for_idx].targets[0] = break_target;
-            cc_backpatch_break_continue(ctx->out, for_idx + 1, break_target, continue_target);
-            return 0;
-        }
-        case CC_STMT_SWITCH: {
-            //   N: CC_STMT_SWITCH  -- exprs[0]=expr, targets[0]=EXIT,
-            //                         targets[1]=default (or EXIT),
-            //                         targets[2]=table_count,
-            //                         switch_table=sorted entries
-            //   N+1..M: body stmts (case bodies, fall through)
-            //   EXIT: next stmt
-            uint32_t sw_idx;
-            err = cc_lower_flat(p, ctx, CC_STMT_SWITCH, n->loc, &sw_idx);
-            if(err) return err;
-            ctx->out->data[sw_idx].switch_expr = n->exprs[0];
-            n->exprs[0] = NULL;
-            CcLowerSwitch sw = {0};
-            {
-                CcLowerSwitch* prev = ctx->sw;
-                ctx->sw = &sw;
-                err = cc_lower_stmt(p, ctx, n->stmts[0]);
-                ctx->sw = prev;
-            }
-            if(err) goto switch_cleanup;
-            // Sort entries by value
-            {
-                void* scratch = Allocator_alloc(cc_scratch_allocator(p), sw.entries.count * sizeof(CcSwitchEntry));
-                if(!scratch && sw.entries.count){ err = CC_OOM_ERROR; goto switch_cleanup; }
-                drp_merge_sort(scratch, sw.entries.data, sw.entries.count, sizeof(CcSwitchEntry), NULL, cc_cmp_switch_entry);
-                Allocator_free(cc_scratch_allocator(p), scratch, sw.entries.count * sizeof(CcSwitchEntry));
-            }
-            // Check for duplicate case values
-            for(uint32_t i = 1; i < sw.entries.count; i++){
-                if(sw.entries.data[i].value == sw.entries.data[i-1].value){
-                    err = cc_error(p, n->loc, "duplicate case value '%lld'", (long long)sw.entries.data[i].value);
-                    goto switch_cleanup;
-                }
-            }
-            // Shrink and steal the table
-            if(sw.entries.count){
-                int serr = ma_shrink_to_size(CcSwitchEntry)(&sw.entries, cc_allocator(p));
-                if(serr){ err = CC_OOM_ERROR; goto switch_cleanup; }
-            }
-            {
-                uint32_t break_target = (uint32_t)ctx->out->count;
-                CcStatement* s = &ctx->out->data[sw_idx];
-                s->targets[0] = break_target;
-                s->targets[1] = sw.has_default ? sw.default_target : break_target;
-                s->targets[2] = (uint32_t)sw.entries.count;
-                s->switch_table = sw.entries.data;
-                sw.entries.data = NULL;
-                sw.entries.count = 0;
-                sw.entries.capacity = 0;
-                cc_backpatch_break(ctx->out, sw_idx + 1, break_target);
-            }
-            switch_cleanup:
-            ma_cleanup(CcSwitchEntry)(&sw.entries, cc_allocator(p));
-            return err;
-        }
-        case CC_STMT_CASE: {
-            if(!ctx->sw)
-                return cc_unreachable(p, n->loc, "case label outside of switch in lowering");
-            CcSwitchEntry entry = {.value = n->case_value, .target = (uint32_t)ctx->out->count};
-            err = ma_push(CcSwitchEntry)(&ctx->sw->entries, cc_allocator(p), entry);
-            if(err) return CC_OOM_ERROR;
-            return cc_lower_stmt(p, ctx, n->stmts[0]);
-        }
-        case CC_STMT_DEFAULT: {
-            if(!ctx->sw)
-                return cc_unreachable(p, n->loc, "default label outside of switch in lowering");
-            ctx->sw->has_default = 1;
-            ctx->sw->default_target = (uint32_t)ctx->out->count;
-            return cc_lower_stmt(p, ctx, n->stmts[0]);
-        }
-        case CC_STMT_RETURN: {
-            err = cc_lower_flat(p, ctx, CC_STMT_RETURN, n->loc, &idx);
-            if(err) return err;
-            ctx->out->data[idx].exprs[0] = n->exprs[0];
-            n->exprs[0] = NULL;
-            return 0;
-        }
-        case CC_STMT_BREAK:
-        case CC_STMT_CONTINUE:
-            // patched into gotos by the enclosing loop/switch lowering
-            return cc_lower_flat(p, ctx, n->kind, n->loc, &idx);
-        case CC_STMT_GOTO: {
-            err = cc_lower_flat(p, ctx, CC_STMT_GOTO, n->loc, &idx);
-            if(err) return err;
-            ctx->out->data[idx].goto_label = n->label;
-            return 0;
-        }
-        case CC_STMT_LABEL: {
-            void* existing = AM_get(ctx->labels, n->label);
-            if(existing)
-                return cc_error(p, n->loc, "Duplicate label '%.*s'", n->label->length, n->label->data);
-            err = cc_lower_flat(p, ctx, CC_STMT_LABEL, n->loc, &idx);
-            if(err) return err;
-            err = AM_put(ctx->labels, cc_allocator(p), n->label, (void*)(uintptr_t)(idx + 1));
-            if(err) return CC_OOM_ERROR;
-            return cc_lower_stmt(p, ctx, n->stmts[0]);
-        }
-    }
-    return cc_unreachable(p, n->loc, "unknown statement kind in lowering");
-}
-
-static
-int
-cc_lower_stmts(CcParser* p, Parray(CcStmtNode)* nodes, Marray(CcStatement)* out, AtomMap(uintptr_t)* labels){
-    int err;
-    CcLowerCtx ctx = {.out = out, .labels = labels};
-    for(size_t i = 0; i < nodes->count; i++){
-        err = cc_lower_stmt(p, &ctx, nodes->data[i]);
-        if(err) return err;
-    }
-    return 0;
-}
 
 // Skip a balanced `{ ... }` block. Assumes the opening `{` has NOT
 // been consumed yet.
@@ -9968,6 +9673,7 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         p->switch_depth--;
                         p->loop_depth--;
                         p->switch_ctx = prev_ctx;
+                        ma_cleanup(CcSwitchEntry)(&ctx.cases, cc_allocator(p));
                         if(err){
                             cc_free_stmt_tree(p, node);
                             return err;
@@ -10009,6 +9715,15 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         if(err)
                             return cc_error(p, tok.loc, "case label must be a constant integer expression");
                         case_val = (uint64_t)case_i;
+                    }
+                    for(size_t i = 0; i < p->switch_ctx->cases.count; i++){
+                        if(p->switch_ctx->cases.data[i].value == case_val)
+                            return cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)case_val);
+                    }
+                    {
+                        CcSwitchEntry entry = {.value = case_val};
+                        err = ma_push(CcSwitchEntry)(&p->switch_ctx->cases, cc_allocator(p), entry);
+                        if(err) return CC_OOM_ERROR;
                     }
                     CcStmtNode* node = cc_stmt_node(p, CC_STMT_CASE, tok.loc, 1);
                     if(!node) return CC_OOM_ERROR;
@@ -10091,6 +9806,11 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     CcStmtNode* node = cc_stmt_node(p, CC_STMT_GOTO, tok.loc, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->label = label_tok.ident.ident;
+                    err = pa_push(&cc_label_ctx(p)->gotos, cc_allocator(p), node);
+                    if(err){
+                        cc_free_stmt_tree(p, node);
+                        return CC_OOM_ERROR;
+                    }
                     *out = node;
                     return 0;
                 }
@@ -10217,9 +9937,17 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
             if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
                 cc_next_token(p, &peek); // consume ':'
                 Atom label_name = tok.ident.ident;
+                CcLabelCtx* lctx = cc_label_ctx(p);
+                if(AM_get(&lctx->labels, label_name))
+                    return cc_error(p, tok.loc, "Duplicate label '%.*s'", label_name->length, label_name->data);
                 CcStmtNode* node = cc_stmt_node(p, CC_STMT_LABEL, tok.loc, 1);
                 if(!node) return CC_OOM_ERROR;
                 node->label = label_name;
+                err = AM_put(&lctx->labels, cc_allocator(p), label_name, node);
+                if(err){
+                    cc_free_stmt_tree(p, node);
+                    return CC_OOM_ERROR;
+                }
                 CcStmtNode*_Nullable child = NULL;
                 err = cc_parse_statement(p, &child);
                 if(err){
@@ -11817,13 +11545,15 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
             if(err) break;
         }
         if(!err)
-            err = cc_lower_stmts(p, &sink->stmts, &f->body, &f->labels);
+            err = cc_finalize_stmt_list(p, f->loc, &sink->stmts, 1, &f->body_tree);
         cc_pop_stmt_sink(p, sink);
         if(err) goto end_scope;
     }
+    err = cc_check_gotos(p, &f->label_ctx);
+    if(err) goto end_scope;
     f->parsed = 1;
-    err = cc_resolve_gotos(p, f->body.data, f->body.count, &f->labels);
     end_scope:
+    pa_cleanup(&f->label_ctx.gotos, cc_allocator(p));
     cc_pop_scope(p);
     p->current_func = prev;
     return err;
