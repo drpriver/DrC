@@ -598,6 +598,29 @@ TestFunction(test_interpreter){
                "return f() * 10 + g();\n"),
             .exit_code = 12,
         },
+        {
+            "lowering: temp slot recycling stress", __LINE__,
+            SVI("int f(void){\n"
+               "    int total = 0;\n"
+               "    for(int i = 0; i < 3; i++){\n"
+               "        int j = 0;\n"
+               "        while(j < 4){\n"
+               "            if(j % 2 == 0){\n"
+               "                switch(j){\n"
+               "                    case 0: total += 1; break;\n"
+               "                    case 2: total += 10; break;\n"
+               "                }\n"
+               "            }\n"
+               "            if(j == 3) total += 100;\n"
+               "            j++;\n"
+               "        }\n"
+               "        do { total += 1000; } while(0);\n"
+               "    }\n"
+               "    return total == 3333 ? 42 : 1;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 42,
+        },
         #define SKIP_GNU_STMT_EXPR 1
         // Statement expressions
         {

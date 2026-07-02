@@ -53,11 +53,15 @@ struct CiLowerCtx {
     Marray(CiOp)* out;
     AtomMap(uintptr_t)* labels; // label -> op index + 1
     CiLowerSwitch* _Nullable sw; // innermost switch being lowered
-    uint32_t* frame_size; // temp slots allocate from here: &func->frame_size, or the toplevel/module slot size
+    uint32_t temp; // top of the temp slot stack; statements save/restore
+                   // this around their children so siblings recycle slots
+    uint32_t* frame_size; // high-water mark of temp usage: &func->frame_size,
+                          // or the toplevel/module slot size
     Marray(CiBackpatchTarget) backpatches;
 };
 
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
+static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -67,9 +71,18 @@ static int ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const 
 static
 int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
+    if(!n) return 0;
+    uint32_t temp = ctx->temp;
+    int err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
+    ctx->temp = temp;
+    return err;
+}
+
+static
+int
+ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
     int err;
     CcParser* p = &ci->parser;
-    if(!n) return 0;
     switch(n->kind){
         case CC_STMT_NULL:
             return 0;
@@ -433,7 +446,7 @@ ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
 static
 int
 ci_alloc_slot(CiLowerCtx* ctx, uint32_t sz, uint32_t align, uint32_t* slot){
-    uint32_t frm = *ctx->frame_size;
+    uint32_t frm = ctx->temp;
     if(add_overflow(frm, align - 1, &frm))
         return _cc_overflow_error;
     frm &= ~(align - 1);
@@ -441,7 +454,9 @@ ci_alloc_slot(CiLowerCtx* ctx, uint32_t sz, uint32_t align, uint32_t* slot){
     if(add_overflow(frm, sz, &new_frm))
         return _cc_overflow_error;
     *slot = frm;
-    *ctx->frame_size = new_frm;
+    ctx->temp = new_frm;
+    if(new_frm > *ctx->frame_size)
+        *ctx->frame_size = new_frm;
     return 0;
 }
 
@@ -538,6 +553,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f){
         .a = al,
         .out = &ops->code,
         .labels = &labels,
+        .temp = f->frame_size, // temps stack above params + locals
         .frame_size = &f->frame_size,
     };
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
@@ -568,6 +584,7 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .a = ci_allocator(ci),
         .out = ops,
         .labels = labels,
+        .temp = 0, // toplevel/module slots hold only temps; each batch recycles them
         .frame_size = slot_size,
     };
     for(size_t i = *lowered; i < nodes->count; i++){
