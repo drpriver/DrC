@@ -78,7 +78,6 @@ static int ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
 static int ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out);
 static int ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, SrcLoc loc);
 static int ci_lower_dest(CiLowerCtx* ctx, uint32_t* dest, uint32_t size);
-static _Bool ci_expr_flattens(CcExprKind kind);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -339,7 +338,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_RETURN: {
             CcExpr* e = n->exprs[0];
             CiOp* op;
-            if(e && ci_expr_flattens(e->kind) && !ccqt_bt_eq(e->type, CCBT_void)){
+            if(e && ccqt_bt_eq(e->type, CCBT_void)){
+                err = ci_lower_expr_discard(ci, ctx, e);
+                if(err) return err;
+            }
+            else if(e){
                 CiLowerVal v;
                 err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
                 if(err) return err;
@@ -357,7 +360,6 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return err;
             *op = (CiOp){
                 .kind = CI_OP_RETURN,
-                .expr = e,
                 .loc = n->loc,
             };
             return 0;
@@ -687,22 +689,6 @@ ci_lower_dest(CiLowerCtx* ctx, uint32_t* dest, uint32_t size){
     return ci_alloc_slot(ctx, size, size, dest);
 }
 
-// Kinds that ci_lower_expr lowers into ops rather than falling back to a tree
-// evaluation; grows as expression lowering proceeds.
-static
-_Bool
-ci_expr_flattens(CcExprKind kind){
-    switch((uint32_t)kind){
-        case CC_EXPR_LOGAND:
-        case CC_EXPR_LOGOR:
-        case CC_EXPR_TERNARY:
-        case CC_EXPR_COMMA:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 // Lower a condition expression and normalize it so a conditional jump can
 // test its slot without knowing the type.
 static
@@ -716,9 +702,11 @@ ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out)
     if(err) return err;
     err = ci_lower_istrue(ctx, out, cond->type, slot, 1, cond->loc);
     if(err) return err;
-    out->slot = slot;
-    out->size = 1;
-    out->canonical = 1;
+    *out = (CiLowerVal){
+        .slot = slot,
+        .size = 1,
+        .canonical = 1,
+    };
     return 0;
 }
 

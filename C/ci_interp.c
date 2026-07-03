@@ -3550,10 +3550,6 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_RETURN: {
-            if(op->expr){
-                int err = ci_interp_expr(ci, frame, op->expr, frame->return_buf, frame->return_size);
-                if(err) return err;
-            }
             frame->pc = frame->op_count;
             return 0;
         }
