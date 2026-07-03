@@ -3697,6 +3697,23 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_BOUNDS: {
+            uint64_t idx = ci_read_uint((char*)frame->slots + op->src, op->src_size);
+            uint64_t len = ci_read_uint((char*)frame->slots + op->src2, op->src2_size);
+            _Bool oob = op->bounds.inclusive ? (idx > len) : (idx >= len);
+            if(oob){
+                const char* close = op->bounds.inclusive ? "]" : ")";
+                if(op->bounds.index_signed)
+                    return ci_error(ci, op->loc,
+                        "array subscript out of bounds: index %lld not in [0, %llu%s",
+                        (long long)idx, (unsigned long long)len, close);
+                return ci_error(ci, op->loc,
+                    "array subscript out of bounds: index %llu not in [0, %llu%s",
+                    (unsigned long long)idx, (unsigned long long)len, close);
+            }
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_CALL: {
             CcFunc* func = op->func;
             void* result;

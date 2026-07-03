@@ -86,7 +86,11 @@ struct CiLowerAddr {
 };
 
 static _Bool ci_frame_lvalue(const CcExpr* lv, uint32_t* offset);
-static int ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* handled);
+// Lower an lvalue to a base pointer slot + displacement. one_past_ok relaxes an
+// outermost subscript's bounds check to permit forming (not accessing) a
+// one-past-the-end address; it is always false when recursing into a base.
+static int ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled);
+static int ci_lower_lvalue_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled);
 static _Bool ci_alu_int_type(CcQualType t);
 static _Bool ci_falu_type(CcQualType t);
 static CiAluOp ci_alu_op_for(CcExprKind kind);
@@ -553,7 +557,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             uint32_t temp = ctx->temp;
             CiLowerAddr a;
             _Bool handled;
-            err = ci_lower_addr(ci, ctx, e, &a, &handled);
+            err = ci_lower_addr(ci, ctx, e, 0, &a, &handled); // access
             if(err) return err;
             if(!handled){
                 ctx->temp = temp;
@@ -595,7 +599,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             CiLowerAddr a;
             _Bool handled;
-            err = ci_lower_addr(ci, ctx, lv, &a, &handled);
+            err = ci_lower_addr(ci, ctx, lv, 1, &a, &handled); // address-of: one-past ok
             if(err) return err;
             if(!handled)
                 break; // nothing was emitted
@@ -831,7 +835,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             // at statement end.
             CiLowerAddr a;
             _Bool handled;
-            err = ci_lower_addr(ci, ctx, lhs, &a, &handled);
+            err = ci_lower_addr(ci, ctx, lhs, 0, &a, &handled); // access
             if(err) return err;
             if(!handled)
                 break; // bitfields, array/slice subscripts fall back
@@ -908,7 +912,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             uint32_t keep = ctx->temp; // cur is established; the rest is scratch
             if(is_mem){
                 _Bool handled;
-                err = ci_lower_addr(ci, ctx, lhs, &a, &handled);
+                err = ci_lower_addr(ci, ctx, lhs, 0, &a, &handled); // access
                 if(err) return err;
                 if(!handled){
                     // ci_lower_addr emits nothing when it declines, so the
@@ -1332,7 +1336,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     if(err) return err;
     CiLowerAddr a;
     _Bool ok;
-    err = ci_lower_addr(ci, ctx, lhs, &a, &ok);
+    err = ci_lower_addr(ci, ctx, lhs, 0, &a, &ok); // access
     if(err) return err;
     if(!ok){
         // nothing was emitted; the caller falls back and re-evaluates once
@@ -1653,7 +1657,7 @@ ci_frame_lvalue(const CcExpr* lv, uint32_t* offset){
 // allocated (no ctx->temp restore) so callers can consume them.
 static
 int
-ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* handled){
+ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled){
     int err;
     CcParser* p = &ci->parser;
     *handled = 0;
@@ -1700,18 +1704,16 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, 
         }
         case CC_EXPR_DOT: {
             if(lv->field_loc.bit_width) return 0;
-            err = ci_lower_addr(ci, ctx, lv->values[0], out, handled);
+            err = ci_lower_addr(ci, ctx, lv->values[0], 0, out, handled); // base must be a valid object
             if(err) return err;
             if(!*handled) return 0;
             out->disp += (uint32_t)lv->field_loc.byte_offset;
             return 0;
         }
         case CC_EXPR_SUBSCRIPT: {
-            // pointer bases only; array and slice subscripts keep their
-            // bounds checks in the tree evaluator
             CcExpr* base = lv->lhs;
             CcExpr* idx = lv->values[0];
-            if(ccqt_kind(base->type) != CC_POINTER) return 0;
+            CcTypeKind bk = ccqt_kind(base->type);
             uint32_t idx_sz;
             err = cc_sizeof_as_uint(p, idx->type, idx->loc, &idx_sz);
             if(err) return err;
@@ -1719,16 +1721,85 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, 
             uint32_t elem_sz;
             err = cc_sizeof_as_uint(p, lv->type, lv->loc, &elem_sz);
             if(err) return err;
-            CiLowerVal b, iv;
-            err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &b);
-            if(err) return err;
+            CiOp* op;
+            // Resolve the base pointer, and a length slot when the element
+            // count is known (arrays: constant; slices: the runtime .count).
+            uint32_t base_ptr;     // slot holding an 8-byte base pointer
+            uint32_t base_disp = 0;// offset folded into the result displacement
+            _Bool do_check = 0;
+            uint32_t len_slot = 0;
+            if(bk == CC_POINTER){
+                CiLowerVal b;
+                err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &b);
+                if(err) return err;
+                base_ptr = b.slot; // pointers carry no bounds
+            }
+            else if(bk == CC_ARRAY){
+                CcArray* arr = ccqt_as_array(base->type);
+                CiLowerAddr ba;
+                _Bool ok;
+                err = ci_lower_lvalue_addr(ci, ctx, base, 0, &ba, &ok);
+                if(err) return err;
+                if(!ok) return 0;
+                base_ptr = ba.slot;
+                base_disp = ba.disp;
+                // Elide the check only for genuine flexible-array-member idioms:
+                // a C99 FLA (incomplete), a zero-length member, or a length-1
+                // member at the end of a struct (the struct hack). A real member
+                // array is still checked.
+                _Bool skip = arr->is_incomplete;
+                if(!skip && arr->length <= 1
+                    && (base->kind == CC_EXPR_DOT || base->kind == CC_EXPR_ARROW)){
+                    if(arr->length == 0){
+                        skip = 1;
+                    }
+                    else {
+                        // length 1: skip only if it is the struct's last field
+                        CcQualType st = base->values[0]->type;
+                        if(base->kind == CC_EXPR_ARROW && ccqt_kind(st) == CC_POINTER)
+                            st = ccqt_as_ptr(st)->pointee;
+                        if(ccqt_kind(st) == CC_STRUCT){
+                            CcStruct* s = ccqt_as_struct(st);
+                            if(s->field_count && s->fields
+                                && s->fields[s->field_count-1].offset == (uint32_t)base->field_loc.byte_offset)
+                                skip = 1;
+                        }
+                    }
+                }
+                if(!skip){
+                    err = ci_alloc_slot(ctx, 8, 8, &len_slot);
+                    if(err) return err;
+                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    if(err) return err;
+                    *op = (CiOp){
+                        .kind = CI_OP_CONST,
+                        .slot = len_slot,
+                        .slot_size = 8,
+                        .immediate = arr->length,
+                        .loc = lv->loc,
+                    };
+                    do_check = 1;
+                }
+            }
+            else if(bk == CC_SLICE){
+                CiLowerVal sv;
+                err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &sv); // {count@0, data@8}
+                if(err) return err;
+                base_ptr = sv.slot + 8; // .data
+                len_slot = sv.slot;     // .count
+                do_check = 1;
+            }
+            else {
+                return 0;
+            }
+            CiLowerVal iv;
             err = ci_lower_expr(ci, ctx, idx, CI_NO_SLOT, &iv);
             if(err) return err;
-            CiOp* op;
-            // widen the index to 8 bytes with its own signedness
+            // widen the index to 8 bytes with its own signedness; the unsigned
+            // bounds compare then also rejects negative indices
+            _Bool idx_unsigned = ccqt_is_unsigned(idx->type, !ci_target(ci)->char_is_signed);
             uint32_t widx = iv.slot;
             if(iv.size != 8){
-                _Bool idx_unsigned = ccqt_is_unsigned(idx->type, !ci_target(ci)->char_is_signed);
                 err = ci_alloc_slot(ctx, 8, 8, &widx);
                 if(err) return err;
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -1741,6 +1812,22 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, 
                     .src_size = iv.size,
                     .conv.is_unsigned = idx_unsigned,
                     .loc = idx->loc,
+                };
+            }
+            if(do_check){
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_BOUNDS,
+                    .src = widx,
+                    .src_size = 8,
+                    .src2 = len_slot,
+                    .src2_size = 8,
+                    .bounds = {
+                        .inclusive = one_past_ok,
+                        .index_signed = !idx_unsigned,
+                    },
+                    .loc = lv->loc,
                 };
             }
             // scale by the element size
@@ -1786,7 +1873,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, 
                 .kind = CI_OP_ALU,
                 .slot = addr,
                 .slot_size = 8,
-                .src = b.slot,
+                .src = base_ptr,
                 .src_size = 8,
                 .src2 = scaled,
                 .src2_size = 8,
@@ -1797,13 +1884,43 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, 
                 .loc = lv->loc,
             };
             out->slot = addr;
-            out->disp = 0;
+            out->disp = base_disp;
             *handled = 1;
             return 0;
         }
         default:
             return 0;
     }
+}
+
+// Like ci_lower_addr, but also takes the address of a frame-slot lvalue (a
+// local variable or member of one) via CI_OP_SLOT_ADDR. Used to reach the base
+// of an array subscript, whose storage may live in a slot rather than behind a
+// pointer.
+static
+int
+ci_lower_lvalue_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled){
+    uint32_t off;
+    if(ci_frame_lvalue(lv, &off)){
+        uint32_t aslot;
+        int err = ci_alloc_slot(ctx, 8, 8, &aslot);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .kind = CI_OP_SLOT_ADDR,
+            .slot = aslot,
+            .slot_size = 8,
+            .src = off,
+            .loc = lv->loc,
+        };
+        out->slot = aslot;
+        out->disp = 0;
+        *handled = 1;
+        return 0;
+    }
+    return ci_lower_addr(ci, ctx, lv, one_past_ok, out, handled);
 }
 
 static

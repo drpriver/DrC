@@ -82,6 +82,9 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_VAR_ADDR,         // slots[slot] = the CcVariable* imm's resolved storage
                             // address; a GOT load, read at execution because
                             // lowering can run before the variable resolves
+    CI_OP_BOUNDS,           // trap unless the 8-byte unsigned index in slots[src] is in
+                            // range of the 8-byte length in slots[src2]; bounds.inclusive
+                            // permits index == length (address-of one-past-the-end)
     CI_OP_LOAD,             // slots[slot..slot+slot_size) = ptr[extra..], ptr read from slots[src]
     CI_OP_STORE,            // ptr[extra..] = slots[src..src+src_size), ptr read from slots[slot]
     CI_OP_CALL,             // call the CcFunc* in imm; slots[src..src+src_size) holds the
@@ -133,6 +136,11 @@ struct CiOp {
                      negate: 1,
                      _padding: 15;
         } is_true;
+        struct {
+            uint32_t inclusive: 1,     // permit index == length
+                     index_signed: 1,  // format a failing index as signed
+                     _padding: 30;
+        } bounds;
     };
     uint32_t _pad;
     SrcLoc loc;

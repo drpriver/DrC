@@ -1101,6 +1101,61 @@ TestFunction(test_interpreter){
             .exit_code = 15,
         },
         {
+            "flat expr: array subscript in bounds", __LINE__,
+            SVI("int f(void){\n"
+               "    int a[4];\n"
+               "    for(int i = 0; i < 4; i++) a[i] = i * i;\n"
+               "    int s = 0;\n"
+               "    for(int i = 0; i < 4; i++) s += a[i];\n"
+               "    a[3] += 10;\n"
+               "    return s + a[3];\n"       // 0+1+4+9=14, a[3]=9+10=19 -> 33
+               "}\n"
+               "return f();\n"),
+            .exit_code = 33,
+        },
+        {
+            "flat expr: one-past-end address is legal", __LINE__,
+            SVI("int f(void){\n"
+               "    int a[3];\n"
+               "    int* p = a;\n"
+               "    int* end = &a[3];\n"       // forming one-past pointer is allowed
+               "    int n = 0;\n"
+               "    while(p != end){ *p = 7; p++; n++; }\n"
+               "    return n * 10 + a[2];\n"   // 3 iterations, a[2]=7 -> 37
+               "}\n"
+               "return f();\n"),
+            .exit_code = 37,
+        },
+        {
+            "flat expr: struct-hack trailing array (BITMAPINFO idiom)", __LINE__,
+            // a length-1 array as a struct's last member is over-allocated and
+            // indexed past its declared bound; the ABC must be elided
+            SVI("struct Info { int n; int colors[1]; };\n"
+               "int f(void){\n"
+               "    char buf[64];\n"
+               "    struct Info* p = (struct Info*)buf;\n"
+               "    p->n = 3;\n"
+               "    p->colors[0] = 10;\n"
+               "    p->colors[1] = 20;\n"
+               "    p->colors[2] = 30;\n"
+               "    return p->n + p->colors[1] + p->colors[2];\n" // 3+20+30
+               "}\n"
+               "return f();\n"),
+            .exit_code = 53,
+        },
+        {
+            "flat expr: 2d array subscript", __LINE__,
+            SVI("int f(void){\n"
+               "    int m[2][3];\n"
+               "    for(int i = 0; i < 2; i++)\n"
+               "        for(int j = 0; j < 3; j++)\n"
+               "            m[i][j] = i * 10 + j;\n"
+               "    return m[1][2] + m[0][1];\n" // 12 + 1 = 13
+               "}\n"
+               "return f();\n"),
+            .exit_code = 13,
+        },
+        {
             "flat expr: pointer int casts", __LINE__,
             SVI("int f(void){\n"
                "    int x = 42;\n"
@@ -6813,6 +6868,190 @@ TestFunction(test_interpreter){
     TESTEND();
 }
 
+// Runtime traps are a Dvm extension (the C standard leaves these undefined), so
+// they get their own harness: run the program and require it to fail with a
+// specific diagnostic. Programs are cached as "(test)" so locations are stable.
+TestFunction(test_interpreter_runtime_errors){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    static struct tc {
+        const char* name; int line;
+        StringView program;
+        StringView expect; // full expected diagnostic
+        _Bool skip;
+    } testcases[] = {
+        {
+            "array store past end", __LINE__,
+            SVI("int a[3];\n"
+                "a[3] = 1;\n"
+                "return 0;\n"),
+            SVI("(test):2:2: error: array subscript out of bounds: index 3 not in [0, 3)\n"),
+        },
+        {
+            "array read past end", __LINE__,
+            SVI("int a[3]; a[0] = 0;\n"
+                "return a[5];\n"),
+            SVI("(test):2:9: error: array subscript out of bounds: index 5 not in [0, 3)\n"),
+        },
+        {
+            "array negative index", __LINE__,
+            SVI("int a[3]; a[0] = 0;\n"
+                "int i = -1;\n"
+                "return a[i];\n"),
+            SVI("(test):3:9: error: array subscript out of bounds: index -1 not in [0, 3)\n"),
+        },
+        {
+            "slice past end", __LINE__,
+            SVI("int a[3]; a[0]=1; a[1]=2; a[2]=3;\n"
+                "int s[:] = a[:];\n"
+                "return s[3];\n"),
+            SVI("(test):3:9: error: array subscript out of bounds: index 3 not in [0, 3)\n"),
+        },
+        {
+            "addr past one-past-end: array", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+                "int *p = &a[4];\n"
+                "return *p;\n"),
+            SVI("(test):2:12: error: array subscript out of bounds: index 4 not in [0, 3]\n"),
+        },
+        {
+            "addr negative: array", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+                "int *p = &a[-1];\n"
+                "return *p;\n"),
+            SVI("(test):2:12: error: array subscript out of bounds: index -1 not in [0, 3]\n"),
+        },
+        {
+            "addr past one-past-end: slice", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+                "int s[:] = a;\n"
+                "int *p = &s[4];\n"
+                "return *p;\n"),
+            SVI("(test):3:12: error: array subscript out of bounds: index 4 not in [0, 3]\n"),
+        },
+        {
+            "addr negative: slice", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+                "int s[:] = a;\n"
+                "int *p = &s[-1];\n"
+                "return *p;\n"),
+            SVI("(test):3:12: error: array subscript out of bounds: index -1 not in [0, 3]\n"),
+        },
+        {
+            "addr past one-past-end: struct wrapping array (not last member)", __LINE__,
+            SVI("struct {int a[3]; int x;} s = {1, 2, 3};\n"
+                "int *p = &s.a[4];\n"
+                "return *p;\n"),
+            SVI("(test):2:14: error: array subscript out of bounds: index 4 not in [0, 3]\n"),
+        },
+        {
+            "addr negative: struct wrapping array (not last member)", __LINE__,
+            SVI("struct {int a[3]; int x; } s = {1, 2, 3};\n"
+                "int *p = &s.a[-1];\n"
+                "return *p;\n"),
+            SVI("(test):2:14: error: array subscript out of bounds: index -1 not in [0, 3]\n"),
+        },
+        {
+            "addr past one-past-end: struct wrapping array", __LINE__,
+            SVI("struct {int a[3]; } s = {1, 2, 3};\n"
+                "int *p = &s.a[4];\n"
+                "return *p;\n"),
+            SVI("(test):2:14: error: array subscript out of bounds: index 4 not in [0, 3]\n"),
+        },
+        {
+            "addr negative: struct wrapping array", __LINE__,
+            SVI("struct {int a[3]; } s = {1, 2, 3};\n"
+                "int *p = &s.a[-1];\n"
+                "return *p;\n"),
+            SVI("(test):2:14: error: array subscript out of bounds: index -1 not in [0, 3]\n"),
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        if(tc->skip){
+            TEST_stats.skipped++;
+            continue;
+        }
+        err = 0;
+        FileCache* fc = fc_create(al);
+        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {.allocator = al};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_TEST](),
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
+        fc_write_path(fc, "(test)", 6);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
+        if(err) {TestReport("failed to include"); goto finally;}
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp, 0);
+        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+
+        // Run; a runtime trap surfaces as an error from lowering or stepping.
+        CiInterpFrame* frame = &interp.top_frame;
+        _Bool trapped = 0;
+        err = ci_lower_toplevel(&interp);
+        if(err) trapped = 1;
+        while(!trapped && frame->pc < frame->op_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) trapped = 1;
+        }
+        err = 0; // the trap is the expected outcome, not a harness failure
+        TEST_stats.executed++;
+        if(!trapped){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: %s: expected runtime error but program succeeded\n", __FILE__, tc->line, tc->name);
+        }
+        StringView log = msb_borrow_sv(&log_sb);
+        test_expect_equals_sv(tc->expect, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
+
+        finally:
+        if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
+
 TestFunction(test_interpreter_builtin_headers){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -7969,6 +8208,7 @@ int main(int argc, char** argv){
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_interpreter_runtime_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interpreter_builtin_headers, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
