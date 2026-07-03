@@ -87,6 +87,12 @@ enum CiOpKind TYPED_ENUM(uint32_t){
                             // permits index == length (address-of one-past-the-end)
     CI_OP_LOAD,             // slots[slot..slot+slot_size) = ptr[extra..], ptr read from slots[src]
     CI_OP_STORE,            // ptr[extra..] = slots[src..src+src_size), ptr read from slots[slot]
+    CI_OP_LOAD_BITFIELD,    // like CI_OP_LOAD, but the slot_size bytes at ptr[extra..] are a
+                            // bitfield storage unit: extract bf.bit_width bits at
+                            // bf.bit_offset, extend per bf.is_signed
+    CI_OP_STORE_BITFIELD,   // like CI_OP_STORE, but a read-modify-write: insert the low
+                            // bf.bit_width bits of slots[src..src+src_size) at bf.bit_offset
+                            // of the src_size-byte storage unit at ptr[extra..]
     CI_OP_CALL,             // call the CcFunc* in imm; slots[src..src+src_size) holds the
                             // staged arguments, laid out like the callee's parameter area;
                             // the return value lands in slots[slot..slot+slot_size)
@@ -142,7 +148,11 @@ struct CiOp {
                      _padding: 30;
         } bounds;
     };
-    uint32_t _pad;
+    // CI_OP_LOAD_BITFIELD/CI_OP_STORE_BITFIELD; outside the union so the
+    // byte offset in load/store stays usable alongside it
+    struct {
+        uint32_t bit_offset: 8, bit_width: 8, is_signed: 1, _padding: 15;
+    } bf;
     SrcLoc loc;
     union {
         CcExpr* _Null_unspecified expr;

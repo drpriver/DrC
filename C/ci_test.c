@@ -1127,6 +1127,82 @@ TestFunction(test_interpreter){
             .exit_code = 37,
         },
         {
+            "flat expr: array to pointer decay", __LINE__,
+            SVI("void fill(int* a, int v){ a[0] = v; a[1] = v + 1; }\n"
+               "struct S { int arr[3]; };\n"
+               "int g[2];\n"
+               "int f(void){\n"
+               "    int local[3];\n"
+               "    int* p;\n"
+               "    p = local;\n"          // local array decay (assignment)
+               "    p[0] = 1; p[1] = 2; p[2] = 3;\n"
+               "    fill(local, 10);\n"     // array arg decays: local[0]=10, local[1]=11
+               "    struct S s;\n"
+               "    int* q = s.arr;\n"      // member array decay (initializer)
+               "    q[0] = 7;\n"
+               "    int* r = g;\n"          // global array decay
+               "    r[1] = 4;\n"
+               "    return local[0]+local[1]+local[2] + s.arr[0] + g[1];\n" // 10+11+3+7+4
+               "}\n"
+               "return f();\n"),
+            .exit_code = 35,
+        },
+        {
+            "flat expr: bitfield load/store", __LINE__,
+            SVI("struct B { unsigned a: 3; int b: 4; unsigned c: 9; };\n"
+               "struct B g;\n"
+               "int f(void){\n"
+               "    struct B x;\n"
+               "    x.a = 9;\n"                       // truncates to 1
+               "    x.b = -3;\n"
+               "    x.c = 100;\n"
+               "    int r = (x.a == 1) + (x.b == -3) + (x.c == 100);\n"
+               "    struct B* p = &x;\n"
+               "    p->b = 7;\n"
+               "    r += p->b == 7;\n"
+               "    r += (x.c = 512) == 0;\n"         // 512 truncates to 0 in 9 bits
+               "    g.b = 5;\n"                       // global struct bitfield
+               "    r += g.b == 5;\n"
+               "    return r;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 6,
+        },
+        {
+            "flat expr: bitfield compound assign", __LINE__,
+            SVI("struct B { int s: 4; unsigned u: 3; };\n"
+               "int f(void){\n"
+               "    struct B x;\n"
+               "    x.s = 7; x.u = 6;\n"
+               "    int r = (x.s += 2) == -7;\n"      // 7+2=9 wraps to -7 in 4 signed bits
+               "    r += x.s == -7;\n"
+               "    x.u += 3;\n"                      // 6+3=9 wraps to 1 in 3 bits
+               "    r += x.u == 1;\n"
+               "    struct B* p = &x;\n"
+               "    p->s &= 6;\n"                     // 1001 & 0110 == 0
+               "    r += x.s == 0;\n"
+               "    return r;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 4,
+        },
+        {
+            "flat expr: bitfield inc/dec", __LINE__,
+            SVI("struct B { int s: 3; unsigned u: 2; };\n"
+               "int f(void){\n"
+               "    struct B x;\n"
+               "    x.s = 3; x.u = 3;\n"
+               "    int r = x.s++ == 3;\n"            // post yields old; s wraps to -4
+               "    r += x.s == -4;\n"
+               "    r += --x.s == 3;\n"               // -5 wraps to 3 in 3 signed bits
+               "    r += x.u++ == 3;\n"
+               "    r += x.u == 0;\n"                 // wraps
+               "    return r;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 5,
+        },
+        {
             "flat expr: struct-hack trailing array (BITMAPINFO idiom)", __LINE__,
             // a length-1 array as a struct's last member is over-allocated and
             // indexed past its declared bound; the ABC must be elided

@@ -3738,10 +3738,28 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_LOAD_BITFIELD: {
+            char* ptr;
+            memcpy(&ptr, (char*)frame->slots+op->src, sizeof ptr);
+            uint64_t val = ci_bitfield_read(ptr + op->load.offset, op->slot_size, op->bf.bit_offset, op->bf.bit_width);
+            val = ci_bitfield_extend(val, op->bf.bit_width, op->bf.is_signed);
+            memcpy((char*)frame->slots + op->slot, &val, op->slot_size);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_STORE: {
             char* ptr;
             memcpy(&ptr, (char*)frame->slots + op->slot, sizeof ptr);
             memcpy(ptr + op->store.offset, (char*)frame->slots + op->src, op->src_size);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_STORE_BITFIELD: {
+            char* ptr;
+            memcpy(&ptr, (char*)frame->slots + op->slot, sizeof ptr);
+            uint64_t val = 0;
+            memcpy(&val, (char*)frame->slots + op->src, op->src_size);
+            ci_bitfield_write(ptr + op->store.offset, op->src_size, op->bf.bit_offset, op->bf.bit_width, val);
             frame->pc++;
             return 0;
         }

@@ -91,6 +91,15 @@ static _Bool ci_frame_lvalue(const CcExpr* lv, uint32_t* offset);
 // one-past-the-end address; it is always false when recursing into a base.
 static int ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled);
 static int ci_lower_lvalue_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out, _Bool* handled);
+// Materialize a computed address (base pointer slot + constant displacement) as
+// an 8-byte pointer value in dest (allocated when CI_NO_SLOT).
+static int ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, SrcLoc loc, CiLowerVal* out);
+// Lower the address of a bitfield's storage unit: the base's address plus the
+// member's byte offset. lv is a DOT or ARROW with a nonzero bit_width. Emits
+// nothing when it returns *handled = 0 (a base with no addressable storage).
+static int ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* handled);
+static int ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size);
+static int ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size);
 static _Bool ci_alu_int_type(CcQualType t);
 static _Bool ci_falu_type(CcQualType t);
 static CiAluOp ci_alu_op_for(CcExprKind kind);
@@ -531,6 +540,24 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 break; // atomic loads fall back
             if(ccqt_kind(e->type) == CC_ARRAY)
                 break; // array rvalues only decay; no direct loads
+            if((e->kind == CC_EXPR_DOT || e->kind == CC_EXPR_ARROW) && e->field_loc.bit_width){
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                uint32_t temp = ctx->temp;
+                CiLowerAddr a;
+                _Bool handled;
+                err = ci_lower_bitfield_addr(ci, ctx, e, &a, &handled);
+                if(err) return err;
+                if(!handled){
+                    ctx->temp = temp;
+                    break; // struct rvalue bases fall back
+                }
+                err = ci_emit_load_bitfield(ci, ctx, e, a, dest, size);
+                if(err) return err;
+                ctx->temp = temp;
+                out->slot = dest;
+                return 0;
+            }
             uint32_t off;
             if(ci_frame_lvalue(e, &off)){
                 // a member of a local is already a slot
@@ -561,7 +588,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(err) return err;
             if(!handled){
                 ctx->temp = temp;
-                break; // bitfields, array/slice subscripts, etc fall back
+                break; // array/slice subscripts, etc fall back
             }
             out->slot = dest;
             CiOp* op;
@@ -603,56 +630,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(err) return err;
             if(!handled)
                 break; // nothing was emitted
-            if(a.disp == 0 && dest == CI_NO_SLOT){
-                out->slot = a.slot;
-                return 0;
-            }
-            err = ci_lower_dest(ctx, &dest, size);
-            if(err) return err;
-            out->slot = dest;
-            if(a.disp == 0){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .kind = CI_OP_COPY,
-                    .slot = dest,
-                    .slot_size = size,
-                    .src = a.slot,
-                    .src_size = size,
-                    .loc = e->loc,
-                };
-                return 0;
-            }
-            // addr and displacement temps recycle at statement end
-            uint32_t cslot;
-            err = ci_alloc_slot(ctx, 8, 8, &cslot);
-            if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .kind = CI_OP_CONST,
-                .slot = cslot,
-                .slot_size = 8,
-                .immediate = a.disp,
-                .loc = e->loc,
-            };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .kind = CI_OP_ALU,
-                .slot = dest,
-                .slot_size = size,
-                .src = a.slot,
-                .src_size = 8,
-                .src2 = cslot,
-                .src2_size = 8,
-                .alu = {
-                    .op = CI_ALU_ADD,
-                    .is_unsigned = 1,
-                },
-                .loc = e->loc,
-            };
-            return 0;
+            return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
         }
         case CC_EXPR_CAST: {
             // CC_EXPR_CAST covers several distinct operations; dispatch like
@@ -667,8 +645,20 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             // Qualifier-only cast: pass through directly.
             if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7))
                 return ci_lower_expr(ci, ctx, operand, dest, out);
-            if(ccqt_kind(from) == CC_ARRAY)
-                break; // array decay and array-to-slice fall back
+            if(ccqt_kind(from) == CC_ARRAY){
+                // array-to-pointer decay: the value is the address of the
+                // array's first element (same as &array). array-to-slice and
+                // vector types still fall back.
+                if(ccqt_kind(to) != CC_POINTER)
+                    break;
+                CiLowerAddr a;
+                _Bool ok;
+                err = ci_lower_lvalue_addr(ci, ctx, operand, 1, &a, &ok);
+                if(err) return err;
+                if(!ok)
+                    break;
+                return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
+            }
             // Scalar conversions. A pointer is an 8-byte value here; the
             // evaluator reads it with ccqt_is_unsigned (false), which is
             // bit-identical to unsigned at full width, so CI_OP_CONVERT covers
@@ -835,10 +825,29 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             // at statement end.
             CiLowerAddr a;
             _Bool handled;
+            if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
+                // read-modify-write on the storage unit; the assignment's
+                // value is the stored bits, re-read truncated and extended
+                err = ci_lower_bitfield_addr(ci, ctx, lhs, &a, &handled);
+                if(err) return err;
+                if(!handled)
+                    break;
+                CiLowerVal v;
+                err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
+                if(err) return err;
+                err = ci_emit_store_bitfield(ctx, lhs, a, v.slot, size);
+                if(err) return err;
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                err = ci_emit_load_bitfield(ci, ctx, lhs, a, dest, size);
+                if(err) return err;
+                out->slot = dest;
+                return 0;
+            }
             err = ci_lower_addr(ci, ctx, lhs, 0, &a, &handled); // access
             if(err) return err;
             if(!handled)
-                break; // bitfields, array/slice subscripts fall back
+                break; // array/slice subscripts fall back
             CiLowerVal v;
             err = ci_lower_expr(ci, ctx, rhs, dest, &v);
             if(err) return err;
@@ -888,6 +897,71 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             else {
                 break; // pointer compound assignment falls back
+            }
+            if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
+                // Bitfield target: read-modify-write on the storage unit,
+                // with cur as the working value. Bitfields are integers, so
+                // opkind is always CI_OP_ALU here.
+                uint32_t save = ctx->temp;
+                uint32_t cur;
+                err = ci_alloc_slot(ctx, size, size, &cur);
+                if(err) return err;
+                uint32_t keep = ctx->temp; // cur is established; the rest is scratch
+                CiLowerAddr a;
+                _Bool handled;
+                err = ci_lower_bitfield_addr(ci, ctx, lhs, &a, &handled);
+                if(err) return err;
+                if(!handled){
+                    // nothing was emitted; the fallback re-evaluates the
+                    // lvalue exactly once
+                    ctx->temp = save;
+                    break;
+                }
+                err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size);
+                if(err) return err;
+                CiLowerVal r;
+                err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
+                if(err) return err;
+                CiOp* op;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_ALU,
+                    .slot = cur,
+                    .slot_size = size,
+                    .src = cur,
+                    .src_size = size,
+                    .src2 = r.slot,
+                    .src2_size = r.size,
+                    .alu = {
+                        .op = ci_alu_op_for(e->kind),
+                        .is_unsigned = ccqt_is_unsigned(e->type, !ci_target(ci)->char_is_signed),
+                    },
+                    .loc = e->loc,
+                };
+                err = ci_emit_store_bitfield(ctx, lhs, a, cur, size);
+                if(err) return err;
+                // the expression's value is the stored bits, re-read
+                // truncated and extended
+                err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size);
+                if(err) return err;
+                ctx->temp = keep; // free rhs and address scratch; cur survives
+                if(dest == CI_NO_SLOT){
+                    out->slot = cur;
+                    return 0;
+                }
+                out->slot = dest;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_COPY,
+                    .slot = dest,
+                    .slot_size = size,
+                    .src = cur,
+                    .src_size = size,
+                    .loc = e->loc,
+                };
+                return 0;
             }
             // Resolve the target: a frame slot operated on in place, or a
             // computed address loaded into a temp and stored back.
@@ -1336,7 +1410,12 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     if(err) return err;
     CiLowerAddr a;
     _Bool ok;
-    err = ci_lower_addr(ci, ctx, lhs, 0, &a, &ok); // access
+    _Bool is_bf = (lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW)
+        && lhs->field_loc.bit_width;
+    if(is_bf)
+        err = ci_lower_bitfield_addr(ci, ctx, lhs, &a, &ok);
+    else
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a, &ok); // access
     if(err) return err;
     if(!ok){
         // nothing was emitted; the caller falls back and re-evaluates once
@@ -1344,16 +1423,22 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         return 0;
     }
     *handled = 1;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-    if(err) return err;
-    *op = (CiOp){
-        .kind = CI_OP_LOAD,
-        .slot = old,
-        .slot_size = size,
-        .src = a.slot,
-        .load.offset = a.disp,
-        .loc = e->loc,
-    };
+    if(is_bf){
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size);
+        if(err) return err;
+    }
+    else {
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .kind = CI_OP_LOAD,
+            .slot = old,
+            .slot_size = size,
+            .src = a.slot,
+            .load.offset = a.disp,
+            .loc = e->loc,
+        };
+    }
     uint32_t newv;
     err = ci_alloc_slot(ctx, size, size, &newv);
     if(err) return err;
@@ -1385,16 +1470,27 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         },
         .loc = e->loc,
     };
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-    if(err) return err;
-    *op = (CiOp){
-        .kind = CI_OP_STORE,
-        .slot = a.slot,
-        .src = newv,
-        .src_size = size,
-        .store.offset = a.disp,
-        .loc = e->loc,
-    };
+    if(is_bf){
+        err = ci_emit_store_bitfield(ctx, lhs, a, newv, size);
+        if(err) return err;
+        if(out && is_pre){
+            // pre yields the stored bits, re-read truncated and extended
+            err = ci_emit_load_bitfield(ci, ctx, lhs, a, newv, size);
+            if(err) return err;
+        }
+    }
+    else {
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .kind = CI_OP_STORE,
+            .slot = a.slot,
+            .src = newv,
+            .src_size = size,
+            .store.offset = a.disp,
+            .loc = e->loc,
+        };
+    }
     if(out){
         // pre yields the new value, post the old; both live in kept slots
         out->slot = is_pre? newv : old;
@@ -1625,6 +1721,131 @@ int
 ci_lower_dest(CiLowerCtx* ctx, uint32_t* dest, uint32_t size){
     if(*dest != CI_NO_SLOT) return 0;
     return ci_alloc_slot(ctx, size, size, dest);
+}
+
+static
+int
+ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, SrcLoc loc, CiLowerVal* out){
+    int err;
+    out->size = size;
+    out->canonical = 0;
+    if(a.disp == 0 && dest == CI_NO_SLOT){
+        // the base pointer slot already holds the value
+        out->slot = a.slot;
+        return 0;
+    }
+    err = ci_lower_dest(ctx, &dest, size);
+    if(err) return err;
+    out->slot = dest;
+    CiOp* op;
+    if(a.disp == 0){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .kind = CI_OP_COPY,
+            .slot = dest,
+            .slot_size = size,
+            .src = a.slot,
+            .src_size = size,
+            .loc = loc,
+        };
+        return 0;
+    }
+    // dest = a.slot + a.disp; the displacement temp recycles at statement end
+    uint32_t cslot;
+    err = ci_alloc_slot(ctx, 8, 8, &cslot);
+    if(err) return err;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_CONST,
+        .slot = cslot,
+        .slot_size = 8,
+        .immediate = a.disp,
+        .loc = loc,
+    };
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_ALU,
+        .slot = dest,
+        .slot_size = size,
+        .src = a.slot,
+        .src_size = 8,
+        .src2 = cslot,
+        .src2_size = 8,
+        .alu = {
+            .op = CI_ALU_ADD,
+            .is_unsigned = 1,
+        },
+        .loc = loc,
+    };
+    return 0;
+}
+
+static
+int
+ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* handled){
+    int err;
+    *handled = 0;
+    if(lv->kind == CC_EXPR_ARROW){
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, lv->values[0], CI_NO_SLOT, &v);
+        if(err) return err;
+        out->slot = v.slot;
+        out->disp = (uint32_t)lv->field_loc.byte_offset;
+        *handled = 1;
+        return 0;
+    }
+    // DOT: the base may live in a frame slot rather than behind a pointer
+    err = ci_lower_lvalue_addr(ci, ctx, lv->values[0], 0, out, handled);
+    if(err) return err;
+    if(*handled)
+        out->disp += (uint32_t)lv->field_loc.byte_offset;
+    return 0;
+}
+
+static
+int
+ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size){
+    CiOp* op;
+    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_LOAD_BITFIELD,
+        .slot = dest,
+        .slot_size = size,
+        .src = a.slot,
+        .load.offset = a.disp,
+        .bf = {
+            .bit_offset = lv->field_loc.bit_offset,
+            .bit_width = lv->field_loc.bit_width,
+            .is_signed = !ccqt_is_unsigned(lv->type, !ci_target(ci)->char_is_signed),
+        },
+        .loc = lv->loc,
+    };
+    return 0;
+}
+
+static
+int
+ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size){
+    CiOp* op;
+    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_STORE_BITFIELD,
+        .slot = a.slot,
+        .src = src,
+        .src_size = size,
+        .store.offset = a.disp,
+        .bf = {
+            .bit_offset = lv->field_loc.bit_offset,
+            .bit_width = lv->field_loc.bit_width,
+        },
+        .loc = lv->loc,
+    };
+    return 0;
 }
 
 // Lvalues that resolve to a static frame slot offset at lowering time:
