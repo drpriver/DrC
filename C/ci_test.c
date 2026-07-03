@@ -724,6 +724,416 @@ TestFunction(test_interpreter){
             .exit_code = 10,
         },
         {
+            "flat expr: assignment chains and arithmetic", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 0, y = 0;\n"
+               "    x = x + 5;\n"
+               "    y = x * 3 - 4;\n"
+               "    x = y = y / 2;\n"
+               "    return x * 10 + y;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 55,
+        },
+        {
+            "flat expr: unsigned wraparound compare", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned a = 0;\n"
+               "    if(a - 1 > 100) return 1;\n"
+               "    return 2;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "flat expr: signed compare and division", __LINE__,
+            SVI("int f(int a, int b){\n"
+               "    int q = 0;\n"
+               "    q = a / b;\n"
+               "    if(-1 < q) return q + 10;\n"
+               "    return -q;\n"
+               "}\n"
+               "return f(-7, 2) * 10 + f(9, 2);\n"),
+            .exit_code = 44,
+        },
+        {
+            "flat expr: assignment value used in condition", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 0, n = 0;\n"
+               "    while((x = x + 2) < 10) n = n + 1;\n"
+               "    return x * 10 + n;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 104,
+        },
+        {
+            "flat expr: logical rhs reads assigned var", __LINE__,
+            SVI("int seen = 0;\n"
+               "int probe(int v){ seen = v; return 1; }\n"
+               "int f(void){\n"
+               "    int x = 7;\n"
+               "    x = x && probe(x);\n"
+               "    return x;\n"
+               "}\n"
+               "return f() * 10 + seen;\n"),
+            .exit_code = 17,
+        },
+        {
+            "flat expr: bit ops", __LINE__,
+            SVI("int f(void){\n"
+               "    int a = 0;\n"
+               "    a = (5 << 2) | 3;\n"
+               "    a = a ^ (a & 6);\n"
+               "    a = a % 7;\n"
+               "    return a + (1 << 4);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 19,
+        },
+        {
+            "flat expr: mixed width arithmetic", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned char c = 200;\n"
+               "    short s = -5;\n"
+               "    int r = 0;\n"
+               "    r = c + 100;\n"
+               "    if(s < 0) r = r + 1;\n"
+               "    return r - 250;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 51,
+        },
+        {
+            "flat expr: casts truncate and extend", __LINE__,
+            SVI("int f(void){\n"
+               "    int big = 0x1234;\n"
+               "    char c = 0;\n"
+               "    c = (char)big;\n"
+               "    signed char s = -1;\n"
+               "    unsigned u = 0;\n"
+               "    u = (unsigned)s;\n"
+               "    int r = 0;\n"
+               "    r = (int)(u >> 24);\n"
+               "    return c + (r == 255);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 53,
+        },
+        {
+            "flat expr: unary ops", __LINE__,
+            SVI("int f(void){\n"
+               "    int a = 5;\n"
+               "    int r = 0;\n"
+               "    r = -a + 10;\n"
+               "    r = r + (~a & 15);\n"
+               "    if(!a) return 99;\n"
+               "    if(!!a) r = r + 1;\n"
+               "    return r + !0 * 10;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 26,
+        },
+        {
+            "flat expr: lognot of double", __LINE__,
+            SVI("int f(void){\n"
+               "    double z = -0.0;\n"
+               "    double v = 0.5;\n"
+               "    return !z * 10 + !v;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 10,
+        },
+        {
+            "flat expr: classic for loop with compound assign", __LINE__,
+            SVI("int f(void){\n"
+               "    int s = 0;\n"
+               "    for(int i = 0; i < 5; i++) s += i;\n"
+               "    for(int i = 10; i > 0; --i) s -= 1;\n"
+               "    return s;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 0,
+        },
+        {
+            "flat expr: post and pre value semantics", __LINE__,
+            SVI("int f(void){\n"
+               "    int i = 3, j = 0, k = 0;\n"
+               "    j = i++;\n"
+               "    k = --i;\n"
+               "    return j * 100 + k * 10 + i;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 333,
+        },
+        {
+            "flat expr: pointer inc dec", __LINE__,
+            SVI("int f(void){\n"
+               "    int a[3];\n"
+               "    a[0] = 5; a[1] = 6; a[2] = 7;\n"
+               "    int* p = a;\n"
+               "    p++;\n"
+               "    ++p;\n"
+               "    int r = *p;\n"
+               "    p--;\n"
+               "    return r * 10 + *p;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 76,
+        },
+        {
+            "flat expr: compound assign chain", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 2;\n"
+               "    x *= 3;\n"
+               "    x <<= 2;\n"
+               "    x |= 1;\n"
+               "    x %= 100;\n"
+               "    x -= 5;\n"
+               "    x ^= 3;\n"
+               "    x &= 0xff;\n"
+               "    unsigned u = 0x80000000u;\n"
+               "    u >>= 24;\n"
+               "    return x + (u == 0x80);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 24,
+        },
+        {
+            "flat expr: compound assign value used", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 5, y = 0;\n"
+               "    y = (x += 3);\n"
+               "    while((x -= 2) > 0) y++;\n"
+               "    return y * 10 + (x == 0);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 111,
+        },
+        {
+            "flat expr: float arithmetic", __LINE__,
+            SVI("int f(void){\n"
+               "    float x = 1.5f;\n"
+               "    float y = 0;\n"
+               "    y = x * 2.0f + 1.0f;\n"
+               "    y = y - 0.5f;\n"
+               "    y = -y;\n"
+               "    return (int)(y * -2.0f);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "flat expr: float compound assignment", __LINE__,
+            SVI("int f(void){\n"
+               "    float x = 10.0f;\n"
+               "    x += 5.0f;\n"
+               "    x -= 3.0f;\n"
+               "    x *= 2.0f;\n"
+               "    x /= 4.0f;\n"
+               "    x += 1;\n"     // int rhs, parser casts to float
+               "    double d = 2.0;\n"
+               "    d *= 1.5;\n"
+               "    d += x;\n"     // float rhs, parser casts to double
+               "    return (int)(x * 10.0f) + (int)d;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 80,
+        },
+        {
+            "flat expr: double arithmetic and compares", __LINE__,
+            SVI("int f(void){\n"
+               "    double a = 1.5, b = 2.5;\n"
+               "    int r = 0;\n"
+               "    double c = 0;\n"
+               "    c = a * b + 0.25;\n"
+               "    if(a < b) r += 1;\n"
+               "    if(c == 4.0) r += 2;\n"
+               "    if(a >= b) r += 100;\n"
+               "    if(b != b) r += 100;\n"
+               "    return r + (int)c;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "flat expr: int float conversions", __LINE__,
+            SVI("int f(void){\n"
+               "    int i = 7;\n"
+               "    double d = 0;\n"
+               "    d = (double)i / 2.0;\n"
+               "    float g = 0;\n"
+               "    g = (float)(d + 0.25);\n"
+               "    int r = 0;\n"
+               "    r = (int)(g * 4.0f);\n"
+               "    unsigned u = 3000000000u;\n"
+               "    d = (double)u;\n"
+               "    if(d > 2000000000.0) r += 10;\n"
+               "    return r + (int)-1.5;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 24,
+        },
+        {
+            "flat expr: deref load and store", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 5;\n"
+               "    int* p = &x;\n"
+               "    *p = 7;\n"
+               "    *p = *p + 1;\n"
+               "    return *p + x;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 16,
+        },
+        {
+            "flat expr: struct through pointer", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "int f(void){\n"
+               "    struct P s;\n"
+               "    s.a = 1; s.b = 2;\n"
+               "    struct P* q = &s;\n"
+               "    q->a = 3;\n"
+               "    q->b = q->a + 4;\n"
+               "    return s.a * 10 + s.b;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 37,
+        },
+        {
+            "flat expr: nested member of local", __LINE__,
+            SVI("struct Inner { int v; };\n"
+               "struct Outer { int pad; struct Inner in; };\n"
+               "int f(void){\n"
+               "    struct Outer o;\n"
+               "    o.pad = 1;\n"
+               "    o.in.v = 5;\n"
+               "    o.in.v += 2;\n"
+               "    o.in.v++;\n"
+               "    return o.in.v * 10 + o.pad;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 81,
+        },
+        {
+            "flat expr: pointer subscript", __LINE__,
+            SVI("int f(void){\n"
+               "    int a[4];\n"
+               "    a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4;\n"
+               "    int* p = a;\n"
+               "    p[2] = 9;\n"
+               "    int s = 0;\n"
+               "    for(int i = 0; i < 4; i++) s += p[i];\n"
+               "    int* q = &p[1];\n"
+               "    return s + *q;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 18,
+        },
+        {
+            "flat expr: struct copy through pointer", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "int f(void){\n"
+               "    struct P s, t;\n"
+               "    s.a = 3; s.b = 4;\n"
+               "    t.a = 0; t.b = 0;\n"
+               "    struct P* q = &t;\n"
+               "    *q = s;\n"
+               "    return t.a * 10 + t.b;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 34,
+        },
+        {
+            "flat expr: recursive call", __LINE__,
+            SVI("int fib(int n){\n"
+               "    if(n < 2) return n;\n"
+               "    return fib(n - 1) + fib(n - 2);\n"
+               "}\n"
+               "return fib(10);\n"),
+            .exit_code = 55,
+        },
+        {
+            "flat expr: pointer int casts", __LINE__,
+            SVI("int f(void){\n"
+               "    int x = 42;\n"
+               "    int* p = &x;\n"
+               "    __SIZE_TYPE__ n = (__SIZE_TYPE__)p;\n"  // ptr -> int
+               "    int* q = (int*)n;\n"                     // int -> ptr
+               "    char* c = (char*)p;\n"                   // ptr -> ptr
+               "    return (*q == 42) + (c == (char*)p) * 2;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 3,
+        },
+        {
+            "flat expr: global read write and address", __LINE__,
+            SVI("int g = 5;\n"
+               "int* gp;\n"
+               "void bump(void){ g += 10; }\n"
+               "void store(int v){ *gp = v; }\n"
+               "int f(void){\n"
+               "    gp = &g;\n"
+               "    bump();\n"        // g = 15
+               "    store(g + 1);\n"  // g = 16 via *gp
+               "    return g;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 16,
+        },
+        {
+            "flat expr: global struct member", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "struct P gp;\n"
+               "int f(void){\n"
+               "    gp.a = 3;\n"
+               "    gp.b = gp.a + 4;\n"
+               "    struct P* q = &gp;\n"
+               "    q->a += 10;\n"
+               "    return gp.a * 100 + gp.b;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1307,
+        },
+        {
+            "flat expr: void call with out param", __LINE__,
+            SVI("void set(int* p, int v){ *p = v; }\n"
+               "int f(void){\n"
+               "    int x = 0;\n"
+               "    set(&x, 42);\n"
+               "    return x;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 42,
+        },
+        {
+            "flat expr: struct args and return", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "struct P mk(int a, int b){ struct P r; r.a = a; r.b = b; return r; }\n"
+               "int sum(struct P p){ return p.a + p.b; }\n"
+               "int f(void){\n"
+               "    struct P s;\n"
+               "    s = mk(3, 4);\n"
+               "    return s.a * 10 + sum(s);\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 37,
+        },
+        {
+            "flat expr: nested calls as arguments", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int twice(int x){ return x * 2; }\n"
+               "return add(twice(3), add(twice(2), 1));\n"),
+            .exit_code = 11,
+        },
+        {
+            "flat expr: discarded call return", __LINE__,
+            SVI("int calls = 0;\n"
+               "int bump(void){ calls++; return 99; }\n"
+               "int f(void){ bump(); bump(); return 1; }\n"
+               "return f() + calls;\n"),
+            .exit_code = 3,
+        },
+        {
             "lowering: temp slot recycling stress", __LINE__,
             SVI("int f(void){\n"
                "    int total = 0;\n"
