@@ -1551,6 +1551,114 @@ TestFunction(test_interpreter){
             .exit_code = 3,
         },
         {
+            "pointer: add negative signed char index", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = &arr[3];\n"
+               "signed char i = -2;\n"
+               "return *(p + i);\n"),
+            .exit_code = 20,
+        },
+        {
+            "pointer: int + pointer", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "return *(3 + p);\n"),
+            .exit_code = 40,
+        },
+        {
+            "pointer: sub unsigned index", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = &arr[3];\n"
+               "unsigned i = 2;\n"
+               "return *(p - i);\n"),
+            .exit_code = 20,
+        },
+        {
+            "pointer: long long and unsigned long long index", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "long long i = 3;\n"
+               "unsigned long long u = 1;\n"
+               "return *(p + i) + *(p + u);\n"),
+            .exit_code = 60,
+        },
+        {
+            "pointer: enum index", __LINE__,
+            SVI("enum E { TWO = 2 };\n"
+               "int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "enum E e = TWO;\n"
+               "return *(p + e);\n"),
+            .exit_code = 30,
+        },
+        {
+            "pointer: difference negative", __LINE__,
+            SVI("int arr[5] = {0};\n"
+               "int *a = &arr[4];\n"
+               "int *b = &arr[1];\n"
+               "return (int)(b - a) + 4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer: difference odd-sized element", __LINE__,
+            SVI("struct S { char c[12]; };\n"
+               "struct S arr[5];\n"
+               "struct S *a = &arr[1];\n"
+               "struct S *b = &arr[4];\n"
+               "return (int)(b - a);\n"),
+            .exit_code = 3,
+        },
+        {
+            "pointer: char difference", __LINE__,
+            SVI("char buf[10];\n"
+               "char *a = buf + 2;\n"
+               "char *b = buf + 9;\n"
+               "return (int)(b - a);\n"),
+            .exit_code = 7,
+        },
+        {
+            "pointer: comparisons", __LINE__,
+            SVI("int arr[4];\n"
+               "int *a = arr + 1;\n"
+               "int *b = arr + 3;\n"
+               "return (a < b) + (b > a)*2 + (a <= a)*4 + (b >= b)*8 + (a == a)*16 + (a != b)*32;\n"),
+            .exit_code = 63,
+        },
+        {
+            "pointer: compare with null", __LINE__,
+            SVI("int x = 0;\n"
+               "int *p = &x;\n"
+               "int *q = 0;\n"
+               "return (p != 0) + (q == 0)*2 + (0 == q)*4;\n"),
+            .exit_code = 7,
+        },
+        {
+            "pointer: += negative signed char", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = &arr[3];\n"
+               "signed char i = -3;\n"
+               "p += i;\n"
+               "return *p;\n"),
+            .exit_code = 10,
+        },
+        {
+            "pointer: += through pointer to pointer", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "int **pp = &p;\n"
+               "*pp += 2;\n"
+               "return *p;\n"),
+            .exit_code = 30,
+        },
+        {
+            "pointer: compound assign value used", __LINE__,
+            SVI("int arr[4] = {10, 20, 30, 40};\n"
+               "int *p = arr;\n"
+               "int *q = (p += 2);\n"
+               "return (*q == 30) + (p == q)*2;\n"),
+            .exit_code = 3,
+        },
+        {
             "pointer: sub array decay", __LINE__,
             SVI("typedef struct Foo { char data[10000]; } Foo;\n"
                "Foo f;\n"
