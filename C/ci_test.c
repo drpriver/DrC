@@ -1053,6 +1053,54 @@ TestFunction(test_interpreter){
             .exit_code = 55,
         },
         {
+            "flat expr: compound assign through memory", __LINE__,
+            SVI("struct P { int a, b; };\n"
+               "int g = 100;\n"
+               "int f(void){\n"
+               "    g += 5;\n"                 // static: 105
+               "    struct P s; s.a = 2; s.b = 3;\n"
+               "    struct P* q = &s;\n"
+               "    q->a *= 10;\n"             // through pointer: a=20
+               "    int arr[3]; arr[0]=1; arr[1]=4; arr[2]=9;\n"
+               "    int* p = arr;\n"
+               "    p[1] += 6;\n"              // subscript: arr[1]=10
+               "    int r = (q->b <<= 2);\n"   // value used: b=12, r=12
+               "    return g + q->a + p[1] + r;\n"  // 105+20+10+12 = 147
+               "}\n"
+               "return f();\n"),
+            .exit_code = 147,
+        },
+        {
+            "flat expr: incdec through memory", __LINE__,
+            SVI("int g = 10;\n"
+               "struct P { int a, b; };\n"
+               "int f(void){\n"
+               "    ++g;\n"               // static pre: g=11
+               "    struct P s; s.a=5; s.b=8;\n"
+               "    struct P* q = &s;\n"
+               "    int x = q->a++;\n"     // post through ptr: x=5, s.a=6
+               "    int arr[3]; arr[0]=1; arr[1]=2; arr[2]=3;\n"
+               "    int* p = arr;\n"
+               "    p[2]--;\n"             // post through subscript, discarded: arr[2]=2
+               "    int y = --p[0];\n"     // pre through subscript: y=0, arr[0]=0
+               "    return g*100 + x*10 + q->a + arr[2] + y;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1158,
+        },
+        {
+            "flat expr: float compound assign through pointer", __LINE__,
+            SVI("int f(void){\n"
+               "    double d = 4.0;\n"
+               "    double* p = &d;\n"
+               "    *p += 1.0;\n"
+               "    *p *= 3.0;\n"
+               "    return (int)*p;\n"          // (4+1)*3 = 15
+               "}\n"
+               "return f();\n"),
+            .exit_code = 15,
+        },
+        {
             "flat expr: pointer int casts", __LINE__,
             SVI("int f(void){\n"
                "    int x = 42;\n"

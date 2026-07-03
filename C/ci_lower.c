@@ -865,11 +865,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_RSHIFTASSIGN: {
             CcExpr* lhs = e->lhs;
             CcExpr* rhs = e->values[0];
-            uint32_t vslot;
-            if(!ci_frame_lvalue(lhs, &vslot))
-                break;
             // The parser casts the rhs to the lhs type (cc_implicit_cast), so
-            // both operands share e->type here.
+            // both operands share e->type here. Decide the arithmetic before
+            // emitting anything with side effects (the lvalue is evaluated
+            // once).
             CiOpKind opkind;
             CiFaluOp fop = 0;
             if(ci_alu_int_type(e->type) && ci_alu_int_type(rhs->type)){
@@ -886,18 +885,58 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             else {
                 break; // pointer compound assignment falls back
             }
-            uint32_t temp = ctx->temp;
+            // Resolve the target: a frame slot operated on in place, or a
+            // computed address loaded into a temp and stored back.
+            uint32_t save = ctx->temp;
+            uint32_t cur;
+            CiLowerAddr a;
+            _Bool is_mem;
+            uint32_t vslot;
+            CiOp* op;
+            if(ci_frame_lvalue(lhs, &vslot)){
+                is_mem = 0;
+                cur = vslot;
+            }
+            else if(lhs->type.is_atomic){
+                break;
+            }
+            else {
+                is_mem = 1;
+                err = ci_alloc_slot(ctx, size, size, &cur);
+                if(err) return err;
+            }
+            uint32_t keep = ctx->temp; // cur is established; the rest is scratch
+            if(is_mem){
+                _Bool handled;
+                err = ci_lower_addr(ci, ctx, lhs, &a, &handled);
+                if(err) return err;
+                if(!handled){
+                    // ci_lower_addr emits nothing when it declines, so the
+                    // fallback re-evaluates the lvalue exactly once
+                    ctx->temp = save;
+                    break;
+                }
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_LOAD,
+                    .slot = cur,
+                    .slot_size = size,
+                    .src = a.slot,
+                    .load.offset = a.disp,
+                    .loc = e->loc,
+                };
+            }
             CiLowerVal r;
             err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
             if(err) return err;
-            CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .kind = opkind,
-                .slot = vslot,
+                .slot = cur,
                 .slot_size = size,
-                .src = vslot,
+                .src = cur,
                 .src_size = size,
                 .src2 = r.slot,
                 .src2_size = r.size,
@@ -910,9 +949,21 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             else {
                 op->falu.op = fop;
             }
-            ctx->temp = temp;
+            if(is_mem){
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_STORE,
+                    .slot = a.slot,
+                    .src = cur,
+                    .src_size = size,
+                    .store.offset = a.disp,
+                    .loc = e->loc,
+                };
+            }
+            ctx->temp = keep; // free rhs and address scratch; cur survives
             if(dest == CI_NO_SLOT){
-                out->slot = vslot;
+                out->slot = cur;
                 return 0;
             }
             out->slot = dest;
@@ -922,7 +973,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 .kind = CI_OP_COPY,
                 .slot = dest,
                 .slot_size = size,
-                .src = vslot,
+                .src = cur,
                 .src_size = size,
                 .loc = e->loc,
             };
@@ -1188,8 +1239,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     CcParser* p = &ci->parser;
     *handled = 0;
     CcExpr* lhs = e->lhs;
-    uint32_t vslot;
-    if(!ci_frame_lvalue(lhs, &vslot)) return 0;
     uint32_t size;
     err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
     if(err) return err;
@@ -1202,27 +1251,108 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     }
     else if(!ci_alu_int_type(e->type) || size > 8)
         return 0; // floats and 128-bit integers fall back
-    *handled = 1;
     _Bool is_pre = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_PREDEC;
     _Bool is_inc = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_POSTINC;
     CiOp* op;
-    if(out && !is_pre){
-        // the post forms yield the old value
-        err = ci_lower_dest(ctx, &dest, size);
+    uint32_t vslot;
+    if(ci_frame_lvalue(lhs, &vslot)){
+        *handled = 1;
+        if(out && !is_pre){
+            // the post forms yield the old value, captured before modifying
+            err = ci_lower_dest(ctx, &dest, size);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .kind = CI_OP_COPY,
+                .slot = dest,
+                .slot_size = size,
+                .src = vslot,
+                .src_size = size,
+                .loc = e->loc,
+            };
+            out->slot = dest;
+        }
+        uint32_t temp = ctx->temp;
+        uint32_t sslot;
+        err = ci_alloc_slot(ctx, 8, 8, &sslot);
         if(err) return err;
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
-            .kind = CI_OP_COPY,
-            .slot = dest,
+            .kind = CI_OP_CONST,
+            .slot = sslot,
+            .slot_size = 8,
+            .immediate = step,
+            .loc = e->loc,
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .kind = CI_OP_ALU,
+            .slot = vslot,
             .slot_size = size,
             .src = vslot,
             .src_size = size,
+            .src2 = sslot,
+            .src2_size = 8,
+            .alu = {
+                .op = is_inc?CI_ALU_ADD:CI_ALU_SUB,
+                .is_unsigned = 1,
+            },
             .loc = e->loc,
         };
-        out->slot = dest;
+        ctx->temp = temp;
+        if(out && is_pre){
+            if(dest == CI_NO_SLOT){
+                out->slot = vslot;
+            }
+            else {
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .kind = CI_OP_COPY,
+                    .slot = dest,
+                    .slot_size = size,
+                    .src = vslot,
+                    .src_size = size,
+                    .loc = e->loc,
+                };
+                out->slot = dest;
+            }
+        }
+        return 0;
     }
-    uint32_t temp = ctx->temp;
+    if(lhs->type.is_atomic) return 0;
+    // Memory path: load-modify-store through a computed address, evaluated
+    // once. old holds the loaded value, new the incremented value.
+    uint32_t save = ctx->temp;
+    uint32_t old;
+    err = ci_alloc_slot(ctx, size, size, &old);
+    if(err) return err;
+    CiLowerAddr a;
+    _Bool ok;
+    err = ci_lower_addr(ci, ctx, lhs, &a, &ok);
+    if(err) return err;
+    if(!ok){
+        // nothing was emitted; the caller falls back and re-evaluates once
+        ctx->temp = save;
+        return 0;
+    }
+    *handled = 1;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_LOAD,
+        .slot = old,
+        .slot_size = size,
+        .src = a.slot,
+        .load.offset = a.disp,
+        .loc = e->loc,
+    };
+    uint32_t newv;
+    err = ci_alloc_slot(ctx, size, size, &newv);
+    if(err) return err;
     uint32_t sslot;
     err = ci_alloc_slot(ctx, 8, 8, &sslot);
     if(err) return err;
@@ -1239,9 +1369,9 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     if(err) return err;
     *op = (CiOp){
         .kind = CI_OP_ALU,
-        .slot = vslot,
+        .slot = newv,
         .slot_size = size,
-        .src = vslot,
+        .src = old,
         .src_size = size,
         .src2 = sslot,
         .src2_size = 8,
@@ -1251,19 +1381,27 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         },
         .loc = e->loc,
     };
-    ctx->temp = temp;
-    if(out && is_pre){
-        if(dest == CI_NO_SLOT){
-            out->slot = vslot;
-        }
-        else {
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .kind = CI_OP_STORE,
+        .slot = a.slot,
+        .src = newv,
+        .src_size = size,
+        .store.offset = a.disp,
+        .loc = e->loc,
+    };
+    if(out){
+        // pre yields the new value, post the old; both live in kept slots
+        out->slot = is_pre? newv : old;
+        if(dest != CI_NO_SLOT){
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .kind = CI_OP_COPY,
                 .slot = dest,
                 .slot_size = size,
-                .src = vslot,
+                .src = out->slot,
                 .src_size = size,
                 .loc = e->loc,
             };
@@ -1378,9 +1516,13 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_LSHIFTASSIGN:
         case CC_EXPR_RSHIFTASSIGN: {
             uint32_t off;
-            if(!ci_frame_lvalue(e->lhs, &off))
+            uint32_t k = e->lhs->kind;
+            // frame lvalues and computed addresses lower; anything else EVALs
+            if(!ci_frame_lvalue(e->lhs, &off)
+                && k != CC_EXPR_VARIABLE && k != CC_EXPR_DEREF
+                && k != CC_EXPR_ARROW && k != CC_EXPR_DOT
+                && k != CC_EXPR_SUBSCRIPT)
                 break;
-            // the value is the lvalue's own slot, so this costs nothing extra
             CiLowerVal v;
             return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
         }
