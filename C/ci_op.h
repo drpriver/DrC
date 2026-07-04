@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include <stddef.h>
 #include "srcloc.h"
 #include "cc_stmt.h"
 #include "cc_expr.h"
@@ -17,9 +18,6 @@
 #define _Nonnull
 #endif
 
-// Integer operations for CI_OP_ALU; mirrors the tree evaluator's semantics:
-// both operands widen to 64 bits with the lhs type's signedness, the
-// operation runs in 64 bits, the result truncates to the destination size.
 enum CiAluOp TYPED_ENUM(uint32_t){
     CI_ALU_ADD,
     CI_ALU_SUB,
@@ -37,15 +35,12 @@ enum CiAluOp TYPED_ENUM(uint32_t){
     CI_ALU_GT,
     CI_ALU_LE,
     CI_ALU_GE,
-    // unary; src2 is ignored (set equal to src)
+    // unary
     CI_ALU_NEG,
     CI_ALU_NOT,
 };
 TYPEDEF_ENUM(CiAluOp, uint32_t);
 
-// Float operations for CI_OP_FALU32/CI_OP_FALU64; arithmetic runs at the
-// op's native width (FLT_EVAL_METHOD 0), comparisons write a canonical
-// integer of the destination size.
 enum CiFaluOp TYPED_ENUM(uint32_t){
     CI_FALU_ADD,
     CI_FALU_SUB,
@@ -57,115 +52,299 @@ enum CiFaluOp TYPED_ENUM(uint32_t){
     CI_FALU_GT,
     CI_FALU_LE,
     CI_FALU_GE,
-    // unary; src2 is ignored (set equal to src)
+    // unary
     CI_FALU_NEG,
 };
 TYPEDEF_ENUM(CiFaluOp, uint32_t);
 
 enum CiOpKind TYPED_ENUM(uint32_t){
-    CI_OP_EVAL,             // evaluate expr, discard result
-    CI_OP_EVAL_INTO,        // evaluate expr into slots[slot..slot+slot_size)
-    CI_OP_CONST,            // slots[slot..slot+slot_size) = low slot_size bytes of imm
-    CI_OP_COPY,             // slots[slot..slot+slot_size) = slots[src..src+slot_size)
-    CI_OP_ALU,              // slots[slot] = slots[src] op slots[src2] as integers;
-                            // extra = CiAluOp | (is_unsigned << 16)
-    CI_OP_FALU32,           // slots[slot] = slots[src] op slots[src2] as floats;
-    CI_OP_FALU64,           // ... as doubles; extra = CiFaluOp
-    CI_OP_CONVERT,          // slots[slot..slot+slot_size) = slots[src..src+src_size)
-                            // widened to 64 bits then truncated; extra = source is unsigned
-    CI_OP_ITOF,             // integer slots[src] to float/double slots[slot] (by slot_size);
-                            // extra = source is unsigned
-    CI_OP_FTOI,             // float/double slots[src] (by src_size) to integer slots[slot];
-                            // extra = destination is unsigned
-    CI_OP_FTOF,             // float/double slots[src] to float/double slots[slot] (by sizes)
-    CI_OP_SLOT_ADDR,        // slots[slot] = &slots[src]
-    CI_OP_VAR_ADDR,         // slots[slot] = the CcVariable* imm's resolved storage
-                            // address; a GOT load, read at execution because
-                            // lowering can run before the variable resolves
-    CI_OP_BOUNDS,           // trap unless the 8-byte unsigned index in slots[src] is in
-                            // range of the 8-byte length in slots[src2]; bounds.inclusive
-                            // permits index == length (address-of one-past-the-end)
-    CI_OP_LOAD,             // slots[slot..slot+slot_size) = ptr[extra..], ptr read from slots[src]
-    CI_OP_STORE,            // ptr[extra..] = slots[src..src+src_size), ptr read from slots[slot]
-    CI_OP_LOAD_BITFIELD,    // like CI_OP_LOAD, but the slot_size bytes at ptr[extra..] are a
-                            // bitfield storage unit: extract bf.bit_width bits at
-                            // bf.bit_offset, extend per bf.is_signed
-    CI_OP_STORE_BITFIELD,   // like CI_OP_STORE, but a read-modify-write: insert the low
-                            // bf.bit_width bits of slots[src..src+src_size) at bf.bit_offset
-                            // of the src_size-byte storage unit at ptr[extra..]
-    CI_OP_CALL,             // call the CcFunc* in imm; slots[src..src+src_size) holds the
-                            // staged arguments, laid out like the callee's parameter area;
-                            // the return value lands in slots[slot..slot+slot_size)
-                            // (slot_size 0 discards it)
-    CI_OP_ISTRUE,           // slots[slot] = slot_size-byte 0/1 of truthy(slots[src..src+src_size));
-                            // extra = CcBasicTypeKind when the source is a float, else 0,
-                            // | (negate << 16) to compute !truthy instead
-    CI_OP_JUMP,             // pc = jump
-    CI_OP_JUMP_FALSE,       // if !slots[slot] pc = jump; slot holds a canonical 0/1
-    CI_OP_JUMP_TRUE,        // if slots[slot] pc = jump; slot holds a canonical 0/1
-    CI_OP_RETURN,           // return with no value; pc = end
-    CI_OP_RETURN_SLOT,      // copy slots[src..src+src_size) into return_buf; pc = end
-    CI_OP_SWITCH,           // multi-way conditional jump on slots[slot]; binary
-                            // search sw.table, no match: pc = jump (default/exit);
-                            // extra = 1 if the value is unsigned
+    CI_OP_EVAL,
+    CI_OP_EVAL_INTO,
+    CI_OP_CONST,
+    CI_OP_COPY,
+    CI_OP_ALU,
+    CI_OP_FALU32,
+    CI_OP_FALU64,
+    CI_OP_CONVERT,
+    CI_OP_ITOF,
+    CI_OP_FTOI,
+    CI_OP_FTOF,
+    CI_OP_SLOT_ADDR,
+    CI_OP_VAR_ADDR,
+    CI_OP_BOUNDS,
+    CI_OP_LOAD,
+    CI_OP_STORE,
+    CI_OP_LOAD_BITFIELD,
+    CI_OP_STORE_BITFIELD,
+    CI_OP_CALL,
+    CI_OP_ISTRUE,
+    CI_OP_JUMP,
+    CI_OP_JUMP_FALSE,
+    CI_OP_JUMP_TRUE,
+    CI_OP_RETURN,
+    CI_OP_RETURN_SLOT,
+    CI_OP_SWITCH,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
+typedef struct CiSwitchTable CiSwitchTable;
+struct CiSwitchTable {
+    size_t count;
+    CcSwitchEntry data[];
+};
+
 typedef struct CiOp CiOp;
 struct CiOp {
-    CiOpKind kind;
-    uint32_t jump;
-    uint32_t slot, slot_size; // destination (or tested) slot
-    uint32_t src, src_size;   // source slot
-    uint32_t src2, src2_size; // second source slot
     union {
-        uint32_t extra_;           // op-specific immediate
         struct {
-            CiAluOp op: 16;
-            uint32_t is_unsigned:1,
-                     _padding: 15;
+            CiOpKind kind: 8;
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint64_t pad[2];
+            SrcLoc loc;
+        };
+        struct {
+            // evaluate expr, discard result
+            CiOpKind kind: 8; // CI_OP_EVAL
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            CcExpr*_Nonnull expr;
+            uint64_t pad;
+            SrcLoc loc;
+        } eval;
+        struct {
+            // evaluate expr into slots[slot:slot+slot_size]
+            CiOpKind kind: 8; // CI_OP_EVAL_INTO
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            CcExpr*_Nonnull expr;
+            uint32_t slot, slot_size;
+            SrcLoc loc;
+        } eval_into;
+        struct {
+            // slots[slot:slot+immsize] = immediate
+            CiOpKind kind: 8; // CI_OP_CONST
+            uint32_t immsize: 24;
+            uint32_t slot;
+            uint64_t immediate[2];
+            SrcLoc loc;
+        } constant;
+        struct {
+            // slots[slot:slot+slot_size] = slots[src:src+slot_size]
+            CiOpKind kind: 8; // CI_OP_COPY
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint32_t slot, slot_size,
+                     src, src_size;
+            SrcLoc loc;
+        } copy;
+        struct {
+            // slots[slot:slot+slot_size] = slots[src] op slots[src2] as integers
+            CiOpKind kind: 8; // CI_OP_ALU
+            CiAluOp op: 8;
+            uint32_t is_unsigned: 1,
+                     src_size: 4,
+                     src2_size: 4,
+                     _bitpad: 7;
+            uint32_t slot,
+                     slot_size,
+                     src,
+                     src2;
+            uint32_t pad;
+            SrcLoc loc;
         } alu;
         struct {
-            CiFaluOp op: 32;
-        } falu;
+            // slots[slot] = slots[src] op slots[src2] as floats (falu32) or
+            // doubles (falu64)
+            CiOpKind kind: 8; // CI_OP_FALU32, CI_OP_FALU64
+            CiFaluOp op: 8;
+            uint32_t _bitpad: 16;
+            uint32_t slot,
+                     slot_size, // comparisons write a canonical integer of
+                                // this size; operand widths are fixed by kind
+                     src,
+                     src2;
+            uint32_t pad;
+            SrcLoc loc;
+        } falu32, falu64;
         struct {
-            uint32_t is_unsigned: 32;
-        } conv;
+            // CI_OP_CONVERT: slots[slot:slot+slot_size] = slots[src:src+src_size]
+            //   widened to 64 bits then truncated; is_unsigned: the source is unsigned
+            // CI_OP_ITOF: integer slots[src] to float/double slots[slot] (by
+            //   slot_size); is_unsigned: the source is unsigned
+            // CI_OP_FTOI: float/double slots[src] (by src_size) to integer
+            //   slots[slot]; is_unsigned: the destination is unsigned
+            // CI_OP_FTOF: float/double slots[src] to float/double slots[slot]
+            //   (by sizes)
+            CiOpKind kind: 8; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
+            uint32_t is_unsigned: 1,
+                     _bitpad: 23;
+            uint32_t pad;
+            uint32_t slot, slot_size,
+                     src, src_size;
+            SrcLoc loc;
+        } convert, itof, ftoi, ftof;
         struct {
-            uint32_t offset;
-        } load;
+            // slots[slot] = &slots[src]
+            CiOpKind kind: 8; // CI_OP_SLOT_ADDR
+            uint32_t _bitpad: 24;
+            uint32_t slot, slot_size, src;
+            uint64_t pad[1];
+            SrcLoc loc;
+        } slot_addr;
         struct {
-            uint32_t offset;
+            // slots[slot] = var's resolved storage address; a GOT load, read
+            // at execution because lowering can run before the variable
+            // resolves
+            CiOpKind kind: 8; // CI_OP_VAR_ADDR
+            uint32_t _bitpad: 24;
+            uint32_t pad;
+            uint32_t slot, slot_size;
+            CcVariable*_Nonnull var;
+            SrcLoc loc;
+        } var_addr;
+        struct {
+            // trap unless the 8-byte unsigned index in slots[src] is in range
+            // of the 8-byte length in slots[src2]; inclusive permits
+            // index == length (address-of one-past-the-end)
+            CiOpKind kind: 8; // CI_OP_BOUNDS
+            uint32_t inclusive: 1,
+                     index_signed: 1,
+                     _bitpad: 22;
+            uint32_t pad;
+            uint32_t src, src_size,
+                     src2, src2_size;
+            SrcLoc loc;
+        } bounds;
+        struct {
+            // ptr[offset:] = slots[src:src+src_size], ptr read from slots[slot]
+            CiOpKind kind: 8; // CI_OP_STORE
+            uint32_t _bitpad: 24;
+            uint32_t pad;
+            uint32_t slot,
+                     src,
+                     src_size,
+                     offset;
+            SrcLoc loc;
         } store;
         struct {
+            // slots[slot:slot+slot_size] = ptr[offset:], ptr read from slots[src]
+            CiOpKind kind: 8; // CI_OP_LOAD
+            uint32_t _bitpad: 24;
+            uint32_t pad;
+            uint32_t slot,
+                     slot_size,
+                     src,
+                     offset;
+            SrcLoc loc;
+        } load;
+        struct {
+            // like store, but a read-modify-write: insert the low bit_width
+            // bits of slots[src:src+src_size] at bit_offset of the
+            // src_size-byte storage unit at ptr[offset:]
+            CiOpKind kind: 8; // CI_OP_STORE_BITFIELD
+            uint32_t bit_offset: 8,
+                     bit_width: 8,
+                     is_signed: 1,
+                     _bitpad: 7;
+            uint32_t pad;
+            uint32_t slot,
+                     src,
+                     src_size,
+                     offset;
+            SrcLoc loc;
+        } store_bf;
+        struct {
+            // like load, but the slot_size bytes at ptr[offset:] are a
+            // bitfield storage unit: extract bit_width bits at bit_offset,
+            // extend per is_signed
+            CiOpKind kind: 8; // CI_OP_LOAD_BITFIELD
+            uint32_t bit_offset: 8,
+                     bit_width: 8,
+                     is_signed: 1,
+                     _bitpad: 7;
+            uint32_t pad;
+            uint32_t slot, slot_size,
+                     src,
+                     offset;
+            SrcLoc loc;
+        } load_bf;
+        struct {
+            // call func; slots[src:src+src_size] holds the staged arguments,
+            // laid out like the callee's parameter area; the return value
+            // lands in slots[ret_slot:ret_slot+ret_size]
+            // (ret_size 0 discards it)
+            CiOpKind kind: 8; // CI_OP_CALL
+            uint32_t src_size: 24; // staged-args extent
+            uint32_t ret_slot,
+                     ret_size,
+                     src;
+            CcFunc*_Nonnull func;
+            SrcLoc loc;
+        } call;
+        struct {
+            // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
+            // float_kind = CcBasicTypeKind when the source is a float, else 0;
+            // negate computes !truthy instead
+            CiOpKind kind: 8; // CI_OP_ISTRUE
             uint32_t float_kind: 16,
                      negate: 1,
-                     _padding: 15;
-        } is_true;
+                     _bitpad: 7;
+            uint32_t pad;
+            uint32_t slot, slot_size,
+                     src, src_size;
+            SrcLoc loc;
+        } istrue;
         struct {
-            uint32_t inclusive: 1,     // permit index == length
-                     index_signed: 1,  // format a failing index as signed
-                     _padding: 30;
-        } bounds;
-    };
-    // CI_OP_LOAD_BITFIELD/CI_OP_STORE_BITFIELD; outside the union so the
-    // byte offset in load/store stays usable alongside it
-    struct {
-        uint32_t bit_offset: 8, bit_width: 8, is_signed: 1, _padding: 15;
-    } bf;
-    SrcLoc loc;
-    union {
-        CcExpr* _Null_unspecified expr;
+            // pc = jump
+            CiOpKind kind: 8; // CI_OP_JUMP
+            uint32_t _bitpad: 24;
+            uint32_t jump;
+            uint64_t pad[2];
+            SrcLoc loc;
+        } jump;
         struct {
-            CcSwitchEntry* _Null_unspecified table;
-            size_t count;
-        } sw;               // CI_OP_SWITCH
-        uint64_t immediate; // CI_OP_CONST value, CI_OP_CALL CcFunc*, CI_OP_VAR_ADDR CcVariable*
-        CcFunc*_Nonnull func;
-        CcVariable*_Nonnull var;
+            // if !slots[slot] (jump_false) or slots[slot] (jump_true):
+            // pc = jump; slot holds a canonical 0/1
+            CiOpKind kind: 8; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
+            uint32_t _bitpad: 24;
+            uint32_t jump;
+            uint32_t slot, slot_size;
+            uint64_t pad[1];
+            SrcLoc loc;
+        } jump_false, jump_true;
+        struct {
+            // return with no value; pc = end
+            CiOpKind kind: 8; // CI_OP_RETURN
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint64_t pad[2];
+            SrcLoc loc;
+        } return_;
+        struct {
+            // copy slots[src:src+src_size] into return_buf; pc = end
+            CiOpKind kind: 8; // CI_OP_RETURN_SLOT
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint32_t src, src_size;
+            uint64_t pad[1];
+            SrcLoc loc;
+        } return_slot;
+        struct {
+            // multi-way conditional jump on slots[slot]; binary search table,
+            // no match: pc = jump (default/exit); is_unsigned: the value is
+            // unsigned
+            CiOpKind kind: 8; // CI_OP_SWITCH
+            uint32_t is_unsigned: 1,
+                     _bitpad: 23;
+            uint32_t jump;
+            uint32_t slot, slot_size;
+            CiSwitchTable*_Null_unspecified table;
+            SrcLoc loc;
+        } switch_;
     };
 };
-_Static_assert(sizeof(CiOp) == 64, ""); // FIXME: optimize this
+_Static_assert(sizeof(CiOp) == 32, "");
 
 #ifndef MARRAY_CIOP
 #define MARRAY_CIOP

@@ -3493,40 +3493,40 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
     const CiOp* op = &frame->ops[frame->pc];
     switch(op->kind){
         case CI_OP_EVAL: {
-            int err = ci_interp_expr(ci, frame, op->expr, ci_discard_buf, sizeof ci_discard_buf);
+            int err = ci_interp_expr(ci, frame, op->eval.expr, ci_discard_buf, sizeof ci_discard_buf);
             if(err) return err;
             frame->pc++;
             return 0;
         }
         case CI_OP_EVAL_INTO: {
-            void* dest = (char*)frame->slots + op->slot;
-            int err = ci_interp_expr(ci, frame, op->expr, dest, op->slot_size);
+            void* dest = (char*)frame->slots + op->eval_into.slot;
+            int err = ci_interp_expr(ci, frame, op->eval_into.expr, dest, op->eval_into.slot_size);
             if(err) return err;
             frame->pc++;
             return 0;
         }
         case CI_OP_CONST: {
-            memcpy((char*)frame->slots + op->slot, &op->immediate, op->slot_size);
+            memcpy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
             frame->pc++;
             return 0;
         }
         case CI_OP_COPY: {
-            memmove((char*)frame->slots + op->slot, (char*)frame->slots + op->src, op->slot_size);
+            memmove((char*)frame->slots + op->copy.slot, (char*)frame->slots + op->copy.src, op->copy.slot_size);
             frame->pc++;
             return 0;
         }
         case CI_OP_ALU: {
-            const void* s1 = (char*)frame->slots + op->src;
-            const void* s2 = (char*)frame->slots + op->src2;
+            const void* s1 = (char*)frame->slots + op->alu.src;
+            const void* s2 = (char*)frame->slots + op->alu.src2;
             _Bool is_unsigned = op->alu.is_unsigned;
             uint64_t lu, ru;
             if(is_unsigned){
-                lu = ci_read_uint(s1, op->src_size);
-                ru = ci_read_uint(s2, op->src2_size);
+                lu = ci_read_uint(s1, op->alu.src_size);
+                ru = ci_read_uint(s2, op->alu.src2_size);
             }
             else {
-                lu = (uint64_t)ci_read_int(s1, op->src_size);
-                ru = (uint64_t)ci_read_int(s2, op->src2_size);
+                lu = (uint64_t)ci_read_int(s1, op->alu.src_size);
+                ru = (uint64_t)ci_read_int(s2, op->alu.src2_size);
             }
             uint64_t res;
             switch((CiAluOp)(op->alu.op)){
@@ -3565,28 +3565,29 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_ALU_NOT: res = ~lu; break;
                 CASES_EXHAUSTED;
             }
-            ci_write_uint((char*)frame->slots + op->slot, op->slot_size, res);
+            ci_write_uint((char*)frame->slots + op->alu.slot, op->alu.slot_size, res);
             frame->pc++;
             return 0;
         }
         case CI_OP_FALU32: {
             float a, b;
-            memcpy(&a, (char*)frame->slots + op->src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->src2, sizeof b);
-            void* dest = (char*)frame->slots + op->slot;
+            memcpy(&a, (char*)frame->slots + op->falu32.src, sizeof a);
+            memcpy(&b, (char*)frame->slots + op->falu32.src2, sizeof b);
+            void* dest = (char*)frame->slots + op->falu32.slot;
+            uint32_t slot_size = op->falu32.slot_size;
             float res;
-            switch(op->falu.op){
+            switch(op->falu32.op){
                 case CI_FALU_ADD: res = a + b; break;
                 case CI_FALU_SUB: res = a - b; break;
                 case CI_FALU_MUL: res = a * b; break;
                 case CI_FALU_DIV: res = a / b; break;
                 case CI_FALU_NEG: res = -a; break;
-                case CI_FALU_EQ: ci_write_uint(dest, op->slot_size, a == b); goto falu32_done;
-                case CI_FALU_NE: ci_write_uint(dest, op->slot_size, a != b); goto falu32_done;
-                case CI_FALU_LT: ci_write_uint(dest, op->slot_size, a <  b); goto falu32_done;
-                case CI_FALU_GT: ci_write_uint(dest, op->slot_size, a >  b); goto falu32_done;
-                case CI_FALU_LE: ci_write_uint(dest, op->slot_size, a <= b); goto falu32_done;
-                case CI_FALU_GE: ci_write_uint(dest, op->slot_size, a >= b); goto falu32_done;
+                case CI_FALU_EQ: ci_write_uint(dest, slot_size, a == b); goto falu32_done;
+                case CI_FALU_NE: ci_write_uint(dest, slot_size, a != b); goto falu32_done;
+                case CI_FALU_LT: ci_write_uint(dest, slot_size, a <  b); goto falu32_done;
+                case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu32_done;
+                case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu32_done;
+                case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu32_done;
                 CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
@@ -3596,22 +3597,23 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         }
         case CI_OP_FALU64: {
             double a, b;
-            memcpy(&a, (char*)frame->slots + op->src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->src2, sizeof b);
-            void* dest = (char*)frame->slots + op->slot;
+            memcpy(&a, (char*)frame->slots + op->falu64.src, sizeof a);
+            memcpy(&b, (char*)frame->slots + op->falu64.src2, sizeof b);
+            void* dest = (char*)frame->slots + op->falu64.slot;
+            uint32_t slot_size = op->falu64.slot_size;
             double res;
-            switch(op->falu.op){
+            switch(op->falu64.op){
                 case CI_FALU_ADD: res = a + b; break;
                 case CI_FALU_SUB: res = a - b; break;
                 case CI_FALU_MUL: res = a * b; break;
                 case CI_FALU_DIV: res = a / b; break;
                 case CI_FALU_NEG: res = -a; break;
-                case CI_FALU_EQ: ci_write_uint(dest, op->slot_size, a == b); goto falu64_done;
-                case CI_FALU_NE: ci_write_uint(dest, op->slot_size, a != b); goto falu64_done;
-                case CI_FALU_LT: ci_write_uint(dest, op->slot_size, a <  b); goto falu64_done;
-                case CI_FALU_GT: ci_write_uint(dest, op->slot_size, a >  b); goto falu64_done;
-                case CI_FALU_LE: ci_write_uint(dest, op->slot_size, a <= b); goto falu64_done;
-                case CI_FALU_GE: ci_write_uint(dest, op->slot_size, a >= b); goto falu64_done;
+                case CI_FALU_EQ: ci_write_uint(dest, slot_size, a == b); goto falu64_done;
+                case CI_FALU_NE: ci_write_uint(dest, slot_size, a != b); goto falu64_done;
+                case CI_FALU_LT: ci_write_uint(dest, slot_size, a <  b); goto falu64_done;
+                case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu64_done;
+                case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu64_done;
+                case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu64_done;
                 CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
@@ -3620,31 +3622,31 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_ITOF: {
-            const void* src = (char*)frame->slots + op->src;
-            void* dest = (char*)frame->slots + op->slot;
-            if(op->slot_size == 4){
+            const void* src = (char*)frame->slots + op->itof.src;
+            void* dest = (char*)frame->slots + op->itof.slot;
+            if(op->itof.slot_size == 4){
                 float f;
-                if(op->conv.is_unsigned)
-                    f = (float)ci_read_uint(src, op->src_size);
+                if(op->itof.is_unsigned)
+                    f = (float)ci_read_uint(src, op->itof.src_size);
                 else
-                    f = (float)ci_read_int(src, op->src_size);
+                    f = (float)ci_read_int(src, op->itof.src_size);
                 memcpy(dest, &f, sizeof f);
             }
             else {
                 double d;
-                if(op->conv.is_unsigned)
-                    d = (double)ci_read_uint(src, op->src_size);
+                if(op->itof.is_unsigned)
+                    d = (double)ci_read_uint(src, op->itof.src_size);
                 else
-                    d = (double)ci_read_int(src, op->src_size);
+                    d = (double)ci_read_int(src, op->itof.src_size);
                 memcpy(dest, &d, sizeof d);
             }
             frame->pc++;
             return 0;
         }
         case CI_OP_FTOI: {
-            const void* src = (char*)frame->slots + op->src;
+            const void* src = (char*)frame->slots + op->ftoi.src;
             double d;
-            if(op->src_size == 4){
+            if(op->ftoi.src_size == 4){
                 float f;
                 memcpy(&f, src, sizeof f);
                 d = (double)f;
@@ -3653,19 +3655,19 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 memcpy(&d, src, sizeof d);
             }
             uint64_t v;
-            if(op->conv.is_unsigned)
+            if(op->ftoi.is_unsigned)
                 v = (uint64_t)d;
             else
                 v = (uint64_t)(int64_t)d;
-            ci_write_uint((char*)frame->slots + op->slot, op->slot_size, v);
+            ci_write_uint((char*)frame->slots + op->ftoi.slot, op->ftoi.slot_size, v);
             frame->pc++;
             return 0;
         }
         case CI_OP_FTOF: {
-            const void* src = (char*)frame->slots + op->src;
-            void* dest = (char*)frame->slots + op->slot;
+            const void* src = (char*)frame->slots + op->ftof.src;
+            void* dest = (char*)frame->slots + op->ftof.slot;
             double d;
-            if(op->src_size == 4){
+            if(op->ftof.src_size == 4){
                 float f;
                 memcpy(&f, src, sizeof f);
                 d = (double)f;
@@ -3673,7 +3675,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             else {
                 memcpy(&d, src, sizeof d);
             }
-            if(op->slot_size == 4){
+            if(op->ftof.slot_size == 4){
                 float f = (float)d;
                 memcpy(dest, &f, sizeof f);
             }
@@ -3684,22 +3686,22 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_SLOT_ADDR: {
-            void* addr = (char*)frame->slots + op->src;
-            memcpy((char*)frame->slots + op->slot, &addr, sizeof addr);
+            void* addr = (char*)frame->slots + op->slot_addr.src;
+            memcpy((char*)frame->slots + op->slot_addr.slot, &addr, sizeof addr);
             frame->pc++;
             return 0;
         }
         case CI_OP_VAR_ADDR: {
-            CcVariable* var = op->var;
+            CcVariable* var = op->var_addr.var;
             int err = ci_ensure_var_storage(ci, var);
             if(err) return err;
-            memcpy((char*)frame->slots + op->slot, &var->interp_val, sizeof(void*));
+            memcpy((char*)frame->slots + op->var_addr.slot, &var->interp_val, sizeof(void*));
             frame->pc++;
             return 0;
         }
         case CI_OP_BOUNDS: {
-            uint64_t idx = ci_read_uint((char*)frame->slots + op->src, op->src_size);
-            uint64_t len = ci_read_uint((char*)frame->slots + op->src2, op->src2_size);
+            uint64_t idx = ci_read_uint((char*)frame->slots + op->bounds.src, op->bounds.src_size);
+            uint64_t len = ci_read_uint((char*)frame->slots + op->bounds.src2, op->bounds.src2_size);
             _Bool oob = op->bounds.inclusive ? (idx > len) : (idx >= len);
             if(oob){
                 const char* close = op->bounds.inclusive ? "]" : ")";
@@ -3715,98 +3717,98 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_CALL: {
-            CcFunc* func = op->func;
+            CcFunc* func = op->call.func;
             void* result;
             size_t rsize;
-            if(op->slot_size){
-                result = (char*)frame->slots + op->slot;
-                rsize = op->slot_size;
+            if(op->call.ret_size){
+                result = (char*)frame->slots + op->call.ret_slot;
+                rsize = op->call.ret_size;
             }
             else {
                 result = ci_discard_buf;
                 rsize = sizeof ci_discard_buf;
             }
-            int err = ci_call_staged(ci, frame, func, (char*)frame->slots + op->src, op->src_size, result, rsize, op->loc);
+            int err = ci_call_staged(ci, frame, func, (char*)frame->slots + op->call.src, op->call.src_size, result, rsize, op->loc);
             if(err) return err;
             frame->pc++;
             return 0;
         }
         case CI_OP_LOAD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->src, sizeof ptr);
-            memcpy((char*)frame->slots + op->slot, ptr + op->load.offset, op->slot_size);
+            memcpy(&ptr, (char*)frame->slots + op->load.src, sizeof ptr);
+            memcpy((char*)frame->slots + op->load.slot, ptr + op->load.offset, op->load.slot_size);
             frame->pc++;
             return 0;
         }
         case CI_OP_LOAD_BITFIELD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots+op->src, sizeof ptr);
-            uint64_t val = ci_bitfield_read(ptr + op->load.offset, op->slot_size, op->bf.bit_offset, op->bf.bit_width);
-            val = ci_bitfield_extend(val, op->bf.bit_width, op->bf.is_signed);
-            memcpy((char*)frame->slots + op->slot, &val, op->slot_size);
+            memcpy(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
+            uint64_t val = ci_bitfield_read(ptr + op->load_bf.offset, op->load_bf.slot_size, op->load_bf.bit_offset, op->load_bf.bit_width);
+            val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
+            memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
             frame->pc++;
             return 0;
         }
         case CI_OP_STORE: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->slot, sizeof ptr);
-            memcpy(ptr + op->store.offset, (char*)frame->slots + op->src, op->src_size);
+            memcpy(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);
+            memcpy(ptr + op->store.offset, (char*)frame->slots + op->store.src, op->store.src_size);
             frame->pc++;
             return 0;
         }
         case CI_OP_STORE_BITFIELD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->slot, sizeof ptr);
+            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
             uint64_t val = 0;
-            memcpy(&val, (char*)frame->slots + op->src, op->src_size);
-            ci_bitfield_write(ptr + op->store.offset, op->src_size, op->bf.bit_offset, op->bf.bit_width, val);
+            memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
+            ci_bitfield_write(ptr + op->store_bf.offset, op->store_bf.src_size, op->store_bf.bit_offset, op->store_bf.bit_width, val);
             frame->pc++;
             return 0;
         }
         case CI_OP_JUMP:
-            frame->pc = op->jump;
+            frame->pc = op->jump.jump;
             return 0;
         case CI_OP_CONVERT: {
-            const void* src = (char*)frame->slots + op->src;
+            const void* src = (char*)frame->slots + op->convert.src;
             uint64_t v;
-            if(op->conv.is_unsigned)
-                v = ci_read_uint(src, op->src_size);
+            if(op->convert.is_unsigned)
+                v = ci_read_uint(src, op->convert.src_size);
             else
-                v = (uint64_t)ci_read_int(src, op->src_size);
-            ci_write_uint((char*)frame->slots + op->slot, op->slot_size, v);
+                v = (uint64_t)ci_read_int(src, op->convert.src_size);
+            ci_write_uint((char*)frame->slots + op->convert.slot, op->convert.slot_size, v);
             frame->pc++;
             return 0;
         }
         case CI_OP_ISTRUE: {
-            const void* src = (char*)frame->slots + op->src;
-            uint32_t float_kind = op->is_true.float_kind;
+            const void* src = (char*)frame->slots + op->istrue.src;
+            uint32_t float_kind = op->istrue.float_kind;
             _Bool v;
             if(float_kind)
                 v = ci_read_float(src, (CcBasicTypeKind)float_kind) != 0.0;
-            else if(op->src_size > 8){
+            else if(op->istrue.src_size > 8){
                 CiUint128 u;
-                ci_uint128_read(&u, src, op->src_size);
+                ci_uint128_read(&u, src, op->istrue.src_size);
                 v = ci_uint128_nonzero(u);
             }
             else
-                v = ci_read_uint(src, op->src_size) != 0;
-            v ^= (_Bool)op->is_true.negate;
-            ci_write_uint((char*)frame->slots + op->slot, op->slot_size, v);
+                v = ci_read_uint(src, op->istrue.src_size) != 0;
+            v ^= (_Bool)op->istrue.negate;
+            ci_write_uint((char*)frame->slots + op->istrue.slot, op->istrue.slot_size, v);
             frame->pc++;
             return 0;
         }
         case CI_OP_JUMP_FALSE: {
-            const void* cond = (char*)frame->slots + op->slot;
-            if(ci_read_uint(cond, op->slot_size) == 0)
-                frame->pc = op->jump;
+            const void* cond = (char*)frame->slots + op->jump_false.slot;
+            if(ci_read_uint(cond, op->jump_false.slot_size) == 0)
+                frame->pc = op->jump_false.jump;
             else
                 frame->pc++;
             return 0;
         }
         case CI_OP_JUMP_TRUE: {
-            const void* cond = (char*)frame->slots + op->slot;
-            if(ci_read_uint(cond, op->slot_size) != 0)
-                frame->pc = op->jump;
+            const void* cond = (char*)frame->slots + op->jump_true.slot;
+            if(ci_read_uint(cond, op->jump_true.slot_size) != 0)
+                frame->pc = op->jump_true.jump;
             else
                 frame->pc++;
             return 0;
@@ -3816,23 +3818,23 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_RETURN_SLOT: {
-            if(op->src_size > frame->return_size)
-                return CI_RESULT_TOO_SMALL(ci, op->loc, op->src_size, frame->return_size);
-            memcpy(frame->return_buf, (char*)frame->slots + op->src, op->src_size);
+            if(op->return_slot.src_size > frame->return_size)
+                return CI_RESULT_TOO_SMALL(ci, op->loc, op->return_slot.src_size, frame->return_size);
+            memcpy(frame->return_buf, (char*)frame->slots + op->return_slot.src, op->return_slot.src_size);
             frame->pc = frame->op_count;
             return 0;
         }
         case CI_OP_SWITCH: {
-            const void* src = (char*)frame->slots + op->slot;
-            // Sign-extend or zero-extend to 64 bits; 
+            const void* src = (char*)frame->slots + op->switch_.slot;
+            // Sign-extend or zero-extend to 64 bits;
             // decided at lowering.
             uint64_t val;
-            if(op->conv.is_unsigned)
-                val = ci_read_uint(src, op->slot_size);
+            if(op->switch_.is_unsigned)
+                val = ci_read_uint(src, op->switch_.slot_size);
             else
-                val = (uint64_t)ci_read_int(src, op->slot_size);
-            size_t count = op->sw.count;
-            const CcSwitchEntry* table = op->sw.table;
+                val = (uint64_t)ci_read_int(src, op->switch_.slot_size);
+            size_t count = op->switch_.table->count;
+            const CcSwitchEntry* table = op->switch_.table->data;
             // Binary search for matching case
             size_t lo = 0, hi = count;
             while(lo < hi){
@@ -3847,7 +3849,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 }
             }
             // No match — jump to default or exit
-            frame->pc = op->jump;
+            frame->pc = op->switch_.jump;
             return 0;
         }
     }
