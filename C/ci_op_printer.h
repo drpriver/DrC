@@ -106,23 +106,83 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
         case CI_OP_EVAL:
             msb_write_literal(out, "(void)");
             cc_print_expr(out, op->eval.expr);
+            msb_write_literal(out, " (tree walker)");
             break;
         case CI_OP_EVAL_INTO:
             ci_op_print_range(out, op->eval_into.slot, op->eval_into.slot_size);
             msb_write_literal(out, " = ");
             cc_print_expr(out, op->eval_into.expr);
+            msb_write_literal(out, " (tree walker)");
             break;
         case CI_OP_CONST:
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
+            uint64_t v = op->constant.immediate[0];
+            switch((CcBasicTypeKind)op->constant.bt_kind){
+                case CCBT_bool:
+                    msb_sprintf(out, " = %s", v?"true":"false");
+                    return;
+                case CCBT_char:
+                    if(v >= 32 && v < 127)
+                        msb_sprintf(out, " = '%c'", (char)v);
+                    else
+                        msb_sprintf(out, " = '\\x%x'", (int)v);
+                    return;
+                case CCBT_signed_char:
+                case CCBT_short:
+                case CCBT_int:
+                case CCBT_long:
+                case CCBT_long_long:
+                    switch(op->constant.immsize){
+                        case 1:
+                            msb_sprintf(out, " = %lld", (long long)(int8_t)v);
+                            return;
+                        case 2:
+                            msb_sprintf(out, " = %lld", (long long)(int16_t)v);
+                            return;
+                        case 4:
+                            msb_sprintf(out, " = %lld", (long long)(int32_t)v);
+                            return;
+                        case 8:
+                            msb_sprintf(out, " = %lld", (long long)(int64_t)v);
+                            return;
+                        default:
+                            break;
+                    }
+                    break;
+                case CCBT_unsigned_char:
+                case CCBT_unsigned_short:
+                case CCBT_unsigned:
+                case CCBT_unsigned_long:
+                case CCBT_unsigned_long_long:
+                    msb_sprintf(out, " = %llu (0x%llx)", (unsigned long long)v, (unsigned long long)v);
+                    return;
+                case CCBT_float:{
+                    float f;
+                    memcpy(&f, &v, sizeof f);
+                    msb_sprintf(out, " = %f (0x%x)", (double)f, (unsigned)v);
+                    return;
+                }
+                case CCBT_double:{
+                    double f;
+                    memcpy(&f, &v, sizeof f);
+                    msb_sprintf(out, " = %f (0x%llx)", f, (unsigned long long)v);
+                    return;
+                }
+                case CCBT__Type:
+                    msb_write_literal(out, " = ");
+                    cc_print_type(out, (CcQualType){.bits=v});
+                    return;
+                default:
+                    break;
+            }
             if(op->constant.immsize > 8){
                 msb_sprintf(out, " = 0x%016llx%016llx",
                     (unsigned long long)op->constant.immediate[1],
                     (unsigned long long)op->constant.immediate[0]);
             }
             else {
-                unsigned long long v = op->constant.immediate[0];
-                msb_sprintf(out, " = %llu", v);
-                if(v > 9) msb_sprintf(out, " (0x%llx)", v);
+                msb_sprintf(out, " = %llu", (unsigned long long)v);
+                if(v > 9) msb_sprintf(out, " (0x%llx)", (unsigned long long)v);
             }
             break;
         case CI_OP_COPY:

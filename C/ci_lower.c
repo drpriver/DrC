@@ -72,6 +72,7 @@ struct CiLowerVal {
 };
 #define CI_NO_SLOT UINT32_MAX
 
+static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
 static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
 static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
@@ -276,15 +277,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return err;
             uint32_t continue_idx = (uint32_t)ctx->out->count;
             if(inc){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_lower_expr_discard(ci, ctx, inc);
                 if(err) return err;
-                *op = (CiOp){
-                    .eval = {
-                        .kind = CI_OP_EVAL,
-                        .expr = inc,
-                        .loc = inc->loc,
-                    }
-                };
             }
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -491,6 +485,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             *op = (CiOp){
                 .constant = {
                     .kind = CI_OP_CONST,
+                    .bt_kind = (uint32_t)(ccqt_is_basic(e->type)? e->type.basic.kind : CCBT_void),
                     .slot = dest,
                     .immsize = size,
                     .loc = e->loc,
@@ -1103,6 +1098,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 *op = (CiOp){
                     .constant = {
                         .kind = CI_OP_CONST,
+                        .bt_kind = (uint32_t)ci_target(ci)->size_type,
                         .slot = esz,
                         .immsize = 8,
                         .immediate = {elem_sz},
@@ -1296,6 +1292,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                         *op = (CiOp){
                             .constant = {
                                 .kind = CI_OP_CONST,
+                                .bt_kind = (uint32_t)ci_target(ci)->size_type,
                                 .slot = esz,
                                 .immsize = 8,
                                 .immediate = {elem_sz},
@@ -1353,6 +1350,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     *op = (CiOp){
                         .constant = {
                             .kind = CI_OP_CONST,
+                            .bt_kind = (uint32_t)ci_target(ci)->size_type,
                             .slot = esz,
                             .immsize = 8,
                             .immediate = {elem_sz},
@@ -1702,6 +1700,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         *op = (CiOp){
             .constant = {
                 .kind = CI_OP_CONST,
+                .bt_kind = (uint32_t)ci_target(ci)->size_type,
                 .slot = sslot,
                 .immsize = 8,
                 .immediate = {step},
@@ -1798,6 +1797,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     *op = (CiOp){
         .constant = {
             .kind = CI_OP_CONST,
+            .bt_kind = (uint32_t)ci_target(ci)->size_type,
             .slot = sslot,
             .immsize = 8,
             .immediate = {step},
@@ -2128,6 +2128,7 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, S
     *op = (CiOp){
         .constant = {
             .kind = CI_OP_CONST,
+            .bt_kind = CCBT_unsigned_long_long, // XXX
             .slot = cslot,
             .immsize = 8,
             .immediate = {a.disp},
@@ -2367,6 +2368,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                     *op = (CiOp){
                         .constant = {
                             .kind = CI_OP_CONST,
+                            .bt_kind = (uint32_t)ci_target(ci)->size_type,
                             .slot = len_slot,
                             .immsize = 8,
                             .immediate = {arr->length},
@@ -2438,6 +2440,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                 *op = (CiOp){
                     .constant = {
                         .kind = CI_OP_CONST,
+                        .bt_kind = (uint32_t)ci_target(ci)->size_type,
                         .slot = cslot,
                         .immsize = 8,
                         .immediate = {elem_sz},

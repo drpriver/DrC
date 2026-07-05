@@ -840,11 +840,11 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
         for(size_t i = 0; i < func->interp_ops->code.count; i++){
             CiOp* op = &func->interp_ops->code.data[i];
             size_t cur = sb->cursor;
-            msb_sprintf(sb, "  0x%02zu)  ", i);
+            msb_sprintf(sb, "  0x%02zx)  ", i);
             ci_op_print(op, sb);
             size_t dif = sb->cursor - cur;
-            if(dif < 40)
-                msb_write_nchar(sb, ' ', 40-dif);
+            if(dif < 60)
+                msb_write_nchar(sb, ' ', 60-dif);
             {
                 SrcLoc loc = op->loc;
                 uint64_t line = 0;
@@ -852,6 +852,8 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
                 uint64_t file_id = 0;
                 if(loc.is_actually_a_pointer){
                     SrcLocExp* e = (SrcLocExp*)(loc.bits & ~1);
+                    while(e->parent)
+                        e = e->parent;
                     line = e->line;
                     column = e->column;
                     file_id = e->file_id;
