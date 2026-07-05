@@ -126,7 +126,8 @@ struct CiOp {
         struct {
             // slots[slot:slot+immsize] = immediate
             CiOpKind kind: 8; // CI_OP_CONST
-            uint32_t bt_kind: 8; // for pretty printing, we can remove if we need the bits
+            uint32_t bt_kind: 7; // for pretty printing, we can remove if we need the bits
+            uint32_t is_anon_array: 1; // for pretty printing, we can remove if we need the bits
             uint32_t immsize: 16;
             uint32_t slot;
             uint64_t immediate[2];

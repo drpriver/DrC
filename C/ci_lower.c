@@ -478,8 +478,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     out->canonical = 0;
     switch((uint32_t)e->kind){
         case CC_EXPR_VALUE:{
-            if(ccqt_kind(e->type) == CC_ARRAY || size > 8)
+            if(ccqt_kind(e->type) == CC_ARRAY || size > 8){
+                if(0) ci_ice(ci, e->loc, "oversized, falling back. size: %u", size);
                 break; // string literals and oversized values fall back
+            }
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
             out->slot = dest;
@@ -703,20 +705,22 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 return 0;
             }
             // Qualifier-only cast: pass through directly.
-            if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7))
+            if(from.unqual == to.unqual)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
             if(ccqt_kind(from) == CC_ARRAY){
-                // array-to-pointer decay: the value is the address of the
-                // array's first element (same as &array). array-to-slice and
-                // vector types still fall back.
-                if(ccqt_kind(to) != CC_POINTER)
+                // array-to-pointer decay
+                if(ccqt_kind(to) != CC_POINTER){
+                    if(0)ci_ice(ci, e->loc, "%s", "");
                     break;
+                }
                 CiLowerAddr a;
                 _Bool ok;
                 err = ci_lower_lvalue_addr(ci, ctx, operand, 1, &a, &ok);
                 if(err) return err;
-                if(!ok)
+                if(!ok){
+                    if(0)ci_ice(ci, e->loc, "%s", "");
                     break;
+                }
                 return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
             }
             // Scalar conversions. A pointer is an 8-byte value here; the
@@ -873,8 +877,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 break;
             uint32_t vslot;
             if(ci_frame_lvalue(lhs, &vslot)){
-                // mirror the tree evaluator: the rhs evaluates directly into
-                // the lvalue's storage
                 CiLowerVal v;
                 err = ci_lower_expr(ci, ctx, rhs, vslot, &v);
                 if(err) return err;
@@ -899,9 +901,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 };
                 return 0;
             }
-            // store through a computed address; the lvalue's side effects
-            // come first, like the evaluator. addr and value slots recycle
-            // at statement end.
             CiLowerAddr a;
             _Bool handled;
             if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
@@ -2398,9 +2397,37 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
     CcParser* p = &ci->parser;
     *handled = 0;
     switch((uint32_t)lv->kind){
+        case CC_EXPR_VALUE:{
+            if(ccqt_kind(lv->type) != CC_ARRAY)
+                return ci_unimplemented(ci, lv->loc, "addr of non-array value");
+            uint32_t aslot;
+            err = ci_alloc_slot(ctx, 8, 8, &aslot);
+            if(err) return err;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            CcArray* arr = ccqt_as_array(lv->type);
+            *op = (CiOp){
+                .constant = {
+                    .kind = CI_OP_CONST,
+                    .bt_kind = (uint32_t)(ccqt_is_basic(arr->element)?arr->element.basic.kind:CCBT_nullptr_t),
+                    .is_anon_array = 1,
+                    .immsize = 8,
+                    .slot = aslot,
+                    .immediate = {
+                        (uint64_t)lv->text,
+                        lv->str.length,
+                    },
+                },
+            };
+            out->slot = aslot;
+            out->disp = 0;
+            *handled = 1;
+            return 0;
+        }
         case CC_EXPR_VARIABLE:{
             CcVariable* var = lv->var;
-            if(var->automatic) return 0; // frame lvalues are slots, not addresses
+            if(var->automatic) return ci_ice(ci, lv->loc, "lower addr of automatic%s", "");
             uint32_t aslot;
             err = ci_alloc_slot(ctx, 8, 8, &aslot);
             if(err) return err;
