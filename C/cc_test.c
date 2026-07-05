@@ -874,7 +874,7 @@ TestFunction(test_parse_decls){
               ),
             .vars = {
                 { SVI("a"), SVI("int[4]") },
-                { SVI("b"), SVI("int"),    SVI("a[2]") },
+                { SVI("b"), SVI("int"),    SVI("a[(long)2]") },
             },
         },
         {
@@ -2918,7 +2918,7 @@ TestFunction(test_parse_decls){
                "_Static_assert(x);\n"),
             .vars = {
                 {SVI("arr"), SVI("const int[1]"), SVI("{1}")},
-                {SVI("x"), SVI("const int"), SVI("(int)arr[0]")},
+                {SVI("x"), SVI("const int"), SVI("(int)arr[(long)0]")},
             },
         },
         // ---- constexpr/value class torture tests ----

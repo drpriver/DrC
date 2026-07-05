@@ -114,6 +114,12 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             cc_print_expr(out, op->eval_into.expr);
             msb_write_literal(out, " (tree walker)");
             break;
+        case CI_OP_EVAL_LVALUE:
+            ci_op_print_range(out, op->eval_lvalue.slot, op->eval_lvalue.slot_size);
+            msb_write_literal(out, " = &");
+            cc_print_expr(out, op->eval_lvalue.expr);
+            msb_write_literal(out, " (tree walker)");
+            break;
         case CI_OP_CONST:
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
             uint64_t v = op->constant.immediate[0];
@@ -273,13 +279,15 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             break;
         case CI_OP_VAR_ADDR:{
             Atom name = op->var_addr.var->name;
+            const char *s = name&&name->length?name->data:"<anon>";
             ci_op_print_range(out, op->var_addr.slot, op->var_addr.slot_size);
-            msb_sprintf(out, " = &%.*s", (int)name->length, name->data);
+            msb_sprintf(out, " = &%s", s);
         } break;
         case CI_OP_FUNC_ADDR:{
             Atom name = op->func_addr.func->name;
+            const char *s = name&&name->length?name->data:"<anon>";
             ci_op_print_range(out, op->func_addr.slot, op->func_addr.slot_size);
-            msb_sprintf(out, " = &%.*s", (int)name->length, name->data);
+            msb_sprintf(out, " = &%s", s);
         } break;
         case CI_OP_BOUNDS:
             msb_sprintf(out, "bounds%s ", op->bounds.index_signed?".s":"");
@@ -320,11 +328,12 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             break;
         case CI_OP_CALL:{
             Atom name = op->call.func->name;
+            const char *s = name&&name->length?name->data:"<anon>";
             if(op->call.ret_size){
                 ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
                 msb_write_literal(out, " = ");
             }
-            msb_sprintf(out, "call %.*s(", (int)name->length, name->data);
+            msb_sprintf(out, "call %s(", s);
             for(uint32_t i = 0; i < op->call.nargs; i++){
                 if(i) msb_write_literal(out, ", ");
                 msb_sprintf(out, "*[%u]", op->call.argv_slot + i * 8);

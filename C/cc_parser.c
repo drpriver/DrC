@@ -3886,6 +3886,12 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     operand = index;
                     index = tmp;
                 }
+                {
+                    const CcTargetConfig* tgt = cc_target(p);
+                    CcQualType idx_type = ccqt_basic(ccqt_is_unsigned(index->type, !tgt->char_is_signed) ? tgt->size_type : tgt->ptrdiff_type);
+                    err = cc_implicit_cast(p, index, idx_type, &index);
+                    if(err) return err;
+                }
                 CcQualType elem_type;
                 err = cc_deref_type(p, operand->type, &elem_type, tok.loc);
                 if(err) return err;

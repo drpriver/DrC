@@ -1298,6 +1298,122 @@ TestFunction(test_interpreter){
             .exit_code = 37,
         },
         {
+            "rvalue dot: members of call results", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "struct S mk(int a, int b){ struct S r; r.x = a; r.y = b; return r; }\n"
+               "return mk(1, 2).x + mk(3, 4).y;\n"),
+            .exit_code = 5,
+        },
+        {
+            "rvalue dot: nested member of call result", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "struct T { struct S s; };\n"
+               "struct T mk(void){ struct T t; t.s.x = 6; t.s.y = 7; return t; }\n"
+               "return mk().s.y;\n"),
+            .exit_code = 7,
+        },
+        {
+            "rvalue dot: 8-byte members of call result", __LINE__,
+            SVI("struct L { long a, b; };\n"
+               "struct L mk(void){ struct L r; r.a = 30; r.b = 12; return r; }\n"
+               "return (int)(mk().a + mk().b);\n"),
+            .exit_code = 42,
+        },
+        {
+            "rvalue dot: member of conditional", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "int f(int c){\n"
+               "    struct S a = {1, 2};\n"
+               "    struct S b = {30, 40};\n"
+               "    return (c ? a : b).y;\n"
+               "}\n"
+               "return f(0) + f(1);\n"),
+            .exit_code = 42,
+        },
+        {
+            "rvalue dot: member of statement expression", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "struct S mk(int a, int b){ struct S r; r.x = a; r.y = b; return r; }\n"
+               "return ({ mk(40, 2); }).y;\n"),
+            .exit_code = 2,
+        },
+        {
+            "rvalue dot: bitfield members of call results", __LINE__,
+            SVI("struct S { int x:3, y:5; };\n"
+               "struct S mk(int a, int b){ struct S r; r.x = a; r.y = b; return r; }\n"
+               "return mk(1, 2).x + mk(3, 4).y;\n"),
+            .exit_code = 5,
+        },
+        {
+            "rvalue dot: bitfield sign extension", __LINE__,
+            SVI("struct S { int v:4; };\n"
+               "struct S mk(int v){ struct S r; r.v = v; return r; }\n"
+               "return mk(-3).v == -3 ? 42 : 1;\n"),
+            .exit_code = 42,
+        },
+        {
+            "rvalue dot: unsigned bitfield masking", __LINE__,
+            SVI("struct U { unsigned pad:7, v:4; };\n"
+               "struct U mk(unsigned v){ struct U r; r.pad = 127; r.v = v; return r; }\n"
+               "return mk(255).v;\n"),
+            .exit_code = 15,
+        },
+        {
+            "rvalue dot: bitfield of nested member of call result", __LINE__,
+            SVI("struct S { int x:3, y:5; };\n"
+               "struct T { int pad; struct S s; };\n"
+               "struct T mk(void){ struct T t; t.pad = 9; t.s.x = 2; t.s.y = 12; return t; }\n"
+               "return mk().s.y;\n"),
+            .exit_code = 12,
+        },
+        {
+            "rvalue dot: subscript of array member of call result", __LINE__,
+            SVI("struct S { int arr[4]; };\n"
+               "struct S mk(void){ return (struct S){{1, 2, 3, 4}}; }\n"
+               "int i = 2;\n"
+               "return mk().arr[i] * 10 + mk().arr[3];\n"),
+            .exit_code = 34,
+        },
+        {
+            "subscript: __int128 index", __LINE__,
+            SVI("int a[4] = {5, 6, 7, 8};\n"
+               "__int128 i = 2;\n"
+               "return a[i];\n"),
+            .exit_code = 7,
+        },
+        {
+            "subscript: unsigned __int128 index", __LINE__,
+            SVI("int a[4] = {5, 6, 7, 8};\n"
+               "unsigned __int128 i = 3;\n"
+               "return a[i];\n"),
+            .exit_code = 8,
+        },
+        {
+            "compound literal: subscript at toplevel", __LINE__,
+            SVI("int i = 1;\n"
+               "int x = (int[]){10, 20, 30}[i];\n"
+               "return x + (int[]){1, 2, 3}[2];\n"),
+            .exit_code = 23,
+        },
+        {
+            "compound literal: subscript in function", __LINE__,
+            SVI("int f(int i){ return (int[]){10, 20, 30}[i]; }\n"
+               "return f(2);\n"),
+            .exit_code = 30,
+        },
+        {
+            "compound literal: store through subscript", __LINE__,
+            SVI("return ((int[]){1, 2, 3}[0] = 5);\n"),
+            .exit_code = 5,
+        },
+        {
+            "compound literal: member access", __LINE__,
+            SVI("struct S { int x, y; };\n"
+               "int f(void){ return (struct S){1, 2}.y; }\n"
+               "return f() + (struct S){39, 3}.x;\n"),
+            .exit_code = 41,
+        },
+        {
             "flat expr: nested calls as arguments", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
                "int twice(int x){ return x * 2; }\n"
@@ -7303,6 +7419,13 @@ TestFunction(test_interpreter_runtime_errors){
             "array negative index", __LINE__,
             SVI("int a[3]; a[0] = 0;\n"
                 "int i = -1;\n"
+                "return a[i];\n"),
+            SVI("(test):3:9: error: array subscript out of bounds: index -1 not in [0, 3)\n"),
+        },
+        {
+            "array negative __int128 index", __LINE__,
+            SVI("int a[3]; a[0] = 0;\n"
+                "__int128 i = -1;\n"
                 "return a[i];\n"),
             SVI("(test):3:9: error: array subscript out of bounds: index -1 not in [0, 3)\n"),
         },

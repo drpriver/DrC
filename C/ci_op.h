@@ -60,6 +60,7 @@ TYPEDEF_ENUM(CiFaluOp, uint32_t);
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,
     CI_OP_EVAL_INTO,
+    CI_OP_EVAL_LVALUE,
     CI_OP_CONST,
     CI_OP_COPY,
     CI_OP_ALU64,
@@ -125,6 +126,15 @@ struct CiOp {
             uint32_t slot, slot_size;
             SrcLoc loc;
         } eval_into;
+        struct {
+            // evaluate the lvalue expr's address into slots[slot:slot+8]
+            CiOpKind kind: 8; // CI_OP_EVAL_LVALUE
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            CcExpr*_Nonnull expr;
+            uint32_t slot, slot_size;
+            SrcLoc loc;
+        } eval_lvalue;
         struct {
             // slots[slot:slot+immsize] = immediate
             CiOpKind kind: 8; // CI_OP_CONST
