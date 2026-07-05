@@ -548,9 +548,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(e->type.is_atomic)
                 break; // atomics need an atomic load
             if(!var->automatic){
-                // static/global: address through the GOT-style op, then load
-                if(ccqt_kind(e->type) == CC_ARRAY)
-                    break; // array rvalues only decay
+                // static/global: address through the GOT-style op, then load.
+                // Array rvalues (array assignment extension) load like any
+                // other whole object.
                 err = ci_lower_dest(ctx, &dest, size);
                 if(err) return err;
                 out->slot = dest;
@@ -611,10 +611,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_SUBSCRIPT:{
             if(e->type.is_atomic)
                 break; // atomic loads fall back
-            if(ccqt_kind(e->type) == CC_ARRAY){
-                ci_unimplemented(ci, e->loc, "array assignment");
-                break; // array rvalues only decay; no direct loads
-            }
+            // Array rvalues (array assignment extension) load like any other
+            // whole object.
             if((e->kind == CC_EXPR_DOT || e->kind == CC_EXPR_ARROW) && e->field_loc.bit_width){
                 err = ci_lower_dest(ctx, &dest, size);
                 if(err) return err;

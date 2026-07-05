@@ -1696,6 +1696,101 @@ TestFunction(test_interpreter){
                "return arr[0] + arr[1] + arr[2];\n"),
             .exit_code = 3,
         },
+        {
+            "array: assign local to local", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+               "int b[3] = {0};\n"
+               "b = a;\n"
+               "a[0] = 9;\n"
+               "return b[0] * 100 + b[1] * 10 + b[2];\n"),
+            .exit_code = 123,
+        },
+        {
+            "array: assign global to global", __LINE__,
+            SVI("int p[100];\n"
+               "int q[100];\n"
+               "void doit(void){ p = q; }\n"
+               "q[0] = 7;\n"
+               "q[99] = 8;\n"
+               "doit();\n"
+               "return p[0] * 10 + p[99];\n"),
+            .exit_code = 78,
+        },
+        {
+            "array: assign global to local", __LINE__,
+            SVI("int g[4] = {4, 3, 2, 1};\n"
+               "int f(void){\n"
+               "    int l[4] = {0};\n"
+               "    l = g;\n"
+               "    return l[0] * 1000 + l[1] * 100 + l[2] * 10 + l[3];\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 4321,
+        },
+        {
+            "array: assign local to global", __LINE__,
+            SVI("int g[4];\n"
+               "void f(void){\n"
+               "    int l[4] = {5, 6, 7, 8};\n"
+               "    g = l;\n"
+               "}\n"
+               "f();\n"
+               "return g[0] * 1000 + g[1] * 100 + g[2] * 10 + g[3];\n"),
+            .exit_code = 5678,
+        },
+        {
+            "array: assign struct member arrays", __LINE__,
+            SVI("struct S { int a[3]; int b[3]; };\n"
+               "struct S s = {{1, 2, 3}, {0}};\n"
+               "s.b = s.a;\n"
+               "return s.b[0] * 100 + s.b[1] * 10 + s.b[2];\n"),
+            .exit_code = 123,
+        },
+        {
+            "array: assign member array through pointer", __LINE__,
+            SVI("struct S { int a[3]; };\n"
+               "int f(struct S* dst, struct S* src){\n"
+               "    dst->a = src->a;\n"
+               "    return dst->a[0] * 100 + dst->a[1] * 10 + dst->a[2];\n"
+               "}\n"
+               "struct S x = {{0}};\n"
+               "struct S y = {{3, 2, 1}};\n"
+               "return f(&x, &y);\n"),
+            .exit_code = 321,
+        },
+        {
+            "array: assign row of 2d array", __LINE__,
+            SVI("int m[2][3] = {{1, 2, 3}, {0}};\n"
+               "m[1] = m[0];\n"
+               "return m[1][0] * 100 + m[1][1] * 10 + m[1][2];\n"),
+            .exit_code = 123,
+        },
+        {
+            "array: assign through pointer to array", __LINE__,
+            SVI("int f(int (*d)[3], int (*s)[3]){\n"
+               "    *d = *s;\n"
+               "    return (*d)[0] * 100 + (*d)[1] * 10 + (*d)[2];\n"
+               "}\n"
+               "int a[3] = {0};\n"
+               "int b[3] = {4, 5, 6};\n"
+               "return f(&a, &b);\n"),
+            .exit_code = 456,
+        },
+        {
+            "array: init local from array", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+               "int b[3] = a;\n"
+               "a[1] = 9;\n"
+               "return b[0] * 100 + b[1] * 10 + b[2];\n"),
+            .exit_code = 123,
+        },
+        {
+            "array: self assignment", __LINE__,
+            SVI("int a[3] = {1, 2, 3};\n"
+               "a = a;\n"
+               "return a[0] * 100 + a[1] * 10 + a[2];\n"),
+            .exit_code = 123,
+        },
         // Struct
         {
             "struct: basic", __LINE__,
