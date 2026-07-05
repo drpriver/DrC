@@ -67,6 +67,7 @@ int main(int argc, char** argv, char** envp){
     };
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     Marray(StringView) dis = {0};
+    _Bool dis_top = 0;
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
         .user_data = &interp.parser.cpp,
@@ -174,6 +175,11 @@ int main(int argc, char** argv, char** envp){
             .help = "print the bytecode for these functions",
             .max_num = 1000,
             .one_at_a_time = 1,
+        },
+        {
+            .name = SV("--dis-top"),
+            .dest = ARGDEST(&dis_top),
+            .help = "print the toplevel bytecode",
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -376,7 +382,7 @@ int main(int argc, char** argv, char** envp){
         err = ci_resolve_refs(&interp, 0);
         if(err) goto stringify_error;
     }
-    if(dis.count){
+    if(dis.count || dis_top){
         MARRAY_FOR_EACH_VALUE(StringView, d, dis){
             err = ci_resolve_root(&interp, d);
             if(err){
@@ -401,6 +407,45 @@ int main(int argc, char** argv, char** envp){
             cc_print_func(&interp.parser, func, &logger->buff);
             log_flush(logger, LOG_PRINT);
             continue;
+        }
+        if(dis_top){
+            err = ci_lower_toplevel(&interp);
+            if(err) goto stringify_error;
+            MStringBuilder* sb = &logger->buff;
+            msb_sprintf(sb, "top level: {\n");
+            for(size_t i = 0; i < interp.toplevel_ops.count; i++){
+                CiOp* op = &interp.toplevel_ops.data[i];
+                size_t cur = sb->cursor;
+                msb_sprintf(sb, "  0x%02zx)  ", i);
+                ci_op_print(op, sb);
+                size_t dif = sb->cursor - cur;
+                if(dif < 60)
+                    msb_write_nchar(sb, ' ', 60-dif);
+                {
+                    SrcLoc loc = op->loc;
+                    uint64_t line = 0;
+                    uint64_t column = 0;
+                    uint64_t file_id = 0;
+                    if(loc.is_actually_a_pointer){
+                        SrcLocExp* e = (SrcLocExp*)(loc.bits & ~1);
+                        while(e->parent)
+                            e = e->parent;
+                        line = e->line;
+                        column = e->column;
+                        file_id = e->file_id;
+                    }
+                    else {
+                        line = loc.line;
+                        column = loc.column;
+                        file_id = loc.file_id;
+                    }
+                    LongString path = file_id < interp.parser.cpp.fc->map.count?interp.parser.cpp.fc->map.data[file_id].path:LS("???");
+                    msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
+                }
+            }
+            msb_sprintf(sb, "}\n");
+            log_flush(logger, LOG_PRINT);
+
         }
         goto fini;
     }
@@ -819,7 +864,6 @@ repl_builtin_command(CcParser* parser, StringView input){
 static
 void
 cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
-    CiInterpreter* ci = (CiInterpreter*)((char*)p-offsetof(CiInterpreter, parser));
     msb_sprintf(sb, "%s(", func->name->data);
     CcFunction* ft = func->type;
     for(uint32_t j = 0; j < ft->param_count; j++){
@@ -863,7 +907,7 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
                     column = loc.column;
                     file_id = loc.file_id;
                 }
-                LongString path = file_id < ci->parser.cpp.fc->map.count?ci->parser.cpp.fc->map.data[file_id].path:LS("???");
+                LongString path = file_id < p->cpp.fc->map.count?p->cpp.fc->map.data[file_id].path:LS("???");
                 msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
             }
         }

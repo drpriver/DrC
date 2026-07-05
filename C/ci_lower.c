@@ -478,9 +478,48 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     out->canonical = 0;
     switch((uint32_t)e->kind){
         case CC_EXPR_VALUE:{
-            if(ccqt_kind(e->type) == CC_ARRAY || size > 8){
-                if(0) ci_ice(ci, e->loc, "oversized, falling back. size: %u", size);
-                break; // string literals and oversized values fall back
+            if(ccqt_kind(e->type) == CC_ARRAY){
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                out->slot = dest;
+                // if(dest == CI_NO_SLOT) return ci_unimplemented(ci, e->loc, "needs memory to memory op");
+                uint32_t aslot;
+                err = ci_alloc_slot(ctx, 8, 8, &aslot);
+                if(err) return err;
+                CiOp* op;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                CcArray* arr = ccqt_as_array(e->type);
+                *op = (CiOp){
+                    .constant = {
+                        .kind = CI_OP_CONST,
+                        .bt_kind = (uint32_t)(ccqt_is_basic(arr->element)?arr->element.basic.kind:CCBT_nullptr_t),
+                        .is_anon_array = 1,
+                        .immsize = 8,
+                        .slot = aslot,
+                        .immediate = {
+                            (uint64_t)e->text,
+                            e->str.length,
+                        },
+                        .loc = e->loc,
+                    },
+                };
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .load = {
+                        .kind = CI_OP_LOAD,
+                        .slot = dest,
+                        .slot_size = size,
+                        .src = aslot,
+                        .offset = 0,
+                        .loc = e->loc,
+                    },
+                };
+                return 0;
+            }
+            if(size > 16){
+                return ci_unimplemented(ci, e->loc, "oversized values");
             }
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
@@ -572,8 +611,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_SUBSCRIPT:{
             if(e->type.is_atomic)
                 break; // atomic loads fall back
-            if(ccqt_kind(e->type) == CC_ARRAY)
+            if(ccqt_kind(e->type) == CC_ARRAY){
+                ci_unimplemented(ci, e->loc, "array assignment");
                 break; // array rvalues only decay; no direct loads
+            }
             if((e->kind == CC_EXPR_DOT || e->kind == CC_EXPR_ARROW) && e->field_loc.bit_width){
                 err = ci_lower_dest(ctx, &dest, size);
                 if(err) return err;
