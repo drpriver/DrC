@@ -477,7 +477,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     if(err) return err;
     out->size = size;
     out->canonical = 0;
-    switch((uint32_t)e->kind){
+    switch(e->kind){
         case CC_EXPR_VALUE:{
             if(ccqt_kind(e->type) == CC_ARRAY){
                 err = ci_lower_dest(ctx, &dest, size);
@@ -1689,8 +1689,58 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(err) return err;
             return ci_lower_expr(ci, ctx, e->values[0], dest, out);
         }
-        default:
+        case CC_EXPR_STATEMENT_EXPRESSION:{
+            // body statements; value = trailing expression statement
+            // (the parser typed this expression from it; when it's absent
+            // or void there is no value)
+            CcStmtNode* body = e->stmt_body;
+            uint32_t count = body->count;
+            CcExpr*_Nullable value = NULL;
+            if(count && body->stmts[count-1]->kind == CC_STMT_EXPR
+                && !ccqt_bt_eq(e->type, CCBT_void)){
+                value = body->stmts[count-1]->exprs[0];
+                count--;
+            }
+            for(uint32_t i = 0; i < count; i++){
+                err = ci_lower_stmt(ci, ctx, body->stmts[i]);
+                if(err) return err;
+            }
+            if(value)
+                return ci_lower_expr(ci, ctx, (CcExpr*_Nonnull)value, dest, out);
+            err = ci_lower_dest(ctx, &dest, size);
+            if(err) return err;
+            out->slot = dest;
+            return 0;
+        }
+        case CC_EXPR_SIZEOF_VMT:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+        case CC_EXPR_ATOMIC:
+        case CC_EXPR_VA:
+        case CC_EXPR_BUILTIN:
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_INTERN:
+        case CC_EXPR_SYMBOL:
+        case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
+        case CC_EXPR_TYPE_INTROSPECTION:
+        case CC_EXPR_UMUL128:
+        case CC_EXPR_SLICE_ALL:
+        case CC_EXPR_SLICE:
+        case CC_EXPR_SLICE_LO:
+        case CC_EXPR_SLICE_HI:
             break;
+        CASES_EXHAUSTED;
     }
     // fallback: evaluate the (sub)tree
     err = ci_lower_dest(ctx, &dest, size);

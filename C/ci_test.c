@@ -1335,14 +1335,12 @@ TestFunction(test_interpreter){
                "return f();\n"),
             .exit_code = 42,
         },
-        #define SKIP_GNU_STMT_EXPR 1
         // Statement expressions
         {
             "stmt expr: basic value", __LINE__,
             SVI("int x = ({ int a = 2; a * 3; });\n"
                "return x;\n"),
             .exit_code = 6,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: goto out through call args", __LINE__,
@@ -1356,7 +1354,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return goto_out() + calls;\n"),
             .exit_code = 42,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: return inside, not taken", __LINE__,
@@ -1366,7 +1363,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return f(2);\n"),
             .exit_code = 14,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: return inside, taken", __LINE__,
@@ -1376,7 +1372,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return -f(5);\n"),
             .exit_code = 5,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: loop condition re-evaluated", __LINE__,
@@ -1386,7 +1381,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return total;\n"),
             .exit_code = 15,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: break from body binds enclosing loop", __LINE__,
@@ -1396,7 +1390,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return total;\n"),
             .exit_code = 60,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: if condition with goto out", __LINE__,
@@ -1405,7 +1398,6 @@ TestFunction(test_interpreter){
                "hello:\n"
                "return 7;\n"),
             .exit_code = 7,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: && short circuits body", __LINE__,
@@ -1413,13 +1405,11 @@ TestFunction(test_interpreter){
                "int r = 0 && ({ n = 1; 1; });\n"
                "return n * 10 + r;\n"),
             .exit_code = 0,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: && normalizes to 0/1", __LINE__,
             SVI("return 1 && ({ 5; });\n"),
             .exit_code = 1,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: || short circuits body", __LINE__,
@@ -1427,7 +1417,6 @@ TestFunction(test_interpreter){
                "int r = 1 || ({ n = 1; 0; });\n"
                "return n * 10 + r;\n"),
             .exit_code = 1,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: ternary arms", __LINE__,
@@ -1438,7 +1427,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return f(0) * 10 + f(2);\n"),
             .exit_code = 45,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: labels are function scoped", __LINE__,
@@ -1455,7 +1443,6 @@ TestFunction(test_interpreter){
                "}\n"
                "return f();\n"),
             .exit_code = 24,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: struct value", __LINE__,
@@ -1463,7 +1450,6 @@ TestFunction(test_interpreter){
                "struct Pair p = ({ struct Pair t = {3, 4}; t; });\n"
                "return p.a * 10 + p.b;\n"),
             .exit_code = 34,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: void as expression statement", __LINE__,
@@ -1472,7 +1458,6 @@ TestFunction(test_interpreter){
                "({ n += 6; });\n"
                "return n;\n"),
             .exit_code = 11,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         {
             "stmt expr: toplevel ternary arm", __LINE__,
@@ -1483,7 +1468,6 @@ TestFunction(test_interpreter){
                "int z = total > 50 ? ({ total + 1; }) : 0;\n"
                "return z;\n"),
             .exit_code = 61,
-            .skip = SKIP_GNU_STMT_EXPR,
         },
         // Blocks / scoping
         {
