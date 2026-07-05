@@ -62,7 +62,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL_INTO,
     CI_OP_CONST,
     CI_OP_COPY,
-    CI_OP_ALU,
+    CI_OP_ALU64,
+    CI_OP_ALU128,
     CI_OP_FALU32,
     CI_OP_FALU64,
     CI_OP_CONVERT,
@@ -145,12 +146,12 @@ struct CiOp {
         } copy;
         struct {
             // slots[slot:slot+slot_size] = slots[src] op slots[src2] as integers
-            CiOpKind kind: 8; // CI_OP_ALU
+            CiOpKind kind: 8; // CI_OP_ALU64, CI_OP_ALU128
             CiAluOp op: 8;
             uint32_t is_unsigned: 1,
-                     src_size: 4,
-                     src2_size: 4,
-                     _bitpad: 7;
+                     src_size: 5, // sizes reach 16 for CI_OP_ALU128
+                     src2_size: 5,
+                     _bitpad: 5;
             uint32_t slot,
                      slot_size,
                      src,
@@ -174,7 +175,8 @@ struct CiOp {
         } falu32, falu64;
         struct {
             // CI_OP_CONVERT: slots[slot:slot+slot_size] = slots[src:src+src_size]
-            //   widened to 64 bits then truncated; is_unsigned: the source is unsigned
+            //   widened (to 128 bits when either side is larger than 8) then
+            //   truncated; is_unsigned: the source is unsigned
             // CI_OP_ITOF: integer slots[src] to float/double slots[slot] (by
             //   slot_size); is_unsigned: the source is unsigned
             // CI_OP_FTOI: float/double slots[src] (by src_size) to integer

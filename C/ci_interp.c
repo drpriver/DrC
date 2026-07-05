@@ -3503,7 +3503,7 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
-        case CI_OP_ALU: {
+        case CI_OP_ALU64: {
             const void* s1 = (char*)frame->slots + op->alu.src;
             const void* s2 = (char*)frame->slots + op->alu.src2;
             _Bool is_unsigned = op->alu.is_unsigned;
@@ -3554,6 +3554,82 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->alu.slot, op->alu.slot_size, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_ALU128: {
+            const void* s1 = (char*)frame->slots + op->alu.src;
+            const void* s2 = (char*)frame->slots + op->alu.src2;
+            _Bool is_unsigned = op->alu.is_unsigned;
+            CiUint128 lu, ru;
+            if(is_unsigned){
+                ci_uint128_read(&lu, s1, op->alu.src_size);
+                ci_uint128_read(&ru, s2, op->alu.src2_size);
+            }
+            else {
+                if(op->alu.src_size <= 8)
+                    lu = ci_uint128_from_int64(ci_read_int(s1, op->alu.src_size));
+                else
+                    ci_uint128_read(&lu, s1, op->alu.src_size);
+                if(op->alu.src2_size <= 8)
+                    ru = ci_uint128_from_int64(ci_read_int(s2, op->alu.src2_size));
+                else
+                    ci_uint128_read(&ru, s2, op->alu.src2_size);
+            }
+            CiUint128 res;
+            switch((CiAluOp)(op->alu.op)){
+                case CI_ALU_ADD: res = ci_uint128_add(lu, ru); break;
+                case CI_ALU_SUB: res = ci_uint128_sub(lu, ru); break;
+                case CI_ALU_MUL: res = ci_uint128_mul(lu, ru); break;
+                case CI_ALU_DIV:
+                    if(is_unsigned)
+                        res = ci_uint128_div(lu, ru);
+                    else
+                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_MOD:
+                    if(is_unsigned)
+                        res = ci_uint128_mod(lu, ru);
+                    else
+                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_AND: res = ci_uint128_and(lu, ru); break;
+                case CI_ALU_OR:  res = ci_uint128_or(lu, ru); break;
+                case CI_ALU_XOR: res = ci_uint128_xor(lu, ru); break;
+                case CI_ALU_SHL: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
+                case CI_ALU_SHR:
+                    if(is_unsigned)
+                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
+                    else
+                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
+                    break;
+                case CI_ALU_EQ: res = ci_uint128_from_uint64(ci_uint128_eq(lu, ru)); break;
+                case CI_ALU_NE: res = ci_uint128_from_uint64(ci_uint128_ne(lu, ru)); break;
+                case CI_ALU_LT:
+                    res = ci_uint128_from_uint64(is_unsigned
+                        ? ci_uint128_lt(lu, ru)
+                        : ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_GT:
+                    res = ci_uint128_from_uint64(is_unsigned
+                        ? ci_uint128_gt(lu, ru)
+                        : ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_LE:
+                    res = ci_uint128_from_uint64(is_unsigned
+                        ? ci_uint128_le(lu, ru)
+                        : ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_GE:
+                    res = ci_uint128_from_uint64(is_unsigned
+                        ? ci_uint128_ge(lu, ru)
+                        : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
+                    break;
+                case CI_ALU_NEG: res = ci_uint128_sub(ci_uint128_from_uint64(0), lu); break;
+                case CI_ALU_NOT: res = ci_uint128_xor(lu, ci_uint128_from_int64(-1)); break;
+                CASES_EXHAUSTED;
+            }
+            ci_uint128_write((char*)frame->slots + op->alu.slot, op->alu.slot_size, res);
             frame->pc++;
             return 0;
         }
@@ -3817,12 +3893,29 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         case CI_OP_CONVERT: {
             const void* src = (char*)frame->slots + op->convert.src;
+            void* dest = (char*)frame->slots + op->convert.slot;
+            if(op->convert.src_size > 8 || op->convert.slot_size > 8){
+                // 128-bit path, extending per the source's signedness
+                CiUint128 v;
+                if(op->convert.src_size > 8)
+                    ci_uint128_read(&v, src, op->convert.src_size);
+                else if(op->convert.is_unsigned)
+                    v = ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size));
+                else
+                    v = ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
+                if(op->convert.slot_size <= 8)
+                    ci_write_uint(dest, op->convert.slot_size, ci_uint128_lo(v));
+                else
+                    ci_uint128_write(dest, op->convert.slot_size, v);
+                frame->pc++;
+                return 0;
+            }
             uint64_t v;
             if(op->convert.is_unsigned)
                 v = ci_read_uint(src, op->convert.src_size);
             else
                 v = (uint64_t)ci_read_int(src, op->convert.src_size);
-            ci_write_uint((char*)frame->slots + op->convert.slot, op->convert.slot_size, v);
+            ci_write_uint(dest, op->convert.slot_size, v);
             frame->pc++;
             return 0;
         }

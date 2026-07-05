@@ -217,7 +217,8 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->copy.src, op->copy.src_size);
             break;
-        case CI_OP_ALU:
+        case CI_OP_ALU64:
+        case CI_OP_ALU128:
             ci_op_print_range(out, op->alu.slot, op->alu.slot_size);
             msb_write_literal(out, " = ");
             if(op->alu.op >= CI_ALU_NEG){

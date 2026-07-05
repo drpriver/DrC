@@ -4920,6 +4920,76 @@ TestFunction(test_interpreter){
             .exit_code = 16,
         },
         {
+            "int128: high bits survive shifts", __LINE__,
+            SVI("unsigned __int128 a = 1;\n"
+               "a <<= 100;\n"
+               "a >>= 96;\n"
+               "return (int)a;\n"),
+            .exit_code = 16,
+        },
+        {
+            "int128: mul carries into high half", __LINE__,
+            SVI("unsigned __int128 a = (unsigned __int128)1 << 40;\n"
+               "unsigned __int128 b = (unsigned __int128)1 << 40;\n"
+               "return (int)((a * b) >> 76);\n"),
+            .exit_code = 16,
+        },
+        {
+            "int128: cmp decided by high half", __LINE__,
+            SVI("unsigned __int128 a = (unsigned __int128)1 << 64;\n"
+               "unsigned __int128 b = 2;\n"
+               "return (a > b) + (b < a) + (a >= b) + (b != a);\n"),
+            .exit_code = 4,
+        },
+        {
+            "int128: shift by int-typed count", __LINE__,
+            SVI("unsigned __int128 a = 1;\n"
+               "int s = 100;\n"
+               "return (int)((a << s) >> 98);\n"),
+            .exit_code = 4,
+        },
+        {
+            "int128: add carries into high half", __LINE__,
+            SVI("unsigned __int128 a = ~(unsigned __int128)0 >> 64;\n" // 2**64-1
+               "a += 1;\n"
+               "return (int)(a >> 64);\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: sub borrows from high half", __LINE__,
+            SVI("unsigned __int128 a = (unsigned __int128)1 << 64;\n"
+               "unsigned __int128 b = 1;\n"
+               "return (int)((a - b) >> 60) == 15;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: cast sign extends into high half", __LINE__,
+            SVI("int x = -5;\n"
+               "signed __int128 a = (signed __int128)x;\n"
+               "return (int)(a >> 64) + 100;\n"),
+            .exit_code = 99,
+        },
+        {
+            "int128: cast zero extends into high half", __LINE__,
+            SVI("int x = -5;\n"
+               "unsigned __int128 a = (unsigned __int128)(unsigned)x;\n"
+               "return (int)(a >> 64);\n"),
+            .exit_code = 0,
+        },
+        {
+            "int128: cast truncation drops high half", __LINE__,
+            SVI("unsigned __int128 a = ((unsigned __int128)1 << 64) + 42;\n"
+               "return (int)a;\n"),
+            .exit_code = 42,
+        },
+        {
+            "int128: cast between 128-bit signedness", __LINE__,
+            SVI("signed __int128 a = -1;\n"
+               "unsigned __int128 b = (unsigned __int128)a;\n"
+               "return (int)(b >> 100) == (1 << 28) - 1;\n"),
+            .exit_code = 1,
+        },
+        {
             "int128: unsigned eq", __LINE__,
             SVI("unsigned __int128 a = 42;\n"
                "unsigned __int128 b = 42;\n"

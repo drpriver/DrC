@@ -793,15 +793,15 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             _Bool from_float = ci_falu_type(from);
             _Bool from_int = ccqt_kind(from) == CC_POINTER;
+            uint32_t from_sz = 8; // pointer size
             if(!from_int && ci_alu_int_type(from)){
-                uint32_t from_sz;
                 err = cc_sizeof_as_uint(p, from, e->loc, &from_sz);
                 if(err) return err;
-                from_int = from_sz <= 8;
+                from_int = from_sz <= 16;
             }
             if(!from_int && !from_float)
-                break; // 128-bit, long double, non-scalar fall back
-            _Bool to_int = ccqt_kind(to) == CC_POINTER || (ci_alu_int_type(to) && size <= 8);
+                break; // long double, non-scalar fall back
+            _Bool to_int = ccqt_kind(to) == CC_POINTER || (ci_alu_int_type(to) && size <= 16);
             _Bool to_float = ci_falu_type(to);
             CiOpKind kind;
             uint32_t is_unsigned = 0;
@@ -810,10 +810,14 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 is_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
             }
             else if(from_int && to_float){
+                if(from_sz > 8)
+                    break; // 128-bit to float falls back
                 kind = CI_OP_ITOF;
                 is_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
             }
             else if(from_float && to_int){
+                if(size > 8)
+                    break; // float to 128-bit falls back
                 kind = CI_OP_FTOI;
                 is_unsigned = ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed);
             }
@@ -861,10 +865,13 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 kind = e->type.basic.kind == CCBT_float? CI_OP_FALU32 : CI_OP_FALU64;
             }
             else if(ci_alu_int_type(e->type) && size <= 8){
-                kind = CI_OP_ALU;
+                kind = CI_OP_ALU64;
+            }
+            else if(ci_alu_int_type(e->type) && size <= 16){
+                kind = CI_OP_ALU128;
             }
             else {
-                break; // long double and 128-bit integers fall back
+                break; // long double falls back
             }
             uint32_t osz;
             err = cc_sizeof_as_uint(p, operand->type, operand->loc, &osz);
@@ -881,12 +888,12 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
-            if(kind == CI_OP_ALU){
+            if(kind == CI_OP_ALU64 || kind == CI_OP_ALU128){
                 // NEG reads signed and negates; NOT reads unsigned and
                 // complements, mirroring the evaluator
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = kind,
                         .op = is_not? CI_ALU_NOT : CI_ALU_NEG,
                         .is_unsigned = is_not,
                         .slot = dest,
@@ -1035,9 +1042,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 uint32_t rsz;
                 err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
                 if(err) return err;
-                if(size > 8 || rsz > 8)
+                if(size > 16 || rsz > 16)
                     break;
-                opkind = CI_OP_ALU;
+                opkind = size > 8 || rsz > 8? CI_OP_ALU128 : CI_OP_ALU64;
                 op_unsigned = ccqt_is_unsigned(e->type, !ci_target(ci)->char_is_signed);
             }
             else if(ci_falu_type(e->type) && ci_falu_op_for(e->kind, &fop)){
@@ -1056,16 +1063,18 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 err = cc_sizeof_as_uint(p, ccqt_as_ptr(e->type)->pointee, e->loc, &elem_sz);
                 if(err) return err;
                 is_ptr = 1;
-                opkind = CI_OP_ALU;
+                opkind = CI_OP_ALU64;
                 op_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
             }
             else {
-                break; // 128-bit and exotic compound assignment falls back
+                break; // exotic compound assignment falls back
             }
             if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
                 // Bitfield target: read-modify-write on the storage unit,
-                // with cur as the working value. Bitfields are integers, so
-                // opkind is always CI_OP_ALU here.
+                // with cur as the working value. The bitfield load/store ops
+                // work in 64-bit storage units, so 128-bit bitfields fall back.
+                if(opkind != CI_OP_ALU64)
+                    break;
                 uint32_t save = ctx->temp;
                 uint32_t cur;
                 err = ci_alloc_slot(ctx, size, size, &cur);
@@ -1091,7 +1100,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = CI_OP_ALU64,
                         .slot = cur,
                         .slot_size = size,
                         .src = cur,
@@ -1198,7 +1207,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = CI_OP_ALU64,
                         .slot = scaled,
                         .slot_size = 8,
                         .src = r.slot,
@@ -1216,10 +1225,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
-            if(opkind == CI_OP_ALU){
+            if(opkind == CI_OP_ALU64 || opkind == CI_OP_ALU128){
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = opkind,
                         .op = ci_alu_op_for(e->kind),
                         .is_unsigned = op_unsigned,
                         .slot = cur,
@@ -1360,7 +1369,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
-                            .kind = CI_OP_ALU,
+                            .kind = CI_OP_ALU64,
                             .slot = diff,
                             .slot_size = elem_sz != 1? 8 : size,
                             .src = l.slot,
@@ -1392,7 +1401,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                         if(err) return err;
                         *op = (CiOp){
                             .alu = {
-                                .kind = CI_OP_ALU,
+                                .kind = CI_OP_ALU64,
                                 .slot = dest,
                                 .slot_size = size,
                                 .src = diff,
@@ -1450,7 +1459,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
-                            .kind = CI_OP_ALU,
+                            .kind = CI_OP_ALU64,
                             .slot = scaled,
                             .slot_size = 8,
                             .src = iv->slot,
@@ -1470,7 +1479,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = CI_OP_ALU64,
                         .slot = dest,
                         .slot_size = size,
                         .src = pv->slot,
@@ -1495,9 +1504,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
                 if(err) return err;
-                if(lsz > 8 || rsz > 8 || size > 8)
-                    break; // 128-bit integers fall back
-                kind = CI_OP_ALU;
+                if(lsz > 16 || rsz > 16 || size > 16)
+                    break;
+                kind = lsz > 8 || rsz > 8 || size > 8? CI_OP_ALU128 : CI_OP_ALU64;
                 aop = ci_alu_op_for(e->kind);
                 is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
             }
@@ -1512,9 +1521,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
                 if(err) return err;
-                if(lsz > 8 || rsz > 8)
-                    break; // 128-bit null constants fall back
-                kind = CI_OP_ALU;
+                if(lsz > 16 || rsz > 16)
+                    break;
+                kind = lsz > 8 || rsz > 8? CI_OP_ALU128 : CI_OP_ALU64;
                 aop = ci_alu_op_for(e->kind);
                 is_unsigned = 1;
             }
@@ -1539,10 +1548,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
-            if(kind == CI_OP_ALU){
+            if(kind == CI_OP_ALU64 || kind == CI_OP_ALU128){
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = kind,
                         .op = aop,
                         .is_unsigned = is_unsigned,
                         .slot = dest,
@@ -1736,8 +1745,9 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         step = pointee_sz;
     }
-    else if(!ci_alu_int_type(e->type) || size > 8)
-        return 0; // floats and 128-bit integers fall back
+    else if(!ci_alu_int_type(e->type) || size > 16)
+        return 0; // floats fall back
+    CiOpKind alukind = size > 8? CI_OP_ALU128 : CI_OP_ALU64;
     _Bool is_pre = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_PREDEC;
     _Bool is_inc = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_POSTINC;
     CiOp* op;
@@ -1782,7 +1792,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         *op = (CiOp){
             .alu = {
-                .kind = CI_OP_ALU,
+                .kind = alukind,
                 .slot = vslot,
                 .slot_size = size,
                 .src = vslot,
@@ -1828,6 +1838,11 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     _Bool ok;
     _Bool is_bf = (lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW)
         && lhs->field_loc.bit_width;
+    if(is_bf && size > 8){
+        // the bitfield load/store ops work in 64-bit storage units
+        ctx->temp = save;
+        return 0;
+    }
     if(is_bf)
         err = ci_lower_bitfield_addr(ci, ctx, lhs, &a, &ok);
     else
@@ -1879,7 +1894,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     if(err) return err;
     *op = (CiOp){
         .alu = {
-            .kind = CI_OP_ALU,
+            .kind = alukind,
             .slot = newv,
             .slot_size = size,
             .src = old,
@@ -2450,7 +2465,7 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, S
     if(err) return err;
     *op = (CiOp){
         .alu = {
-            .kind = CI_OP_ALU,
+            .kind = CI_OP_ALU64,
             .slot = dest,
             .slot_size = size,
             .src = a.slot,
@@ -2792,7 +2807,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
-                        .kind = CI_OP_ALU,
+                        .kind = CI_OP_ALU64,
                         .slot = scaled,
                         .slot_size = 8,
                         .src = widx,
@@ -2812,7 +2827,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             if(err) return err;
             *op = (CiOp){
                 .alu = {
-                    .kind = CI_OP_ALU,
+                    .kind = CI_OP_ALU64,
                     .slot = addr,
                     .slot_size = 8,
                     .src = base_ptr,
