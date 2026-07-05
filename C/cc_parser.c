@@ -1920,6 +1920,11 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     result_type = ccqt_basic(CCBT_int);
                     break;
                 case CC_EXPR_DEREF:
+                    if(ccqt_kind(operand->type) == CC_FUNCTION){
+                        // decays back to same function
+                        *out = operand;
+                        return 0;
+                    }
                     if(ccqt_kind(operand->type) == CC_ARRAY && !ccqt_as_array(operand->type)->is_vector){
                         CcQualType ptr_type;
                         err = cc_pointer_of(p, ccqt_as_array(operand->type)->element, &ptr_type);

@@ -71,6 +71,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FTOF,
     CI_OP_SLOT_ADDR,
     CI_OP_VAR_ADDR,
+    CI_OP_FUNC_ADDR,
     CI_OP_BOUNDS,
     CI_OP_LOAD,
     CI_OP_STORE,
@@ -205,6 +206,17 @@ struct CiOp {
             CcVariable*_Nonnull var;
             SrcLoc loc;
         } var_addr;
+        struct {
+            // slots[slot] = func's resolved function pointer; a GOT load, read
+            // at execution because lowering can run before the closure or
+            // native symbol resolves
+            CiOpKind kind: 8; // CI_OP_FUNC_ADDR
+            uint32_t _bitpad: 24;
+            uint32_t pad;
+            uint32_t slot, slot_size;
+            CcFunc*_Nonnull func;
+            SrcLoc loc;
+        } func_addr;
         struct {
             // trap unless the 8-byte unsigned index in slots[src] is in range
             // of the 8-byte length in slots[src2]; inclusive permits

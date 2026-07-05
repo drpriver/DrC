@@ -248,6 +248,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             ci_op_print_range(out, op->var_addr.slot, op->var_addr.slot_size);
             msb_sprintf(out, " = &%.*s", (int)name->length, name->data);
         } break;
+        case CI_OP_FUNC_ADDR:{
+            Atom name = op->func_addr.func->name;
+            ci_op_print_range(out, op->func_addr.slot, op->func_addr.slot_size);
+            msb_sprintf(out, " = &%.*s", (int)name->length, name->data);
+        } break;
         case CI_OP_BOUNDS:
             msb_sprintf(out, "bounds%s ", op->bounds.index_signed?".s":"");
             ci_op_print_range(out, op->bounds.src, op->bounds.src_size);

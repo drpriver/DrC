@@ -671,15 +671,37 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
         }
         case CC_EXPR_CAST:{
-            // CC_EXPR_CAST covers several distinct operations; dispatch like
-            // the evaluator does, and only take sizeof once the cast is known
-            // to be a scalar conversion (array decay has an incomplete
-            // source type, for example).
+            // CC_EXPR_CAST covers several distinct operations;
             CcExpr* operand = e->lhs;
+            while(operand->kind == CC_EXPR_COMMA){
+                err = ci_lower_expr_discard(ci, ctx, operand->lhs);
+                if(err) return err;
+                operand = operand->values[0];
+            }
             CcQualType from = operand->type;
             CcQualType to = e->type;
-            if(ccqt_kind(from) == CC_FUNCTION)
-                break; // function-to-pointer falls back
+            if(ccqt_kind(from) == CC_FUNCTION){
+                if(operand->kind == CC_EXPR_DEREF)
+                    return ci_lower_expr(ci, ctx, operand->lhs, dest, out);
+                if(operand->kind != CC_EXPR_FUNCTION)
+                    return ci_unreachable(ci, operand->loc, "is this code reachable??");
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                out->slot = dest;
+                CiOp* op;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .func_addr = {
+                        .kind = CI_OP_FUNC_ADDR,
+                        .slot = dest,
+                        .slot_size = size,
+                        .func = operand->func,
+                        .loc = e->loc,
+                    }
+                };
+                return 0;
+            }
             // Qualifier-only cast: pass through directly.
             if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7))
                 return ci_lower_expr(ci, ctx, operand, dest, out);
@@ -760,7 +782,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return 0;
         }
         case CC_EXPR_POS:
-            // unary plus is a no-op; the evaluator passes through
+            // unary plus is a no-op
             return ci_lower_expr(ci, ctx, e->lhs, dest, out);
         case CC_EXPR_NEG:
         case CC_EXPR_BITNOT:{
@@ -1591,26 +1613,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return 0;
         }
         case CC_EXPR_COMMA:{
-            CcExpr* lhs = e->lhs;
-            uint32_t temp = ctx->temp;
-            if(ccqt_bt_eq(lhs->type, CCBT_void)){
-                CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .eval = {
-                        .kind = CI_OP_EVAL,
-                        .expr = lhs,
-                        .loc = lhs->loc,
-                    }
-                };
-            }
-            else {
-                CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &v);
-                if(err) return err;
-            }
-            ctx->temp = temp;
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
             return ci_lower_expr(ci, ctx, e->values[0], dest, out);
         }
         default:
@@ -1884,6 +1888,11 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     }
     else {
         CcQualType ct = callee->type;
+        if(ccqt_kind(ct) == CC_FUNCTION && callee->kind == CC_EXPR_DEREF){
+            // (*fp)(...): the function pointer is the deref's operand
+            callee = callee->lhs;
+            ct = callee->type;
+        }
         if(ccqt_kind(ct) != CC_POINTER)
             return 0; // function-typed callees have no loadable value
         CcQualType pointee = ccqt_as_ptr(ct)->pointee;
@@ -1988,11 +1997,103 @@ static
 int
 ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     int err;
-    switch((uint32_t)e->kind){
+    switch(e->kind){
         case CC_EXPR_VALUE:
+            return 0;
         case CC_EXPR_VARIABLE:
+            // FIXME: volatile reads
+            return 0;
+        case CC_EXPR_SIZEOF_VMT:
+            return ci_unimplemented(ci, e->loc, "sizeof(vmt)");
         case CC_EXPR_FUNCTION:
             return 0;
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:{
+            CcInitList *l = e->init_list;
+            for(size_t i = 0; i < l->count; i++){
+                err = ci_lower_expr_discard(ci, ctx, l->entries[i].value);
+                if(err) return err;
+            }
+            return 0;
+        }
+        case CC_EXPR_NEG:
+        case CC_EXPR_POS:
+        case CC_EXPR_BITNOT:
+        case CC_EXPR_LOGNOT:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ADDR:
+        case CC_EXPR_CAST:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_ALLOCA:
+        case CC_EXPR_SLICE_ALL:
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            return err;
+        case CC_EXPR_INTERN:
+        case CC_EXPR_COMPILE:
+            // idk maybe these should be treated as having side effects?
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            return err;
+        case CC_EXPR_PREINC:
+        case CC_EXPR_PREDEC:
+        case CC_EXPR_POSTINC:
+        case CC_EXPR_POSTDEC:{
+            _Bool handled;
+            err = ci_lower_incdec(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
+            if(err) return err;
+            if(handled) return 0;
+            break;
+        }
+        case CC_EXPR_ADD:
+        case CC_EXPR_SUB:
+        case CC_EXPR_MUL:
+        case CC_EXPR_DIV:
+        case CC_EXPR_MOD:
+        case CC_EXPR_BITAND:
+        case CC_EXPR_BITOR:
+        case CC_EXPR_BITXOR:
+        case CC_EXPR_LSHIFT:
+        case CC_EXPR_RSHIFT:
+        case CC_EXPR_EQ:
+        case CC_EXPR_NE:
+        case CC_EXPR_LT:
+        case CC_EXPR_GT:
+        case CC_EXPR_LE:
+        case CC_EXPR_GE:
+        case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_SYMBOL:
+        case CC_EXPR_SLICE_LO:
+        case CC_EXPR_SLICE_HI:
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+            return err;
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR:{
+            uint32_t temp = ctx->temp;
+            CiLowerVal v;
+            err = ci_lower_cond(ci, ctx, e->lhs, &v);
+            if(err) return err;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .jump_false = {
+                    .kind = e->kind == CC_EXPR_LOGAND? CI_OP_JUMP_FALSE : CI_OP_JUMP_TRUE,
+                    .slot = v.slot,
+                    .slot_size = v.size,
+                    .loc = e->loc,
+                }
+            };
+            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
+            ctx->temp = temp;
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+            if(err) return err;
+            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            return 0;
+        }
+
         case CC_EXPR_ASSIGN:{
             uint32_t off;
             uint32_t k = e->lhs->kind;
@@ -2025,47 +2126,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                 break;
             CiLowerVal v;
             return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
-        }
-        case CC_EXPR_PREINC:
-        case CC_EXPR_PREDEC:
-        case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC:{
-            _Bool handled;
-            err = ci_lower_incdec(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
-        case CC_EXPR_CALL:{
-            _Bool handled;
-            err = ci_lower_call(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
-        case CC_EXPR_LOGAND:
-        case CC_EXPR_LOGOR:{
-            uint32_t temp = ctx->temp;
-            CiLowerVal v;
-            err = ci_lower_cond(ci, ctx, e->lhs, &v);
-            if(err) return err;
-            CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .jump_false = {
-                    .kind = e->kind == CC_EXPR_LOGAND? CI_OP_JUMP_FALSE : CI_OP_JUMP_TRUE,
-                    .slot = v.slot,
-                    .slot_size = v.size,
-                    .loc = e->loc,
-                }
-            };
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
-            ctx->temp = temp;
-            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
-            if(err) return err;
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
-            return 0;
         }
         case CC_EXPR_TERNARY:{
             uint32_t temp = ctx->temp;
@@ -2102,13 +2162,55 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
             return 0;
         }
+        case CC_EXPR_CALL:{
+            _Bool handled;
+            err = ci_lower_call(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
+            if(err) return err;
+            if(handled) return 0;
+            break;
+        }
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+            return err;
         case CC_EXPR_COMMA:{
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             if(err) return err;
             return ci_lower_expr_discard(ci, ctx, e->values[0]);
         }
-        default:
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            err = ci_lower_stmt(ci, ctx, e->stmt_body);
+            return err;
+        case CC_EXPR_ATOMIC:
+            // atomics have side effects
             break;
+        case CC_EXPR_VA:
+            // TODO: complicated
+            break;
+        case CC_EXPR_BUILTIN:
+            // TODO: complicated
+            break;
+        case CC_EXPR_HOTSWAP:
+            // TODO: lower to function call?
+            break;
+        case CC_EXPR_ADD_OVERFLOW:
+        case CC_EXPR_MUL_OVERFLOW:
+        case CC_EXPR_SUB_OVERFLOW:
+        case CC_EXPR_UMUL128:
+            break; // these have side effects
+        case CC_EXPR_SLICE:
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+            if(err) return err;
+            err = ci_lower_expr_discard(ci, ctx, e->values[1]);
+            return err;
+        case CC_EXPR_MODULE_RUN:
+        case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_MODULE_REFLECT:
+        case CC_EXPR_TYPE_INTROSPECTION:
+            break; // TODO: complicated? Maybe should be lowered just to calls to runtime functions?
+        CASES_EXHAUSTED;
     }
     // fallback: evaluate the (sub)tree for its side effects
     CiOp* op;

@@ -1821,6 +1821,44 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "function pointer: call through explicit deref", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = add;\n"
+               "return (*fp)(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function pointer: deref decays back to pointer", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = add;\n"
+               "int (*fp2)(int, int) = *fp;\n"
+               "return fp2(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function pointer: repeated deref", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = add;\n"
+               "return (***fp)(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function pointer: address of deref", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int (*fp)(int, int) = add;\n"
+               "int (*fp2)(int, int) = &*fp;\n"
+               "return fp2(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function pointer: comma rhs decays", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int x = 0;\n"
+               "int (*fp)(int, int) = (x = 1, add);\n"
+               "return fp(3, 4) + x;\n"),
+            .exit_code = 8,
+        },
+        {
             "call: argument to unnamed parameter is evaluated", __LINE__,
             SVI("int second(int, int b){ return b; }\n"
                "int counter = 0;\n"

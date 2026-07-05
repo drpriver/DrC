@@ -981,9 +981,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     case CC_EXPR_COMMA: {
         int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
         if(err) return err;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
         return ci_interp_expr(ci, frame,expr->values[0], result, size);
     }
     case CC_EXPR_TERNARY: {
@@ -1013,6 +1010,13 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         void* ptr_val = NULL;
         int err = ci_interp_expr(ci, frame, expr->lhs, &ptr_val, sizeof ptr_val);
         if(err) return err;
+        if(ccqt_kind(expr->type) == CC_FUNCTION){
+            if(result == ci_discard_buf) return 0;
+            if(sizeof ptr_val > size)
+                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ptr_val, size);
+            memcpy(result, &ptr_val, sizeof ptr_val);
+            return 0;
+        }
         uint32_t sz;
         err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
         if(err) return err;
@@ -3680,6 +3684,15 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             int err = ci_ensure_var_storage(ci, var);
             if(err) return err;
             memcpy((char*)frame->slots + op->var_addr.slot, &var->interp_val, sizeof(void*));
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_FUNC_ADDR: {
+            CcFunc* func = op->func_addr.func;
+            if(!func->native_func)
+                return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
+            void (*fn)(void) = func->native_func;
+            memcpy((char*)frame->slots + op->func_addr.slot, &fn, sizeof fn);
             frame->pc++;
             return 0;
         }
