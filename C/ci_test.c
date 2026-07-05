@@ -1794,6 +1794,40 @@ TestFunction(test_interpreter){
             .skip = 0,
         },
         {
+            "function pointer: call inside function body", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+               "int mul(int a, int b){ return a * b; }\n"
+               "int apply(int (*f)(int, int), int a, int b){ return f(a, b); }\n"
+               "return apply(add, 2, 3) + apply(mul, 2, 3);\n"),
+            .exit_code = 11,
+        },
+        {
+            "function pointer: struct arg and return", __LINE__,
+            SVI("typedef struct P { int x, y; } P;\n"
+               "P mkp(int x, int y){ return (P){x, y}; }\n"
+               "int psum(P p){ return p.x + p.y; }\n"
+               "P (*mk)(int, int) = mkp;\n"
+               "int (*sum)(P) = psum;\n"
+               "return sum(mk(3, 4));\n"),
+            .exit_code = 7,
+        },
+        {
+            "function pointer: discarded result still runs", __LINE__,
+            SVI("int store(int* p, int v){ *p = v; return v; }\n"
+               "int (*fp)(int*, int) = store;\n"
+               "int x = 0;\n"
+               "fp(&x, 42);\n"
+               "return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "call: argument to unnamed parameter is evaluated", __LINE__,
+            SVI("int second(int, int b){ return b; }\n"
+               "int counter = 0;\n"
+               "return second(counter = 40, 2) + counter;\n"),
+            .exit_code = 42,
+        },
+        {
             "_Module.symbol function", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
                "int (*fp)(int, int) = __root_module().symbol(\"add\", typeof(*fp));\n"

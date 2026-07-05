@@ -12,6 +12,10 @@
 #include "../Drp/merge_sort.h"
 #include "../Drp/ckdint.h"
 
+#ifndef ci_ice
+#define ci_ice(ci, loc, fmt, ...) ci_error(ci, loc, "ICE: " fmt " at %s:%d", __VA_ARGS__, __FILE__, __LINE__)
+#endif
+
 #ifndef MARRAY_CCSWITCHENTRY
 #define MARRAY_CCSWITCHENTRY
 #define MARRAY_T CcSwitchEntry
@@ -361,7 +365,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_CASE:{
             if(!ctx->sw)
-                return ci_error(ci, n->loc, "ICE: case label outside of switch in lowering at %s:%d", __FILE__, __LINE__);
+                return ci_ice(ci, n->loc, "case label outside of switch in lowering%s", "");
             CcSwitchEntry entry = {.value = n->case_value, .target = (uint32_t)ctx->out->count};
             err = ma_push(CcSwitchEntry)(&ctx->sw->entries, ctx->a, entry);
             if(err) return CI_OOM_ERROR;
@@ -369,7 +373,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_DEFAULT:{
             if(!ctx->sw)
-                return ci_error(ci, n->loc, "ICE: default label outside of switch in lowering at %s:%d", __FILE__, __LINE__);
+                return ci_ice(ci, n->loc, "default label outside of switch in lowering%s", "");
             ctx->sw->has_default = 1;
             ctx->sw->default_target = (uint32_t)ctx->out->count;
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
@@ -450,13 +454,13 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_LABEL:{
             void* existing = AM_get(ctx->labels, n->label);
             if(existing)
-                return ci_error(ci, n->loc, "ICE: Duplicate label '%.*s' at %s:%d", n->label->length, n->label->data, __FILE__, __LINE__);
+                return ci_ice(ci, n->loc, "Duplicate label '%.*s'", n->label->length, n->label->data);
             err = AM_put(ctx->labels, ctx->a, n->label, (void*)(uintptr_t)(ctx->out->count + 1));
             if(err) return CI_OOM_ERROR;
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
     }
-    return ci_error(ci, n->loc, "ICE: unknown statement kind in lowering at %s:%d", __FILE__, __LINE__);
+    return ci_ice(ci, n->loc, "unknown statement kind in lowering at%s", "");
 }
 
 // Flatten an expression into ops leaving its value in a slot.
@@ -1865,10 +1869,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     return 0;
 }
 
-// Lower an eligible call (direct, defined, non-variadic) into a CI_OP_CALL:
-// arguments stage into a caller-frame block laid out like the callee's
-// parameter area. out is null when the return value is unused; *handled is 0
-// (with nothing emitted) when the call must fall back to the tree evaluator.
 static
 int
 ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled){
@@ -1876,20 +1876,27 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     CcParser* p = &ci->parser;
     *handled = 0;
     CcExpr* callee = e->lhs;
-    if(callee->kind != CC_EXPR_FUNCTION)
-        return 0; // indirect calls fall back
-    CcFunc* func = callee->func;
-    if(!func->defined || !func->parsed)
-        return 0; // native/FFI calls; unparsed bodies have no param layout yet
-    CcFunction* ftype = func->type;
+    CcFunc* func = NULL;
+    CcFunction* ftype;
+    if(callee->kind == CC_EXPR_FUNCTION){
+        func = callee->func;
+        ftype = func->type;
+    }
+    else {
+        CcQualType ct = callee->type;
+        if(ccqt_kind(ct) != CC_POINTER)
+            return 0; // function-typed callees have no loadable value
+        CcQualType pointee = ccqt_as_ptr(ct)->pointee;
+        if(ccqt_kind(pointee) != CC_FUNCTION)
+            return 0;
+        ftype = ccqt_as_function(pointee);
+    }
     uint32_t nargs = e->call.nargs;
     if(ftype->is_variadic || nargs != ftype->param_count)
         return 0;
-    // The staged block mirrors the callee's parameter area.
-    uint32_t extent = 0;
+    if(nargs >= 1u << 24)
+        return 0; // the ops' nargs is 24 bits
     for(uint32_t i = 0; i < nargs; i++){
-        CcVariable* var = func->param_vars[i];
-        if(!var) continue; // unnamed parameter: the evaluator skips its arg
         uint32_t psz, asz;
         err = cc_sizeof_as_uint(p, ftype->params[i], e->loc, &psz);
         if(err) return err;
@@ -1897,11 +1904,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         if(err) return err;
         if(asz != psz)
             return 0;
-        uint32_t end = (uint32_t)var->frame_offset + psz;
-        if(end > extent) extent = end;
     }
-    if(extent >= 1u << 24)
-        return 0; // CiOp's call.src_size is 24 bits
     *handled = 1;
     uint32_t ret_size = 0;
     if(out){
@@ -1911,32 +1914,71 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         ret_size = out->size;
     }
     uint32_t temp = ctx->temp;
-    uint32_t stage = 0;
-    if(extent){
-        err = ci_alloc_slot(ctx, extent, 16, &stage);
+    // The argv region; an indirect call's function pointer is its first cell.
+    uint32_t argv_cells = nargs + (func? 0 : 1);
+    uint32_t argv_slot = 0;
+    if(argv_cells){
+        err = ci_alloc_slot(ctx, argv_cells * 8, 8, &argv_slot);
         if(err) return err;
     }
-    for(uint32_t i = 0; i < nargs; i++){
-        CcVariable* var = func->param_vars[i];
-        if(!var) continue;
+    uint32_t argv_cell = argv_slot;
+    if(!func){
         CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, e->values[i], stage + (uint32_t)var->frame_offset, &v);
+        err = ci_lower_expr(ci, ctx, callee, argv_cell, &v);
         if(err) return err;
+        argv_cell += 8;
+    }
+    for(uint32_t i = 0; i < nargs; i++){
+        uint32_t asz;
+        err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &asz);
+        if(err) return err;
+        uint32_t slot_sz = asz < 8 ? 8 : asz;
+        uint32_t slot;
+        err = ci_alloc_slot(ctx, slot_sz, slot_sz > 8 ? 16 : 8, &slot);
+        if(err) return err;
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, e->values[i], slot, &v);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .slot_addr = {
+                .kind = CI_OP_SLOT_ADDR,
+                .slot = argv_cell + i * 8,
+                .slot_size = 8,
+                .src = slot,
+                .loc = e->values[i]->loc,
+            }
+        };
     }
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
-    *op = (CiOp){
-        .call = {
-            .kind = CI_OP_CALL,
-            .ret_slot = out? dest : 0,
-            .ret_size = ret_size,
-            .src = stage,
-            .src_size = extent,
-            .func = func,
-            .loc = e->loc,
-        }
-    };
+    if(func)
+        *op = (CiOp){
+            .call = {
+                .kind = CI_OP_CALL,
+                .nargs = nargs,
+                .ret_slot = out? dest : 0,
+                .ret_size = ret_size,
+                .argv_slot = argv_slot,
+                .func = func,
+                .loc = e->loc,
+            }
+        };
+    else
+        *op = (CiOp){
+            .calli = {
+                .kind = CI_OP_CALL_INDIRECT,
+                .nargs = nargs,
+                .ret_slot = out? dest : 0,
+                .ret_size = ret_size,
+                .argv_slot = argv_slot,
+                .ftype = ftype,
+                .loc = e->loc,
+            }
+        };
     ctx->temp = temp;
     return 0;
 }
@@ -2720,15 +2762,15 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
             case CI_BP_LABEL:{
                 void* v = AM_get(ctx->labels, t->label);
                 if(!v)
-                    return ci_error(ci, t->loc, "ICE: Use of undeclared label '%.*s' at %s:%d", t->label->length, t->label->data, __FILE__, __LINE__);
+                    return ci_ice(ci, t->loc, "Use of undeclared label '%.*s'", t->label->length, t->label->data);
                 *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = (uint32_t)((uintptr_t)v - 1);
                 t->kind = CI_BP_NONE;
                 continue;
             }
             case CI_BP_BREAK:
-                return ci_error(ci, t->loc, "ICE: unresolved break in lowering at %s:%d", __FILE__, __LINE__);
+                return ci_ice(ci, t->loc, "unresolved break in lowering%s", "");
             case CI_BP_CONTINUE:
-                return ci_error(ci, t->loc, "ICE: unresolved continue in lowering at %s:%d", __FILE__, __LINE__);
+                return ci_ice(ci, t->loc, "unresolved continue in lowering%s", "");
         }
     }
     ctx->backpatches.count = 0;
@@ -2742,7 +2784,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f){
     int err;
     if(f->interp_ops) return 0;
     if(!f->parsed)
-        return ci_error(ci, f->loc, "ICE: lowering function '%s' before it was parsed at %s:%d", f->name->data, __FILE__, __LINE__);
+        return ci_ice(ci, f->loc, "lowering function '%s' before it was parsed", f->name->data);
     Allocator al = ci_allocator(ci);
     CiFuncOps* ops = Allocator_zalloc(al, sizeof *ops);
     if(!ops) return CI_OOM_ERROR;

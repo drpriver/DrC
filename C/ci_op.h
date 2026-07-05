@@ -77,6 +77,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_LOAD_BITFIELD,
     CI_OP_STORE_BITFIELD,
     CI_OP_CALL,
+    CI_OP_CALL_INDIRECT,
     CI_OP_ISTRUE,
     CI_OP_JUMP,
     CI_OP_JUMP_FALSE,
@@ -271,18 +272,23 @@ struct CiOp {
             SrcLoc loc;
         } load_bf;
         struct {
-            // call func; slots[src:src+src_size] holds the staged arguments,
-            // laid out like the callee's parameter area; the return value
-            // lands in slots[ret_slot:ret_slot+ret_size]
-            // (ret_size 0 discards it)
             CiOpKind kind: 8; // CI_OP_CALL
-            uint32_t src_size: 24; // staged-args extent
+            uint32_t nargs: 24;
             uint32_t ret_slot,
                      ret_size,
-                     src;
+                     argv_slot;
             CcFunc*_Nonnull func;
             SrcLoc loc;
         } call;
+        struct {
+            CiOpKind kind: 8; // CI_OP_CALL_INDIRECT
+            uint32_t nargs: 24;
+            uint32_t ret_slot,
+                     ret_size,
+                     argv_slot;
+            CcFunction*_Nonnull ftype;
+            SrcLoc loc;
+        } calli;
         struct {
             // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
             // float_kind = CcBasicTypeKind when the source is a float, else 0;

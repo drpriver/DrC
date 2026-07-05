@@ -653,6 +653,32 @@ TestFunction(test_interop){
             {{SV("sort_ints"), (void*)test_sort_ints},},
             .exit_code = 12345,
         },
+        // ---- Indirect calls with native targets ----
+        {
+            "fn ptr: native target", __LINE__,
+            SV("int add(int, int);\n"
+               "int (*fp)(int, int) = add;\n"
+               "return fp(30, 12);\n"),
+            {{SV("add"), (void*)test_add},},
+            .exit_code = 42,
+        },
+        {
+            "fn ptr: native target, double args", __LINE__,
+            SV("double dadd(double, double);\n"
+               "double (*fp)(double, double) = dadd;\n"
+               "return (int)fp(1.5, 2.5);\n"),
+            {{SV("dadd"), (void*)test_dadd},},
+            .exit_code = 4,
+        },
+        {
+            "fn ptr: one call site, native and interpreted targets", __LINE__,
+            SV("int add(int, int);\n"
+               "int mymul(int a, int b){ return a * b; }\n"
+               "int apply(int (*f)(int, int), int a, int b){ return f(a, b); }\n"
+               "return apply(add, 4, 5) + apply(mymul, 4, 5);\n"),
+            {{SV("add"), (void*)test_add},},
+            .exit_code = 29,
+        },
         {
             "HasUnion", __LINE__,
             SV("struct HasUnion {\n"
