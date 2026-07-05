@@ -456,8 +456,7 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
         }
         return 0;
     }
-    // Complete array decays to a slice of its element type, like x[:]. Pointers
-    // and incomplete arrays stay explicit since they have no known length.
+    // Complete array decays to a slice of its element type, like x[:].
     if(fk == CC_ARRAY && tk == CC_SLICE){
         CcArray* a = ccqt_as_array(from);
         if(a->is_incomplete || a->is_vector) return 0;
@@ -477,6 +476,7 @@ cc_implicit_convertible(CcQualType from, CcQualType to){
     && tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t) return 1;
     if(tk == CC_BASIC && to.basic.kind == CCBT_bool){
         if(fk == CC_POINTER) return 1;
+        if(fk == CC_ARRAY) return 1;
         if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t) return 1;
     }
     if(fk == CC_ARRAY && tk == CC_ARRAY && ccqt_as_array(from)->is_vector && ccqt_as_array(to)->is_vector)

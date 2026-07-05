@@ -110,6 +110,7 @@ static _Bool ci_alu_int_type(CcQualType t);
 static _Bool ci_falu_type(CcQualType t);
 static CiAluOp ci_alu_op_for(CcExprKind kind);
 static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
+static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
@@ -464,7 +465,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
 }
 
 // Flatten an expression into ops leaving its value in a slot.
-// Control-flow expressions (&&, ||, ?:, comma) lower to jumps; 
+// Control-flow expressions (&&, ||, ?:, comma) lower to jumps;
 // dest is the requested slot, or CI_NO_SLOT to allocate one.
 static
 int
@@ -747,25 +748,49 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(from.unqual == to.unqual)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
             if(ccqt_kind(from) == CC_ARRAY){
-                // array-to-pointer decay
-                if(ccqt_kind(to) != CC_POINTER){
-                    if(0)ci_ice(ci, e->loc, "%s", "");
+                if(ccqt_kind(to) == CC_POINTER){
+                    CiLowerAddr a;
+                    _Bool ok;
+                    err = ci_lower_lvalue_addr(ci, ctx, operand, 1, &a, &ok);
+                    if(err) return err;
+                    if(!ok){
+                        if(0)ci_ice(ci, e->loc, "%s", "");
+                        break;
+                    }
+                    return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
+                }
+                else if(ccqt_kind(to) == CC_SLICE){
                     break;
                 }
-                CiLowerAddr a;
-                _Bool ok;
-                err = ci_lower_lvalue_addr(ci, ctx, operand, 1, &a, &ok);
-                if(err) return err;
-                if(!ok){
-                    if(0)ci_ice(ci, e->loc, "%s", "");
+                else if(ccqt_kind(to) == CC_BASIC){
+                    if(to.basic.kind == CCBT_bool){
+                        err = ci_lower_dest(ctx, &dest, size);
+                        if(err) return err;
+                        out->slot = dest;
+                        out->canonical = 1;
+                        CiOp* op;
+                        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                        if(err) return err;
+                        *op = (CiOp){
+                            .constant = {
+                                .kind = CI_OP_CONST,
+                                .bt_kind = CCBT_bool,
+                                .immsize = size,
+                                .slot = dest,
+                                .immediate[0] = 1,
+                                .loc = e->loc,
+                            },
+                        };
+                        return 0;
+                    }
+                    if(1)ci_ice(ci, e->loc, "%s", "");
                     break;
                 }
-                return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
+                else {
+                    if(1)ci_ice(ci, e->loc, "%s", "");
+                    break;
+                }
             }
-            // Scalar conversions. A pointer is an 8-byte value here; the
-            // evaluator reads it with ccqt_is_unsigned (false), which is
-            // bit-identical to unsigned at full width, so CI_OP_CONVERT covers
-            // int<->pointer and pointer<->pointer casts too.
             _Bool from_float = ci_falu_type(from);
             _Bool from_int = ccqt_kind(from) == CC_POINTER;
             if(!from_int && ci_alu_int_type(from)){
@@ -2030,6 +2055,106 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     return 0;
 }
 
+// Statement-context aggregate assignment (structs, unions, arrays, slices):
+// when both sides are lvalues in memory, copy memory to memory instead of
+// staging the value in a temp slot the size of the object. Only valid when
+// the assignment's value is discarded (a memcopy leaves no value slot).
+// Emits nothing when it returns *handled = 0.
+static
+int
+ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled){
+    int err;
+    CcParser* p = &ci->parser;
+    *handled = 0;
+    CcExpr* lhs = e->lhs;
+    CcExpr* rhs = e->values[0];
+    if(lhs->type.is_atomic || rhs->type.is_atomic)
+        return 0; // atomics fall back
+    switch(ccqt_kind(lhs->type)){
+        case CC_STRUCT:
+        case CC_UNION:
+        case CC_ARRAY:
+        case CC_SLICE:
+            break;
+        default:
+            return 0; // scalars stage through a slot cheaply
+    }
+    uint32_t off;
+    if(ci_frame_lvalue(lhs, &off))
+        return 0; // the rhs loads directly into the slot
+    switch((uint32_t)rhs->kind){
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ARROW:
+        case CC_EXPR_DOT:
+        case CC_EXPR_SUBSCRIPT:
+            break;
+        default:
+            return 0; // not an lvalue; it must be materialized anyway
+    }
+    if(ci_frame_lvalue(rhs, &off))
+        return 0; // the store reads directly from the slot
+    uint32_t size, rsz;
+    err = cc_sizeof_as_uint(p, lhs->type, lhs->loc, &size);
+    if(err) return err;
+    err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
+    if(err) return err;
+    if(rsz != size)
+        return 0;
+    uint32_t temp = ctx->temp;
+    CiLowerAddr dst;
+    _Bool ok;
+    err = ci_lower_addr(ci, ctx, lhs, 0, &dst, &ok); // access
+    if(err) return err;
+    if(!ok){
+        // nothing was emitted; the caller lowers the assignment normally
+        ctx->temp = temp;
+        return 0;
+    }
+    CiLowerAddr src;
+    err = ci_lower_addr(ci, ctx, rhs, 0, &src, &ok); // access
+    if(err) return err;
+    CiOp* op;
+    if(!ok){
+        // the rhs declined without emitting, but the lhs address is already
+        // emitted, so finish like the value path: materialize and store
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .store = {
+                .kind = CI_OP_STORE,
+                .slot = dst.slot,
+                .src = v.slot,
+                .src_size = size,
+                .offset = dst.disp,
+                .loc = e->loc,
+            }
+        };
+        ctx->temp = temp;
+        *handled = 1;
+        return 0;
+    }
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .memcopy = {
+            .kind = CI_OP_MEMCOPY,
+            .slot = dst.slot,
+            .offset = dst.disp,
+            .src = src.slot,
+            .src_offset = src.disp,
+            .size = size,
+            .loc = e->loc,
+        }
+    };
+    ctx->temp = temp;
+    *handled = 1;
+    return 0;
+}
+
 // Lower an expression for side effects only.
 static
 int
@@ -2141,6 +2266,10 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                 && k != CC_EXPR_ARROW && k != CC_EXPR_DOT
                 && k != CC_EXPR_SUBSCRIPT)
                 break;
+            _Bool handled;
+            err = ci_lower_assign_memcopy(ci, ctx, e, &handled);
+            if(err) return err;
+            if(handled) return 0;
             CiLowerVal v;
             return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
         }

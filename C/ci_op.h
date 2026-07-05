@@ -75,6 +75,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_BOUNDS,
     CI_OP_LOAD,
     CI_OP_STORE,
+    CI_OP_MEMCOPY,
     CI_OP_LOAD_BITFIELD,
     CI_OP_STORE_BITFIELD,
     CI_OP_CALL,
@@ -253,6 +254,19 @@ struct CiOp {
                      offset;
             SrcLoc loc;
         } load;
+        struct {
+            // dst[offset : offset+size] = src[src_offset : src_offset+size],
+            // dst read from slots[slot], src read from slots[src]; the
+            // regions may overlap exactly (self assignment)
+            CiOpKind kind: 8; // CI_OP_MEMCOPY
+            uint32_t _bitpad: 24;
+            uint32_t size;
+            uint32_t slot,
+                     offset,
+                     src,
+                     src_offset;
+            SrcLoc loc;
+        } memcopy;
         struct {
             // like store, but a read-modify-write: insert the low bit_width
             // bits of slots[src:src+src_size] at bit_offset of the

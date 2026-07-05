@@ -296,6 +296,12 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->store.src, op->store.src_size);
             break;
+        case CI_OP_MEMCOPY:
+            ci_op_print_deref(out, op->memcopy.slot, op->memcopy.offset);
+            msb_write_literal(out, " = ");
+            ci_op_print_deref(out, op->memcopy.src, op->memcopy.src_offset);
+            msb_sprintf(out, " (%u bytes)", op->memcopy.size);
+            break;
         case CI_OP_LOAD_BITFIELD:
             ci_op_print_range(out, op->load_bf.slot, op->load_bf.slot_size);
             msb_sprintf(out, " = bits%s[%u:%u] of ",

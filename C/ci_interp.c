@@ -3794,6 +3794,15 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_MEMCOPY: {
+            char* dst;
+            char* src;
+            memcpy(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst);
+            memcpy(&src, (char*)frame->slots + op->memcopy.src, sizeof src);
+            memmove(dst + op->memcopy.offset, src + op->memcopy.src_offset, op->memcopy.size);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_STORE_BITFIELD: {
             char* ptr;
             memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
