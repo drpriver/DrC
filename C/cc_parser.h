@@ -228,6 +228,7 @@ static int cc_parse_func_body(CcParser*, CcFunc*);
 static int cc_parse_type_string(CcParser*, CcScope*, SrcLoc loc, StringView source, CcQualType*);
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
+static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 
 // NOTE: these structs are designed so they match the layout on 
 // any of our targets.

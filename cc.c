@@ -24,14 +24,17 @@
 #include "C/ci_interp.h"
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
+#include "C/ci_op_printer.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
-
+static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb);
 static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
+static const char* cc_stringify_error(int err);
+
 
 int main(int argc, char** argv, char** envp){
     _Bool eager = 0, syntax_only = 0;
@@ -63,12 +66,17 @@ int main(int argc, char** argv, char** envp){
         .procedural_macros = 1,
     };
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
+    Marray(StringView) dis = {0};
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
         .user_data = &interp.parser.cpp,
     };
     ArgParseUserDefinedType tlib = {
         .type_name = SV("lib"),
+        .user_data = &interp.parser.cpp,
+    };
+    ArgParseUserDefinedType tsym = {
+        .type_name = SV("symbol"),
         .user_data = &interp.parser.cpp,
     };
     StringView filename = {0};
@@ -158,7 +166,15 @@ int main(int argc, char** argv, char** envp){
             .name = SV("--dump"),
             .dest = ARGDEST(&dump),
             .help = "Dump symbols after execution",
-        }
+        },
+        {
+            .name = SV("--dis"),
+            .dest = cpp_ma_sv_dest(&tsym, &dis),
+            .append_proc = ma_sv_appender,
+            .help = "print the bytecode for these functions",
+            .max_num = 1000,
+            .one_at_a_time = 1,
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -360,6 +376,34 @@ int main(int argc, char** argv, char** envp){
         err = ci_resolve_refs(&interp, 0);
         if(err) goto stringify_error;
     }
+    if(dis.count){
+        MARRAY_FOR_EACH_VALUE(StringView, d, dis){
+            err = ci_resolve_root(&interp, d);
+            if(err){
+                log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
+                err = 0;
+                continue;
+            }
+            Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
+            if(!a){
+                log_warn(logger, "No function '%s'", d.text);
+                continue;
+            }
+            CcFunc* func = AM_get(&interp.parser.global.functions, a);
+            if(!func){
+                log_warn(logger, "No function '%s'", d.text);
+                continue;
+            }
+            if(!func->interp_ops){
+                log_warn(logger, "No bytecode for '%s'", d.text);
+                continue;
+            }
+            cc_print_func(&interp.parser, func, &logger->buff);
+            log_flush(logger, LOG_PRINT);
+            continue;
+        }
+        goto fini;
+    }
     if(repl){
         // Execute any statements from the initial file before entering REPL.
         if(!syntax_only){
@@ -478,13 +522,11 @@ int main(int argc, char** argv, char** envp){
     fini:;
     return err;
     stringify_error:;
-    const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
+    const char* error_name = cc_stringify_error(err);
     fprintf(stderr, "Fail: %s\n", error_name);
     return 1;
 }
 
-static void cc_print_type(MStringBuilder*, CcQualType t);
-static void cc_print_expr(MStringBuilder*sb, CcExpr* e);
 
 static
 _Bool
@@ -533,11 +575,25 @@ repl_builtin_command(CcParser* parser, StringView input){
              "  /dump symbols  [regex] - dump everything but macros\n"
              "  /dump          [regex] - dump everything\n"
              "  /dump all      [regex] - dump everything\n"
+             "  /dis, /disasm  <func>  - print the bytecode for func\n"
         );
         return 1;
     }
     StringView tail = {0};
     sv_split1(input, ' ', &input, &tail);
+    if(sv_iequals(input, SV("dis")) || sv_iequals(input, SV("disasm")) || sv_iequals(input, SV("disassemble"))){
+        input = stripped(tail);
+        if(!input.length)
+            return 1;
+        Atom a = AT_get_atom(parser->cpp.at, input.text, input.length);
+        if(!a) return 1;
+        CcFunc* func = AM_get(&scope->functions, a);
+        if(!func) return 1;
+        log_sprintf(l, "\r");
+        cc_print_func(parser, func, &l->buff);
+        log_flush(l, LOG_PRINT);
+        return 1;
+    }
     if(sv_iequals(input, SV("save"))){
         input = stripped(tail);
         if(!input.length)
@@ -759,6 +815,65 @@ repl_builtin_command(CcParser* parser, StringView input){
         msb_write_char(&l->buff, '\n');
     log_flush(l, LOG_PRINT);
     return 1;
+}
+static
+void
+cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
+    CiInterpreter* ci = (CiInterpreter*)((char*)p-offsetof(CiInterpreter, parser));
+    msb_sprintf(sb, "%s(", func->name->data);
+    CcFunction* ft = func->type;
+    for(uint32_t j = 0; j < ft->param_count; j++){
+        if(j) msb_sprintf(sb, ", ");
+        cc_print_type(sb, ft->params[j]);
+        if(func->params.data && j < func->params.count && func->params.data[j]){
+            msb_sprintf(sb, " %s", func->params.data[j]->data);
+        }
+    }
+    if(ft->is_variadic){
+        if(ft->param_count) msb_sprintf(sb, ", ");
+        msb_sprintf(sb, "...");
+    }
+    msb_sprintf(sb, ") -> ");
+    cc_print_type(sb, ft->return_type);
+    msb_sprintf(sb, "{\n");
+    if(func->interp_ops){
+        for(size_t i = 0; i < func->interp_ops->code.count; i++){
+            CiOp* op = &func->interp_ops->code.data[i];
+            size_t cur = sb->cursor;
+            msb_sprintf(sb, "  0x%02zu)  ", i);
+            ci_op_print(op, sb);
+            size_t dif = sb->cursor - cur;
+            if(dif < 40)
+                msb_write_nchar(sb, ' ', 40-dif);
+            {
+                SrcLoc loc = op->loc;
+                uint64_t line = 0;
+                uint64_t column = 0;
+                uint64_t file_id = 0;
+                if(loc.is_actually_a_pointer){
+                    SrcLocExp* e = (SrcLocExp*)(loc.bits & ~1);
+                    line = e->line;
+                    column = e->column;
+                    file_id = e->file_id;
+                }
+                else {
+                    line = loc.line;
+                    column = loc.column;
+                    file_id = loc.file_id;
+                }
+                LongString path = file_id < ci->parser.cpp.fc->map.count?ci->parser.cpp.fc->map.data[file_id].path:LS("???");
+                msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
+            }
+        }
+    }
+    msb_sprintf(sb, "}\n");
+}
+
+static
+const char*
+cc_stringify_error(int err){
+    const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
+    return error_name;
 }
 
 #ifdef __clang__

@@ -132,14 +132,14 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             return 0;
         case CC_STMT_EXPR:
             return ci_lower_expr_discard(ci, ctx, n->exprs[0]);
-        case CC_STMT_COMPOUND: {
+        case CC_STMT_COMPOUND:{
             for(uint32_t i = 0; i < n->count; i++){
                 err = ci_lower_stmt(ci, ctx, n->stmts[i]);
                 if(err) return err;
             }
             return 0;
         }
-        case CC_STMT_IF: {
+        case CC_STMT_IF:{
             CcExpr* cond = n->exprs[0];
             CiLowerVal v;
             err = ci_lower_cond(ci, ctx, cond, &v);
@@ -178,7 +178,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             }
             return 0;
         }
-        case CC_STMT_WHILE: {
+        case CC_STMT_WHILE:{
             CcExpr* cond = n->exprs[0];
             uint32_t cond_idx = (uint32_t)ctx->out->count;
             CiLowerVal v;
@@ -213,7 +213,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, cond_idx);
             return 0;
         }
-        case CC_STMT_DOWHILE: {
+        case CC_STMT_DOWHILE:{
             CcExpr* cond = n->exprs[0];
             size_t backpatch_start = ctx->backpatches.count;
             uint32_t body_start = (uint32_t)ctx->out->count;
@@ -238,7 +238,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             ci_backpatch_break_continue(ctx, backpatch_start, (uint32_t)ctx->out->count, cond_idx);
             return 0;
         }
-        case CC_STMT_FOR: {
+        case CC_STMT_FOR:{
             // init;
             // top: cond;               (if cond)
             // if false goto break;     (if cond)
@@ -301,7 +301,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, continue_idx);
             return 0;
         }
-        case CC_STMT_SWITCH: {
+        case CC_STMT_SWITCH:{
             CcExpr* e = n->exprs[0];
             CiLowerVal v;
             err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
@@ -365,7 +365,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             ma_cleanup(CcSwitchEntry)(&sw.entries, ctx->a);
             return err;
         }
-        case CC_STMT_CASE: {
+        case CC_STMT_CASE:{
             if(!ctx->sw)
                 return ci_error(ci, n->loc, "ICE: case label outside of switch in lowering at %s:%d", __FILE__, __LINE__);
             CcSwitchEntry entry = {.value = n->case_value, .target = (uint32_t)ctx->out->count};
@@ -373,14 +373,14 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return CI_OOM_ERROR;
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
-        case CC_STMT_DEFAULT: {
+        case CC_STMT_DEFAULT:{
             if(!ctx->sw)
                 return ci_error(ci, n->loc, "ICE: default label outside of switch in lowering at %s:%d", __FILE__, __LINE__);
             ctx->sw->has_default = 1;
             ctx->sw->default_target = (uint32_t)ctx->out->count;
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
-        case CC_STMT_RETURN: {
+        case CC_STMT_RETURN:{
             CcExpr* e = n->exprs[0];
             CiOp* op;
             if(e && ccqt_bt_eq(e->type, CCBT_void)){
@@ -414,7 +414,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             return 0;
         }
         case CC_STMT_BREAK:
-        case CC_STMT_CONTINUE: {
+        case CC_STMT_CONTINUE:{
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -433,7 +433,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return CI_OOM_ERROR;
             return 0;
         }
-        case CC_STMT_GOTO: {
+        case CC_STMT_GOTO:{
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -453,7 +453,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return CI_OOM_ERROR;
             return 0;
         }
-        case CC_STMT_LABEL: {
+        case CC_STMT_LABEL:{
             void* existing = AM_get(ctx->labels, n->label);
             if(existing)
                 return ci_error(ci, n->loc, "ICE: Duplicate label '%.*s' at %s:%d", n->label->length, n->label->data, __FILE__, __LINE__);
@@ -479,7 +479,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     out->size = size;
     out->canonical = 0;
     switch((uint32_t)e->kind){
-        case CC_EXPR_VALUE: {
+        case CC_EXPR_VALUE:{
             if(ccqt_kind(e->type) == CC_ARRAY || size > 8)
                 break; // string literals and oversized values fall back
             err = ci_lower_dest(ctx, &dest, size);
@@ -503,7 +503,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->canonical = val <= 1;
             return 0;
         }
-        case CC_EXPR_VARIABLE: {
+        case CC_EXPR_VARIABLE:{
             CcVariable* var = e->var;
             if(e->type.is_atomic)
                 break; // atomics need an atomic load
@@ -568,7 +568,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_DEREF:
         case CC_EXPR_ARROW:
         case CC_EXPR_DOT:
-        case CC_EXPR_SUBSCRIPT: {
+        case CC_EXPR_SUBSCRIPT:{
             if(e->type.is_atomic)
                 break; // atomic loads fall back
             if(ccqt_kind(e->type) == CC_ARRAY)
@@ -642,7 +642,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             ctx->temp = temp;
             return 0;
         }
-        case CC_EXPR_ADDR: {
+        case CC_EXPR_ADDR:{
             CcExpr* lv = e->lhs;
             uint32_t off;
             CiOp* op;
@@ -671,7 +671,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 break; // nothing was emitted
             return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
         }
-        case CC_EXPR_CAST: {
+        case CC_EXPR_CAST:{
             // CC_EXPR_CAST covers several distinct operations; dispatch like
             // the evaluator does, and only take sizeof once the cast is known
             // to be a scalar conversion (array decay has an incomplete
@@ -764,7 +764,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             // unary plus is a no-op; the evaluator passes through
             return ci_lower_expr(ci, ctx, e->lhs, dest, out);
         case CC_EXPR_NEG:
-        case CC_EXPR_BITNOT: {
+        case CC_EXPR_BITNOT:{
             CcExpr* operand = e->lhs;
             CiOpKind kind;
             _Bool is_not = e->kind == CC_EXPR_BITNOT;
@@ -826,7 +826,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             ctx->temp = temp;
             return 0;
         }
-        case CC_EXPR_LOGNOT: {
+        case CC_EXPR_LOGNOT:{
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
             out->slot = dest;
@@ -840,7 +840,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->canonical = 1;
             return 0;
         }
-        case CC_EXPR_ASSIGN: {
+        case CC_EXPR_ASSIGN:{
             CcExpr* lhs = e->lhs;
             CcExpr* rhs = e->values[0];
             if(lhs->type.is_atomic)
@@ -935,7 +935,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_BITORASSIGN:
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_LSHIFTASSIGN:
-        case CC_EXPR_RSHIFTASSIGN: {
+        case CC_EXPR_RSHIFTASSIGN:{
             CcExpr* lhs = e->lhs;
             CcExpr* rhs = e->values[0];
             // The parser casts the rhs to the lhs type (cc_implicit_cast), so
@@ -1197,14 +1197,14 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_PREINC:
         case CC_EXPR_PREDEC:
         case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC: {
+        case CC_EXPR_POSTDEC:{
             _Bool handled;
             err = ci_lower_incdec(ci, ctx, e, dest, out, &handled);
             if(err) return err;
             if(handled) return 0;
             break;
         }
-        case CC_EXPR_CALL: {
+        case CC_EXPR_CALL:{
             _Bool handled;
             err = ci_lower_call(ci, ctx, e, dest, out, &handled);
             if(err) return err;
@@ -1226,7 +1226,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_LT:
         case CC_EXPR_GT:
         case CC_EXPR_LE:
-        case CC_EXPR_GE: {
+        case CC_EXPR_GE:{
             CcExpr* lhs = e->lhs;
             CcExpr* rhs = e->values[0];
             _Bool canonical = 0;
@@ -1486,7 +1486,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return 0;
         }
         case CC_EXPR_LOGAND:
-        case CC_EXPR_LOGOR: {
+        case CC_EXPR_LOGOR:{
             // work = istrue(lhs); if(!work) goto end; work = istrue(rhs); end:
             // (|| jumps on true instead)
             // A caller-supplied dest may alias state the rhs reads
@@ -1547,7 +1547,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->canonical = 1;
             return 0;
         }
-        case CC_EXPR_TERNARY: {
+        case CC_EXPR_TERNARY:{
             // cond; if(!cond) goto else; dest = then; goto end; else: dest = else; end:
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
@@ -1588,7 +1588,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
             return 0;
         }
-        case CC_EXPR_COMMA: {
+        case CC_EXPR_COMMA:{
             CcExpr* lhs = e->lhs;
             uint32_t temp = ctx->temp;
             if(ccqt_bt_eq(lhs->type, CCBT_void)){
@@ -1951,7 +1951,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_VARIABLE:
         case CC_EXPR_FUNCTION:
             return 0;
-        case CC_EXPR_ASSIGN: {
+        case CC_EXPR_ASSIGN:{
             uint32_t off;
             uint32_t k = e->lhs->kind;
             // frame lvalues and computed addresses (statics included) lower
@@ -1972,7 +1972,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_BITORASSIGN:
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_LSHIFTASSIGN:
-        case CC_EXPR_RSHIFTASSIGN: {
+        case CC_EXPR_RSHIFTASSIGN:{
             uint32_t off;
             uint32_t k = e->lhs->kind;
             // frame lvalues and computed addresses lower; anything else EVALs
@@ -1987,14 +1987,14 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_PREINC:
         case CC_EXPR_PREDEC:
         case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC: {
+        case CC_EXPR_POSTDEC:{
             _Bool handled;
             err = ci_lower_incdec(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
             if(err) return err;
             if(handled) return 0;
             break;
         }
-        case CC_EXPR_CALL: {
+        case CC_EXPR_CALL:{
             _Bool handled;
             err = ci_lower_call(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
             if(err) return err;
@@ -2002,7 +2002,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             break;
         }
         case CC_EXPR_LOGAND:
-        case CC_EXPR_LOGOR: {
+        case CC_EXPR_LOGOR:{
             uint32_t temp = ctx->temp;
             CiLowerVal v;
             err = ci_lower_cond(ci, ctx, e->lhs, &v);
@@ -2025,7 +2025,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
             return 0;
         }
-        case CC_EXPR_TERNARY: {
+        case CC_EXPR_TERNARY:{
             uint32_t temp = ctx->temp;
             CiLowerVal v;
             err = ci_lower_cond(ci, ctx, e->lhs, &v);
@@ -2060,7 +2060,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
             return 0;
         }
-        case CC_EXPR_COMMA: {
+        case CC_EXPR_COMMA:{
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             if(err) return err;
             return ci_lower_expr_discard(ci, ctx, e->values[0]);
@@ -2230,7 +2230,7 @@ ci_frame_lvalue(const CcExpr* lv, uint32_t* offset){
             if(lv->type.is_atomic) return 0;
             *offset = (uint32_t)lv->var->frame_offset;
             return 1;
-        case CC_EXPR_DOT: {
+        case CC_EXPR_DOT:{
             if(lv->field_loc.bit_width) return 0;
             if(lv->type.is_atomic) return 0;
             uint32_t base;
@@ -2253,7 +2253,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
     CcParser* p = &ci->parser;
     *handled = 0;
     switch((uint32_t)lv->kind){
-        case CC_EXPR_VARIABLE: {
+        case CC_EXPR_VARIABLE:{
             CcVariable* var = lv->var;
             if(var->automatic) return 0; // frame lvalues are slots, not addresses
             uint32_t aslot;
@@ -2276,7 +2276,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             *handled = 1;
             return 0;
         }
-        case CC_EXPR_DEREF: {
+        case CC_EXPR_DEREF:{
             CiLowerVal v;
             err = ci_lower_expr(ci, ctx, lv->lhs, CI_NO_SLOT, &v);
             if(err) return err;
@@ -2285,7 +2285,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             *handled = 1;
             return 0;
         }
-        case CC_EXPR_ARROW: {
+        case CC_EXPR_ARROW:{
             if(lv->field_loc.bit_width) return 0;
             CiLowerVal v;
             err = ci_lower_expr(ci, ctx, lv->values[0], CI_NO_SLOT, &v);
@@ -2295,7 +2295,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             *handled = 1;
             return 0;
         }
-        case CC_EXPR_DOT: {
+        case CC_EXPR_DOT:{
             if(lv->field_loc.bit_width) return 0;
             err = ci_lower_addr(ci, ctx, lv->values[0], 0, out, handled); // base must be a valid object
             if(err) return err;
@@ -2303,7 +2303,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             out->disp += (uint32_t)lv->field_loc.byte_offset;
             return 0;
         }
-        case CC_EXPR_SUBSCRIPT: {
+        case CC_EXPR_SUBSCRIPT:{
             CcExpr* base = lv->lhs;
             CcExpr* idx = lv->values[0];
             CcTypeKind bk = ccqt_kind(base->type);
@@ -2714,7 +2714,7 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
         switch(t->kind){
             case CI_BP_NONE:
                 continue;
-            case CI_BP_LABEL: {
+            case CI_BP_LABEL:{
                 void* v = AM_get(ctx->labels, t->label);
                 if(!v)
                     return ci_error(ci, t->loc, "ICE: Use of undeclared label '%.*s' at %s:%d", t->label->length, t->label->data, __FILE__, __LINE__);
