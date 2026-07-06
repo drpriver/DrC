@@ -70,6 +70,14 @@ enum CiAtomicRmwOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiAtomicRmwOp, uint32_t);
 
+// The checked-arithmetic ops for __builtin_{add,sub,mul}_overflow.
+enum CiCheckedOp TYPED_ENUM(uint32_t){
+    CI_CHK_ADD,
+    CI_CHK_SUB,
+    CI_CHK_MUL,
+};
+TYPEDEF_ENUM(CiCheckedOp, uint32_t);
+
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,
     CI_OP_EVAL_INTO,
@@ -80,6 +88,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ALU128,
     CI_OP_FALU32,
     CI_OP_FALU64,
+    CI_OP_CHECKED,
     CI_OP_CONVERT,
     CI_OP_ITOF,
     CI_OP_FTOI,
@@ -212,6 +221,29 @@ struct CiOp {
             uint32_t pad;
             SrcLoc loc;
         } falu32, falu64;
+        struct {
+            // checked integer arithmetic (__builtin_{add,sub,mul}_overflow):
+            // slots[result:result+res_size] = trunc(src <op> src2), and
+            // slots[overflow] = 1-byte bool set when the exact result does not
+            // fit the destination type. src and src2 are read at their own
+            // size and signedness (all three may differ); the exact result
+            // always fits 128 bits since the parser rejects __int128 operands.
+            CiOpKind kind: 8; // CI_OP_CHECKED
+            CiCheckedOp op: 8;
+            uint32_t src_size: 4,
+                     src2_size: 4,
+                     res_size: 4,
+                     src_unsigned: 1,
+                     src2_unsigned: 1,
+                     res_unsigned: 1,
+                     _bitpad: 1;
+            uint32_t result,
+                     overflow,
+                     src,
+                     src2;
+            uint32_t pad;
+            SrcLoc loc;
+        } checked;
         struct {
             // CI_OP_CONVERT: slots[slot:slot+slot_size] = slots[src:src+src_size]
             //   widened (to 128 bits when either side is larger than 8) then

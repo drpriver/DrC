@@ -283,6 +283,17 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                 ci_op_print_range(out, op->falu32.src2, width);
             }
         } break;
+        case CI_OP_CHECKED:{
+            const char* sym = op->checked.op == CI_CHK_ADD? "+"
+                            : op->checked.op == CI_CHK_SUB? "-" : "*";
+            ci_op_print_range(out, op->checked.result, op->checked.res_size);
+            msb_write_literal(out, ", ");
+            ci_op_print_range(out, op->checked.overflow, 1);
+            msb_sprintf(out, " = checked %s ", sym);
+            ci_op_print_range(out, op->checked.src, op->checked.src_size);
+            msb_write_literal(out, ", ");
+            ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
+        } break;
         case CI_OP_CONVERT:
             ci_op_print_range(out, op->convert.slot, op->convert.slot_size);
             msb_sprintf(out, " = %s ", op->convert.is_unsigned?"zext":"sext");

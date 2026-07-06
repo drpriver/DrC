@@ -1177,6 +1177,82 @@ TestFunction(test_interpreter){
             .exit_code = 48,
         },
         {
+            "flat expr: add overflow builtin", __LINE__,
+            SVI("int f(void){\n"
+               "    int r;\n"
+               "    int of1 = __builtin_add_overflow(2000000000, 2000000000, &r);\n" // overflows int
+               "    int r2;\n"
+               "    int of2 = __builtin_add_overflow(3, 4, &r2);\n"                  // r2=7, of2=0
+               "    return of1*1000 + of2*100 + r2;\n"                               // 1000+0+7
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1007,
+        },
+        {
+            "flat expr: mul overflow into narrow type", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned char r;\n"
+               "    int of = __builtin_mul_overflow(20, 20, &r);\n"    // 400 & 255 = 144, of=1
+               "    unsigned char r2;\n"
+               "    int of2 = __builtin_mul_overflow(10, 10, &r2);\n"  // 100 fits, of2=0
+               "    return of*1000 + r + of2*10 + r2;\n"              // 1000+144+0+100
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1244,
+        },
+        {
+            "flat expr: sub overflow mixed signedness", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned u;\n"
+               "    int of = __builtin_sub_overflow(3, 5, &u);\n"   // -2 doesn't fit unsigned: of=1
+               "    int s;\n"
+               "    int of2 = __builtin_sub_overflow(5, 3, &s);\n"  // s=2, of2=0
+               "    return of*100 + of2*10 + s + (u == 4294967294u ? 5 : 0);\n" // 100+0+2+5
+               "}\n"
+               "return f();\n"),
+            .exit_code = 107,
+        },
+        {
+            "flat expr: overflow builtin in statement context", __LINE__,
+            SVI("int f(void){\n"
+               "    long r = 0;\n"
+               "    __builtin_add_overflow(1000, 2000, &r);\n"  // value discarded, r=3000
+               "    return (int)r;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 3000,
+        },
+        {
+            "flat expr: umul128", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned long long hi;\n"
+               "    unsigned long long lo = _umul128(0x100000000ULL, 0x100000000ULL, &hi);\n" // 2^64
+               "    return (int)(hi*10 + lo);\n"  // hi=1, lo=0 -> 10
+               "}\n"
+               "return f();\n"),
+            .exit_code = 10,
+        },
+        {
+            "flat expr: umul128 nonzero low", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned long long hi;\n"
+               "    unsigned long long lo = _umul128(0xFFFFFFFFFFFFFFFFULL, 2ULL, &hi);\n" // 2^65-2
+               "    return (int)(hi*100 + (lo == 0xFFFFFFFFFFFFFFFEULL ? 42 : 0));\n"       // 100+42
+               "}\n"
+               "return f();\n"),
+            .exit_code = 142,
+        },
+        {
+            "flat expr: umul128 statement context", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned long long hi = 0;\n"
+               "    _umul128(0x100000000ULL, 0x100000000ULL, &hi);\n" // low discarded, hi=1
+               "    return (int)hi;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 1,
+        },
+        {
             "flat expr: array subscript in bounds", __LINE__,
             SVI("int f(void){\n"
                "    int a[4];\n"

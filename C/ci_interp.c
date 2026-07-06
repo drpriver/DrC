@@ -3694,6 +3694,52 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_CHECKED: {
+            // __builtin_{add,sub,mul}_overflow: compute in exact 128-bit
+            // precision (operands are <= 64-bit), truncate to the destination
+            // type, and flag overflow when the exact value doesn't fit.
+            const void* s1 = (char*)frame->slots + op->checked.src;
+            const void* s2 = (char*)frame->slots + op->checked.src2;
+            CiInt128 a = op->checked.src_unsigned
+                ? ci_int128_from_uint64(ci_read_uint(s1, op->checked.src_size))
+                : ci_int128_from_int64(ci_read_int(s1, op->checked.src_size));
+            CiInt128 b = op->checked.src2_unsigned
+                ? ci_int128_from_uint64(ci_read_uint(s2, op->checked.src2_size))
+                : ci_int128_from_int64(ci_read_int(s2, op->checked.src2_size));
+            CiInt128 r;
+            switch((CiCheckedOp)op->checked.op){
+                case CI_CHK_ADD: r = ci_int128_add(a, b); break;
+                case CI_CHK_SUB: r = ci_int128_sub(a, b); break;
+                case CI_CHK_MUL: r = ci_int128_mul(a, b); break;
+                CASES_EXHAUSTED;
+            }
+            uint32_t dsz = op->checked.res_size;
+            uint64_t truncated = ci_int128_lo(r);
+            ci_write_uint((char*)frame->slots + op->checked.result, dsz, truncated);
+            // re-extend the truncated value per the destination signedness and
+            // compare to the exact result
+            CiInt128 back;
+            if(op->checked.res_unsigned){
+                if(dsz >= 8)
+                    back = ci_int128_from_uint64(truncated);
+                else
+                    back = ci_int128_from_uint64(truncated & (((uint64_t)1 << (dsz * 8)) - 1));
+            }
+            else {
+                int64_t sval;
+                switch(dsz){
+                    case 1: sval = (int8_t)truncated; break;
+                    case 2: sval = (int16_t)truncated; break;
+                    case 4: sval = (int32_t)truncated; break;
+                    default: sval = (int64_t)truncated; break;
+                }
+                back = ci_int128_from_int64(sval);
+            }
+            _Bool overflowed = !ci_int128_eq(r, back);
+            *((char*)frame->slots + op->checked.overflow) = (char)overflowed;
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_ITOF: {
             const void* src = (char*)frame->slots + op->itof.src;
             void* dest = (char*)frame->slots + op->itof.slot;

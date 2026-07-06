@@ -99,6 +99,8 @@ static CiAluOp ci_alu_op_for(CcExprKind kind);
 static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
 static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
@@ -1688,10 +1690,12 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
         case CC_EXPR_VA:
-        case CC_EXPR_BUILTIN:
+            break;
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
+            return ci_lower_checked(ci, ctx, e, dest, out);
+        case CC_EXPR_BUILTIN:
         case CC_EXPR_POPCOUNT:
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
@@ -1704,12 +1708,14 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
-        case CC_EXPR_UMUL128:
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_SLICE:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
+            // fallback
             break;
+        case CC_EXPR_UMUL128:
+            return ci_lower_umul128(ci, ctx, e, dest, out);
         CASES_EXHAUSTED;
     }
     // fallback: evaluate the (sub)tree
@@ -2187,6 +2193,169 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             out->slot = dest;
         }
     }
+    return 0;
+}
+
+// Lower __builtin_{add,sub,mul}_overflow(a, b, &res) into a CI_OP_CHECKED plus
+// a store of the truncated result through the result pointer. The expression's
+// value is the 1-byte overflow bool; out is null in statement context, where
+// the flag is discarded but the store still happens.
+static
+int
+ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    CcParser* p = &ci->parser;
+    CcExpr* ae = e->lhs;
+    CcExpr* be = e->values[0];
+    CcExpr* rese = e->values[1];
+    uint32_t asz, bsz, dsz;
+    err = cc_sizeof_as_uint(p, ae->type, ae->loc, &asz);
+    if(err) return err;
+    err = cc_sizeof_as_uint(p, be->type, be->loc, &bsz);
+    if(err) return err;
+    CcQualType dtype = ccqt_as_ptr(rese->type)->pointee;
+    err = cc_sizeof_as_uint(p, dtype, e->loc, &dsz);
+    if(err) return err;
+    _Bool sign_char = !ci_target(ci)->char_is_signed;
+    CiCheckedOp cop = e->kind == CC_EXPR_ADD_OVERFLOW? CI_CHK_ADD
+                    : e->kind == CC_EXPR_SUB_OVERFLOW? CI_CHK_SUB
+                    : CI_CHK_MUL;
+    // the expression value is the 1-byte overflow bool
+    uint32_t ovf;
+    uint32_t save;
+    if(out){
+        err = ci_lower_dest(ctx, &dest, 1);
+        if(err) return err;
+        out->slot = dest;
+        ovf = dest;
+        save = ctx->temp;
+    }
+    else {
+        // statement context: the flag is discarded, but the store must happen
+        save = ctx->temp;
+        err = ci_alloc_slot(ctx, 1, 1, &ovf);
+        if(err) return err;
+    }
+    CiLowerVal av, bv, pv;
+    err = ci_lower_expr(ci, ctx, ae, CI_NO_SLOT, &av);
+    if(err) return err;
+    err = ci_lower_expr(ci, ctx, be, CI_NO_SLOT, &bv);
+    if(err) return err;
+    err = ci_lower_expr(ci, ctx, rese, CI_NO_SLOT, &pv); // the result pointer
+    if(err) return err;
+    uint32_t rtmp;
+    err = ci_alloc_slot(ctx, dsz, dsz, &rtmp);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .checked = {
+            .kind = CI_OP_CHECKED,
+            .op = cop,
+            .src_size = asz,
+            .src2_size = bsz,
+            .res_size = dsz,
+            .src_unsigned = ccqt_is_unsigned(ae->type, sign_char),
+            .src2_unsigned = ccqt_is_unsigned(be->type, sign_char),
+            .res_unsigned = ccqt_is_unsigned(dtype, sign_char),
+            .result = rtmp,
+            .overflow = ovf,
+            .src = av.slot,
+            .src2 = bv.slot,
+            .loc = e->loc,
+        }
+    };
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .store = {
+            .kind = CI_OP_STORE,
+            .slot = pv.slot,
+            .src = rtmp,
+            .src_size = dsz,
+            .offset = 0,
+            .loc = e->loc,
+        }
+    };
+    ctx->temp = save;
+    return 0;
+}
+
+// Lower _umul128(a, b, &high): the full 128-bit product of two 64-bit unsigned
+// operands (the parser casts both to unsigned long long). The expression value
+// is the low 64 bits; the high 64 bits are stored through the pointer. The
+// product is exactly what CI_OP_ALU128 MUL yields, so its low and high halves
+// are just the two 8-byte halves of the 16-byte result slot.
+static
+int
+ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    CcExpr* ae = e->lhs;
+    CcExpr* be = e->values[0];
+    CcExpr* he = e->values[1]; // pointer to the high half
+    if(out){
+        err = ci_lower_dest(ctx, &dest, 8);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t save = ctx->temp;
+    CiLowerVal av, bv, hv;
+    err = ci_lower_expr(ci, ctx, ae, CI_NO_SLOT, &av);
+    if(err) return err;
+    err = ci_lower_expr(ci, ctx, be, CI_NO_SLOT, &bv);
+    if(err) return err;
+    err = ci_lower_expr(ci, ctx, he, CI_NO_SLOT, &hv);
+    if(err) return err;
+    uint32_t prod;
+    err = ci_alloc_slot(ctx, 16, 16, &prod);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .alu = {
+            .kind = CI_OP_ALU128,
+            .op = CI_ALU_MUL,
+            .is_unsigned = 1,
+            .slot = prod,
+            .slot_size = 16,
+            .src = av.slot,
+            .src_size = 8,
+            .src2 = bv.slot,
+            .src2_size = 8,
+            .loc = e->loc,
+        }
+    };
+    // *high = product[8:16]
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .store = {
+            .kind = CI_OP_STORE,
+            .slot = hv.slot,
+            .src = prod + 8,
+            .src_size = 8,
+            .offset = 0,
+            .loc = e->loc,
+        }
+    };
+    if(out){
+        // value = product[0:8], copied to a stable slot before the scratch is freed
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .copy = {
+                .kind = CI_OP_COPY,
+                .slot = dest,
+                .slot_size = 8,
+                .src = prod,
+                .src_size = 8,
+                .loc = e->loc,
+            }
+        };
+    }
+    ctx->temp = save;
     return 0;
 }
 
@@ -3450,8 +3619,9 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
+            return ci_lower_checked(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_UMUL128:
-            break; // these have side effects
+            return ci_lower_umul128(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_SLICE:
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             if(err) return err;
