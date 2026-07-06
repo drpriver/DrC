@@ -205,7 +205,26 @@ ci_read_int_any(const void* buf, uint32_t sz, _Bool is_unsigned){
 static inline
 void
 ci_write_uint(void* buf, uint32_t sz, uint64_t val){
-    memcpy(buf, &val, sz);
+    switch(sz){
+        case 1: memcpy(buf, &val, 1); return;
+        case 2: memcpy(buf, &val, 2); return;
+        case 4: memcpy(buf, &val, 4); return;
+        case 8: memcpy(buf, &val, 8); return;
+        default: memcpy(buf, &val, sz); return;
+    }
+}
+
+static inline
+void
+ci_copy(void* dst, const void* src, uint32_t sz){
+    switch(sz){
+        case 1:  memcpy(dst, src, 1);  return;
+        case 2:  memcpy(dst, src, 2);  return;
+        case 4:  memcpy(dst, src, 4);  return;
+        case 8:  memcpy(dst, src, 8);  return;
+        case 16: memcpy(dst, src, 16); return;
+        default: memmove(dst, src, sz); return;
+    }
 }
 
 
@@ -3517,12 +3536,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_CONST: {
-            memcpy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
+            ci_copy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
             frame->pc++;
             return 0;
         }
         case CI_OP_COPY: {
-            memmove((char*)frame->slots + op->copy.slot, (char*)frame->slots + op->copy.src, op->copy.slot_size);
+            ci_copy((char*)frame->slots + op->copy.slot, (char*)frame->slots + op->copy.src, op->copy.slot_size);
             frame->pc++;
             return 0;
         }
@@ -3953,7 +3972,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CI_OP_LOAD: {
             char* ptr;
             memcpy(&ptr, (char*)frame->slots + op->load.src, sizeof ptr);
-            memcpy((char*)frame->slots + op->load.slot, ptr + op->load.offset, op->load.slot_size);
+            ci_copy((char*)frame->slots + op->load.slot, ptr + op->load.offset, op->load.slot_size);
             frame->pc++;
             return 0;
         }
@@ -3969,7 +3988,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CI_OP_STORE: {
             char* ptr;
             memcpy(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);
-            memcpy(ptr + op->store.offset, (char*)frame->slots + op->store.src, op->store.src_size);
+            ci_copy(ptr + op->store.offset, (char*)frame->slots + op->store.src, op->store.src_size);
             frame->pc++;
             return 0;
         }
