@@ -348,7 +348,7 @@ cc_check_atomic_integer_rmw(CcParser* p, CcQualType type, SrcLoc loc){
     base.is_atomic = 0;
     if(!ccqt_is_basic(base) && ccqt_kind(base) == CC_ENUM)
         base = ccqt_as_enum(base)->underlying;
-    if(!ccqt_is_basic(base) || !ccbt_is_integer(base.basic.kind))
+    if((!ccqt_is_basic(base) || !ccbt_is_integer(base.basic.kind)) && ccqt_kind(base) != CC_POINTER)
         return cc_error(p, loc, "atomic read-modify-write requires integer atomic type");
     return cc_check_atomic_object_access(p, type, loc);
 }
@@ -4936,7 +4936,51 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_VALUE:
             if(e->str.length && e->text){
-                msb_sprintf(sb, "\"%.*s\"", e->str.length - 1, e->text);
+                uint32_t sz = 1;
+                if(ccqt_kind(e->type) == CC_ARRAY){
+                    CcQualType pointee = ccqt_as_array(e->type)->element;
+                    if(ccqt_is_basic(pointee)){
+                        // FIXME: adhoc
+                        switch(pointee.basic.kind){
+                            case CCBT_char:
+                            case CCBT_signed_char:
+                            case CCBT_unsigned_char:
+                                sz = 1;
+                                break;
+                            case CCBT_short:
+                            case CCBT_unsigned_short:
+                                sz = 2;
+                                break;
+                            case CCBT_int:
+                            case CCBT_unsigned:
+                                sz = 4;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                }
+                switch(sz){
+                    case 1:
+                        msb_write_literal(sb, "\"");
+                        msb_write_str(sb, (const char*)e->text, e->str.length-1);
+                        msb_write_literal(sb, "\"");
+                        break;
+                    case 2:
+                        msb_write_literal(sb, "u\"");
+                        msb_write_utf16(sb, (const uint16_t*)e->text, e->str.length-1);
+                        msb_write_literal(sb, "\"");
+                        break;
+                    case 4:
+                        msb_write_literal(sb, "U\"");
+                        for(uint64_t i = 0; i < e->str.length; i++)
+                            msb_write_utf32_codepoint(sb, ((const uint32_t*)e->text)[i]);
+                        msb_write_literal(sb, "\"");
+                        break;
+                    default:
+                        msb_sprintf(sb, "(??""?)\"...\"");
+                        break;
+                }
             }
             else if(ccqt_is_basic(e->type) && e->type.basic.kind == CCBT__Type){
                 cc_print_type(sb, (CcQualType){.bits = e->uinteger});
@@ -6808,12 +6852,13 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
         if(err) return err;
         err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
         if(err) return err;
-        if(f->alignment > field_align)
-            field_align = f->alignment;
         if(s->packed)
             field_align = 1;
         else if(pack_value > 0 && field_align > pack_value)
             field_align = pack_value;
+        // An explicit _Alignas/aligned on the field overrides packing.
+        if(f->alignment > field_align)
+            field_align = f->alignment;
         if(f->is_bitfield){
             uint32_t bw = f->bitwidth;
             uint32_t storage_bits = field_size * 8;
@@ -6958,10 +7003,11 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         uint32_t field_align;
         err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
         if(err) return err;
-        if(f->alignment > field_align)
-            field_align = f->alignment;
         if(pack_value > 0 && field_align > pack_value)
             field_align = pack_value;
+        // An explicit _Alignas/aligned on the field overrides packing.
+        if(f->alignment > field_align)
+            field_align = f->alignment;
         f->offset = 0;
         if(f->is_bitfield){
             f->bitoffset = 0;

@@ -297,7 +297,7 @@ msb_peek(MStringBuilder* msb){
 static
 inline
 void
-msb_write_utf32(MStringBuilder* msb, uint32_t u){
+msb_write_utf32_codepoint(MStringBuilder* msb, uint32_t u){
     int err = _check_msb_remaining_size(msb, 4);
     if(err) return;
     if(u < 0x80u){
@@ -323,6 +323,13 @@ msb_write_utf32(MStringBuilder* msb, uint32_t u){
         return;
     }
     msb->errored = 1;
+}
+
+static
+void
+msb_write_utf32(MStringBuilder* msb, const uint32_t* str, size_t len){
+    for(size_t i = 0; i < len; i++)
+        msb_write_utf32_codepoint(msb, str[i]);
 }
 
 static
@@ -356,7 +363,7 @@ msb_write_utf16(MStringBuilder* msb, const uint16_t* str, size_t len){
             cp = u;
             i += 1;
         }
-        msb_write_utf32(msb, cp);
+        msb_write_utf32_codepoint(msb, cp);
     }
 }
 

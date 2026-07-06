@@ -637,7 +637,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
                                         else break;
                                         cp = (cp << 4) | d;
                                     }
-                                    msb_write_utf32(&sb, cp);
+                                    msb_write_utf32_codepoint(&sb, cp);
                                     continue;
                                 }
                                 default:
@@ -863,7 +863,7 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
                                         else break;
                                         cp = (cp << 4) | d;
                                     }
-                                    msb_write_utf32(&sb, cp);
+                                    msb_write_utf32_codepoint(&sb, cp);
                                     continue;
                                 }
                                 default:

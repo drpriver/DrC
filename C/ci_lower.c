@@ -100,6 +100,10 @@ static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
 static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
+static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
+static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
+static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size, _Bool is_ptr, uint32_t elem_sz, _Bool op_unsigned);
+static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -532,8 +536,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         }
         case CC_EXPR_VARIABLE:{
             CcVariable* var = e->var;
-            if(e->type.is_atomic)
-                break; // atomics need an atomic load
+            if(e->type.is_atomic){
+                return ci_lower_atomic_load_lv(ci, ctx, e, dest, out, size);
+            }
             if(!var->automatic){
                 // static/global: address through the GOT-style op, then load.
                 // Array rvalues (array assignment extension) load like any
@@ -596,8 +601,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_ARROW:
         case CC_EXPR_DOT:
         case CC_EXPR_SUBSCRIPT:{
-            if(e->type.is_atomic)
-                break; // atomic loads fall back
+            if(e->type.is_atomic){
+                return ci_lower_atomic_load_lv(ci, ctx, e, dest, out, size);
+            }
             // Array rvalues (array assignment extension) load like any other
             // whole object.
             if((e->kind == CC_EXPR_DOT || e->kind == CC_EXPR_ARROW) && e->field_loc.bit_width){
@@ -907,13 +913,36 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_ASSIGN:{
             CcExpr* lhs = e->lhs;
             CcExpr* rhs = e->values[0];
-            if(lhs->type.is_atomic)
-                break;
             uint32_t rsz;
             err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
             if(err) return err;
             if(rsz != size)
-                break;
+                return ci_unreachable(ci, rhs->loc, "size mismatch");
+            if(lhs->type.is_atomic){
+                CiLowerAddr a;
+                err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+                if(err) return err;
+                CiLowerVal v;
+                err = ci_lower_expr(ci, ctx, rhs, dest, &v);
+                if(err) return err;
+                CiOp* op;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .atomic_store = {
+                        .kind = CI_OP_ATOMIC_STORE,
+                        .memorder = CC_MO_SEQ_CST,
+                        .slot = a.slot,
+                        .src = v.slot,
+                        .src_size = size,
+                        .offset = a.disp,
+                        .loc = e->loc,
+                    }
+                };
+                out->slot = v.slot;
+                out->canonical = v.canonical;
+                return 0;
+            }
             uint32_t vslot;
             if(ci_frame_lvalue(lhs, &vslot)){
                 CiLowerVal v;
@@ -1105,7 +1134,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 cur = vslot;
             }
             else if(lhs->type.is_atomic){
-                break;
+                if(opkind != CI_OP_ALU64 || size > 8)
+                    break; // float and 128-bit atomic compound assigns fall back
+                return ci_lower_atomic_compound_assign(ci, ctx, e, dest, out, size, is_ptr, elem_sz, op_unsigned);
             }
             else {
                 is_mem = 1;
@@ -1659,11 +1690,12 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->slot = dest;
             return 0;
         }
+        case CC_EXPR_ATOMIC:
+            return ci_lower_atomic_builtin(ci, ctx, e, dest, out);
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_FUNCTION:
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
-        case CC_EXPR_ATOMIC:
         case CC_EXPR_VA:
         case CC_EXPR_BUILTIN:
         case CC_EXPR_ADD_OVERFLOW:
@@ -1824,7 +1856,90 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         }
         return 0;
     }
-    if(lhs->type.is_atomic) return 0;
+    if(lhs->type.is_atomic){
+        if(size > 8)
+            return 0; // 128-bit atomic rmw falls back to the tree walker's error
+        // one atomic fetch-add/sub; pre forms recompute the new value from
+        // the returned old one
+        uint32_t save = ctx->temp;
+        uint32_t old, sslot;
+        err = ci_alloc_slot(ctx, size, size, &old);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, size, size, &sslot);
+        if(err) return err;
+        CiLowerAddr a;
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+        if(err) return err;
+        *handled = 1;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .constant = {
+                .kind = CI_OP_CONST,
+                .bt_kind = (uint32_t)ci_target(ci)->size_type,
+                .slot = sslot,
+                .immsize = size,
+                .immediate = {step},
+                .loc = e->loc,
+            }
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .atomic_rmw = {
+                .kind = CI_OP_ATOMIC_RMW,
+                .op = is_inc? CI_ARMW_ADD : CI_ARMW_SUB,
+                .memorder = CC_MO_SEQ_CST,
+                .discard = !out,
+                .slot = old,
+                .slot_size = size,
+                .src = a.slot,
+                .src2 = sslot,
+                .offset = a.disp,
+                .loc = e->loc,
+            }
+        };
+        if(!out){
+            ctx->temp = save;
+            return 0;
+        }
+        if(is_pre){
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .alu = {
+                    .kind = CI_OP_ALU64,
+                    .slot = old,
+                    .slot_size = size,
+                    .src = old,
+                    .src_size = size,
+                    .src2 = sslot,
+                    .src2_size = size,
+                    .op = is_inc? CI_ALU_ADD : CI_ALU_SUB,
+                    .is_unsigned = 1,
+                    .loc = e->loc,
+                }
+            };
+        }
+        if(dest == CI_NO_SLOT){
+            out->slot = old;
+            return 0;
+        }
+        out->slot = dest;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .copy = {
+                .kind = CI_OP_COPY,
+                .slot = dest,
+                .slot_size = size,
+                .src = old,
+                .src_size = size,
+                .loc = e->loc,
+            }
+        };
+        return 0;
+    }
     // Memory path: load-modify-store through a computed address, evaluated
     // once. old holds the loaded value, new the incremented value.
     uint32_t save = ctx->temp;
@@ -2089,6 +2204,10 @@ ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* ha
     if(ci_frame_lvalue(lhs, &off))
         return 0; // the rhs loads directly into the slot
     switch((uint32_t)rhs->kind){
+        case CC_EXPR_VALUE:
+            if(ccqt_kind(rhs->type) == CC_ARRAY)
+                break;
+            return 0;
         case CC_EXPR_VARIABLE:
         case CC_EXPR_DEREF:
         case CC_EXPR_ARROW:
@@ -2105,7 +2224,7 @@ ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* ha
     if(err) return err;
     err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
     if(err) return err;
-    if(rsz != size)
+    if(rsz > size)
         return 0;
     uint32_t temp = ctx->temp;
     CiLowerAddr dst;
@@ -2128,8 +2247,893 @@ ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* ha
             .loc = e->loc,
         }
     };
+    if(rsz < size){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .zero = {
+                .kind = CI_OP_ZERO,
+                .slot = dst.slot,
+                .offset = dst.disp+rsz,
+                .size = size-rsz,
+                .loc = e->loc,
+            }
+        };
+    }
     ctx->temp = temp;
     *handled = 1;
+    return 0;
+}
+
+static
+_Bool
+ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out){
+    switch((uint32_t)kind){
+        case CC_EXPR_ADDASSIGN:    *out = CI_ARMW_ADD; return 1;
+        case CC_EXPR_SUBASSIGN:    *out = CI_ARMW_SUB; return 1;
+        case CC_EXPR_BITANDASSIGN: *out = CI_ARMW_AND; return 1;
+        case CC_EXPR_BITORASSIGN:  *out = CI_ARMW_OR;  return 1;
+        case CC_EXPR_BITXORASSIGN: *out = CI_ARMW_XOR; return 1;
+        default: return 0;
+    }
+}
+
+// Load of an _Atomic lvalue in value context; plain accesses are seq_cst.
+static
+int
+ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size){
+    int err;
+    err = ci_lower_dest(ctx, &dest, size);
+    if(err) return err;
+    uint32_t temp = ctx->temp;
+    CiLowerAddr a;
+    err = ci_lower_addr(ci, ctx, e, 0, &a); // access
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .atomic_load = {
+            .kind = CI_OP_ATOMIC_LOAD,
+            .memorder = CC_MO_SEQ_CST,
+            .slot = dest,
+            .slot_size = size,
+            .src = a.slot,
+            .offset = a.disp,
+            .loc = e->loc,
+        }
+    };
+    ctx->temp = temp;
+    out->slot = dest;
+    return 0;
+}
+
+static
+int
+ci_lower_atomic_operand(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* ve, CiLowerVal* v, uint32_t sz, SrcLoc loc){
+    if(v->size == sz) return 0;
+    int err;
+    uint32_t conv;
+    err = ci_alloc_slot(ctx, sz, sz, &conv);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .convert = {
+            .kind = CI_OP_CONVERT,
+            .is_unsigned = ccqt_is_unsigned(ve->type, !ci_target(ci)->char_is_signed),
+            .slot = conv,
+            .slot_size = sz,
+            .src = v->slot,
+            .src_size = v->size,
+            .loc = loc,
+        }
+    };
+    v->slot = conv;
+    v->size = sz;
+    return 0;
+}
+
+static
+int
+ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size, _Bool is_ptr, uint32_t elem_sz, _Bool op_unsigned){
+    int err;
+    CcExpr* lhs = e->lhs;
+    CcExpr* rhs = e->values[0];
+    CiOp* op;
+    // cur holds the new value and survives; the rest is scratch
+    uint32_t cur;
+    err = ci_alloc_slot(ctx, size, size, &cur);
+    if(err) return err;
+    uint32_t keep = ctx->temp;
+    CiLowerAddr a;
+    err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+    if(err) return err;
+    CiLowerVal r;
+    err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
+    if(err) return err;
+    if(is_ptr && elem_sz != 1){
+        // pointer += and -= scale the integer by the pointee size
+        uint32_t esz, scaled;
+        err = ci_alloc_slot(ctx, 8, 8, &esz);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, 8, 8, &scaled);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .constant = {
+                .kind = CI_OP_CONST,
+                .bt_kind = (uint32_t)ci_target(ci)->size_type,
+                .slot = esz,
+                .immsize = 8,
+                .immediate = {elem_sz},
+                .loc = e->loc,
+            }
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .alu = {
+                .kind = CI_OP_ALU64,
+                .slot = scaled,
+                .slot_size = 8,
+                .src = r.slot,
+                .src_size = r.size,
+                .src2 = esz,
+                .src2_size = 8,
+                .op = CI_ALU_MUL,
+                .is_unsigned = op_unsigned,
+                .loc = e->loc,
+            }
+        };
+        r.slot = scaled;
+        r.size = 8;
+        op_unsigned = 1;
+    }
+    // rmw and cas operands are the object's size
+    err = ci_lower_atomic_operand(ci, ctx, rhs, &r, size, e->loc);
+    if(err) return err;
+    CiAtomicRmwOp armw;
+    if(ci_armw_op_for(e->kind, &armw)){
+        uint32_t old;
+        err = ci_alloc_slot(ctx, size, size, &old);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .atomic_rmw = {
+                .kind = CI_OP_ATOMIC_RMW,
+                .op = armw,
+                .memorder = CC_MO_SEQ_CST,
+                .slot = old,
+                .slot_size = size,
+                .src = a.slot,
+                .src2 = r.slot,
+                .offset = a.disp,
+                .loc = e->loc,
+            }
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .alu = {
+                .kind = CI_OP_ALU64,
+                .slot = cur,
+                .slot_size = size,
+                .src = old,
+                .src_size = size,
+                .src2 = r.slot,
+                .src2_size = size,
+                .op = ci_alu_op_for(e->kind),
+                .is_unsigned = op_unsigned,
+                .loc = e->loc,
+            }
+        };
+    }
+    else {
+        // compare-exchange loop: the failed cas reloads the old value, so
+        // recompute and retry until the store wins
+        uint32_t old, ok;
+        err = ci_alloc_slot(ctx, size, size, &old);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, 1, 1, &ok);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .atomic_load = {
+                .kind = CI_OP_ATOMIC_LOAD,
+                .memorder = CC_MO_SEQ_CST,
+                .slot = old,
+                .slot_size = size,
+                .src = a.slot,
+                .offset = a.disp,
+                .loc = e->loc,
+            }
+        };
+        uint32_t loop = (uint32_t)ctx->out->count;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .alu = {
+                .kind = CI_OP_ALU64,
+                .slot = cur,
+                .slot_size = size,
+                .src = old,
+                .src_size = size,
+                .src2 = r.slot,
+                .src2_size = size,
+                .op = ci_alu_op_for(e->kind),
+                .is_unsigned = op_unsigned,
+                .loc = e->loc,
+            }
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .atomic_cas = {
+                .kind = CI_OP_ATOMIC_CAS,
+                .memorder = CC_MO_SEQ_CST,
+                .fail_memorder = CC_MO_SEQ_CST,
+                .weak = 1,
+                .size = size,
+                .slot = ok,
+                .src = a.slot,
+                .expected = old,
+                .desired = cur,
+                .offset = a.disp,
+                .loc = e->loc,
+            }
+        };
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .jump_false = {
+                .kind = CI_OP_JUMP_FALSE,
+                .slot = ok,
+                .slot_size = 1,
+                .jump = loop,
+                .loc = e->loc,
+            }
+        };
+    }
+    ctx->temp = keep;
+    if(dest == CI_NO_SLOT){
+        out->slot = cur;
+        return 0;
+    }
+    out->slot = dest;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .copy = {
+            .kind = CI_OP_COPY,
+            .slot = dest,
+            .slot_size = size,
+            .src = cur,
+            .src_size = size,
+            .loc = e->loc,
+        }
+    };
+    return 0;
+}
+
+static
+int
+ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    CcParser* p = &ci->parser;
+    CcAtomicOp aop = e->atomic.op;
+    CcMemoryOrder mo = e->atomic.memorder;
+    CiOp* op;
+    if(aop == CC_ATOMIC_THREAD_FENCE || aop == CC_ATOMIC_SIGNAL_FENCE){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .fence = {
+                .kind = CI_OP_FENCE,
+                .memorder = mo,
+                .is_signal = aop == CC_ATOMIC_SIGNAL_FENCE,
+                .loc = e->loc,
+            }
+        };
+        if(out){
+            // void result; the slot exists but is never read
+            err = ci_lower_dest(ctx, &dest, out->size);
+            if(err) return err;
+            out->slot = dest;
+        }
+        return 0;
+    }
+    uint32_t sz;
+    err = cc_sizeof_as_uint(p, ccqt_as_ptr(e->lhs->type)->pointee, e->loc, &sz);
+    if(err) return err;
+    if(aop == CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE128)
+        sz = 16; // the pointer is to the low __int64 of the pair
+    if(out){
+        // the result slot survives; everything else is scratch
+        err = ci_lower_dest(ctx, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t temp = ctx->temp;
+    CiLowerVal pv;
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &pv);
+    if(err) return err;
+    switch(aop){
+        case CC_ATOMIC_LOAD_N:{
+            uint32_t slot = dest;
+            if(!out){
+                err = ci_alloc_slot(ctx, sz, sz, &slot);
+                if(err) return err;
+            }
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_load = {
+                    .kind = CI_OP_ATOMIC_LOAD,
+                    .memorder = mo,
+                    .slot = slot,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .loc = e->loc,
+                }
+            };
+            break;
+        }
+        case CC_ATOMIC_LOAD:{
+            // the generic form returns the value through a pointer
+            CiLowerVal dp;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &dp);
+            if(err) return err;
+            uint32_t tmp;
+            err = ci_alloc_slot(ctx, sz, sz, &tmp);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_load = {
+                    .kind = CI_OP_ATOMIC_LOAD,
+                    .memorder = mo,
+                    .slot = tmp,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .store = {
+                    .kind = CI_OP_STORE,
+                    .slot = dp.slot,
+                    .src = tmp,
+                    .src_size = sz,
+                    .loc = e->loc,
+                }
+            };
+            break;
+        }
+        case CC_ATOMIC_STORE_N:
+        case CC_ATOMIC_STORE:{
+            CiLowerVal v;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+            if(err) return err;
+            if(aop == CC_ATOMIC_STORE){
+                // the generic form passes the value by pointer
+                uint32_t tmp;
+                err = ci_alloc_slot(ctx, sz, sz, &tmp);
+                if(err) return err;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .load = {
+                        .kind = CI_OP_LOAD,
+                        .slot = tmp,
+                        .slot_size = sz,
+                        .src = v.slot,
+                        .loc = e->loc,
+                    }
+                };
+                v.slot = tmp;
+                v.size = sz;
+            }
+            else {
+                err = ci_lower_atomic_operand(ci, ctx, e->values[0], &v, sz, e->loc);
+                if(err) return err;
+            }
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_store = {
+                    .kind = CI_OP_ATOMIC_STORE,
+                    .memorder = mo,
+                    .slot = pv.slot,
+                    .src = v.slot,
+                    .src_size = sz,
+                    .loc = e->loc,
+                }
+            };
+            break;
+        }
+        case CC_ATOMIC_EXCHANGE_N:{
+            CiLowerVal v;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+            if(err) return err;
+            err = ci_lower_atomic_operand(ci, ctx, e->values[0], &v, sz, e->loc);
+            if(err) return err;
+            uint32_t slot = dest;
+            if(!out){
+                err = ci_alloc_slot(ctx, sz, sz, &slot);
+                if(err) return err;
+            }
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_rmw = {
+                    .kind = CI_OP_ATOMIC_RMW,
+                    .op = CI_ARMW_XCHG,
+                    .memorder = mo,
+                    .discard = !out,
+                    .slot = slot,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .src2 = v.slot,
+                    .loc = e->loc,
+                }
+            };
+            break;
+        }
+        case CC_ATOMIC_EXCHANGE:{
+            // the generic form: value and old-value result both by pointer
+            CiLowerVal vp, rp;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &vp);
+            if(err) return err;
+            err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &rp);
+            if(err) return err;
+            uint32_t tmpv, tmpold;
+            err = ci_alloc_slot(ctx, sz, sz, &tmpv);
+            if(err) return err;
+            err = ci_alloc_slot(ctx, sz, sz, &tmpold);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .load = {
+                    .kind = CI_OP_LOAD,
+                    .slot = tmpv,
+                    .slot_size = sz,
+                    .src = vp.slot,
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_rmw = {
+                    .kind = CI_OP_ATOMIC_RMW,
+                    .op = CI_ARMW_XCHG,
+                    .memorder = mo,
+                    .slot = tmpold,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .src2 = tmpv,
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .store = {
+                    .kind = CI_OP_STORE,
+                    .slot = rp.slot,
+                    .src = tmpold,
+                    .src_size = sz,
+                    .loc = e->loc,
+                }
+            };
+            break;
+        }
+        case CC_ATOMIC_COMPARE_EXCHANGE_N:
+        case CC_ATOMIC_COMPARE_EXCHANGE:{
+            CiLowerVal ep;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &ep);
+            if(err) return err;
+            uint32_t eslot;
+            err = ci_alloc_slot(ctx, sz, sz, &eslot);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .load = {
+                    .kind = CI_OP_LOAD,
+                    .slot = eslot,
+                    .slot_size = sz,
+                    .src = ep.slot,
+                    .loc = e->loc,
+                }
+            };
+            CiLowerVal dv;
+            err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &dv);
+            if(err) return err;
+            if(aop == CC_ATOMIC_COMPARE_EXCHANGE){
+                // the generic form passes the desired value by pointer
+                uint32_t tmp;
+                err = ci_alloc_slot(ctx, sz, sz, &tmp);
+                if(err) return err;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .load = {
+                        .kind = CI_OP_LOAD,
+                        .slot = tmp,
+                        .slot_size = sz,
+                        .src = dv.slot,
+                        .loc = e->loc,
+                    }
+                };
+                dv.slot = tmp;
+                dv.size = sz;
+            }
+            else {
+                err = ci_lower_atomic_operand(ci, ctx, e->values[1], &dv, sz, e->loc);
+                if(err) return err;
+            }
+            uint32_t ok = dest;
+            if(!out){
+                err = ci_alloc_slot(ctx, 1, 1, &ok);
+                if(err) return err;
+            }
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_cas = {
+                    .kind = CI_OP_ATOMIC_CAS,
+                    .memorder = mo,
+                    .fail_memorder = e->atomic.fail_memorder,
+                    .weak = e->atomic.weak,
+                    .size = sz,
+                    .slot = ok,
+                    .src = pv.slot,
+                    .expected = eslot,
+                    .desired = dv.slot,
+                    .loc = e->loc,
+                }
+            };
+            // the old value writes back through the expected pointer; on
+            // success it equals what was already there
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .store = {
+                    .kind = CI_OP_STORE,
+                    .slot = ep.slot,
+                    .src = eslot,
+                    .src_size = sz,
+                    .loc = e->loc,
+                }
+            };
+            if(out) out->canonical = 1;
+            break;
+        }
+        case CC_ATOMIC_FETCH_ADD:
+        case CC_ATOMIC_FETCH_SUB:
+        case CC_ATOMIC_ADD_FETCH:
+        case CC_ATOMIC_SUB_FETCH:
+        case CC_ATOMIC_FETCH_AND:
+        case CC_ATOMIC_FETCH_OR:
+        case CC_ATOMIC_FETCH_XOR:{
+            CiLowerVal v;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+            if(err) return err;
+            _Bool is_add = aop == CC_ATOMIC_FETCH_ADD || aop == CC_ATOMIC_ADD_FETCH;
+            _Bool is_sub = aop == CC_ATOMIC_FETCH_SUB || aop == CC_ATOMIC_SUB_FETCH;
+            CcQualType obj = ccqt_as_ptr(e->lhs->type)->pointee;
+            obj.is_atomic = 0;
+            if((is_add || is_sub) && ccqt_kind(obj) == CC_POINTER){
+                // scale the delta by the pointee size
+                uint32_t elem_sz;
+                err = cc_sizeof_as_uint(p, ccqt_as_ptr(obj)->pointee, e->loc, &elem_sz);
+                if(err) return err;
+                if(elem_sz != 1){
+                    uint32_t esz, scaled;
+                    err = ci_alloc_slot(ctx, 8, 8, &esz);
+                    if(err) return err;
+                    err = ci_alloc_slot(ctx, 8, 8, &scaled);
+                    if(err) return err;
+                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    if(err) return err;
+                    *op = (CiOp){
+                        .constant = {
+                            .kind = CI_OP_CONST,
+                            .bt_kind = (uint32_t)ci_target(ci)->size_type,
+                            .slot = esz,
+                            .immsize = 8,
+                            .immediate = {elem_sz},
+                            .loc = e->loc,
+                        }
+                    };
+                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    if(err) return err;
+                    *op = (CiOp){
+                        .alu = {
+                            .kind = CI_OP_ALU64,
+                            .slot = scaled,
+                            .slot_size = 8,
+                            .src = v.slot,
+                            .src_size = v.size,
+                            .src2 = esz,
+                            .src2_size = 8,
+                            .op = CI_ALU_MUL,
+                            .is_unsigned = ccqt_is_unsigned(e->values[0]->type, !ci_target(ci)->char_is_signed),
+                            .loc = e->loc,
+                        }
+                    };
+                    v.slot = scaled;
+                    v.size = 8;
+                }
+            }
+            err = ci_lower_atomic_operand(ci, ctx, e->values[0], &v, sz, e->loc);
+            if(err) return err;
+            _Bool want_new = aop == CC_ATOMIC_ADD_FETCH || aop == CC_ATOMIC_SUB_FETCH;
+            uint32_t old = dest;
+            if(!out || want_new){
+                err = ci_alloc_slot(ctx, sz, sz, &old);
+                if(err) return err;
+            }
+            CiAtomicRmwOp armw =
+                is_add? CI_ARMW_ADD :
+                is_sub? CI_ARMW_SUB :
+                aop == CC_ATOMIC_FETCH_AND? CI_ARMW_AND :
+                aop == CC_ATOMIC_FETCH_OR? CI_ARMW_OR : CI_ARMW_XOR;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_rmw = {
+                    .kind = CI_OP_ATOMIC_RMW,
+                    .op = armw,
+                    .memorder = mo,
+                    .discard = !out,
+                    .slot = old,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .src2 = v.slot,
+                    .loc = e->loc,
+                }
+            };
+            if(out && want_new){
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .alu = {
+                        .kind = CI_OP_ALU64,
+                        .slot = dest,
+                        .slot_size = sz,
+                        .src = old,
+                        .src_size = sz,
+                        .src2 = v.slot,
+                        .src2_size = sz,
+                        .op = is_add? CI_ALU_ADD : CI_ALU_SUB,
+                        .is_unsigned = 1,
+                        .loc = e->loc,
+                    }
+                };
+            }
+            break;
+        }
+        case CC_ATOMIC_INTERLOCKED_INCREMENT:
+        case CC_ATOMIC_INTERLOCKED_DECREMENT:{
+            // these yield the new value
+            _Bool inc = aop == CC_ATOMIC_INTERLOCKED_INCREMENT;
+            uint32_t one, old;
+            err = ci_alloc_slot(ctx, sz, sz, &one);
+            if(err) return err;
+            err = ci_alloc_slot(ctx, sz, sz, &old);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .constant = {
+                    .kind = CI_OP_CONST,
+                    .bt_kind = (uint32_t)ci_target(ci)->size_type,
+                    .slot = one,
+                    .immsize = sz,
+                    .immediate = {1},
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_rmw = {
+                    .kind = CI_OP_ATOMIC_RMW,
+                    .op = inc? CI_ARMW_ADD : CI_ARMW_SUB,
+                    .memorder = mo,
+                    .discard = !out,
+                    .slot = old,
+                    .slot_size = sz,
+                    .src = pv.slot,
+                    .src2 = one,
+                    .loc = e->loc,
+                }
+            };
+            if(out){
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .alu = {
+                        .kind = CI_OP_ALU64,
+                        .slot = dest,
+                        .slot_size = sz,
+                        .src = old,
+                        .src_size = sz,
+                        .src2 = one,
+                        .src2_size = sz,
+                        .op = inc? CI_ALU_ADD : CI_ALU_SUB,
+                        .is_unsigned = 1,
+                        .loc = e->loc,
+                    }
+                };
+            }
+            break;
+        }
+        case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE:{
+            // values[0] = exchange, values[1] = comparand; yields the old value
+            CiLowerVal x;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &x);
+            if(err) return err;
+            err = ci_lower_atomic_operand(ci, ctx, e->values[0], &x, sz, e->loc);
+            if(err) return err;
+            CiLowerVal c;
+            err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &c);
+            if(err) return err;
+            err = ci_lower_atomic_operand(ci, ctx, e->values[1], &c, sz, e->loc);
+            if(err) return err;
+            // cas writes the old value into expected, so it must be a
+            // scratch slot, never the comparand's own storage
+            uint32_t eslot, ok;
+            err = ci_alloc_slot(ctx, sz, sz, &eslot);
+            if(err) return err;
+            err = ci_alloc_slot(ctx, 1, 1, &ok);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .copy = {
+                    .kind = CI_OP_COPY,
+                    .slot = eslot,
+                    .slot_size = sz,
+                    .src = c.slot,
+                    .src_size = sz,
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_cas = {
+                    .kind = CI_OP_ATOMIC_CAS,
+                    .memorder = mo,
+                    .fail_memorder = mo,
+                    .size = sz,
+                    .slot = ok,
+                    .src = pv.slot,
+                    .expected = eslot,
+                    .desired = x.slot,
+                    .loc = e->loc,
+                }
+            };
+            if(out){
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){
+                    .copy = {
+                        .kind = CI_OP_COPY,
+                        .slot = dest,
+                        .slot_size = sz,
+                        .src = eslot,
+                        .src_size = sz,
+                        .loc = e->loc,
+                    }
+                };
+            }
+            break;
+        }
+        case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE128:{
+            // values[0] = exchange_high, values[1] = exchange_low,
+            // values[2] = comparand pointer (in/out); yields a bool
+            CiLowerVal hi, lo;
+            err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &hi);
+            if(err) return err;
+            err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &lo);
+            if(err) return err;
+            uint32_t des;
+            err = ci_alloc_slot(ctx, 16, 16, &des);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .copy = {
+                    .kind = CI_OP_COPY,
+                    .slot = des,
+                    .slot_size = 8,
+                    .src = lo.slot,
+                    .src_size = 8,
+                    .loc = e->loc,
+                }
+            };
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .copy = {
+                    .kind = CI_OP_COPY,
+                    .slot = des + 8,
+                    .slot_size = 8,
+                    .src = hi.slot,
+                    .src_size = 8,
+                    .loc = e->loc,
+                }
+            };
+            CiLowerVal cp;
+            err = ci_lower_expr(ci, ctx, e->values[2], CI_NO_SLOT, &cp);
+            if(err) return err;
+            uint32_t eslot;
+            err = ci_alloc_slot(ctx, 16, 16, &eslot);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .load = {
+                    .kind = CI_OP_LOAD,
+                    .slot = eslot,
+                    .slot_size = 16,
+                    .src = cp.slot,
+                    .loc = e->loc,
+                }
+            };
+            uint32_t ok = dest;
+            if(!out){
+                err = ci_alloc_slot(ctx, 1, 1, &ok);
+                if(err) return err;
+            }
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .atomic_cas = {
+                    .kind = CI_OP_ATOMIC_CAS,
+                    .memorder = mo,
+                    .fail_memorder = mo,
+                    .size = 16,
+                    .slot = ok,
+                    .src = pv.slot,
+                    .expected = eslot,
+                    .desired = des,
+                    .loc = e->loc,
+                }
+            };
+            // the old value always writes back through the comparand
+            // pointer, matching the msvc intrinsic
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .store = {
+                    .kind = CI_OP_STORE,
+                    .slot = cp.slot,
+                    .src = eslot,
+                    .src_size = 16,
+                    .loc = e->loc,
+                }
+            };
+            if(out) out->canonical = 1;
+            break;
+        }
+        case CC_ATOMIC_THREAD_FENCE:
+        case CC_ATOMIC_SIGNAL_FENCE:
+            break; // handled above
+    }
+    ctx->temp = temp;
     return 0;
 }
 
@@ -2236,14 +3240,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         }
 
         case CC_EXPR_ASSIGN:{
-            uint32_t off;
-            uint32_t k = e->lhs->kind;
-            // frame lvalues and computed addresses (statics included) lower
-            if(!ci_frame_lvalue(e->lhs, &off)
-                && k != CC_EXPR_VARIABLE && k != CC_EXPR_DEREF
-                && k != CC_EXPR_ARROW && k != CC_EXPR_DOT
-                && k != CC_EXPR_SUBSCRIPT)
-                break;
             _Bool handled;
             err = ci_lower_assign_memcopy(ci, ctx, e, &handled);
             if(err) return err;
@@ -2261,14 +3257,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_LSHIFTASSIGN:
         case CC_EXPR_RSHIFTASSIGN:{
-            uint32_t off;
-            uint32_t k = e->lhs->kind;
-            // frame lvalues and computed addresses lower; anything else EVALs
-            if(!ci_frame_lvalue(e->lhs, &off)
-                && k != CC_EXPR_VARIABLE && k != CC_EXPR_DEREF
-                && k != CC_EXPR_ARROW && k != CC_EXPR_DOT
-                && k != CC_EXPR_SUBSCRIPT)
-                break;
             CiLowerVal v;
             return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
         }
@@ -2327,8 +3315,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_stmt(ci, ctx, e->stmt_body);
             return err;
         case CC_EXPR_ATOMIC:
-            // atomics have side effects
-            break;
+            return ci_lower_atomic_builtin(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_VA:
             // TODO: complicated
             break;

@@ -3258,6 +3258,117 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "atomic: non-seq_cst orders", __LINE__,
+            SVI("int x = 1;\n"
+               "__atomic_store_n(&x, 2, __ATOMIC_RELEASE);\n"
+               "int a = __atomic_load_n(&x, __ATOMIC_ACQUIRE);\n"
+               "int b = __atomic_fetch_add(&x, 3, __ATOMIC_RELAXED);\n"
+               "return a * 100 + b * 10 + x;\n"),
+            .exit_code = 2 * 100 + 2 * 10 + 5,
+        },
+        {
+            "atomic: weak compare_exchange loop", __LINE__,
+            SVI("int x = 5;\n"
+               "int expected = 5;\n"
+               "while(!__atomic_compare_exchange_n(&x, &expected, expected + 1, 1, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)){}\n"
+               "return x;\n"),
+            .exit_code = 6,
+        },
+        {
+            "atomic: generic load/store", __LINE__,
+            SVI("long long x = 7, in = 9, out = 0;\n"
+               "__atomic_store(&x, &in, __ATOMIC_SEQ_CST);\n"
+               "__atomic_load(&x, &out, __ATOMIC_SEQ_CST);\n"
+               "return (int)out;\n"),
+            .exit_code = 9,
+        },
+        {
+            "atomic: generic exchange", __LINE__,
+            SVI("int x = 3, val = 8, old = 0;\n"
+               "__atomic_exchange(&x, &val, &old, __ATOMIC_SEQ_CST);\n"
+               "return old * 10 + x;\n"),
+            .exit_code = 38,
+        },
+        {
+            "atomic: generic compare_exchange", __LINE__,
+            SVI("int x = 3, expected = 3, desired = 4;\n"
+               "_Bool ok = __atomic_compare_exchange(&x, &expected, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
+               "return ok * 10 + x;\n"),
+            .exit_code = 14,
+        },
+        {
+            "atomic: fetch_and/or/xor", __LINE__,
+            SVI("unsigned x = 0xff;\n"
+               "unsigned a = __atomic_fetch_and(&x, 0x0f, __ATOMIC_SEQ_CST);\n"
+               "unsigned b = __atomic_fetch_or(&x, 0x30, __ATOMIC_SEQ_CST);\n"
+               "unsigned c = __atomic_fetch_xor(&x, 0xff, __ATOMIC_SEQ_CST);\n"
+               "return a == 0xff && b == 0x0f && c == 0x3f && x == 0xc0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic: fences", __LINE__,
+            SVI("int x = 1;\n"
+               "__atomic_thread_fence(__ATOMIC_SEQ_CST);\n"
+               "__atomic_signal_fence(__ATOMIC_ACQUIRE);\n"
+               "x += 1;\n"
+               "return x;\n"),
+            .exit_code = 2,
+        },
+        {
+            "atomic: 16-byte exchange and compare_exchange", __LINE__,
+            SVI("struct S16 { long long x, y; };\n"
+               "_Alignas(16) struct S16 obj = {1, 2};\n"
+               "struct S16 val = {3, 4};\n"
+               "struct S16 old;\n"
+               "__atomic_exchange(&obj, &val, &old, __ATOMIC_SEQ_CST);\n"
+               "int ok1 = old.x == 1 && old.y == 2 && obj.x == 3;\n"
+               "struct S16 expected = {3, 4};\n"
+               "struct S16 desired = {5, 6};\n"
+               "_Bool ok2 = __atomic_compare_exchange(&obj, &expected, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n"
+               "return ok1 * 10 + (ok2 && obj.x == 5 && obj.y == 6);\n"),
+            .exit_code = 11,
+        },
+        {
+            "atomic type: pointer increment and compound scale", __LINE__,
+            SVI("int arr[4] = {1, 2, 3, 4};\n"
+               "int * _Atomic p = arr;\n"
+               "p++;\n"
+               "int a = *p;\n"
+               "p += 2;\n"
+               "int b = *p;\n"
+               "int c = *--p;\n"
+               "return a * 100 + b * 10 + c;\n"),
+            .exit_code = 2 * 100 + 4 * 10 + 3,
+        },
+        {
+            "atomic type: compound assignment in function", __LINE__,
+            SVI("int f(void){\n"
+               "    _Atomic long long x = 100;\n"
+               "    x *= 3;\n"
+               "    x -= 50;\n"
+               "    x %= 90;\n"
+               "    return (int)x;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = (100 * 3 - 50) % 90,
+        },
+        {
+            "atomic: Interlocked builtins", __LINE__,
+            SVI("long long x = 5;\n"
+               "long long old = _InterlockedCompareExchange64(&x, 9, 5);\n"
+               "long long n = _InterlockedIncrement64(&x);\n"
+               "return old == 5 && x == 10 && n == 10;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic: builtins in statement context", __LINE__,
+            SVI("int x = 1;\n"
+               "__atomic_fetch_add(&x, 2, __ATOMIC_RELAXED);\n"
+               "__atomic_exchange_n(&x, x + 1, __ATOMIC_SEQ_CST);\n"
+               "return x;\n"),
+            .exit_code = 4,
+        },
+        {
             "atomic type: volatile atomic", __LINE__,
             SVI("volatile _Atomic int x = 1;\n"
                "x = 2;\n"
@@ -6064,6 +6175,63 @@ TestFunction(test_interpreter){
             SVI("struct S { char c; int i; };\n"
                "return _Alignof(struct S);\n"),
             .exit_code = 4,
+        },
+        {
+            "alignas member raises struct alignment", __LINE__,
+            SVI("struct S { _Alignas(16) int x; int y; };\n"
+               "return _Alignof(struct S);\n"),
+            .exit_code = 16,
+        },
+        {
+            "alignas member pads struct size", __LINE__,
+            SVI("struct S { _Alignas(16) int x; int y; };\n"
+               "return (int)sizeof(struct S);\n"),
+            .exit_code = 16,
+        },
+        {
+            "alignas member on later field", __LINE__,
+            SVI("struct S { int a; _Alignas(16) int b; };\n"
+               "return (int)(_Alignof(struct S) * 100 + sizeof(struct S) + ((char*)&((struct S*)0)->b - (char*)0));\n"),
+            .exit_code = 16 * 100 + 32 + 16,
+        },
+        {
+            "alignas pointer member raises struct alignment", __LINE__,
+            SVI("struct S { _Alignas(16) int* x; int y; };\n"
+               "return (int)(_Alignof(struct S) * 100 + sizeof(struct S));\n"),
+            .exit_code = 16 * 100 + 16,
+        },
+        {
+            "alignas self-referential pointer member", __LINE__,
+            SVI("struct S { _Alignas(16) struct S* next; int y; };\n"
+               "return (int)(_Alignof(struct S) * 100 + sizeof(struct S));\n"),
+            .exit_code = 16 * 100 + 16,
+        },
+        {
+            "alignas typedef self-referential pointer member", __LINE__,
+            SVI("typedef struct S S;\n"
+               "struct S { _Alignas(16) S* next; int y; };\n"
+               "return (int)(_Alignof(struct S) * 100 + sizeof(struct S));\n"),
+            .exit_code = 16 * 100 + 16,
+        },
+        {
+            // mirrors CcField's packing: a 17-bit field sharing a 32-bit
+            // storage unit with 15 low bits, so storing 16 sets high bits
+            "wide bitfield in shared storage unit round-trips", __LINE__,
+            SVI("struct F { unsigned bitwidth:7, bitoffset:6, is_method:1, is_bitfield:1, alignment:17; };\n"
+               "struct F f = {0};\n"
+               "f.alignment = 16;\n"
+               "f.bitwidth = 5;\n"
+               "return (int)(f.alignment * 100 + f.bitwidth);\n"),
+            .exit_code = 16 * 100 + 5,
+        },
+        {
+            "wide bitfield read back after full write", __LINE__,
+            SVI("struct F { unsigned bitwidth:7, bitoffset:6, is_method:1, is_bitfield:1, alignment:17; };\n"
+               "struct F f;\n"
+               "f.bitwidth = 3; f.bitoffset = 2; f.is_method = 1; f.is_bitfield = 0; f.alignment = 16;\n"
+               "unsigned ok = f.alignment == 16 && f.bitwidth == 3 && f.bitoffset == 2 && f.is_method == 1 && f.is_bitfield == 0;\n"
+               "return (int)ok;\n"),
+            .exit_code = 1,
         },
         {
             "alignof union", __LINE__,

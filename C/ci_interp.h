@@ -29,7 +29,7 @@ struct CiAllocaBlock {
 
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
-    CiInterpFrame*_Null_unspecified parent;
+    _Alignas(16) CiInterpFrame*_Null_unspecified parent;
     Atom name;
     size_t pc;
     size_t op_count;
@@ -43,6 +43,8 @@ struct CiInterpFrame {
     void*_Null_unspecified varargs_buf; // points into trailing data, past frame_size
     CiAllocaBlock*_Null_unspecified alloca_list;
 };
+_Static_assert(_Alignof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
+_Static_assert(sizeof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
 
 typedef struct CiVirtualLib CiVirtualLib;
 struct CiVirtualLib {

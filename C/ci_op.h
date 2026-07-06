@@ -8,6 +8,7 @@
 #include "srcloc.h"
 #include "cc_stmt.h"
 #include "cc_expr.h"
+#include "cc_memory_order.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
 
@@ -57,6 +58,18 @@ enum CiFaluOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiFaluOp, uint32_t);
 
+// The hardware read-modify-write set; everything else (mod, shifts, floats,
+// 128-bit arithmetic) is a CAS loop in the lowered code.
+enum CiAtomicRmwOp TYPED_ENUM(uint32_t){
+    CI_ARMW_XCHG,
+    CI_ARMW_ADD,
+    CI_ARMW_SUB,
+    CI_ARMW_AND,
+    CI_ARMW_OR,
+    CI_ARMW_XOR,
+};
+TYPEDEF_ENUM(CiAtomicRmwOp, uint32_t);
+
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,
     CI_OP_EVAL_INTO,
@@ -78,6 +91,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_LOAD,
     CI_OP_STORE,
     CI_OP_MEMCOPY,
+    CI_OP_ZERO,
     CI_OP_LOAD_BITFIELD,
     CI_OP_STORE_BITFIELD,
     CI_OP_CALL,
@@ -89,6 +103,11 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_RETURN,
     CI_OP_RETURN_SLOT,
     CI_OP_SWITCH,
+    CI_OP_ATOMIC_LOAD,
+    CI_OP_ATOMIC_STORE,
+    CI_OP_ATOMIC_RMW,
+    CI_OP_ATOMIC_CAS,
+    CI_OP_FENCE,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
@@ -280,6 +299,14 @@ struct CiOp {
             SrcLoc loc;
         } memcopy;
         struct {
+            CiOpKind kind: 8; // CI_OP_ZERO
+            uint32_t _bitpad: 24;
+            uint32_t size;
+            uint32_t slot, offset;
+            uint64_t pad;
+            SrcLoc loc;
+        } zero;
+        struct {
             // like store, but a read-modify-write: insert the low bit_width
             // bits of slots[src:src+src_size] at bit_offset of the
             // src_size-byte storage unit at ptr[offset:]
@@ -310,6 +337,78 @@ struct CiOp {
                      offset;
             SrcLoc loc;
         } load_bf;
+        struct {
+            // slots[slot:slot+slot_size] = atomic load of ptr[offset:], ptr
+            // read from slots[src]; slot_size is a power of two <= 16
+            CiOpKind kind: 8; // CI_OP_ATOMIC_LOAD
+            CcMemoryOrder memorder: 4;
+            uint32_t _bitpad: 20;
+            uint32_t pad;
+            uint32_t slot, slot_size,
+                     src,
+                     offset;
+            SrcLoc loc;
+        } atomic_load;
+        struct {
+            // atomic store of slots[src:src+src_size] to ptr[offset:], ptr
+            // read from slots[slot]; src_size is a power of two <= 16
+            CiOpKind kind: 8; // CI_OP_ATOMIC_STORE
+            CcMemoryOrder memorder: 4;
+            uint32_t _bitpad: 20;
+            uint32_t pad;
+            uint32_t slot,
+                     src,
+                     src_size,
+                     offset;
+            SrcLoc loc;
+        } atomic_store;
+        struct {
+            // atomically: old = ptr[offset:]; ptr[offset:] = old <op>
+            // slots[src2]; slots[slot:slot+slot_size] = old. ptr read from
+            // slots[src]. slot_size is also the operand size: a power of two
+            // <= 8, or 16 for xchg only. slot is always a valid slot;
+            // discard means the old value is unused (a JIT may then use a
+            // non-fetching instruction)
+            CiOpKind kind: 8; // CI_OP_ATOMIC_RMW
+            CiAtomicRmwOp op: 8;
+            CcMemoryOrder memorder: 4;
+            uint32_t discard: 1,
+                     _bitpad: 11;
+            uint32_t offset;
+            uint32_t slot, slot_size,
+                     src,
+                     src2;
+            SrcLoc loc;
+        } atomic_rmw;
+        struct {
+            // atomically: old = ptr[offset:]; if old == slots[expected]:
+            // ptr[offset:] = slots[desired]. slots[expected:expected+size] =
+            // old (a no-op when the exchange happened); slots[slot] = 1-byte
+            // canonical bool of success. ptr read from slots[src]; weak
+            // permits spurious failure; size is a power of two <= 16
+            CiOpKind kind: 8; // CI_OP_ATOMIC_CAS
+            CcMemoryOrder memorder: 4;
+            CcMemoryOrder fail_memorder: 4;
+            uint32_t weak: 1,
+                     size: 5,
+                     _bitpad: 10;
+            uint32_t offset;
+            uint32_t slot,
+                     src,
+                     expected,
+                     desired;
+            SrcLoc loc;
+        } atomic_cas;
+        struct {
+            // memory fence; is_signal: compiler barrier only, no instruction
+            CiOpKind kind: 8; // CI_OP_FENCE
+            CcMemoryOrder memorder: 4;
+            uint32_t is_signal: 1,
+                     _bitpad: 19;
+            uint32_t _pad;
+            uint64_t pad[2];
+            SrcLoc loc;
+        } fence;
         struct {
             CiOpKind kind: 8; // CI_OP_CALL
             uint32_t nargs: 24;

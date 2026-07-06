@@ -14,6 +14,7 @@
 #include "cc_func.h"
 #include "cc_var.h"
 #include "cc_type.h"
+#include "cc_memory_order.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -100,6 +101,36 @@ ci_op_float_suffix(uint32_t float_kind){
 }
 
 static
+const
+char*
+ci_op_armw_name(CiAtomicRmwOp op){
+    switch(op){
+        case CI_ARMW_XCHG: return "xchg";
+        case CI_ARMW_ADD:  return "fetch_add";
+        case CI_ARMW_SUB:  return "fetch_sub";
+        case CI_ARMW_AND:  return "fetch_and";
+        case CI_ARMW_OR:   return "fetch_or";
+        case CI_ARMW_XOR:  return "fetch_xor";
+    }
+    return "?";
+}
+
+static
+const
+char*
+ci_op_memory_order(CcMemoryOrder m){
+    switch((uint32_t)m){
+    case CC_MO_RELAXED: return "relaxed";
+    case CC_MO_CONSUME: return "consume";
+    case CC_MO_ACQUIRE: return "acquire";
+    case CC_MO_RELEASE: return "release";
+    case CC_MO_ACQ_REL: return "acquire-release";
+    case CC_MO_SEQ_CST: return "seq-cst";
+    case CC_MO_COUNT: default: return "???";
+    }
+}
+
+static
 void
 ci_op_print(const CiOp* op, MStringBuilder* out){
     switch(op->kind){
@@ -141,8 +172,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                     case CCBT_int:
                     case CCBT_unsigned:
                         msb_write_literal(out, " = U\"");
-                        for(uint64_t i = 0; i < op->constant.immediate[1]-1; i++)
-                            msb_write_utf32(out, ((const uint32_t*)v)[i]);
+                        msb_write_utf32(out, ((const uint32_t*)v), op->constant.immediate[1]-1);
                         msb_write_literal(out, "\"");
                         return;
                     default:
@@ -311,6 +341,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             ci_op_print_deref(out, op->memcopy.src, op->memcopy.src_offset);
             msb_sprintf(out, " (%u bytes)", op->memcopy.size);
             break;
+        case CI_OP_ZERO:
+            msb_write_literal(out, "zero ");
+            ci_op_print_deref(out, op->zero.slot, op->zero.offset);
+            msb_sprintf(out, " (%u bytes)", op->zero.size);
+            break;
         case CI_OP_LOAD_BITFIELD:
             ci_op_print_range(out, op->load_bf.slot, op->load_bf.slot_size);
             msb_sprintf(out, " = bits%s[%u:%u] of ",
@@ -393,6 +428,39 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                 }
             }
             msb_sprintf(out, "default=>0x%x}", op->switch_.jump);
+            break;
+        case CI_OP_ATOMIC_LOAD:
+            ci_op_print_range(out, op->atomic_load.slot, op->atomic_load.slot_size);
+            msb_write_literal(out, " = ");
+            ci_op_print_deref(out, op->atomic_load.src, op->atomic_load.offset);
+            msb_sprintf(out, " (atomic %s)", ci_op_memory_order(op->atomic_load.memorder));
+            break;
+        case CI_OP_ATOMIC_STORE:
+            ci_op_print_deref(out, op->atomic_store.slot, op->atomic_store.offset);
+            msb_write_literal(out, " = ");
+            ci_op_print_range(out, op->atomic_store.src, op->atomic_store.src_size);
+            msb_sprintf(out, " (atomic %s)", ci_op_memory_order(op->atomic_store.memorder));
+            break;
+        case CI_OP_ATOMIC_RMW:
+            ci_op_print_range(out, op->atomic_rmw.slot, op->atomic_rmw.slot_size);
+            msb_sprintf(out, " = %s ", ci_op_armw_name(op->atomic_rmw.op));
+            ci_op_print_deref(out, op->atomic_rmw.src, op->atomic_rmw.offset);
+            msb_write_literal(out, ", ");
+            ci_op_print_range(out, op->atomic_rmw.src2, op->atomic_rmw.slot_size);
+            msb_sprintf(out, " (atomic %s)%s", ci_op_memory_order(op->atomic_rmw.memorder), op->atomic_rmw.discard?" (discard)":"");
+            break;
+        case CI_OP_ATOMIC_CAS:
+            ci_op_print_range(out, op->atomic_cas.slot, 1);
+            msb_sprintf(out, " = cas%s ", op->atomic_cas.weak?".weak":"");
+            ci_op_print_deref(out, op->atomic_cas.src, op->atomic_cas.offset);
+            msb_write_literal(out, ", expected=");
+            ci_op_print_range(out, op->atomic_cas.expected, op->atomic_cas.size);
+            msb_write_literal(out, ", desired=");
+            ci_op_print_range(out, op->atomic_cas.desired, op->atomic_cas.size);
+            msb_sprintf(out, " (atomic %s, fail %s)", ci_op_memory_order(op->atomic_cas.memorder), ci_op_memory_order(op->atomic_cas.fail_memorder));
+            break;
+        case CI_OP_FENCE:
+            msb_sprintf(out, "%s fence %s", op->fence.is_signal?"signal":"atomic", ci_op_memory_order(op->fence.memorder));
             break;
     }
 }

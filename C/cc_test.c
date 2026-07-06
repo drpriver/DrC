@@ -4422,6 +4422,23 @@ TestFunction(test_parse_decls){
                 {SVI("s"), SVI("int[:]"), SVI("(int[:])a")},
             },
         },
+        {
+            "sizeof aligns", __LINE__,
+            SVI("struct S {_Alignas(16) int x[5];} s = {1};\n"
+                "_Static_assert(sizeof(struct S)==32, \"\");\n"),
+            .vars = {
+                {SVI("s"), SVI("struct S"), SVI("{1}")},
+            },
+        },
+        {
+            "alignas after pragma pack()", __LINE__,
+            SVI("#pragma pack()\n"
+                "struct S {_Alignas(16) int x[5];} s = {1};\n"
+                "_Static_assert(sizeof(struct S)==32, \"\");\n"),
+            .vars = {
+                {SVI("s"), SVI("struct S"), SVI("{1}")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
