@@ -3801,62 +3801,73 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             return 0;
         }
         case CI_OP_CALL: {
-            CcFunc* func = op->call.func;
-            void* result;
-            size_t rsize;
-            if(op->call.ret_size){
-                result = (char*)frame->slots + op->call.ret_slot;
-                rsize = op->call.ret_size;
-            }
-            else {
-                result = ci_discard_buf;
-                rsize = sizeof ci_discard_buf;
-            }
-            void** argv = (void**)((char*)frame->slots + op->call.argv_slot);
-            if(func->defined){
-                int err = ci_call_argv(ci, frame, func, argv, op->call.nargs, NULL, result, rsize, op->loc);
-                if(err) return err;
+            CiCallDescriptor* d = op->call.descrip;
+            if(op->call.is_indirect){
+                void* result;
+                size_t rsize;
+                if(op->call.ret_size){
+                    result = (char*)frame->slots + op->call.ret_slot;
+                    rsize = op->call.ret_size;
+                }
+                else {
+                    result = ci_discard_buf;
+                    rsize = sizeof ci_discard_buf;
+                }
+                void (*fn)(void);
+                memcpy(&fn, (char*)frame->slots + op->call.argv_slot, sizeof fn);
+                void** argv = (void**)((char*)frame->slots + op->call.argv_slot + 8);
+                // The pointer may wrap an interpreted function.
+                CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
+                if(interp_func){
+                    int err = ci_call_argv(ci, frame, interp_func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc);
+                    if(err) return err;
+                    frame->pc++;
+                    return 0;
+                }
+                NativeCallCache* cache;
+                if(op->call.is_variadic)
+                    cache = PM_get(&ci->ffi_cache, d->expr);
+                else
+                    cache = PM_get(&ci->ffi_cache, d->func_type);
+                if(!cache)
+                    return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
+                native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
             }
-            void (*fn)(void) = func->native_func;
-            if(!fn)
-                return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
-            NativeCallCache* cache = PM_get(&ci->ffi_cache, func->type);
-            if(!cache)
-                return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
-            native_call(cache, fn, argv, result);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_CALL_INDIRECT: {
-            void* result;
-            size_t rsize;
-            if(op->call_indirect.ret_size){
-                result = (char*)frame->slots + op->call_indirect.ret_slot;
-                rsize = op->call_indirect.ret_size;
-            }
             else {
-                result = ci_discard_buf;
-                rsize = sizeof ci_discard_buf;
-            }
-            void (*fn)(void);
-            memcpy(&fn, (char*)frame->slots + op->call_indirect.argv_slot, sizeof fn);
-            void** argv = (void**)((char*)frame->slots + op->call_indirect.argv_slot + 8);
-            // The pointer may wrap an interpreted function.
-            CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
-            if(interp_func){
-                int err = ci_call_argv(ci, frame, interp_func, argv, op->call_indirect.nargs, NULL, result, rsize, op->loc);
-                if(err) return err;
+                CcFunc* func = d->func;
+                void* result;
+                size_t rsize;
+                if(op->call.ret_size){
+                    result = (char*)frame->slots + op->call.ret_slot;
+                    rsize = op->call.ret_size;
+                }
+                else {
+                    result = ci_discard_buf;
+                    rsize = sizeof ci_discard_buf;
+                }
+                void** argv = (void**)((char*)frame->slots + op->call.argv_slot);
+                if(func->defined){
+                    int err = ci_call_argv(ci, frame, func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc);
+                    if(err) return err;
+                    frame->pc++;
+                    return 0;
+                }
+                void (*fn)(void) = func->native_func;
+                if(!fn)
+                    return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
+                NativeCallCache* cache;
+                if(op->call.is_variadic)
+                    cache = PM_get(&ci->ffi_cache, d->expr);
+                else
+                    cache = PM_get(&ci->ffi_cache, func->type);
+                if(!cache)
+                    return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
+                native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
             }
-            NativeCallCache* cache = PM_get(&ci->ffi_cache, op->call_indirect.ftype);
-            if(!cache)
-                return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
-            native_call(cache, fn, argv, result);
-            frame->pc++;
-            return 0;
         }
         case CI_OP_LOAD: {
             char* ptr;

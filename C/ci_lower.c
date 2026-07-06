@@ -99,7 +99,7 @@ static CiAluOp ci_alu_op_for(CcExprKind kind);
 static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
 static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
-static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
+static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
 static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size, _Bool is_ptr, uint32_t elem_sz, _Bool op_unsigned);
@@ -1276,13 +1276,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(handled) return 0;
             break;
         }
-        case CC_EXPR_CALL:{
-            _Bool handled;
-            err = ci_lower_call(ci, ctx, e, dest, out, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
+        case CC_EXPR_CALL:
+            return ci_lower_call(ci, ctx, e, dest, out);
         case CC_EXPR_ADD:
         case CC_EXPR_SUB:
         case CC_EXPR_MUL:
@@ -2059,10 +2054,9 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
 
 static
 int
-ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled){
+ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     int err;
     CcParser* p = &ci->parser;
-    *handled = 0;
     CcExpr* callee = e->lhs;
     CcFunc* func = NULL;
     CcFunction* ftype;
@@ -2087,11 +2081,6 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     uint32_t nargs = e->call.nargs;
     if(!ftype->is_variadic && nargs != ftype->param_count)
         return ci_unimplemented(ci, e->loc, "K&R calls");
-    if(ftype->is_variadic)
-        return 0;
-    if(nargs >= 1u << 24)
-        return ci_error(ci, e->loc, "Too many args to lower: %u", (unsigned)nargs);
-    *handled = 1;
     uint32_t ret_size = 0;
     if(out){
         err = ci_lower_dest(ctx, &dest, out->size);
@@ -2114,10 +2103,17 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         if(err) return err;
         argv_cell += 8;
     }
+    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * sizeof d->arg_sizes[0]);
+    if(!d) return CI_OOM_ERROR;
+    if(func) d->func = func;
+    else d->func_type = ftype;
+    d->nargs = nargs;
+    d->expr = e;
     for(uint32_t i = 0; i < nargs; i++){
         uint32_t asz;
         err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &asz);
         if(err) return err;
+        d->arg_sizes[i] = asz;
         uint32_t slot_sz = asz < 8 ? 8 : asz;
         uint32_t slot;
         err = ci_alloc_slot(ctx, slot_sz, slot_sz > 8 ? 16 : 8, &slot);
@@ -2141,30 +2137,18 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
-    if(func)
-        *op = (CiOp){
-            .call = {
-                .kind = CI_OP_CALL,
-                .nargs = nargs,
-                .ret_slot = out? dest : 0,
-                .ret_size = ret_size,
-                .argv_slot = argv_slot,
-                .func = func,
-                .loc = e->loc,
-            }
-        };
-    else
-        *op = (CiOp){
-            .call_indirect = {
-                .kind = CI_OP_CALL_INDIRECT,
-                .nargs = nargs,
-                .ret_slot = out? dest : 0,
-                .ret_size = ret_size,
-                .argv_slot = argv_slot,
-                .ftype = ftype,
-                .loc = e->loc,
-            }
-        };
+    *op = (CiOp){
+        .call = {
+            .kind = CI_OP_CALL,
+            .is_indirect = func?0:1,
+            .is_variadic = ftype->is_variadic && nargs != ftype->param_count,
+            .ret_slot = out? dest : 0,
+            .ret_size = ret_size,
+            .argv_slot = argv_slot,
+            .descrip = d,
+            .loc = e->loc,
+        }
+    };
     ctx->temp = temp;
     return 0;
 }
@@ -3288,13 +3272,8 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
             return 0;
         }
-        case CC_EXPR_CALL:{
-            _Bool handled;
-            err = ci_lower_call(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
+        case CC_EXPR_CALL:
+            return ci_lower_call(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_DOT:
         case CC_EXPR_ARROW:
             err = ci_lower_expr_discard(ci, ctx, e->values[0]);

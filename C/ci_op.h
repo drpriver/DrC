@@ -95,7 +95,6 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_LOAD_BITFIELD,
     CI_OP_STORE_BITFIELD,
     CI_OP_CALL,
-    CI_OP_CALL_INDIRECT,
     CI_OP_ISTRUE,
     CI_OP_JUMP,
     CI_OP_JUMP_FALSE,
@@ -110,6 +109,17 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FENCE,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
+
+typedef struct CiCallDescriptor CiCallDescriptor;
+struct CiCallDescriptor {
+    union {
+        CcFunction*_Nonnull func_type;
+        CcFunc* _Nonnull func;
+    };
+    CcExpr*_Nonnull expr;
+    uint32_t nargs;
+    uint32_t arg_sizes[];
+};
 
 typedef struct CiSwitchTable CiSwitchTable;
 struct CiSwitchTable {
@@ -411,22 +421,13 @@ struct CiOp {
         } fence;
         struct {
             CiOpKind kind: 8; // CI_OP_CALL
-            uint32_t nargs: 24;
+            uint32_t is_indirect: 1, is_variadic:1, _pad:22;
             uint32_t ret_slot,
                      ret_size,
                      argv_slot;
-            CcFunc*_Nonnull func;
+            CiCallDescriptor *_Nonnull descrip;
             SrcLoc loc;
         } call;
-        struct {
-            CiOpKind kind: 8; // CI_OP_CALL_INDIRECT
-            uint32_t nargs: 24;
-            uint32_t ret_slot,
-                     ret_size,
-                     argv_slot;
-            CcFunction*_Nonnull ftype;
-            SrcLoc loc;
-        } call_indirect;
         struct {
             // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
             // float_kind = CcBasicTypeKind when the source is a float, else 0;

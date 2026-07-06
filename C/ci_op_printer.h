@@ -362,30 +362,32 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             ci_op_print_range(out, op->store_bf.src, op->store_bf.src_size);
             break;
         case CI_OP_CALL:{
-            Atom name = op->call.func->name;
-            const char *s = name&&name->length?name->data:"<anon>";
-            if(op->call.ret_size){
-                ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
-                msb_write_literal(out, " = ");
+            CiCallDescriptor* d = op->call.descrip;
+            if(op->call.is_indirect){
+                if(op->call.ret_size){
+                    ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
+                    msb_write_literal(out, " = ");
+                }
+                msb_sprintf(out, "call *[%u](", op->call.argv_slot);
+                for(uint32_t i = 0; i < d->nargs; i++){
+                    if(i) msb_write_literal(out, ", ");
+                    msb_sprintf(out, "*[%u]", op->call.argv_slot + 8 + i * 8);
+                }
+                msb_write_char(out, ')');
+            }else {
+                Atom name = d->func->name;
+                const char *s = name&&name->length?name->data:"<anon>";
+                if(op->call.ret_size){
+                    ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
+                    msb_write_literal(out, " = ");
+                }
+                msb_sprintf(out, "call %s(", s);
+                for(uint32_t i = 0; i < d->nargs; i++){
+                    if(i) msb_write_literal(out, ", ");
+                    msb_sprintf(out, "*[%u]", op->call.argv_slot + i * 8);
+                }
+                msb_write_char(out, ')');
             }
-            msb_sprintf(out, "call %s(", s);
-            for(uint32_t i = 0; i < op->call.nargs; i++){
-                if(i) msb_write_literal(out, ", ");
-                msb_sprintf(out, "*[%u]", op->call.argv_slot + i * 8);
-            }
-            msb_write_char(out, ')');
-        } break;
-        case CI_OP_CALL_INDIRECT:{
-            if(op->call_indirect.ret_size){
-                ci_op_print_range(out, op->call_indirect.ret_slot, op->call_indirect.ret_size);
-                msb_write_literal(out, " = ");
-            }
-            msb_sprintf(out, "call *[%u](", op->call_indirect.argv_slot);
-            for(uint32_t i = 0; i < op->call_indirect.nargs; i++){
-                if(i) msb_write_literal(out, ", ");
-                msb_sprintf(out, "*[%u]", op->call_indirect.argv_slot + 8 + i * 8);
-            }
-            msb_write_char(out, ')');
         } break;
         case CI_OP_ISTRUE:
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);

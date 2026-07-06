@@ -734,6 +734,22 @@ TestFunction(test_interop){
             .exit_code=3,
             .skip = 1, // TODO: this passes on macos, verify on other systems
         },
+        {
+            "variadic indirect zero varargs", __LINE__,
+            SVI("char buf[8] = {0};\n"
+                "typeof(snprintf)* p = snprintf;\n"
+                "return p(buf, sizeof buf, \"hi\");\n"),
+            {{SV("snprintf"), (void*)snprintf}},
+            .exit_code = 2,
+        },
+        {
+            "variadic indirect with varargs", __LINE__,
+            SVI("char buf[8] = {0};\n"
+                "typeof(snprintf)* p = snprintf;\n"
+                "return p(buf, sizeof buf, \"%d\", 123);\n"),
+            {{SV("snprintf"), (void*)snprintf}},
+            .exit_code = 3,
+        },
     };
     int err;
     static int idx = 0;
@@ -865,7 +881,6 @@ TestFunction(test_interp){
             .exit_code = 0,
             .skip = IS_WINDOWS,
         },
-        // smoke test, can't actually test the effect of this
         {
             "append lib", __LINE__,
             SVI("#pragma lib_path \"/hope/this/does/not/exist\"\n"
