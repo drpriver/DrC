@@ -5951,22 +5951,10 @@ TestFunction(test_parse_errors){
             SVI("(test):3:17: error: atomic operand size 3 is not a power of 2\n"),
         },
         {
-            "prefix increment atomic float", __LINE__,
-            SVI("_Atomic float f;\n"
-               "void g(void){ ++f; }\n"),
-            SVI("(test):2:15: error: atomic read-modify-write requires integer atomic type\n"),
-        },
-        {
-            "compound assignment atomic float", __LINE__,
-            SVI("_Atomic float f;\n"
-               "void g(void){ f += 1.0f; }\n"),
-            SVI("(test):2:17: error: atomic read-modify-write requires integer atomic type\n"),
-        },
-        {
             "compound assignment atomic struct", __LINE__,
             SVI("_Atomic(struct S { int x; }) s;\n"
                "void g(void){ s += s; }\n"),
-            SVI("(test):2:17: error: atomic read-modify-write requires integer atomic type\n"),
+            SVI("(test):2:17: error: atomic read-modify-write requires scalar atomic type\n"),
         },
         {
             "atomic fetch add on aggregate", __LINE__,

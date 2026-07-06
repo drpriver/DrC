@@ -342,14 +342,14 @@ cc_check_atomic_object_access(CcParser* p, CcQualType type, SrcLoc loc){
 
 static
 int
-cc_check_atomic_integer_rmw(CcParser* p, CcQualType type, SrcLoc loc){
+cc_check_atomic_rmw(CcParser* p, CcQualType type, SrcLoc loc){
     if(!type.is_atomic) return 0;
     CcQualType base = type;
     base.is_atomic = 0;
     if(!ccqt_is_basic(base) && ccqt_kind(base) == CC_ENUM)
         base = ccqt_as_enum(base)->underlying;
-    if((!ccqt_is_basic(base) || !ccbt_is_integer(base.basic.kind)) && ccqt_kind(base) != CC_POINTER)
-        return cc_error(p, loc, "atomic read-modify-write requires integer atomic type");
+    if((!ccqt_is_basic(base) || (!ccbt_is_integer(base.basic.kind) && !ccbt_is_float(base.basic.kind))) && ccqt_kind(base) != CC_POINTER)
+        return cc_error(p, loc, "atomic read-modify-write requires scalar atomic type");
     return cc_check_atomic_object_access(p, type, loc);
 }
 
@@ -1293,7 +1293,7 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
                 if(err) return err;
             }
             else {
-                err = cc_check_atomic_integer_rmw(p, left->type, tok.loc);
+                err = cc_check_atomic_rmw(p, left->type, tok.loc);
                 if(err) return err;
             }
             if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
@@ -1976,7 +1976,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                             return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                     }
-                    err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                    err = cc_check_atomic_rmw(p, operand->type, tok.loc);
                     if(err) return err;
                     result_type = operand->type;
                     break;
@@ -3742,7 +3742,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                         return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                 }
-                err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                err = cc_check_atomic_rmw(p, operand->type, tok.loc);
                 if(err) return err;
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTINC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;
@@ -3764,7 +3764,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     if(tk != CC_POINTER && tk != CC_BASIC && tk != CC_ENUM)
                         return cc_error(p, tok.loc, "increment/decrement requires arithmetic or pointer type");
                 }
-                err = cc_check_atomic_integer_rmw(p, operand->type, tok.loc);
+                err = cc_check_atomic_rmw(p, operand->type, tok.loc);
                 if(err) return err;
                 CcExpr* node = cc_make_expr(p, CC_EXPR_POSTDEC, tok.loc, operand->type, 0);
                 if(!node) return CC_OOM_ERROR;

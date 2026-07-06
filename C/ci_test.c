@@ -1101,6 +1101,82 @@ TestFunction(test_interpreter){
             .exit_code = 15,
         },
         {
+            "flat expr: float incdec pre and post value", __LINE__,
+            SVI("int f(void){\n"
+               "    double d = 5.0;\n"
+               "    double a = d++;\n"          // post: a=5, d=6
+               "    double b = ++d;\n"          // pre:  b=7, d=7
+               "    float g = 2.0f;\n"
+               "    float c = g--;\n"           // post: c=2, g=1
+               "    return (int)(a*100 + b*10 + d + c);\n"  // 500+70+7+2=579
+               "}\n"
+               "return f();\n"),
+            .exit_code = 579,
+        },
+        {
+            "flat expr: float incdec through pointer", __LINE__,
+            SVI("int f(void){\n"
+               "    double d = 10.0;\n"
+               "    double* p = &d;\n"
+               "    ++*p;\n"                     // d=11
+               "    (*p)--;\n"                   // d=10, discarded
+               "    double x = (*p)++;\n"        // x=10, d=11
+               "    return (int)(x*10 + d);\n"   // 100+11=111
+               "}\n"
+               "return f();\n"),
+            .exit_code = 111,
+        },
+        {
+            "flat expr: atomic float incdec", __LINE__,
+            SVI("int f(void){\n"
+               "    _Atomic double d = 3.0;\n"
+               "    double a = d++;\n"           // post: a=3, d=4
+               "    double b = ++d;\n"           // pre:  b=5, d=5
+               "    d--;\n"                       // d=4, discarded
+               "    return (int)(a*100 + b*10 + d);\n"  // 300+50+4=354
+               "}\n"
+               "return f();\n"),
+            .exit_code = 354,
+        },
+        {
+            "flat expr: atomic float compound assign", __LINE__,
+            SVI("int f(void){\n"
+               "    _Atomic double d = 4.0;\n"
+               "    d += 1.0;\n"                  // 5, discarded
+               "    d *= 3.0;\n"                  // 15, discarded
+               "    double v = (d -= 5.0);\n"     // 10, value used
+               "    _Atomic float g = 8.0f;\n"
+               "    g /= 2.0f;\n"                 // 4
+               "    return (int)(v*10 + g);\n"    // 100+4=104
+               "}\n"
+               "return f();\n"),
+            .exit_code = 104,
+        },
+        {
+            "flat expr: atomic 128-bit incdec", __LINE__,
+            SVI("int f(void){\n"
+               "    _Atomic __int128 x = 100;\n"
+               "    __int128 a = x++;\n"          // post: a=100, x=101
+               "    __int128 b = ++x;\n"          // pre:  b=102, x=102
+               "    x--;\n"                        // x=101, discarded
+               "    return (int)(a + b + x);\n"   // 100+102+101=303
+               "}\n"
+               "return f();\n"),
+            .exit_code = 303,
+        },
+        {
+            "flat expr: atomic 128-bit compound assign", __LINE__,
+            SVI("int f(void){\n"
+               "    _Atomic __int128 x = 6;\n"
+               "    x += 4;\n"                     // 10, discarded
+               "    x *= 5;\n"                     // 50, discarded (rmw can't; cas loop)
+               "    __int128 v = (x -= 2);\n"      // 48, value used
+               "    return (int)v;\n"
+               "}\n"
+               "return f();\n"),
+            .exit_code = 48,
+        },
+        {
             "flat expr: array subscript in bounds", __LINE__,
             SVI("int f(void){\n"
                "    int a[4];\n"
