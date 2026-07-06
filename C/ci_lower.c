@@ -113,6 +113,7 @@ static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target)
 static int ci_lower_resolve_gotos(CiInterpreter*, CiLowerCtx*);
 static int ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b);
 
+
 static
 int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){

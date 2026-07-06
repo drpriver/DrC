@@ -39,6 +39,23 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifndef force_inline
+#if defined(__GNUC__) || defined(__clang__)
+#define force_inline static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define force_inline static inline __forceinline
+#else
+#define force_inline static inline
+#endif
+#endif
+
+force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame);
+
+static
+int
+ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
+    return _ci_interp_step(ci, frame);
+}
 
 enum {
     CI_NO_ERROR = _cc_no_error,
@@ -2981,10 +2998,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 .return_size = sizeof ci_discard_buf,
             };
             ret = 0;
-            while(module_frame.pc < module_frame.op_count){
-                err = ci_interp_step(ci, &module_frame);
-                if(err) break;
-            }
+            err = ci_interp_run(ci, &module_frame);
             ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
             if(slots)
                 Allocator_free(ci_allocator(ci), slots, module->slot_size);
@@ -3473,9 +3487,9 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
     return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
 }
 
-static
+force_inline
 int
-ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
+_ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
     if(frame->pc >= frame->op_count)
         return 0;
     const CiOp* op = &frame->ops[frame->pc];
@@ -4421,13 +4435,20 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, vo
             va_buf += arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
         }
     }
-    err = 0;
-    while(frame->pc < frame->op_count){
-        err = ci_interp_step(ci, frame);
-        if(err) break;
-    }
+    err = ci_interp_run(ci, frame);
     ci_free_alloca_list(ci_allocator(ci), frame->alloca_list);
     Allocator_free(ci_allocator(ci), frame, alloc_size);
+    return err;
+}
+
+static
+int
+ci_interp_run(CiInterpreter* ci, CiInterpFrame* frame){
+    int err = 0;
+    while(frame->pc < frame->op_count){
+        err = _ci_interp_step(ci, frame);
+        if(err) break;
+    }
     return err;
 }
 
