@@ -11699,8 +11699,9 @@ int
 cc_parse_func_body(CcParser* p, CcFunc* f){
     if(!f->defined) return CC_UNREACHABLE_ERROR;
     if(f->parsed) return 0;
+    if(f->parse_failed) return CC_SYNTAX_ERROR;
     Marray(CcToken)* tokens = f->tokens;
-    if(!tokens) return CC_SYNTAX_ERROR;
+    if(!tokens){ f->parse_failed = 1; return CC_SYNTAX_ERROR; }
     // Append EOF sentinel so parsing doesn't fall through to the main stream.
     CcToken eof_tok = {.type = CC_EOF};
     int eof_err = ma_push(CcToken)(tokens, cc_allocator(p), eof_tok);
@@ -11722,6 +11723,7 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
     p->pending = saved_pending;
     cc_release_scratch(p, tokens);
     f->tokens = NULL;
+    if(err) f->parse_failed = 1;
     return err;
 }
 

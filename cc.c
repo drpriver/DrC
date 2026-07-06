@@ -395,11 +395,9 @@ int main(int argc, char** argv, char** envp){
                 CcFunc* func = items[i].p;
                 if(!func->defined) continue;
                 StringView d = {atom->length, atom->data};
-                if(sv_startswith(d, SV("_"))) continue;
                 err = ci_resolve_root(&interp, d);
                 if(err){
                     log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
-                    cpp_discard_all_input(&interp.parser.cpp);
                     err = 0;
                     continue;
                 }

@@ -44,10 +44,11 @@ struct CcFunc {
              defined: 1,
              parsed:  1, // If 0, then just an array of tokens instead of array of stmts and needs
                          // to be parsed on first use or codegen.
+             parse_failed: 1, // Body failed to parse; tokens have been released. Don't retry.
              addr_taken: 1, // address taken (used as value, not just called directly)
              libc_builtin: 1,
              printf_like: 1,
-             _padding: 24;
+             _padding: 23;
     uint32_t frame_size; // size of params + automatic local vars + temporaries;
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.

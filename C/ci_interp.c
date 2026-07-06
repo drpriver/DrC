@@ -5008,6 +5008,7 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
             continue;
         }
         if(!libc_only){
+            if(func->parse_failed) continue;
             if(!func->parsed){
                 int err = cc_parse_func_body(p, func);
                 if(err) return err;
