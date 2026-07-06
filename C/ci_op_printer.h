@@ -376,14 +376,14 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_char(out, ')');
         } break;
         case CI_OP_CALL_INDIRECT:{
-            if(op->calli.ret_size){
-                ci_op_print_range(out, op->calli.ret_slot, op->calli.ret_size);
+            if(op->call_indirect.ret_size){
+                ci_op_print_range(out, op->call_indirect.ret_slot, op->call_indirect.ret_size);
                 msb_write_literal(out, " = ");
             }
-            msb_sprintf(out, "call *[%u](", op->calli.argv_slot);
-            for(uint32_t i = 0; i < op->calli.nargs; i++){
+            msb_sprintf(out, "call *[%u](", op->call_indirect.argv_slot);
+            for(uint32_t i = 0; i < op->call_indirect.nargs; i++){
                 if(i) msb_write_literal(out, ", ");
-                msb_sprintf(out, "*[%u]", op->calli.argv_slot + 8 + i * 8);
+                msb_sprintf(out, "*[%u]", op->call_indirect.argv_slot + 8 + i * 8);
             }
             msb_write_char(out, ')');
         } break;

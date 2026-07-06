@@ -426,7 +426,7 @@ struct CiOp {
                      argv_slot;
             CcFunction*_Nonnull ftype;
             SrcLoc loc;
-        } calli;
+        } call_indirect;
         struct {
             // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
             // float_kind = CcBasicTypeKind when the source is a float, else 0;

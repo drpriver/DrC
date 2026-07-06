@@ -2072,32 +2072,25 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     }
     else {
         CcQualType ct = callee->type;
-        if(ccqt_kind(ct) == CC_FUNCTION && callee->kind == CC_EXPR_DEREF){
+        while(ccqt_kind(ct) == CC_FUNCTION && callee->kind == CC_EXPR_DEREF){
             // (*fp)(...): the function pointer is the deref's operand
             callee = callee->lhs;
             ct = callee->type;
         }
         if(ccqt_kind(ct) != CC_POINTER)
-            return 0; // function-typed callees have no loadable value
+            return ci_unreachable(ci, e->loc, "calling a non-function-pointer?");
         CcQualType pointee = ccqt_as_ptr(ct)->pointee;
         if(ccqt_kind(pointee) != CC_FUNCTION)
-            return 0;
+            return ci_unreachable(ci, e->loc, "calling a non-function pointer?");
         ftype = ccqt_as_function(pointee);
     }
     uint32_t nargs = e->call.nargs;
-    if(ftype->is_variadic || nargs != ftype->param_count)
+    if(!ftype->is_variadic && nargs != ftype->param_count)
+        return ci_unimplemented(ci, e->loc, "K&R calls");
+    if(ftype->is_variadic)
         return 0;
     if(nargs >= 1u << 24)
-        return 0; // the ops' nargs is 24 bits
-    for(uint32_t i = 0; i < nargs; i++){
-        uint32_t psz, asz;
-        err = cc_sizeof_as_uint(p, ftype->params[i], e->loc, &psz);
-        if(err) return err;
-        err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &asz);
-        if(err) return err;
-        if(asz != psz)
-            return 0;
-    }
+        return ci_error(ci, e->loc, "Too many args to lower: %u", (unsigned)nargs);
     *handled = 1;
     uint32_t ret_size = 0;
     if(out){
@@ -2162,7 +2155,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         };
     else
         *op = (CiOp){
-            .calli = {
+            .call_indirect = {
                 .kind = CI_OP_CALL_INDIRECT,
                 .nargs = nargs,
                 .ret_slot = out? dest : 0,
