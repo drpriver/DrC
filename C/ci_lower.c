@@ -98,7 +98,7 @@ static _Bool ci_falu_type(CcQualType t);
 static CiAluOp ci_alu_op_for(CcExprKind kind);
 static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
 static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
-static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled);
+static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
@@ -1270,13 +1270,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_PREINC:
         case CC_EXPR_PREDEC:
         case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC:{
-            _Bool handled;
-            err = ci_lower_incdec(ci, ctx, e, dest, out, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
+        case CC_EXPR_POSTDEC:
+            return ci_lower_incdec(ci, ctx, e, dest, out);
         case CC_EXPR_CALL:
             return ci_lower_call(ci, ctx, e, dest, out);
         case CC_EXPR_ADD:
@@ -1750,15 +1745,11 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     return 0;
 }
 
-// Lower eligible ++/-- (automatic variable of integer or pointer type) into
-// ops. out is null when the value is unused (statement context); *handled is
-// 0 when the expression must fall back instead.
 static
 int
-ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, _Bool* handled){
+ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     int err;
     CcParser* p = &ci->parser;
-    *handled = 0;
     CcExpr* lhs = e->lhs;
     uint32_t size;
     err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
@@ -1794,7 +1785,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         }
     }
     else {
-        return 0; // long double, non-scalar, etc fall back
+        return ci_unimplemented(ci, e->loc, "incdec on unsupported type");
     }
     _Bool is_pre = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_PREDEC;
     _Bool is_inc = e->kind == CC_EXPR_PREINC || e->kind == CC_EXPR_POSTINC;
@@ -1810,7 +1801,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     CiOp* op;
     uint32_t vslot;
     if(ci_frame_lvalue(lhs, &vslot)){
-        *handled = 1;
         if(out && !is_pre){
             // the post forms yield the old value, captured before modifying
             err = ci_lower_dest(ctx, &dest, size);
@@ -1909,7 +1899,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         CiLowerAddr a;
         err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
         if(err) return err;
-        *handled = 1;
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
@@ -2081,16 +2070,14 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     _Bool is_bf = (lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW)
         && lhs->field_loc.bit_width;
     if(is_bf && size > 8){
-        // the bitfield load/store ops work in 64-bit storage units
         ctx->temp = save;
-        return 0;
+        return ci_unimplemented(ci, e->loc, "incdec on a 128-bit bitfield");
     }
     if(is_bf)
         err = ci_lower_bitfield_addr(ci, ctx, lhs, &a);
     else
         err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
     if(err) return err;
-    *handled = 1;
     if(is_bf){
         err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size);
         if(err) return err;
@@ -2120,29 +2107,44 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     *op = (CiOp){
         .constant = {
             .kind = CI_OP_CONST,
-            .bt_kind = (uint32_t)ci_target(ci)->size_type,
+            .bt_kind = step_bt,
             .slot = sslot,
-            .immsize = 8,
+            .immsize = step_immsize,
             .immediate = {step},
             .loc = e->loc,
         }
     };
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
-    *op = (CiOp){
-        .alu = {
-            .kind = alukind,
-            .slot = newv,
-            .slot_size = size,
-            .src = old,
-            .src_size = size,
-            .src2 = sslot,
-            .src2_size = 8,
-            .op = is_inc?CI_ALU_ADD:CI_ALU_SUB,
-            .is_unsigned = 1,
-            .loc = e->loc,
-        }
-    };
+    if(is_float){
+        *op = (CiOp){
+            .falu32 = {
+                .kind = alukind,
+                .op = fop,
+                .slot = newv,
+                .slot_size = size,
+                .src = old,
+                .src2 = sslot,
+                .loc = e->loc,
+            }
+        };
+    }
+    else {
+        *op = (CiOp){
+            .alu = {
+                .kind = alukind,
+                .slot = newv,
+                .slot_size = size,
+                .src = old,
+                .src_size = size,
+                .src2 = sslot,
+                .src2_size = 8,
+                .op = is_inc?CI_ALU_ADD:CI_ALU_SUB,
+                .is_unsigned = 1,
+                .loc = e->loc,
+            }
+        };
+    }
     if(is_bf){
         err = ci_emit_store_bitfield(ctx, lhs, a, newv, size);
         if(err) return err;
@@ -3313,13 +3315,8 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_PREINC:
         case CC_EXPR_PREDEC:
         case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC:{
-            _Bool handled;
-            err = ci_lower_incdec(ci, ctx, e, CI_NO_SLOT, NULL, &handled);
-            if(err) return err;
-            if(handled) return 0;
-            break;
-        }
+        case CC_EXPR_POSTDEC:
+            return ci_lower_incdec(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_ADD:
         case CC_EXPR_SUB:
         case CC_EXPR_MUL:
