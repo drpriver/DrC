@@ -110,6 +110,8 @@ enum {
     CC_UNIMPLEMENTED_ERROR  = _cc_unimplemented_error,
     CC_FILE_NOT_FOUND_ERROR = _cc_file_not_found_error,
     CC_VALUE_ERROR          = _cc_invalid_value_error,
+    CC_OVERFLOW_ERROR       = _cc_overflow_error,
+    CC_NOT_CONSTANT_ERROR   = _cc_not_constant_error,
 };
 
 struct CcStmtSink {
@@ -2169,6 +2171,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* ev;
                     err = cc_eval_expr(p, arg, &ev);
                     if(!err) cc_release_expr(p, ev);
+                    if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
+                    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                     cc_release_expr(p, arg);
                     CcExpr* node = cc_int64_expr(p, tok.loc, ccqt_basic(CCBT_int), err?0:1);
                     if(!node) return CC_OOM_ERROR;
@@ -2223,6 +2227,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                             int64_t idx;
                             err = cc_eval_integer(p, idx_expr, &idx);
                             cc_release_expr(p, idx_expr);
+                            if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                             if(err)
                                 return cc_error(p, next.loc, "array index in __builtin_offsetof must be a constant integer");
                             uint32_t elem_size;
@@ -2508,6 +2513,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         err = cc_eval_integer(p, const_expr, &ev);
                         SrcLoc eloc = const_expr->loc;
                         cc_release_expr(p, const_expr);
+                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                         if(err)
                             return cc_error(p, eloc, "memory order must be a constant expression");
                         const_vals[i] = (unsigned)ev;
@@ -2544,6 +2550,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     int64_t ev;
                     err = cc_eval_integer(p, const_expr, &ev);
+                    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                     if(err)
                         return cc_error(p, const_expr->loc, "memory order must be a constant expression");
                     unsigned order = (unsigned)ev;
@@ -4057,6 +4064,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             return cc_error(p, member.loc, "push method only allowed at global scope");
                         CcExpr* tv;
                         err = cc_eval_expr(p, operand, &tv);
+                        if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
+                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                         if(err || !ccqt_bt_eq(tv->type, CCBT__Type))
                             return cc_error(p, member.loc, "push_method requires a constant type");
                         CcQualType qt = tv->type_value;
@@ -4422,7 +4431,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         err = cc_eval_integer(p, idx_expr, &idx_signed);
                         cc_release_expr(p, idx_expr);
                         if(err){
-                            err = cc_error(p, dot.loc, "positional designator must be a constant integer expression"); goto call_cleanup;
+                            if(err == CC_NOT_CONSTANT_ERROR)
+                                err = cc_error(p, dot.loc, "positional designator must be a constant integer expression");
+                            goto call_cleanup;
                         }
                         if(idx_signed < 0 || idx_signed > UINT32_MAX){
                             err = cc_error(p, dot.loc, "positional designator value out of range");
@@ -5289,6 +5300,7 @@ cc_parse_static_if(CcParser* p, SrcLoc loc){
         SrcLoc cond_loc = cond->loc;
         err = cc_eval_truthy(p, cond, &predicate);
         cc_release_expr(p, cond);
+        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
         if(err)
             return cc_error(p, cond_loc, "static if condition must be a constant expression");
     }
@@ -6313,6 +6325,7 @@ cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttribut
             int64_t align_i;
             err = cc_eval_integer(p, expr, &align_i);
             cc_release_expr(p, expr);
+            if(err && err != CC_NOT_CONSTANT_ERROR) return err;
             if(err)
                 return cc_error(p, loc, "aligned attribute requires a constant integral expression");
             uint64_t align = (uint64_t)align_i;
@@ -6341,6 +6354,7 @@ cc_match_gnu_attribute(CcParser* p, SrcLoc loc, StringView attr_name, CcAttribut
         int64_t vs_i;
         err = cc_eval_integer(p, expr, &vs_i);
         cc_release_expr(p, expr);
+        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
         if(err)
             return cc_error(p, loc, "vector_size attribute requires a constant integral expression");
         uint64_t vs = (uint64_t)vs_i;
@@ -6638,6 +6652,7 @@ cc_parse_declspec(CcParser* p, CcAttributes* attrs){
                 int64_t align_i;
                 err = cc_eval_integer(p, expr, &align_i);
                 cc_release_expr(p, expr);
+                if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                 if(err)
                     return cc_error(p, tok.loc, "__declspec(align) requires a constant integral expression");
                 uint64_t align = (uint64_t)align_i;
@@ -7510,6 +7525,7 @@ cc_parse_desig_tail(CcParser* p, CcQualType* sub, CcFieldLoc* fl){
             int64_t idx_signed;
             err = cc_eval_integer(p, idx_expr, &idx_signed);
             cc_release_expr(p, idx_expr);
+            if(err && err != CC_NOT_CONSTANT_ERROR) return err;
             if(err)
                 return cc_error(p, peek.loc, "array designator must be a constant integer expression");
             if(idx_signed < 0 || idx_signed > UINT32_MAX)
@@ -7928,6 +7944,7 @@ cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, uint64_t base_off
                     int64_t idx_signed;
                     err = cc_eval_integer(p, idx_expr, &idx_signed);
                     cc_release_expr(p, idx_expr);
+                    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                     if(err)
                         return cc_error(p, desig_loc, "array designator must be a constant integer expression");
                     if(idx_signed < 0 || idx_signed > UINT32_MAX)
@@ -8276,7 +8293,8 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     err = cc_eval_integer(p, bw_expr, &bw_i);
                     cc_release_expr(p, bw_expr);
                     if(err){
-                        err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
+                        if(err == CC_NOT_CONSTANT_ERROR)
+                            err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
                         goto struct_err;
                     }
                     bitwidth = (uint64_t)bw_i;
@@ -8407,7 +8425,8 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_eval_integer(p, bw_expr, &bw_i);
                         cc_release_expr(p, bw_expr);
                         if(err){
-                            err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
+                            if(err == CC_NOT_CONSTANT_ERROR)
+                                err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
                             goto struct_err;
                         }
                         bitwidth = (uint64_t)bw_i;
@@ -8701,7 +8720,8 @@ cc_parse_enum(CcParser* p, SrcLoc loc, CcQualType* base_type){
                 err = cc_eval_integer(p, expr, &next_value);
                 cc_release_expr(p, expr);
                 if(err){
-                    err = cc_error(p, tok.loc, "enumerator value must be a constant integer expression");
+                    if(err == CC_NOT_CONSTANT_ERROR)
+                        err = cc_error(p, tok.loc, "enumerator value must be a constant integer expression");
                     goto enum_err;
                 }
             }
@@ -9077,6 +9097,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                             int64_t av;
                             err = cc_eval_integer(p, expr, &av);
                             cc_release_expr(p, expr);
+                            if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                             if(err)
                                 return cc_error(p, tok.loc, "_Alignas requires a constant integer expression");
                             if(av < 0)
@@ -9807,7 +9828,9 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
                         CcExpr* case_val_expr;
                         err = cc_eval_expr(p, case_expr, &case_val_expr);
+                        if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
                         cc_release_expr(p, case_expr);
+                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                         if(err)
                             return cc_error(p, tok.loc, "case label must be a constant _Type expression");
                         if(!ccqt_bt_eq(case_val_expr->type, CCBT__Type)){
@@ -9821,6 +9844,7 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         int64_t case_i;
                         err = cc_eval_integer(p, case_expr, &case_i);
                         cc_release_expr(p, case_expr);
+                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                         if(err)
                             return cc_error(p, tok.loc, "case label must be a constant integer expression");
                         case_val = (uint64_t)case_i;
@@ -10295,6 +10319,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 int64_t length;
                 err = cc_eval_integer(p, dim, &length);
                 cc_release_expr(p, dim);
+                if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                 if(err) return cc_unimplemented(p, tok.loc, "VLA array dimensions");
                 if(length < 0) return cc_error(p, tok.loc, "Negative array length");
                 arr->length = (size_t)length;
@@ -11028,6 +11053,7 @@ cc_handle_static_assert(CcParser* p){
     err = cc_eval_truthy(p, expr, &sa_truthy);
     if(err){
         cc_release_expr(p, expr);
+        if(err != CC_NOT_CONSTANT_ERROR) return err;
         return cc_error(p, assert_loc, "static_assert expression is not a constant expression");
     }
     // Check for optional message.
@@ -11706,19 +11732,19 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
     CcQualType t = v->type;
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    if(!ccqt_is_basic(t)) return 1;
+    if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
         CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
-            if(d != d || d >= 9223372036854775808.0 || d < -9223372036854775808.0) return 1;
+            if(d != d || d >= 9223372036854775808.0 || d < -9223372036854775808.0) return CC_NOT_CONSTANT_ERROR;
             *out = (int64_t)d;
             return 0;
         }
         case CCBT_float:{
             float f = v->float_;
-            if(f != f || f >= 9223372036854775808.0f || f < -9223372036854775808.0f) return 1;
+            if(f != f || f >= 9223372036854775808.0f || f < -9223372036854775808.0f) return CC_NOT_CONSTANT_ERROR;
             *out = (int64_t)f;
             return 0;
         }
@@ -11761,19 +11787,19 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
     CcQualType t = v->type;
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    if(!ccqt_is_basic(t)) return 1;
+    if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
         CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
-            if(d != d || d < 0.0 || d >= 18446744073709551616.0) return 1;
+            if(d != d || d < 0.0 || d >= 18446744073709551616.0) return CC_OVERFLOW_ERROR;
             *out = (uint64_t)d;
             return 0;
         }
         case CCBT_float:{
             float f = v->float_;
-            if(f != f || f < 0.0f || f >= 18446744073709551616.0f) return 1;
+            if(f != f || f < 0.0f || f >= 18446744073709551616.0f) return CC_OVERFLOW_ERROR;
             *out = (uint64_t)f;
             return 0;
         }
@@ -11815,16 +11841,16 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
     CcQualType t = v->type;
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    if(!ccqt_is_basic(t)) return 1;
+    if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
         CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
-            if(d != d) return 1;
-            if(d > (double)FLT_MAX || d < -(double)FLT_MAX) return 1;
+            if(d != d) return CC_NOT_CONSTANT_ERROR;
+            if(d > (double)FLT_MAX || d < -(double)FLT_MAX) return CC_NOT_CONSTANT_ERROR;
             float f = (float)d;
-            if((double)f != d) return 1;
+            if((double)f != d) return CC_NOT_CONSTANT_ERROR;
             *out = f;
             return 0;
         }
@@ -11843,8 +11869,8 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
         case CCBT_long_long:
             signed_:;{
             float f = (float)v->integer;
-            if(f >= 9223372036854775808.0f || f < -9223372036854775808.0f) return 1;
-            if((int64_t)f != v->integer) return 1;
+            if(f >= 9223372036854775808.0f || f < -9223372036854775808.0f) return CC_NOT_CONSTANT_ERROR;
+            if((int64_t)f != v->integer) return CC_NOT_CONSTANT_ERROR;
             *out = f;
             return 0;
         }
@@ -11855,8 +11881,8 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
         case CCBT_unsigned_long_long:
             unsigned_:;{
             float f = (float)v->uinteger;
-            if(f < 0.0f || f >= 18446744073709551616.0f) return 1;
-            if((uint64_t)f != v->uinteger) return 1;
+            if(f < 0.0f || f >= 18446744073709551616.0f) return CC_NOT_CONSTANT_ERROR;
+            if((uint64_t)f != v->uinteger) return CC_NOT_CONSTANT_ERROR;
             *out = f;
             return 0;
         }
@@ -11884,7 +11910,7 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
     CcQualType t = v->type;
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    if(!ccqt_is_basic(t)) return 1;
+    if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
         CASES_EXHAUSTED;
@@ -11906,8 +11932,8 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
         case CCBT_long_long:
             signed_:;{
             double d = (double)v->integer;
-            if(d >= 9223372036854775808.0 || d < -9223372036854775808.0) return 1;
-            if((int64_t)d != v->integer) return 1;
+            if(d >= 9223372036854775808.0 || d < -9223372036854775808.0) return CC_NOT_CONSTANT_ERROR;
+            if((int64_t)d != v->integer) return CC_NOT_CONSTANT_ERROR;
             *out = d;
             return 0;
         }
@@ -11918,8 +11944,8 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
         case CCBT_unsigned_long_long:
             unsigned_:;{
             double d = (double)v->uinteger;
-            if(d < 0.0 || d >= 18446744073709551616.0) return 1;
-            if((uint64_t)d != v->uinteger) return 1;
+            if(d < 0.0 || d >= 18446744073709551616.0) return CC_NOT_CONSTANT_ERROR;
+            if((uint64_t)d != v->uinteger) return CC_NOT_CONSTANT_ERROR;
             *out = d;
             return 0;
         }
@@ -12017,7 +12043,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     neg_int:;{
                     int32_t val;
                     if(sub_overflow((int32_t)0, (int32_t)operand->integer, &val)){
-                        err = CC_UNREACHABLE_ERROR;
+                        err = CC_OVERFLOW_ERROR;
                         break;
                     }
                     node = cc_value_expr(p, e->loc, e->type);
@@ -12034,7 +12060,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     neg_long_long:;{
                     int64_t val;
                     if(sub_overflow((int64_t)0, operand->integer, &val)){
-                        err = CC_UNREACHABLE_ERROR;
+                        err = CC_OVERFLOW_ERROR;
                         break;
                     }
                     node = cc_value_expr(p, e->loc, e->type);
@@ -12346,7 +12372,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             if(!node) {err = CC_OOM_ERROR; goto fini_binary;}
             #define ARITH(op, lv, rv, field, type) node->field = (type)((type)(lv) op (type)(rv)); break
             #define SIGNED_ARITH(op, chk, lv, rv, field, type) do { \
-                type _r; if(chk((type)(lv), (type)(rv), &_r)){err = CC_UNREACHABLE_ERROR; goto fini_binary;} \
+                type _r; if(chk((type)(lv), (type)(rv), &_r)){err = CC_OVERFLOW_ERROR; goto fini_binary;} \
                 node->field = _r; \
             } while(0); break
             #define CMP(op, lv, rv) node->integer = (lv) op (rv); break
@@ -12397,19 +12423,19 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_SUB: SIGNED_ARITH(-, sub_overflow, lv, rv, integer, int32_t);
                         case CC_EXPR_MUL: SIGNED_ARITH(*, mul_overflow, lv, rv, integer, int32_t);
                         case CC_EXPR_DIV:
-                            if(rv == 0 || (lv == INT32_MIN && rv == -1)){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0 || (lv == INT32_MIN && rv == -1)){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(/, lv, rv, integer, int32_t);
                         case CC_EXPR_MOD:
-                            if(rv == 0 || (lv == INT32_MIN && rv == -1)){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0 || (lv == INT32_MIN && rv == -1)){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(%, lv, rv, integer, int32_t);
                         case CC_EXPR_BITAND: ARITH(&,  lv, rv, integer, int32_t);
                         case CC_EXPR_BITOR:  ARITH(|,  lv, rv, integer, int32_t);
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, integer, int32_t);
                         case CC_EXPR_LSHIFT:
-                            if(rv < 0 || rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv < 0 || rv >= 32){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             node->integer = (int32_t)((uint32_t)lv << rv); break;
                         case CC_EXPR_RSHIFT:
-                            if(rv < 0 || rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv < 0 || rv >= 32){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, integer, int32_t);
                         case CC_EXPR_EQ: CMP(==, lv, rv);
                         case CC_EXPR_NE: CMP(!=, lv, rv);
@@ -12430,19 +12456,19 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_SUB: ARITH(-, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_MUL: ARITH(*, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_DIV:
-                            if(rv == 0){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(/, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_MOD:
-                            if(rv == 0){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(%, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_BITAND: ARITH(&,  lv, rv, uinteger, uint32_t);
                         case CC_EXPR_BITOR:  ARITH(|,  lv, rv, uinteger, uint32_t);
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, uinteger, uint32_t);
                         case CC_EXPR_LSHIFT:
-                            if(rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv >= 32){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(<<, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_RSHIFT:
-                            if(rv >= 32){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv >= 32){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, uinteger, uint32_t);
                         case CC_EXPR_EQ: CMP(==, lv, rv);
                         case CC_EXPR_NE: CMP(!=, lv, rv);
@@ -12469,19 +12495,19 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_SUB: SIGNED_ARITH(-, sub_overflow, lv, rv, integer, int64_t);
                         case CC_EXPR_MUL: SIGNED_ARITH(*, mul_overflow, lv, rv, integer, int64_t);
                         case CC_EXPR_DIV:
-                            if(rv == 0 || (lv == INT64_MIN && rv == -1)){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0 || (lv == INT64_MIN && rv == -1)){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(/, lv, rv, integer, int64_t);
                         case CC_EXPR_MOD:
-                            if(rv == 0 || (lv == INT64_MIN && rv == -1)){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0 || (lv == INT64_MIN && rv == -1)){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(%, lv, rv, integer, int64_t);
                         case CC_EXPR_BITAND: ARITH(&,  lv, rv, integer, int64_t);
                         case CC_EXPR_BITOR:  ARITH(|,  lv, rv, integer, int64_t);
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, integer, int64_t);
                         case CC_EXPR_LSHIFT:
-                            if(rv < 0 || rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv < 0 || rv >= 64){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             node->integer = (int64_t)((uint64_t)lv << rv); break;
                         case CC_EXPR_RSHIFT:
-                            if(rv < 0 || rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv < 0 || rv >= 64){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, integer, int64_t);
                         case CC_EXPR_EQ: CMP(==, lv, rv);
                         case CC_EXPR_NE: CMP(!=, lv, rv);
@@ -12500,19 +12526,19 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_EXPR_SUB: ARITH(-, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_MUL: ARITH(*, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_DIV:
-                            if(rv == 0){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(/, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_MOD:
-                            if(rv == 0){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv == 0){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(%, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_BITAND: ARITH(&,  lv, rv, uinteger, uint64_t);
                         case CC_EXPR_BITOR:  ARITH(|,  lv, rv, uinteger, uint64_t);
                         case CC_EXPR_BITXOR: ARITH(^,  lv, rv, uinteger, uint64_t);
                         case CC_EXPR_LSHIFT:
-                            if(rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv >= 64){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(<<, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_RSHIFT:
-                            if(rv >= 64){err = CC_UNREACHABLE_ERROR; goto fini_binary;}
+                            if(rv >= 64){err = CC_OVERFLOW_ERROR; goto fini_binary;}
                             ARITH(>>, lv, rv, uinteger, uint64_t);
                         case CC_EXPR_EQ: CMP(==, lv, rv);
                         case CC_EXPR_NE: CMP(!=, lv, rv);
@@ -12605,7 +12631,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             int err = cc_eval_expr(p, e->lhs, &lhs);
             if(err) return err;
             if(!ccqt_bt_eq(lhs->type, CCBT__Type)){
-                err = 1;
+                err = CC_NOT_CONSTANT_ERROR;
                 goto fini_introspection;
             }
             CcQualType qt = lhs->type_value;
@@ -12668,17 +12694,17 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_SIZEOF: {
                     uint32_t sz;
                     err = cc_sizeof_as_uint(p, qt, e->loc, &sz);
-                    if(err) { err = 1; goto fini_introspection; }
+                    if(err) goto fini_introspection;
                     UINTRES(sz);
                 }
                 case CC_TYPE_ALIGNOF: {
                     uint32_t al;
                     err = cc_alignof_as_uint(p, qt, e->loc, &al);
-                    if(err) { err = 1; goto fini_introspection; }
+                    if(err) goto fini_introspection;
                     UINTRES(al);
                 }
                 case CC_TYPE_POINTEE:
-                    if(ccqt_kind(qt) != CC_POINTER) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_POINTER) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_ptr(qt)->pointee);
                 case CC_TYPE_UNQUAL: {
                     CcQualType uq = qt;
@@ -12686,7 +12712,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     TYPERES(uq);
                 }
                 case CC_TYPE_COUNT:
-                    if(ccqt_kind(qt) != CC_ARRAY) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     UINTRES(ccqt_as_array(qt)->length);
                 case CC_TYPE_IS_CALLABLE_WITH: {
                     CcExpr* arg;
@@ -12694,7 +12720,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(err) goto fini_introspection;
                     if(!ccqt_bt_eq(arg->type, CCBT__Type)) {
                         cc_release_expr(p, arg);
-                        err = 1;
+                        err = CC_NOT_CONSTANT_ERROR;
                         goto fini_introspection;
                     }
                     CcQualType arg_type = arg->type_value;
@@ -12715,7 +12741,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(err) goto fini_introspection;
                     if(!ccqt_bt_eq(arg->type, CCBT__Type)) {
                         cc_release_expr(p, arg);
-                        err = 1;
+                        err = CC_NOT_CONSTANT_ERROR;
                         goto fini_introspection;
                     }
                     _Bool castable = cc_explicit_castable(qt, arg->type_value);
@@ -12724,59 +12750,59 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 }
                 case CC_TYPE_FIELDS: {
                     CcTypeKind k = ccqt_kind(qt);
-                    if(k != CC_STRUCT && k != CC_UNION) { err = 1; goto fini_introspection; }
+                    if(k != CC_STRUCT && k != CC_UNION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcStruct* s = ccqt_as_struct(qt);
                     INTRES(s->field_count);
                 }
                 case CC_TYPE_RETURN_TYPE: {
                     CcQualType ft = qt;
                     if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_function(ft)->return_type);
                 }
                 case CC_TYPE_PARAM_COUNT: {
                     CcQualType ft = qt;
                     if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     UINTRES(ccqt_as_function(ft)->param_count);
                 }
                 case CC_TYPE_PARAM_TYPE: {
                     CcQualType ft = qt;
                     if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcFunction* f = ccqt_as_function(ft);
                     int64_t i;
                     err = cc_eval_integer(p, e->values[0], &i);
                     if(err) goto fini_introspection;
-                    if(i < 0 || (uint64_t)i >= f->param_count) { err = 1; goto fini_introspection; }
+                    if(i < 0 || (uint64_t)i >= f->param_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(f->params[i]);
                 }
                 case CC_TYPE_ELEMENT_TYPE:
-                    if(ccqt_kind(qt) != CC_ARRAY) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_array(qt)->element);
                 case CC_TYPE_UNDERLYING_TYPE:
-                    if(ccqt_kind(qt) != CC_ENUM) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_ENUM) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_enum(qt)->underlying);
                 case CC_TYPE_ENUMERATORS: {
-                    if(ccqt_kind(qt) != CC_ENUM) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_ENUM) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcEnum* e2 = ccqt_as_enum(qt);
                     UINTRES(e2->enumerator_count);
                 }
                 case CC_TYPE_FIELD: {
                     CcTypeKind k = ccqt_kind(qt);
-                    if(k != CC_STRUCT && k != CC_UNION) { err = 1; goto fini_introspection; }
+                    if(k != CC_STRUCT && k != CC_UNION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     int64_t idx;
                     err = cc_eval_integer(p, e->values[0], &idx);
                     if(err) goto fini_introspection;
                     CcField* f;
                     if(k == CC_STRUCT){
                         CcStruct* s = ccqt_as_struct(qt);
-                        if(idx < 0 || (uint64_t)idx >= s->field_count) { err = 1; goto fini_introspection; }
+                        if(idx < 0 || (uint64_t)idx >= s->field_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                         f = &s->fields[idx];
                     }
                     else {
                         CcUnion* u = ccqt_as_union(qt);
-                        if(idx < 0 || (uint64_t)idx >= u->field_count) { err = 1; goto fini_introspection; }
+                        if(idx < 0 || (uint64_t)idx >= u->field_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                         f = &u->fields[idx];
                     }
                     // Build a CcInitList matching __builtin_Field layout
@@ -12834,12 +12860,12 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     goto fini_introspection;
                 }
                 case CC_TYPE_ENUMERATOR: {
-                    if(ccqt_kind(qt) != CC_ENUM) { err = 1; goto fini_introspection; }
+                    if(ccqt_kind(qt) != CC_ENUM) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcEnum* enum_ = ccqt_as_enum(qt);
                     int64_t idx;
                     err = cc_eval_integer(p, e->values[0], &idx);
                     if(err) goto fini_introspection;
-                    if(idx < 0 || (uint64_t)idx >= enum_->enumerator_count) { err = 1; goto fini_introspection; }
+                    if(idx < 0 || (uint64_t)idx >= enum_->enumerator_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcEnumerator* en = enum_->enumerators[idx];
                     uint32_t nfields = 3; // name, name_length, value
                     CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + nfields * sizeof(CcInitEntry));
@@ -12900,10 +12926,10 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 }
                 case CC_TYPE_PUSH_METHOD: // handled at parse time
                 case CC_TYPE_NONE:
-                    err = 1;
+                    err = CC_NOT_CONSTANT_ERROR;
                     goto fini_introspection;
             }
-            err = 1;
+            err = CC_NOT_CONSTANT_ERROR;
             #undef INTRES
             #undef UINTRES
             #undef TYPERES
@@ -12913,11 +12939,11 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         }
         case CC_EXPR_ATOMIC:
         case CC_EXPR_SIZEOF_VMT:
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_VARIABLE:
             if(e->var->constexpr_ && e->var->initializer)
                 return cc_eval_expr(p, e->var->initializer, result);
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_INIT_LIST: {
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
             if(!node) return CC_OOM_ERROR;
@@ -12945,15 +12971,15 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_LSHIFTASSIGN:
         case CC_EXPR_RSHIFTASSIGN:
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_SLICE:
         case CC_EXPR_SLICE_HI:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_ALL:
             // maybe we should support this? idk
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_CALL:
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_DOT:
         eval_init_list_access: {
             // Accumulate byte offset through chained DOTs and SUBSCRIPTs
@@ -12969,10 +12995,10 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     int64_t i;
                     int err = cc_eval_integer(p, cur->values[0], &i);
                     if(err) return err;
-                    if(i < 0) return 1;
+                    if(i < 0) return CC_NOT_CONSTANT_ERROR;
                     uint32_t elem_size;
                     err = cc_sizeof_as_uint(p, cur->type, cur->loc, &elem_size);
-                    if(err) return 1;
+                    if(err) return err;
                     offset += (uint64_t)i * elem_size;
                     cur = cur->lhs;
                 }
@@ -12993,10 +13019,10 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     *result = node;
                     goto fini_init_list_access;
                 }
-                err = 1;
+                err = CC_NOT_CONSTANT_ERROR;
                 goto fini_init_list_access;
             }
-            if(base->kind != CC_EXPR_INIT_LIST) { err = 1; goto fini_init_list_access; }
+            if(base->kind != CC_EXPR_INIT_LIST) { err = CC_NOT_CONSTANT_ERROR; goto fini_init_list_access; }
             CcInitList* il = base->init_list;
             for(uint32_t i = 0; i < il->count; i++){
                 uint64_t entry_off = il->entries[i].field_loc.byte_offset;
@@ -13020,7 +13046,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     goto fini_init_list_access;
                 }
             }
-            err = 1;
+            err = CC_NOT_CONSTANT_ERROR;
             fini_init_list_access:
             cc_release_expr(p, base);
             return err;
@@ -13032,7 +13058,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_POPCOUNT:
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ: {
@@ -13040,7 +13066,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             int err = cc_eval_expr(p, e->lhs, &operand);
             if(err) return err;
             if(ccqt_bt_eq(operand->type, CCBT_float) || ccqt_bt_eq(operand->type, CCBT_double)){
-                err = 1;
+                err = CC_NOT_CONSTANT_ERROR;
                 goto fini_bitop;
             }
             uint64_t v;
@@ -13051,14 +13077,14 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 r = popcount_64(v);
             }
             else if(e->kind == CC_EXPR_CLZ){
-                if(v == 0) { err = 1; goto fini_bitop; }
+                if(v == 0) { err = CC_NOT_CONSTANT_ERROR; goto fini_bitop; }
                 uint32_t sz;
                 err = cc_sizeof_as_uint(p, operand->type, e->loc, &sz);
                 if(err) goto fini_bitop;
                 r = clz_64(v) - (64 - sz * 8);
             }
             else {
-                if(v == 0) { err = 1; goto fini_bitop; }
+                if(v == 0) { err = CC_NOT_CONSTANT_ERROR; goto fini_bitop; }
                 r = ctz_64(v);
             }
             *result = cc_int64_expr(p, e->loc, e->type, r);
@@ -13076,7 +13102,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
-            return 1;
+            return CC_NOT_CONSTANT_ERROR;
     }
 }
 
@@ -13085,9 +13111,11 @@ int
 cc_eval_integer(CcParser* p, CcExpr* e, int64_t* out){
     CcExpr* val;
     int err = cc_eval_expr(p, e, &val);
+    // temporary hack, callers should report different error.
+    if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
     if(err) return err;
     if(ccqt_bt_eq(val->type, CCBT_float) || ccqt_bt_eq(val->type, CCBT_double)){
-        err = 1;
+        err = CC_NOT_CONSTANT_ERROR;
         goto finish;
     }
     err = cc_eval_to_i(p, val, out);
@@ -13101,6 +13129,7 @@ int
 cc_eval_truthy(CcParser* p, CcExpr* e, _Bool* out){
     CcExpr* val;
     int err = cc_eval_expr(p, e, &val);
+    if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
     if(err) return err;
     if(ccqt_bt_eq(val->type, CCBT_float))
         *out = val->float_ != 0;
