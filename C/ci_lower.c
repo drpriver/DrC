@@ -778,13 +778,32 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             if(!from_int && !from_float)
                 break; // long double, non-scalar fall back
+            // Conversion to _Bool is not a truncation: any nonzero scalar
+            // canonicalizes to exactly 1, zero to 0.
+            if(ccqt_is_basic(to) && to.basic.kind == CCBT_bool){
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                out->slot = dest;
+                uint32_t temp = ctx->temp;
+                CiLowerVal v;
+                err = ci_lower_expr(ci, ctx, operand, CI_NO_SLOT, &v);
+                if(err) return err;
+                err = ci_lower_istrue(ctx, &v, from, dest, size, 0, e->loc);
+                if(err) return err;
+                ctx->temp = temp;
+                out->canonical = 1;
+                return 0;
+            }
             _Bool to_int = ccqt_kind(to) == CC_POINTER || (ci_alu_int_type(to) && size <= 16);
             _Bool to_float = ci_falu_type(to);
             CiOpKind kind;
             uint32_t is_unsigned = 0;
             if(from_int && to_int){
+                if(from_sz == size)
+                    return ci_lower_expr(ci, ctx, operand, dest, out);
                 kind = CI_OP_CONVERT;
-                is_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
+                // A pointer source is an address: widen by zero-extension.
+                is_unsigned = ccqt_kind(from) == CC_POINTER || ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
             }
             else if(from_int && to_float){
                 if(from_sz > 8)

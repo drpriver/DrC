@@ -400,6 +400,51 @@ TestFunction(test_interpreter){
                "return c;\n"),
             .exit_code = 1,
         },
+        // _Bool must canonicalize any nonzero value to exactly 1, not
+        // truncate to the low byte.
+        {
+            "cast: bool from nonzero low byte", __LINE__,
+            SVI("int x = 3;\n"
+               "_Bool b = x;\n"
+               "return b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: bool from value with zero low byte", __LINE__,
+            SVI("int x = 256;\n"
+               "_Bool b = x;\n"
+               "return b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: bool bits are 0 or 1 (nonzero)", __LINE__,
+            SVI("int x = 256;\n"
+               "_Bool b = x;\n"
+               "return *(unsigned char*)&b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: bool bits are 0 or 1 (large)", __LINE__,
+            SVI("long x = 0x10000;\n"
+               "_Bool b = x;\n"
+               "return *(unsigned char*)&b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: bool bits are 0 or 1 (zero)", __LINE__,
+            SVI("int x = 0;\n"
+               "_Bool b = x;\n"
+               "return *(unsigned char*)&b;\n"),
+            .exit_code = 0,
+        },
+        {
+            "cast: bool from pointer canonicalizes", __LINE__,
+            SVI("int obj = 0;\n"
+               "int* p = &obj;\n"
+               "_Bool b = p;\n"
+               "return *(unsigned char*)&b;\n"),
+            .exit_code = 1,
+        },
         // sizeof
         {
             "sizeof int", __LINE__,
