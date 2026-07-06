@@ -4327,6 +4327,20 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             }
             frame->pc++;
             return 0;
+        case CI_OP_ALLOCA:{
+            size_t sz;
+            void* dest = (char*)frame->slots + op->alloca.slot;
+            memcpy(&sz, (char*)frame->slots + op->alloca.src, sizeof sz);
+            CiAllocaBlock* block = Allocator_zalloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
+            if(!block) return CI_OOM_ERROR;
+            block->size = sz;
+            block->next = frame->alloca_list;
+            frame->alloca_list = block;
+            void* ptr = block + 1;
+            memcpy(dest, &ptr, sizeof dest);
+            frame->pc++;
+            return 0;
+        }
     }
     return ci_unimplemented(ci, op->loc, "unsupported op kind");
 }

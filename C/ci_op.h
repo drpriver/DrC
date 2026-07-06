@@ -125,6 +125,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ATOMIC_RMW,
     CI_OP_ATOMIC_CAS,
     CI_OP_FENCE,
+    CI_OP_ALLOCA,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
@@ -543,6 +544,15 @@ struct CiOp {
             CiSwitchTable*_Null_unspecified table;
             SrcLoc loc;
         } switch_;
+        struct {
+            // evaluate expr into slots[slot:slot+slot_size]
+            CiOpKind kind: 8; // CI_OP_ALLOCA
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint32_t slot, src;
+            uint64_t pad;
+            SrcLoc loc;
+        } alloca;
     };
 };
 _Static_assert(sizeof(CiOp) == 32, "");

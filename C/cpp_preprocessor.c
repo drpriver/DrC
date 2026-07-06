@@ -4427,6 +4427,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__SIZEOF_PTRDIFF_T__",   t.sizeof_[t.ptrdiff_type]);
     DEFINT("__SIZEOF_WCHAR_T__",     t.sizeof_[t.wchar_type]);
     DEFINT("__SIZEOF_WINT_T__",      t.sizeof_[t.wint_type]);
+    DEFINT("__SIZEOF_INT128__",      t.sizeof_[CCBT_unsigned_int128]);
 
     DEFINT("__CHAR_BIT__", 8);
 

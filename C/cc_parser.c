@@ -3030,6 +3030,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     CcExpr* sz;
                     err = cc_parse_assignment_expr(p, vc, &sz, CCQT_NONE);
                     if(err) return err;
+                    err = cc_implicit_cast(p, sz, ccqt_basic(cc_target(p)->size_type), &sz);
+                    if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ALLOCA, tok.loc, p->void_star, 0);
@@ -4960,26 +4962,76 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                         }
                     }
                 }
+                size_t before = sb->cursor;
                 switch(sz){
                     case 1:
                         msb_write_literal(sb, "\"");
+                        before = sb->cursor;
                         msb_write_str(sb, (const char*)e->text, e->str.length-1);
                         msb_write_literal(sb, "\"");
-                        break;
+                        goto fixup;
                     case 2:
                         msb_write_literal(sb, "u\"");
+                        before = sb->cursor;
                         msb_write_utf16(sb, (const uint16_t*)e->text, e->str.length-1);
                         msb_write_literal(sb, "\"");
-                        break;
+                        goto fixup;
                     case 4:
                         msb_write_literal(sb, "U\"");
-                        for(uint64_t i = 0; i < e->str.length; i++)
-                            msb_write_utf32_codepoint(sb, ((const uint32_t*)e->text)[i]);
+                        before = sb->cursor;
+                        msb_write_utf32(sb, ((const uint32_t*)e->text), e->str.length);
                         msb_write_literal(sb, "\"");
                         break;
+                        goto fixup;
                     default:
                         msb_sprintf(sb, "(??""?)\"...\"");
                         break;
+                }
+                if(0){
+                    fixup:
+                    for(size_t i = before; i < sb->cursor-1; i++){
+                        unsigned char c = (unsigned char)sb->data[i];
+                        char buff[8];
+                        char* repl; size_t len;
+                        if(c == '\\'){
+                            msb_replace_range(sb, i, i+1, "\\\\", 2);
+                            i += 1;
+                        }
+                        else if(c == '"'){
+                            msb_replace_range(sb, i, i+1, "\\\"", 2);
+                            i += 1;
+                        }
+                        if(c < 32){
+                            switch(c){
+                                case '\0':
+                                    repl = "\\0";
+                                    len = 2;
+                                    break;
+                                case '\r':
+                                    repl = "\\r";
+                                    len = 2;
+                                    break;
+                                case '\n':
+                                    repl = "\\n";
+                                    len = 2;
+                                    break;
+                                case '\t':
+                                    repl = "\\t";
+                                    len = 2;
+                                    break;
+                                case '\f':
+                                    repl = "\\f";
+                                    len = 2;
+                                    break;
+                                default:
+                                    len = stbsp_snprintf(buff, sizeof buff, "\\x%x", c);
+                                    repl = buff;
+                                    break;
+                            }
+                            msb_replace_range(sb, i, i+1, repl, len);
+                            i += len-1;
+                        }
+                    }
                 }
             }
             else if(ccqt_is_basic(e->type) && e->type.basic.kind == CCBT__Type){

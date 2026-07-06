@@ -155,28 +155,79 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
             uint64_t v = op->constant.immediate[0];
             if(op->constant.is_anon_array){
+                size_t before = out->cursor;
                 switch((CcBasicTypeKind)op->constant.bt_kind){
                     case CCBT_char:
                     case CCBT_unsigned_char:
                     case CCBT_signed_char:
                         msb_write_literal(out, " = \"");
+                        before = out->cursor;
                         msb_write_str(out, (const char*)v, op->constant.immediate[1]-1);
                         msb_write_literal(out, "\"");
-                        return;
+                        goto fixup;
                     case CCBT_short:
                     case CCBT_unsigned_short:
                         msb_write_literal(out, " = u\"");
+                        before = out->cursor;
                         msb_write_utf16(out, (const uint16_t*)v, op->constant.immediate[1]-1);
                         msb_write_literal(out, "\"");
-                        return;
+                        goto fixup;
                     case CCBT_int:
                     case CCBT_unsigned:
                         msb_write_literal(out, " = U\"");
+                        before = out->cursor;
                         msb_write_utf32(out, ((const uint32_t*)v), op->constant.immediate[1]-1);
                         msb_write_literal(out, "\"");
-                        return;
+                        goto fixup;
                     default:
                         break;
+                }
+                if(0){
+                    fixup:
+                    for(size_t i = before; i < out->cursor-1; i++){
+                        unsigned char c = (unsigned char)out->data[i];
+                        char buff[8];
+                        char* repl; size_t len;
+                        if(c == '\\'){
+                            msb_replace_range(out, i, i+1, "\\\\", 2);
+                            i += 1;
+                        }
+                        else if(c == '"'){
+                            msb_replace_range(out, i, i+1, "\\\"", 2);
+                            i += 1;
+                        }
+                        else if(c < 32){
+                            switch(c){
+                                case '\0':
+                                    repl = "\\0";
+                                    len = 2;
+                                    break;
+                                case '\r':
+                                    repl = "\\r";
+                                    len = 2;
+                                    break;
+                                case '\n':
+                                    repl = "\\n";
+                                    len = 2;
+                                    break;
+                                case '\t':
+                                    repl = "\\t";
+                                    len = 2;
+                                    break;
+                                case '\f':
+                                    repl = "\\f";
+                                    len = 2;
+                                    break;
+                                default:
+                                    len = stbsp_snprintf(buff, sizeof buff, "\\x%x", c);
+                                    repl = buff;
+                                    break;
+                            }
+                            msb_replace_range(out, i, i+1, repl, len);
+                            i += len-1;
+                        }
+                    }
+                    return;
                 }
             }
             else
@@ -481,6 +532,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             break;
         case CI_OP_FENCE:
             msb_sprintf(out, "%s fence %s", op->fence.is_signal?"signal":"atomic", ci_op_memory_order(op->fence.memorder));
+            break;
+        case CI_OP_ALLOCA:
+            msb_sprintf(out, "[%u] = alloca([%u])", op->alloca.slot, op->alloca.src);
             break;
     }
 }

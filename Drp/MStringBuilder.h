@@ -367,6 +367,26 @@ msb_write_utf16(MStringBuilder* msb, const uint16_t* str, size_t len){
     }
 }
 
+static
+void
+msb_replace_range(MStringBuilder* msb, size_t start, size_t end, const char* repl, size_t len){
+    if(msb->errored) return;
+    if(start > msb->cursor || end > msb->cursor || start>end){
+        msb->errored = 1;
+        return;
+    }
+    size_t rangelen = end-start;
+    size_t new_cursor = msb->cursor - rangelen + len;
+    if(new_cursor > msb->capacity){
+       if(_check_msb_remaining_size(msb, new_cursor - msb->capacity))
+           return;
+    }
+    if(len != rangelen)
+        memmove(msb->data + start + len, msb->data + end, msb->cursor - end);
+    memcpy(msb->data+start, repl, len);
+    msb->cursor = new_cursor;
+}
+
 // Writes a string literal into the builder. Avoids the need to strlen
 // as the literal's size is known at compile time.
 // The "" forces it to be a string literal.

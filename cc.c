@@ -67,7 +67,7 @@ int main(int argc, char** argv, char** envp){
     };
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     Marray(StringView) dis = {0};
-    _Bool dis_top = 0;
+    _Bool dis_top = 0, dis_all = 0;
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
         .user_data = &interp.parser.cpp,
@@ -180,6 +180,11 @@ int main(int argc, char** argv, char** envp){
             .name = SV("--dis-top"),
             .dest = ARGDEST(&dis_top),
             .help = "print the toplevel bytecode",
+        },
+        {
+            .name = SV("--dis-all"),
+            .dest = ARGDEST(&dis_all),
+            .help = "print the bytecode for all functions and for top-level",
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -382,33 +387,67 @@ int main(int argc, char** argv, char** envp){
         err = ci_resolve_refs(&interp, 0);
         if(err) goto stringify_error;
     }
-    if(dis.count || dis_top){
-        MARRAY_FOR_EACH_VALUE(StringView, d, dis){
-            err = ci_resolve_root(&interp, d);
-            if(err){
-                log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
-                err = 0;
+    if(dis.count || dis_top || dis_all){
+        if(dis_all){
+            for(size_t i = 0; i < interp.parser.global.functions.count; i++){
+                AtomMapItem* items = interp.parser.global.functions.data;
+                Atom atom = items[i].atom;
+                CcFunc* func = items[i].p;
+                if(!func->defined) continue;
+                StringView d = {atom->length, atom->data};
+                if(sv_startswith(d, SV("_"))) continue;
+                err = ci_resolve_root(&interp, d);
+                if(err){
+                    log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
+                    cpp_discard_all_input(&interp.parser.cpp);
+                    err = 0;
+                    continue;
+                }
+                Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
+                if(!a){
+                    log_warn(logger, "No function '%s'", d.text);
+                    continue;
+                }
+                func = AM_get(&interp.parser.global.functions, a);
+                if(!func){
+                    log_warn(logger, "No function '%s'", d.text);
+                    continue;
+                }
+                if(!func->interp_ops)
+                    continue;
+                cc_print_func(&interp.parser, func, &logger->buff);
+                log_flush(logger, LOG_PRINT);
                 continue;
             }
-            Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
-            if(!a){
-                log_warn(logger, "No function '%s'", d.text);
-                continue;
-            }
-            CcFunc* func = AM_get(&interp.parser.global.functions, a);
-            if(!func){
-                log_warn(logger, "No function '%s'", d.text);
-                continue;
-            }
-            if(!func->interp_ops){
-                log_warn(logger, "No bytecode for '%s'", d.text);
-                continue;
-            }
-            cc_print_func(&interp.parser, func, &logger->buff);
-            log_flush(logger, LOG_PRINT);
-            continue;
         }
-        if(dis_top){
+        else {
+            MARRAY_FOR_EACH_VALUE(StringView, d, dis){
+                err = ci_resolve_root(&interp, d);
+                if(err){
+                    log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
+                    err = 0;
+                    continue;
+                }
+                Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
+                if(!a){
+                    log_warn(logger, "No function '%s'", d.text);
+                    continue;
+                }
+                CcFunc* func = AM_get(&interp.parser.global.functions, a);
+                if(!func){
+                    log_warn(logger, "No function '%s'", d.text);
+                    continue;
+                }
+                if(!func->interp_ops){
+                    log_warn(logger, "No bytecode for '%s'", d.text);
+                    continue;
+                }
+                cc_print_func(&interp.parser, func, &logger->buff);
+                log_flush(logger, LOG_PRINT);
+                continue;
+            }
+        }
+        if(dis_top || dis_all){
             err = ci_lower_toplevel(&interp);
             if(err) goto stringify_error;
             MStringBuilder* sb = &logger->buff;
