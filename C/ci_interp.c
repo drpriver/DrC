@@ -283,13 +283,12 @@ ci_load_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* src, void* 
         default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
     }
     #else
-    typedef struct { _Alignas(16) char bytes[16]; } CiCiAtomic16;
     switch(sz){
         case 1:  __atomic_load(( uint8_t*)src, ( uint8_t*)dest, __ATOMIC_SEQ_CST); break;
         case 2:  __atomic_load((uint16_t*)src, (uint16_t*)dest, __ATOMIC_SEQ_CST); break;
         case 4:  __atomic_load((uint32_t*)src, (uint32_t*)dest, __ATOMIC_SEQ_CST); break;
         case 8:  __atomic_load((uint64_t*)src, (uint64_t*)dest, __ATOMIC_SEQ_CST); break;
-        case 16: __atomic_load((CiCiAtomic16*)src, (CiCiAtomic16*)dest, __ATOMIC_SEQ_CST); break;
+        case 16: __atomic_load((CiAtomic16*)src, (CiAtomic16*)dest, __ATOMIC_SEQ_CST); break;
         default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
     }
     #endif
@@ -323,13 +322,12 @@ ci_store_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* dest, void
         default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
     }
     #else
-    typedef struct { _Alignas(16) char bytes[16]; } CiCiAtomic16;
     switch(sz){
         case 1:  __atomic_store(( uint8_t*)dest, ( uint8_t*)src, __ATOMIC_SEQ_CST); break;
         case 2:  __atomic_store((uint16_t*)dest, (uint16_t*)src, __ATOMIC_SEQ_CST); break;
         case 4:  __atomic_store((uint32_t*)dest, (uint32_t*)src, __ATOMIC_SEQ_CST); break;
         case 8:  __atomic_store((uint64_t*)dest, (uint64_t*)src, __ATOMIC_SEQ_CST); break;
-        case 16: __atomic_store((CiCiAtomic16*)dest, (CiCiAtomic16*)src, __ATOMIC_SEQ_CST); break;
+        case 16: __atomic_store((CiAtomic16*)dest, (CiAtomic16*)src, __ATOMIC_SEQ_CST); break;
         default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
     }
     #endif
