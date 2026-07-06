@@ -1253,6 +1253,30 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "flat expr: popcount clz ctz", __LINE__,
+            SVI("int f(void){\n"
+               "    int a = __builtin_popcount(0xF0u);\n"          // 4
+               "    int b = __builtin_ctz(0x10u);\n"               // 4
+               "    int c = __builtin_clz(1u);\n"                  // 31 (32-bit operand)
+               "    int d = __builtin_clzll(1ull);\n"             // 63 (64-bit operand)
+               "    int e = __builtin_popcountll(0xFFFFFFFFFFFFFFFFull);\n" // 64
+               "    return a*10000 + b*1000 + c*10 + d + e;\n"     // 40000+4000+310+63+64
+               "}\n"
+               "return f();\n"),
+            .exit_code = 44437,
+        },
+        {
+            "flat expr: clz ctz of zero", __LINE__,
+            SVI("int f(void){\n"
+               "    unsigned x = 0;\n"
+               "    int c = __builtin_clz(x);\n"    // width: 32
+               "    int t = __builtin_ctz(x);\n"    // width: 32
+               "    return c + t;\n"                 // 64
+               "}\n"
+               "return f();\n"),
+            .exit_code = 64,
+        },
+        {
             "flat expr: array subscript in bounds", __LINE__,
             SVI("int f(void){\n"
                "    int a[4];\n"

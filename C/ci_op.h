@@ -78,6 +78,14 @@ enum CiCheckedOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 
+// The bit-counting ops for __builtin_popcount/clz/ctz (and l/ll variants).
+enum CiBitCountOp TYPED_ENUM(uint32_t){
+    CI_BITCNT_POPCOUNT,
+    CI_BITCNT_CLZ,
+    CI_BITCNT_CTZ,
+};
+TYPEDEF_ENUM(CiBitCountOp, uint32_t);
+
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,
     CI_OP_EVAL_INTO,
@@ -89,6 +97,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FALU32,
     CI_OP_FALU64,
     CI_OP_CHECKED,
+    CI_OP_BITCOUNT,
     CI_OP_CONVERT,
     CI_OP_ITOF,
     CI_OP_FTOI,
@@ -244,6 +253,20 @@ struct CiOp {
             uint32_t pad;
             SrcLoc loc;
         } checked;
+        struct {
+            // __builtin_popcount/clz/ctz: slots[slot:slot+slot_size] = the
+            // count over the src_size-byte unsigned value at slots[src]. clz
+            // and ctz of zero yield the operand's bit width (src_size*8), and
+            // clz counts from the operand width, not 64.
+            CiOpKind kind: 8; // CI_OP_BITCOUNT
+            CiBitCountOp op: 8;
+            uint32_t src_size: 8,
+                     _bitpad: 8;
+            uint32_t slot, slot_size,
+                     src;
+            uint64_t pad;
+            SrcLoc loc;
+        } bitcount;
         struct {
             // CI_OP_CONVERT: slots[slot:slot+slot_size] = slots[src:src+src_size]
             //   widened (to 128 bits when either side is larger than 8) then

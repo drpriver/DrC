@@ -101,6 +101,7 @@ static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_bitcount(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
@@ -1695,10 +1696,11 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
             return ci_lower_checked(ci, ctx, e, dest, out);
-        case CC_EXPR_BUILTIN:
         case CC_EXPR_POPCOUNT:
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
+            return ci_lower_bitcount(ci, ctx, e, dest, out);
+        case CC_EXPR_BUILTIN:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
@@ -2355,6 +2357,47 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             }
         };
     }
+    ctx->temp = save;
+    return 0;
+}
+
+// Lower __builtin_popcount/clz/ctz into a CI_OP_BITCOUNT. The operand keeps its
+// own width (the parser rejects __int128); the result is int.
+static
+int
+ci_lower_bitcount(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    int err;
+    CcParser* p = &ci->parser;
+    uint32_t sz;
+    err = cc_sizeof_as_uint(p, e->lhs->type, e->lhs->loc, &sz);
+    if(err) return err;
+    uint32_t rsz;
+    err = cc_sizeof_as_uint(p, e->type, e->loc, &rsz);
+    if(err) return err;
+    CiBitCountOp bop = e->kind == CC_EXPR_POPCOUNT? CI_BITCNT_POPCOUNT
+                     : e->kind == CC_EXPR_CTZ? CI_BITCNT_CTZ
+                     : CI_BITCNT_CLZ;
+    err = ci_lower_dest(ctx, &dest, rsz);
+    if(err) return err;
+    out->slot = dest;
+    uint32_t save = ctx->temp;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &v);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .bitcount = {
+            .kind = CI_OP_BITCOUNT,
+            .op = bop,
+            .src_size = sz,
+            .slot = dest,
+            .slot_size = rsz,
+            .src = v.slot,
+            .loc = e->loc,
+        }
+    };
     ctx->temp = save;
     return 0;
 }

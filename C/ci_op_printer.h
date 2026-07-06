@@ -294,6 +294,13 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_literal(out, ", ");
             ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
         } break;
+        case CI_OP_BITCOUNT:{
+            const char* name = op->bitcount.op == CI_BITCNT_POPCOUNT? "popcount"
+                             : op->bitcount.op == CI_BITCNT_CLZ? "clz" : "ctz";
+            ci_op_print_range(out, op->bitcount.slot, op->bitcount.slot_size);
+            msb_sprintf(out, " = %s ", name);
+            ci_op_print_range(out, op->bitcount.src, op->bitcount.src_size);
+        } break;
         case CI_OP_CONVERT:
             ci_op_print_range(out, op->convert.slot, op->convert.slot_size);
             msb_sprintf(out, " = %s ", op->convert.is_unsigned?"zext":"sext");

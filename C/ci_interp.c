@@ -3740,6 +3740,29 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_BITCOUNT: {
+            uint32_t sz = op->bitcount.src_size;
+            uint64_t val = ci_read_uint((char*)frame->slots + op->bitcount.src, sz);
+            uint64_t count;
+            switch((CiBitCountOp)op->bitcount.op){
+                case CI_BITCNT_POPCOUNT:
+                    count = (uint64_t)popcount_64(val);
+                    break;
+                case CI_BITCNT_CTZ:
+                    // ctz(0) is UB per the spec; return the operand bit width
+                    count = val? (uint64_t)ctz_64(val) : (uint64_t)(sz * 8);
+                    break;
+                case CI_BITCNT_CLZ:
+                    // clz counts from the operand width, not 64; clz(0) returns
+                    // the operand bit width
+                    count = val? (uint64_t)(clz_64(val) - (int)(64 - sz * 8)) : (uint64_t)(sz * 8);
+                    break;
+                CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->bitcount.slot, op->bitcount.slot_size, count);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_ITOF: {
             const void* src = (char*)frame->slots + op->itof.src;
             void* dest = (char*)frame->slots + op->itof.slot;
