@@ -108,6 +108,7 @@ static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
 static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size, _Bool is_ptr, uint32_t elem_sz, _Bool op_unsigned, _Bool is_float, CiFaluOp fop);
 static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -1799,8 +1800,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         }
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_FUNCTION:
-        case CC_EXPR_VA:
             break;
+        case CC_EXPR_VA:
+            return ci_lower_va(ci, ctx, e, dest, out);
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
@@ -3654,6 +3656,107 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     return 0;
 }
 
+static
+int
+ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    switch(e->va.op){
+    case CC_VA_START:{
+        uint32_t temp = ctx->temp;
+        CiLowerVal ap;
+        err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &ap);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .va_start_ = {
+                .kind = CI_OP_VA_START,
+                .slot = ap.slot,
+                .loc = e->loc,
+                .target = ci_target(ci)->target,
+            },
+        };
+        ctx->temp = temp;
+        return 0;
+    }
+    case CC_VA_END:
+        return 0;
+    case CC_VA_ARG:{
+        CcParser* p = &ci->parser;
+        uint32_t size;
+        err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
+        if(err) return err;
+        err = ci_lower_dest(ctx, &dest, size);
+        if(err) return err;
+        if(out) out->slot = dest;
+        uint32_t temp = ctx->temp;
+        CiLowerVal ap;
+        err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &ap);
+        if(err) return err;
+        _Bool is_fp = ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind);
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .va_arg_ = {
+                .kind = CI_OP_VA_ARG,
+                .is_fp = is_fp,
+                .slot = dest,
+                .slot_size = size,
+                .src = ap.slot,
+                .loc = e->loc,
+                .target = ci_target(ci)->target,
+            },
+        };
+        ctx->temp = temp;
+        return 0;
+    }
+    case CC_VA_COPY:{
+        uint32_t n;
+        switch(ci_target(ci)->target){
+        case CC_TARGET_AARCH64_MACOS:
+        case CC_TARGET_X86_64_WINDOWS:
+        case CC_TARGET_TEST:
+            n = sizeof(void*);
+            break;
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS:
+            n = sizeof(CiSysvVaListTag);
+            break;
+        case CC_TARGET_AARCH64_LINUX:
+            n = sizeof(CiAapcs64VaList);
+            break;
+        case CC_TARGET_COUNT:
+            return ci_error(ci, e->loc, "va_copy: unsupported target");
+        }
+        uint32_t temp = ctx->temp;
+        CiLowerVal dst_ap, src_ap;
+        err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &dst_ap);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &src_ap);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .memcopy = {
+                .kind = CI_OP_MEMCOPY,
+                .size = n,
+                .slot = dst_ap.slot,
+                .offset = 0,
+                .src = src_ap.slot,
+                .src_offset = 0,
+                .loc = e->loc,
+            },
+        };
+        ctx->temp = temp;
+        return 0;
+    }
+    }
+    return ci_error(ci, e->loc, "unsupported va operation");
+}
+
 // Lower an expression for side effects only.
 static
 int
@@ -3824,8 +3927,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_ATOMIC:
             return ci_lower_atomic_builtin(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_VA:
-            // TODO: complicated
-            break;
+            return ci_lower_va(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_BUILTIN:{
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);

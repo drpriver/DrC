@@ -5105,10 +5105,36 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(sb, "backtrace()"); break;
             }
             return;
+        case CC_EXPR_VA:
+            switch(e->va.op){
+                case CC_VA_ARG:
+                    msb_write_literal(sb, "va_arg(");
+                    cc_print_expr(sb, e->lhs);
+                    msb_write_literal(sb, ", ");
+                    cc_print_type(sb, e->type);
+                    msb_write_literal(sb, ")");
+                    return;
+                case CC_VA_END:
+                    msb_write_literal(sb, "va_end(");
+                    cc_print_expr(sb, e->lhs);
+                    msb_write_literal(sb, ")");
+                    return;
+                case CC_VA_COPY:
+                    msb_write_literal(sb, "va_copy(");
+                    cc_print_expr(sb, e->lhs);
+                    msb_write_literal(sb, ", ");
+                    cc_print_expr(sb, e->values[0]);
+                    msb_write_literal(sb, ")");
+                    return;
+                case CC_VA_START:
+                    msb_write_literal(sb, "va_start(");
+                    cc_print_expr(sb, e->lhs);
+                    msb_write_literal(sb, ")");
+                    return;
+            }
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
         case CC_EXPR_ATOMIC:
-        case CC_EXPR_VA:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:

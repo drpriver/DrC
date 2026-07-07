@@ -548,6 +548,14 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(out, "backtrace()"); break;
                 default: msb_write_literal(out, "?invalid builtinop"); break;
             }
+            break;
+        case CI_OP_VA_START:
+            msb_sprintf(out, "va_start(*[%u])", op->va_start_.slot);
+            break;
+        case CI_OP_VA_ARG:
+            ci_op_print_range(out, op->va_arg_.slot, op->va_arg_.slot_size);
+            msb_sprintf(out, " = va_arg(*[%u])%s", op->va_arg_.src, op->va_arg_.is_fp?" (fp)":"");
+            break;
     }
 }
 

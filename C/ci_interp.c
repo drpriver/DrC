@@ -4406,6 +4406,123 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 CASES_EXHAUSTED;
             }
         }
+        case CI_OP_VA_START:{
+            void* ap_ptr;
+            memcpy(&ap_ptr, (char*)frame->slots + op->va_start_.slot, sizeof ap_ptr);
+            if(!frame->varargs_buf)
+                return ci_error(ci, op->loc, "va_start used in non-variadic function");
+            switch(op->va_start_.target){
+            case CC_TARGET_AARCH64_MACOS:
+            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_TEST: {
+                void* va_ptr = frame->varargs_buf;
+                memcpy(ap_ptr, &va_ptr, sizeof(void*));
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                CiAapcs64VaList* va = ap_ptr;
+                va->__stack = frame->varargs_buf;
+                va->__gr_top = NULL;
+                va->__vr_top = NULL;
+                va->__gr_offs = 0;
+                va->__vr_offs = 0;
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                CiSysvVaListTag* tag = ap_ptr;
+                tag->gp_offset = 48;
+                tag->fp_offset = 48 + 128;
+                tag->overflow_arg_area = frame->varargs_buf;
+                tag->reg_save_area = NULL;
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_COUNT:
+                break;
+            }
+            return ci_error(ci, op->loc, "va_start: unsupported target");
+        }
+        case CI_OP_VA_ARG:{
+            void* ap_ptr;
+            memcpy(&ap_ptr, (char*)frame->slots + op->va_arg_.src, sizeof ap_ptr);
+            uint32_t sz = op->va_arg_.slot_size;
+            uint32_t advance = sz < 8 ? 8 : (sz + 7) & ~7u;
+            void* dest = (char*)frame->slots + op->va_arg_.slot;
+            switch(op->va_arg_.target){
+            case CC_TARGET_AARCH64_MACOS:
+            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_TEST: {
+                void* cur;
+                memcpy(&cur, ap_ptr, sizeof(void*));
+                memcpy(dest, cur, sz);
+                cur = (char*)cur + advance;
+                memcpy(ap_ptr, &cur, sizeof(void*));
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                CiAapcs64VaList* va = ap_ptr;
+                const void* src;
+                if(op->va_arg_.is_fp){
+                    if(va->__vr_offs < 0){
+                        src = (char*)va->__vr_top + va->__vr_offs;
+                        va->__vr_offs += 16;
+                    }
+                    else {
+                        src = va->__stack;
+                        va->__stack = (char*)va->__stack + advance;
+                    }
+                }
+                else {
+                    if(va->__gr_offs < 0){
+                        src = (char*)va->__gr_top + va->__gr_offs;
+                        va->__gr_offs += 8;
+                    }
+                    else {
+                        src = va->__stack;
+                        va->__stack = (char*)va->__stack + advance;
+                    }
+                }
+                memcpy(dest, src, sz);
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                CiSysvVaListTag* tag = ap_ptr;
+                const void* src;
+                if(op->va_arg_.is_fp){
+                    if(tag->fp_offset < 176){
+                        src = (char*)tag->reg_save_area + tag->fp_offset;
+                        tag->fp_offset += 16;
+                    }
+                    else {
+                        src = tag->overflow_arg_area;
+                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
+                    }
+                }
+                else {
+                    if(tag->gp_offset < 48){
+                        src = (char*)tag->reg_save_area + tag->gp_offset;
+                        tag->gp_offset += 8;
+                    }
+                    else {
+                        src = tag->overflow_arg_area;
+                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
+                    }
+                }
+                memcpy(dest, src, sz);
+                frame->pc++;
+                return 0;
+            }
+            case CC_TARGET_COUNT:
+                break;
+            }
+            return ci_error(ci, op->loc, "va_arg: unsupported target");
+        }
     }
     return ci_unimplemented(ci, op->loc, "unsupported op kind");
 }

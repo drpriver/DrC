@@ -128,6 +128,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ALLOCA,
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
+    CI_OP_VA_START,
+    CI_OP_VA_ARG,
     // CI_OP_RT_CALL, // call into runtime support function
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
@@ -573,6 +575,24 @@ struct CiOp {
             uint64_t pad[2];
             SrcLoc loc;
         } builtin;
+        struct {
+            CiOpKind kind: 8; // CI_OP_VA_START
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            CcTarget target;
+            uint32_t slot;
+            uint64_t pad[1];
+            SrcLoc loc;
+        } va_start_;
+        struct {
+            CiOpKind kind: 8; // CI_OP_VA_ARG
+            uint32_t is_fp: 1,
+                     _bitpad: 23;
+            uint32_t slot, slot_size,
+                     src;
+            CcTarget target;
+            SrcLoc loc;
+        } va_arg_;
     };
 };
 _Static_assert(sizeof(CiOp) == 32, "");
