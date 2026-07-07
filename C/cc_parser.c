@@ -1758,6 +1758,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_SLICE_LO:
             case CC_EXPR_SLICE_HI:
             case CC_EXPR_SLICE_ALL:
+            case CC_EXPR_BSWAP:
                 return CC_UNREACHABLE_ERROR;
         }
         CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 1);
@@ -2050,6 +2051,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_SLICE_ALL:
                 case CC_EXPR_SLICE_LO:
                 case CC_EXPR_SLICE_HI:
+                case CC_EXPR_BSWAP:
                     return CC_UNREACHABLE_ERROR;
             }
             CcExpr* node = cc_make_expr(p, kind, tok.loc, result_type, 0);
@@ -3155,6 +3157,31 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         if(!node) return CC_OOM_ERROR;
                         node->double_ = (double)NAN;
                     }
+                    *out = node;
+                    return 0;
+                }
+                case CC__builtin_bswap16:{
+                    CcQualType t;
+                    t = ccqt_basic(CCBT_unsigned_short);
+                    goto bswap;
+                case CC__builtin_bswap32:
+                    t = ccqt_basic(CCBT_unsigned);
+                    goto bswap;
+                case CC__builtin_bswap64:
+                    t = ccqt_basic(ccbt_to_unsigned(cc_target(p)->int64_type));
+                    bswap:
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* arg;
+                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, arg, t, &arg);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BSWAP, tok.loc, t, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    node->lhs = arg;
                     *out = node;
                     return 0;
                 }
@@ -5080,9 +5107,6 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CTZ:
-        case CC_EXPR_CLZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
@@ -5093,6 +5117,26 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
+            return;
+        case CC_EXPR_POPCOUNT:
+            msb_write_literal(sb, "popcount(");
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, ")");
+            return;
+        case CC_EXPR_CTZ:
+            msb_write_literal(sb, "ctz(");
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, ")");
+            return;
+        case CC_EXPR_CLZ:
+            msb_write_literal(sb, "clz(");
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, ")");
+            return;
+        case CC_EXPR_BSWAP:
+            msb_write_literal(sb, "bswap(");
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, ")");
             return;
         case CC_EXPR_COMPOUND_LITERAL:
             msb_write_char(sb, '(');
@@ -5999,6 +6043,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_POPCOUNT:
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
+        case CC_EXPR_BSWAP:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_COMPILE:
@@ -6193,6 +6238,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_CLZ:
         case CC_EXPR_COMMA:
         case CC_EXPR_CTZ:
+        case CC_EXPR_BSWAP:
         case CC_EXPR_DEREF:
         case CC_EXPR_DIV:
         case CC_EXPR_DIVASSIGN:
@@ -11587,6 +11633,10 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_nan"), CC__builtin_nan},
             {SVI("__builtin_nanf"), CC__builtin_nanf},
             {SVI("__nan"), CC__nan},
+            {SVI("__nan"), CC__nan},
+            {SVI("__builtin_bswap16"), CC__builtin_bswap16},
+            {SVI("__builtin_bswap32"), CC__builtin_bswap32},
+            {SVI("__builtin_bswap64"), CC__builtin_bswap64},
             {SVI("__builtin_alloca"), CC__builtin_alloca},
             {SVI("_alloca"), CC__builtin_alloca},
             {SVI("alloca"), CC__builtin_alloca},
@@ -11623,6 +11673,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("_InterlockedXor8"), CC_InterlockedXor8},
             {SVI("_InterlockedXor16"), CC_InterlockedXor16},
             {SVI("_InterlockedXor64"), CC_InterlockedXor64},
+            {SVI("_byteswap_ushort"), CC__builtin_bswap16},
+            {SVI("_byteswap_ulong"), CC__builtin_bswap32},
+            {SVI("_byteswap_uint64"), CC__builtin_bswap64},
             {SVI("_umul128"), CC__umul128},
             {SVI("__root_module"), CC__root_module},
             {SVI("__hotswap"), CC__hotswap},
@@ -11701,6 +11754,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
             {SVI("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
             {SVI("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("fabsf"), {.basic.kind=CCBT_float}, 1, {{.basic.kind=CCBT_float}}},
+            {SVI("fabs"), {.basic.kind=CCBT_double}, 1, {{.basic.kind=CCBT_double}}},
+            {SVI("fabsl"), {.basic.kind=CCBT_long_double}, 1, {{.basic.kind=CCBT_long_double}}},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];
@@ -13200,6 +13256,35 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             *result = cc_int64_expr(p, e->loc, e->type, r);
             if(!*result) err = CC_OOM_ERROR;
             fini_bitop:;
+            cc_release_expr(p, operand);
+            return err;
+        }
+        case CC_EXPR_BSWAP:{
+            CcExpr* operand;
+            int err = cc_eval_expr(p, e->lhs, &operand);
+            if(err) return err;
+            uint64_t v;
+            err = cc_eval_to_u(p, operand, &v);
+            if(err) goto fini_bswap;
+            uint32_t sz;
+            err = cc_sizeof_as_uint(p, operand->type, e->loc, &sz);
+            if(err) goto fini_bswap;
+            switch(sz){
+                case 2: v = bswap16((uint16_t)v); break;
+                case 4: v = bswap32((uint32_t)v); break;
+                case 8: v = bswap64((uint64_t)v); break;
+                default:
+                    err = CC_UNREACHABLE_ERROR;
+                    goto fini_bswap;
+            }
+
+            CcExpr* node = cc_value_expr(p, e->loc, operand->type);
+            if(!node){
+                err = CC_OOM_ERROR;
+                goto fini_bswap;
+            }
+            *result = node;
+            fini_bswap:;
             cc_release_expr(p, operand);
             return err;
         }

@@ -79,6 +79,36 @@ popcount_64(uint64_t a){
     #endif
 }
 
+force_inline
+uint16_t
+bswap16(uint16_t v){
+    #ifdef _MSC_VER
+    return _byteswap_ushort(v);
+    #else
+    return __builtin_bswap16(v);
+    #endif
+}
+
+force_inline
+uint32_t
+bswap32(uint32_t v){
+    #ifdef _MSC_VER
+    return _byteswap_ulong(v);
+    #else
+    return __builtin_bswap32(v);
+    #endif
+}
+
+force_inline
+uint64_t
+bswap64(uint64_t v){
+    #ifdef _MSC_VER
+    return _byteswap_uint64(v);
+    #else
+    return __builtin_bswap64(v);
+    #endif
+}
+
 
 
 #endif

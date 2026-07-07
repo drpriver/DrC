@@ -1809,6 +1809,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
             return ci_lower_bitcount(ci, ctx, e, dest, out);
+        case CC_EXPR_BSWAP:
+            break;
         case CC_EXPR_ALLOCA:{
             CcExpr *sz = e->lhs;
             err = ci_lower_dest(ctx, &dest, size);
@@ -3656,6 +3658,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_CTZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_SLICE_ALL:
+        case CC_EXPR_BSWAP:
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             return err;
         case CC_EXPR_INTERN:

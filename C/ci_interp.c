@@ -678,6 +678,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
         case CC_EXPR_SLICE_ALL:
+        case CC_EXPR_BSWAP:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
         CASES_EXHAUSTED;
     }
@@ -3501,6 +3502,27 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         else {
             return ci_unreachable(ci, expr->loc, "slice of pointer without upper bound");
         }
+    }
+    case CC_EXPR_BSWAP: {
+        uint64_t val;
+        uint32_t sz;
+        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
+        if(err) return err;
+        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
+        if(err) return err;
+        val = ci_read_uint(&val, sz);
+        switch(sz){
+            case 2: val = bswap16((uint16_t)val); break;
+            case 4: val = bswap32((uint32_t)val); break;
+            case 8: val = bswap64((uint64_t)val); break;
+            default: return ci_unreachable(ci, expr->loc, "bswap of non 2,4,8 byte integer");
+        }
+        if(result != ci_discard_buf){
+            if(sz > size)
+                return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
+            ci_write_uint(result, sz, val);
+        }
+        return 0;
     }
     }
     return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");

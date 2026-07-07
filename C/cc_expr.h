@@ -83,6 +83,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_POPCOUNT,
     CC_EXPR_CLZ,
     CC_EXPR_CTZ,
+    CC_EXPR_BSWAP,
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
     CC_EXPR_SYMBOL, // _Module.symbol(const char*, type-name) -> type-name*
