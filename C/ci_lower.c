@@ -1828,6 +1828,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     .size = size,
                     .src = l.slot,
                     .slot = dest,
+                    .loc = e->loc,
                 },
             };
             ctx->temp = temp;
@@ -1855,7 +1856,18 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             ctx->temp = temp;
             return 0;
         }
-        case CC_EXPR_BUILTIN:
+        case CC_EXPR_BUILTIN:{
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .builtin = {
+                    .kind = CI_OP_BUILTIN,
+                    .op = e->builtin.op,
+                },
+            };
+            return 0;
+        }
         case CC_EXPR_INTERN:
         case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
@@ -3817,9 +3829,19 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_VA:
             // TODO: complicated
             break;
-        case CC_EXPR_BUILTIN:
-            // TODO: complicated
-            break;
+        case CC_EXPR_BUILTIN:{
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .builtin = {
+                    .kind = CI_OP_BUILTIN,
+                    .op = e->builtin.op,
+                    .loc = e->loc,
+                },
+            };
+            return 0;
+        }
         case CC_EXPR_HOTSWAP:
             // TODO: lower to function call?
             break;

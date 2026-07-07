@@ -127,6 +127,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FENCE,
     CI_OP_ALLOCA,
     CI_OP_BSWAP,
+    CI_OP_BUILTIN,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
@@ -556,13 +557,21 @@ struct CiOp {
         } alloca;
         struct {
             // evaluate bswap into slots[slot:slot+slot_size]
-            CiOpKind kind: 8; // CI_OP_ALLOCA
+            CiOpKind kind: 8; // CI_OP_BSWAP
             uint32_t _bitpad: 24;
             uint32_t size;
             uint32_t slot, src;
             uint64_t pad;
             SrcLoc loc;
         } bswap;
+        struct {
+            CiOpKind kind: 8; // CI_OP_BUILTIN
+            CcBuiltinOp op: 8;
+            uint32_t _bitpad: 16;
+            uint32_t _pad;
+            uint64_t pad[2];
+            SrcLoc loc;
+        } builtin;
     };
 };
 _Static_assert(sizeof(CiOp) == 32, "");

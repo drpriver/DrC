@@ -4410,6 +4410,24 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_BUILTIN:{
+            switch(op->builtin.op){
+                case CC_BUILTIN_UNREACHABLE:
+                    return ci_error(ci, op->loc, "__builtin_unreachable reached");
+                case CC_BUILTIN_TRAP:
+                    return ci_error(ci, op->loc, "__builtin_trap");
+                case CC_BUILTIN_DEBUGTRAP:
+                    frame->pc++;
+                    return 0;
+                case CC_BUILTIN_ABORT:
+                    return ci_error(ci, op->loc, "__builtin_abort called");
+                case CC_BUILTIN_BACKTRACE:
+                    ci_backtrace(ci, frame, 0);
+                    frame->pc++;
+                    return 0;
+                CASES_EXHAUSTED;
+            }
+        }
     }
     return ci_unimplemented(ci, op->loc, "unsupported op kind");
 }

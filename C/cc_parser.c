@@ -5099,11 +5099,19 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             else
                 msb_write_literal(sb, "<lambda>");
             return;
+        case CC_EXPR_BUILTIN:
+            switch(e->builtin.op){
+                case CC_BUILTIN_UNREACHABLE: msb_write_literal(sb, "unreachable"); break;
+                case CC_BUILTIN_TRAP: msb_write_literal(sb, "trap"); break;
+                case CC_BUILTIN_DEBUGTRAP: msb_write_literal(sb, "debugtrap()"); break;
+                case CC_BUILTIN_ABORT: msb_write_literal(sb, "abort()"); break;
+                case CC_BUILTIN_BACKTRACE: msb_write_literal(sb, "backtrace()"); break;
+            }
+            return;
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
         case CC_EXPR_ATOMIC:
         case CC_EXPR_VA:
-        case CC_EXPR_BUILTIN:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
