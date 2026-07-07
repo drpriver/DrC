@@ -128,6 +128,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ALLOCA,
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
+    // CI_OP_RT_CALL, // call into runtime support function
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 

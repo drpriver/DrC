@@ -86,11 +86,8 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_BSWAP,
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
-    CC_EXPR_SYMBOL, // _Module.symbol(const char*, type-name) -> type-name*
     CC_EXPR_HOTSWAP, // __hotswap(function-pointer, function-pointer) -> int
     CC_EXPR_COMPILE, // __compile(const char*) -> _Module
-    CC_EXPR_MODULE_RUN, // _Module.run() -> int
-    CC_EXPR_MODULE_TYPE, // _Module.parse_type(const char*) -> _Type
     CC_EXPR_MODULE_REFLECT, // _Module reflection methods/properties; op in extra field
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
     CC_EXPR_UMUL128, // _umul128(a, b, &high) -> low
@@ -196,6 +193,10 @@ enum CcModuleOp TYPED_ENUM(uint32_t) {
     CC_MODULE_VAR,
     CC_MODULE_TYPE_COUNT,
     CC_MODULE_TYPE,
+
+    CC_MODULE_PARSE_TYPE,
+    CC_MODULE_RUN,
+    CC_MODULE_SYMBOL,
 };
 TYPEDEF_ENUM(CcModuleOp, uint32_t);
 

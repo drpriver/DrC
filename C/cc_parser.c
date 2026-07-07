@@ -1746,11 +1746,8 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_CTZ:
             case CC_EXPR_ALLOCA:
             case CC_EXPR_INTERN:
-            case CC_EXPR_SYMBOL:
             case CC_EXPR_HOTSWAP:
             case CC_EXPR_COMPILE:
-            case CC_EXPR_MODULE_RUN:
-            case CC_EXPR_MODULE_TYPE:
             case CC_EXPR_MODULE_REFLECT:
             case CC_EXPR_TYPE_INTROSPECTION:
             case CC_EXPR_UMUL128:
@@ -2039,11 +2036,8 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_CTZ:
                 case CC_EXPR_ALLOCA:
                 case CC_EXPR_INTERN:
-                case CC_EXPR_SYMBOL:
                 case CC_EXPR_HOTSWAP:
                 case CC_EXPR_COMPILE:
-                case CC_EXPR_MODULE_RUN:
-                case CC_EXPR_MODULE_TYPE:
                 case CC_EXPR_MODULE_REFLECT:
                 case CC_EXPR_TYPE_INTROSPECTION:
                 case CC_EXPR_UMUL128:
@@ -3985,9 +3979,10 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
                         if(err) return err;
-                        CcExpr* node = cc_make_expr(p, CC_EXPR_SYMBOL, tok.loc, result_type, 1);
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_REFLECT, tok.loc, result_type, 1);
                         if(!node) return CC_OOM_ERROR;
                         node->lhs = operand;
+                        node->module.op = CC_MODULE_SYMBOL;
                         node->values[0] = name;
                         operand = node;
                         continue;
@@ -3997,8 +3992,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
                         if(err) return err;
-                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_RUN, tok.loc, ccqt_basic(CCBT_int), 0);
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_REFLECT, tok.loc, ccqt_basic(CCBT_int), 0);
                         if(!node) return CC_OOM_ERROR;
+                        node->module.op = CC_MODULE_RUN;
                         node->lhs = operand;
                         operand = node;
                         continue;
@@ -4015,8 +4011,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
                         if(err) return err;
-                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_TYPE, tok.loc, ccqt_basic(CCBT__Type), 1);
+                        CcExpr* node = cc_make_expr(p, CC_EXPR_MODULE_REFLECT, tok.loc, ccqt_basic(CCBT__Type), 1);
                         if(!node) return CC_OOM_ERROR;
+                        node->module.op = CC_MODULE_PARSE_TYPE;
                         node->lhs = operand;
                         node->values[0] = name;
                         operand = node;
@@ -5117,11 +5114,8 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_SUB_OVERFLOW:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
-        case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
@@ -6055,12 +6049,23 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
-        case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
-        case CC_EXPR_SYMBOL:
+        case CC_EXPR_MODULE_REFLECT:
+            switch(e->module.op){
+                case CC_MODULE_NONE:
+                case CC_MODULE_FUNC_COUNT:
+                case CC_MODULE_FUNC:
+                case CC_MODULE_VAR_COUNT:
+                case CC_MODULE_VAR:
+                case CC_MODULE_TYPE_COUNT:
+                case CC_MODULE_TYPE:
+                case CC_MODULE_RUN:
+                     return 0;
+                case CC_MODULE_PARSE_TYPE:
+                case CC_MODULE_SYMBOL:
+                    return 1;
+            }
         case CC_EXPR_HOTSWAP:
             return 1;
         case CC_EXPR_VALUE:
@@ -6281,11 +6286,8 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_SUBASSIGN:
         case CC_EXPR_SUBSCRIPT:
         case CC_EXPR_SUB_OVERFLOW:
-        case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TERNARY:
         case CC_EXPR_TYPE_INTROSPECTION:
@@ -13298,11 +13300,8 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         }
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
-        case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
             return CC_NOT_CONSTANT_ERROR;

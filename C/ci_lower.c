@@ -1868,19 +1868,17 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             };
             return 0;
         }
-        case CC_EXPR_INTERN:
-        case CC_EXPR_SYMBOL:
-        case CC_EXPR_HOTSWAP:
-        case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
-        case CC_EXPR_MODULE_REFLECT:
-        case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_SLICE:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
             // fallback
+            break;
+        case CC_EXPR_INTERN:
+        case CC_EXPR_HOTSWAP:
+        case CC_EXPR_COMPILE:
+        case CC_EXPR_MODULE_REFLECT:
+        case CC_EXPR_TYPE_INTROSPECTION:
             break;
         case CC_EXPR_UMUL128:
             return ci_lower_umul128(ci, ctx, e, dest, out);
@@ -3722,7 +3720,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_LE:
         case CC_EXPR_GE:
         case CC_EXPR_SUBSCRIPT:
-        case CC_EXPR_SYMBOL:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
@@ -3842,9 +3839,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             };
             return 0;
         }
-        case CC_EXPR_HOTSWAP:
-            // TODO: lower to function call?
-            break;
         case CC_EXPR_ADD_OVERFLOW:
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
@@ -3858,8 +3852,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             if(err) return err;
             err = ci_lower_expr_discard(ci, ctx, e->values[1]);
             return err;
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
+        case CC_EXPR_HOTSWAP:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
             break; // TODO: complicated? Maybe should be lowered just to calls to runtime functions?

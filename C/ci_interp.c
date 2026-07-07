@@ -666,11 +666,8 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_CTZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
-        case CC_EXPR_SYMBOL:
         case CC_EXPR_HOTSWAP:
         case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_RUN:
-        case CC_EXPR_MODULE_TYPE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
@@ -2957,28 +2954,6 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         }
         return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
     }
-    case CC_EXPR_SYMBOL: {
-        if(result == ci_discard_buf) return 0;
-        CiModule* module = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
-        if(err) return err;
-        if(module && PM_get(&ci->modules, module) != module)
-            return ci_error(ci, expr->loc, "_Module.symbol module is not valid");
-        void* name_ptr = NULL;
-        err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
-        if(err) return err;
-        const char* name = name_ptr;
-        if(!name)
-            return ci_error(ci, expr->loc, "_Module.symbol name must not be NULL");
-        CcQualType expected = ccqt_as_ptr(expr->type)->pointee;
-        void* sym = NULL;
-        err = ci_lookup_symbol(ci, expr->loc, module, name, expected, &sym);
-        if(err) return err;
-        if(sizeof sym > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof sym, size);
-        memcpy(result, &sym, sizeof sym);
-        return 0;
-    }
     case CC_EXPR_COMPILE: {
         if(result == ci_discard_buf) return 0;
         const char* source = NULL;
@@ -2994,71 +2969,13 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
         memcpy(result, &module, sizeof module);
         return 0;
     }
-    case CC_EXPR_MODULE_RUN: {
-        CiModule* module = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
-        if(err) return err;
-        int ret = 1;
-        if(module && PM_get(&ci->modules, module) == module){
-            err = ci_resolve_module(ci, module);
-            if(err) return err;
-            err = ci_lower_module(ci, module);
-            if(err) return err;
-            void*_Null_unspecified slots = NULL;
-            if(module->slot_size){
-                slots = Allocator_zalloc(ci_allocator(ci), module->slot_size);
-                if(!slots) return CI_OOM_ERROR;
-            }
-            CiInterpFrame module_frame = {
-                .parent = frame,
-                .ops = module->ops.data,
-                .op_count = module->ops.count,
-                .slots = slots,
-                .return_buf = ci_discard_buf,
-                .return_size = sizeof ci_discard_buf,
-            };
-            ret = 0;
-            err = ci_interp_run(ci, &module_frame);
-            ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
-            if(slots)
-                Allocator_free(ci_allocator(ci), slots, module->slot_size);
-            if(err) return err;
-        }
-        if(result == ci_discard_buf) return 0;
-        if(sizeof ret > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
-        memcpy(result, &ret, sizeof ret);
-        return 0;
-    }
-    case CC_EXPR_MODULE_TYPE: {
-        if(result == ci_discard_buf) return 0;
-        CiModule* module = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
-        if(err) return err;
-        if(module && PM_get(&ci->modules, module) != module)
-            return ci_error(ci, expr->loc, "_Module.parse_type module is not valid");
-        void* name_ptr = NULL;
-        err = ci_interp_expr(ci, frame, expr->values[0], &name_ptr, sizeof name_ptr);
-        if(err) return err;
-        const char* name = name_ptr;
-        if(!name)
-            return ci_error(ci, expr->loc, "_Module.parse_type name must not be NULL");
-        CcQualType type = {0};
-        err = ci_parse_module_type(ci, expr->loc, module, name, &type);
-        if(err) return err;
-        uintptr_t bits = type.bits;
-        if(sizeof bits > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof bits, size);
-        memcpy(result, &bits, sizeof bits);
-        return 0;
-    }
     case CC_EXPR_MODULE_REFLECT: {
-        if(result == ci_discard_buf) return 0;
+        if(expr->module.op != CC_MODULE_RUN && result == ci_discard_buf) return 0;
         CiModule* module = NULL;
         int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
         if(err) return err;
         if(module && PM_get(&ci->modules, module) != module)
-            return ci_error(ci, expr->loc, "_Module reflection module is not valid");
+            return ci_error(ci, expr->loc, "_Module is not valid");
         size_t idx = 0;
         switch(expr->module.op){
             case CC_MODULE_FUNC:
@@ -3072,6 +2989,66 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_MODULE_TYPE_COUNT:
             case CC_MODULE_NONE:
                 break;
+            case CC_MODULE_SYMBOL:{
+                const char* name = NULL;
+                err = ci_interp_expr(ci, frame, expr->values[0], &name, sizeof name);
+                if(err) return err;
+                if(!name)
+                    return ci_error(ci, expr->loc, "_Module.symbol name must not be NULL");
+                CcQualType expected = ccqt_as_ptr(expr->type)->pointee;
+                void* sym = NULL;
+                err = ci_lookup_symbol(ci, expr->loc, module, name, expected, &sym);
+                if(err) return err;
+                if(sizeof sym > size)
+                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof sym, size);
+                memcpy(result, &sym, sizeof sym);
+                return 0;
+            }
+            case CC_MODULE_RUN:{
+                err = ci_resolve_module(ci, module);
+                if(err) return err;
+                err = ci_lower_module(ci, module);
+                if(err) return err;
+                void*_Null_unspecified slots = NULL;
+                if(module->slot_size){
+                    slots = Allocator_zalloc(ci_allocator(ci), module->slot_size);
+                    if(!slots) return CI_OOM_ERROR;
+                }
+                CiInterpFrame module_frame = {
+                    .parent = frame,
+                    .ops = module->ops.data,
+                    .op_count = module->ops.count,
+                    .slots = slots,
+                    .return_buf = ci_discard_buf,
+                    .return_size = sizeof ci_discard_buf,
+                };
+                int ret = 0;
+                err = ci_interp_run(ci, &module_frame);
+                ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
+                if(slots)
+                    Allocator_free(ci_allocator(ci), slots, module->slot_size);
+                if(err) return err;
+                if(result == ci_discard_buf) return 0;
+                if(sizeof ret > size)
+                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
+                memcpy(result, &ret, sizeof ret);
+                return 0;
+            }
+            case CC_MODULE_PARSE_TYPE:{
+                const char* name = NULL;
+                err = ci_interp_expr(ci, frame, expr->values[0], &name, sizeof name);
+                if(err) return err;
+                if(!name)
+                    return ci_error(ci, expr->loc, "_Module.parse_type name must not be NULL");
+                CcQualType type = {0};
+                err = ci_parse_module_type(ci, expr->loc, module, name, &type);
+                if(err) return err;
+                uintptr_t bits = type.bits;
+                if(sizeof bits > size)
+                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof bits, size);
+                memcpy(result, &bits, sizeof bits);
+                return 0;
+            }
         }
         CiRtModuleMember member = {0};
         err = ci_reflect_module(ci, expr->loc, module, expr->module.op, idx, &member);
@@ -3092,6 +3069,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
                 memcpy(result, &member, sizeof member);
                 return 0;
             case CC_MODULE_NONE:
+            default:
                 return CI_UNREACHABLE_ERROR;
         }
         return CI_UNREACHABLE_ERROR;
@@ -4932,6 +4910,9 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
             if(ret == CI_SYMBOL_NOT_FOUND)
                 ret = ci_error(ci, loc, "_Module.type index out of range");
             break;
+        case CC_MODULE_SYMBOL:
+        case CC_MODULE_RUN:
+        case CC_MODULE_PARSE_TYPE:
         case CC_MODULE_NONE:
             ret = CI_UNREACHABLE_ERROR;
             break;
