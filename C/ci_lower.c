@@ -1799,8 +1799,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return 0;
         }
         case CC_EXPR_SIZEOF_VMT:
+            return ci_unimplemented(ci, e->loc, "sizeof vmt");
         case CC_EXPR_FUNCTION:
-            break;
+            return ci_unreachable(ci, e->loc, "function as value?");
         case CC_EXPR_VA:
             return ci_lower_va(ci, ctx, e, dest, out);
         case CC_EXPR_ADD_OVERFLOW:
@@ -1811,7 +1812,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
             return ci_lower_bitcount(ci, ctx, e, dest, out);
-            break;
         case CC_EXPR_BSWAP:{
             CcExpr* arg = e->lhs;
             err = ci_lower_dest(ctx, &dest, size);
