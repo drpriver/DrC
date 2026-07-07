@@ -8005,6 +8005,52 @@ TestFunction(test_interpreter_runtime_errors){
             SVI("(test):3:9: error: array subscript out of bounds: index 3 not in [0, 3)\n"),
         },
         {
+            "slice high bound past end: array", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int s[:] = a[:5];\n"
+                "return s[0];\n"),
+            SVI("(test):2:13: error: array subscript out of bounds: index 5 not in [0, 3]\n"),
+        },
+        {
+            "slice low bound past end: array", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int s[:] = a[4:];\n"
+                "return s[0];\n"),
+            SVI("(test):2:13: error: array subscript out of bounds: index 4 not in [0, 3]\n"),
+        },
+        {
+            "slice reversed bounds: array", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int s[:] = a[2:1];\n"
+                "return s[0];\n"),
+            SVI("(test):2:13: error: array subscript out of bounds: index 2 not in [0, 1]\n"),
+        },
+        {
+            "slice negative low bound: array", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int i = -1;\n"
+                "int s[:] = a[i:];\n"
+                "return s[0];\n"),
+            SVI("(test):3:13: error: array subscript out of bounds: index -1 not in [0, 3]\n"),
+        },
+        {
+            "slice high bound past end: slice", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int x[:] = a;\n"
+                "int s[:] = x[:5];\n"
+                "return s[0];\n"),
+            SVI("(test):3:13: error: array subscript out of bounds: index 5 not in [0, 3]\n"),
+        },
+        {
+            "slice negative high bound: pointer", __LINE__,
+            SVI("int a[3] = {1,2,3};\n"
+                "int* p = a;\n"
+                "int h = -1;\n"
+                "int s[:] = p[:h];\n"
+                "return s[0];\n"),
+            SVI("(test):4:13: error: array subscript out of bounds: index -1 not in [0, 9223372036854775807]\n"),
+        },
+        {
             "addr past one-past-end: array", __LINE__,
             SVI("int a[3] = {1, 2, 3};\n"
                 "int *p = &a[4];\n"

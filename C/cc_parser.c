@@ -532,6 +532,19 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
 }
 
 static
+int
+cc_implicit_cast_to_index(CcParser* p, CcExpr* e, CcExpr* _Nullable* _Nonnull out){
+    CcQualType src = e->type;
+    if(ccqt_kind(src) == CC_ENUM)
+        src = ccqt_as_enum(src)->underlying;
+    if(!ccqt_is_basic(src) || !ccbt_is_integer(src.basic.kind))
+        return cc_error(p, e->loc, "index requires integer type");
+    const CcTargetConfig* t = cc_target(p);
+    CcQualType target = ccqt_basic(ccbt_is_unsigned(src.basic.kind, !t->char_is_signed)?  t->size_type : ccbt_to_signed(t->size_type));
+    return cc_implicit_cast(p, e, target, out);
+}
+
+static
 _Bool
 cc_is_type_start(CcParser* p, CcToken* tok){
     if(tok->type == CC_KEYWORD){
@@ -1984,7 +1997,11 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ADDR: {
                     if(vc == CC_CONSTEXPR_VALUE)
                         return cc_error(p, tok.loc, "address-of in constant expression");
-                    if(operand->kind == CC_EXPR_VALUE && ccqt_kind(operand->type) != CC_ARRAY){
+                    CcExpr* val = operand;
+                    while(val->kind == CC_EXPR_CAST){
+                        val = val->lhs;
+                    }
+                    if(val->kind == CC_EXPR_VALUE && ccqt_kind(val->type) != CC_ARRAY){
                         // eg &3. Desugar to &(int){3}.
                         err = cc_wrap_to_desugared_compound_literal(p, operand, &operand);
                         if(err) return err;
@@ -3882,11 +3899,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     CcExpr* hi;
                     err = cc_parse_expr(p, vc, &hi);
                     if(err) return err;
-                    CcQualType hi_type = hi->type;
-                    if(ccqt_kind(hi_type) == CC_ENUM)
-                        hi_type = ccqt_as_enum(hi_type)->underlying;
-                    if(!ccqt_is_basic(hi_type) || !ccbt_is_integer(hi_type.basic.kind))
-                        return cc_error(p, hi->loc, "slice subscript requires integer type");
+                    err = cc_implicit_cast_to_index(p, hi, &hi);
+                    if(err) return err;
                     err = cc_expect_punct(p, CC_rbracket);
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_HI, tok.loc, slice_type, 1);
@@ -3908,11 +3922,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     CcQualType slice_type;
                     err = cc_slice_of(p, elem_type, &slice_type);
                     if(err) return err;
-                    CcQualType idx_type = index->type;
-                    if(ccqt_kind(idx_type) == CC_ENUM)
-                        idx_type = ccqt_as_enum(idx_type)->underlying;
-                    if(!ccqt_is_basic(idx_type) || !ccbt_is_integer(idx_type.basic.kind))
-                        return cc_error(p, index->loc, "slice subscript requires integer type");
+                    err = cc_implicit_cast_to_index(p, index, &index);
+                    if(err) return err;
                     err = cc_next_token(p, &peek);
                     if(err) return err;
                     err = cc_peek(p, &peek);
@@ -3934,11 +3945,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     CcExpr* hi;
                     err = cc_parse_expr(p, vc, &hi);
                     if(err) return err;
-                    CcQualType hi_type = hi->type;
-                    if(ccqt_kind(hi_type) == CC_ENUM)
-                        hi_type = ccqt_as_enum(hi_type)->underlying;
-                    if(!ccqt_is_basic(hi_type) || !ccbt_is_integer(hi_type.basic.kind))
-                        return cc_error(p, hi->loc, "slice subscript requires integer type");
+                    err = cc_implicit_cast_to_index(p, hi, &hi);
+                    if(err) return err;
                     err = cc_expect_punct(p, CC_rbracket);
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE, tok.loc, slice_type, 2);
@@ -3966,9 +3974,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     index = tmp;
                 }
                 {
-                    const CcTargetConfig* tgt = cc_target(p);
-                    CcQualType idx_type = ccqt_basic(ccqt_is_unsigned(index->type, !tgt->char_is_signed) ? tgt->size_type : tgt->ptrdiff_type);
-                    err = cc_implicit_cast(p, index, idx_type, &index);
+                    err = cc_implicit_cast_to_index(p, index, &index);
                     if(err) return err;
                 }
                 CcQualType elem_type;

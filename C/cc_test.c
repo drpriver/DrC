@@ -4322,9 +4322,9 @@ TestFunction(test_parse_decls){
             .vars = {
                 {SVI("x"), SVI("int[3]")},
                 {SVI("a"), SVI("int[:]"), SVI("x[:]")},
-                {SVI("b"), SVI("int[:]"), SVI("x[1:]")},
-                {SVI("c"), SVI("int[:]"), SVI("x[:1]")},
-                {SVI("d"), SVI("int[:]"), SVI("x[1:1]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[(long)1:]")},
+                {SVI("c"), SVI("int[:]"), SVI("x[:(long)1]")},
+                {SVI("d"), SVI("int[:]"), SVI("x[(long)1:(long)1]")},
             },
         },
         {
@@ -4338,9 +4338,9 @@ TestFunction(test_parse_decls){
             .vars = {
                 {SVI("x"), SVI("int[:]")},
                 {SVI("a"), SVI("int[:]"), SVI("x[:]")},
-                {SVI("b"), SVI("int[:]"), SVI("x[1:]")},
-                {SVI("c"), SVI("int[:]"), SVI("x[:1]")},
-                {SVI("d"), SVI("int[:]"), SVI("x[1:1]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[(long)1:]")},
+                {SVI("c"), SVI("int[:]"), SVI("x[:(long)1]")},
+                {SVI("d"), SVI("int[:]"), SVI("x[(long)1:(long)1]")},
             },
         },
         {
@@ -4351,8 +4351,8 @@ TestFunction(test_parse_decls){
             ),
             .vars = {
                 {SVI("x"), SVI("int *")},
-                {SVI("a"), SVI("int[:]"), SVI("x[:1]")},
-                {SVI("b"), SVI("int[:]"), SVI("x[1:1]")},
+                {SVI("a"), SVI("int[:]"), SVI("x[:(long)1]")},
+                {SVI("b"), SVI("int[:]"), SVI("x[(long)1:(long)1]")},
             },
         },
         {
