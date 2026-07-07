@@ -7852,6 +7852,23 @@ TestFunction(test_interpreter){
                 "return f();\n"),
             .exit_code = 1,
         },
+        {
+            "address of literal (global)", __LINE__,
+            SVI("int *p = &3;\n"
+                "++*p;\n"
+                "return *p;\n"),
+            .exit_code = 4,
+        },
+        {
+            "address of literal (func)", __LINE__,
+            SVI("int f(void){\n"
+                "  int *p = &3;\n"
+                "  ++*p;\n"
+                "  return *p;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 4,
+        },
     };
     int err;
     static int idx = 0;

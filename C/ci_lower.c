@@ -4179,6 +4179,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                         (uint64_t)lv->text,
                         lv->str.length,
                     },
+                    .loc = lv->loc,
                 },
             };
             out->slot = aslot;

@@ -797,6 +797,50 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     return 0;
 }
 
+static
+int
+cc_wrap_to_desugared_compound_literal(CcParser* p, CcExpr* operand, CcExpr*_Nullable*_Nonnull out){
+    CcQualType type = operand->type;
+    SrcLoc loc = operand->loc;
+    CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
+    if(!anon) return CC_OOM_ERROR;
+    *anon = (CcVariable){
+        .name = nil_atom,
+        .loc = loc,
+        .type = type,
+        .automatic = p->current_func != NULL,
+    };
+    if(anon->automatic){
+        uint32_t sz, align;
+        int err = cc_sizeof_as_uint(p, type, loc, &sz);
+        if(err) return err;
+        err = cc_alignof_as_uint(p, type, loc, &align);
+        if(err) return err;
+        p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
+        anon->frame_offset = p->current_func->frame_size;
+        p->current_func->frame_size += sz;
+    }
+    else {
+        int err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
+        if(err) return CC_OOM_ERROR;
+    }
+    CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
+    if(!var_ref) return CC_OOM_ERROR;
+    var_ref->is_lvalue = 1;
+    var_ref->var = anon;
+    CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, loc, type, var_ref, operand);
+    if(!assign) return CC_OOM_ERROR;
+    CcExpr* var_ref2 = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
+    if(!var_ref2) return CC_OOM_ERROR;
+    var_ref2->is_lvalue = 1;
+    var_ref2->var = anon;
+    CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, loc, type, assign, var_ref2);
+    if(!comma) return CC_OOM_ERROR;
+    comma->is_lvalue = var_ref2->is_lvalue;
+    *out = comma;
+    return 0;
+}
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullable-to-nonnull-conversion"
@@ -1940,6 +1984,11 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ADDR: {
                     if(vc == CC_CONSTEXPR_VALUE)
                         return cc_error(p, tok.loc, "address-of in constant expression");
+                    if(operand->kind == CC_EXPR_VALUE && ccqt_kind(operand->type) != CC_ARRAY){
+                        // eg &3. Desugar to &(int){3}.
+                        err = cc_wrap_to_desugared_compound_literal(p, operand, &operand);
+                        if(err) return err;
+                    }
                     if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
