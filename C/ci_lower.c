@@ -1809,8 +1809,30 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_CLZ:
         case CC_EXPR_CTZ:
             return ci_lower_bitcount(ci, ctx, e, dest, out);
-        case CC_EXPR_BSWAP:
             break;
+        case CC_EXPR_BSWAP:{
+            CcExpr* arg = e->lhs;
+            err = ci_lower_dest(ctx, &dest, size);
+            if(err) return err;
+            out->slot = dest;
+            uint32_t temp = ctx->temp;
+            CiLowerVal l;
+            err = ci_lower_expr(ci, ctx, arg, CI_NO_SLOT, &l);
+            if(err) return err;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .bswap = {
+                    .kind = CI_OP_BSWAP,
+                    .size = size,
+                    .src = l.slot,
+                    .slot = dest,
+                },
+            };
+            ctx->temp = temp;
+            return 0;
+        }
         case CC_EXPR_ALLOCA:{
             CcExpr *sz = e->lhs;
             err = ci_lower_dest(ctx, &dest, size);

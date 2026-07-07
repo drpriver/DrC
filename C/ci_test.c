@@ -7810,6 +7810,48 @@ TestFunction(test_interpreter){
                 "return _byteswap_uint64(v) == 0x0807060504030201;\n"),
             .exit_code = 1,
         },
+        {
+            "bswap16: gcc (func)", __LINE__,
+            SVI("unsigned short f(void){unsigned short v = 0x0102;\n"
+                "return __builtin_bswap16(v);}\n"
+                "return f();\n"),
+            .exit_code = 0x0201,
+        },
+        {
+            "bswap32: gcc (func)", __LINE__,
+            SVI("int f(void){unsigned int v = 0x01020304;\n"
+                "return (int)__builtin_bswap32(v);}\n"
+                "return f();\n"),
+            .exit_code = 0x04030201,
+        },
+        {
+            "bswap64: gcc (func)", __LINE__,
+            SVI("int f(void){unsigned long long v = 0x0102030405060708;\n"
+                "return __builtin_bswap64(v) == 0x0807060504030201;}\n"
+                "return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "bswap16: msvc (func)", __LINE__,
+            SVI("unsigned short f(void){unsigned short v = 0x0102;\n"
+                "return _byteswap_ushort(v);}\n"
+                "return f();\n"),
+            .exit_code = 0x0201,
+        },
+        {
+            "bswap32: msvc (func)", __LINE__,
+            SVI("int f(void){unsigned int v = 0x01020304;\n"
+                "return (int)_byteswap_ulong(v);}\n"
+                "return f();\n"),
+            .exit_code = 0x04030201,
+        },
+        {
+            "bswap64: msvc (func)", __LINE__,
+            SVI("int f(void){unsigned long long v = 0x0102030405060708;\n"
+                "return _byteswap_uint64(v) == 0x0807060504030201;}\n"
+                "return f();\n"),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;

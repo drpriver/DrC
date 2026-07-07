@@ -4396,6 +4396,20 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_BSWAP:{
+            size_t sz = op->bswap.size;
+            void* dest = (char*)frame->slots + op->bswap.slot;
+            void* src = (char*)frame->slots + op->bswap.src;
+            switch(sz){
+                case 2: *(uint16_t*)dest = bswap16(*(uint16_t*)src); break;
+                case 4: *(uint32_t*)dest = bswap32(*(uint32_t*)src); break;
+                case 8: *(uint64_t*)dest = bswap64(*(uint64_t*)src); break;
+                default:
+                    return ci_unreachable(ci, op->loc, "bswap other than 2,4,8 bytes");
+            }
+            frame->pc++;
+            return 0;
+        }
     }
     return ci_unimplemented(ci, op->loc, "unsupported op kind");
 }

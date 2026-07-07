@@ -536,6 +536,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
         case CI_OP_ALLOCA:
             msb_sprintf(out, "[%u] = alloca([%u])", op->alloca.slot, op->alloca.src);
             break;
+        case CI_OP_BSWAP:
+            msb_sprintf(out, "[%u] = bswap%u([%u])", op->bswap.slot, op->bswap.size*8, op->bswap.src);
+            break;
     }
 }
 
