@@ -7690,6 +7690,90 @@ TestFunction(test_interpreter){
                 "return s.count * 10 + s[1];\n"),
             .exit_code = 3 * 10 + 4,
         },
+        {
+            "struct self assign", __LINE__,
+            SVI("struct S {int x, y;} s = {-1, -2};\n"
+                "s = {-s.y, -s.x};\n"
+                "return s.x+s.y;\n"),
+            .exit_code = 1+2,
+        },
+        {
+            // A braced assignment (not a declaration initializer) is a compound
+            // literal: a distinct object, so the initializers read the old value
+            // of the target. This must hold for locals too, not just globals.
+            "struct self assign local", __LINE__,
+            SVI("int f(void){\n"
+                "    struct S {int x, y;} s = {-1, -2};\n"
+                "    s = {-s.y, -s.x};\n"
+                "    return s.x*100 + s.y;\n"  // expect 201, not 0
+                "}\n"
+                "return f();\n"),
+            .exit_code = 201,
+        },
+        {
+            "array self assign local", __LINE__,
+            SVI("int f(void){\n"
+                "    int a[2] = {3, 7};\n"
+                "    a = {a[1], a[0]};\n"       // swap, reading old values
+                "    return a[0]*100 + a[1];\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 700 + 3,
+        },
+        {
+            // Members not named in the init list are zero-filled.
+            "init list partial zero fill", __LINE__,
+            SVI("struct S { int a, b, c, d; };\n"
+                "int f(void){\n"
+                "    struct S s = {5, 6};\n"    // c, d implicitly 0
+                "    return s.a + s.b*10 + s.c*100 + s.d*1000;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 5 + 60,
+        },
+        {
+            "init list nested struct", __LINE__,
+            SVI("struct Inner { int x, y; };\n"
+                "struct Outer { int tag; struct Inner in; };\n"
+                "int f(void){\n"
+                "    struct Outer o = {9, {4, 7}};\n"
+                "    return o.tag*100 + o.in.x*10 + o.in.y;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 900 + 40 + 7,
+        },
+        {
+            "init list array of structs", __LINE__,
+            SVI("struct P { int a, b; };\n"
+                "int f(void){\n"
+                "    struct P ps[2] = {{1, 2}, {3, 4}};\n"
+                "    return ps[0].a*1000 + ps[0].b*100 + ps[1].a*10 + ps[1].b;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 1000 + 200 + 30 + 4,
+        },
+        {
+            "init list bitfields", __LINE__,
+            SVI("struct B { unsigned a: 3; unsigned b: 4; unsigned c: 9; };\n"
+                "int f(void){\n"
+                "    struct B x = {5, 9, 300};\n"
+                "    return x.a + x.b*10 + x.c*1000;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 5 + 90 + 300000,
+        },
+        {
+            "init list nested value expr", __LINE__,
+            SVI("struct Inner { int x, y; };\n"
+                "struct Outer { struct Inner in; int tag; };\n"
+                "int f(void){\n"
+                "    struct Inner src = {6, 8};\n"
+                "    struct Outer o = {src, 3};\n"  // nested aggregate lvalue as entry
+                "    return o.in.x*100 + o.in.y*10 + o.tag;\n"
+                "}\n"
+                "return f();\n"),
+            .exit_code = 600 + 80 + 3,
+        },
     };
     int err;
     static int idx = 0;

@@ -1320,7 +1320,7 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
                 err = cc_implicit_cast(p, right, left->type, &right);
                 if(err) return err;
             }
-            if(kind == CC_EXPR_ASSIGN && right->kind == CC_EXPR_COMPOUND_LITERAL){
+            if(kind == CC_EXPR_ASSIGN && (right->kind == CC_EXPR_COMPOUND_LITERAL || right->kind == CC_EXPR_INIT_LIST)){
                 err = cc_desugar_compound_literal(p, right, &right);
                 if(err) return err;
             }
@@ -5059,7 +5059,12 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             }
             return;
         case CC_EXPR_VARIABLE:
-            msb_sprintf(sb, "%.*s", e->var->name->length, e->var->name->data);
+            if(e->var->name->length)
+                msb_sprintf(sb, "%.*s", e->var->name->length, e->var->name->data);
+            else if(e->var->automatic)
+                msb_sprintf(sb, "<anon>@[%zd]", e->var->frame_offset);
+            else
+                msb_sprintf(sb, "<anon>");
             return;
         case CC_EXPR_FUNCTION:
             if(e->func->name)
@@ -5226,6 +5231,109 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             return;
     }
     msb_write_literal(sb, "<unknown>");
+}
+
+static
+void
+_cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
+    msb_write_nchar(sb, ' ', indent*2);
+    switch(s->kind){
+    case CC_STMT_NULL:       // ;
+        msb_write_char(sb, ';');
+        return;
+    case CC_STMT_EXPR:       // expr;
+        cc_print_expr(sb, s->exprs[0]);
+        return;
+    case CC_STMT_COMPOUND:   // { ... } (tree form only, flattened away by lowering)
+        msb_write_literal(sb, "{\n");
+        for(size_t i = 0; i < s->count; i++){
+            _cc_print_statement(sb, s->stmts[i], indent+1);
+            msb_write_char(sb, '\n');
+        }
+        msb_write_nchar(sb, ' ', indent*2);
+        msb_write_literal(sb, "}");
+        return;
+    case CC_STMT_IF:         // if (cond) then [else]
+        msb_write_literal(sb, "if(");
+        cc_print_expr(sb, s->exprs[0]);
+        msb_write_literal(sb, ")\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        if(s->stmts[1]){
+            msb_write_char(sb, '\n');
+            msb_write_nchar(sb, ' ', indent*2);
+            msb_write_literal(sb, "else\n");
+            _cc_print_statement(sb, s->stmts[1], indent+1);
+        }
+        return;
+    case CC_STMT_WHILE:      // while (cond) body
+        msb_write_literal(sb, "while(");
+        cc_print_expr(sb, s->exprs[0]);
+        msb_write_literal(sb, ")\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
+    case CC_STMT_DOWHILE:    // do body while (cond);
+        msb_write_literal(sb, "do\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        msb_write_char(sb, '\n');
+        msb_write_nchar(sb, ' ', indent*2);
+        msb_write_literal(sb, "while(");
+        cc_print_expr(sb, s->exprs[0]);
+        msb_write_literal(sb, ");");
+        return;
+    case CC_STMT_FOR:        // for (init; cond; inc) body
+        msb_write_literal(sb, "for(");
+        if(s->stmts[0]) _cc_print_statement(sb, s->stmts[0], 0);
+        msb_write_literal(sb, "; ");
+        if(s->exprs[0]) cc_print_expr(sb, s->exprs[0]);
+        msb_write_literal(sb, "; ");
+        if(s->exprs[1]) cc_print_expr(sb, s->exprs[1]);
+        msb_write_literal(sb, ")\n");
+        _cc_print_statement(sb, s->stmts[1], indent+1);
+        return;
+    case CC_STMT_SWITCH:     // switch (expr) { ... }
+        msb_write_literal(sb, "switch(");
+        cc_print_expr(sb, s->exprs[0]);
+        msb_write_literal(sb, ")\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
+    case CC_STMT_CASE:       // case expr:
+        msb_sprintf(sb, "case %llu:\n", (unsigned long long)s->case_value);
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
+    case CC_STMT_DEFAULT:    // default:
+        msb_write_literal(sb, "default:\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
+    case CC_STMT_RETURN:     // return [expr];
+        msb_write_literal(sb, "return");
+        if(s->exprs[0]){
+            msb_write_char(sb, ' ');
+            cc_print_expr(sb, s->exprs[0]);
+        }
+        msb_write_char(sb, ';');
+        return;
+    case CC_STMT_BREAK:      // break;
+        msb_write_literal(sb, "break;");
+        return;
+    case CC_STMT_CONTINUE:   // continue;
+        msb_write_literal(sb, "continue;");
+        return;
+    case CC_STMT_GOTO:       // goto label;
+        msb_sprintf(sb, "goto %.*s;", (int)s->label->length, s->label->data);
+        return;
+    case CC_STMT_LABEL:      // label:
+        msb_sprintf(sb, "%.*s:\n", (int)s->label->length, s->label->data);
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
+    }
+
+}
+
+static
+void
+cc_print_statement(MStringBuilder*sb, CcStmtNode* s){
+    _cc_print_statement(sb, s, 1);
+    msb_write_char(sb, '\n');
 }
 
 static

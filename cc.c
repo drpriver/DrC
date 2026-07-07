@@ -31,7 +31,7 @@
 
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
-static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb);
+static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast);
 static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 static const char* cc_stringify_error(int err);
 
@@ -67,7 +67,7 @@ int main(int argc, char** argv, char** envp){
     };
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     Marray(StringView) dis = {0};
-    _Bool dis_top = 0, dis_all = 0;
+    _Bool dis_top = 0, dis_all = 0, ast=0;
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
         .user_data = &interp.parser.cpp,
@@ -185,6 +185,11 @@ int main(int argc, char** argv, char** envp){
             .name = SV("--dis-all"),
             .dest = ARGDEST(&dis_all),
             .help = "print the bytecode for all functions and for top-level",
+        },
+        {
+            .name = SV("--ast"),
+            .dest = ARGDEST(&ast),
+            .help = "print the AST in addition to bytecode",
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -413,7 +418,7 @@ int main(int argc, char** argv, char** envp){
                 }
                 if(!func->interp_ops)
                     continue;
-                cc_print_func(&interp.parser, func, &logger->buff);
+                cc_print_func(&interp.parser, func, &logger->buff, ast);
                 log_flush(logger, LOG_PRINT);
                 continue;
             }
@@ -440,7 +445,7 @@ int main(int argc, char** argv, char** envp){
                     log_warn(logger, "No bytecode for '%s'", d.text);
                     continue;
                 }
-                cc_print_func(&interp.parser, func, &logger->buff);
+                cc_print_func(&interp.parser, func, &logger->buff, ast);
                 log_flush(logger, LOG_PRINT);
                 continue;
             }
@@ -450,6 +455,11 @@ int main(int argc, char** argv, char** envp){
             if(err) goto stringify_error;
             MStringBuilder* sb = &logger->buff;
             msb_sprintf(sb, "top level: {\n");
+            if(ast){
+                for(size_t i = 0; i < interp.parser.toplevel_nodes.count; i++)
+                    cc_print_statement(sb, interp.parser.toplevel_nodes.data[i]);
+                msb_write_literal(sb, "-------\n");
+            }
             for(size_t i = 0; i < interp.toplevel_ops.count; i++){
                 CiOp* op = &interp.toplevel_ops.data[i];
                 size_t cur = sb->cursor;
@@ -672,7 +682,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         CcFunc* func = AM_get(&scope->functions, a);
         if(!func) return 1;
         log_sprintf(l, "\r");
-        cc_print_func(parser, func, &l->buff);
+        cc_print_func(parser, func, &l->buff, 0);
         log_flush(l, LOG_PRINT);
         return 1;
     }
@@ -900,7 +910,7 @@ repl_builtin_command(CcParser* parser, StringView input){
 }
 static
 void
-cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
+cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
     msb_sprintf(sb, "%s(", func->name->data);
     CcFunction* ft = func->type;
     for(uint32_t j = 0; j < ft->param_count; j++){
@@ -917,6 +927,9 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb){
     msb_sprintf(sb, ") -> ");
     cc_print_type(sb, ft->return_type);
     msb_sprintf(sb, "{\n");
+    if(ast && func->body_tree){
+        cc_print_statement(sb, (CcStmtNode*)func->body_tree);
+    }
     if(func->interp_ops){
         for(size_t i = 0; i < func->interp_ops->code.count; i++){
             CiOp* op = &func->interp_ops->code.data[i];
