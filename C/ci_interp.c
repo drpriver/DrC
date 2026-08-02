@@ -677,7 +677,7 @@ ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nu
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_BSWAP:
             return ci_error(ci, expr->loc, "expression is not an lvalue");
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -2751,7 +2751,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             case CC_TYPE_IS_INCOMPLETE: {
                 CcTypeKind k = ccqt_kind(qt);
                 switch(k){
-                    CASES_EXHAUSTED;
+                    DRP_CASES_EXHAUSTED;
                     case CC_STRUCT:
                         *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
                         break;
@@ -3566,7 +3566,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int32_t)lu > (int32_t)ru); break;
                 case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int32_t)lu <= (int32_t)ru); break;
                 case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int32_t)lu >= (int32_t)ru); break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
             frame->pc++;
@@ -3593,7 +3593,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int64_t)lu > (int64_t)ru); break;
                 case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int64_t)lu <= (int64_t)ru); break;
                 case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru); break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
             frame->pc++;
@@ -3622,7 +3622,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CMP_GE:
                     res = is_unsigned ? ci_uint128_ge(lu, ru) : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
                     break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
             frame->pc++;
@@ -3670,7 +3670,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 case CI_ALU_NEG: res = (uint8_t)-(int8_t)lu; break;
                 case CI_ALU_NOT: res = (uint8_t)~lu; break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->alu.slot, 1, res);
             frame->pc++;
@@ -3718,7 +3718,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 case CI_ALU_NEG: res = (uint16_t)-(int16_t)lu; break;
                 case CI_ALU_NOT: res = (uint16_t)~lu; break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->alu.slot, 2, res);
             frame->pc++;
@@ -3766,7 +3766,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 case CI_ALU_NEG: res = (uint32_t)-(int32_t)lu; break;
                 case CI_ALU_NOT: res = ~lu; break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->alu.slot, 4, res);
             frame->pc++;
@@ -3814,7 +3814,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 case CI_ALU_NEG: res = (uint64_t)-(int64_t)lu; break;
                 case CI_ALU_NOT: res = ~lu; break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->alu.slot, 8, res);
             frame->pc++;
@@ -3856,7 +3856,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 case CI_ALU_NEG: res = ci_uint128_sub(ci_uint128_from_uint64(0), lu); break;
                 case CI_ALU_NOT: res = ci_uint128_xor(lu, ci_uint128_from_int64(-1)); break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_uint128_write((char*)frame->slots + op->alu.slot, 16, res);
             frame->pc++;
@@ -3881,7 +3881,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu32_done;
                 case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu32_done;
                 case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu32_done;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
             falu32_done:
@@ -3907,7 +3907,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu64_done;
                 case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu64_done;
                 case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu64_done;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
             falu64_done:
@@ -3931,7 +3931,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CHK_ADD: r = ci_int128_add(a, b); break;
                 case CI_CHK_SUB: r = ci_int128_sub(a, b); break;
                 case CI_CHK_MUL: r = ci_int128_mul(a, b); break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             uint32_t dsz = op->checked.res_size;
             uint64_t truncated = ci_int128_lo(r);
@@ -3977,7 +3977,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     // the operand bit width
                     count = val? (uint64_t)(clz_64(val) - (int)(64 - sz * 8)) : (uint64_t)(sz * 8);
                     break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->bitcount.slot, op->bitcount.slot_size, count);
             frame->pc++;
@@ -4590,7 +4590,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     ci_backtrace(ci, frame, 0);
                     frame->pc++;
                     return 0;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         }
         case CI_OP_VA_START:{

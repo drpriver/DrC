@@ -10,15 +10,15 @@
 // will assume it's a valid value.
 // So those compilers need a hint that all cases are covered.
 //
-#ifndef CASES_EXHAUSTED
+#ifndef DRP_CASES_EXHAUSTED
 #if defined __clang__
-#define CASES_EXHAUSTED
+#define DRP_CASES_EXHAUSTED
 #elif defined __GNUC__
-#define CASES_EXHAUSTED default: __builtin_unreachable()
+#define DRP_CASES_EXHAUSTED default: __builtin_unreachable()
 #elif defined _MSC_VER
-#define CASES_EXHAUSTED default: __assume(0)
+#define DRP_CASES_EXHAUSTED default: __assume(0)
 #else
-#define CASES_EXHAUSTED
+#define DRP_CASES_EXHAUSTED
 #endif
 #endif
 

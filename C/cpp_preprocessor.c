@@ -4356,7 +4356,7 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT__Type:
         case CCBT_COUNT:
             return "";
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -5327,7 +5327,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
     if((CcTarget)CC_TARGET_NATIVE != t.target)
         goto finally;
     switch(t.target){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CC_TARGET_AARCH64_MACOS:
         case CC_TARGET_X86_64_MACOS: {
             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/local/include");
@@ -7296,7 +7296,7 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
         case CPP_PLACEMARKER:
         case CPP_REENABLE:
             return cpp_error(cpp, tok.loc, "Unexpected token in #if expression");
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 

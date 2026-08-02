@@ -1054,7 +1054,7 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
     CcQualType size_type = ccqt_basic(cfg->size_type);
     uint64_t align;
     switch(ccqt_kind(t)){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CC_BASIC:{
             if(t.basic.kind >= CCBT_COUNT)
                 return cc_error(p, loc, "alignof applied to invalid kind");
@@ -2210,7 +2210,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_uSTRING:  elem_type = cc_target(p)->char16_type; break;
                 case CC_USTRING:  elem_type = cc_target(p)->char32_type; break;
                 case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
             CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
             if(!sa) return CC_OOM_ERROR;
@@ -3625,7 +3625,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             case CC_typedef:
             case CC_while:
                 return cc_error(p, tok.loc, "Unexpected keyword in expression");
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_EOF:
             return cc_error(p, tok.loc, "Unexpected end of input in expression");
@@ -4930,7 +4930,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 case CCBT_unsigned_int128:
                     msb_write_literal(sb, "<unknown basic>");
                     return;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         }
         case CC_SLICE:{
@@ -5188,7 +5188,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                     cc_print_expr(sb, e->lhs);
                     msb_write_literal(sb, ")");
                     return;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
@@ -5923,7 +5923,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
         switch(conv){
             case 'd': case 'i':
                 switch(len_mod){
-                    CASES_EXHAUSTED;
+                    DRP_CASES_EXHAUSTED;
                     case LEN_NONE: expected = ccqt_basic(CCBT_int); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_int); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_int); break;
@@ -5941,7 +5941,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
             case 'u': case 'x': case 'X': case 'o':
             case 'b': case 'B':
                 switch(len_mod){
-                    CASES_EXHAUSTED;
+                    DRP_CASES_EXHAUSTED;
                     case LEN_NONE: expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_h:    expected = ccqt_basic(CCBT_unsigned); break;
                     case LEN_hh:   expected = ccqt_basic(CCBT_unsigned); break;
@@ -6149,7 +6149,7 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_MODULE_PARSE_TYPE:
                 case CC_MODULE_SYMBOL:
                     return 1;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_EXPR_HOTSWAP:
             return 1;
@@ -6273,7 +6273,7 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_TYPE_UNDERLYING_TYPE:
                 case CC_TYPE_UNQUAL:
                     return 0;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST:
@@ -6956,7 +6956,7 @@ static
 uint32_t
 cc_type_sizeof_assume_complete(const CcTargetConfig* tc, CcQualType type){
     switch(ccqt_kind(type)){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CC_BASIC:    return tc->sizeof_[type.basic.kind];
         case CC_POINTER:  return tc->sizeof_[CCBT_nullptr_t];
         case CC_BLOCK_POINTER: return tc->sizeof_[CCBT_nullptr_t];
@@ -9334,7 +9334,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                                 case CC_ENUM:
                                 case CC_FUNCTION:
                                     return cc_error(p, tok.loc, "_Alignas with this type not yet supported");
-                                CASES_EXHAUSTED;
+                                DRP_CASES_EXHAUSTED;
                             }
                         }
                         else {
@@ -10776,7 +10776,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         case CC_STRUCT:
         case CC_UNION:
             return t;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -11507,7 +11507,7 @@ cc_define_builtin_types(CcParser* p){
         }
         case CC_TARGET_COUNT:
             return CC_UNREACHABLE_ERROR;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
     err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
     if(err) return CC_OOM_ERROR;
@@ -11996,7 +11996,7 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d || d >= 9223372036854775808.0 || d < -9223372036854775808.0) return CC_NOT_CONSTANT_ERROR;
@@ -12051,7 +12051,7 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d || d < 0.0 || d >= 18446744073709551616.0) return CC_OVERFLOW_ERROR;
@@ -12105,7 +12105,7 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
             if(d != d) return CC_NOT_CONSTANT_ERROR;
@@ -12174,7 +12174,7 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = t.basic.kind;
     switch(k){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CCBT_double:
             *out = v->double_;
             return 0;
@@ -12259,7 +12259,7 @@ static
 int
 cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
     switch(e->kind){
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         case CC_EXPR_VALUE: {
             CcExpr* node = _cc_alloc_expr(p, 0);
             if(!node) return CC_OOM_ERROR;
@@ -12281,7 +12281,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             CcExpr* node;
             switch(e->type.basic.kind){
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -12384,7 +12384,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             CcExpr* node;
             switch(e->type.basic.kind){
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -12460,7 +12460,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     err = 0; \
                     goto fini_lognot; \
                 }while(0)
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
                 case CCBT_INVALID:
                 case CCBT_void:
                 case CCBT_nullptr_t:
@@ -12638,7 +12638,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             } while(0); break
             #define CMP(op, lv, rv) node->integer = (lv) op (rv); break
             switch(optype.basic.kind){
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
                 case CCBT_float:
                     switch((uint32_t)e->kind){
                         case CC_EXPR_ADD: ARITH(+, L->float_, R->float_, float_, float);
@@ -12934,7 +12934,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcTypeKind k = ccqt_kind(qt);
                     _Bool is_incomplete;
                     switch(k){
-                        CASES_EXHAUSTED;
+                        DRP_CASES_EXHAUSTED;
                         case CC_STRUCT:   is_incomplete = ccqt_as_struct(qt)->is_incomplete; break;
                         case CC_UNION:    is_incomplete = ccqt_as_union(qt)->is_incomplete; break;
                         case CC_ARRAY:    is_incomplete = ccqt_as_array(qt)->is_incomplete; break;

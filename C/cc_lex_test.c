@@ -198,7 +198,7 @@ cc_tok_matches(CcToken got, CcToken exp){
                 case CC_CHAR32:
                 case CC_UCHAR:
                     return got.constant.integer_value == exp.constant.integer_value;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_STRING_LITERAL:
             if(got.str.stype != exp.str.stype) return 0;
@@ -213,7 +213,7 @@ cc_tok_matches(CcToken got, CcToken exp){
                 case CC_STRING:
                 case CC_U8STRING:
                     return memcmp(got.str.utf8, exp.str.utf8, got.str.length) == 0;
-                CASES_EXHAUSTED;
+                DRP_CASES_EXHAUSTED;
             }
         case CC_PUNCTUATOR:
             return got.punct.punct == exp.punct.punct;

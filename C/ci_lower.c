@@ -1931,7 +1931,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             break;
         case CC_EXPR_UMUL128:
             return ci_lower_umul128(ci, ctx, e, dest, out);
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
     // fallback: evaluate the (sub)tree
     err = ci_lower_dest(ctx, &dest, size);
@@ -4031,7 +4031,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
             break;
         case CC_TARGET_COUNT:
             return ci_error(ci, e->loc, "va_copy: unsupported target");
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
         }
         uint32_t temp = ctx->temp;
         CiLowerVal dst_ap, src_ap;
@@ -4261,7 +4261,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
             break; // TODO: complicated? Maybe should be lowered just to calls to runtime functions?
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
     // fallback: evaluate the (sub)tree for its side effects
     CiOp* op;

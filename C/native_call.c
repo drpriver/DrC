@@ -138,7 +138,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_unsigned_short:
                         case CCBT_void:
                         return NC_UNSUPPORTED_TYPE;
-                        CASES_EXHAUSTED;
+                        DRP_CASES_EXHAUSTED;
                     }
                     uint32_t n = s->arm64.hfa_count;
                     ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
@@ -226,7 +226,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_unsigned_short:
                         case CCBT_void:
                         return NC_UNSUPPORTED_TYPE;
-                        CASES_EXHAUSTED;
+                        DRP_CASES_EXHAUSTED;
                     }
                     uint32_t n = u->arm64.hfa_count;
                     ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));

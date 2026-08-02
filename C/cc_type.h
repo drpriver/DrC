@@ -353,7 +353,7 @@ ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
         case CCBT_signed_char:
         case CCBT_void:
             return 0;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -396,7 +396,7 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_nullptr_t:
         case CCBT_void:
             return -1;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -438,7 +438,7 @@ ccbt_to_unsigned(CcBasicTypeKind k){
         case CCBT_unsigned_short:
         case CCBT_void:
             return k;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
@@ -480,7 +480,7 @@ ccbt_to_signed(CcBasicTypeKind k){
         case CCBT_signed_char:
         case CCBT_void:
             return k;
-        CASES_EXHAUSTED;
+        DRP_CASES_EXHAUSTED;
     }
 }
 
