@@ -378,7 +378,7 @@ msb_replace_range(MStringBuilder* msb, size_t start, size_t end, const char* rep
     size_t rangelen = end-start;
     size_t new_cursor = msb->cursor - rangelen + len;
     if(new_cursor > msb->capacity){
-       if(_check_msb_remaining_size(msb, new_cursor - msb->capacity))
+       if(_check_msb_remaining_size(msb, new_cursor - msb->cursor))
            return;
     }
     if(len != rangelen)
