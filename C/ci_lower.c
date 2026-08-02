@@ -4031,6 +4031,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
             break;
         case CC_TARGET_COUNT:
             return ci_error(ci, e->loc, "va_copy: unsupported target");
+        CASES_EXHAUSTED;
         }
         uint32_t temp = ctx->temp;
         CiLowerVal dst_ap, src_ap;

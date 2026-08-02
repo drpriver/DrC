@@ -3566,6 +3566,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int32_t)lu > (int32_t)ru); break;
                 case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int32_t)lu <= (int32_t)ru); break;
                 case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int32_t)lu >= (int32_t)ru); break;
+                CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
             frame->pc++;
@@ -3621,6 +3622,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_CMP_GE:
                     res = is_unsigned ? ci_uint128_ge(lu, ru) : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
                     break;
+                CASES_EXHAUSTED;
             }
             ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
             frame->pc++;

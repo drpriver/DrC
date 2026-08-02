@@ -5188,6 +5188,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                     cc_print_expr(sb, e->lhs);
                     msb_write_literal(sb, ")");
                     return;
+                CASES_EXHAUSTED;
             }
         case CC_EXPR_SIZEOF_VMT:
         case CC_EXPR_STATEMENT_EXPRESSION:
@@ -6148,6 +6149,7 @@ cc_expr_nvalues(CcExpr* e){
                 case CC_MODULE_PARSE_TYPE:
                 case CC_MODULE_SYMBOL:
                     return 1;
+                CASES_EXHAUSTED;
             }
         case CC_EXPR_HOTSWAP:
             return 1;
