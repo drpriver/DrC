@@ -520,6 +520,13 @@ ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
         t = ccqt_as_enum(t)->underlying;
     return ccqt_is_basic(t) && ccbt_is_unsigned(t.basic.kind, unsigned_char);
 }
+static inline
+_Bool
+ccqt_is_integer(CcQualType t){
+    while(ccqt_kind(t) == CC_ENUM)
+        t = ccqt_as_enum(t)->underlying;
+    return ccqt_is_basic(t) && ccbt_is_integer(t.basic.kind);
+}
 #undef CC_ALIGN
 
 #ifdef __clang__

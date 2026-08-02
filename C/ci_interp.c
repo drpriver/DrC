@@ -3545,18 +3545,243 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_CMP32: {
+            const void* s1 = (char*)frame->slots + op->cmp.src;
+            const void* s2 = (char*)frame->slots + op->cmp.src2;
+            _Bool is_unsigned = op->cmp.is_unsigned;
+            uint32_t lu, ru;
+            if(is_unsigned){
+                lu = (uint32_t)ci_read_uint(s1, 4);
+                ru = (uint32_t)ci_read_uint(s2, 4);
+            }
+            else {
+                lu = (uint32_t)ci_read_int(s1, 4);
+                ru = (uint32_t)ci_read_int(s2, 4);
+            }
+            uint64_t res;
+            switch((CiCmpOp)(op->cmp.op)){
+                case CI_CMP_EQ: res = lu == ru; break;
+                case CI_CMP_NE: res = lu != ru; break;
+                case CI_CMP_LT: res = is_unsigned ? (lu < ru) : ((int32_t)lu < (int32_t)ru); break;
+                case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int32_t)lu > (int32_t)ru); break;
+                case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int32_t)lu <= (int32_t)ru); break;
+                case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int32_t)lu >= (int32_t)ru); break;
+            }
+            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_CMP64: {
+            const void* s1 = (char*)frame->slots + op->cmp.src;
+            const void* s2 = (char*)frame->slots + op->cmp.src2;
+            _Bool is_unsigned = op->cmp.is_unsigned;
+            uint64_t lu, ru;
+            if(is_unsigned){
+                lu = ci_read_uint(s1, 8);
+                ru = ci_read_uint(s2, 8);
+            }
+            else {
+                lu = (uint64_t)ci_read_int(s1, 8);
+                ru = (uint64_t)ci_read_int(s2, 8);
+            }
+            uint64_t res;
+            switch((CiCmpOp)(op->cmp.op)){
+                case CI_CMP_EQ: res = lu == ru; break;
+                case CI_CMP_NE: res = lu != ru; break;
+                case CI_CMP_LT: res = is_unsigned ? (lu < ru) : ((int64_t)lu < (int64_t)ru); break;
+                case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int64_t)lu > (int64_t)ru); break;
+                case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int64_t)lu <= (int64_t)ru); break;
+                case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru); break;
+                CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_CMP128: {
+            const void* s1 = (char*)frame->slots + op->cmp.src;
+            const void* s2 = (char*)frame->slots + op->cmp.src2;
+            _Bool is_unsigned = op->cmp.is_unsigned;
+            CiUint128 lu, ru;
+            ci_uint128_read(&lu, s1, 16);
+            ci_uint128_read(&ru, s2, 16);
+            uint64_t res;
+            switch((CiCmpOp)(op->cmp.op)){
+                case CI_CMP_EQ: res = ci_uint128_eq(lu, ru); break;
+                case CI_CMP_NE: res = ci_uint128_ne(lu, ru); break;
+                case CI_CMP_LT:
+                    res = is_unsigned ? ci_uint128_lt(lu, ru) : ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
+                    break;
+                case CI_CMP_GT:
+                    res = is_unsigned ? ci_uint128_gt(lu, ru) : ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
+                    break;
+                case CI_CMP_LE:
+                    res = is_unsigned ? ci_uint128_le(lu, ru) : ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
+                    break;
+                case CI_CMP_GE:
+                    res = is_unsigned ? ci_uint128_ge(lu, ru) : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
+                    break;
+            }
+            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_ALU8: {
+            const void* s1 = (char*)frame->slots + op->alu.src;
+            const void* s2 = (char*)frame->slots + op->alu.src2;
+            _Bool is_unsigned = op->alu.is_unsigned;
+            uint32_t lu, ru;
+            if(is_unsigned){
+                lu = (uint32_t)ci_read_uint(s1, 1);
+                ru = (uint32_t)ci_read_uint(s2, 1);
+            }
+            else {
+                lu = (uint32_t)ci_read_int(s1, 1);
+                ru = (uint32_t)ci_read_int(s2, 1);
+            }
+            uint64_t res;
+            switch((CiAluOp)(op->alu.op)){
+                case CI_ALU_ADD: res = lu + ru; break;
+                case CI_ALU_SUB: res = lu - ru; break;
+                case CI_ALU_MUL: res = lu * ru; break;
+                case CI_ALU_DIV:
+                    if(is_unsigned)
+                        res = ru ? lu / ru : 0;
+                    else
+                        res = ru ? (uint8_t)((int8_t)lu / (int8_t)ru) : 0;
+                    break;
+                case CI_ALU_MOD:
+                    if(is_unsigned)
+                        res = ru ? lu % ru : 0;
+                    else
+                        res = ru ? (uint8_t)((int8_t)lu % (int8_t)ru) : 0;
+                    break;
+                case CI_ALU_AND: res = lu & ru; break;
+                case CI_ALU_OR:  res = lu | ru; break;
+                case CI_ALU_XOR: res = lu ^ ru; break;
+                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHR:
+                    if(is_unsigned)
+                        res = lu >> ru;
+                    else
+                        res = (uint8_t)((int8_t)lu >> ru);
+                    break;
+                case CI_ALU_NEG: res = (uint8_t)-(int8_t)lu; break;
+                case CI_ALU_NOT: res = (uint8_t)~lu; break;
+                CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->alu.slot, 1, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_ALU16: {
+            const void* s1 = (char*)frame->slots + op->alu.src;
+            const void* s2 = (char*)frame->slots + op->alu.src2;
+            _Bool is_unsigned = op->alu.is_unsigned;
+            uint32_t lu, ru;
+            if(is_unsigned){
+                lu = (uint32_t)ci_read_uint(s1, 2);
+                ru = (uint32_t)ci_read_uint(s2, 2);
+            }
+            else {
+                lu = (uint32_t)ci_read_int(s1, 2);
+                ru = (uint32_t)ci_read_int(s2, 2);
+            }
+            uint64_t res;
+            switch((CiAluOp)(op->alu.op)){
+                case CI_ALU_ADD: res = lu + ru; break;
+                case CI_ALU_SUB: res = lu - ru; break;
+                case CI_ALU_MUL: res = lu * ru; break;
+                case CI_ALU_DIV:
+                    if(is_unsigned)
+                        res = ru ? lu / ru : 0;
+                    else
+                        res = ru ? (uint16_t)((int16_t)lu / (int16_t)ru) : 0;
+                    break;
+                case CI_ALU_MOD:
+                    if(is_unsigned)
+                        res = ru ? lu % ru : 0;
+                    else
+                        res = ru ? (uint16_t)((int16_t)lu % (int16_t)ru) : 0;
+                    break;
+                case CI_ALU_AND: res = lu & ru; break;
+                case CI_ALU_OR:  res = lu | ru; break;
+                case CI_ALU_XOR: res = lu ^ ru; break;
+                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHR:
+                    if(is_unsigned)
+                        res = lu >> ru;
+                    else
+                        res = (uint16_t)((int16_t)lu >> ru);
+                    break;
+                case CI_ALU_NEG: res = (uint16_t)-(int16_t)lu; break;
+                case CI_ALU_NOT: res = (uint16_t)~lu; break;
+                CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->alu.slot, 2, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_ALU32: {
+            const void* s1 = (char*)frame->slots + op->alu.src;
+            const void* s2 = (char*)frame->slots + op->alu.src2;
+            _Bool is_unsigned = op->alu.is_unsigned;
+            uint32_t lu, ru;
+            if(is_unsigned){
+                lu = (uint32_t)ci_read_uint(s1, 4);
+                ru = (uint32_t)ci_read_uint(s2, 4);
+            }
+            else {
+                lu = (uint32_t)ci_read_int(s1, 4);
+                ru = (uint32_t)ci_read_int(s2, 4);
+            }
+            uint64_t res;
+            switch((CiAluOp)(op->alu.op)){
+                case CI_ALU_ADD: res = lu + ru; break;
+                case CI_ALU_SUB: res = lu - ru; break;
+                case CI_ALU_MUL: res = lu * ru; break;
+                case CI_ALU_DIV:
+                    if(is_unsigned)
+                        res = ru ? lu / ru : 0;
+                    else
+                        res = ru ? (uint32_t)((int32_t)lu / (int32_t)ru) : 0;
+                    break;
+                case CI_ALU_MOD:
+                    if(is_unsigned)
+                        res = ru ? lu % ru : 0;
+                    else
+                        res = ru ? (uint32_t)((int32_t)lu % (int32_t)ru) : 0;
+                    break;
+                case CI_ALU_AND: res = lu & ru; break;
+                case CI_ALU_OR:  res = lu | ru; break;
+                case CI_ALU_XOR: res = lu ^ ru; break;
+                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHR:
+                    if(is_unsigned)
+                        res = lu >> ru;
+                    else
+                        res = (uint32_t)((int32_t)lu >> ru);
+                    break;
+                case CI_ALU_NEG: res = (uint32_t)-(int32_t)lu; break;
+                case CI_ALU_NOT: res = ~lu; break;
+                CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->alu.slot, 4, res);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_ALU64: {
             const void* s1 = (char*)frame->slots + op->alu.src;
             const void* s2 = (char*)frame->slots + op->alu.src2;
             _Bool is_unsigned = op->alu.is_unsigned;
             uint64_t lu, ru;
             if(is_unsigned){
-                lu = ci_read_uint(s1, op->alu.src_size);
-                ru = ci_read_uint(s2, op->alu.src2_size);
+                lu = ci_read_uint(s1, 8);
+                ru = ci_read_uint(s2, 8);
             }
             else {
-                lu = (uint64_t)ci_read_int(s1, op->alu.src_size);
-                ru = (uint64_t)ci_read_int(s2, op->alu.src2_size);
+                lu = (uint64_t)ci_read_int(s1, 8);
+                ru = (uint64_t)ci_read_int(s2, 8);
             }
             uint64_t res;
             switch((CiAluOp)(op->alu.op)){
@@ -3585,17 +3810,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     else
                         res = (uint64_t)((int64_t)lu >> ru);
                     break;
-                case CI_ALU_EQ: res = lu == ru; break;
-                case CI_ALU_NE: res = lu != ru; break;
-                case CI_ALU_LT: res = is_unsigned ? (lu < ru) : ((int64_t)lu < (int64_t)ru); break;
-                case CI_ALU_GT: res = is_unsigned ? (lu > ru) : ((int64_t)lu > (int64_t)ru); break;
-                case CI_ALU_LE: res = is_unsigned ? (lu <= ru) : ((int64_t)lu <= (int64_t)ru); break;
-                case CI_ALU_GE: res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru); break;
                 case CI_ALU_NEG: res = (uint64_t)-(int64_t)lu; break;
                 case CI_ALU_NOT: res = ~lu; break;
                 CASES_EXHAUSTED;
             }
-            ci_write_uint((char*)frame->slots + op->alu.slot, op->alu.slot_size, res);
+            ci_write_uint((char*)frame->slots + op->alu.slot, 8, res);
             frame->pc++;
             return 0;
         }
@@ -3604,20 +3823,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             const void* s2 = (char*)frame->slots + op->alu.src2;
             _Bool is_unsigned = op->alu.is_unsigned;
             CiUint128 lu, ru;
-            if(is_unsigned){
-                ci_uint128_read(&lu, s1, op->alu.src_size);
-                ci_uint128_read(&ru, s2, op->alu.src2_size);
-            }
-            else {
-                if(op->alu.src_size <= 8)
-                    lu = ci_uint128_from_int64(ci_read_int(s1, op->alu.src_size));
-                else
-                    ci_uint128_read(&lu, s1, op->alu.src_size);
-                if(op->alu.src2_size <= 8)
-                    ru = ci_uint128_from_int64(ci_read_int(s2, op->alu.src2_size));
-                else
-                    ci_uint128_read(&ru, s2, op->alu.src2_size);
-            }
+            ci_uint128_read(&lu, s1, 16);
+            ci_uint128_read(&ru, s2, 16);
             CiUint128 res;
             switch((CiAluOp)(op->alu.op)){
                 case CI_ALU_ADD: res = ci_uint128_add(lu, ru); break;
@@ -3645,33 +3852,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     else
                         res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
                     break;
-                case CI_ALU_EQ: res = ci_uint128_from_uint64(ci_uint128_eq(lu, ru)); break;
-                case CI_ALU_NE: res = ci_uint128_from_uint64(ci_uint128_ne(lu, ru)); break;
-                case CI_ALU_LT:
-                    res = ci_uint128_from_uint64(is_unsigned
-                        ? ci_uint128_lt(lu, ru)
-                        : ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CI_ALU_GT:
-                    res = ci_uint128_from_uint64(is_unsigned
-                        ? ci_uint128_gt(lu, ru)
-                        : ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CI_ALU_LE:
-                    res = ci_uint128_from_uint64(is_unsigned
-                        ? ci_uint128_le(lu, ru)
-                        : ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CI_ALU_GE:
-                    res = ci_uint128_from_uint64(is_unsigned
-                        ? ci_uint128_ge(lu, ru)
-                        : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
                 case CI_ALU_NEG: res = ci_uint128_sub(ci_uint128_from_uint64(0), lu); break;
                 case CI_ALU_NOT: res = ci_uint128_xor(lu, ci_uint128_from_int64(-1)); break;
                 CASES_EXHAUSTED;
             }
-            ci_uint128_write((char*)frame->slots + op->alu.slot, op->alu.slot_size, res);
+            ci_uint128_write((char*)frame->slots + op->alu.slot, 16, res);
             frame->pc++;
             return 0;
         }

@@ -24,6 +24,7 @@ static void ci_op_print(const CiOp* op, MStringBuilder* out);
 static void ci_op_print_range(MStringBuilder* out, uint32_t slot, uint32_t size);
 static void ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offset);
 static const char* ci_op_alu_sym(CiAluOp op);
+static const char* ci_op_cmp_sym(CiCmpOp op);
 static const char* ci_op_falu_sym(CiFaluOp op);
 static const char* ci_op_float_suffix(uint32_t float_kind);
 
@@ -56,14 +57,22 @@ ci_op_alu_sym(CiAluOp op){
         case CI_ALU_XOR: return "^";
         case CI_ALU_SHL: return "<<";
         case CI_ALU_SHR: return ">>";
-        case CI_ALU_EQ:  return "==";
-        case CI_ALU_NE:  return "!=";
-        case CI_ALU_LT:  return "<";
-        case CI_ALU_GT:  return ">";
-        case CI_ALU_LE:  return "<=";
-        case CI_ALU_GE:  return ">=";
         case CI_ALU_NEG: return "-";
         case CI_ALU_NOT: return "~";
+    }
+    return "?";
+}
+
+static
+const char*
+ci_op_cmp_sym(CiCmpOp op){
+    switch(op){
+        case CI_CMP_EQ: return "==";
+        case CI_CMP_NE: return "!=";
+        case CI_CMP_LT: return "<";
+        case CI_CMP_GT: return ">";
+        case CI_CMP_LE: return "<=";
+        case CI_CMP_GE: return ">=";
     }
     return "?";
 }
@@ -304,20 +313,54 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->copy.src, op->copy.src_size);
             break;
+        case CI_OP_ALU8:{
+            uint32_t sz;
+            sz = 1;
+            goto op_alu;
+        case CI_OP_ALU16:
+            sz = 2;
+            goto op_alu;
+        case CI_OP_ALU32:
+            sz = 4;
+            goto op_alu;
         case CI_OP_ALU64:
+            sz=8;
+            goto op_alu;
         case CI_OP_ALU128:
-            ci_op_print_range(out, op->alu.slot, op->alu.slot_size);
+            sz=16;
+            goto op_alu;
+            op_alu:;
+            ci_op_print_range(out, op->alu.slot, sz);
             msb_write_literal(out, " = ");
             if(op->alu.op >= CI_ALU_NEG){
                 msb_sprintf(out, "%s%s", ci_op_alu_sym(op->alu.op), op->alu.is_unsigned?"u":"");
-                ci_op_print_range(out, op->alu.src, op->alu.src_size);
+                ci_op_print_range(out, op->alu.src, sz);
             }
             else {
-                ci_op_print_range(out, op->alu.src, op->alu.src_size);
+                ci_op_print_range(out, op->alu.src, sz);
                 msb_sprintf(out, " %s%s ", ci_op_alu_sym(op->alu.op), op->alu.is_unsigned?"u":"");
-                ci_op_print_range(out, op->alu.src2, op->alu.src2_size);
+                ci_op_print_range(out, op->alu.src2, sz);
             }
             break;
+        }
+        case CI_OP_CMP32:{
+            uint32_t sz;
+            sz = 4;
+            goto op_cmp;
+        case CI_OP_CMP64:
+            sz = 8;
+            goto op_cmp;
+        case CI_OP_CMP128:
+            sz = 16;
+            goto op_cmp;
+            op_cmp:;
+            ci_op_print_range(out, op->cmp.slot, op->cmp.slot_size);
+            msb_write_literal(out, " = ");
+            ci_op_print_range(out, op->cmp.src, sz);
+            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->cmp.op), op->cmp.is_unsigned?"u":"");
+            ci_op_print_range(out, op->cmp.src2, sz);
+            break;
+        }
         case CI_OP_FALU32:
         case CI_OP_FALU64:{
             uint32_t width = op->kind == CI_OP_FALU32? 4 : 8;

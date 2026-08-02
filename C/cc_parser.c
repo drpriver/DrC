@@ -1342,7 +1342,7 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
             if(kind != CC_EXPR_ASSIGN && kind != CC_EXPR_ADDASSIGN && kind != CC_EXPR_SUBASSIGN){
                 CcQualType lt = left->type;
                 lt.is_atomic = 0;
-                if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
+                if(ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
                 if(!ccqt_is_basic(lt) || !ccbt_is_arithmetic(lt.basic.kind)){
                     return cc_error(p, tok.loc, "compound assignment requires arithmetic operands");
                 }
@@ -1360,16 +1360,15 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
             || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
                 CcQualType lt = left->type;
                 lt.is_atomic = 0;
-                if(!ccqt_is_basic(lt) && ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
+                if(ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
                 if(!ccqt_is_basic(lt) || !ccbt_is_integer(lt.basic.kind))
                     return cc_error(p, tok.loc, "operator requires integer operands");
             }
-            if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN)
-                && ccqt_kind(left->type) == CC_POINTER){
-                CcQualType rt = right->type;
-                if(!ccqt_is_basic(rt) && ccqt_kind(rt) == CC_ENUM) rt = ccqt_as_enum(rt)->underlying;
-                if(!ccqt_is_basic(rt) || !ccbt_is_integer(rt.basic.kind))
+            if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN) && ccqt_kind(left->type) == CC_POINTER){
+                if(!ccqt_is_integer(right->type))
                     return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                err = cc_implicit_cast_to_index(p, right, &right);
+                if(err) return err;
             }
             else {
                 err = cc_check_atomic_object_access(p, right->type, right->loc);
@@ -1661,11 +1660,15 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                 if(lptr || rptr) {
                     CcExpr** ptr_operand = lptr ? &left : &right;
                     CcExpr* int_operand = lptr ? right : left;
-                    {
-                        CcQualType it = int_operand->type;
-                        if(!ccqt_is_basic(it) && ccqt_kind(it) == CC_ENUM) it = ccqt_as_enum(it)->underlying;
-                        if(!ccqt_is_basic(it) || !ccbt_is_integer(it.basic.kind))
-                            return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    if(!ccqt_is_integer(int_operand->type))
+                        return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    if(rptr){
+                        err = cc_implicit_cast_to_index(p, left, &left);
+                        if(err) return err;
+                    }
+                    else {
+                        err = cc_implicit_cast_to_index(p, right, &right);
+                        if(err) return err;
                     }
                     if(ccqt_kind((*ptr_operand)->type) == CC_ARRAY){
                         err = cc_pointer_of(p, ccqt_as_array((*ptr_operand)->type)->element, &result_type);
@@ -1714,11 +1717,10 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
-                    CcQualType rt = right->type;
-                    if(!ccqt_is_basic(rt) && ccqt_kind(rt) == CC_ENUM)
-                        rt = ccqt_as_enum(rt)->underlying;
-                    if(!ccqt_is_basic(rt) || !ccbt_is_integer(rt.basic.kind))
+                    if(!ccqt_is_integer(right->type))
                         return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    err = cc_implicit_cast_to_index(p, right, &right);
+                    if(err) return err;
                     if(ccqt_kind(left->type) == CC_ARRAY){
                         err = cc_pointer_of(p, ccqt_as_array(left->type)->element, &result_type);
                         if(err) return err;

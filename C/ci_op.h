@@ -30,17 +30,21 @@ enum CiAluOp TYPED_ENUM(uint32_t){
     CI_ALU_XOR,
     CI_ALU_SHL,
     CI_ALU_SHR,
-    CI_ALU_EQ,
-    CI_ALU_NE,
-    CI_ALU_LT,
-    CI_ALU_GT,
-    CI_ALU_LE,
-    CI_ALU_GE,
     // unary
     CI_ALU_NEG,
     CI_ALU_NOT,
 };
 TYPEDEF_ENUM(CiAluOp, uint32_t);
+
+enum CiCmpOp TYPED_ENUM(uint32_t){
+    CI_CMP_EQ,
+    CI_CMP_NE,
+    CI_CMP_LT,
+    CI_CMP_GT,
+    CI_CMP_LE,
+    CI_CMP_GE,
+};
+TYPEDEF_ENUM(CiCmpOp, uint32_t);
 
 enum CiFaluOp TYPED_ENUM(uint32_t){
     CI_FALU_ADD,
@@ -92,8 +96,14 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL_LVALUE,
     CI_OP_CONST,
     CI_OP_COPY,
+    CI_OP_ALU8,
+    CI_OP_ALU16,
+    CI_OP_ALU32,
     CI_OP_ALU64,
     CI_OP_ALU128,
+    CI_OP_CMP32,
+    CI_OP_CMP64,
+    CI_OP_CMP128,
     CI_OP_FALU32,
     CI_OP_FALU64,
     CI_OP_CHECKED,
@@ -208,20 +218,31 @@ struct CiOp {
             SrcLoc loc;
         } copy;
         struct {
-            // slots[slot:slot+slot_size] = slots[src] op slots[src2] as integers
-            CiOpKind kind: 8; // CI_OP_ALU64, CI_OP_ALU128
+            // slots[slot:slot+(implict size)] = slots[src] op slots[src2] as integers
+            CiOpKind kind: 8; // CI_OP_ALU8, CI_OP_ALU16, CI_OP_ALU32, CI_OP_ALU64, CI_OP_ALU128
             CiAluOp op: 8;
             uint32_t is_unsigned: 1,
-                     src_size: 5, // sizes reach 16 for CI_OP_ALU128
-                     src2_size: 5,
-                     _bitpad: 5;
+                     _bitpad: 15;
             uint32_t slot,
-                     slot_size,
+                     src,
+                     src2;
+            uint32_t pad[2];
+            SrcLoc loc;
+        } alu;
+        struct {
+            // slots[slot:slot+slot_size] = (int)(slots[src] cmp slots[src2])
+            // operand widths are fixed by kind
+            CiOpKind kind: 8; // CI_OP_CMP32, CI_OP_CMP64, CI_OP_CMP128
+            CiCmpOp op: 8;
+            uint32_t is_unsigned: 1,
+                     _bitpad: 15;
+            uint32_t slot,
+                     slot_size, // always sizeof(int), but that is target specific and can't be implied by the kind.
                      src,
                      src2;
             uint32_t pad;
             SrcLoc loc;
-        } alu;
+        } cmp;
         struct {
             // slots[slot] = slots[src] op slots[src2] as floats (falu32) or
             // doubles (falu64)
