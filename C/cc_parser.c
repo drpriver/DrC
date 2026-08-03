@@ -1568,8 +1568,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_EQ: case CC_EXPR_NE:
             case CC_EXPR_LT: case CC_EXPR_GT:
             case CC_EXPR_LE: case CC_EXPR_GE: {
-                if(ccqt_is_basic(left->type) && left->type.basic.kind == CCBT__Type
-                && ccqt_is_basic(right->type) && right->type.basic.kind == CCBT__Type){
+                if(ccqt_is_basic(left->type) && left->type.basic.kind == CCBT__Type && ccqt_is_basic(right->type) && right->type.basic.kind == CCBT__Type){
                     if(kind != CC_EXPR_EQ && kind != CC_EXPR_NE)
                         return cc_error(p, tok.loc, "ordered comparison of _Type values");
                     result_type = ccqt_basic(CCBT_int);
@@ -1623,15 +1622,13 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                     && !(ccqt_is_basic(rpointee) && rpointee.basic.kind == CCBT_void))
                         return cc_error(p, tok.loc, "comparison of incompatible pointer types");
                 }
+                else if(lp){
+                    err = cc_implicit_cast(p, right, left->type, &right);
+                    if(err) return err;
+                }
                 else {
-                    CcExpr* non_ptr = lp ? right : left;
-                    _Bool is_npc = non_ptr->kind == CC_EXPR_VALUE
-                        && ccqt_is_basic(non_ptr->type)
-                        && ccbt_is_integer(non_ptr->type.basic.kind)
-                        && non_ptr->uinteger == 0;
-                    _Bool is_nullptr = ccqt_is_basic(non_ptr->type) && non_ptr->type.basic.kind == CCBT_nullptr_t;
-                    if(!(is_npc || is_nullptr) || (kind != CC_EXPR_EQ && kind != CC_EXPR_NE))
-                        return cc_error(p, tok.loc, "comparison of pointer with non-pointer");
+                    err = cc_implicit_cast(p, left, right->type, &left);
+                    if(err) return err;
                 }
                 result_type = ccqt_basic(CCBT_int);
                 break;

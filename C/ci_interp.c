@@ -3867,7 +3867,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             memcpy(&a, (char*)frame->slots + op->falu32.src, sizeof a);
             memcpy(&b, (char*)frame->slots + op->falu32.src2, sizeof b);
             void* dest = (char*)frame->slots + op->falu32.slot;
-            uint32_t slot_size = op->falu32.slot_size;
             float res;
             switch(op->falu32.op){
                 case CI_FALU_ADD: res = a + b; break;
@@ -3875,16 +3874,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_FALU_MUL: res = a * b; break;
                 case CI_FALU_DIV: res = a / b; break;
                 case CI_FALU_NEG: res = -a; break;
-                case CI_FALU_EQ: ci_write_uint(dest, slot_size, a == b); goto falu32_done;
-                case CI_FALU_NE: ci_write_uint(dest, slot_size, a != b); goto falu32_done;
-                case CI_FALU_LT: ci_write_uint(dest, slot_size, a <  b); goto falu32_done;
-                case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu32_done;
-                case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu32_done;
-                case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu32_done;
                 DRP_CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
-            falu32_done:
             frame->pc++;
             return 0;
         }
@@ -3893,7 +3885,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             memcpy(&a, (char*)frame->slots + op->falu64.src, sizeof a);
             memcpy(&b, (char*)frame->slots + op->falu64.src2, sizeof b);
             void* dest = (char*)frame->slots + op->falu64.slot;
-            uint32_t slot_size = op->falu64.slot_size;
             double res;
             switch(op->falu64.op){
                 case CI_FALU_ADD: res = a + b; break;
@@ -3901,16 +3892,45 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 case CI_FALU_MUL: res = a * b; break;
                 case CI_FALU_DIV: res = a / b; break;
                 case CI_FALU_NEG: res = -a; break;
-                case CI_FALU_EQ: ci_write_uint(dest, slot_size, a == b); goto falu64_done;
-                case CI_FALU_NE: ci_write_uint(dest, slot_size, a != b); goto falu64_done;
-                case CI_FALU_LT: ci_write_uint(dest, slot_size, a <  b); goto falu64_done;
-                case CI_FALU_GT: ci_write_uint(dest, slot_size, a >  b); goto falu64_done;
-                case CI_FALU_LE: ci_write_uint(dest, slot_size, a <= b); goto falu64_done;
-                case CI_FALU_GE: ci_write_uint(dest, slot_size, a >= b); goto falu64_done;
                 DRP_CASES_EXHAUSTED;
             }
             memcpy(dest, &res, sizeof res);
-            falu64_done:
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_FCMP32: {
+            float a, b;
+            memcpy(&a, (char*)frame->slots + op->fcmp32.src, sizeof a);
+            memcpy(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b);
+            uint64_t res;
+            switch(op->fcmp32.op){
+                case CI_CMP_EQ: res = a == b; break;
+                case CI_CMP_NE: res = a != b; break;
+                case CI_CMP_LT: res = a <  b; break;
+                case CI_CMP_GT: res = a >  b; break;
+                case CI_CMP_LE: res = a <= b; break;
+                case CI_CMP_GE: res = a >= b; break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, res);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_FCMP64: {
+            double a, b;
+            memcpy(&a, (char*)frame->slots + op->fcmp64.src, sizeof a);
+            memcpy(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b);
+            uint64_t res;
+            switch(op->fcmp64.op){
+                case CI_CMP_EQ: res = a == b; break;
+                case CI_CMP_NE: res = a != b; break;
+                case CI_CMP_LT: res = a <  b; break;
+                case CI_CMP_GT: res = a >  b; break;
+                case CI_CMP_LE: res = a <= b; break;
+                case CI_CMP_GE: res = a >= b; break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->fcmp64.slot, op->fcmp64.slot_size, res);
             frame->pc++;
             return 0;
         }

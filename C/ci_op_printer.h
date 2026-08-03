@@ -85,12 +85,6 @@ ci_op_falu_sym(CiFaluOp op){
         case CI_FALU_SUB: return "-";
         case CI_FALU_MUL: return "*";
         case CI_FALU_DIV: return "/";
-        case CI_FALU_EQ:  return "==";
-        case CI_FALU_NE:  return "!=";
-        case CI_FALU_LT:  return "<";
-        case CI_FALU_GT:  return ">";
-        case CI_FALU_LE:  return "<=";
-        case CI_FALU_GE:  return ">=";
         case CI_FALU_NEG: return "-";
     }
     return "?";
@@ -376,6 +370,16 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                 msb_sprintf(out, " %s%s ", ci_op_falu_sym(op->falu32.op), suffix);
                 ci_op_print_range(out, op->falu32.src2, width);
             }
+        } break;
+        case CI_OP_FCMP32:
+        case CI_OP_FCMP64:{
+            uint32_t width = op->kind == CI_OP_FCMP32? 4 : 8;
+            const char* suffix = op->kind == CI_OP_FCMP32? "f32" : "f64";
+            ci_op_print_range(out, op->fcmp32.slot, op->fcmp32.slot_size);
+            msb_write_literal(out, " = ");
+            ci_op_print_range(out, op->fcmp32.src, width);
+            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->fcmp32.op), suffix);
+            ci_op_print_range(out, op->fcmp32.src2, width);
         } break;
         case CI_OP_CHECKED:{
             const char* sym = op->checked.op == CI_CHK_ADD? "+"

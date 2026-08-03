@@ -51,12 +51,6 @@ enum CiFaluOp TYPED_ENUM(uint32_t){
     CI_FALU_SUB,
     CI_FALU_MUL,
     CI_FALU_DIV,
-    CI_FALU_EQ,
-    CI_FALU_NE,
-    CI_FALU_LT,
-    CI_FALU_GT,
-    CI_FALU_LE,
-    CI_FALU_GE,
     // unary
     CI_FALU_NEG,
 };
@@ -106,6 +100,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_CMP128,
     CI_OP_FALU32,
     CI_OP_FALU64,
+    CI_OP_FCMP32,
+    CI_OP_FCMP64,
     CI_OP_CHECKED,
     CI_OP_BITCOUNT,
     CI_OP_CONVERT,
@@ -231,7 +227,6 @@ struct CiOp {
         } alu;
         struct {
             // slots[slot:slot+slot_size] = (int)(slots[src] cmp slots[src2])
-            // operand widths are fixed by kind
             CiOpKind kind: 8; // CI_OP_CMP32, CI_OP_CMP64, CI_OP_CMP128
             CiCmpOp op: 8;
             uint32_t is_unsigned: 1,
@@ -244,26 +239,30 @@ struct CiOp {
             SrcLoc loc;
         } cmp;
         struct {
-            // slots[slot] = slots[src] op slots[src2] as floats (falu32) or
-            // doubles (falu64)
+            // slots[slot] = slots[src] op slots[src2]
             CiOpKind kind: 8; // CI_OP_FALU32, CI_OP_FALU64
             CiFaluOp op: 8;
             uint32_t _bitpad: 16;
             uint32_t slot,
-                     slot_size, // comparisons write a canonical integer of
-                                // this size; operand widths are fixed by kind
+                     slot_size,
                      src,
                      src2;
             uint32_t pad;
             SrcLoc loc;
         } falu32, falu64;
         struct {
-            // checked integer arithmetic (__builtin_{add,sub,mul}_overflow):
-            // slots[result:result+res_size] = trunc(src <op> src2), and
-            // slots[overflow] = 1-byte bool set when the exact result does not
-            // fit the destination type. src and src2 are read at their own
-            // size and signedness (all three may differ); the exact result
-            // always fits 128 bits since the parser rejects __int128 operands.
+            // slots[slot:slot+slot_size] = (int)(slots[src] cmp slots[src2])
+            CiOpKind kind: 8; // CI_OP_FCMP32, CI_OP_FCMP64
+            CiCmpOp op: 8;
+            uint32_t _bitpad: 16;
+            uint32_t slot,
+                     slot_size,
+                     src,
+                     src2;
+            uint32_t pad;
+            SrcLoc loc;
+        } fcmp32, fcmp64;
+        struct {
             CiOpKind kind: 8; // CI_OP_CHECKED
             CiCheckedOp op: 8;
             uint32_t src_size: 4,
@@ -281,10 +280,6 @@ struct CiOp {
             SrcLoc loc;
         } checked;
         struct {
-            // __builtin_popcount/clz/ctz: slots[slot:slot+slot_size] = the
-            // count over the src_size-byte unsigned value at slots[src]. clz
-            // and ctz of zero yield the operand's bit width (src_size*8), and
-            // clz counts from the operand width, not 64.
             CiOpKind kind: 8; // CI_OP_BITCOUNT
             CiBitCountOp op: 8;
             uint32_t src_size: 8,
@@ -295,15 +290,6 @@ struct CiOp {
             SrcLoc loc;
         } bitcount;
         struct {
-            // CI_OP_CONVERT: slots[slot:slot+slot_size] = slots[src:src+src_size]
-            //   widened (to 128 bits when either side is larger than 8) then
-            //   truncated; is_unsigned: the source is unsigned
-            // CI_OP_ITOF: integer slots[src] to float/double slots[slot] (by
-            //   slot_size); is_unsigned: the source is unsigned
-            // CI_OP_FTOI: float/double slots[src] (by src_size) to integer
-            //   slots[slot]; is_unsigned: the destination is unsigned
-            // CI_OP_FTOF: float/double slots[src] to float/double slots[slot]
-            //   (by sizes)
             CiOpKind kind: 8; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
             uint32_t is_unsigned: 1,
                      _bitpad: 23;
@@ -459,8 +445,7 @@ struct CiOp {
             // slots[src2]; slots[slot:slot+slot_size] = old. ptr read from
             // slots[src]. slot_size is also the operand size: a power of two
             // <= 8, or 16 for xchg only. slot is always a valid slot;
-            // discard means the old value is unused (a JIT may then use a
-            // non-fetching instruction)
+            // discard means the old value is unused
             CiOpKind kind: 8; // CI_OP_ATOMIC_RMW
             CiAtomicRmwOp op: 8;
             CcMemoryOrder memorder: 4;

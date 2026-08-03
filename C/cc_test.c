@@ -5235,12 +5235,12 @@ TestFunction(test_parse_errors){
         {
             "ptr < float", __LINE__,
             SVI("int *p; float f; int x = p < f;\n"),
-            SVI("(test):1:28: error: comparison of pointer with non-pointer\n"),
+            SVI("(test):1:30: error: cannot implicitly convert from 'float' to 'int *'\n"),
         },
         {
             "ptr > int", __LINE__,
             SVI("int *p; int x = p > 42;\n"),
-            SVI("(test):1:19: error: comparison of pointer with non-pointer\n"),
+            SVI("(test):1:21: error: cannot implicitly convert from 'int' to 'int *'\n"),
         },
         {
             "ptr + float", __LINE__,
