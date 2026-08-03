@@ -148,12 +148,6 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             cc_print_expr(out, op->eval_into.expr);
             msb_write_literal(out, " (tree walker)");
             break;
-        case CI_OP_EVAL_LVALUE:
-            ci_op_print_range(out, op->eval_lvalue.slot, op->eval_lvalue.slot_size);
-            msb_write_literal(out, " = &");
-            cc_print_expr(out, op->eval_lvalue.expr);
-            msb_write_literal(out, " (tree walker)");
-            break;
         case CI_OP_CONST:
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
             uint64_t v = op->constant.immediate[0];

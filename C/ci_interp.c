@@ -3526,15 +3526,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
-        case CI_OP_EVAL_LVALUE: {
-            void* addr = NULL;
-            size_t lval_size;
-            int err = ci_interp_lvalue(ci, frame, op->eval_lvalue.expr, &addr, &lval_size);
-            if(err) return err;
-            memcpy((char*)frame->slots + op->eval_lvalue.slot, &addr, sizeof addr);
-            frame->pc++;
-            return 0;
-        }
         case CI_OP_CONST: {
             ci_copy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
             frame->pc++;
