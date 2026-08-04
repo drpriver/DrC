@@ -126,6 +126,34 @@ static inline void ci_uint128_write(void* buf, uint32_t sz, CiUint128 v){
 }
 #endif
 
+static inline double ci_uint128_to_double(CiUint128 v, _Bool is_unsigned){
+#ifdef __SIZEOF_INT128__
+    return is_unsigned ? (double)v : (double)(__int128)v;
+#else
+    _Bool negative = !is_unsigned && (ci_uint128_hi(v) >> 63);
+    if(negative)
+        v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    double d = (double)ci_uint128_hi(v) * 18446744073709551616.0
+             + (double)ci_uint128_lo(v);
+    return negative ? -d : d;
+#endif
+}
+
+static inline CiUint128 ci_uint128_from_double(double d, _Bool is_unsigned){
+#ifdef __SIZEOF_INT128__
+    return is_unsigned ? (CiUint128)d : (CiUint128)(__int128)d;
+#else
+    _Bool negative = !is_unsigned && d < 0;
+    if(negative) d = -d;
+    const double two64 = 18446744073709551616.0;
+    uint64_t hi = (uint64_t)(d / two64);
+    uint64_t lo = (uint64_t)(d - (double)hi * two64);
+    CiUint128 v = ci_uint128_or(ci_uint128_shl(ci_uint128_from_uint64(hi), 64),
+                                ci_uint128_from_uint64(lo));
+    return negative ? ci_uint128_sub(ci_uint128_from_uint64(0), v) : v;
+#endif
+}
+
 // 128-bit signed integer
 #ifdef __SIZEOF_INT128__
 typedef __int128 CiInt128;

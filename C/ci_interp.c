@@ -909,11 +909,8 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             double d = ci_read_float(valp, from.basic.kind);
             if(to_sz > 8){
                 // float to 128-bit int
-                CiUint128 v;
-                if(ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed))
-                    v = ci_uint128_from_uint64((uint64_t)d);
-                else
-                    v = ci_uint128_from_int64((int64_t)d);
+                _Bool is_unsigned = ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed);
+                CiUint128 v = ci_uint128_from_double(d, is_unsigned);
                 ci_uint128_write(result, to_sz, v);
             }
             else {
@@ -929,7 +926,7 @@ ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* resu
             if(from_sz > 8){
                 CiUint128 v;
                 ci_uint128_read(&v, valp, from_sz);
-                d = (double)ci_uint128_lo(v); // best effort
+                d = ci_uint128_to_double(v, from_unsigned);
             }
             else if(from_unsigned)
                 d = (double)ci_read_uint(valp, from_sz);
@@ -3997,7 +3994,19 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         case CI_OP_ITOF: {
             const void* src = (char*)frame->slots + op->itof.src;
             void* dest = (char*)frame->slots + op->itof.slot;
-            if(op->itof.slot_size == 4){
+            if(op->itof.src_size > 8){
+                CiUint128 v;
+                ci_uint128_read(&v, src, op->itof.src_size);
+                double d = ci_uint128_to_double(v, op->itof.is_unsigned);
+                if(op->itof.slot_size == 4){
+                    float f = (float)d;
+                    memcpy(dest, &f, sizeof f);
+                }
+                else {
+                    memcpy(dest, &d, sizeof d);
+                }
+            }
+            else if(op->itof.slot_size == 4){
                 float f;
                 if(op->itof.is_unsigned)
                     f = (float)ci_read_uint(src, op->itof.src_size);
@@ -4027,12 +4036,15 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             else {
                 memcpy(&d, src, sizeof d);
             }
-            uint64_t v;
-            if(op->ftoi.is_unsigned)
-                v = (uint64_t)d;
-            else
-                v = (uint64_t)(int64_t)d;
-            ci_write_uint((char*)frame->slots + op->ftoi.slot, op->ftoi.slot_size, v);
+            void* dest = (char*)frame->slots + op->ftoi.slot;
+            if(op->ftoi.slot_size > 8){
+                CiUint128 v = ci_uint128_from_double(d, op->ftoi.is_unsigned);
+                ci_uint128_write(dest, op->ftoi.slot_size, v);
+            }
+            else {
+                uint64_t v = op->ftoi.is_unsigned ? (uint64_t)d : (uint64_t)(int64_t)d;
+                ci_write_uint(dest, op->ftoi.slot_size, v);
+            }
             frame->pc++;
             return 0;
         }

@@ -5422,6 +5422,42 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "int128: unsigned to double uses high half", __LINE__,
+            SVI("unsigned __int128 a = (unsigned __int128)3 << 64;\n"
+               "double d = (double)a;\n"
+               "return d == 55340232221128654848.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: signed to double preserves sign", __LINE__,
+            SVI("signed __int128 a = -((signed __int128)5 << 64);\n"
+               "double d = (double)a;\n"
+               "return d == -92233720368547758080.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: float round trip uses high half", __LINE__,
+            SVI("unsigned __int128 a = (unsigned __int128)4 << 64;\n"
+               "float f = (float)a;\n"
+               "unsigned __int128 b = (unsigned __int128)f;\n"
+               "return (unsigned long long)(b >> 64) == 4 && (unsigned long long)b == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: double to unsigned uses high half", __LINE__,
+            SVI("double d = 129127208515966861312.0;\n"
+               "unsigned __int128 a = (unsigned __int128)d;\n"
+               "return (unsigned long long)(a >> 64) == 7 && (unsigned long long)a == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "int128: double to signed truncates and preserves sign", __LINE__,
+            SVI("double d = -36893488147419103232.0;\n"
+               "signed __int128 a = (signed __int128)d;\n"
+               "return a == -((signed __int128)2 << 64);\n"),
+            .exit_code = 1,
+        },
+        {
             "int128: unsigned eq", __LINE__,
             SVI("unsigned __int128 a = 42;\n"
                "unsigned __int128 b = 42;\n"

@@ -886,14 +886,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 is_unsigned = ccqt_kind(from) == CC_POINTER || ccqt_is_unsigned(from, ctx->char_is_unsigned);
             }
             else if(from_int && to_float){
-                if(from_sz > 8)
-                    break; // 128-bit to float falls back
                 kind = CI_OP_ITOF;
                 is_unsigned = ccqt_is_unsigned(from, ctx->char_is_unsigned);
             }
             else if(from_float && to_int){
-                if(size > 8)
-                    break; // float to 128-bit falls back
                 kind = CI_OP_FTOI;
                 is_unsigned = ccqt_is_unsigned(to, ctx->char_is_unsigned);
             }
@@ -1988,20 +1984,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             .loc = e->loc,
         }
     };
-    switch((uint32_t)e->kind){
-        case CC_EXPR_LOGNOT:
-        case CC_EXPR_EQ:
-        case CC_EXPR_NE:
-        case CC_EXPR_LT:
-        case CC_EXPR_GT:
-        case CC_EXPR_LE:
-        case CC_EXPR_GE:
-            // the evaluator writes these as canonical 0/1
-            out->canonical = 1;
-            break;
-        default:
-            break;
-    }
     return 0;
 }
 
