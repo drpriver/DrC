@@ -148,6 +148,18 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             cc_print_expr(out, op->eval_into.expr);
             msb_write_literal(out, " (tree walker)");
             break;
+        case CI_OP_RT_CALL:
+            if(op->rt_call.slot_size){
+                ci_op_print_range(out, op->rt_call.slot, op->rt_call.slot_size);
+                msb_write_literal(out, " = ");
+            }
+            msb_sprintf(out, "runtime[%u](", (unsigned)op->rt_call.op);
+            for(uint32_t i = 0; i < op->rt_call.nargs; i++){
+                if(i) msb_write_literal(out, ", ");
+                msb_sprintf(out, "%%%u", op->rt_call.args[i]);
+            }
+            msb_write_literal(out, ")");
+            break;
         case CI_OP_CONST:
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
             uint64_t v = op->constant.immediate[0];

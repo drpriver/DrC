@@ -84,6 +84,13 @@ enum CiBitCountOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiBitCountOp, uint32_t);
 
+enum CiRuntimeOp TYPED_ENUM(uint32_t){
+    CI_RT_INTERN,
+    CI_RT_HOTSWAP,
+    CI_RT_COMPILE,
+};
+TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
+
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_EVAL,
     CI_OP_EVAL_INTO,
@@ -135,7 +142,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_BUILTIN,
     CI_OP_VA_START,
     CI_OP_VA_ARG,
-    // CI_OP_RT_CALL, // call into runtime support function
+    CI_OP_RT_CALL,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 
@@ -184,6 +191,16 @@ struct CiOp {
             uint32_t slot, slot_size;
             SrcLoc loc;
         } eval_into;
+        struct {
+            // Call interpreter runtime support with already-lowered operands.
+            CiOpKind kind: 8; // CI_OP_RT_CALL
+            CiRuntimeOp op: 8;
+            uint32_t nargs: 8;
+            uint32_t _bitpad: 8;
+            uint32_t slot, slot_size;
+            uint32_t args[3];
+            SrcLoc loc;
+        } rt_call;
         struct {
             // slots[slot:slot+immsize] = immediate
             CiOpKind kind: 8; // CI_OP_CONST

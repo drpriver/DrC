@@ -1305,6 +1305,30 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                 goto retry;
             goto default_;
         }
+        case 0xc3:
+            if(cpp_match_char(f, 0x97)){
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("×"), .punct='*', .loc = loc};
+                return 0;
+            }
+            if(cpp_match_char(f, 0xb7)){
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("÷"), .punct='/', .loc = loc};
+                return 0;
+            }
+            goto default_;
+        case 0xe2:
+            if(cpp_match_2char(f, 0x89, 0xa5)){
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("≥"), .punct='>=', .loc = loc};
+                return 0;
+            }
+            if(cpp_match_2char(f, 0x89, 0xa4)){
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("≤"), .punct='<=', .loc = loc};
+                return 0;
+            }
+            if(cpp_match_2char(f, 0x89, 0xa0)){
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("≠"), .punct='!=', .loc = loc};
+                return 0;
+            }
+            goto default_;
         // identifier
         case CASE_a_z:
         case CASE_A_Z:

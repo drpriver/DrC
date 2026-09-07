@@ -3523,6 +3523,63 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
             frame->pc++;
             return 0;
         }
+        case CI_OP_RT_CALL: {
+            void* result = op->rt_call.slot_size
+                ? (char*)frame->slots + op->rt_call.slot
+                : ci_discard_buf;
+            int err = 0;
+            switch(op->rt_call.op){
+                case CI_RT_INTERN: {
+                    const char* s;
+                    memcpy(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
+                    const char* interned = NULL;
+                    if(s){
+                        Atom a;
+                        AtomTable* at = ci_lock_atoms(ci);
+                        a = AT_atomize(at, s, strlen(s));
+                        ci_unlock_atoms(ci, at);
+                        if(!a) return CI_OOM_ERROR;
+                        interned = a->data;
+                    }
+                    if(op->rt_call.slot_size)
+                        memcpy(result, &interned, sizeof interned);
+                    break;
+                }
+                case CI_RT_HOTSWAP: {
+                    void (*old_ptr)(void), (*new_ptr)(void);
+                    memcpy(&old_ptr, (char*)frame->slots + op->rt_call.args[0], sizeof old_ptr);
+                    memcpy(&new_ptr, (char*)frame->slots + op->rt_call.args[1], sizeof new_ptr);
+                    int ret = 1;
+                    CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
+                    CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
+                    if(old_func == new_func) ret = 0;
+                    else if(old_func && new_func && old_func->type == new_func->type){
+                        drp_atomic_ptr_store(&old_func->hotswap, new_func);
+                        ret = 0;
+                    }
+                    if(op->rt_call.slot_size)
+                        memcpy(result, &ret, sizeof ret);
+                    break;
+                }
+                case CI_RT_COMPILE: {
+                    const char* source;
+                    memcpy(&source, (char*)frame->slots + op->rt_call.args[0], sizeof source);
+                    CiModule* module = NULL;
+                    if(source){
+                        err = ci_compile_module(ci, source, &module);
+                        if(err == CI_OOM_ERROR) return err;
+                        // Compilation diagnostics produce a null module, not
+                        // an interpreter execution failure.
+                        err = 0;
+                    }
+                    if(op->rt_call.slot_size)
+                        memcpy(result, &module, sizeof module);
+                    break;
+                }
+            }
+            frame->pc++;
+            return err;
+        }
         case CI_OP_CONST: {
             ci_copy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
             frame->pc++;

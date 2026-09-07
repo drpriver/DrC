@@ -115,6 +115,7 @@ static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, C
 static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -849,8 +850,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 }
             }
             _Bool from_float = ci_falu_type(from);
-            _Bool from_int = ccqt_kind(from) == CC_POINTER;
-            uint32_t from_sz = 8; // pointer size
+            _Bool from_int = ccqt_kind(from) == CC_POINTER
+                          || ccqt_bt_eq(from, CCBT_nullptr_t);
+            uint32_t from_sz = ctx->ptr_size;
             if(!from_int && ccqt_is_integer(from)){
                 err = cc_sizeof_as_uint(p, from, e->loc, &from_sz);
                 if(err) return err;
@@ -883,7 +885,9 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     return ci_lower_expr(ci, ctx, operand, dest, out);
                 kind = CI_OP_CONVERT;
                 // A pointer source is an address: widen by zero-extension.
-                is_unsigned = ccqt_kind(from) == CC_POINTER || ccqt_is_unsigned(from, ctx->char_is_unsigned);
+                is_unsigned = ccqt_kind(from) == CC_POINTER
+                           || ccqt_bt_eq(from, CCBT_nullptr_t)
+                           || ccqt_is_unsigned(from, ctx->char_is_unsigned);
             }
             else if(from_int && to_float){
                 kind = CI_OP_ITOF;
@@ -1959,8 +1963,11 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_SLICE_HI:
             return ci_lower_slice(ci, ctx, e, dest, out);
         case CC_EXPR_INTERN:
+            return ci_lower_rt_call(ci, ctx, e, CI_RT_INTERN, dest, out);
         case CC_EXPR_HOTSWAP:
+            return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, dest, out);
         case CC_EXPR_COMPILE:
+            return ci_lower_rt_call(ci, ctx, e, CI_RT_COMPILE, dest, out);
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
             break;
@@ -1984,6 +1991,46 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             .loc = e->loc,
         }
     };
+    return 0;
+}
+
+static
+int
+ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out){
+    uint32_t nargs = rt_op == CI_RT_HOTSWAP ? 2 : 1;
+    CcExpr* args[2] = {e->lhs, NULL};
+    if(nargs == 2)
+        args[1] = e->values[0];
+    uint32_t temp = ctx->temp;
+    uint32_t slots[3] = {0};
+    for(uint32_t i = 0; i < nargs; i++){
+        CiLowerVal v;
+        int err = ci_lower_expr(ci, ctx, args[i], CI_NO_SLOT, &v);
+        if(err) return err;
+        slots[i] = v.slot;
+    }
+    uint32_t result_size = 0;
+    if(out){
+        int err = ci_lower_dest(ctx, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+        result_size = out->size;
+    }
+    CiOp* op;
+    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .rt_call = {
+            .kind = CI_OP_RT_CALL,
+            .op = rt_op,
+            .nargs = nargs,
+            .slot = dest,
+            .slot_size = result_size,
+            .args = {slots[0], slots[1], slots[2]},
+            .loc = e->loc,
+        },
+    };
+    ctx->temp = temp;
     return 0;
 }
 
@@ -4279,6 +4326,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_expr_discard(ci, ctx, e->values[1]);
             return err;
         case CC_EXPR_HOTSWAP:
+            return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, CI_NO_SLOT, NULL);
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
             break; // TODO: complicated? Maybe should be lowered just to calls to runtime functions?
