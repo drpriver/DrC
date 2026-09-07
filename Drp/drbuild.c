@@ -529,7 +529,7 @@ enum {
 
 static struct BuildTargetSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
-    MemberInfo members[10 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
+    MemberInfo members[11 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
 } TI_BuildTargetSettings;
 static struct GlobalCachedSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
@@ -819,11 +819,6 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                     .offset = offsetof(BuildTargetSettings, optimize),
                 },
                 {
-                    .name = b_atomize(ctx, "no_debug_symbols"),
-                    .type = &TI__Bool.type_info,
-                    .offset = offsetof(BuildTargetSettings, no_debug_symbols),
-                },
-                {
                     .name = b_atomize(ctx, "sanitize"),
                     .type = &TI__Bool.type_info,
                     .offset = offsetof(BuildTargetSettings, sanitize),
@@ -837,6 +832,16 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                     .name = b_atomize(ctx, "tsan"),
                     .type = &TI__Bool.type_info,
                     .offset = offsetof(BuildTargetSettings, tsan),
+                },
+                {
+                    .name = b_atomize(ctx, "no_debug_symbols"),
+                    .type = &TI__Bool.type_info,
+                    .offset = offsetof(BuildTargetSettings, no_debug_symbols),
+                },
+                {
+                    .name = b_atomize(ctx, "cc_handles_target"),
+                    .type = &TI__Bool.type_info,
+                    .offset = offsetof(BuildTargetSettings, cc_handles_target),
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                     #define X(ty, field, cli, help, def) { \
@@ -1190,9 +1195,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         msb_destroy(&sb);
     }
     int err;
-    {
-        err = env_parse_posix(&ctx->env, envp);
-    }
+    err = env_parse_posix(&ctx->env, envp);
     if(err) goto fail;
     #ifdef TARGET_SETTINGS_EXTRA_FIELDS
         #define X(ty, field, cli, help, def) \
@@ -1256,7 +1259,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         LongString*: ARGDEST((StringView*)x), \
         Atom*: ArgAtomDest((Atom*)x, &ctx->at))
 
-    enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=18};
+    enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=19};
 
     ArgToParse kw_args[] = {
         [BCC_IDX] = {
@@ -1310,6 +1313,11 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .help = "The target bitness. Defaults to build machine bitness.",
             .show_default = 1,
             .min_num = 1, .max_num = 1,
+        },
+        {
+            .name = SV("--cc-handles-target"),
+            .dest = BARGDEST(&ctx->target.cc_handles_target),
+            .help = "The C compilers handle arch, os, etc. themselves (usually due to being wrapped)",
         },
         {
             .name = SV("-O"),
@@ -1547,8 +1555,10 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             if(after_ap.arch != before_ap.arch) ctx->target.arch = after_ap.arch;
             if(after_ap.bits != before_ap.bits) ctx->target.bits = after_ap.bits;
             if(after_ap.optimize != before_ap.optimize) ctx->target.optimize = after_ap.optimize;
+            if(after_ap.no_debug_symbols != before_ap.no_debug_symbols) ctx->target.no_debug_symbols = after_ap.no_debug_symbols;
             if(after_ap.sanitize != before_ap.sanitize) ctx->target.sanitize = after_ap.sanitize;
             if(after_ap.tsan != before_ap.tsan) ctx->target.tsan = after_ap.tsan;
+            if(after_ap.cc_handles_target != before_ap.cc_handles_target) ctx->target.cc_handles_target = after_ap.cc_handles_target;
             #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                 #define X(ty, field, cli, help, def) \
                 if(after_ap.field != before_ap.field) \
@@ -2772,7 +2782,8 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
                 goto fallthrough;
             case COMPILER_CLANG_CL:
                 fallthrough:;
-                b_args(ctx, build, "-march=native");
+                if(!ctx->target.cc_handles_target)
+                    b_args(ctx, build, "-march=native");
                 b_args(ctx, build, "-o", ctx->exe_path->data);
                 depfile = b_atomize_f(ctx, "%s.deps", ctx->exe_path->data);
                 if(ctx->build_compiler_flavor == COMPILER_CLANG_CL){
@@ -3059,31 +3070,36 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
         case COMPILER_CLANG:
             fallthrough:;
             if(flavor == COMPILER_CLANG && target_os != BUILD_OS && target_os == OS_WINDOWS){
-                b_args(ctx, target,
-                    "--target=x86_64-pc-windows-msvc",
-                    "-nostdinc");
+                if(!ctx->target.cc_handles_target){
+                    b_args(ctx, target,
+                        "--target=x86_64-pc-windows-msvc",
+                        "-nostdinc");
+                }
             }
             if(debug) b_args(ctx, target, "-g");
             goto fallthrough2;
         case COMPILER_CLANG_CL:
             fallthrough2:;
-            if(native)
-                b_args(ctx, target, "-march=native");
-            else if(arch == AFAM_x86){
-                if(!(target_os == OS_APPLE && flavor == COMPILER_CLANG)) // should be apple clang, but we don't sniff that
-                    // b_args(ctx, target, "-march=x86-64-v3");
-                    // Old compilers don't support the above flag.
-                    b_args(ctx, target, "-march=haswell");
-            }
-            else if(arch == AFAM_APPLE_UNIVERSAL){
-                b_args(ctx, target,
-                    "-arch", "x86_64",
-                    "-Xarch_x86_64", "-march=haswell",
-                    "-Xarch_x86_64", "-mmacosx-version-min=10.15",
-                    "-arch", "arm64",
-                    "-Xarch_arm64", "-mcpu=apple-m1",
-                    "-Xarch_arm64", "-mmacosx-version-min=11.0"
-                );
+            if(!ctx->target.cc_handles_target){
+                if(native){
+                    b_args(ctx, target, "-march=native");
+                }
+                else if(arch == AFAM_x86){
+                    if(!(target_os == OS_APPLE && flavor == COMPILER_CLANG)) // should be apple clang, but we don't sniff that
+                        // b_args(ctx, target, "-march=x86-64-v3");
+                        // Old compilers don't support the above flag.
+                        b_args(ctx, target, "-march=haswell");
+                }
+                else if(arch == AFAM_APPLE_UNIVERSAL){
+                    b_args(ctx, target,
+                        "-arch", "x86_64",
+                        "-Xarch_x86_64", "-march=haswell",
+                        "-Xarch_x86_64", "-mmacosx-version-min=10.15",
+                        "-arch", "arm64",
+                        "-Xarch_arm64", "-mcpu=apple-m1",
+                        "-Xarch_arm64", "-mmacosx-version-min=11.0"
+                    );
+                }
             }
             if(flavor == COMPILER_CLANG_CL){
                 b_argf(ctx, target, "/Fe:%s", binary->data);

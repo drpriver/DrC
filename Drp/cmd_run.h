@@ -77,7 +77,7 @@ cmd_wait_many(intptr_t* proc_handles, size_t n, size_t* which, int* exit_code, _
             if(block) return 1;
             else return 0;
         }
-        if(ret >= WAIT_OBJECT_0 && n <= WAIT_OBJECT_0 + (DWORD)n){
+        if(n <= WAIT_OBJECT_0 + (DWORD)n){
             DWORD idx = ret - WAIT_OBJECT_0;
             *which = (size_t)idx;
             HANDLE h = (HANDLE)proc_handles[idx];

@@ -1,6 +1,7 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#include <stdlib.h>
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
 #include "Drp/compiler_warnings.h"
@@ -271,7 +272,9 @@ int main(int argc, char** argv, char** envp){
             StringView symname; void* sym;
         } crt_syms[] = {
             { SVI("atexit"), (void*)&atexit, },
+            #if !defined __APPLE__
             { SVI("at_quick_exit"), (void*)&at_quick_exit, },
+            #endif
             #if defined _WIN32
             { SVI("printf"), (void*)&printf, },
             #endif

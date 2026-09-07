@@ -360,6 +360,7 @@ struct BuildTargetSettings {
     _Bool native_sanitize;
     _Bool tsan;
     _Bool no_debug_symbols;
+    _Bool cc_handles_target;
 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
 #define X(type, field, cli, help, def) type field;
     TARGET_SETTINGS_EXTRA_FIELDS(X)

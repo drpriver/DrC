@@ -45,6 +45,8 @@ int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
     BuildTarget* all = b_phony_target(ctx, "all");
+    BuildTarget* nothing = b_phony_target(ctx, "nothing");
+    nothing->user_bits |= EXCLUDE_FROM_MAKEFILE;
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
@@ -435,7 +437,7 @@ copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
 static
 void
 link_libffi(BuildCtx* ctx, BuildTarget* tgt, enum OS os, BuildTarget* _Null_unspecified ffi_lib){
-    if(os == OS_WINDOWS || (os == OS_NATIVE && BUILD_OS == OS_WINDOWS)){
+    if(ffi_lib && (os == OS_WINDOWS || (os == OS_NATIVE && BUILD_OS == OS_WINDOWS))){
         b_arg(ctx, tgt, "-IFetched/libffi");
         b_linkinp(ctx, tgt, ffi_lib);
     }
