@@ -624,7 +624,7 @@ struct ArgParser {
 // Prints the help for a single argument.
 static inline
 void
-print_arg_help(const ArgParser* p, const ArgToParse*, int, const ArgStyle* style);
+ap_print_arg_help(const ArgParser* p, const ArgToParse*, int, const ArgStyle* style);
 
 
 // Internal helper struct for text-wrapping.
@@ -638,7 +638,7 @@ struct HelpState {
 // Handle text-wrapping, printing a newline and indenting if necessary.
 static inline
 void
-help_state_update(const ArgParser* p, HelpState* hs, int n_to_print){
+ap_help_state_update(const ArgParser* p, HelpState* hs, int n_to_print){
     if(hs->remaining - n_to_print < 0){
         p->print(p->hout, "\n%*s", hs->lead, "");
         hs->remaining = hs->output_width;
@@ -648,11 +648,11 @@ help_state_update(const ArgParser* p, HelpState* hs, int n_to_print){
 
 static inline
 void
-print_wrapped_help(const ArgParser*, const char*_Nullable, int);
+ap_print_wrapped_help(const ArgParser*, const char*_Nullable, int);
 
 static inline
 ArgStyle
-determine_styling(const ArgParser* p){
+ap_determine_styling(const ArgParser* p){
     const char* pre_argname = "\033[1m";
     const char* post_argname = "\033[0m";
     const char* pre_typename = "\033[3m";
@@ -707,7 +707,7 @@ print_argparse_help(ArgParser* p, int columns){
         p->herr = stderr;
     }
     #endif
-    ArgStyle style = determine_styling(p);
+    ArgStyle style = ap_determine_styling(p);
     p->print(p->hout, "%s: %s\n\n", p->name, p->description);
     const int printed = (int)(sizeof "usage: " -1 + strlen(p->name));
     p->print(p->hout, "usage: %s", p->name);
@@ -721,12 +721,12 @@ print_argparse_help(ArgParser* p, int columns){
         ArgToParse* arg = &p->positional.args[i];
         if(arg->max_num > 1){
             size_t to_print = 1 + arg->name.length + 4;
-            help_state_update(p, &hs, (int)to_print);
+            ap_help_state_update(p, &hs, (int)to_print);
             p->print(p->hout, " %s ...", arg->name.text);
         }
         else {
             size_t to_print = 1 + arg->name.length;
-            help_state_update(p, &hs, (int)to_print);
+            ap_help_state_update(p, &hs, (int)to_print);
             p->print(p->hout, " %s", arg->name.text);
         }
     }
@@ -738,12 +738,12 @@ print_argparse_help(ArgParser* p, int columns){
             if(arg->dest.type == ARG_FLAG || arg->dest.type == ARG_BITFLAG){
                 if(arg->altname1.length){
                     size_t to_print = sizeof(" [%s | %s]") - 5 + arg->name.length + arg->altname1.length;
-                    help_state_update(p, &hs, (int)to_print);
+                    ap_help_state_update(p, &hs, (int)to_print);
                     p->print(p->hout, " [%s | %s]", arg->name.text, arg->altname1.text);
                 }
                 else{
                     size_t to_print = sizeof(" [%s]") - 3 + arg->name.length;
-                    help_state_update(p, &hs, (int)to_print);
+                    ap_help_state_update(p, &hs, (int)to_print);
                     p->print(p->hout, " [%s]", arg->name.text);
                 }
             }
@@ -755,7 +755,7 @@ print_argparse_help(ArgParser* p, int columns){
                     else
                         tn = ArgTypeNames[arg->dest.type];
                     size_t to_print = sizeof(" [%s | %s <%s>%s]") - 9 + arg->name.length + arg->altname1.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1: 0);
-                    help_state_update(p, &hs, (int)to_print);
+                    ap_help_state_update(p, &hs, (int)to_print);
                     p->print(p->hout, " [%s | %s <%s>%s]", arg->name.text, arg->altname1.text, tn.text, arg->max_num > 1?" ...":"");
                 }
                 else{
@@ -765,7 +765,7 @@ print_argparse_help(ArgParser* p, int columns){
                     else
                         tn = ArgTypeNames[arg->dest.type];
                     size_t to_print = sizeof(" [%s <%s>%s]") - 7 + arg->name.length + tn.length + (arg->max_num > 1?sizeof(" ...")-1:0);
-                    help_state_update(p, &hs, (int)to_print);
+                    ap_help_state_update(p, &hs, (int)to_print);
                     p->print(p->hout, " [%s <%s>%s]", arg->name.text, tn.text, arg->max_num>1?" ...":"");
                 }
             }
@@ -788,7 +788,7 @@ print_argparse_help(ArgParser* p, int columns){
             p->print(p->hout, "%s%s%s:\n", style.pre_argname, early->name.text, style.post_argname);
         }
         p->print(p->hout, "%s", style.pre_description);
-        print_wrapped_help(p, early->help, columns);
+        ap_print_wrapped_help(p, early->help, columns);
         p->print(p->hout, "%s", style.post_description);
     }
     if(p->positional.count){
@@ -798,7 +798,7 @@ print_argparse_help(ArgParser* p, int columns){
         }
         for(size_t i = 0; i < p->positional.count; i++){
             ArgToParse* arg = &p->positional.args[i];
-            print_arg_help(p, arg, columns, &style);
+            ap_print_arg_help(p, arg, columns, &style);
         }
     }
     // It's possible for all keyword arguments to be hidden,
@@ -815,7 +815,7 @@ print_argparse_help(ArgParser* p, int columns){
                 if(!p->styling.no_dashed_header_underline)
                     p->print(p->hout, "------------------\n");
             }
-            print_arg_help(p, arg, columns, &style);
+            ap_print_arg_help(p, arg, columns, &style);
         }
     }
 }
@@ -831,7 +831,7 @@ print_argparse_hidden_help(ArgParser* p, int columns){
         p->herr = stderr;
     }
     #endif
-    ArgStyle style = determine_styling(p);
+    ArgStyle style = ap_determine_styling(p);
     // There might be no hidden args. Only print the header if we are actually
     // going to print an arg.
     _Bool printed_an_arg = 0;
@@ -845,14 +845,14 @@ print_argparse_hidden_help(ArgParser* p, int columns){
                 if(!p->styling.no_dashed_header_underline)
                     p->print(p->hout, "-----------------\n");
             }
-            print_arg_help(p, arg, columns, &style);
+            ap_print_arg_help(p, arg, columns, &style);
         }
     }
 }
 
 static inline
 void
-print_enum_options(const ArgParser* p, const ArgParseEnumType*_Nullable enu_, const ArgStyle* style, int columns){
+ap_print_enum_options(const ArgParser* p, const ArgParseEnumType*_Nullable enu_, const ArgStyle* style, int columns){
     if(!enu_) return;
     // cast away nullability
     const ArgParseEnumType* enu = enu_;
@@ -882,7 +882,7 @@ print_enum_options(const ArgParser* p, const ArgParseEnumType*_Nullable enu_, co
 // See top of file.
 static inline
 void
-print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const ArgStyle* style){
+ap_print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const ArgStyle* style){
     const char* help = arg->help;
     const char* name = arg->name.text;
     ArgType type = arg->dest.type;
@@ -909,10 +909,10 @@ print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const Arg
     if(!arg->show_default){
         p->print(p->hout, "%c", '\n');
         p->print(p->hout, "%s", style->pre_description);
-        print_wrapped_help(p, help, columns);
+        ap_print_wrapped_help(p, help, columns);
         p->print(p->hout, "%s", style->post_description);
         if(type == ARG_ENUM)
-            print_enum_options(p, arg->dest.enum_pointer, style, columns);
+            ap_print_enum_options(p, arg->dest.enum_pointer, style, columns);
         return;
     }
     switch(type){
@@ -981,16 +981,16 @@ print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const Arg
                 }break;
             }
             p->print(p->hout, " = %.*s", (int)enu_name.length, enu_name.text);
-            // print_enum_options(p, enu, style);
+            // ap_print_enum_options(p, enu, style);
         }break;
     }
     p->print(p->hout, "%c", '\n');
     p->print(p->hout, "%s", style->pre_description);
-    print_wrapped_help(p, help, columns);
+    ap_print_wrapped_help(p, help, columns);
     p->print(p->hout, "%s", style->post_description);
     if(type == ARG_ENUM){
         const ArgParseEnumType* enu = arg->dest.enum_pointer;
-        print_enum_options(p, enu, style, columns);
+        ap_print_enum_options(p, enu, style, columns);
     }
 }
 
@@ -1004,7 +1004,7 @@ struct HelpTokenized {
 // Internal helper for printing the help wrapped.
 static inline
 struct HelpTokenized
-next_tokenize_help(const char* help){
+ap_next_tokenize_help(const char* help){
     for(;;help++){
         switch(*help){
             case ' ': case '\r': case '\t': case '\f':
@@ -1042,13 +1042,13 @@ next_tokenize_help(const char* help){
 
 static inline
 void
-print_wrapped(const ArgParser* p, const char*text, int columns){
+ap_print_wrapped(const ArgParser* p, const char*text, int columns){
     HelpState hs = {.output_width = columns, .lead=0, .remaining=0};
     hs.remaining = hs.output_width;
     // Track if we had a hardbreak so we can preserve paragraph breaks.
     _Bool newline = 0;
     for(;*text;){
-        struct HelpTokenized tok = next_tokenize_help((const char*)text); // cast away nullability
+        struct HelpTokenized tok = ap_next_tokenize_help((const char*)text); // cast away nullability
         text = tok.rest;
         if(tok.is_newline){
             if(newline || hs.remaining != hs.output_width){
@@ -1061,7 +1061,7 @@ print_wrapped(const ArgParser* p, const char*text, int columns){
         else {
             newline = 0;
         }
-        help_state_update(p, &hs, (int)tok.token.length);
+        ap_help_state_update(p, &hs, (int)tok.token.length);
         p->print(p->hout, "%.*s", (int)tok.token.length, tok.token.text);
         if(hs.remaining){
             p->print(p->hout, "%c", ' ');
@@ -1073,7 +1073,7 @@ print_wrapped(const ArgParser* p, const char*text, int columns){
 
 static inline
 void
-print_wrapped_help(const ArgParser* p, const char*_Nullable help, int columns){
+ap_print_wrapped_help(const ArgParser* p, const char*_Nullable help, int columns){
     if(!help){
         return;
     }
@@ -1081,7 +1081,7 @@ print_wrapped_help(const ArgParser* p, const char*_Nullable help, int columns){
     HelpState hs = {.output_width = columns - 4, .lead = 4, .remaining = 0};
     hs.remaining = hs.output_width;
     for(;*help;){
-        struct HelpTokenized tok = next_tokenize_help((const char*)help); // cast away nullability
+        struct HelpTokenized tok = ap_next_tokenize_help((const char*)help); // cast away nullability
         help = tok.rest;
         if(tok.is_newline){
             if(hs.remaining != hs.output_width){
@@ -1090,7 +1090,7 @@ print_wrapped_help(const ArgParser* p, const char*_Nullable help, int columns){
             }
             continue;
         }
-        help_state_update(p, &hs, (int)tok.token.length);
+        ap_help_state_update(p, &hs, (int)tok.token.length);
         p->print(p->hout, "%.*s", (int)tok.token.length, tok.token.text);
         if(hs.remaining){
             p->print(p->hout, "%c", ' ');
@@ -1103,13 +1103,13 @@ print_wrapped_help(const ArgParser* p, const char*_Nullable help, int columns){
 static inline size_t agp_maxnum(int x){ return x>0?x:1; }
 static inline size_t agp_minnum(int x){ return x>0?x:0; }
 
-static inline enum ArgParseError set_flag(ArgToParse* arg);
+static inline enum ArgParseError ap_set_flag(ArgToParse* arg);
 // Parse a single argument from a string.
 // Used internally. I guess you could use it if you really wanted to, but you
 // don't need this type generic version?
 static inline
 enum ArgParseError
-parse_arg(ArgToParse* arg, StringView s){
+ap_parse_arg(ArgToParse* arg, StringView s){
     // Append_procs should signal their own error.
     if(arg->num_parsed >= agp_maxnum(arg->max_num))
         return ARGPARSE_EXCESS_ARGS;
@@ -1164,7 +1164,7 @@ parse_arg(ArgToParse* arg, StringView s){
             // fall-through
         case ARG_FLAG:
             // This is weird, but it is a configuration error.
-            return set_flag(arg);
+            return ap_set_flag(arg);
         case ARG_STRING:{
             APPEND_ARG(StringView, s);
         }break;
@@ -1252,25 +1252,22 @@ parse_arg(ArgToParse* arg, StringView s){
 
 static inline
 enum ArgParseError
-set_flag_explicit(ArgToParse* arg, _Bool value){
+ap_set_flag_explicit(ArgToParse* arg, _Bool value){
+    if(arg->dest.type != ARG_FLAG && arg->dest.type != ARG_BITFLAG)
+        return ARGPARSE_INTERNAL_ERROR;
+    if(arg->num_parsed >= agp_maxnum(arg->max_num))
+        return ARGPARSE_DUPLICATE_KWARG;
     if(arg->dest.type == ARG_BITFLAG){
         uint64_t* dest = arg->dest.pointer;
-        if(*dest & arg->dest.bitflag)
-            return ARGPARSE_DUPLICATE_KWARG;
         if(value)
             *dest |= arg->dest.bitflag;
         else
             *dest &= ~arg->dest.bitflag;
-        arg->num_parsed += 1;
-        if(arg->pnum_parsed) (*arg->pnum_parsed)++;
-        return 0;
     }
-    if(arg->dest.type != ARG_FLAG)
-        return ARGPARSE_INTERNAL_ERROR;
-    if(arg->num_parsed >= agp_maxnum(arg->max_num))
-        return ARGPARSE_DUPLICATE_KWARG;
-    _Bool* dest = arg->dest.pointer;
-    *dest = value;
+    else {
+        _Bool* dest = arg->dest.pointer;
+        *dest = value;
+    }
     arg->num_parsed += 1;
     if(arg->pnum_parsed) (*arg->pnum_parsed)++;
     return 0;
@@ -1278,8 +1275,20 @@ set_flag_explicit(ArgToParse* arg, _Bool value){
 // Set a flag. I really don't see why you would use this outside of this.
 static inline
 enum ArgParseError
-set_flag(ArgToParse* arg){
-    return set_flag_explicit(arg, 1);
+ap_set_flag(ArgToParse* arg){
+    return ap_set_flag_explicit(arg, 1);
+}
+
+static inline
+enum ArgParseError
+ap_parse_flag_value(ArgToParse* arg, StringView s){
+    if(sv_equals(s, SV("1")) || sv_iequals(s, SV("true")) || sv_iequals(s, SV("yes")))
+        return ap_set_flag_explicit(arg, 1);
+    else if(sv_equals(s, SV("0")) || sv_iequals(s, SV("false")) || sv_iequals(s, SV("no")))
+        return ap_set_flag_explicit(arg, 0);
+    else
+        return ARGPARSE_CONVERSION_ERROR;
+
 }
 
 static inline
@@ -1317,7 +1326,7 @@ check_for_early_out_args_strings(ArgParser* parser, const StringView* args, size
 
 static inline
 ArgToParse*_Nullable
-find_matching_kwarg(ArgParser* parser, StringView sv){
+ap_find_matching_kwarg(ArgParser* parser, StringView sv){
     // do an inefficient linear search for now.
     for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
         for(size_t i = 0; i < keywords->count; i++){
@@ -1359,11 +1368,11 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
         if(s.length > 1){
             ArgToParse* new_kwarg;
             if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
-                new_kwarg = find_matching_kwarg(parser, s);
+                new_kwarg = ap_find_matching_kwarg(parser, s);
                 if(new_kwarg) goto found_new_kwarg;
                 const char* eq = memchr(s.text, '=', s.length);
                 if(eq && eq != s.text){
-                    new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                    new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                     if(new_kwarg){
                         arg_after_eq = 1;
                         s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1375,11 +1384,11 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                 _Bool number = s.text[1] == '.' || (s.text[1] >= '0' && s.text[1] <= '9');
                 if(!number){
                     // Not a number, find matching kwarg
-                    new_kwarg = find_matching_kwarg(parser, s);
+                    new_kwarg = ap_find_matching_kwarg(parser, s);
                     if(!new_kwarg){
                         const char* eq = memchr(s.text, '=', s.length);
                         if(eq && eq != s.text){
-                            new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                            new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                             if(new_kwarg){
                                 arg_after_eq = 1;
                                 s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1423,18 +1432,18 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
                     kwarg = new_kwarg;
                     kwarg->visited = 1;
                     if(kwarg->dest.type == ARG_FLAG || kwarg->dest.type == ARG_BITFLAG){
-                        if(arg_after_eq){
-                            parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = *arg;
-                            return ARGPARSE_EXCESS_ARGS;
-                        }
-                        enum ArgParseError error = set_flag(kwarg);
+                        enum ArgParseError error;
+                        if(arg_after_eq)
+                            error = ap_parse_flag_value(kwarg, s);
+                        else
+                            error = ap_set_flag(kwarg);
                         if(error){
                             parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = *arg;
+                            parser->failed.arg = arg_after_eq?s.text:*arg;
                             return error;
                         }
                         kwarg = NULL;
+                        continue;
                     }
                     if(!arg_after_eq)
                         continue;
@@ -1443,7 +1452,7 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
         }
         skip:;
         if(kwarg){
-            enum ArgParseError err = parse_arg(kwarg, s);
+            enum ArgParseError err = ap_parse_arg(kwarg, s);
             if(err){
                 parser->failed.arg = *arg;
                 parser->failed.arg_to_parse = kwarg;
@@ -1457,7 +1466,7 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
         }
         else if(pos_arg && pos_arg != past_the_end){
             pos_arg->visited = 1;
-            enum ArgParseError err = parse_arg(pos_arg, s);
+            enum ArgParseError err = ap_parse_arg(pos_arg, s);
             if(err){
                 parser->failed.arg = *arg;
                 parser->failed.arg_to_parse = pos_arg;
@@ -1533,11 +1542,11 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
         if(s.length > 1){
             ArgToParse* new_kwarg;
             if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
-                new_kwarg = find_matching_kwarg(parser, s);
+                new_kwarg = ap_find_matching_kwarg(parser, s);
                 if(new_kwarg) goto found_new_kwarg;
                 const char* eq = memchr(s.text, '=', s.length);
                 if(eq && eq != s.text){
-                    new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                    new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                     if(new_kwarg){
                         arg_after_eq = 1;
                         s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1549,11 +1558,11 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                 _Bool number = s.text[1] == '.' || (s.text[1] >= '0' && s.text[1] <= '9');
                 if(!number){
                     // Not a number, find matching kwarg
-                    new_kwarg = find_matching_kwarg(parser, s);
+                    new_kwarg = ap_find_matching_kwarg(parser, s);
                     if(!new_kwarg){
                         const char* eq = memchr(s.text, '=', s.length);
                         if(eq && eq != s.text){
-                            new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                            new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                             if(new_kwarg){
                                 arg_after_eq = 1;
                                 s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1598,18 +1607,18 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
                     kwarg = new_kwarg;
                     kwarg->visited = 1;
                     if(kwarg->dest.type == ARG_FLAG || kwarg->dest.type == ARG_BITFLAG){
-                        if(arg_after_eq){
-                            parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = arg->text;
-                            return ARGPARSE_EXCESS_ARGS;
-                        }
-                        enum ArgParseError error = set_flag(kwarg);
+                        enum ArgParseError error;
+                        if(arg_after_eq)
+                            error = ap_parse_flag_value(kwarg, s);
+                        else
+                            error = ap_set_flag(kwarg);
                         if(error) {
                             parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = arg->text;
+                            parser->failed.arg = arg_after_eq?arg->text:s.text;
                             return error;
                         }
                         kwarg = NULL;
+                        continue;
                     }
                     if(!arg_after_eq)
                         continue;
@@ -1618,7 +1627,7 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
         }
         skip:;
         if(kwarg){
-            enum ArgParseError err = parse_arg(kwarg, s);
+            enum ArgParseError err = ap_parse_arg(kwarg, s);
             if(err){
                 parser->failed.arg = arg->text;
                 parser->failed.arg_to_parse = kwarg;
@@ -1631,7 +1640,7 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
         }
         else if(pos_arg && pos_arg != past_the_end){
             pos_arg->visited = 1;
-            enum ArgParseError err = parse_arg(pos_arg, s);
+            enum ArgParseError err = ap_parse_arg(pos_arg, s);
             if(err){
                 parser->failed.arg = arg->text;
                 parser->failed.arg_to_parse = pos_arg;
@@ -1750,11 +1759,11 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
         if(s.length > 1){
             ArgToParse* new_kwarg;
             if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
-                new_kwarg = find_matching_kwarg(parser, s);
+                new_kwarg = ap_find_matching_kwarg(parser, s);
                 if(new_kwarg) goto found_new_kwarg;
                 const char* eq = memchr(s.text, '=', s.length);
                 if(eq && eq != s.text){
-                    new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                    new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                     if(new_kwarg){
                         arg_after_eq = 1;
                         s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1766,11 +1775,11 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
                 _Bool number = s.text[1] == '.' || (s.text[1] >= '0' && s.text[1] <= '9');
                 if(!number){
                     // Not a number, find matching kwarg
-                    new_kwarg = find_matching_kwarg(parser, s);
+                    new_kwarg = ap_find_matching_kwarg(parser, s);
                     if(!new_kwarg){
                         const char* eq = memchr(s.text, '=', s.length);
                         if(eq && eq != s.text){
-                            new_kwarg = find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                            new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
                             if(new_kwarg){
                                 arg_after_eq = 1;
                                 s = (StringView){s.text+s.length - eq - 1, eq+1};
@@ -1811,18 +1820,18 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
                     kwarg = new_kwarg;
                     kwarg->visited = 1;
                     if(kwarg->dest.type == ARG_FLAG || kwarg->dest.type == ARG_BITFLAG){
-                        if(arg_after_eq){
-                            parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = arg_start;
-                            return ARGPARSE_EXCESS_ARGS;
-                        }
-                        enum ArgParseError error = set_flag(kwarg);
+                        enum ArgParseError error;
+                        if(arg_after_eq)
+                            error = ap_parse_flag_value(kwarg, s);
+                        else
+                            error = ap_set_flag(kwarg);
                         if(error){
                             parser->failed.arg_to_parse = kwarg;
-                            parser->failed.arg = arg_start;
+                            parser->failed.arg = arg_after_eq?s.text:arg_start;
                             return error;
                         }
                         kwarg = NULL;
+                        continue;
                     }
                     if(!arg_after_eq)
                         continue;
@@ -1831,7 +1840,7 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
         }
         skip:;
         if(kwarg){
-            enum ArgParseError err = parse_arg(kwarg, s);
+            enum ArgParseError err = ap_parse_arg(kwarg, s);
             if(err){
                 parser->failed.arg = arg_start;
                 parser->failed.arg_to_parse = kwarg;
@@ -1844,7 +1853,7 @@ parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsi
         }
         else if(pos_arg && pos_arg != past_the_end){
             pos_arg->visited = 1;
-            enum ArgParseError err = parse_arg(pos_arg, s);
+            enum ArgParseError err = ap_parse_arg(pos_arg, s);
             if(err){
                 parser->failed.arg = arg_start;
                 parser->failed.arg_to_parse = pos_arg;
@@ -1953,7 +1962,7 @@ print_argparse_error(ArgParser* p, enum ArgParseError error){
                         case ARG_BITFLAG:
                             // fall-through
                         case ARG_FLAG:
-                            p->print(p->herr, "Unable to parse a flag. This is a bug.\n");
+                            p->print(p->herr, "Unable to parse a flag from '%s'. Expected a boolean value.\n", arg);
                             return;
                     }
                     p->print(p->herr, "Unable to parse an unknown type from '%s'\n", arg);
@@ -2060,7 +2069,7 @@ print_argparse_error(ArgParser* p, enum ArgParseError error){
 
 static inline
 void
-print_argparse_single_line_help_escaped(const ArgParser*p, const char* help){
+ap_print_argparse_single_line_help_escaped(const ArgParser*p, const char* help){
     for(;;help++){
         switch(*help){
             case ' ': case '\t': case '\n':
@@ -2117,7 +2126,7 @@ print_argparse_fish_completions(ArgParser* p){
         }
         if(a->help){
             p->print(p->hout, " -d \"");
-            print_argparse_single_line_help_escaped(p, a->help);
+            ap_print_argparse_single_line_help_escaped(p, a->help);
             p->print(p->hout, "%c", '"');
         }
         p->print(p->hout, "%c", '\n');
@@ -2167,7 +2176,7 @@ print_argparse_fish_completions(ArgParser* p){
             }
             if(a->help){
                 p->print(p->hout, " -d \"");
-                print_argparse_single_line_help_escaped(p, a->help);
+                ap_print_argparse_single_line_help_escaped(p, a->help);
                 p->print(p->hout, "%c", '"');
             }
             p->print(p->hout, "%c", '\n');
