@@ -555,7 +555,7 @@ static struct CompilerFlavorInfo {
 
 static struct BuildTargetInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
-    MemberInfo members[14];
+    MemberInfo members[15];
 } TI_BuildTarget;
 
 static TypeInfoMarray TI_MA_Atom = {
@@ -904,6 +904,11 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                     .name = b_atomize(ctx, "name"),
                     .type = &TI_Atom.type_info,
                     .offset = offsetof(BuildTarget, name),
+                },
+                {
+                    .name = b_atomize(ctx, "description"),
+                    .type = &TI_Atom.type_info,
+                    .offset = offsetof(BuildTarget, description),
                 },
                 {
                     .name = b_atomize(ctx, "dependencies"),
@@ -1608,23 +1613,27 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         ctx->target.bits = ABITS_64;
 #endif
 
-    (void)b_phony_target(ctx, "clean");
+    b_phony_target(ctx, "clean")->description = b_atomize(ctx, "Delete the contents of the build directory.");
 
     {
         BuildTarget* list = b_script_target(ctx, "list", list_targets, NULL);
         list->is_phony = 1;
+        list->description = b_atomize(ctx, "List all targets.");
     }
     {
         BuildTarget* print = b_script_target(ctx, "print", print_ctx, NULL);
         print->is_phony = 1;
+        print->description = b_atomize(ctx, "Print the full ctx and all targets.");
     }
     {
         BuildTarget* ccjs = b_script_target(ctx, "compile_commands.json", compile_commands, NULL);
         ccjs->is_phony = 1;
+        ccjs->description = b_atomize(ctx, "Create a clang-compatible compile_commands.json.");
     }
     {
         BuildTarget* fc = b_script_target(ctx, "fish-completions", fish_completions, NULL);
         fc->is_phony = 1;
+        fc->description = b_atomize(ctx, "Generate fish-shell completion commands.");
     }
     return ctx;
 }
@@ -1641,6 +1650,8 @@ list_targets(BuildCtx* ctx, BuildTarget* tgt){
         StringView sv = {item.atom->length, item.atom->data};
         if(sv_startswith(sv, SV("./"))) continue;
         b_printf(ctx, "  %s\n", item.atom->data);
+        if(t->description && t->description->length)
+            b_printf(ctx, "      %s\n", t->description->data);
     }
     return 0;
 }

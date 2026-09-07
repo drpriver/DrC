@@ -457,6 +457,7 @@ static const StringView BLogLevelSVs[] = {
 typedef struct BuildTarget BuildTarget;
 struct BuildTarget {
     Atom name;
+    Atom _Nullable description;
     Marray(Atom) dependencies;
     Marray(Atom) outputs;
     Marray(Atom) linker_args;

@@ -45,19 +45,27 @@ int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
     BuildTarget* all = b_phony_target(ctx, "all");
+    all->description = b_atomize(ctx, "Build all binaries (including tests).");
     BuildTarget* nothing = b_phony_target(ctx, "nothing");
     nothing->user_bits |= EXCLUDE_FROM_MAKEFILE;
+    nothing->description = b_atomize(ctx, "Build nothing (for setting flags without building anything).");
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
+    Makefile->description = b_atomize(ctx, "Generate a Makefile that invokes this build system.");
 
     BuildTarget* cpp = b_exe_target(ctx, "drcpp", "cpp.c", ctx->target.os);
     b_add_dep(ctx, all, cpp);
+    cpp->description = b_atomize(ctx, "C Preprocessor.");
+    b_get_target(ctx, "drcpp")->description = cpp->description;
 
     BuildTarget* cc = b_exe_target(ctx, "drc", "cc.c", ctx->target.os);
+    cc->description = b_atomize(ctx, "C interpreter.");
+    b_get_target(ctx, "drc")->description = cc->description;
     BuildTarget* ffi_lib = NULL;
     BuildTarget* ffi_dll = NULL;
     BuildTarget* fetch_ffi = b_coro_target(ctx, "fetch-libffi", fetch_libffi, NULL);
+    fetch_ffi->description = b_atomize(ctx, "Fetch libffi from github (only for windows builds).");
     if(BUILD_OS == OS_WINDOWS){
         ffi_lib = b_targeta(ctx, b_atomize(ctx, "Fetched/libffi/" LIBFFI_LIB));
         b_add_dep(ctx, ffi_lib, fetch_ffi);
@@ -74,28 +82,35 @@ int main(int argc, char** argv, char** envp){
     link_libffi(ctx, cc, ctx->target.os, ffi_lib);
     b_add_dep(ctx, all, cc);
 
+    BuildTarget* native_tests = b_phony_target(ctx, "native-tests");
+    native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
     BuildTarget* tests = b_phony_target(ctx, "tests");
-    BuildTarget* test = b_phony_target(ctx, "test");
-    BuildTarget* selftests = b_phony_target(ctx, "selftests");
+    tests->description = b_atomize(ctx, "Run all tests.");
+    BuildTarget* self_tests = b_phony_target(ctx, "self-tests");
+    self_tests->description = b_atomize(ctx, "Run the tests interpreted by drc interpreter.");
     BuildTarget* coverage_tests = b_phony_target(ctx, "coverage-tests");
+    coverage_tests->description = b_atomize(ctx, "Run the tests with coverage enabled.");
     coverage_tests->user_bits |= EXCLUDE_FROM_MAKEFILE;
-    b_add_dep(ctx, test, tests);
+    b_add_deps(ctx, tests, native_tests, self_tests);
     BuildTarget* cc_opt, *cc_cov;
     {
-        // Optimized cc without sanitizers for self-hosted tests
         _Bool saved_ns = ctx->target.native_sanitize;
         ctx->target.native_sanitize = 0;
 
         {
             cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
-            cc_opt->is_compile_command = 0; // exclude from compile_commands.json
+            cc_opt->is_compile_command = 0;
+            cc_opt->description = b_atomize(ctx, "Optimized C interpreter for self-hosted tests.");
+            b_get_target(ctx, "cc_opt")->description = cc_opt->description;
             b_add_dep(ctx, all, cc_opt);
             b_arg(ctx, cc_opt, "-O2");
             link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
         }
         {
             cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", OS_NATIVE);
-            cc_cov->is_compile_command = 0; // exclude from compile_commands.json
+            cc_cov->description = b_atomize(ctx, "C interpreter with coverage enabled.");
+            b_get_target(ctx, "cc_cov")->description = cc_cov->description;
+            cc_cov->is_compile_command = 0;
             b_get_target(ctx, "cc_cov")->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(cc_cov->compiler_flavor != COMPILER_CL){
                 if(cc_cov->compiler_flavor == COMPILER_CLANG_CL){
@@ -148,7 +163,7 @@ int main(int argc, char** argv, char** envp){
             else
                 for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                     b_aarg(ctx, cmd, ctx->dash_dash_args.data[j]);
-            b_add_dep(ctx, tests, cmd);
+            b_add_dep(ctx, native_tests, cmd);
 
             // Coverage variant
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
@@ -238,7 +253,7 @@ int main(int argc, char** argv, char** envp){
         if(ffi_dll) b_add_dep(ctx, selfhost, ffi_dll);
         b_args(ctx, selfhost, "cc.c", "Samples/hello.c");
         if(BUILD_OS != OS_WINDOWS)
-            b_add_dep(ctx, selftests, selfhost);
+            b_add_dep(ctx, self_tests, selfhost);
 
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             if(test_files[i].skip_self_hosted) continue;
@@ -255,9 +270,9 @@ int main(int argc, char** argv, char** envp){
             else
                 for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                     b_aarg(ctx, cmd, ctx->dash_dash_args.data[j]);
-            b_add_dep(ctx, selftests, cmd);
+            b_add_dep(ctx, self_tests, cmd);
         }
-        b_add_dep(ctx, test, selftests);
+        b_add_dep(ctx, tests, self_tests);
     }
 
     {
@@ -290,6 +305,7 @@ int main(int argc, char** argv, char** envp){
     }
     {
         BuildTarget* repl = b_exec_target(ctx, "repl", cc);
+        repl->description = b_atomize(ctx, "Exec the interpreter in --repl mode.");
         repl->is_phony = 1;
         b_arg(ctx, repl, "--repl");
         for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
@@ -298,12 +314,14 @@ int main(int argc, char** argv, char** envp){
     {
         static BuildTarget* bins[2]; bins[0] = cpp; bins[1] = cc;
         BuildTarget* install = b_script_target(ctx, "install", do_install, bins);
+        install->description = b_atomize(ctx, "Install the main binaries.");
         install->is_phony = 1;
         b_add_dep(ctx, install, cpp);
         b_add_dep(ctx, install, cc);
     }
     {
         BuildTarget* tags = b_cmd_target(ctx, "tags", BUILD_OS==OS_WINDOWS?"py":"python3");
+        tags->description = b_atomize(ctx, "Generate a vim-compatible tags file.");
         tags->is_phony = 1;
         b_arg(ctx, tags, "Tools/ct.py");
         BuildTarget* compile_commands_json = b_get_target(ctx, "compile_commands.json");
