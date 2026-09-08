@@ -82,6 +82,7 @@ struct Worker {
     SDL_sem* work_ready;
     SDL_sem* work_done;
     _Bool quit;
+    char name[16];
 };
 
 // Ensure pixel at (row,col) has been computed
@@ -162,13 +163,16 @@ Worker workers[NTHREADS];
 SDL_Thread* threads[NTHREADS];
 int rows_per = RH / NTHREADS;
 for(int i = 0; i < NTHREADS; i++){
-    workers[i].id = i;
-    workers[i].y_start = i * rows_per;
-    workers[i].y_end = (i == NTHREADS - 1) ? RH : (i + 1) * rows_per;
-    workers[i].quit = 0;
-    workers[i].work_ready = SDL_CreateSemaphore(0);
-    workers[i].work_done = SDL_CreateSemaphore(0);
-    threads[i] = SDL_CreateThread(render_worker, "render", &workers[i]);
+    workers[i] = {
+        .id = i,
+        .y_start = i * rows_per,
+        .y_end = (i == NTHREADS - 1) ? RH : (i + 1) * rows_per,
+        .quit = 0,
+        .work_ready = SDL_CreateSemaphore(0),
+        .work_done = SDL_CreateSemaphore(0),
+    };
+    SDL_snprintf(workers[i].name, sizeof workers[i].name, "render%d", i);
+    threads[i] = SDL_CreateThread(render_worker, workers[i].name, &workers[i]);
 }
 
 // Show the window on the current space before doing heavy computation.

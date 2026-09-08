@@ -39,7 +39,7 @@ static inline void ci_uint128_write(void* buf, uint32_t sz, CiUint128 v){
     memcpy(buf, &v, sz <= 16 ? sz : 16);
 }
 #else
-typedef struct { uint64_t lo, hi; } CiUint128;
+typedef struct { _Alignas(16) uint64_t lo, hi; } CiUint128;
 static inline CiUint128 ci_uint128_from_uint64(uint64_t v){
     return (CiUint128){.lo = v, .hi = 0};
 }
@@ -175,7 +175,7 @@ static inline CiInt128 ci_int128_shr(CiInt128 a, uint64_t b){ return a >> b; }
 static inline CiInt128 ci_int128_from_uint128(CiUint128 a){ return (CiInt128)a; }
 static inline CiUint128 ci_uint128_from_int128(CiInt128 a){ return (CiUint128)a; }
 #else
-typedef struct { uint64_t lo; int64_t hi; } CiInt128;
+typedef struct { _Alignas(16) uint64_t lo; int64_t hi; } CiInt128;
 static inline int64_t ci_asr64(int64_t v, uint64_t amount){
     if(v >= 0) return (int64_t)((uint64_t)v >> amount);
     return (int64_t)~(~(uint64_t)v >> amount);
@@ -264,5 +264,121 @@ static CiInt128 ci_int128_mod(CiInt128 a, CiInt128 b){
 }
 #endif
 
+typedef union CiIEE754Float16 CiIEE754Float16;
+union CiIEE754Float16 {
+    #if defined __FLT16_MANT_DIG__
+    _Float16 f16;
+    #endif
+    uint16_t u;
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint32_t sign: 1,
+                 exponent: 5,
+                 fraction: 10;
+        #else // Little-Endian
+        uint32_t fraction: 10,
+                 exponent: 5,
+                 sign: 1;
+        #endif
+    };
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint32_t _sign: 1,
+                 magnitude: 15;
+        #else // Little-Endian
+        uint32_t magnitude: 15,
+                 _sign: 1;
+        #endif
+    };
+};
+
+typedef union CiIEE754Float32 CiIEE754Float32;
+union CiIEE754Float32 {
+    _Static_assert(sizeof(float) == 4, "");
+    float f;
+    #if 0 // TODO: feature check
+    _Float32 f32;
+    #endif
+    uint32_t u;
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint32_t sign: 1,
+                 exponent: 8,
+                 fraction: 23;
+        #else // Little-Endian
+        uint32_t fraction: 23,
+                 exponent: 8,
+                 sign: 1;
+        #endif
+    };
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint32_t _sign: 1,
+                 magnitude: 31;
+        #else // Little-Endian
+        uint32_t magnitude: 31,
+                 _sign: 1;
+        #endif
+    };
+};
+typedef union CiIEE754Float64 CiIEE754Float64;
+union CiIEE754Float64 {
+    _Static_assert(sizeof(double) == 8, "");
+    double d;
+    #if 0 // TODO: feature check
+    _Float64 f64;
+    #endif
+    uint64_t u;
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint64_t sign: 1,
+                 exponent: 11,
+                 fraction: 52;
+        #else // Little-Endian
+        uint64_t fraction: 52,
+                 exponent: 11,
+                 sign: 1;
+        #endif
+    };
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        uint64_t _sign: 1,
+                 magnitude: 63;
+        #else // Little-Endian
+        uint64_t magnitude: 63,
+                 _sign: 1;
+        #endif
+    };
+};
+
+typedef union CiIEE754Float128 CiIEE754Float128;
+union CiIEE754Float128 {
+    #if defined __FLT128_MANT_DIG__
+    _Float128 f128;
+    #endif
+    CiUint128 u;
+    #if defined __SIZEOF_INT128__ && !defined __DRC__ // 128-bit bitfields unsupported
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        CiUint128 sign: 1,
+                 exponent: 15,
+                 fraction: 112;
+        #else // Little-Endian
+        CiUint128 fraction: 112,
+                 exponent: 15,
+                 sign: 1;
+        #endif
+    };
+    struct {
+        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        CiUint128 _sign: 1,
+                 magnitude: 127;
+        #else // Little-Endian
+        CiUint128 magnitude: 127,
+                 _sign: 1;
+        #endif
+    };
+    #endif
+};
 
 #endif

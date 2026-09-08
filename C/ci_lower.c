@@ -83,7 +83,8 @@ static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t
 static int ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
 static int ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out);
-static int ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, CiOp*_Nonnull*_Nonnull out);
+static int ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, uint32_t* chain);
+static void ci_patch_branches(CiLowerCtx* ctx, uint32_t chain, uint32_t target);
 static int ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, _Bool negate, SrcLoc loc);
 static int ci_lower_dest(CiLowerCtx* ctx, uint32_t* dest, uint32_t size);
 typedef struct CiLowerAddr CiLowerAddr;
@@ -155,13 +156,13 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_IF:{
             CcExpr* cond = n->exprs[0];
             CiOp* op;
-            err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &op);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &chain);
             if(err) return err;
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
             if(!n->stmts[1]){
-                *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
             }
             else {
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -172,8 +173,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                         .loc = n->loc,
                     }
                 };
-                *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
-                jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+                ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
                 err = ci_lower_stmt(ci, ctx, n->stmts[1]);
                 if(err) return err;
                 *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
@@ -184,9 +185,9 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             CcExpr* cond = n->exprs[0];
             uint32_t cond_idx = (uint32_t)ctx->out->count;
             CiOp* op;
-            err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &op);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &chain);
             if(err) return err;
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             size_t backpatch_start = ctx->backpatches.count;
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
@@ -200,7 +201,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 }
             };
             uint32_t break_idx = (uint32_t)ctx->out->count;
-            *(uint32_t*)((char*)ctx->out->data+jump) = break_idx;
+            ci_patch_branches(ctx, chain, break_idx);
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, cond_idx);
             return 0;
         }
@@ -211,10 +212,10 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
             uint32_t cond_idx = (uint32_t)ctx->out->count;
-            CiOp* op;
-            err = ci_lower_branch(ci, ctx, cond, 1, n->loc, &op);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, cond, 1, n->loc, &chain);
             if(err) return err;
-            op->jump_true.jump = body_start;
+            ci_patch_branches(ctx, chain, body_start);
             ci_backpatch_break_continue(ctx, backpatch_start, (uint32_t)ctx->out->count, cond_idx);
             return 0;
         }
@@ -235,11 +236,10 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             CcExpr* cond = n->exprs[0];
             CcExpr* inc = n->exprs[1];
             uint32_t top_idx = (uint32_t)ctx->out->count;
-            ptrdiff_t jump = -1;
+            uint32_t chain = 0;
             if(cond){
-                err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &op);
+                err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &chain);
                 if(err) return err;
-                jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             }
             err = ci_lower_stmt(ci, ctx, n->stmts[1]); // body
             if(err) return err;
@@ -258,8 +258,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 }
             };
             uint32_t break_idx = (uint32_t)ctx->out->count;
-            if(jump >= 0)
-                *(uint32_t*)((char*)ctx->out->data+jump) = break_idx;
+            ci_patch_branches(ctx, chain, break_idx);
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, continue_idx);
             return 0;
         }
@@ -734,7 +733,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
         }
         case CC_EXPR_CAST:{
-            // CC_EXPR_CAST covers several distinct operations;
             CcExpr* operand = e->lhs;
             if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_kind(e->type) == CC_SLICE)
                 return ci_lower_slice(ci, ctx, e, dest, out);
@@ -787,7 +785,6 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(from_sz == size)
                     return ci_lower_cast_operand(ci, ctx, operand, dest, out);
                 kind = CI_OP_CONVERT;
-                // A pointer source is an address: widen by zero-extension.
                 is_unsigned = from_addr || ccqt_is_unsigned(from, ctx->char_is_unsigned);
             }
             else if(from_int && to_float){
@@ -1730,20 +1727,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->slot = dest;
             uint32_t temp = ctx->temp;
             CiLowerVal v;
-            err = ci_lower_cond(ci, ctx, e->lhs, &v);
-            if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, e->lhs, 0, e->loc, &chain);
             if(err) return err;
-            *op = (CiOp){
-                .jump_false = {
-                    .kind = CI_OP_JUMP_FALSE,
-                    .slot = v.slot,
-                    .slot_size = v.size,
-                    .loc = e->loc,
-                }
-            };
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             ctx->temp = temp;
             err = ci_lower_expr(ci, ctx, e->values[0], dest, &v);
             if(err) return err;
@@ -1756,8 +1743,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     .loc = e->loc,
                 }
             };
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
-            jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+            ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
             err = ci_lower_expr(ci, ctx, e->values[1], dest, &v);
             if(err) return err;
             ctx->temp = temp;
@@ -4277,25 +4264,13 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_LOGAND:
         case CC_EXPR_LOGOR:{
             uint32_t temp = ctx->temp;
-            CiLowerVal v;
-            err = ci_lower_cond(ci, ctx, e->lhs, &v);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, e->lhs, e->kind == CC_EXPR_LOGOR, e->loc, &chain);
             if(err) return err;
-            CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .jump_false = {
-                    .kind = e->kind == CC_EXPR_LOGAND? CI_OP_JUMP_FALSE : CI_OP_JUMP_TRUE,
-                    .slot = v.slot,
-                    .slot_size = v.size,
-                    .loc = e->loc,
-                }
-            };
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             ctx->temp = temp;
             err = ci_lower_expr_discard(ci, ctx, e->values[0]);
             if(err) return err;
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
             return 0;
         }
 
@@ -4322,21 +4297,10 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         }
         case CC_EXPR_TERNARY:{
             uint32_t temp = ctx->temp;
-            CiLowerVal v;
-            err = ci_lower_cond(ci, ctx, e->lhs, &v);
-            if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, e->lhs, 0, e->loc, &chain);
             if(err) return err;
-            *op = (CiOp){
-                .jump_false = {
-                    .kind = CI_OP_JUMP_FALSE,
-                    .slot = v.slot,
-                    .slot_size = v.size,
-                    .loc = e->loc,
-                }
-            };
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
             ctx->temp = temp;
             err = ci_lower_expr_discard(ci, ctx, e->values[0]);
             if(err) return err;
@@ -4348,8 +4312,8 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                     .loc = e->loc,
                 }
             };
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
-            jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+            ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
             err = ci_lower_expr_discard(ci, ctx, e->values[1]);
             if(err) return err;
             *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
@@ -4954,7 +4918,7 @@ ci_cmp_op_kind(uint32_t size){
 
 static
 int
-ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, CiOp*_Nonnull*_Nonnull out){
+ci_lower_branch_leaf(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, CiOp*_Nonnull*_Nonnull out){
     CiLowerVal v;
     int err = ci_lower_cond(ci, ctx, cond, &v);
     if(err) return err;
@@ -4995,6 +4959,55 @@ ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_tru
         }
     };
     *out = op;
+    return 0;
+}
+
+// Until patched, branch targets form a list of instruction indices plus one.
+// Using indices keeps the list valid when the opcode array grows.
+static
+void
+ci_patch_branches(CiLowerCtx* ctx, uint32_t chain, uint32_t target){
+    while(chain){
+        CiOp* op = &ctx->out->data[chain - 1];
+        uint32_t next = op->jump_false.jump;
+        op->jump_false.jump = target;
+        chain = next;
+    }
+}
+
+static
+int
+ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, uint32_t* chain){
+    int err;
+    if(cond->kind == CC_EXPR_LOGNOT)
+        return ci_lower_branch(ci, ctx, cond->lhs, !when_true, loc, chain);
+    if(cond->kind == CC_EXPR_COMMA){
+        err = ci_lower_expr_discard(ci, ctx, cond->lhs);
+        if(err) return err;
+        return ci_lower_branch(ci, ctx, cond->values[0], when_true, loc, chain);
+    }
+    if(cond->kind == CC_EXPR_LOGAND || cond->kind == CC_EXPR_LOGOR){
+        _Bool short_circuit = cond->kind == CC_EXPR_LOGOR;
+        if(when_true == short_circuit){
+            err = ci_lower_branch(ci, ctx, cond->lhs, when_true, loc, chain);
+            if(err) return err;
+            return ci_lower_branch(ci, ctx, cond->values[0], when_true, loc, chain);
+        }
+        uint32_t skip = 0;
+        err = ci_lower_branch(ci, ctx, cond->lhs, short_circuit, loc, &skip);
+        if(err) return err;
+        err = ci_lower_branch(ci, ctx, cond->values[0], when_true, loc, chain);
+        if(err) return err;
+        ci_patch_branches(ctx, skip, (uint32_t)ctx->out->count);
+        return 0;
+    }
+    uint32_t temp = ctx->temp;
+    CiOp* op;
+    err = ci_lower_branch_leaf(ci, ctx, cond, when_true, loc, &op);
+    if(err) return err;
+    op->jump_false.jump = *chain;
+    *chain = (uint32_t)(op - ctx->out->data) + 1;
+    ctx->temp = temp;
     return 0;
 }
 

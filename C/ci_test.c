@@ -2749,6 +2749,92 @@ TestFunction(test_interpreter){
                 "return s.a == 7 && s.b == 17 && a == 31 && v == 37 ? 0 : 1;\n"),
             .exit_code = 0,
         },
+        {
+            "branch context: nested short circuit and evaluation order", __LINE__,
+            SVI("int log = 0; int mark(int v, int id) { log = log*10 + id; return v; }\n"
+                "int logs[8] = {13,123,13,12,13,123,13,12};\n"
+                "int neglogs[8] = {123,1,12,1,123,1,12,1};\n"
+                "for (int i=0; i<8; i++) {\n"
+                "  int a=i&1, b=i&2, c=i&4, got=0; int want=(a&&b)||c;\n"
+                "  log=0; if ((mark(a,1)&&mark(b,2))||mark(c,3)) got=1; else got=0;\n"
+                "  if (got != want || log != logs[i]) return 1;\n"
+                "  log=0; if (!(mark(a,1)||mark(b,2)) && mark(c,3)) got=1; else got=0;\n"
+                "  if (got != (i==4) || log != neglogs[i]) return 2;\n"
+                "  log=0; int v=((mark(a,1)&&mark(b,2))||mark(c,3)) ? mark(11,4) : mark(22,5);\n"
+                "  if (v != (want?11:22) || log != logs[i]*10+(want?4:5)) return 3;\n"
+                "  log=0; ((mark(a,1)&&mark(b,2))||mark(c,3)) && mark(1,4);\n"
+                "  if (log != (want?logs[i]*10+4:logs[i])) return 4;\n"
+                "} return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "branch context: loop backedges, comma and value results", __LINE__,
+            SVI("int n=0; do { n++; if(n==2) continue; } while(n<3 || (n<5 && n!=4));\n"
+                "if(n!=4) return 1;\n"
+                "while(n<5 && (n==4 || n==0)) n++;\n"
+                "if(n!=5) return 2;\n"
+                "int calls=0; for(int i=0; (calls++, i<3 && n>0); i++) { if(i==1) continue; n--; }\n"
+                "if(calls!=4 || n!=3) return 3;\n"
+                "int v=0; if(v=(n && calls)) {} else return 4;\n"
+                "if(v!=1) return 5; double z=-0.0;\n"
+                "if(z && ++calls) return 6; if(calls!=4) return 7;\n"
+                "if(!(z || n)) return 8; return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "constant conversions: signedness, truncation, exact and inexact floats", __LINE__,
+            SVI("unsigned char a=511; signed char b=255; long long c=(signed char)255;\n"
+                "unsigned long long u=(unsigned int)4294967295u; _Bool yes=256, no=0;\n"
+                "if(a!=255 || b!=-1 || c!=-1 || u!=4294967295ull || !yes || no) return 1;\n"
+                "float f=16777216, rounded=16777217; double d=9007199254740992ll;\n"
+                "double dr=9007199254740993ll; double neg=-37;\n"
+                "if(f!=16777216.0f || rounded!=16777216.0f || d!=9007199254740992.0) return 2;\n"
+                "if(dr!=9007199254740992.0 || neg!=-37.0) return 3;\n"
+                "int calls=0; double once=(calls++, 2);\n"
+                "return once==2.0 && calls==1 ? 0 : 4;\n"),
+            .exit_code = 0,
+        },
+        {
+            "float constant conversion: negation", __LINE__,
+            SVI("double a = -1.f;\n"
+                "return a == -1.;\n"),
+            .exit_code = 1,
+        },
+        {
+            "float constant conversion: exact narrowing and signed zero", __LINE__,
+            SVI("float a=2.5, b=-2.5, zero=0.0, negzero=-0.0;\n"
+                "float normal=0x1p-126, sub=0x1p-149, max=0x1.fffffep127;\n"
+                "float next=0x1.000002p0;\n"
+                "if(a!=2.5f || b!=-2.5f || zero!=0.0f || negzero!=0.0f) return 1;\n"
+                "if(1.0f/zero<0.0f || 1.0f/negzero>0.0f) return 2;\n"
+                "if(normal!=0x1p-126f || sub!=0x1p-149f || max!=0x1.fffffep127f) return 3;\n"
+                "return next==0x1.000002p0f ? 0 : 4;\n"),
+            .exit_code = 0,
+            .skip = 1, // hex floats
+        },
+        {
+            "float constant conversion: finite widening", __LINE__,
+            SVI("double a=2.5f, b=-2.5f, sub=0x1p-149f, zero=-0.0f;\n"
+                "if(a!=2.5 || b!=-2.5 || sub!=0x1p-149 || zero!=0.0) return 1;\n"
+                "return 1.0/zero<0.0 ? 0 : 2;\n"),
+            .exit_code = 0,
+            .skip = 1, // hex floats
+        },
+        {
+            "float constant conversion: inexact narrowing stays runtime", __LINE__,
+            SVI("float decimal=0.1, halfway=0x1.000001p0, tiny=0x1p-150;\n"
+                "if(decimal!=0.1f || halfway!=1.0f || tiny!=0.0f) return 1;\n"
+                "return 0;\n"),
+            .exit_code = 0,
+            .skip = 1, // hex floats
+        },
+        {
+            "float constant conversion: preserve side effects and dynamic casts", __LINE__,
+            SVI("int calls=0; float a=(calls++, -2.5);\n"
+                "float b=2.5f; double dynamic=b;\n"
+                "return calls==1 && a==-2.5f && dynamic==2.5 ? 0 : 1;\n"),
+            .exit_code = 0,
+        },
         // Type conversions
         {
             "unsigned wrap", __LINE__,
@@ -8128,18 +8214,17 @@ TestFunction(test_interpreter){
             "array self assign local", __LINE__,
             SVI("int f(void){\n"
                 "    int a[2] = {3, 7};\n"
-                "    a = {a[1], a[0]};\n"       // swap, reading old values
+                "    a = {a[1], a[0]};\n"
                 "    return a[0]*100 + a[1];\n"
                 "}\n"
                 "return f();\n"),
             .exit_code = 700 + 3,
         },
         {
-            // Members not named in the init list are zero-filled.
             "init list partial zero fill", __LINE__,
             SVI("struct S { int a, b, c, d; };\n"
                 "int f(void){\n"
-                "    struct S s = {5, 6};\n"    // c, d implicitly 0
+                "    struct S s = {5, 6};\n"
                 "    return s.a + s.b*10 + s.c*100 + s.d*1000;\n"
                 "}\n"
                 "return f();\n"),
@@ -8182,7 +8267,7 @@ TestFunction(test_interpreter){
                 "struct Outer { struct Inner in; int tag; };\n"
                 "int f(void){\n"
                 "    struct Inner src = {6, 8};\n"
-                "    struct Outer o = {src, 3};\n"  // nested aggregate lvalue as entry
+                "    struct Outer o = {src, 3};\n"
                 "    return o.in.x*100 + o.in.y*10 + o.tag;\n"
                 "}\n"
                 "return f();\n"),
@@ -8379,9 +8464,6 @@ TestFunction(test_interpreter){
     TESTEND();
 }
 
-// Runtime traps are a Dvm extension (the C standard leaves these undefined), so
-// they get their own harness: run the program and require it to fail with a
-// specific diagnostic. Programs are cached as "(test)" so locations are stable.
 TestFunction(test_interpreter_runtime_errors){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -8389,7 +8471,7 @@ TestFunction(test_interpreter_runtime_errors){
     static struct tc {
         const char* name; int line;
         StringView program;
-        StringView expect; // full expected diagnostic
+        StringView expect;
         _Bool skip;
     } testcases[] = {
         {
