@@ -8,7 +8,7 @@
 #include <Psapi.h>
 #else
 #include <dlfcn.h>
-#if defined(__GLIBC__) && !defined(RTLD_DEFAULT)
+#if defined __GLIBC__ && !defined RTLD_DEFAULT
 #define RTLD_DEFAULT ((void *)0)
 #endif
 #endif
@@ -40,9 +40,9 @@
 #endif
 
 #ifndef force_inline
-#if defined(__GNUC__) || defined(__clang__)
+#if defined __GNUC__ || defined __clang__
 #define force_inline static inline __attribute__((always_inline))
-#elif defined(_MSC_VER)
+#elif defined _MSC_VER
 #define force_inline static inline __forceinline
 #else
 #define force_inline static inline
@@ -187,14 +187,29 @@ ci_read_int(const void* buf, uint32_t sz){
 }
 
 
+#if defined __has_builtin
+#if __has_builtin(__builtin_memcpy_inline)
+#define CI_INLINE_MEMCPY(dst, src, size) __builtin_memcpy_inline(dst, src, size)
+#elif __has_builtin(__builtin_memcpy)
+#define CI_INLINE_MEMCPY(dst, src, size) __builtin_memcpy(dst, src, size)
+#endif
+#endif
+#ifndef CI_INLINE_MEMCPY
+#ifdef __GNUC__
+#define CI_INLINE_MEMCPY(dst, src, size) __builtin_memcpy(dst, src, size)
+#else
+#define CI_INLINE_MEMCPY(dst, src, size) memcpy(dst, src, size)
+#endif
+#endif
+
 static inline
 void
 ci_write_uint(void* buf, uint32_t sz, uint64_t val){
     switch(sz){
-        case 1: memcpy(buf, &val, 1); return;
-        case 2: memcpy(buf, &val, 2); return;
-        case 4: memcpy(buf, &val, 4); return;
-        case 8: memcpy(buf, &val, 8); return;
+        case 1: CI_INLINE_MEMCPY(buf, &val, 1); return;
+        case 2: CI_INLINE_MEMCPY(buf, &val, 2); return;
+        case 4: CI_INLINE_MEMCPY(buf, &val, 4); return;
+        case 8: CI_INLINE_MEMCPY(buf, &val, 8); return;
         default: memcpy(buf, &val, sz); return;
     }
 }
@@ -203,14 +218,15 @@ static inline
 void
 ci_copy(void* dst, const void* src, uint32_t sz){
     switch(sz){
-        case 1:  memcpy(dst, src, 1);  return;
-        case 2:  memcpy(dst, src, 2);  return;
-        case 4:  memcpy(dst, src, 4);  return;
-        case 8:  memcpy(dst, src, 8);  return;
-        case 16: memcpy(dst, src, 16); return;
+        case 1:  CI_INLINE_MEMCPY(dst, src, 1);  return;
+        case 2:  CI_INLINE_MEMCPY(dst, src, 2);  return;
+        case 4:  CI_INLINE_MEMCPY(dst, src, 4);  return;
+        case 8:  CI_INLINE_MEMCPY(dst, src, 8);  return;
+        case 16: CI_INLINE_MEMCPY(dst, src, 16); return;
         default: memmove(dst, src, sz); return;
     }
 }
+
 
 
 static inline
@@ -218,11 +234,11 @@ double
 ci_read_float(const void* buf, CcBasicTypeKind k){
     if(k == CCBT_float){
         float f;
-        memcpy(&f, buf, sizeof f);
+        CI_INLINE_MEMCPY(&f, buf, sizeof f);
         return (double)f;
     }
     double d;
-    memcpy(&d, buf, sizeof d);
+    CI_INLINE_MEMCPY(&d, buf, sizeof d);
     return d;
 }
 
@@ -686,7 +702,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             if(err) return err;
             if(sizeof sym > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof sym, size);
-            memcpy(result, &sym, sizeof sym);
+            CI_INLINE_MEMCPY(result, &sym, sizeof sym);
             return 0;
         }
         case CC_MODULE_RUN:{
@@ -708,7 +724,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
                 .return_buf = ci_discard_buf,
                 .return_size = sizeof ci_discard_buf,
             };
-            if(result != ci_discard_buf) memcpy(result, &ret, sizeof ret);
+            if(result != ci_discard_buf) CI_INLINE_MEMCPY(result, &ret, sizeof ret);
             *child = module_frame;
             return CI_STEP_ENTER_FRAME;
         }
@@ -722,7 +738,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             uintptr_t bits = type.bits;
             if(sizeof bits > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof bits, size);
-            memcpy(result, &bits, sizeof bits);
+            CI_INLINE_MEMCPY(result, &bits, sizeof bits);
             return 0;
         }
     }
@@ -742,7 +758,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
         case CC_MODULE_TYPE:
             if(sizeof member > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof member, size);
-            memcpy(result, &member, sizeof member);
+            CI_INLINE_MEMCPY(result, &member, sizeof member);
             return 0;
         case CC_MODULE_NONE:
         default:
@@ -769,12 +785,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_RT_TYPE_REFLECT:
                 case CI_RT_MODULE_REFLECT: {
                     uintptr_t receiver = 0, arg = 0;
-                    memcpy(&receiver, (char*)frame->slots + op->rt_call.args[0], sizeof receiver);
+                    CI_INLINE_MEMCPY(&receiver, (char*)frame->slots + op->rt_call.args[0], sizeof receiver);
                     if(op->rt_call.nargs >= 2)
-                        memcpy(&arg, (char*)frame->slots + op->rt_call.args[1], sizeof arg);
+                        CI_INLINE_MEMCPY(&arg, (char*)frame->slots + op->rt_call.args[1], sizeof arg);
                     CcQualType expected = {0};
                     if(op->rt_call.nargs == 3)
-                        memcpy(&expected.bits, (char*)frame->slots + op->rt_call.args[2], sizeof expected.bits);
+                        CI_INLINE_MEMCPY(&expected.bits, (char*)frame->slots + op->rt_call.args[2], sizeof expected.bits);
                     CcQualType qt = {.bits = receiver};
                     if(op->rt_call.op == CI_RT_TYPE_VALIDATE)
                         err = ci_type_reflect_validate(ci, op->rt_call.loc, op->rt_call.reflect_op, qt);
@@ -790,7 +806,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 }
                 case CI_RT_INTERN: {
                     const char* s;
-                    memcpy(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
+                    CI_INLINE_MEMCPY(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
                     const char* interned = NULL;
                     if(s){
                         Atom a;
@@ -801,13 +817,13 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         interned = a->data;
                     }
                     if(op->rt_call.slot_size)
-                        memcpy(result, &interned, sizeof interned);
+                        CI_INLINE_MEMCPY(result, &interned, sizeof interned);
                     break;
                 }
                 case CI_RT_HOTSWAP: {
                     void (*old_ptr)(void), (*new_ptr)(void);
-                    memcpy(&old_ptr, (char*)frame->slots + op->rt_call.args[0], sizeof old_ptr);
-                    memcpy(&new_ptr, (char*)frame->slots + op->rt_call.args[1], sizeof new_ptr);
+                    CI_INLINE_MEMCPY(&old_ptr, (char*)frame->slots + op->rt_call.args[0], sizeof old_ptr);
+                    CI_INLINE_MEMCPY(&new_ptr, (char*)frame->slots + op->rt_call.args[1], sizeof new_ptr);
                     int ret = 1;
                     CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
                     CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
@@ -817,12 +833,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         ret = 0;
                     }
                     if(op->rt_call.slot_size)
-                        memcpy(result, &ret, sizeof ret);
+                        CI_INLINE_MEMCPY(result, &ret, sizeof ret);
                     break;
                 }
                 case CI_RT_COMPILE: {
                     const char* source;
-                    memcpy(&source, (char*)frame->slots + op->rt_call.args[0], sizeof source);
+                    CI_INLINE_MEMCPY(&source, (char*)frame->slots + op->rt_call.args[0], sizeof source);
                     CiModule* module = NULL;
                     if(source){
                         err = ci_compile_module(ci, source, &module);
@@ -832,7 +848,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         err = 0;
                     }
                     if(op->rt_call.slot_size)
-                        memcpy(result, &module, sizeof module);
+                        CI_INLINE_MEMCPY(result, &module, sizeof module);
                     break;
                 }
             }
@@ -1168,8 +1184,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_FALU32: {
             float a, b;
-            memcpy(&a, (char*)frame->slots + op->falu32.src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->falu32.src2, sizeof b);
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu32.src, sizeof a);
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu32.src2, sizeof b);
             void* dest = (char*)frame->slots + op->falu32.slot;
             float res;
             switch(op->falu32.op){
@@ -1180,14 +1196,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_FALU_NEG: res = -a; break;
                 DRP_CASES_EXHAUSTED;
             }
-            memcpy(dest, &res, sizeof res);
+            CI_INLINE_MEMCPY(dest, &res, sizeof res);
             frame->pc++;
             return 0;
         }
         case CI_OP_FALU64: {
             double a, b;
-            memcpy(&a, (char*)frame->slots + op->falu64.src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->falu64.src2, sizeof b);
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu64.src, sizeof a);
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu64.src2, sizeof b);
             void* dest = (char*)frame->slots + op->falu64.slot;
             double res;
             switch(op->falu64.op){
@@ -1198,14 +1214,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_FALU_NEG: res = -a; break;
                 DRP_CASES_EXHAUSTED;
             }
-            memcpy(dest, &res, sizeof res);
+            CI_INLINE_MEMCPY(dest, &res, sizeof res);
             frame->pc++;
             return 0;
         }
         case CI_OP_FCMP32: {
             float a, b;
-            memcpy(&a, (char*)frame->slots + op->fcmp32.src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b);
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp32.src, sizeof a);
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b);
             uint64_t res;
             switch(op->fcmp32.op){
                 case CI_CMP_EQ: res = a == b; break;
@@ -1222,8 +1238,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_FCMP64: {
             double a, b;
-            memcpy(&a, (char*)frame->slots + op->fcmp64.src, sizeof a);
-            memcpy(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b);
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp64.src, sizeof a);
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b);
             uint64_t res;
             switch(op->fcmp64.op){
                 case CI_CMP_EQ: res = a == b; break;
@@ -1316,10 +1332,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 double d = ci_uint128_to_double(v, op->itof.is_unsigned);
                 if(op->itof.slot_size == 4){
                     float f = (float)d;
-                    memcpy(dest, &f, sizeof f);
+                    CI_INLINE_MEMCPY(dest, &f, sizeof f);
                 }
                 else {
-                    memcpy(dest, &d, sizeof d);
+                    CI_INLINE_MEMCPY(dest, &d, sizeof d);
                 }
             }
             else if(op->itof.slot_size == 4){
@@ -1328,7 +1344,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     f = (float)ci_read_uint(src, op->itof.src_size);
                 else
                     f = (float)ci_read_int(src, op->itof.src_size);
-                memcpy(dest, &f, sizeof f);
+                CI_INLINE_MEMCPY(dest, &f, sizeof f);
             }
             else {
                 double d;
@@ -1336,7 +1352,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     d = (double)ci_read_uint(src, op->itof.src_size);
                 else
                     d = (double)ci_read_int(src, op->itof.src_size);
-                memcpy(dest, &d, sizeof d);
+                CI_INLINE_MEMCPY(dest, &d, sizeof d);
             }
             frame->pc++;
             return 0;
@@ -1346,11 +1362,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             double d;
             if(op->ftoi.src_size == 4){
                 float f;
-                memcpy(&f, src, sizeof f);
+                CI_INLINE_MEMCPY(&f, src, sizeof f);
                 d = (double)f;
             }
             else {
-                memcpy(&d, src, sizeof d);
+                CI_INLINE_MEMCPY(&d, src, sizeof d);
             }
             void* dest = (char*)frame->slots + op->ftoi.slot;
             if(op->ftoi.slot_size > 8){
@@ -1370,25 +1386,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             double d;
             if(op->ftof.src_size == 4){
                 float f;
-                memcpy(&f, src, sizeof f);
+                CI_INLINE_MEMCPY(&f, src, sizeof f);
                 d = (double)f;
             }
             else {
-                memcpy(&d, src, sizeof d);
+                CI_INLINE_MEMCPY(&d, src, sizeof d);
             }
             if(op->ftof.slot_size == 4){
                 float f = (float)d;
-                memcpy(dest, &f, sizeof f);
+                CI_INLINE_MEMCPY(dest, &f, sizeof f);
             }
             else {
-                memcpy(dest, &d, sizeof d);
+                CI_INLINE_MEMCPY(dest, &d, sizeof d);
             }
             frame->pc++;
             return 0;
         }
         case CI_OP_SLOT_ADDR: {
             void* addr = (char*)frame->slots + op->slot_addr.src;
-            memcpy((char*)frame->slots + op->slot_addr.slot, &addr, sizeof addr);
+            CI_INLINE_MEMCPY((char*)frame->slots + op->slot_addr.slot, &addr, sizeof addr);
             frame->pc++;
             return 0;
         }
@@ -1396,7 +1412,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CcVariable* var = op->var_addr.var;
             int err = ci_ensure_var_storage(ci, var);
             if(err) return err;
-            memcpy((char*)frame->slots + op->var_addr.slot, &var->interp_val, sizeof(void*));
+            CI_INLINE_MEMCPY((char*)frame->slots + op->var_addr.slot, &var->interp_val, sizeof(void*));
             frame->pc++;
             return 0;
         }
@@ -1405,7 +1421,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             if(!func->native_func)
                 return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
             void (*fn)(void) = func->native_func;
-            memcpy((char*)frame->slots + op->func_addr.slot, &fn, sizeof fn);
+            CI_INLINE_MEMCPY((char*)frame->slots + op->func_addr.slot, &fn, sizeof fn);
             frame->pc++;
             return 0;
         }
@@ -1440,7 +1456,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     rsize = sizeof ci_discard_buf;
                 }
                 void (*fn)(void);
-                memcpy(&fn, (char*)frame->slots + op->call.argv_slot, sizeof fn);
+                CI_INLINE_MEMCPY(&fn, (char*)frame->slots + op->call.argv_slot, sizeof fn);
                 void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot + 8);
                 CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
                 if(interp_func){
@@ -1492,14 +1508,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_LOAD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->load.src, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->load.src, sizeof ptr);
             ci_copy((char*)frame->slots + op->load.slot, ptr + op->load.offset, op->load.slot_size);
             frame->pc++;
             return 0;
         }
         case CI_OP_LOAD_BITFIELD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
             uint64_t val = ci_bitfield_read(ptr + op->load_bf.offset, op->load_bf.slot_size, op->load_bf.bit_offset, op->load_bf.bit_width);
             val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
             memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
@@ -1508,7 +1524,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_STORE: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);
             ci_copy(ptr + op->store.offset, (char*)frame->slots + op->store.src, op->store.src_size);
             frame->pc++;
             return 0;
@@ -1516,22 +1532,22 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         case CI_OP_MEMCOPY: {
             char* dst;
             char* src;
-            memcpy(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst);
-            memcpy(&src, (char*)frame->slots + op->memcopy.src, sizeof src);
+            CI_INLINE_MEMCPY(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst);
+            CI_INLINE_MEMCPY(&src, (char*)frame->slots + op->memcopy.src, sizeof src);
             memmove(dst + op->memcopy.offset, src + op->memcopy.src_offset, op->memcopy.size);
             frame->pc++;
             return 0;
         }
         case CI_OP_ZERO: {
             char* dst;
-            memcpy(&dst, (char*)frame->slots + op->zero.slot, sizeof dst);
+            CI_INLINE_MEMCPY(&dst, (char*)frame->slots + op->zero.slot, sizeof dst);
             memset(dst+op->zero.offset, 0, op->zero.size);
             frame->pc++;
             return 0;
         }
         case CI_OP_STORE_BITFIELD: {
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
             uint64_t val = 0;
             memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
             ci_bitfield_write(ptr + op->store_bf.offset, op->store_bf.src_size, op->store_bf.bit_offset, op->store_bf.bit_width, val);
@@ -1644,7 +1660,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_ATOMIC_LOAD:{
             char *ptr, *dest;
-            memcpy(&ptr, (char*)frame->slots+op->atomic_load.src, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->atomic_load.src, sizeof ptr);
             ptr += op->atomic_load.offset;
             dest = (char*)frame->slots + op->atomic_load.slot;
             uint32_t sz = op->atomic_load.slot_size;
@@ -1690,7 +1706,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_ATOMIC_STORE:{
             char *src, *dest;
-            memcpy(&dest, (char*)frame->slots + op->atomic_store.slot, sizeof src);
+            CI_INLINE_MEMCPY(&dest, (char*)frame->slots + op->atomic_store.slot, sizeof src);
             dest += op->atomic_store.offset;
             src = (char*)frame->slots + op->atomic_store.src;
             uint32_t sz = op->atomic_store.src_size;
@@ -1704,7 +1720,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         case 8:  __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store64((volatile __int64*)dest, *(const __int64*)src); __dmb(_ARM64_BARRIER_ISH); break;
                         case 16: {
                             __int64 _tmp[2];
-                            memcpy(_tmp, src, 16);
+                            CI_INLINE_MEMCPY(_tmp, src, 16);
                             __int64 _old[2] = {0};
                             while (!_InterlockedCompareExchange128((volatile __int64*)dest, _tmp[1], _tmp[0], _old)) {
                             }
@@ -1718,7 +1734,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         case 8:  _InterlockedExchange64((volatile long long*)dest, *(const long long*)src); break;
                         case 16: {
                             __int64 _tmp[2];
-                            memcpy(_tmp, src, 16);
+                            CI_INLINE_MEMCPY(_tmp, src, 16);
                             __int64 _old[2] = {0};
                             while (!_InterlockedCompareExchange128((volatile __int64*)dest, _tmp[1], _tmp[0], _old)) {
                             }
@@ -1742,7 +1758,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             // The interpreter runs every order as seq_cst; the encoded order
             // is for the JIT.
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->atomic_rmw.src, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->atomic_rmw.src, sizeof ptr);
             ptr += op->atomic_rmw.offset;
             char* old = (char*)frame->slots + op->atomic_rmw.slot;
             char* val = (char*)frame->slots + op->atomic_rmw.src2;
@@ -1756,11 +1772,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     case 8:  *(uint64_t*)old = (uint64_t)_InterlockedExchange64((volatile long long*)ptr, *(long long*)val); break;
                     case 16: {
                         __int64 _tmp[2];
-                        memcpy(_tmp, val, 16);
+                        CI_INLINE_MEMCPY(_tmp, val, 16);
                         __int64 _old[2] = {0};
                         while (!_InterlockedCompareExchange128((volatile __int64*)ptr, _tmp[1], _tmp[0], _old)) {
                         }
-                        memcpy(old, _old, 16);
+                        CI_INLINE_MEMCPY(old, _old, 16);
                         break;
                     }
                     #else
@@ -1816,7 +1832,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_ATOMIC_CAS:{
             char* ptr;
-            memcpy(&ptr, (char*)frame->slots + op->atomic_cas.src, sizeof ptr);
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->atomic_cas.src, sizeof ptr);
             ptr += op->atomic_cas.offset;
             char* expected = (char*)frame->slots + op->atomic_cas.expected;
             char* desired = (char*)frame->slots + op->atomic_cas.desired;
@@ -1838,7 +1854,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                           r = o == exp; *(uint64_t*)expected = o; break; }
                 case 16: {
                     __int64 _des[2];
-                    memcpy(_des, desired, 16);
+                    CI_INLINE_MEMCPY(_des, desired, 16);
                     r = (_Bool)_InterlockedCompareExchange128((volatile __int64*)ptr, _des[1], _des[0], (__int64*)expected);
                     break;
                 }
@@ -1884,14 +1900,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         case CI_OP_ALLOCA:{
             size_t sz;
             void* dest = (char*)frame->slots + op->alloca.slot;
-            memcpy(&sz, (char*)frame->slots + op->alloca.src, sizeof sz);
+            CI_INLINE_MEMCPY(&sz, (char*)frame->slots + op->alloca.src, sizeof sz);
             CiAllocaBlock* block = Allocator_zalloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
             if(!block) return CI_OOM_ERROR;
             block->size = sz;
             block->next = frame->alloca_list;
             frame->alloca_list = block;
             void* ptr = block + 1;
-            memcpy(dest, &ptr, sizeof dest);
+            CI_INLINE_MEMCPY(dest, &ptr, sizeof dest);
             frame->pc++;
             return 0;
         }
@@ -1929,7 +1945,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_VA_START:{
             void* ap_ptr;
-            memcpy(&ap_ptr, (char*)frame->slots + op->va_start_.slot, sizeof ap_ptr);
+            CI_INLINE_MEMCPY(&ap_ptr, (char*)frame->slots + op->va_start_.slot, sizeof ap_ptr);
             if(!frame->varargs_buf)
                 return ci_error(ci, op->loc, "va_start used in non-variadic function");
             switch(op->va_start_.target){
@@ -1937,7 +1953,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             case CC_TARGET_X86_64_WINDOWS:
             case CC_TARGET_TEST: {
                 void* va_ptr = frame->varargs_buf;
-                memcpy(ap_ptr, &va_ptr, sizeof(void*));
+                CI_INLINE_MEMCPY(ap_ptr, &va_ptr, sizeof(void*));
                 frame->pc++;
                 return 0;
             }
@@ -1968,7 +1984,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_VA_ARG:{
             void* ap_ptr;
-            memcpy(&ap_ptr, (char*)frame->slots + op->va_arg_.src, sizeof ap_ptr);
+            CI_INLINE_MEMCPY(&ap_ptr, (char*)frame->slots + op->va_arg_.src, sizeof ap_ptr);
             uint32_t sz = op->va_arg_.slot_size;
             uint32_t advance = sz < 8 ? 8 : (sz + 7) & ~7u;
             void* dest = (char*)frame->slots + op->va_arg_.slot;
@@ -1977,10 +1993,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             case CC_TARGET_X86_64_WINDOWS:
             case CC_TARGET_TEST: {
                 void* cur;
-                memcpy(&cur, ap_ptr, sizeof(void*));
+                CI_INLINE_MEMCPY(&cur, ap_ptr, sizeof(void*));
                 memcpy(dest, cur, sz);
                 cur = (char*)cur + advance;
-                memcpy(ap_ptr, &cur, sizeof(void*));
+                CI_INLINE_MEMCPY(ap_ptr, &cur, sizeof(void*));
                 frame->pc++;
                 return 0;
             }
