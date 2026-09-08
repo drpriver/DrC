@@ -1794,7 +1794,8 @@ b_log_(BuildCtx* ctx, const char* msg, size_t len){
     }
     #else
     else {
-        write((int)ctx->logger.errhandle, msg, len);
+        ssize_t err = write((int)ctx->logger.errhandle, msg, len);
+        (void)err;
     }
     #endif
 }
@@ -1875,7 +1876,8 @@ b_printfv(BuildCtx* ctx, const char* fmt, va_list vap){
     }
     #else
     else {
-        write((int)ctx->logger.outhandle, sv.text, sv.length);
+        ssize_t err = write((int)ctx->logger.outhandle, sv.text, sv.length);
+        (void)err;
     }
     #endif
     msb_destroy(&sb);
