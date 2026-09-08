@@ -98,6 +98,9 @@ TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_CONST,
     CI_OP_COPY,
+    CI_OP_ALU_IMM32,
+    CI_OP_ALU_IMM64,
+    CI_OP_INDEX,
     CI_OP_ALU8,
     CI_OP_ALU16,
     CI_OP_ALU32,
@@ -106,6 +109,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_CMP32,
     CI_OP_CMP64,
     CI_OP_CMP128,
+    CI_OP_CMP_JUMP32,
+    CI_OP_CMP_JUMP64,
     CI_OP_FALU32,
     CI_OP_FALU64,
     CI_OP_FCMP32,
@@ -205,6 +210,22 @@ struct CiOp {
             SrcLoc loc;
         } copy;
         struct {
+            // slots[slot] = slots[src] op immediate, using the opcode width.
+            CiOpKind kind: 8; // CI_OP_ALU_IMM32, CI_OP_ALU_IMM64
+            CiAluOp op: 8;
+            uint32_t is_unsigned: 1, _bitpad: 15;
+            uint32_t slot, src, _pad;
+            uint64_t immediate;
+            SrcLoc loc;
+        } alu_imm;
+        struct {
+            // Pointer-width modular arithmetic: base + extend(index) * scale.
+            CiOpKind kind: 8; // CI_OP_INDEX
+            uint32_t ptr_size: 4, index_size: 4, index_unsigned: 1, _bitpad: 15;
+            uint32_t slot, base, index, scale, _pad;
+            SrcLoc loc;
+        } index;
+        struct {
             // slots[slot:slot+(implict size)] = slots[src] op slots[src2] as integers
             CiOpKind kind: 8; // CI_OP_ALU8, CI_OP_ALU16, CI_OP_ALU32, CI_OP_ALU64, CI_OP_ALU128
             CiAluOp op: 8;
@@ -229,6 +250,15 @@ struct CiOp {
             uint32_t pad;
             SrcLoc loc;
         } cmp;
+        struct {
+            // Same operand layout as cmp; jump overlays jump_false.jump so
+            // ordinary branch backpatching also handles fused comparisons.
+            CiOpKind kind: 8; // CI_OP_CMP_JUMP32, CI_OP_CMP_JUMP64
+            CiCmpOp op: 8;
+            uint32_t is_unsigned: 1, when_true: 1, _bitpad: 14;
+            uint32_t jump, _pad, src, src2, _pad2;
+            SrcLoc loc;
+        } cmp_jump;
         struct {
             // slots[slot] = slots[src] op slots[src2]
             CiOpKind kind: 8; // CI_OP_FALU32, CI_OP_FALU64
@@ -509,7 +539,7 @@ struct CiOp {
         } jump;
         struct {
             // if !slots[slot] (jump_false) or slots[slot] (jump_true):
-            // pc = jump; slot holds a canonical 0/1
+            // pc = jump; slot is an integer tested for zero
             CiOpKind kind: 8; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
             uint32_t _bitpad: 24;
             uint32_t jump;
@@ -593,6 +623,9 @@ struct CiOp {
     };
 };
 _Static_assert(sizeof(CiOp) == 32, "");
+_Static_assert(offsetof(CiOp, cmp.src) == offsetof(CiOp, cmp_jump.src), "comparison operand layout");
+_Static_assert(offsetof(CiOp, cmp.src2) == offsetof(CiOp, cmp_jump.src2), "comparison operand layout");
+_Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump), "branch target layout");
 
 #ifndef MARRAY_CIOP
 #define MARRAY_CIOP

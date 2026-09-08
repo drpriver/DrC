@@ -2562,6 +2562,160 @@ TestFunction(test_interpreter){
                "return p == 0;\n"),
             .exit_code = 1,
         },
+        {
+            "index address: signed, unsigned, narrowing and scale", __LINE__,
+            SVI("struct triple { unsigned char x[3]; };\n"
+                "struct triple a[260] = {0};\n"
+                "struct triple* p = a + 2;\n"
+                "int neg = -2; unsigned int u = 255; int n = 257;\n"
+                "p[neg].x[1] = 11; p[u].x[2] = 19;\n"
+                "p[(unsigned char)n].x[0] = 23;\n"
+                "signed char sc = -2; short sh = -1; long l = -2;\n"
+                "p[sh].x[0] = 29;\n"
+                "if (p[sc].x[1] != 11 || p[l].x[1] != 11) return 1;\n"
+                "if (a[257].x[2] != 19 || a[3].x[0] != 23) return 2;\n"
+                "return a[1].x[0] == 29 ? 0 : 3;\n"),
+            .exit_code = 0,
+        },
+        {
+            "index address: evaluate base and index once", __LINE__,
+            SVI("int a[4] = {10,20,30,40}; int calls = 0;\n"
+                "int* base(void) { calls++; return a; }\n"
+                "int index(void) { calls++; return 2; }\n"
+                "int v = base()[index()];\n"
+                "return v == 30 && calls == 2 ? 0 : 1;\n"),
+            .exit_code = 0,
+        },
+        {
+            "immediate increment: wrap, pre/post values and pointer scale", __LINE__,
+            SVI("unsigned int u = ~0u; unsigned long long w = ~0ull;\n"
+                "unsigned int old = u++;\n"
+                "if (u != 0 || old != ~0u) return 1;\n"
+                "if (--u != ~0u) return 2;\n"
+                "unsigned long long wide = w++;\n"
+                "if (w != 0 || wide != ~0ull || --w != ~0ull) return 3;\n"
+                "int a[3] = {4,5,6}; int* p = a; int* q = p++;\n"
+                "if (*q != 4 || *p != 5 || *--p != 4) return 4;\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "branch conditions: widths, signedness and materialized values", __LINE__,
+            SVI("int s = -1; unsigned int u = 0x80000000u;\n"
+                "long long l = -4294967296ll; unsigned long long w = 0x8000000000000000ull;\n"
+                "if (s >= 0) return 1; if (u <= 1u) return 2;\n"
+                "if (l > 0ll) return 3; if (w < 1ull) return 4;\n"
+                "if (s == 0) return 5; if (l != -4294967296ll) return 6;\n"
+                "int v = 0; if (v = (s < 0)) { if (v != 1) return 7; }\n"
+                "else return 8;\n"
+                "int n = 0; do { n++; if (n == 2) continue; } while (n < 3);\n"
+                "if (n != 3) return 9;\n"
+                "unsigned long long high = 1ull << 40; if (high) {} else return 10;\n"
+                "double zero = -0.0; if (zero) return 11;\n"
+                "__int128 big = (__int128)1 << 100; if (big) {} else return 12;\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "immediate ALU: int", __LINE__,
+            SVI("int x = -37;\n"
+                "if ((x + 5) != -32) return 1;\n"
+                "{ typeof(x) y = x; y += 5; if (y != -32) return 11; }\n"
+                "if ((x - 5) != -42) return 2;\n"
+                "{ typeof(x) y = x; y -= 5; if (y != -42) return 12; }\n"
+                "if ((x * 3) != -111) return 3;\n"
+                "{ typeof(x) y = x; y *= 3; if (y != -111) return 13; }\n"
+                "if ((x / 5) != -7) return 4;\n"
+                "{ typeof(x) y = x; y /= 5; if (y != -7) return 14; }\n"
+                "if ((x % 5) != -2) return 5;\n"
+                "{ typeof(x) y = x; y %= 5; if (y != -2) return 15; }\n"
+                "if ((x & 15) != 11) return 6;\n"
+                "{ typeof(x) y = x; y &= 15; if (y != 11) return 16; }\n"
+                "if ((x | 15) != -33) return 7;\n"
+                "{ typeof(x) y = x; y |= 15; if (y != -33) return 17; }\n"
+                "if ((x ^ 15) != -44) return 8;\n"
+                "{ typeof(x) y = x; y ^= 15; if (y != -44) return 18; }\n"
+                "if ((x >> 3) != -5) return 9;\n"
+                "{ typeof(x) y = x; y >>= 3; if (y != -5) return 19; }\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "immediate ALU: unsigned int", __LINE__,
+            SVI("unsigned int x = 4026531877u;\n"
+                "if ((x + 5u) != 4026531882u) return 1;\n"
+                "{ typeof(x) y = x; y += 5u; if (y != 4026531882u) return 11; }\n"
+                "if ((x - 5u) != 4026531872u) return 2;\n"
+                "{ typeof(x) y = x; y -= 5u; if (y != 4026531872u) return 12; }\n"
+                "if ((x * 3u) != 3489661039u) return 3;\n"
+                "{ typeof(x) y = x; y *= 3u; if (y != 3489661039u) return 13; }\n"
+                "if ((x / 5u) != 805306375u) return 4;\n"
+                "{ typeof(x) y = x; y /= 5u; if (y != 805306375u) return 14; }\n"
+                "if ((x % 5u) != 2u) return 5;\n"
+                "{ typeof(x) y = x; y %= 5u; if (y != 2u) return 15; }\n"
+                "if ((x & 15u) != 5u) return 6;\n"
+                "{ typeof(x) y = x; y &= 15u; if (y != 5u) return 16; }\n"
+                "if ((x | 15u) != 4026531887u) return 7;\n"
+                "{ typeof(x) y = x; y |= 15u; if (y != 4026531887u) return 17; }\n"
+                "if ((x ^ 15u) != 4026531882u) return 8;\n"
+                "{ typeof(x) y = x; y ^= 15u; if (y != 4026531882u) return 18; }\n"
+                "if ((x >> 3u) != 503316484u) return 9;\n"
+                "{ typeof(x) y = x; y >>= 3u; if (y != 503316484u) return 19; }\n"
+                "if ((x << 3u) != 2147483944u) return 10;\n"
+                "{ typeof(x) y = x; y <<= 3u; if (y != 2147483944u) return 20; }\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "immediate ALU: long long", __LINE__,
+            SVI("long long x = -37ll;\n"
+                "if ((x + 5ll) != -32ll) return 1;\n"
+                "{ typeof(x) y = x; y += 5ll; if (y != -32ll) return 11; }\n"
+                "if ((x - 5ll) != -42ll) return 2;\n"
+                "{ typeof(x) y = x; y -= 5ll; if (y != -42ll) return 12; }\n"
+                "if ((x * 3ll) != -111ll) return 3;\n"
+                "{ typeof(x) y = x; y *= 3ll; if (y != -111ll) return 13; }\n"
+                "if ((x / 5ll) != -7ll) return 4;\n"
+                "{ typeof(x) y = x; y /= 5ll; if (y != -7ll) return 14; }\n"
+                "if ((x % 5ll) != -2ll) return 5;\n"
+                "{ typeof(x) y = x; y %= 5ll; if (y != -2ll) return 15; }\n"
+                "if ((x & 15ll) != 11ll) return 6;\n"
+                "{ typeof(x) y = x; y &= 15ll; if (y != 11ll) return 16; }\n"
+                "if ((x | 15ll) != -33ll) return 7;\n"
+                "{ typeof(x) y = x; y |= 15ll; if (y != -33ll) return 17; }\n"
+                "if ((x ^ 15ll) != -44ll) return 8;\n"
+                "{ typeof(x) y = x; y ^= 15ll; if (y != -44ll) return 18; }\n"
+                "if ((x >> 3ll) != -5ll) return 9;\n"
+                "{ typeof(x) y = x; y >>= 3ll; if (y != -5ll) return 19; }\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "immediate ALU: unsigned long long", __LINE__,
+            SVI("unsigned long long x = 17293822569371140133ull;\n"
+                "if ((x + 5ull) != 17293822569371140138ull) return 1;\n"
+                "{ typeof(x) y = x; y += 5ull; if (y != 17293822569371140138ull) return 11; }\n"
+                "if ((x - 5ull) != 17293822569371140128ull) return 2;\n"
+                "{ typeof(x) y = x; y -= 5ull; if (y != 17293822569371140128ull) return 12; }\n"
+                "if ((x * 3ull) != 14987979560694317167ull) return 3;\n"
+                "{ typeof(x) y = x; y *= 3ull; if (y != 14987979560694317167ull) return 13; }\n"
+                "if ((x / 5ull) != 3458764513874228026ull) return 4;\n"
+                "{ typeof(x) y = x; y /= 5ull; if (y != 3458764513874228026ull) return 14; }\n"
+                "if ((x % 5ull) != 3ull) return 5;\n"
+                "{ typeof(x) y = x; y %= 5ull; if (y != 3ull) return 15; }\n"
+                "if ((x & 15ull) != 5ull) return 6;\n"
+                "{ typeof(x) y = x; y &= 15ull; if (y != 5ull) return 16; }\n"
+                "if ((x | 15ull) != 17293822569371140143ull) return 7;\n"
+                "{ typeof(x) y = x; y |= 15ull; if (y != 17293822569371140143ull) return 17; }\n"
+                "if ((x ^ 15ull) != 17293822569371140138ull) return 8;\n"
+                "{ typeof(x) y = x; y ^= 15ull; if (y != 17293822569371140138ull) return 18; }\n"
+                "if ((x >> 3ull) != 2161727821171392516ull) return 9;\n"
+                "{ typeof(x) y = x; y >>= 3ull; if (y != 2161727821171392516ull) return 19; }\n"
+                "if ((x << 3ull) != 9223372039002259752ull) return 10;\n"
+                "{ typeof(x) y = x; y <<= 3ull; if (y != 9223372039002259752ull) return 20; }\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
         // Type conversions
         {
             "unsigned wrap", __LINE__,

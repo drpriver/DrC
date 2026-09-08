@@ -336,6 +336,35 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             }
             break;
         }
+        case CI_OP_ALU_IMM32:
+        case CI_OP_ALU_IMM64:{
+            uint32_t sz = op->kind == CI_OP_ALU_IMM32 ? 4 : 8;
+            ci_op_print_range(out, op->alu_imm.slot, sz);
+            msb_write_literal(out, " = ");
+            ci_op_print_range(out, op->alu_imm.src, sz);
+            msb_sprintf(out, " %s%s %llu", ci_op_alu_sym(op->alu_imm.op),
+                        op->alu_imm.is_unsigned ? "u" : "",
+                        (unsigned long long)(sz == 4 ? (uint32_t)op->alu_imm.immediate : op->alu_imm.immediate));
+            break;
+        }
+        case CI_OP_INDEX:
+            ci_op_print_range(out, op->index.slot, op->index.ptr_size);
+            msb_write_literal(out, " = index ");
+            ci_op_print_range(out, op->index.base, op->index.ptr_size);
+            msb_sprintf(out, " + %cext ", op->index.index_unsigned ? 'z' : 's');
+            ci_op_print_range(out, op->index.index, op->index.index_size);
+            msb_sprintf(out, " * %u", op->index.scale);
+            break;
+        case CI_OP_CMP_JUMP32:
+        case CI_OP_CMP_JUMP64:{
+            uint32_t sz = op->kind == CI_OP_CMP_JUMP32 ? 4 : 8;
+            msb_sprintf(out, "if %s(", op->cmp_jump.when_true ? "" : "!");
+            ci_op_print_range(out, op->cmp_jump.src, sz);
+            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->cmp_jump.op), op->cmp_jump.is_unsigned ? "u" : "");
+            ci_op_print_range(out, op->cmp_jump.src2, sz);
+            msb_sprintf(out, ") jump 0x%x", op->cmp_jump.jump);
+            break;
+        }
         case CI_OP_CMP32:{
             uint32_t sz;
             sz = 4;

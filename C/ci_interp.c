@@ -865,6 +865,28 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
+        case CI_OP_INDEX: {
+            const void* src = (char*)frame->slots + op->index.index;
+            if(op->index.ptr_size == 8 && (op->index.index_size == 4 || op->index.index_size == 8)){
+                uint64_t index;
+                if(op->index.index_size == 8)
+                    index = ci_read_uint(src, 8);
+                else if(op->index.index_unsigned)
+                    index = ci_read_uint(src, 4);
+                else
+                    index = (uint64_t)ci_read_int(src, 4);
+                uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, 8);
+                ci_write_uint((char*)frame->slots + op->index.slot, 8, base + index * op->index.scale);
+            }
+            else {
+                uint64_t index = op->index.index_unsigned ? ci_read_uint(src, op->index.index_size) : (uint64_t)ci_read_int(src, op->index.index_size);
+                uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, op->index.ptr_size);
+                ci_write_uint((char*)frame->slots + op->index.slot, op->index.ptr_size, base + index * op->index.scale);
+            }
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_CMP_JUMP32:
         case CI_OP_CMP32: {
             const void* s1 = (char*)frame->slots + op->cmp.src;
             const void* s2 = (char*)frame->slots + op->cmp.src2;
@@ -888,10 +910,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int32_t)lu >= (int32_t)ru); break;
                 DRP_CASES_EXHAUSTED;
             }
-            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
-            frame->pc++;
+            if(op->kind == CI_OP_CMP_JUMP32){
+                frame->pc = ((res != 0) == op->cmp_jump.when_true) ? op->cmp_jump.jump : frame->pc + 1;
+            }
+            else {
+                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
+                frame->pc++;
+            }
             return 0;
         }
+        case CI_OP_CMP_JUMP64:
         case CI_OP_CMP64: {
             const void* s1 = (char*)frame->slots + op->cmp.src;
             const void* s2 = (char*)frame->slots + op->cmp.src2;
@@ -915,8 +943,13 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru); break;
                 DRP_CASES_EXHAUSTED;
             }
-            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
-            frame->pc++;
+            if(op->kind == CI_OP_CMP_JUMP64){
+                frame->pc = ((res != 0) == op->cmp_jump.when_true) ? op->cmp_jump.jump : frame->pc + 1;
+            }
+            else {
+                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
+                frame->pc++;
+            }
             return 0;
         }
         case CI_OP_CMP128: {
@@ -1045,18 +1078,17 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_ALU32: {
-            const void* s1 = (char*)frame->slots + op->alu.src;
-            const void* s2 = (char*)frame->slots + op->alu.src2;
-            _Bool is_unsigned = op->alu.is_unsigned;
+            _Bool is_unsigned;
             uint32_t lu, ru;
-            if(is_unsigned){
-                lu = (uint32_t)ci_read_uint(s1, 4);
-                ru = (uint32_t)ci_read_uint(s2, 4);
-            }
-            else {
-                lu = (uint32_t)ci_read_int(s1, 4);
-                ru = (uint32_t)ci_read_int(s2, 4);
-            }
+            is_unsigned = op->alu.is_unsigned;
+            lu = (uint32_t)ci_read_uint((char*)frame->slots + op->alu.src, 4);
+            ru = (uint32_t)ci_read_uint((char*)frame->slots + op->alu.src2, 4);
+            goto alu32;
+        case CI_OP_ALU_IMM32:
+            is_unsigned = op->alu_imm.is_unsigned;
+            lu = (uint32_t)ci_read_uint((char*)frame->slots + op->alu_imm.src, 4);
+            ru = (uint32_t)op->alu_imm.immediate;
+            alu32:;
             uint64_t res;
             switch((CiAluOp)(op->alu.op)){
                 case CI_ALU_ADD: res = lu + ru; break;
@@ -1093,18 +1125,17 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_ALU64: {
-            const void* s1 = (char*)frame->slots + op->alu.src;
-            const void* s2 = (char*)frame->slots + op->alu.src2;
-            _Bool is_unsigned = op->alu.is_unsigned;
+            _Bool is_unsigned;
             uint64_t lu, ru;
-            if(is_unsigned){
-                lu = ci_read_uint(s1, 8);
-                ru = ci_read_uint(s2, 8);
-            }
-            else {
-                lu = (uint64_t)ci_read_int(s1, 8);
-                ru = (uint64_t)ci_read_int(s2, 8);
-            }
+            is_unsigned = op->alu.is_unsigned;
+            lu = ci_read_uint((char*)frame->slots + op->alu.src, 8);
+            ru = ci_read_uint((char*)frame->slots + op->alu.src2, 8);
+            goto alu64;
+        case CI_OP_ALU_IMM64:
+            is_unsigned = op->alu_imm.is_unsigned;
+            lu = ci_read_uint((char*)frame->slots + op->alu_imm.src, 8);
+            ru = op->alu_imm.immediate;
+            alu64:;
             uint64_t res;
             switch((CiAluOp)(op->alu.op)){
                 case CI_ALU_ADD: res = lu + ru; break;
