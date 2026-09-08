@@ -285,7 +285,7 @@ ti_print_struct(const void* src, const TypeInfoStruct* ti, TiPrinter* printer){
                 const char* base;
                 int err = ti_get_start_of_member(src, ti, mi, (const void**)&base);
                 size_t length;
-                if(mi->flexible.length_mi < ti->length){
+                if(!err && mi->flexible.length_mi < ti->length){
                     err = ti_get_size_t_from_member(src, &ti->members[mi->flexible.length_mi], &length);
                     if(!err){
                         printer->printer(printer->ctx, "[");
