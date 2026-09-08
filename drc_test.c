@@ -380,7 +380,7 @@ int main(int argc, char** argv, char** envp){
     ArgToParse kwargs[] = {
         {
             .name = SV("--drc"),
-            .dest = ARGDEST((StringView*)&DRC_PATH),
+            .dest = ARGDEST(&DRC_PATH),
             .help = "Path to drc binary",
             .min_num = 1, .max_num = 1,
             .required = 1,

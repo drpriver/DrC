@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <string.h>
 #include "stringview.h"
+#include "long_string.h"
 #include "parse_numbers.h"
 
 #ifndef arrlen
@@ -251,24 +252,26 @@ static const StringView ArgTypeNames[] = {
 // Type Generic macro allows us to turn a type into an enum.
 #if PARSE_NUMBER_PARSE_FLOATS
 #define ARGTYPE(_x) _Generic(_x, \
-        int64_t: ARG_INTEGER64, \
-        uint64_t: ARG_UINTEGER64, \
-        float: ARG_FLOAT32, \
-        double: ARG_FLOAT64, \
-        int: ARG_INT, \
-        _Bool: ARG_FLAG, \
-        const char*: ARG_CSTRING, \
-        char*: ARG_CSTRING, \
-        StringView: ARG_STRING)
+        int64_t*: ARG_INTEGER64, \
+        uint64_t*: ARG_UINTEGER64, \
+        float*: ARG_FLOAT32, \
+        double*: ARG_FLOAT64, \
+        int*: ARG_INT, \
+        _Bool*: ARG_FLAG, \
+        const char**: ARG_CSTRING, \
+        char**: ARG_CSTRING, \
+        StringView*: ARG_STRING, \
+        LongString*: ARG_STRING)
 #else
 #define ARGTYPE(_x) _Generic(_x, \
-        int64_t: ARG_INTEGER64, \
-        uint64_t: ARG_UINTEGER64, \
-        int: ARG_INT, \
-        _Bool: ARG_FLAG, \
-        const char*: ARG_CSTRING, \
-        char*: ARG_CSTRING, \
-        StringView: ARG_STRING)
+        int64_t*: ARG_INTEGER64, \
+        uint64_t*: ARG_UINTEGER64, \
+        int*: ARG_INT, \
+        _Bool*: ARG_FLAG, \
+        const char**: ARG_CSTRING, \
+        char**: ARG_CSTRING, \
+        StringView*: ARG_STRING, \
+        LongString*: ARG_STRING)
 #endif
 //
 // A structure for allowing the parsing of user defined types.
@@ -380,8 +383,8 @@ struct ArgParseDestination {
 // If the storage is an array, give the pointer to the first
 // element of the array and set the max_num appropriately.
 //
-#define ARGDEST(_x) ((ArgParseDestination){.type = ARGTYPE((_x)[0]), .pointer=_x})
-#define ARGDESTI(_x) {.type = ARGTYPE((_x)[0]), .pointer=_x}
+#define ARGDEST(_x) ((ArgParseDestination){.type = ARGTYPE((_x)), .pointer=_x})
+#define ARGDESTI(_x) {.type = ARGTYPE((_x)), .pointer=_x}
 
 // For bit flags.
 static inline

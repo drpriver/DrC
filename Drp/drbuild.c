@@ -1253,6 +1253,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     _Bool debug_symbols = 0;
     _Bool no_rebuild = 0;
     BuildTargetSettings before_ap = ctx->target;
+    // cast is because each branch has to be valid even if unevaluated.
     #define BARGDEST(x) _Generic(x, \
         int64_t*: ARGDEST((int64_t*)x), \
         uint64_t*: ARGDEST((uint64_t*)x), \
@@ -1261,7 +1262,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         int*: ARGDEST((int*)x), \
         _Bool*: ARGDEST((_Bool*)x), \
         StringView*: ARGDEST((StringView*)x), \
-        LongString*: ARGDEST((StringView*)x), \
+        LongString*: ARGDEST((LongString*)x), \
         Atom*: ArgAtomDest((Atom*)x, &ctx->at))
 
     enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=19};
