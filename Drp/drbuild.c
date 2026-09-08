@@ -1616,6 +1616,11 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     b_phony_target(ctx, "clean")->description = b_atomize(ctx, "Delete the contents of the build directory.");
 
     {
+        BuildTarget* nothing = b_phony_target(ctx, "nothing");
+        nothing->description = b_atomize(ctx, "Build nothing (for setting flags without building anything).");
+    }
+
+    {
         BuildTarget* list = b_script_target(ctx, "list", list_targets, NULL);
         list->is_phony = 1;
         list->description = b_atomize(ctx, "List all targets.");

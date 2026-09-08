@@ -46,9 +46,6 @@ int main(int argc, char** argv, char** envp){
     if(!ctx) return 1;
     BuildTarget* all = b_phony_target(ctx, "all");
     all->description = b_atomize(ctx, "Build all binaries (including tests).");
-    BuildTarget* nothing = b_phony_target(ctx, "nothing");
-    nothing->user_bits |= EXCLUDE_FROM_MAKEFILE;
-    nothing->description = b_atomize(ctx, "Build nothing (for setting flags without building anything).");
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
@@ -86,6 +83,8 @@ int main(int argc, char** argv, char** envp){
     native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
     BuildTarget* tests = b_phony_target(ctx, "tests");
     tests->description = b_atomize(ctx, "Run all tests.");
+    BuildTarget* test = b_phony_target(ctx, "test");
+    b_add_dep(ctx, test, tests);
     BuildTarget* self_tests = b_phony_target(ctx, "self-tests");
     self_tests->description = b_atomize(ctx, "Run the tests interpreted by drc interpreter.");
     BuildTarget* coverage_tests = b_phony_target(ctx, "coverage-tests");
@@ -346,6 +345,7 @@ int main(int argc, char** argv, char** envp){
         }
     }
     b_get_target(ctx, "fish-completions")->user_bits |= EXCLUDE_FROM_MAKEFILE;
+    b_get_target(ctx, "nothing")->user_bits |= EXCLUDE_FROM_MAKEFILE;
     return b_execute_targets(ctx);
 }
 
