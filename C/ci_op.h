@@ -127,6 +127,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_BOUNDS,
     CI_OP_LOAD,
     CI_OP_STORE,
+    CI_OP_STORE_IMM,
     CI_OP_MEMCOPY,
     CI_OP_ZERO,
     CI_OP_LOAD_BITFIELD,
@@ -373,6 +374,14 @@ struct CiOp {
                      offset;
             SrcLoc loc;
         } store;
+        struct {
+            // ptr[offset:] = immediate bytes; ptr read from slots[slot].
+            CiOpKind kind: 8; // CI_OP_STORE_IMM
+            uint32_t size: 8, _bitpad: 16;
+            uint32_t slot, offset, _pad;
+            uint64_t immediate;
+            SrcLoc loc;
+        } store_imm;
         struct {
             // slots[slot:slot+slot_size] = ptr[offset:], ptr read from slots[src]
             CiOpKind kind: 8; // CI_OP_LOAD

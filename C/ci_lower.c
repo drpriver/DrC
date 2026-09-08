@@ -104,7 +104,7 @@ static CiCmpOp ci_cmp_op_for(CcExprKind kind);
 static CiOpKind ci_int_op_kind(uint32_t size);
 static CiOpKind ci_cmp_op_kind(uint32_t size);
 static _Bool ci_falu_op_for(CcExprKind kind, CiFaluOp* out);
-static int ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
+static int ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled);
 static int ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr dst, _Bool zero);
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
@@ -2837,7 +2837,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
 
 static
 int
-ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled){
+ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled){
     int err;
     CcParser* p = &ci->parser;
     *handled = 0;
@@ -2845,6 +2845,40 @@ ci_lower_assign_memcopy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* ha
     CcExpr* rhs = e->values[0];
     if(lhs->type.is_atomic || rhs->type.is_atomic)
         return 0; // atomics fall back
+    uint32_t frame_slot;
+    if(rhs->kind == CC_EXPR_VALUE
+        && (ccqt_is_integer(rhs->type) || ci_falu_type(rhs->type)
+            || ccqt_kind(rhs->type) == CC_POINTER || ccqt_bt_eq(rhs->type, CCBT_nullptr_t))
+        && !((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width)
+        && !ci_frame_lvalue(lhs, &frame_slot)){
+        uint32_t size, rhs_size;
+        err = cc_sizeof_as_uint(p, lhs->type, lhs->loc, &size);
+        if(err) return err;
+        err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rhs_size);
+        if(err) return err;
+        if(size == rhs_size && (size == 1 || size == 2 || size == 4 || size == 8)){
+            uint32_t temp = ctx->temp;
+            CiLowerAddr a;
+            err = ci_lower_addr(ci, ctx, lhs, 0, &a);
+            if(err) return err;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .store_imm = {
+                    .kind = CI_OP_STORE_IMM,
+                    .size = size,
+                    .slot = a.slot,
+                    .offset = a.disp,
+                    .loc = e->loc,
+                }
+            };
+            memcpy(&op->store_imm.immediate, &rhs->uinteger, sizeof op->store_imm.immediate);
+            ctx->temp = temp;
+            *handled = 1;
+            return 0;
+        }
+    }
     if(rhs->kind == CC_EXPR_INIT_LIST || rhs->kind == CC_EXPR_COMPOUND_LITERAL){
         uint32_t frame_off;
         if(ci_frame_lvalue(lhs, &frame_off))
@@ -4267,7 +4301,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
 
         case CC_EXPR_ASSIGN:{
             _Bool handled;
-            err = ci_lower_assign_memcopy(ci, ctx, e, &handled);
+            err = ci_lower_assign_direct(ci, ctx, e, &handled);
             if(err) return err;
             if(handled) return 0;
             CiLowerVal v;

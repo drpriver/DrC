@@ -474,6 +474,10 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->load.src, op->load.offset);
             break;
+        case CI_OP_STORE_IMM:
+            ci_op_print_deref(out, op->store_imm.slot, op->store_imm.offset);
+            msb_sprintf(out, " = 0x%llx (%u bytes)", (unsigned long long)op->store_imm.immediate, op->store_imm.size);
+            break;
         case CI_OP_STORE:
             ci_op_print_deref(out, op->store.slot, op->store.offset);
             msb_write_literal(out, " = ");

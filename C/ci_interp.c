@@ -1553,6 +1553,13 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
+        case CI_OP_STORE_IMM: {
+            char* ptr;
+            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_imm.slot, sizeof ptr);
+            ci_copy(ptr + op->store_imm.offset, &op->store_imm.immediate, op->store_imm.size);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_STORE: {
             char* ptr;
             CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);

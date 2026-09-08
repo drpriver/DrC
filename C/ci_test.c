@@ -2716,6 +2716,39 @@ TestFunction(test_interpreter){
                 "return 0;\n"),
             .exit_code = 0,
         },
+        {
+            "store immediate: scalar widths and member offsets", __LINE__,
+            SVI("struct S { unsigned char guard0, a, guard1; unsigned short b; unsigned int c; unsigned long long d; float f; double g; };\n"
+                "struct S s = {.guard0=41, .guard1=43}; struct S* p = &s;\n"
+                "p->a = 255; p->b = 65535; p->c = 0x89abcdefu; p->d = 0xfedcba9876543210ull;\n"
+                "p->f = 1.5f; p->g = -0.0;\n"
+                "if (p->guard0 != 41 || p->guard1 != 43) return 1;\n"
+                "if (p->a != 255 || p->b != 65535 || p->c != 0x89abcdefu) return 2;\n"
+                "if (p->d != 0xfedcba9876543210ull || p->f != 1.5f) return 3;\n"
+                "if (1.0 / p->g > 0.0) return 4; return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "store immediate: evaluate address once, preserve assignment result", __LINE__,
+            SVI("int a[3] = {3,4,5}; int calls = 0;\n"
+                "int* get(void) { calls++; return a; }\n"
+                "int i = 0; get()[i++] = 17;\n"
+                "if (calls != 1 || i != 1 || a[0] != 17 || a[1] != 4) return 1;\n"
+                "int v = (get()[i++] = 19);\n"
+                "if (calls != 2 || i != 2 || v != 19 || a[1] != 19) return 2;\n"
+                "int* p = a; *p = (a[2] = 23);\n"
+                "return a[0] == 23 && a[2] == 23 ? 0 : 3;\n"),
+            .exit_code = 0,
+        },
+        {
+            "store immediate: bitfield, atomic and volatile assignments", __LINE__,
+            SVI("struct S { unsigned int a:3; unsigned int b:5; };\n"
+                "struct S s = {0}; struct S* p = &s; p->b = 17; p->a = 7;\n"
+                "_Atomic int a = 0; _Atomic int* q = &a; *q = 31;\n"
+                "volatile int v = 0; volatile int* r = &v; *r = 37;\n"
+                "return s.a == 7 && s.b == 17 && a == 31 && v == 37 ? 0 : 1;\n"),
+            .exit_code = 0,
+        },
         // Type conversions
         {
             "unsigned wrap", __LINE__,
