@@ -54,10 +54,14 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* cpp = b_exe_target(ctx, "drcpp", "cpp.c", ctx->target.os);
     b_add_dep(ctx, all, cpp);
     cpp->description = b_atomize(ctx, "C Preprocessor.");
+    if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
+        b_linkarg(ctx, cpp, "-lsynchronization");
     b_get_target(ctx, "drcpp")->description = cpp->description;
 
     BuildTarget* cc = b_exe_target(ctx, "drc", "cc.c", ctx->target.os);
     cc->description = b_atomize(ctx, "C interpreter.");
+    if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
+        b_linkarg(ctx, cc, "-lsynchronization");
     b_get_target(ctx, "drc")->description = cc->description;
     BuildTarget* ffi_lib = NULL;
     BuildTarget* ffi_dll = NULL;
@@ -97,16 +101,18 @@ int main(int argc, char** argv, char** envp){
         ctx->target.native_sanitize = 0;
 
         {
-            cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", OS_NATIVE);
+            cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", ctx->target.os);
             cc_opt->is_compile_command = 0;
             cc_opt->description = b_atomize(ctx, "Optimized C interpreter for self-hosted tests.");
             b_get_target(ctx, "cc_opt")->description = cc_opt->description;
             b_add_dep(ctx, all, cc_opt);
             b_arg(ctx, cc_opt, "-O2");
-            link_libffi(ctx, cc_opt, OS_NATIVE, ffi_lib);
+            link_libffi(ctx, cc_opt, ctx->target.os, ffi_lib);
+            if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
+                b_linkarg(ctx, cc_opt, "-lsynchronization");
         }
         {
-            cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", OS_NATIVE);
+            cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", ctx->target.os);
             cc_cov->description = b_atomize(ctx, "C interpreter with coverage enabled.");
             b_get_target(ctx, "cc_cov")->description = cc_cov->description;
             cc_cov->is_compile_command = 0;
@@ -121,7 +127,9 @@ int main(int argc, char** argv, char** envp){
                     b_arg(ctx, cc_cov, "-fprofile-update=atomic");
                 }
             }
-            link_libffi(ctx, cc_cov, OS_NATIVE, ffi_lib);
+            link_libffi(ctx, cc_cov, ctx->target.os, ffi_lib);
+            if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
+                b_linkarg(ctx, cc_cov, "-lsynchronization");
         }
         ctx->target.native_sanitize = saved_ns;
     }
@@ -147,9 +155,13 @@ int main(int argc, char** argv, char** envp){
             const char* file = test_files[i].file;
             const char* name = test_files[i].name;
             const char* cmd_name = test_files[i].cmd_name;
-            BuildTarget* bin = b_exe_target(ctx, name, file, OS_NATIVE);
+            BuildTarget* bin = b_exe_target(ctx, name, file, ctx->target.os);
+            if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW){
+                b_linkarg(ctx, bin, "-lsynchronization");
+                b_linkarg(ctx, bin, "-ldbghelp");
+            }
             if(test_files[i].needs_lffi)
-                link_libffi(ctx, bin, OS_NATIVE, ffi_lib);
+                link_libffi(ctx, bin, ctx->target.os, ffi_lib);
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
             cmd->is_phony = 1;
@@ -166,7 +178,7 @@ int main(int argc, char** argv, char** envp){
 
             // Coverage variant
             Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
-            BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, OS_NATIVE);
+            BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, ctx->target.os);
             b_get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
             cov_bin->is_compile_command = 0; // exclude from compile_commands.json
             if(cov_bin->compiler_flavor != COMPILER_CL){
@@ -180,7 +192,7 @@ int main(int argc, char** argv, char** envp){
                 }
             }
             if(test_files[i].needs_lffi)
-                link_libffi(ctx, cov_bin, OS_NATIVE, ffi_lib);
+                link_libffi(ctx, cov_bin, ctx->target.os, ffi_lib);
             Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
             cov_cmd->is_phony = 1;

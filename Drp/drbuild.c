@@ -3154,6 +3154,9 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
         b_linkarg(ctx, target, "-lpthread");
         if(flavor == COMPILER_GCC) b_linkarg(ctx, target, "-latomic");
     }
+    if(target_os == OS_WINDOWS && flavor == COMPILER_GCC_MINGW){
+        b_linkarg(ctx, target, "-latomic");
+    }
     if(flavor == COMPILER_CLANG_CL)
         b_linkarg(ctx, target, "clang_rt.builtins-x86_64.lib");
     else if(flavor == COMPILER_CLANG && target_os == OS_WINDOWS)

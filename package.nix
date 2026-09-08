@@ -8,8 +8,8 @@ let
     hostArch = if host.isx86_64 then "x86"
                else if host.isAarch64 then "arm"
                else throw "Unsupported host architecture: ${host.system}";
-    hostBits = if host.isx86_64 then "64bit"
-               else if host.isAarch64 then "64bit"
+    hostBits = if host.is64bit then "64bit"
+               else if host.is32bit then "32bit"
                else throw "Unsupported host bitness: ${host.system}";
 in stdenv.mkDerivation (self: {
     passthru = {
@@ -50,6 +50,7 @@ in stdenv.mkDerivation (self: {
         runHook postInstall
     '';
     strictDeps = true;
+    env.NIX_CFLAGS_COMPILE = lib.optionalString host.isx86_64 "-march=x86-64-v2";
     src = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [

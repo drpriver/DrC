@@ -133,7 +133,7 @@ force_inline uint32_t crc32_u16(uint32_t h, uint16_t v){ return __crc32ch(h, v);
 force_inline uint32_t crc32_u8 (uint32_t h, uint8_t  v){ return __crc32cb(h, v); }
 #endif
 
-#if !defined(USE_MURMUR) && ((defined(__x86_64__) && defined(__SSE4_2__)) || defined(_M_AMD64))
+#if !defined USE_MURMUR && ((defined __x86_64__ && defined __SSE4_2__) || (defined _M_AMD64 && defined _MSC_VER && !defined __clang__))
 #define USE_CRC32
 #ifndef __clang__
 #include <nmmintrin.h>
