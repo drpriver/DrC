@@ -53,6 +53,9 @@ force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInte
 static void ci_free_call_frame(CiInterpreter*, CiInterpFrame*);
 
 
+// Internal opcode result: enter the child frame
+enum { CI_STEP_ENTER_FRAME = -1 };
+
 enum {
     CI_NO_ERROR = _cc_no_error,
     CI_OOM_ERROR = _cc_oom_error,
@@ -707,7 +710,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             };
             if(result != ci_discard_buf) memcpy(result, &ret, sizeof ret);
             *child = module_frame;
-            return 0;
+            return CI_STEP_ENTER_FRAME;
         }
         case CC_MODULE_PARSE_TYPE:{
             const char* name = (const char*)arg;
@@ -833,7 +836,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     break;
                 }
             }
-            if(!*child) frame->pc++;
+            if(err != CI_STEP_ENTER_FRAME) frame->pc++;
             return err;
         }
         case CI_OP_CONST: {
@@ -1442,7 +1445,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
                 if(interp_func){
                     int err = ci_make_call_frame(ci, frame, interp_func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
-                    return err;
+                    return err ? err : CI_STEP_ENTER_FRAME;
                 }
                 NativeCallCache* cache;
                 if(op->call.is_variadic)
@@ -1470,7 +1473,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot);
                 if(func->defined){
                     int err = ci_make_call_frame(ci, frame, func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
-                    return err;
+                    return err ? err : CI_STEP_ENTER_FRAME;
                 }
                 void (*fn)(void) = func->native_func;
                 if(!fn)
@@ -2132,9 +2135,9 @@ ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
         CiInterpFrame* child = NULL;
         while(frame->pc < frame->op_count){
             err = _ci_interp_step(ci, frame, &child);
-            if(err || child) break;
+            if(err) break;
         }
-        if(child){ frame = child; continue; }
+        if(err == CI_STEP_ENTER_FRAME){ frame = child; err = 0; continue; }
         for(;;){
             if(frame == root) return err;
             CiInterpFrame* parent = frame->parent;
@@ -2150,8 +2153,8 @@ int
 ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
     CiInterpFrame* child = NULL;
     int err = _ci_interp_step(ci, frame, &child);
-    if(child){
-        if(!err) err = ci_interp_run(ci, child);
+    if(err == CI_STEP_ENTER_FRAME){
+        err = ci_interp_run(ci, child);
         ci_free_call_frame(ci, child);
         if(!err) frame->pc++;
     }
