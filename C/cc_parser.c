@@ -8581,6 +8581,11 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     member_type = cc_intern_qualtype(p, head);
                     // Method: member type is a function type (not pointer to function)
                     if(ccqt_kind(member_type) == CC_FUNCTION){
+                        if(!member_name){
+                            ma_cleanup(Atom)(&param_names, cc_allocator(p));
+                            err = cc_error(p, tok.loc, "expected method name");
+                            goto struct_err;
+                        }
                         CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
                         if(!func){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); err = CC_OOM_ERROR; goto struct_err; }
                         func->name = member_name;

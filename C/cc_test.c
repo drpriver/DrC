@@ -4698,6 +4698,22 @@ TestFunction(test_parse_errors){
             SVI("(test):1:18: error: bitfield must have integer or enum type\n"),
         },
         {
+            "unnamed union method after unnamed field", __LINE__,
+            SVI("union U { int, (); };\n"),
+            SVI("(test):1:16: error: expected method name\n"),
+        },
+        {
+            "unnamed struct method", __LINE__,
+            SVI("struct S { int (); };\n"),
+            SVI("(test):1:16: error: expected method name\n"),
+        },
+        {
+            "unnamed typedef method with body", __LINE__,
+            SVI("typedef int fn_t(int);\n"
+                "struct S { fn_t () {} };\n"),
+            SVI("(test):2:17: error: expected method name\n"),
+        },
+        {
             "typedef method body", __LINE__,
             SVI("typedef int fn_t(int);\n"
                "struct S { fn_t foo { return 1; } };\n"),
