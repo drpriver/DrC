@@ -1,6 +1,7 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#include "Drp/windowsheader.h"
 #include <stdlib.h>
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION

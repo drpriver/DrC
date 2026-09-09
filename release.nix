@@ -39,5 +39,4 @@ in {
     aarch64-linux-gnu = pkgs.pkgsCross.aarch64-multiplatform.drc;
     x86_64-linux-gnu = pkgs.pkgsCross.gnu64.drc;
     mingw = pkgs.pkgsCross.mingw-ucrt-x86_64.drc;
-
 }

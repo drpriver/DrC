@@ -3,6 +3,9 @@
 //
 #ifndef BIT_UTIL_H
 #define BIT_UTIL_H
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 #include <stdint.h>
 
 #ifndef force_inline

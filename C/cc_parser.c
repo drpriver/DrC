@@ -10876,8 +10876,15 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
             CcTypeKind tk = ccqt_kind(type);
             if(p->attributes.has_aligned && tk != CC_STRUCT && tk != CC_UNION){
-                if(declbase->alignment >= p->attributes.aligned){
-                    // Already applied (e.g. from __declspec(align)), just clear
+                _Bool natural_alignment = 0;
+                if(declbase->spec.sp_typedef){
+                    uint32_t align;
+                    err = cc_alignof_as_uint(p, type, declbase->loc, &align);
+                    if(err) return err;
+                    natural_alignment = align == p->attributes.aligned;
+                }
+                if(natural_alignment || declbase->alignment >= p->attributes.aligned){
+                    // Redundant or already applied (e.g. from __declspec(align)).
                     p->attributes.has_aligned = 0;
                     p->attributes.aligned = 0;
                 }

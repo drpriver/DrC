@@ -469,6 +469,20 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "naturally aligned typedefs (Linux types.h)", __LINE__,
+            SVI("typedef __signed__ __int128 __s128 __attribute__((aligned(16)));\n"
+               "typedef unsigned __int128 __u128 __attribute__((aligned(16)));\n"
+               "_Static_assert(sizeof(__s128) == 16, \"\");\n"
+               "_Static_assert(sizeof(__u128) == 16, \"\");\n"
+               "_Static_assert(_Alignof(__s128) == 16, \"\");\n"
+               "_Static_assert(_Alignof(__u128) == 16, \"\");\n"
+               "struct S { char c; __s128 s; __u128 u; };\n"
+               "_Static_assert(sizeof(struct S) == 48, \"\");\n"
+               "_Static_assert(_Alignof(struct S) == 16, \"\");\n"
+               "typedef int natural_int __attribute__((aligned(4)));\n"
+               "_Static_assert(_Alignof(natural_int) == 4, \"\");\n"),
+        },
+        {
             "__declspec(align) on decl", __LINE__,
             SVI("__declspec(align(16)) int x;\n"
                "int a[_Alignof x];\n"
@@ -4875,6 +4889,11 @@ TestFunction(test_parse_errors){
         {
             "aligned on typedef", __LINE__,
             SVI("typedef int aligned_int __attribute__((aligned(16)));\n"),
+            SVI("(test):1:1: error: aligned attribute on non-struct/union type is not supported\n"),
+        },
+        {
+            "aligned on typedef cannot decrease alignment", __LINE__,
+            SVI("typedef int aligned_int __attribute__((aligned(1)));\n"),
             SVI("(test):1:1: error: aligned attribute on non-struct/union type is not supported\n"),
         },
         {

@@ -1,5 +1,5 @@
 //
-// Copyright © 2024-2025, David Priver <david@davidpriver.com>
+// Copyright © 2024-2026, David Priver <david@davidpriver.com>
 //
 //
 // NOTE: you need to include this before any std header as many
@@ -29,6 +29,7 @@
 #endif
 #ifdef _MSC_VER
 #pragma warning(disable:5105)   // macro producing defined is UB lmao
+#include <intrin.h>
 #endif
 #ifdef __MINGW32__
 #include <windows.h>

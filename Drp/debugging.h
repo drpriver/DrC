@@ -134,7 +134,7 @@ bt(void){
 #include <dbghelp.h>
 #include <stdlib.h>
 #include <stdio.h>
-#if !defined __GNUC__ || defined __clang__
+#if !defined __GNUC__ || defined __clang__ || defined __DRC__
 #pragma comment(lib, "dbghelp.lib")
 #endif
 
