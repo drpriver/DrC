@@ -36,6 +36,13 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\");\n"
+         "if(m) m.run();\n"
+         "return 0;\n")},
+    {__LINE__, SVI("int recurse(int n){\n"
+         "int *p = __builtin_alloca(sizeof(int)); *p = n;\n"
+         "return n ? recurse(n-1) + *p : 0; }\n"
+         "return recurse(8);\n")},
     {__LINE__, SVI("struct S { int a[5]; };\n"
          "int f(void){ static struct S s = {{1,2,3,4,5}}; return s.a[4]++; }\n"
          "return f()+f();\n")},

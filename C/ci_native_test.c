@@ -642,6 +642,15 @@ TestFunction(test_interop){
             .exit_code = 42,
         },
         {
+            "callback: deep interpreted recursion returns to native caller", __LINE__,
+            SV("int apply(int (*)(int, int), int, int);\n"
+               "int descend(int n, int v){ return n ? descend(n-1, v) + 1 : v; }\n"
+               "int outer(void){ return apply(descend, 10000, 7) + 3; }\n"
+               "return outer();\n"),
+            {{SV("apply"), (void*)test_apply},},
+            .exit_code = 10010,
+        },
+        {
             "callback: sort", __LINE__,
             SV("void sort_ints(int*, int, int (*)(const void*, const void*));\n"
                "int cmp(const void* a, const void* b){\n"

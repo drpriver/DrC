@@ -49,13 +49,9 @@
 #endif
 #endif
 
-force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame);
+force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable*_Nonnull child);
+static void ci_free_call_frame(CiInterpreter*, CiInterpFrame*);
 
-static
-int
-ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
-    return _ci_interp_step(ci, frame);
-}
 
 enum {
     CI_NO_ERROR = _cc_no_error,
@@ -125,6 +121,7 @@ ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
+static int ci_make_call_frame(CiInterpreter*, CiInterpFrame*_Nullable, CcFunc*, void*_Nonnull*_Null_unspecified, uint32_t, const uint32_t*_Nullable, void*, size_t, SrcLoc, CiInterpFrame*_Nullable*_Nonnull);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame*_Nullable caller, CcFunc*, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc);
 static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
 static int ci_compile_module(CiInterpreter*, const char*, CiModule*_Nullable*_Nonnull);
@@ -664,7 +661,7 @@ ci_module_reflect_validate(CiInterpreter* ci, SrcLoc loc, CiModule*_Null_unspeci
 
 static
 int
-ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleOp op, CiModule*_Null_unspecified module, uintptr_t arg, CcQualType expected, void* result, size_t size){
+ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleOp op, CiModule*_Null_unspecified module, uintptr_t arg, CcQualType expected, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull child){
     int err;
     size_t idx = arg;
     switch(op){
@@ -694,29 +691,22 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             if(err) return err;
             err = ci_lower_module(ci, module);
             if(err) return err;
-            void*_Null_unspecified slots = NULL;
-            if(module->slot_size){
-                slots = Allocator_zalloc(ci_allocator(ci), module->slot_size);
-                if(!slots) return CI_OOM_ERROR;
-            }
-            CiInterpFrame module_frame = {
+            int ret = 0;
+            if(result != ci_discard_buf && sizeof ret > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
+            CiInterpFrame* module_frame = Allocator_zalloc(ci_allocator(ci), sizeof *module_frame + module->slot_size);
+            if(!module_frame) return CI_OOM_ERROR;
+            *module_frame = (CiInterpFrame){
                 .parent = frame,
                 .ops = module->ops.data,
                 .op_count = module->ops.count,
-                .slots = slots,
+                .slots = module_frame + 1,
+                .data_length = module->slot_size,
                 .return_buf = ci_discard_buf,
                 .return_size = sizeof ci_discard_buf,
             };
-            int ret = 0;
-            err = ci_interp_run(ci, &module_frame);
-            ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
-            if(slots)
-                Allocator_free(ci_allocator(ci), slots, module->slot_size);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            if(sizeof ret > size)
-                return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
-            memcpy(result, &ret, sizeof ret);
+            if(result != ci_discard_buf) memcpy(result, &ret, sizeof ret);
+            *child = module_frame;
             return 0;
         }
         case CC_MODULE_PARSE_TYPE:{
@@ -760,7 +750,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
 
 force_inline
 int
-_ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
+_ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable*_Nonnull child){
     if(frame->pc >= frame->op_count)
         return 0;
     const CiOp* op = &frame->ops[frame->pc];
@@ -792,7 +782,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     else
                         err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op,
                             (CiModule*)receiver, arg, expected, result,
-                            op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf);
+                            op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
                     break;
                 }
                 case CI_RT_INTERN: {
@@ -843,7 +833,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     break;
                 }
             }
-            frame->pc++;
+            if(!*child) frame->pc++;
             return err;
         }
         case CI_OP_CONST: {
@@ -1448,14 +1438,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                 }
                 void (*fn)(void);
                 memcpy(&fn, (char*)frame->slots + op->call.argv_slot, sizeof fn);
-                void** argv = (void**)((char*)frame->slots + op->call.argv_slot + 8);
-                // The pointer may wrap an interpreted function.
+                void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot + 8);
                 CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
                 if(interp_func){
-                    int err = ci_call_argv(ci, frame, interp_func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc);
-                    if(err) return err;
-                    frame->pc++;
-                    return 0;
+                    int err = ci_make_call_frame(ci, frame, interp_func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
+                    return err;
                 }
                 NativeCallCache* cache;
                 if(op->call.is_variadic)
@@ -1480,12 +1467,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
                     result = ci_discard_buf;
                     rsize = sizeof ci_discard_buf;
                 }
-                void** argv = (void**)((char*)frame->slots + op->call.argv_slot);
+                void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot);
                 if(func->defined){
-                    int err = ci_call_argv(ci, frame, func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc);
-                    if(err) return err;
-                    frame->pc++;
-                    return 0;
+                    int err = ci_make_call_frame(ci, frame, func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
+                    return err;
                 }
                 void (*fn)(void) = func->native_func;
                 if(!fn)
@@ -2072,18 +2057,9 @@ ci_hotswap_target(CcFunc* func){
     return func;
 }
 
-// Call an interpreted function with pre-evaluated arguments: argv holds
-// nargs pointers to the argument values (the shared argv convention: each
-// value in its own 8-byte-aligned storage of at least 8 bytes, the same
-// shape native_call and the closure callback use). Each fixed parameter is
-// copied into its storage in the callee's frame — under the hotswap
-// target's own layout, so a swapped-in body with different parameter
-// offsets is safe. For a variadic callee, arg_sizes holds the byte size of
-// each of the nargs values (only the entries past the fixed parameters are
-// read); each vararg gets an 8-byte-aligned slot in the trailing buffer.
 static
 int
-ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc){
+ci_make_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, void*_Nonnull*_Null_unspecified argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc, CiInterpFrame*_Nullable*_Nonnull out){
     int err;
     CcFunc* target = ci_hotswap_target(func);
     if(!target)
@@ -2136,20 +2112,60 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, vo
             va_buf += arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
         }
     }
-    err = ci_interp_run(ci, frame);
+    *out = frame;
+    return 0;
+}
+
+static
+void
+ci_free_call_frame(CiInterpreter* ci, CiInterpFrame* frame){
     ci_free_alloca_list(ci_allocator(ci), frame->alloca_list);
-    Allocator_free(ci_allocator(ci), frame, alloc_size);
+    Allocator_free(ci_allocator(ci), frame, sizeof *frame + frame->data_length);
+}
+
+static
+int
+ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
+    CiInterpFrame* frame = root;
+    int err = 0;
+    for(;;){
+        CiInterpFrame* child = NULL;
+        while(frame->pc < frame->op_count){
+            err = _ci_interp_step(ci, frame, &child);
+            if(err || child) break;
+        }
+        if(child){ frame = child; continue; }
+        for(;;){
+            if(frame == root) return err;
+            CiInterpFrame* parent = frame->parent;
+            ci_free_call_frame(ci, frame);
+            frame = parent;
+            if(!err){ frame->pc++; break; }
+        }
+    }
+}
+
+static
+int
+ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
+    CiInterpFrame* child = NULL;
+    int err = _ci_interp_step(ci, frame, &child);
+    if(child){
+        if(!err) err = ci_interp_run(ci, child);
+        ci_free_call_frame(ci, child);
+        if(!err) frame->pc++;
+    }
     return err;
 }
 
 static
 int
-ci_interp_run(CiInterpreter* ci, CiInterpFrame* frame){
-    int err = 0;
-    while(frame->pc < frame->op_count){
-        err = _ci_interp_step(ci, frame);
-        if(err) break;
-    }
+ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc){
+    CiInterpFrame* frame = NULL;
+    int err = ci_make_call_frame(ci, caller, func, argv, nargs, arg_sizes, result, size, loc, &frame);
+    if(err) return err;
+    err = ci_interp_run(ci, frame);
+    ci_free_call_frame(ci, frame);
     return err;
 }
 
@@ -3891,13 +3907,14 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
 static
 int
 ci_backtrace(CiInterpreter* ci, CiInterpFrame* f, int level){
-    if(!f) return 1;
-    if(!f->ops) return 1;
-    if(f->pc >= f->op_count) return 1;
-    const CiOp* op = &f->ops[f->pc];
-    ci_error(ci, op->loc, "%s: %d", f->name?f->name->data:"(top level)", level);
-    if(!f->parent) return 0;
-    return ci_backtrace(ci, f->parent, level+1);
+    for(;;){
+        if(!f || !f->ops || f->pc >= f->op_count) return 1;
+        const CiOp* op = &f->ops[f->pc];
+        ci_error(ci, op->loc, "%s: %d", f->name?f->name->data:"(top level)", level);
+        if(!f->parent) return 0;
+        f = f->parent;
+        level++;
+    }
 }
 static
 int

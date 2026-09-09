@@ -2398,6 +2398,16 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "__compile module run recursion", __LINE__,
+            SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\");\n"
+                "_Module* self = m.symbol(\"self\", _Module);\n"
+                "int* n = m.symbol(\"n\", int);\n"
+                "*self = m; *n = 100;\n"
+                "int r = m.run();\n"
+                "return r + *n;\n"),
+            .exit_code = 0,
+        },
+        {
             "__compile owns source", __LINE__,
             SVI("char src[] = \"const char* f(void){ return \\\"ok\\\"; }\";\n"
                "_Module m = __compile(src);\n"
@@ -3114,6 +3124,25 @@ TestFunction(test_interpreter){
                "}\n"
                "return fib(11);\n"),
             .exit_code = 89,
+        },
+        {
+            "recursion: deep calls preserve locals and alloca", __LINE__,
+            SVI("int descend(int n){\n"
+                "  int *p = __builtin_alloca(sizeof(int)); *p = n;\n"
+                "  if(!n) return 0;\n"
+                "  int r = descend(n-1);\n"
+                "  return r + (*p == n);\n"
+                "}\n"
+                "return descend(100);\n"),
+            .exit_code = 100,
+        },
+        {
+            "recursion: deep indirect calls", __LINE__,
+            SVI("int (*next)(int);\n"
+                "int descend(int n){ return n ? next(n-1) : 1; }\n"
+                "next = descend;\n"
+                "return next(100);\n"),
+            .exit_code = 1,
         },
         // Early return from deep nesting
         {
@@ -8176,6 +8205,18 @@ TestFunction(test_interpreter_runtime_errors){
         StringView expect; // full expected diagnostic
         _Bool skip;
     } testcases[] = {
+        {
+            "recursion: deep error unwinds frames", __LINE__,
+            SVI("int fail(int n){\n"
+                "  int *p = __builtin_alloca(sizeof(int)); *p = n;\n"
+                "  if(n) return fail(n-1) + *p;\n"
+                "  _Type t = int;\n"
+                "  t.field(0);\n"
+                "  return 0;\n"
+                "}\n"
+                "return fail(100);\n"),
+            SVI("(test):5:4: error: _Type.field: not a struct or union type\n"),
+        },
         {
             "reflection: module validation before name", __LINE__,
             SVI("_Module m = __root_module(); *(unsigned long long*)&m = 1;\n"
