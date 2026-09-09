@@ -40,6 +40,7 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
+        int lower_error;
     } testcases[] = {
         {
             "basic", __LINE__,
@@ -5795,10 +5796,106 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "cast: to long double unsupported", __LINE__,
+            SVI("int n = 7;\n"
+                "long double a = (long double)n;\n"
+                "return 0;\n"),
+            .lower_error = _cc_unimplemented_error,
+        },
+        {
+            "cast: long double to bool unsupported", __LINE__,
+            SVI("long double a = 0.5L;\n"
+                "return (_Bool)a;\n"),
+            .lower_error = _cc_unimplemented_error,
+        },
+        {
+            "cast: qualified slice evaluates once", __LINE__,
+            SVI("int a[3] = {2,4,6};\n"
+                "int s[:] = a[:];\n"
+                "int calls = 0;\n"
+                "const int t[:] = (const int[:])(++calls, s);\n"
+                "int u[:] = (int[:])t;\n"
+                "return calls * 100 + u.count * 10 + u[1];\n"),
+            .exit_code = 134,
+        },
+        {
+            "cast: array to slice comma evaluates once", __LINE__,
+            SVI("int a[3] = {2,4,6};\n"
+                "int calls = 0;\n"
+                "int s[:] = (int[:])(++calls, (++calls, a));\n"
+                "return calls * 100 + s.count * 10 + s[1];\n"),
+            .exit_code = 234,
+        },
+        {
+            "cast: array to bool evaluates address", __LINE__,
+            SVI("struct S { int a[2]; } s;\n"
+                "int calls = 0;\n"
+                "struct S *get(void){ ++calls; return &s; }\n"
+                "_Bool b = (_Bool)get()->a;\n"
+                "return calls * 10 + b;\n"),
+            .exit_code = 11,
+        },
+        {
+            "cast: array address conversions", __LINE__,
+            SVI("int a[2] = {3,7};\n"
+                "unsigned long long addr = (unsigned long long)&a[0];\n"
+                "unsigned char small = (unsigned char)a;\n"
+                "unsigned __int128 wide = (unsigned __int128)a;\n"
+                "typeof(nullptr) np = (typeof(nullptr))a;\n"
+                "return small == (unsigned char)addr && wide == addr\n"
+                "    && (unsigned long long)np == addr\n"
+                "    && (unsigned long long)a == addr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: function address conversions", __LINE__,
+            SVI("int f(void){ return 7; }\n"
+                "unsigned long long addr = (unsigned long long)&f;\n"
+                "struct { unsigned char small, guard; } s = {0, 93};\n"
+                "s.small = (unsigned char)f;\n"
+                "unsigned __int128 wide = (unsigned __int128)f;\n"
+                "typeof(nullptr) np = (typeof(nullptr))f;\n"
+                "_Bool b = (_Bool)f;\n"
+                "return s.small == (unsigned char)addr && s.guard == 93\n"
+                "    && wide == addr && (unsigned long long)np == addr\n"
+                "    && (unsigned long long)f == addr && (int)b == 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: dereferenced function pointer conversions", __LINE__,
+            SVI("int f(void){ return 7; }\n"
+                "int (*p)(void) = f;\n"
+                "int calls = 0;\n"
+                "_Bool b = (_Bool)(++calls, *p);\n"
+                "unsigned char small = (unsigned char)*p;\n"
+                "unsigned __int128 wide = (unsigned __int128)*p;\n"
+                "unsigned long long addr = (unsigned long long)p;\n"
+                "p = nullptr;\n"
+                "return (int)b == 1 && calls == 1 && !(_Bool)*p\n"
+                "    && small == (unsigned char)addr && wide == addr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "cast: void preserves comma side effects", __LINE__,
+            SVI("int n = 0;\n"
+                "(void)(++n, ++n);\n"
+                "return n;\n"),
+            .exit_code = 2,
+        },
+        {
+            "cast: nullptr_t from integer and pointer", __LINE__,
+            SVI("unsigned long long z = 0;\n"
+                "int *p = (int*)z;\n"
+                "typeof(nullptr) a = (typeof(nullptr))z;\n"
+                "typeof(nullptr) b = (typeof(nullptr))p;\n"
+                "return (int)a + (int)b;\n"),
+            .exit_code = 0,
+        },
+        {
             "numeric literal: long double", __LINE__,
             SVI("long double x = 7.0L;\n"
                "return (int)x;\n"),
-            .exit_code = 7,
+            .lower_error = _cc_unimplemented_error,
         },
         {
             "nullptr", __LINE__,
@@ -7123,7 +7220,7 @@ TestFunction(test_interpreter){
             SVI("long double a = 3.5L;\n"
                "long double b = 2.5L;\n"
                "return (int)(a + b);\n"),
-            .exit_code = 6,
+            .lower_error = _cc_unimplemented_error,
         },
         {
             "array of structs init", __LINE__,
@@ -7969,6 +8066,14 @@ TestFunction(test_interpreter){
 
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_lower_toplevel(&interp);
+        if(tc->lower_error){
+            TestExpect(err, ==, tc->lower_error);
+            if(err == tc->lower_error){
+                err = 0;
+                msb_reset(&log_sb);
+            }
+            goto finally;
+        }
         if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);

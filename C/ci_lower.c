@@ -80,6 +80,7 @@ static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
 static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
 static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
 static int ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out);
 static int ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, _Bool negate, SrcLoc loc);
@@ -777,6 +778,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_CAST:{
             // CC_EXPR_CAST covers several distinct operations;
             CcExpr* operand = e->lhs;
+            if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_kind(e->type) == CC_SLICE)
+                return ci_lower_slice(ci, ctx, e, dest, out);
             while(operand->kind == CC_EXPR_COMMA){
                 err = ci_lower_expr_discard(ci, ctx, operand->lhs);
                 if(err) return err;
@@ -784,91 +787,33 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             CcQualType from = operand->type;
             CcQualType to = e->type;
-            if(ccqt_kind(from) == CC_ARRAY && ccqt_kind(to) == CC_SLICE){
-                return ci_lower_slice(ci, ctx, e, dest, out);
+            if(ccqt_bt_eq(to, CCBT_void)){
+                out->slot = CI_NO_SLOT;
+                out->size = 0;
+                return ci_lower_expr_discard(ci, ctx, operand);
             }
-            if(ccqt_kind(from) == CC_FUNCTION){
-                if(operand->kind == CC_EXPR_DEREF)
-                    return ci_lower_expr(ci, ctx, operand->lhs, dest, out);
-                if(operand->kind != CC_EXPR_FUNCTION)
-                    return ci_unreachable(ci, operand->loc, "is this code reachable??");
-                err = ci_lower_dest(ctx, &dest, size);
-                if(err) return err;
-                out->slot = dest;
-                CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .func_addr = {
-                        .kind = CI_OP_FUNC_ADDR,
-                        .slot = dest,
-                        .slot_size = size,
-                        .func = operand->func,
-                        .loc = e->loc,
-                    }
-                };
-                return 0;
-            }
-            // Qualifier-only cast: pass through directly.
             if(from.unqual == to.unqual)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
-            if(ccqt_kind(from) == CC_ARRAY){
-                if(ccqt_kind(to) == CC_POINTER){
-                    CiLowerAddr a;
-                    err = ci_lower_addr(ci, ctx, operand, 1, &a);
-                    if(err) return err;
-                    return ci_addr_to_value(ctx, a, dest, size, e->loc, out);
-                }
-                else if(ccqt_kind(to) == CC_SLICE){
-                    return ci_ice(ci, e->loc, "array-to-slice cast missed early lowering%s", "");
-                }
-                else if(ccqt_kind(to) == CC_BASIC){
-                    if(to.basic.kind == CCBT_bool){
-                        err = ci_lower_dest(ctx, &dest, size);
-                        if(err) return err;
-                        out->slot = dest;
-                        out->canonical = 1;
-                        CiOp* op;
-                        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                        if(err) return err;
-                        *op = (CiOp){
-                            .constant = {
-                                .kind = CI_OP_CONST,
-                                .bt_kind = CCBT_bool,
-                                .immsize = size,
-                                .slot = dest,
-                                .immediate[0] = 1,
-                                .loc = e->loc,
-                            },
-                        };
-                        return 0;
-                    }
-                    return ci_ice(ci, e->loc, "unhandled array-to-basic cast%s", "");
-                }
-                else {
-                    return ci_ice(ci, e->loc, "unhandled array cast target%s", "");
-                }
-            }
+            if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE)
+                return ci_lower_expr(ci, ctx, operand, dest, out);
             _Bool from_float = ci_falu_type(from);
-            _Bool from_int = ccqt_kind(from) == CC_POINTER
-                          || ccqt_bt_eq(from, CCBT_nullptr_t);
+            _Bool from_addr = ccqt_kind(from) == CC_POINTER || ccqt_kind(from) == CC_ARRAY
+                           || ccqt_kind(from) == CC_FUNCTION || ccqt_bt_eq(from, CCBT_nullptr_t);
+            _Bool from_int = from_addr || ccqt_is_integer(from);
             uint32_t from_sz = ctx->ptr_size;
-            if(!from_int && ccqt_is_integer(from)){
+            if(ccqt_is_integer(from)){
                 err = cc_sizeof_as_uint(p, from, e->loc, &from_sz);
                 if(err) return err;
-                from_int = from_sz <= 16;
             }
             if(!from_int && !from_float)
-                break; // long double, non-scalar fall back
-            // Conversion to _Bool is not a truncation: any nonzero scalar
-            // canonicalizes to exactly 1, zero to 0.
-            if(ccqt_is_basic(to) && to.basic.kind == CCBT_bool){
+                return ci_unimplemented(ci, e->loc, "cast from unsupported type");
+            if(ccqt_bt_eq(to, CCBT_bool)){
                 err = ci_lower_dest(ctx, &dest, size);
                 if(err) return err;
                 out->slot = dest;
                 uint32_t temp = ctx->temp;
                 CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, operand, CI_NO_SLOT, &v);
+                err = ci_lower_cast_operand(ci, ctx, operand, CI_NO_SLOT, &v);
                 if(err) return err;
                 err = ci_lower_istrue(ctx, &v, from, dest, size, 0, e->loc);
                 if(err) return err;
@@ -876,18 +821,16 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 out->canonical = 1;
                 return 0;
             }
-            _Bool to_int = ccqt_kind(to) == CC_POINTER || (ccqt_is_integer(to) && size <= 16);
+            _Bool to_int = ccqt_kind(to) == CC_POINTER || ccqt_bt_eq(to, CCBT_nullptr_t) || ccqt_is_integer(to);
             _Bool to_float = ci_falu_type(to);
             CiOpKind kind;
             uint32_t is_unsigned = 0;
             if(from_int && to_int){
                 if(from_sz == size)
-                    return ci_lower_expr(ci, ctx, operand, dest, out);
+                    return ci_lower_cast_operand(ci, ctx, operand, dest, out);
                 kind = CI_OP_CONVERT;
                 // A pointer source is an address: widen by zero-extension.
-                is_unsigned = ccqt_kind(from) == CC_POINTER
-                           || ccqt_bt_eq(from, CCBT_nullptr_t)
-                           || ccqt_is_unsigned(from, ctx->char_is_unsigned);
+                is_unsigned = from_addr || ccqt_is_unsigned(from, ctx->char_is_unsigned);
             }
             else if(from_int && to_float){
                 kind = CI_OP_ITOF;
@@ -901,14 +844,14 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 kind = CI_OP_FTOF;
             }
             else {
-                break; // pointers, 128-bit, long double, etc fall back
+                return ci_unimplemented(ci, e->loc, "cast to unsupported type");
             }
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
             out->slot = dest;
             uint32_t temp = ctx->temp;
             CiLowerVal v;
-            err = ci_lower_expr(ci, ctx, operand, CI_NO_SLOT, &v);
+            err = ci_lower_cast_operand(ci, ctx, operand, CI_NO_SLOT, &v);
             if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -925,12 +868,10 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 }
             };
             ctx->temp = temp;
-            // a canonical 0/1 survives integer widening and truncation
             out->canonical = kind == CI_OP_CONVERT && v.canonical;
             return 0;
         }
         case CC_EXPR_POS:
-            // unary plus is a no-op
             return ci_lower_expr(ci, ctx, e->lhs, dest, out);
         case CC_EXPR_NEG:
         case CC_EXPR_BITNOT:{
@@ -1996,6 +1937,40 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
 
 static
 int
+ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    if(ccqt_kind(e->type) == CC_ARRAY){
+        CiLowerAddr a;
+        int err = ci_lower_addr(ci, ctx, e, 1, &a);
+        if(err) return err;
+        return ci_addr_to_value(ctx, a, dest, ctx->ptr_size, e->loc, out);
+    }
+    if(ccqt_kind(e->type) == CC_FUNCTION){
+        if(e->kind == CC_EXPR_DEREF)
+            return ci_lower_expr(ci, ctx, e->lhs, dest, out);
+        if(e->kind != CC_EXPR_FUNCTION)
+            return ci_ice(ci, e->loc, "unexpected function cast operand%s", "");
+        int err = ci_lower_dest(ctx, &dest, ctx->ptr_size);
+        if(err) return err;
+        *out = (CiLowerVal){.slot = dest, .size = ctx->ptr_size};
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .func_addr = {
+                .kind = CI_OP_FUNC_ADDR,
+                .slot = dest,
+                .slot_size = ctx->ptr_size,
+                .func = e->func,
+                .loc = e->loc,
+            }
+        };
+        return 0;
+    }
+    return ci_lower_expr(ci, ctx, e, dest, out);
+}
+
+static
+int
 ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out){
     uint32_t nargs = rt_op == CI_RT_HOTSWAP ? 2 : 1;
     CcExpr* args[2] = {e->lhs, NULL};
@@ -2043,7 +2018,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     uint32_t size;
     err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
     if(err) return err;
-    uint64_t step = 1;
+    uint64_t step;
     uint32_t step_bt = (uint32_t)ci_target(ci)->size_type;
     uint32_t step_immsize = size;
     _Bool is_float = 0;
@@ -2053,12 +2028,10 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         step = pointee_sz;
     }
-    else if(ccqt_is_integer(e->type) && size <= 16){
-        // integer/enum: step is the integer 1 (or pointee size, above)
+    else if(ccqt_is_integer(e->type)){
+        step = 1;
     }
     else if(ci_falu_type(e->type)){
-        // float/double: step is 1.0 in the target width; long double, _Float16,
-        // etc are not ci_falu_type and still fall back
         is_float = 1;
         step_bt = (uint32_t)e->type.basic.kind;
         step_immsize = size;
@@ -2068,9 +2041,12 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             memcpy(&bits, &one, 4);
             step = bits;
         }
-        else {
+        else if(size == 8){
             double one = 1.0;
             memcpy(&step, &one, 8);
+        }
+        else {
+            return ci_unimplemented(ci, e->loc, "incdec on unsupported falu type");
         }
     }
     else {
