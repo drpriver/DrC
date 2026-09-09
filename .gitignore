@@ -1,6 +1,6 @@
-build
-build.cache.json
-build.deps
+*build
+*.cache.json
+*.deps
 Fetched/
 Bin/
 compile_commands.json
