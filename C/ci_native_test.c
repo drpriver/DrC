@@ -853,7 +853,24 @@ TestFunction(test_interp){
         struct { StringView name; void* sym;} symbols[8];
         int exit_code;
         _Bool skip;
+        const char*_Nullable parse_error;
     } testcases[] = {
+        {
+            "procmacro: aggregate argument", __LINE__,
+            SVI("struct S { int a[5]; };\n"
+                "int sum(struct S s){ return s.a[0]+s.a[4]; }\n"
+                "#pragma procmacro sum\n"
+                "return sum(((struct S){{3,0,0,0,4}}));\n"),
+            .exit_code = 7,
+        },
+        {
+            "procmacro: void result", __LINE__,
+            SVI("void nothing(int x){}\n"
+                "#pragma procmacro nothing\n"
+                "nothing(3)\n"
+                "return 7;\n"),
+            .exit_code = 7,
+        },
         {
             "procmacro", __LINE__,
             SVI("int add(int x, int y){return x + y;}\n"
@@ -1090,6 +1107,27 @@ TestFunction(test_interp_fail){
             "_Module.parse_type rejects declarator name", __LINE__,
             SVI("_Type T = __root_module().parse_type(\"int name\");\n"),
             SVI("(test):1:26: error: unexpected declarator name 'name' in type expression\n"),
+        },
+        {
+            "procmacro: argument with side effects", __LINE__,
+            SVI("int n;\n"
+                "#pragma resolve n\n"
+                "int identity(int x){ return x; }\n"
+                "#pragma procmacro identity\n"
+                "return identity(++n) + identity(++n);\n"),
+            SVI("asd"),
+            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
+        },
+        {
+            "procmacro: argument is alloca", __LINE__,
+            SVI("char* p;\n"
+                "#pragma resolve p\n"
+                "const char* identity(const char* s){ return s; }\n"
+                "#pragma procmacro identity\n"
+                "const char* s = identity((p = __builtin_alloca(3), p[0] = 111, p[1] = 107, p[2] = 0, p));\n"
+                "return s[0] == 111 && s[1] == 107 && s[2] == 0;\n"),
+            SVI("asd"),
+            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
         },
     };
     int err;

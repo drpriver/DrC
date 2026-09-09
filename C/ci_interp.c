@@ -139,8 +139,7 @@ static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* ou
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static _Bool cc_implicit_convertible(CcQualType from, CcQualType to);
 static _Bool cc_explicit_castable(CcQualType from, CcQualType to);
-// Evaluate an expression as an lvalue, returning pointer to its storage.
-static int ci_interp_lvalue(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size);
+static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
 
@@ -187,20 +186,6 @@ ci_read_int(const void* buf, uint32_t sz){
     return 0;
 }
 
-// Read an integer value as int64_t, handling sizes up to 16 (int128).
-// For 128-bit values, this truncates to 64 bits (appropriate for indices, etc.).
-static inline
-int64_t
-ci_read_int_any(const void* buf, uint32_t sz, _Bool is_unsigned){
-    if(sz <= 8){
-        if(is_unsigned)
-            return (int64_t)ci_read_uint(buf, sz);
-        return ci_read_int(buf, sz);
-    }
-    CiUint128 v;
-    ci_uint128_read(&v, buf, sz);
-    return (int64_t)ci_uint128_lo(v);
-}
 
 static inline
 void
@@ -241,39 +226,6 @@ ci_read_float(const void* buf, CcBasicTypeKind k){
     return d;
 }
 
-static inline
-void
-ci_write_float(void* buf, CcBasicTypeKind k, double val){
-    if(k == CCBT_float){
-        float f = (float)val;
-        memcpy(buf, &f, sizeof f);
-    }
-    else {
-        memcpy(buf, &val, sizeof val);
-    }
-}
-
-static inline
-_Bool
-ci_is_truthy(const void* buf, CcQualType type, uint32_t sz){
-    if(ccqt_is_basic(type) && ccbt_is_float(type.basic.kind))
-        return ci_read_float(buf, type.basic.kind) != 0.0;
-    if(sz > 8){
-        CiUint128 v;
-        ci_uint128_read(&v, buf, sz);
-        return ci_uint128_nonzero(v);
-    }
-    return ci_read_uint(buf, sz) != 0;
-}
-
-static
-void* _Nullable
-ci_var_storage(CiInterpFrame* frame, CcVariable* var){
-    if(var->automatic)
-        return (char*)frame->slots + var->frame_offset;
-    return var->interp_val;
-}
-
 static
 int
 ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
@@ -295,410 +247,6 @@ ci_atomic_check_size(CiInterpreter* ci, SrcLoc loc, uint32_t sz){
         default:
             return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
     }
-}
-
-static
-int
-ci_load_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* src, void* dest){
-    uint32_t sz;
-    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
-    if(err) return err;
-    if(!type.is_atomic){
-        memcpy(dest, src, sz);
-        return 0;
-    }
-    err = ci_atomic_check_size(ci, loc, sz);
-    if(err) return err;
-    #ifdef _MSC_VER
-    switch(sz){
-        case 1:  *(uint8_t*)dest  = (uint8_t)_InterlockedOr8((volatile char*)src, 0); break;
-        case 2:  *(uint16_t*)dest = (uint16_t)_InterlockedOr16((volatile short*)src, 0); break;
-        case 4:  *(uint32_t*)dest = (uint32_t)_InterlockedOr((volatile long*)src, 0); break;
-        case 8:  *(uint64_t*)dest = (uint64_t)_InterlockedOr64((volatile long long*)src, 0); break;
-        case 16: { __int64 tmp[2] = {0}; _InterlockedCompareExchange128((volatile __int64*)src, 0, 0, tmp); memcpy(dest, tmp, 16); break; }
-        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    }
-    #else
-    switch(sz){
-        case 1:  __atomic_load(( uint8_t*)src, ( uint8_t*)dest, __ATOMIC_SEQ_CST); break;
-        case 2:  __atomic_load((uint16_t*)src, (uint16_t*)dest, __ATOMIC_SEQ_CST); break;
-        case 4:  __atomic_load((uint32_t*)src, (uint32_t*)dest, __ATOMIC_SEQ_CST); break;
-        case 8:  __atomic_load((uint64_t*)src, (uint64_t*)dest, __ATOMIC_SEQ_CST); break;
-        case 16: __atomic_load((CiAtomic16*)src, (CiAtomic16*)dest, __ATOMIC_SEQ_CST); break;
-        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    }
-    #endif
-    return 0;
-}
-
-static
-int
-ci_store_object(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* dest, void* src){
-    uint32_t sz;
-    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
-    if(err) return err;
-    if(!type.is_atomic){
-        memcpy(dest, src, sz);
-        return 0;
-    }
-    err = ci_atomic_check_size(ci, loc, sz);
-    if(err) return err;
-    #ifdef _MSC_VER
-    switch(sz){
-        case 1:  _InterlockedExchange8((volatile char*)dest, *(char*)src); break;
-        case 2:  _InterlockedExchange16((volatile short*)dest, *(short*)src); break;
-        case 4:  _InterlockedExchange((volatile long*)dest, *(long*)src); break;
-        case 8:  _InterlockedExchange64((volatile long long*)dest, *(long long*)src); break;
-        case 16: {
-            __int64 nv[2]; memcpy(nv, src, 16);
-            __int64 cmp[2] = {0};
-            while(!_InterlockedCompareExchange128((volatile __int64*)dest, nv[1], nv[0], cmp)){}
-            break;
-        }
-        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    }
-    #else
-    switch(sz){
-        case 1:  __atomic_store(( uint8_t*)dest, ( uint8_t*)src, __ATOMIC_SEQ_CST); break;
-        case 2:  __atomic_store((uint16_t*)dest, (uint16_t*)src, __ATOMIC_SEQ_CST); break;
-        case 4:  __atomic_store((uint32_t*)dest, (uint32_t*)src, __ATOMIC_SEQ_CST); break;
-        case 8:  __atomic_store((uint64_t*)dest, (uint64_t*)src, __ATOMIC_SEQ_CST); break;
-        case 16: __atomic_store((CiAtomic16*)dest, (CiAtomic16*)src, __ATOMIC_SEQ_CST); break;
-        default: return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    }
-    #endif
-    return 0;
-}
-
-static
-uint64_t
-ci_atomic_rmw_compute(uint32_t op, uint64_t left, uint64_t right, _Bool is_unsigned){
-    switch(op){
-        case CC_EXPR_PREINC:
-        case CC_EXPR_POSTINC:
-        case CC_EXPR_ADDASSIGN:
-            return left + right;
-        case CC_EXPR_PREDEC:
-        case CC_EXPR_POSTDEC:
-        case CC_EXPR_SUBASSIGN:
-            return left - right;
-        case CC_EXPR_MULASSIGN:
-            return left * right;
-        case CC_EXPR_DIVASSIGN:
-            if(is_unsigned) return right ? left / right : 0;
-            return right ? (uint64_t)((int64_t)left / (int64_t)right) : 0;
-        case CC_EXPR_MODASSIGN:
-            if(is_unsigned) return right ? left % right : 0;
-            return right ? (uint64_t)((int64_t)left % (int64_t)right) : 0;
-        case CC_EXPR_BITANDASSIGN:
-            return left & right;
-        case CC_EXPR_BITORASSIGN:
-            return left | right;
-        case CC_EXPR_BITXORASSIGN:
-            return left ^ right;
-        case CC_EXPR_LSHIFTASSIGN:
-            return left << right;
-        case CC_EXPR_RSHIFTASSIGN:
-            if(is_unsigned) return left >> right;
-            return (uint64_t)((int64_t)left >> right);
-        default:
-            return left;
-    }
-}
-
-static
-int
-ci_atomic_integer_rmw(CiInterpreter* ci, SrcLoc loc, CcQualType type, void* ptr,
-    uint32_t op, uint64_t rhs, _Bool result_is_old, void* result){
-    CcQualType unqual = type;
-    unqual.quals = 0;
-    if(!ccqt_is_basic(unqual) && ccqt_kind(unqual) == CC_ENUM)
-        unqual = ccqt_as_enum(unqual)->underlying;
-    if(!(ccqt_is_basic(unqual) && ccbt_is_integer(unqual.basic.kind)))
-        return ci_error(ci, loc, "atomic read-modify-write requires integer atomic type");
-    uint32_t sz;
-    int err = cc_sizeof_as_uint(&ci->parser, type, loc, &sz);
-    if(err) return err;
-    err = ci_atomic_check_size(ci, loc, sz);
-    if(err) return err;
-    if(sz > 8)
-        return ci_error(ci, loc, "atomic read-modify-write unsupported for operand size %u", sz);
-    _Bool is_unsigned = ccqt_is_unsigned(type, !ci_target(ci)->char_is_signed);
-    #ifdef _MSC_VER
-    #define CI_ATOMIC_RMW_MSVC_CASE(T, ST, IT, intrinsic) do { \
-        volatile IT* iptr = (volatile IT*)ptr; \
-        IT expected = *iptr; \
-        IT old; \
-        IT desired; \
-        do { \
-            old = expected; \
-            T typed_old = (T)old; \
-            uint64_t left = is_unsigned ? (uint64_t)typed_old : (uint64_t)(int64_t)(ST)typed_old; \
-            T typed_desired = (T)ci_atomic_rmw_compute(op, left, rhs, is_unsigned); \
-            desired = (IT)typed_desired; \
-            expected = intrinsic(iptr, desired, old); \
-        } while(expected != old); \
-        T typed_result = (T)(result_is_old ? old : desired); \
-        ci_write_uint(result, sz, (uint64_t)typed_result); \
-        return 0; \
-    } while(0)
-    switch(sz){
-        case 1: CI_ATOMIC_RMW_MSVC_CASE(uint8_t, int8_t, char, _InterlockedCompareExchange8);
-        case 2: CI_ATOMIC_RMW_MSVC_CASE(uint16_t, int16_t, short, _InterlockedCompareExchange16);
-        case 4: CI_ATOMIC_RMW_MSVC_CASE(uint32_t, int32_t, long, _InterlockedCompareExchange);
-        case 8: CI_ATOMIC_RMW_MSVC_CASE(uint64_t, int64_t, long long, _InterlockedCompareExchange64);
-        default: break;
-    }
-    #undef CI_ATOMIC_RMW_MSVC_CASE
-    return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    #else
-    #define CI_ATOMIC_RMW_CASE(T, ST) do { \
-        T expected; \
-        __atomic_load((T*)ptr, &expected, __ATOMIC_SEQ_CST); \
-        T old; \
-        T desired; \
-        do { \
-            old = expected; \
-            uint64_t left = is_unsigned ? (uint64_t)old : (uint64_t)(int64_t)(ST)old; \
-            desired = (T)ci_atomic_rmw_compute(op, left, rhs, is_unsigned); \
-        } while(!__atomic_compare_exchange((T*)ptr, &expected, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)); \
-        ci_write_uint(result, sz, (uint64_t)(result_is_old ? old : desired)); \
-        return 0; \
-    } while(0)
-    switch(sz){
-        case 1: CI_ATOMIC_RMW_CASE(uint8_t, int8_t);
-        case 2: CI_ATOMIC_RMW_CASE(uint16_t, int16_t);
-        case 4: CI_ATOMIC_RMW_CASE(uint32_t, int32_t);
-        case 8: CI_ATOMIC_RMW_CASE(uint64_t, int64_t);
-        default: break;
-    }
-    #undef CI_ATOMIC_RMW_CASE
-    return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    #endif
-}
-
-static
-int
-ci_interp_lvalue(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out, size_t* size){
-    uint32_t _type_sz;
-    // Incomplete arrays (FLA, zero-length arrays) have unknown size.
-    if(ccqt_kind(expr->type) == CC_ARRAY && ccqt_as_array(expr->type)->is_incomplete){
-        _type_sz = 0;
-    }
-    else {
-        int _serr = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &_type_sz);
-        if(_serr) return _serr;
-    }
-    *size = _type_sz;
-    switch(expr->kind){
-        case CC_EXPR_VARIABLE: {
-            CcVariable* var = expr->var;
-            int err = ci_ensure_var_storage(ci, var);
-            if(err) return err;
-            void* storage = ci_var_storage(frame, var);
-            if(!storage)
-                return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
-            *out = storage;
-            return 0;
-        }
-        case CC_EXPR_DEREF: {
-            // *ptr: evaluate ptr, return the pointer value
-            void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, frame,expr->lhs, &ptr_val, sizeof ptr_val);
-            if(err) return err;
-            *out = ptr_val;
-            return 0;
-        }
-        case CC_EXPR_DOT: {
-            // base.member: get lvalue of base, add field offset
-            void* base;
-            size_t base_size;
-            int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
-            if(err) return err;
-            uint64_t off = expr->field_loc.byte_offset;
-            if(off + _type_sz > base_size)
-                return ci_error(ci, expr->loc, "field access out of bounds");
-            *out = (char*)base + off;
-            return 0;
-        }
-        case CC_EXPR_ARROW: {
-            // ptr->member: eval ptr, add field offset
-            void* ptr_val = NULL;
-            int err = ci_interp_expr(ci, frame, expr->values[0], &ptr_val, sizeof ptr_val);
-            if(err) return err;
-            *out = (char*)ptr_val + expr->field_loc.byte_offset;
-            return 0;
-        }
-        case CC_EXPR_SUBSCRIPT: {
-            // base[index]
-            CcExpr* base_expr = expr->lhs;
-            CcExpr* idx_expr = expr->values[0];
-            CcQualType base_type = base_expr->type;
-            uint32_t elem_sz;
-            int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &elem_sz);
-            if(err) return err;
-            CiUint128 idx_buf = {0};
-            uint32_t idx_sz;
-            err = cc_sizeof_as_uint(&ci->parser, idx_expr->type, expr->loc, &idx_sz);
-            if(err) return err;
-            err = ci_interp_expr(ci, frame, idx_expr, &idx_buf, sizeof idx_buf);
-            if(err) return err;
-            _Bool idx_unsigned = ccqt_is_unsigned(idx_expr->type, !ci_target(ci)->char_is_signed);
-            int64_t idx = ci_read_int_any(&idx_buf, idx_sz, idx_unsigned);
-            if(ccqt_kind(base_type) == CC_ARRAY){
-                // Array: get lvalue of base, index into it
-                void* base;
-                size_t base_size;
-                err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);
-                if(err) return err;
-                // Skip bounds check when size is unknown (incomplete/zero-length
-                // arrays) or when base is a struct member (FLA patterns).
-                _Bool skip_check = !base_size
-                    || base_expr->kind == CC_EXPR_ARROW
-                    || base_expr->kind == CC_EXPR_DOT;
-                // XXX: > _Countof instead of >= to allow taking address of
-                // 1-past-the-end which is allowed, but maybe we need a flag to
-                // say we're in that state
-                if(!skip_check && (idx < 0 || (uint64_t)idx * elem_sz > base_size))
-                    return ci_error(ci, expr->loc, "array subscript out of bounds");
-                *out = (char*)base + idx * elem_sz;
-            }
-            else if(ccqt_kind(base_type) == CC_SLICE){
-                CiRtSlice slice;
-                err = ci_interp_expr(ci, frame, base_expr, &slice, sizeof slice);
-                if(err) return err;
-                // XXX: > slice.count instead of >= to allow taking address of
-                // 1-past-the-end which is allowed, but maybe we need a flag to
-                // say we're in that state
-                if(idx < 0 || (uintptr_t)idx > slice.count)
-                    return ci_error(ci, expr->loc, "slice subscript out of bounds");
-                *out = (char*)slice.data + idx * elem_sz;
-            }
-            else {
-                // Pointer: eval base as rvalue
-                void* ptr_val = NULL;
-                err = ci_interp_expr(ci, frame, base_expr, &ptr_val, sizeof ptr_val);
-                if(err) return err;
-                *out = (char*)ptr_val + idx * elem_sz;
-            }
-            return 0;
-        }
-        case CC_EXPR_COMMA: {
-            // Evaluate left side for side effects, then get lvalue of right side.
-            // Used by desugared compound literals: (anon = init, anon)
-            int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
-            if(err) return err;
-            return ci_interp_lvalue(ci, frame, expr->values[0], out, size);
-        }
-        case CC_EXPR_TERNARY: {
-            CiUint128 cond = {0};
-            uint32_t cond_sz;
-            int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
-            if(err) return err;
-            err = ci_interp_expr(ci, frame, expr->lhs, &cond, sizeof cond);
-            if(err) return err;
-            _Bool truthy = ci_is_truthy(&cond, expr->lhs->type, cond_sz);
-            return ci_interp_lvalue(ci, frame, truthy ? expr->values[0] : expr->values[1], out, size);
-        }
-        case CC_EXPR_VALUE:
-            if(ccqt_kind(expr->type) == CC_ARRAY && expr->text){
-                *out = (void*)(uintptr_t)expr->text;
-                uint32_t sz;
-                int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-                if(err) return err;
-                *size = sz;
-                return 0;
-            }
-            return ci_error(ci, expr->loc, "expression is not an lvalue");
-        case CC_EXPR_SIZEOF_VMT:
-        case CC_EXPR_FUNCTION:
-        case CC_EXPR_COMPOUND_LITERAL:
-        case CC_EXPR_INIT_LIST:
-        case CC_EXPR_NEG:
-        case CC_EXPR_POS:
-        case CC_EXPR_BITNOT:
-        case CC_EXPR_LOGNOT:
-        case CC_EXPR_ADDR:
-        case CC_EXPR_PREINC:
-        case CC_EXPR_PREDEC:
-        case CC_EXPR_POSTINC:
-        case CC_EXPR_POSTDEC:
-        case CC_EXPR_ADD:
-        case CC_EXPR_SUB:
-        case CC_EXPR_MUL:
-        case CC_EXPR_DIV:
-        case CC_EXPR_MOD:
-        case CC_EXPR_BITAND:
-        case CC_EXPR_BITOR:
-        case CC_EXPR_BITXOR:
-        case CC_EXPR_LSHIFT:
-        case CC_EXPR_RSHIFT:
-        case CC_EXPR_LOGAND:
-        case CC_EXPR_LOGOR:
-        case CC_EXPR_EQ:
-        case CC_EXPR_NE:
-        case CC_EXPR_LT:
-        case CC_EXPR_GT:
-        case CC_EXPR_LE:
-        case CC_EXPR_GE:
-        case CC_EXPR_ASSIGN:
-        case CC_EXPR_ADDASSIGN:
-        case CC_EXPR_SUBASSIGN:
-        case CC_EXPR_MULASSIGN:
-        case CC_EXPR_DIVASSIGN:
-        case CC_EXPR_MODASSIGN:
-        case CC_EXPR_BITANDASSIGN:
-        case CC_EXPR_BITORASSIGN:
-        case CC_EXPR_BITXORASSIGN:
-        case CC_EXPR_LSHIFTASSIGN:
-        case CC_EXPR_RSHIFTASSIGN:
-        case CC_EXPR_CAST:
-        case CC_EXPR_CALL:
-        case CC_EXPR_STATEMENT_EXPRESSION:
-        case CC_EXPR_ATOMIC:
-        case CC_EXPR_VA:
-        case CC_EXPR_BUILTIN:
-        case CC_EXPR_ADD_OVERFLOW:
-        case CC_EXPR_MUL_OVERFLOW:
-        case CC_EXPR_SUB_OVERFLOW:
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ:
-        case CC_EXPR_ALLOCA:
-        case CC_EXPR_INTERN:
-        case CC_EXPR_HOTSWAP:
-        case CC_EXPR_COMPILE:
-        case CC_EXPR_MODULE_REFLECT:
-        case CC_EXPR_TYPE_INTROSPECTION:
-        case CC_EXPR_UMUL128:
-        case CC_EXPR_SLICE:
-        case CC_EXPR_SLICE_LO:
-        case CC_EXPR_SLICE_HI:
-        case CC_EXPR_SLICE_ALL:
-        case CC_EXPR_BSWAP:
-            return ci_error(ci, expr->loc, "expression is not an lvalue");
-        DRP_CASES_EXHAUSTED;
-    }
-}
-
-// Get the address of the storage unit for a bitfield DOT/ARROW expression.
-static
-int
-ci_bitfield_storage_addr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void*_Nullable*_Nonnull out){
-    if(expr->kind == CC_EXPR_DOT){
-        void* base;
-        size_t base_size;
-        int err = ci_interp_lvalue(ci, frame, expr->values[0], &base, &base_size);
-        if(err) return err;
-        *out = (char*)base + expr->field_loc.byte_offset;
-    }
-    else {
-        void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, frame, expr->values[0], &ptr_val, sizeof ptr_val);
-        if(err) return err;
-        *out = (char*)ptr_val + expr->field_loc.byte_offset;
-    }
-    return 0;
 }
 
 static inline
@@ -792,2715 +340,422 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
 
 static
 int
-ci_interp_expr(CiInterpreter* ci, CiInterpFrame* frame, CcExpr* expr, void* result, size_t size){
-    switch(expr->kind){
-    case CC_EXPR_VALUE: {
-        if(result == ci_discard_buf) return 0;
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(ccqt_kind(expr->type) == CC_ARRAY){
-            if(sz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-            memcpy(result, expr->text, sz);
-            return 0;
-        }
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memcpy(result, &expr->uinteger, sz);
-        return 0;
+ci_type_reflect_validate(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt){
+    if(op == CC_TYPE_FIELD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION)
+        return ci_error(ci, loc, "_Type.field: not a struct or union type");
+    if(op == CC_TYPE_ENUMERATOR && ccqt_kind(qt) != CC_ENUM)
+        return ci_error(ci, loc, "_Type.enumerator: not an enum type");
+    if(op == CC_TYPE_PARAM_TYPE){
+        if(ccqt_kind(qt) == CC_POINTER) qt = ccqt_as_ptr(qt)->pointee;
+        if(ccqt_kind(qt) != CC_FUNCTION)
+            return ci_error(ci, loc, "_Type.param_type: not a function type");
     }
-    case CC_EXPR_VARIABLE: {
-        if(result == ci_discard_buf) return 0;
-        CcVariable* var = expr->var;
-        int err = ci_ensure_var_storage(ci, var);
-        if(err) return err;
-        void* storage = ci_var_storage(frame, var);
-        if(!storage)
-            return ci_error(ci, expr->loc, "variable '%s' has no storage", var->name->data);
-        CcQualType var_type = var->type;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, var_type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        return ci_load_object(ci, expr->loc, var_type, storage, result);
-    }
-    case CC_EXPR_FUNCTION: {
-        if(result == ci_discard_buf) return 0;
-        CcFunc* func = expr->func;
-        if(!func->native_func)
-            return ci_ice(ci, expr->loc, "function '%s' not resolved before execution",
-                func->name ? func->name->data : "<unknown>");
-        void (*fn)(void) = func->native_func;
-        if(sizeof fn > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof fn, size);
-        memcpy(result, &fn, sizeof fn);
-        return 0;
-    }
-    case CC_EXPR_CAST: {
-        CcExpr* operand = expr->lhs;
-        CcQualType from = operand->type;
-        CcQualType to = expr->type;
-        if(ccqt_is_basic(to) && to.basic.kind == CCBT_void){
-            return ci_interp_expr(ci, frame, operand, ci_discard_buf, sizeof ci_discard_buf);
-        }
-        // Function-to-pointer decay: the function expression already
-        // produces the function pointer value.
-        if(ccqt_kind(from) == CC_FUNCTION){
-            return ci_interp_expr(ci, frame, operand, result, size);
-        }
-        // Qualifier-only cast (e.g., const T -> T): pass through directly.
-        if((from.bits & ~(uintptr_t)7) == (to.bits & ~(uintptr_t)7)){
-            return ci_interp_expr(ci, frame, operand, result, size);
-        }
-        if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE){ // qualified slice cast
-            return ci_interp_expr(ci, frame, operand, result, size);
-        }
-        // Array-to-slice conversion: {count = array length, data = &array[0]}.
-        if(ccqt_kind(from) == CC_ARRAY && ccqt_kind(to) == CC_SLICE){
-            if(size < sizeof(CiRtSlice))
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
-            void* ptr;
-            size_t lval_size;
-            int err = ci_interp_lvalue(ci, frame, operand, &ptr, &lval_size);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice* out = result;
-            out->count = ccqt_as_array(from)->length;
-            out->data = ptr;
-            return 0;
-        }
-        // Array-to-pointer decay: get address of array data (not vectors).
-        if(ccqt_kind(from) == CC_ARRAY && !ccqt_as_array(from)->is_vector){
-            if(result == ci_discard_buf) return 0;
-            if(sizeof(void*) > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
-            void* ptr;
-            size_t lval_size;
-            int err = ci_interp_lvalue(ci, frame, operand, &ptr, &lval_size);
-            if(err) return err;
-            memcpy(result, &ptr, sizeof ptr);
-            return 0;
-        }
-        if(!ccqt_is_basic(from) && ccqt_kind(from) != CC_POINTER && ccqt_kind(from) != CC_ENUM)
-            return ci_error(ci, expr->loc, "interpreter:%s:%d: cast from non-scalar type", __FILE__, __LINE__);
-        uint32_t from_sz;
-        int err = cc_sizeof_as_uint(&ci->parser, from, expr->loc, &from_sz);
-        if(err) return err;
-        uint32_t to_sz;
-        err = cc_sizeof_as_uint(&ci->parser, to, expr->loc, &to_sz);
-        if(err) return err;
-        CiUint128 val128 = {0};
-        void* valp = &val128;
-        size_t val_cap = sizeof val128;
-        err = ci_interp_expr(ci, frame, operand, valp, val_cap);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(to_sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, to_sz, size);
-        _Bool from_is_float = ccqt_is_basic(from) && ccbt_is_float(from.basic.kind);
-        _Bool to_is_float = ccqt_is_basic(to) && ccbt_is_float(to.basic.kind);
-        if(from_is_float && to_is_float){
-            double d = ci_read_float(valp, from.basic.kind);
-            ci_write_float(result, to.basic.kind, d);
-        }
-        else if(from_is_float && !to_is_float){
-            double d = ci_read_float(valp, from.basic.kind);
-            if(to_sz > 8){
-                // float to 128-bit int
-                _Bool is_unsigned = ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed);
-                CiUint128 v = ci_uint128_from_double(d, is_unsigned);
-                ci_uint128_write(result, to_sz, v);
-            }
-            else {
-                if(ccqt_is_unsigned(to, !ci_target(ci)->char_is_signed))
-                    ci_write_uint(result, to_sz, (uint64_t)d);
-                else
-                    ci_write_uint(result, to_sz, (uint64_t)(int64_t)d);
-            }
-        }
-        else if(!from_is_float && to_is_float){
-            _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
-            double d;
-            if(from_sz > 8){
-                CiUint128 v;
-                ci_uint128_read(&v, valp, from_sz);
-                d = ci_uint128_to_double(v, from_unsigned);
-            }
-            else if(from_unsigned)
-                d = (double)ci_read_uint(valp, from_sz);
-            else
-                d = (double)ci_read_int(valp, from_sz);
-            ci_write_float(result, to.basic.kind, d);
-        }
-        else {
-            if(from_sz > 8 || to_sz > 8){
-                // 128-bit path
-                CiUint128 v;
-                ci_uint128_read(&v, valp, from_sz);
-                if(from_sz <= 8){
-                    _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
-                    if(from_unsigned)
-                        v = ci_uint128_from_uint64(ci_read_uint(valp, from_sz));
-                    else
-                        v = ci_uint128_from_int64(ci_read_int(valp, from_sz));
-                }
-                if(to_sz <= 8){
-                    ci_write_uint(result, to_sz, ci_uint128_lo(v));
-                }
-                else {
-                    ci_uint128_write(result, to_sz, v);
-                }
-            }
-            else {
-                _Bool from_unsigned = ccqt_is_unsigned(from, !ci_target(ci)->char_is_signed);
-                if(from_unsigned)
-                    ci_write_uint(result, to_sz, ci_read_uint(valp, from_sz));
-                else
-                    ci_write_uint(result, to_sz, (uint64_t)ci_read_int(valp, from_sz));
-            }
-        }
-        return 0;
-    }
-    case CC_EXPR_ASSIGN: {
-        CcExpr* lhs = expr->lhs;
-        // Bitfield assignment: read-modify-write on the storage unit.
-        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
-            void* storage_addr;
-            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
-            if(err) return err;
-            uint32_t sz;
-            err = cc_sizeof_as_uint(&ci->parser, lhs->type, expr->loc, &sz);
-            if(err) return err;
-            uint64_t rval = 0;
-            err = ci_interp_expr(ci, frame, expr->values[0], &rval, sizeof rval);
-            if(err) return err;
-            rval = ci_read_uint(&rval, sz);
-            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, rval);
-            if(result == ci_discard_buf) return 0;
-            _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
-            uint64_t out = ci_bitfield_extend(rval, lhs->field_loc.bit_width, !is_unsigned);
-            memset(result, 0, size);
-            memcpy(result, &out, sz < size ? sz : size);
-            return 0;
-        }
-        void* lval;
-        size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
-        if(err) return err;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > lval_size)
-            return ci_error(ci, expr->loc, "interpreter: assignment exceeds lvalue storage");
-        if(lhs->type.is_atomic){
-            _Alignas(16) char atomic_value[16] = {0};
-            err = ci_interp_expr(ci, frame, expr->values[0], atomic_value, sizeof atomic_value);
-            if(err) return err;
-            err = ci_store_object(ci, expr->loc, lhs->type, lval, atomic_value);
-            if(err) return err;
-        }
-        else {
-            err = ci_interp_expr(ci, frame,expr->values[0], lval, lval_size);
-            if(err) return err;
-        }
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        return ci_load_object(ci, expr->loc, lhs->type, lval, result);
-    }
-    case CC_EXPR_COMMA: {
-        int err = ci_interp_expr(ci, frame, expr->lhs, ci_discard_buf, sizeof ci_discard_buf);
-        if(err) return err;
-        return ci_interp_expr(ci, frame,expr->values[0], result, size);
-    }
-    case CC_EXPR_TERNARY: {
-        CiInt128 cond = {0};
-        uint32_t cond_sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &cond_sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame,expr->lhs, &cond, sizeof cond);
-        if(err) return err;
-        if(ci_is_truthy(&cond, expr->lhs->type, cond_sz))
-            return ci_interp_expr(ci, frame,expr->values[0], result, size);
-        else
-            return ci_interp_expr(ci, frame,expr->values[1], result, size);
-    }
-    case CC_EXPR_ADDR: {
-        void* lval;
-        size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, expr->lhs, &lval, &lval_size);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sizeof lval > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof lval, size);
-        memcpy(result, &lval, sizeof lval);
-        return 0;
-    }
-    case CC_EXPR_DEREF: {
-        void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &ptr_val, sizeof ptr_val);
-        if(err) return err;
-        if(ccqt_kind(expr->type) == CC_FUNCTION){
-            if(result == ci_discard_buf) return 0;
-            if(sizeof ptr_val > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ptr_val, size);
-            memcpy(result, &ptr_val, sizeof ptr_val);
-            return 0;
-        }
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        return ci_load_object(ci, expr->loc, expr->type, ptr_val, result);
-    }
-    case CC_EXPR_DOT: {
-        uint64_t off = expr->field_loc.byte_offset;
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        CcExpr* base_expr = expr->values[0];
-        if(!expr->is_lvalue){
-            uint32_t base_sz;
-            err = cc_sizeof_as_uint(&ci->parser, base_expr->type, expr->loc, &base_sz);
-            if(err) return err;
-            char* temp = Allocator_alloc(ci_allocator(ci), base_sz);
-            if(!temp) return CI_OOM_ERROR;
-            err = ci_interp_expr(ci, frame, base_expr, temp, base_sz);
-            if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
-            if(result == ci_discard_buf){
-                Allocator_free(ci_allocator(ci), temp, base_sz);
-                return 0;
-            }
-            if(expr->field_loc.bit_width){
-                uint64_t val = ci_bitfield_read(temp + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
-                _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-                val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
-                memset(result, 0, size);
-                memcpy(result, &val, sz < size ? sz : size);
-            }
-            else {
-                err = ci_load_object(ci, expr->loc, expr->type, temp + off, result);
-                if(err){ Allocator_free(ci_allocator(ci), temp, base_sz); return err; }
-            }
-            Allocator_free(ci_allocator(ci), temp, base_sz);
-            return 0;
-        }
-        void* base;
-        size_t base_size;
-        err = ci_interp_lvalue(ci, frame, base_expr, &base, &base_size);
-        if(err) return err;
-        if(off + sz > base_size)
-            return ci_error(ci, expr->loc, "interpreter: field access out of bounds");
-        if(result == ci_discard_buf) return 0;
-        if(expr->field_loc.bit_width){
-            uint64_t val = ci_bitfield_read((char*)base + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
-            memset(result, 0, size);
-            memcpy(result, &val, sz < size ? sz : size);
-        }
-        else {
-            return ci_load_object(ci, expr->loc, expr->type, (char*)base + off, result);
-        }
-        return 0;
-    }
-    case CC_EXPR_ARROW: {
-        void* ptr_val = NULL;
-        int err = ci_interp_expr(ci, frame,expr->values[0], &ptr_val, sizeof ptr_val);
-        if(err) return err;
-        uint64_t off = expr->field_loc.byte_offset;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        if(expr->field_loc.bit_width){
-            uint64_t val = ci_bitfield_read((char*)ptr_val + off, sz, expr->field_loc.bit_offset, expr->field_loc.bit_width);
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            val = ci_bitfield_extend(val, expr->field_loc.bit_width, !is_unsigned);
-            memset(result, 0, size);
-            memcpy(result, &val, sz < size ? sz : size);
-        }
-        else {
-            return ci_load_object(ci, expr->loc, expr->type, (char*)ptr_val + off, result);
-        }
-        return 0;
-    }
-    case CC_EXPR_SUBSCRIPT: {
-        void* addr;
-        size_t addr_size;
-        int err = ci_interp_lvalue(ci, frame, expr, &addr, &addr_size);
-        if(err) return err;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        return ci_load_object(ci, expr->loc, expr->type, addr, result);
-    }
-    case CC_EXPR_NEG: {
-        CiUint128 val = {0};
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind)){
-            double d = -ci_read_float(&val, expr->type.basic.kind);
-            ci_write_float(result, expr->type.basic.kind, d);
-        }
-        else if(sz > 8){
-            CiUint128 v;
-            ci_uint128_read(&v, &val, sz);
-            CiUint128 zero = {0};
-            v = ci_uint128_sub(zero, v);
-            ci_uint128_write(result, sz, v);
-        }
-        else {
-            int64_t v = -ci_read_int(&val, sz);
-            ci_write_uint(result, sz, (uint64_t)v);
-        }
-        return 0;
-    }
-    case CC_EXPR_POS: {
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        return ci_interp_expr(ci, frame,expr->lhs, result, size);
-    }
-    case CC_EXPR_BITNOT: {
-        CiUint128 val = {0};
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        if(sz > 8){
-            CiUint128 v;
-            ci_uint128_read(&v, &val, sz);
-            CiUint128 ones = ci_uint128_from_int64(-1);
-            v = ci_uint128_xor(v, ones);
-            ci_uint128_write(result, sz, v);
-        }
-        else {
-            uint64_t v = ~ci_read_uint(&val, sz);
-            ci_write_uint(result, sz, v);
-        }
-        return 0;
-    }
-    case CC_EXPR_LOGNOT: {
-        CiUint128 val = {0};
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame,expr->lhs, &val, sizeof val);
-        if(err) return err;
-        _Bool v = !ci_is_truthy(&val, expr->lhs->type, sz);
-        uint32_t rsz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
-        if(err) return err;
-        if(result == ci_discard_buf) return 0;
-        if(rsz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        ci_write_uint(result, rsz, v);
-        return 0;
-    }
-    case CC_EXPR_PREINC:
-    case CC_EXPR_PREDEC:
-    case CC_EXPR_POSTINC:
-    case CC_EXPR_POSTDEC: {
-        CcExpr* lhs = expr->lhs;
-        _Bool is_pre = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_PREDEC);
-        _Bool is_inc = (expr->kind == CC_EXPR_PREINC || expr->kind == CC_EXPR_POSTINC);
-        // Bitfield inc/dec
-        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
-            void* storage_addr;
-            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
-            if(err) return err;
-            uint32_t sz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-            if(err) return err;
-            uint64_t v = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
-            uint64_t old = v;
-            v += is_inc ? 1 : (uint64_t)-1;
-            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, v);
-            if(result == ci_discard_buf) return 0;
-            uint64_t out = is_pre ? v : old;
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            out = ci_bitfield_extend(out, lhs->field_loc.bit_width, !is_unsigned);
-            memset(result, 0, size);
-            memcpy(result, &out, sz < size ? sz : size);
-            return 0;
-        }
-        void* lval;
-        size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
-        if(err) return err;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > lval_size)
-            return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        if(lhs->type.is_atomic){
-            _Alignas(8) char tmp[8] = {0};
-            void* out = result == ci_discard_buf ? tmp : result;
-            return ci_atomic_integer_rmw(ci, expr->loc, lhs->type, lval,
-                expr->kind, 1, !is_pre, out);
-        }
-        _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
-        if(is_float){
-            double d = ci_read_float(lval, expr->type.basic.kind);
-            double old = d;
-            d += is_inc ? 1.0 : -1.0;
-            ci_write_float(lval, expr->type.basic.kind, d);
-            if(result == ci_discard_buf) return 0;
-            ci_write_float(result, expr->type.basic.kind, is_pre ? d : old);
-        }
-        else if(ccqt_kind(expr->type) == CC_POINTER){
-            CcPointer* pt = ccqt_as_ptr(expr->type);
-            uint32_t pointee_sz;
-            err = cc_sizeof_as_uint(&ci->parser, pt->pointee, expr->loc, &pointee_sz);
-            if(err) return err;
-            void* ptr = NULL;
-            memcpy(&ptr, lval, sizeof ptr);
-            void* old = ptr;
-            ptr = (char*)ptr + (is_inc ? (int)pointee_sz : -(int)pointee_sz);
-            memcpy(lval, &ptr, sizeof ptr);
-            if(result == ci_discard_buf) return 0;
-            void* out = is_pre ? ptr : old;
-            memcpy(result, &out, sizeof out);
-        }
-        else if(sz > 8){
-            CiUint128 v;
-            ci_uint128_read(&v, lval, sz);
-            CiUint128 old = v;
-            CiUint128 one = ci_uint128_from_uint64(1);
-            v = is_inc ? ci_uint128_add(v, one) : ci_uint128_sub(v, one);
-            ci_uint128_write(lval, sz, v);
-            if(result == ci_discard_buf) return 0;
-            ci_uint128_write(result, sz, is_pre ? v : old);
-        }
-        else {
-            uint64_t v = ci_read_uint(lval, sz);
-            uint64_t old = v;
-            v += is_inc ? 1 : (uint64_t)-1;
-            ci_write_uint(lval, sz, v);
-            if(result == ci_discard_buf) return 0;
-            ci_write_uint(result, sz, is_pre ? v : old);
-        }
-        return 0;
-    }
-    case CC_EXPR_ADD: case CC_EXPR_SUB:
-    case CC_EXPR_MUL: case CC_EXPR_DIV: case CC_EXPR_MOD:
-    case CC_EXPR_BITAND: case CC_EXPR_BITOR: case CC_EXPR_BITXOR:
-    case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT:
-    case CC_EXPR_EQ: case CC_EXPR_NE:
-    case CC_EXPR_LT: case CC_EXPR_GT:
-    case CC_EXPR_LE: case CC_EXPR_GE:
-    case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: {
-        CcExpr* lhs = expr->lhs;
-        CcExpr* rhs = expr->values[0];
-        CiUint128 lbuf128 = {0}, rbuf128 = {0};
-        uint32_t lsz, rsz, result_sz;
-        int err = cc_sizeof_as_uint(&ci->parser, lhs->type, expr->loc, &lsz);
-        if(err) return err;
-        err = cc_sizeof_as_uint(&ci->parser, rhs->type, expr->loc, &rsz);
-        if(err) return err;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &result_sz);
-        if(err) return err;
-        if(result_sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, result_sz, size);
-        if(expr->kind == CC_EXPR_LOGAND){
-            err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
-            if(err) return err;
-            _Bool lnz = ci_is_truthy(&lbuf128, lhs->type, lsz);
-            if(!lnz){
-                ci_write_uint(result, result_sz, 0);
-                return 0;
-            }
-            err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
-            if(err) return err;
-            _Bool rnz = ci_is_truthy(&rbuf128, rhs->type, rsz);
-            ci_write_uint(result, result_sz, rnz ? 1 : 0);
-            return 0;
-        }
-        if(expr->kind == CC_EXPR_LOGOR){
-            err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
-            if(err) return err;
-            _Bool lnz = ci_is_truthy(&lbuf128, lhs->type, lsz);
-            if(lnz){
-                ci_write_uint(result, result_sz, 1);
-                return 0;
-            }
-            err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
-            if(err) return err;
-            _Bool rnz = ci_is_truthy(&rbuf128, rhs->type, rsz);
-            ci_write_uint(result, result_sz, rnz ? 1 : 0);
-            return 0;
-        }
-        err = ci_interp_expr(ci, frame,lhs, &lbuf128, sizeof lbuf128);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame,rhs, &rbuf128, sizeof rbuf128);
-        if(err) return err;
-        _Bool lhs_ptr = ccqt_is_pointer_like(lhs->type);
-        _Bool rhs_ptr = ccqt_is_pointer_like(rhs->type);
-        if(lhs_ptr || rhs_ptr){
-            // Pointer arithmetic helper: get pointee and elem_sz from the pointer side
-            CcExpr* ptr_side = lhs_ptr ? lhs : rhs;
-            CcQualType pointee;
-            if(ccqt_kind(ptr_side->type) == CC_POINTER)
-                pointee = ccqt_as_ptr(ptr_side->type)->pointee;
-            else
-                pointee = ccqt_as_array(ptr_side->type)->element;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADD: {
-                    uint32_t elem_sz;
-                    err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                    if(err) return err;
-                    CiUint128 *ptr_buf = lhs_ptr ? &lbuf128 : &rbuf128;
-                    CiUint128 *idx_buf = lhs_ptr ? &rbuf128 : &lbuf128;
-                    CcExpr* idx_side = lhs_ptr ? rhs : lhs;
-                    uint32_t idx_sz = lhs_ptr ? rsz : lsz;
-                    char* ptr = NULL;
-                    memcpy(&ptr, ptr_buf, sizeof ptr);
-                    _Bool idx_unsigned = ccqt_is_unsigned(idx_side->type, !ci_target(ci)->char_is_signed);
-                    int64_t idx = ci_read_int_any(idx_buf, idx_sz, idx_unsigned);
-                    ptr += idx * elem_sz;
-                    memcpy(result, &ptr, sizeof ptr);
-                    return 0;
-                }
-                case CC_EXPR_SUB: {
-                    uint32_t elem_sz;
-                    err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &elem_sz);
-                    if(err) return err;
-                    char* lp = NULL;
-                    memcpy(&lp, &lbuf128, sizeof lp);
-                    if(rhs_ptr){
-                        // ptr - ptr
-                        char* rp = NULL;
-                        memcpy(&rp, &rbuf128, sizeof rp);
-                        int64_t diff = (lp - rp) / (int64_t)elem_sz;
-                        ci_write_uint(result, result_sz, (uint64_t)diff);
-                    } else {
-                        // ptr - int
-                        _Bool idx_unsigned = ccqt_is_unsigned(rhs->type, !ci_target(ci)->char_is_signed);
-                        int64_t idx = ci_read_int_any(&rbuf128, rsz, idx_unsigned);
-                        lp -= idx * elem_sz;
-                        memcpy(result, &lp, sizeof lp);
-                    }
-                    return 0;
-                }
-                #define PTR_CMP(op) do { \
-                    char* lp = NULL, *rp = NULL; \
-                    memcpy(&lp, &lbuf128, sizeof lp); \
-                    memcpy(&rp, &rbuf128, sizeof rp); \
-                    ci_write_uint(result, result_sz, lp op rp); \
-                    return 0; \
-                } while(0)
-                case CC_EXPR_EQ: PTR_CMP(==);
-                case CC_EXPR_NE: PTR_CMP(!=);
-                case CC_EXPR_LT: PTR_CMP(<);
-                case CC_EXPR_GT: PTR_CMP(>);
-                case CC_EXPR_LE: PTR_CMP(<=);
-                case CC_EXPR_GE: PTR_CMP(>=);
-                #undef PTR_CMP
-                DRP_DEFAULT_UNREACHABLE;
-            }
-        }
-        _Bool is_float = ccqt_is_basic(lhs->type) && ccbt_is_float(lhs->type.basic.kind);
-        if(is_float){
-            double ld = ci_read_float(&lbuf128, lhs->type.basic.kind);
-            double rd = ci_read_float(&rbuf128, rhs->type.basic.kind);
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADD: {
-                    double res = ld + rd;
-                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
-                        ci_write_float(result, expr->type.basic.kind, res);
-                    else
-                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
-                    return 0;
-                }
-                case CC_EXPR_SUB: {
-                    double res = ld - rd;
-                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
-                        ci_write_float(result, expr->type.basic.kind, res);
-                    else
-                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
-                    return 0;
-                }
-                case CC_EXPR_MUL: {
-                    double res = ld * rd;
-                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
-                        ci_write_float(result, expr->type.basic.kind, res);
-                    else
-                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
-                    return 0;
-                }
-                case CC_EXPR_DIV: {
-                    double res = ld / rd;
-                    if(ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind))
-                        ci_write_float(result, expr->type.basic.kind, res);
-                    else
-                        ci_write_uint(result, result_sz, (uint64_t)(int64_t)res);
-                    return 0;
-                }
-                case CC_EXPR_EQ: ci_write_uint(result, result_sz, ld == rd); return 0;
-                case CC_EXPR_NE: ci_write_uint(result, result_sz, ld != rd); return 0;
-                case CC_EXPR_LT: ci_write_uint(result, result_sz, ld <  rd); return 0;
-                case CC_EXPR_GT: ci_write_uint(result, result_sz, ld >  rd); return 0;
-                case CC_EXPR_LE: ci_write_uint(result, result_sz, ld <= rd); return 0;
-                case CC_EXPR_GE: ci_write_uint(result, result_sz, ld >= rd); return 0;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-        }
-        _Bool is_unsigned = ccqt_is_unsigned(lhs->type, !ci_target(ci)->char_is_signed);
-        if(lsz > 8 || rsz > 8 || result_sz > 8){
-            // 128-bit integer path
-            CiUint128 lu, ru;
-            if(is_unsigned){
-                ci_uint128_read(&lu, &lbuf128, lsz);
-                ci_uint128_read(&ru, &rbuf128, rsz);
-            }
-            else {
-                if(lsz <= 8)
-                    lu = ci_uint128_from_int64(ci_read_int(&lbuf128, lsz));
-                else
-                    ci_uint128_read(&lu, &lbuf128, lsz);
-                if(rsz <= 8)
-                    ru = ci_uint128_from_int64(ci_read_int(&rbuf128, rsz));
-                else
-                    ci_uint128_read(&ru, &rbuf128, rsz);
-            }
-            CiUint128 res;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADD: res = ci_uint128_add(lu, ru); break;
-                case CC_EXPR_SUB: res = ci_uint128_sub(lu, ru); break;
-                case CC_EXPR_MUL: res = ci_uint128_mul(lu, ru); break;
-                case CC_EXPR_DIV:
-                    if(is_unsigned)
-                        res = ci_uint128_div(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CC_EXPR_MOD:
-                    if(is_unsigned)
-                        res = ci_uint128_mod(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CC_EXPR_BITAND: res = ci_uint128_and(lu, ru); break;
-                case CC_EXPR_BITOR:  res = ci_uint128_or(lu, ru); break;
-                case CC_EXPR_BITXOR: res = ci_uint128_xor(lu, ru); break;
-                case CC_EXPR_LSHIFT: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
-                case CC_EXPR_RSHIFT:
-                    if(is_unsigned)
-                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
-                    else
-                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
-                    break;
-                case CC_EXPR_EQ: ci_write_uint(result, result_sz, ci_uint128_eq(lu, ru)); return 0;
-                case CC_EXPR_NE: ci_write_uint(result, result_sz, ci_uint128_ne(lu, ru)); return 0;
-                case CC_EXPR_LT:
-                    if(is_unsigned)
-                        ci_write_uint(result, result_sz, ci_uint128_lt(lu, ru));
-                    else
-                        ci_write_uint(result, result_sz, ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    return 0;
-                case CC_EXPR_GT:
-                    if(is_unsigned)
-                        ci_write_uint(result, result_sz, ci_uint128_gt(lu, ru));
-                    else
-                        ci_write_uint(result, result_sz, ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    return 0;
-                case CC_EXPR_LE:
-                    if(is_unsigned)
-                        ci_write_uint(result, result_sz, ci_uint128_le(lu, ru));
-                    else
-                        ci_write_uint(result, result_sz, ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    return 0;
-                case CC_EXPR_GE:
-                    if(is_unsigned)
-                        ci_write_uint(result, result_sz, ci_uint128_ge(lu, ru));
-                    else
-                        ci_write_uint(result, result_sz, ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    return 0;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-            ci_uint128_write(result, result_sz, res);
-            return 0;
-        }
-        uint64_t lu, ru;
-        if(is_unsigned){
-            lu = ci_read_uint(&lbuf128, lsz);
-            ru = ci_read_uint(&rbuf128, rsz);
-        }
-        else {
-            lu = (uint64_t)ci_read_int(&lbuf128, lsz);
-            ru = (uint64_t)ci_read_int(&rbuf128, rsz);
-        }
-        uint64_t res;
-        switch((uint32_t)expr->kind){
-            case CC_EXPR_ADD: res = lu + ru; break;
-            case CC_EXPR_SUB: res = lu - ru; break;
-            case CC_EXPR_MUL: res = lu * ru; break;
-            case CC_EXPR_DIV:
-                if(is_unsigned)
-                    res = ru ? lu / ru : 0;
-                else
-                    res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
-                break;
-            case CC_EXPR_MOD:
-                if(is_unsigned)
-                    res = ru ? lu % ru : 0;
-                else
-                    res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
-                break;
-            case CC_EXPR_BITAND:  res = lu & ru; break;
-            case CC_EXPR_BITOR:   res = lu | ru; break;
-            case CC_EXPR_BITXOR:  res = lu ^ ru; break;
-            case CC_EXPR_LSHIFT:  res = lu << ru; break;
-            case CC_EXPR_RSHIFT:
-                if(is_unsigned)
-                    res = lu >> ru;
-                else
-                    res = (uint64_t)((int64_t)lu >> ru);
-                break;
-            case CC_EXPR_EQ: res = lu == ru; break;
-            case CC_EXPR_NE: res = lu != ru; break;
-            case CC_EXPR_LT:
-                res = is_unsigned ? (lu < ru) : ((int64_t)lu < (int64_t)ru);
-                break;
-            case CC_EXPR_GT:
-                res = is_unsigned ? (lu > ru) : ((int64_t)lu > (int64_t)ru);
-                break;
-            case CC_EXPR_LE:
-                res = is_unsigned ? (lu <= ru) : ((int64_t)lu <= (int64_t)ru);
-                break;
-            case CC_EXPR_GE:
-                res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru);
-                break;
-            DRP_DEFAULT_UNREACHABLE;
-        }
-        ci_write_uint(result, result_sz, res);
-        return 0;
-    }
-    case CC_EXPR_ADDASSIGN: case CC_EXPR_SUBASSIGN:
-    case CC_EXPR_MULASSIGN: case CC_EXPR_DIVASSIGN: case CC_EXPR_MODASSIGN:
-    case CC_EXPR_BITANDASSIGN: case CC_EXPR_BITORASSIGN: case CC_EXPR_BITXORASSIGN:
-    case CC_EXPR_LSHIFTASSIGN: case CC_EXPR_RSHIFTASSIGN: {
-        CcExpr* lhs = expr->lhs;
-        // Bitfield compound assignment
-        if((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width){
-            void* storage_addr;
-            int err = ci_bitfield_storage_addr(ci, frame, lhs, &storage_addr);
-            if(err) return err;
-            uint32_t sz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-            if(err) return err;
-            uint64_t rbuf = 0;
-            uint32_t rsz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
-            if(err) return err;
-            err = ci_interp_expr(ci, frame, expr->values[0], &rbuf, sizeof rbuf);
-            if(err) return err;
-            uint64_t lu = ci_bitfield_read(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width);
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            lu = ci_bitfield_extend(lu, lhs->field_loc.bit_width, !is_unsigned);
-            uint64_t ru;
-            if(is_unsigned)
-                ru = ci_read_uint(&rbuf, rsz);
-            else
-                ru = (uint64_t)ci_read_int(&rbuf, rsz);
-            uint64_t res;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
-                case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
-                case CC_EXPR_MULASSIGN:    res = lu * ru; break;
-                case CC_EXPR_DIVASSIGN:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
-                    break;
-                case CC_EXPR_MODASSIGN:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
-                    break;
-                case CC_EXPR_BITANDASSIGN: res = lu & ru; break;
-                case CC_EXPR_BITORASSIGN:  res = lu | ru; break;
-                case CC_EXPR_BITXORASSIGN: res = lu ^ ru; break;
-                case CC_EXPR_LSHIFTASSIGN: res = lu << ru; break;
-                case CC_EXPR_RSHIFTASSIGN:
-                    if(is_unsigned)
-                        res = lu >> ru;
-                    else
-                        res = (uint64_t)((int64_t)lu >> ru);
-                    break;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-            ci_bitfield_write(storage_addr, sz, lhs->field_loc.bit_offset, lhs->field_loc.bit_width, res);
-            if(result == ci_discard_buf) return 0;
-            res = ci_bitfield_extend(res, lhs->field_loc.bit_width, !is_unsigned);
-            memset(result, 0, size);
-            memcpy(result, &res, sz < size ? sz : size);
-            return 0;
-        }
-        void* lval;
-        size_t lval_size;
-        int err = ci_interp_lvalue(ci, frame, lhs, &lval, &lval_size);
-        if(err) return err;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > lval_size)
-            return ci_error(ci, expr->loc, "interpreter: write exceeds lvalue storage");
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        CiUint128 rbuf = {0};
-        uint32_t rsz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &rsz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame,expr->values[0], &rbuf, sizeof rbuf);
-        if(err) return err;
+    return 0;
+}
 
-        if(lhs->type.is_atomic){
-            _Bool rhs_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
-            uint64_t rhs = ci_read_int_any(&rbuf, rsz, rhs_unsigned);
-            _Alignas(8) char tmp[8] = {0};
-            void* out = result == ci_discard_buf ? tmp : result;
-            return ci_atomic_integer_rmw(ci, expr->loc, lhs->type, lval,
-                expr->kind, rhs, 0, out);
-        }
-
-        if(ccqt_kind(expr->type) == CC_POINTER){
-            CcPointer* pt = ccqt_as_ptr(expr->type);
-            uint32_t pointee_sz;
-            err = cc_sizeof_as_uint(&ci->parser, pt->pointee, expr->loc, &pointee_sz);
-            if(err) return err;
-            void* ptr = NULL;
-            memcpy(&ptr, lval, sizeof ptr);
-            _Bool idx_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
-            int64_t idx = ci_read_int_any(&rbuf, rsz, idx_unsigned);
-            if(expr->kind == CC_EXPR_ADDASSIGN)
-                ptr = (char*)ptr + idx * pointee_sz;
-            else
-                ptr = (char*)ptr - idx * pointee_sz;
-            memcpy(lval, &ptr, sizeof ptr);
-            if(result == ci_discard_buf) return 0;
-            memcpy(result, &ptr, sizeof ptr);
+static
+int
+ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt, uintptr_t arg, void* result){
+    int err;
+    switch(op){
+        case CC_TYPE_NONE:
+            return CI_UNREACHABLE_ERROR;
+        case CC_TYPE_NAME: {
+            MStringBuilder sb = {.allocator = ci_allocator(ci)};
+            cc_print_type(&sb, qt);
+            Atom a;
+            {
+                AtomTable* at = ci_lock_atoms(ci);
+                a = msb_atomize(&sb, at);
+                ci_unlock_atoms(ci, at);
+            }
+            msb_destroy(&sb);
+            if(!a) return CI_OOM_ERROR;
+            *(const char**)result = a->data;
             return 0;
         }
-        _Bool is_float = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
-        if(is_float){
-            double ld = ci_read_float(lval, expr->type.basic.kind);
-            double rd = ci_read_float(&rbuf, expr->values[0]->type.basic.kind);
-            double res;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADDASSIGN: res = ld + rd; break;
-                case CC_EXPR_SUBASSIGN: res = ld - rd; break;
-                case CC_EXPR_MULASSIGN: res = ld * rd; break;
-                case CC_EXPR_DIVASSIGN: res = rd != 0.0 ? ld / rd : 0.0; break;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-            ci_write_float(lval, expr->type.basic.kind, res);
-            if(result == ci_discard_buf) return 0;
-            ci_write_float(result, expr->type.basic.kind, res);
-        }
-        else if(sz > 8 || rsz > 8){
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            CiUint128 lu, ru;
-            if(is_unsigned){
-                ci_uint128_read(&lu, lval, sz);
-                ci_uint128_read(&ru, &rbuf, rsz);
-            }
-            else {
-                if(sz <= 8)
-                    lu = ci_uint128_from_int64(ci_read_int(lval, sz));
-                else
-                    ci_uint128_read(&lu, lval, sz);
-                if(rsz <= 8)
-                    ru = ci_uint128_from_int64(ci_read_int(&rbuf, rsz));
-                else
-                    ci_uint128_read(&ru, &rbuf, rsz);
-            }
-            CiUint128 res;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADDASSIGN:    res = ci_uint128_add(lu, ru); break;
-                case CC_EXPR_SUBASSIGN:    res = ci_uint128_sub(lu, ru); break;
-                case CC_EXPR_MULASSIGN:    res = ci_uint128_mul(lu, ru); break;
-                case CC_EXPR_DIVASSIGN:
-                    if(is_unsigned)
-                        res = ci_uint128_div(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CC_EXPR_MODASSIGN:
-                    if(is_unsigned)
-                        res = ci_uint128_mod(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CC_EXPR_BITANDASSIGN: res = ci_uint128_and(lu, ru); break;
-                case CC_EXPR_BITORASSIGN:  res = ci_uint128_or(lu, ru); break;
-                case CC_EXPR_BITXORASSIGN: res = ci_uint128_xor(lu, ru); break;
-                case CC_EXPR_LSHIFTASSIGN: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
-                case CC_EXPR_RSHIFTASSIGN:
-                    if(is_unsigned)
-                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
-                    else
-                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
-                    break;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-            ci_uint128_write(lval, sz, res);
-            if(result == ci_discard_buf) return 0;
-            ci_uint128_write(result, sz, res);
-        }
-        else {
-            _Bool is_unsigned = ccqt_is_unsigned(expr->type, !ci_target(ci)->char_is_signed);
-            uint64_t lu, ru;
-            if(is_unsigned){
-                lu = ci_read_uint(lval, sz);
-                ru = ci_read_uint(&rbuf, rsz);
-            }
-            else {
-                lu = (uint64_t)ci_read_int(lval, sz);
-                ru = (uint64_t)ci_read_int(&rbuf, rsz);
-            }
-            uint64_t res;
-            switch((uint32_t)expr->kind){
-                case CC_EXPR_ADDASSIGN:    res = lu + ru; break;
-                case CC_EXPR_SUBASSIGN:    res = lu - ru; break;
-                case CC_EXPR_MULASSIGN:    res = lu * ru; break;
-                case CC_EXPR_DIVASSIGN:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
-                    break;
-                case CC_EXPR_MODASSIGN:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
-                    break;
-                case CC_EXPR_BITANDASSIGN: res = lu & ru; break;
-                case CC_EXPR_BITORASSIGN:  res = lu | ru; break;
-                case CC_EXPR_BITXORASSIGN: res = lu ^ ru; break;
-                case CC_EXPR_LSHIFTASSIGN: res = lu << ru; break;
-                case CC_EXPR_RSHIFTASSIGN:
-                    if(is_unsigned)
-                        res = lu >> ru;
-                    else
-                        res = (uint64_t)((int64_t)lu >> ru);
-                    break;
-                DRP_DEFAULT_UNREACHABLE;
-            }
-            ci_write_uint(lval, sz, res);
-            if(result == ci_discard_buf) return 0;
-            ci_write_uint(result, sz, res);
-        }
-        return 0;
-    }
-    case CC_EXPR_CALL: {
-        CcExpr* callee = expr->lhs;
-        uint32_t nargs = expr->call.nargs;
-        void (*fn)(void) = NULL;
-        CcFunction* ftype;
-        CcFunc* interp_func = NULL;
-        // Direct call to a known function.
-        if(callee->kind == CC_EXPR_FUNCTION){
-            CcFunc* func = callee->func;
-            ftype = func->type;
-            if(func->defined)
-                interp_func = func;
-            else {
-                fn = func->native_func;
-                if(!fn)
-                    return ci_ice(ci, expr->loc, "function '%s' not resolved before execution",
-                        func->name ? func->name->data : "<unknown>");
-            }
-        }
-        else {
-            // Indirect call through function pointer.
-            int err = ci_interp_expr(ci, frame, callee, &fn, sizeof fn);
-            if(err) return err;
-            CcQualType callee_type = callee->type;
-            if(ccqt_kind(callee_type) == CC_POINTER){
-                CcQualType pointee = ccqt_as_ptr(callee_type)->pointee;
-                if(ccqt_kind(pointee) != CC_FUNCTION)
-                    return ci_error(ci, expr->loc, "Called object is not a function pointer");
-                ftype = ccqt_as_function(pointee);
-            }
-            else if(ccqt_kind(callee_type) == CC_FUNCTION){
-                ftype = ccqt_as_function(callee_type);
-            }
-            else {
-                return ci_error(ci, expr->loc, "Called object is not a function pointer");
-            }
-        }
-        // A function pointer may wrap an interpreted function.
-        if(!interp_func && fn)
-            interp_func = BPM_rget(&ci->closure_map, (void*)fn);
-        size_t arg_data_size = 0;
-        for(uint32_t i = 0; i < nargs; i++){
-            uint32_t arg_sz;
-            int err = cc_sizeof_as_uint(&ci->parser, expr->values[i]->type, expr->loc, &arg_sz);
-            if(err) return err;
-            if(i < ftype->param_count){
-                uint32_t param_sz;
-                err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], expr->loc, &param_sz);
-                if(err) return err;
-                if(param_sz > arg_sz) arg_sz = param_sz;
-            }
-            if(arg_sz < 8) arg_sz = 8;
-            arg_data_size += (arg_sz + 7) & ~7u;
-        }
-        size_t total = nargs * (sizeof(void*) + sizeof(uint32_t)) + arg_data_size;
-        char* buf = Allocator_zalloc(ci_allocator(ci), total);
-        if(!buf) return CI_OOM_ERROR;
-        void** args = (void**)buf;
-        char* arg_data = buf + nargs * sizeof(void*);
-        uint32_t* arg_sizes = (uint32_t*)(arg_data + arg_data_size);
-        for(uint32_t i = 0; i < nargs; i++){
-            uint32_t arg_sz;
-            int err = cc_sizeof_as_uint(&ci->parser, expr->values[i]->type, expr->loc, &arg_sz);
-            if(err){
-                Allocator_free(ci_allocator(ci), buf, total);
-                return err;
-            }
-            arg_sizes[i] = arg_sz;
-            if(i < ftype->param_count){
-                uint32_t param_sz;
-                err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], expr->loc, &param_sz);
-                if(err){
-                    Allocator_free(ci_allocator(ci), buf, total);
-                    return err;
-                }
-                if(param_sz > arg_sz) arg_sz = param_sz;
-            }
-            if(arg_sz < 8) arg_sz = 8;
-            args[i] = arg_data;
-            err = ci_interp_expr(ci, frame, expr->values[i], arg_data, arg_sz);
-            if(err){
-                Allocator_free(ci_allocator(ci), buf, total);
-                return err;
-            }
-            arg_data += (arg_sz + 7) & ~7u;
-        }
-        if(interp_func){
-            int err = ci_call_argv(ci, frame, interp_func, args, nargs, arg_sizes, result, size, expr->loc);
-            Allocator_free(ci_allocator(ci), buf, total);
-            return err;
-        }
-        // Native call: look up the pre-built CIF. Non-variadic: keyed by
-        // CcFunction*. Variadic: keyed by CcExpr* (the call expression node).
-        NativeCallCache* cache;
-        if(ftype->is_variadic && nargs > ftype->param_count)
-            cache = PM_get(&ci->ffi_cache, expr);
-        else
-            cache = PM_get(&ci->ffi_cache, ftype);
-        if(!cache){
-            Allocator_free(ci_allocator(ci), buf, total);
-            return ci_ice(ci, expr->loc, "ffi_cache not populated for call type%s", "");
-        }
-        CcQualType ret_type = ftype->return_type;
-        if(ccqt_is_basic(ret_type) && ret_type.basic.kind == CCBT_void){
-            native_call(cache, fn, args, ci_discard_buf);
-            Allocator_free(ci_allocator(ci), buf, total);
+        case CC_TYPE_TAG: {
+            Atom tag = 0;
+            CcTypeKind k = ccqt_kind(qt);
+            if(k == CC_STRUCT)     tag = ccqt_as_struct(qt)->name;
+            else if(k == CC_UNION) tag = ccqt_as_union(qt)->name;
+            else if(k == CC_ENUM)  tag = ccqt_as_enum(qt)->name;
+            *(const char**)result = tag ? tag->data : "";
             return 0;
         }
-        uint32_t ret_sz;
-        {
-            int err = cc_sizeof_as_uint(&ci->parser, ret_type, expr->loc, &ret_sz);
-            if(err){ Allocator_free(ci_allocator(ci), buf, total); return err; }
-        }
-        if(ret_sz > size){
-            Allocator_free(ci_allocator(ci), buf, total);
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, ret_sz, size);
-        }
-        native_call(cache, fn, args, result);
-        Allocator_free(ci_allocator(ci), buf, total);
-        return 0;
-    }
-    case CC_EXPR_COMPOUND_LITERAL:
-    case CC_EXPR_INIT_LIST: {
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
-        if(err) return err;
-        if(sz > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-        memset(result, 0, sz);
-        CcInitList* il = expr->init_list;
-        for(uint32_t i = 0; i < il->count; i++){
-            CcInitEntry* e = &il->entries[i];
-            if(!e->value) continue;
-            uint32_t esz;
-            err = cc_sizeof_as_uint(&ci->parser, e->value->type, expr->loc, &esz);
-            if(err) return err;
-            uint64_t off = e->field_loc.byte_offset;
-            if(off + esz > sz)
-                return ci_error(ci, expr->loc, "interpreter: init list entry out of bounds");
-            if(esz <= sizeof(uint64_t)){
-                uint64_t val = 0;
-                err = ci_interp_expr(ci, frame,e->value, &val, sizeof val);
-                if(err) return err;
-                if(e->field_loc.bit_width){
-                    // bitfield
-                    uint64_t existing = 0;
-                    memcpy(&existing, (char*)result + off, esz);
-                    uint64_t mask = e->field_loc.bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << e->field_loc.bit_width) - 1;
-                    existing &= ~(mask << e->field_loc.bit_offset);
-                    existing |= (val & mask) << e->field_loc.bit_offset;
-                    memcpy((char*)result + off, &existing, esz);
-                }
-                else {
-                    memcpy((char*)result + off, &val, esz);
-                }
-            }
-            else {
-                // Nested struct/union: write directly into result at offset
-                err = ci_interp_expr(ci, frame,e->value, (char*)result + off, esz);
-                if(err) return err;
-            }
-        }
-        return 0;
-    }
-    case CC_EXPR_ATOMIC: {
-        CcAtomicOp op = expr->atomic.op;
-        if(op == CC_ATOMIC_THREAD_FENCE){
-            #ifdef _MSC_VER
-            MemoryBarrier();
-            #else
-            __atomic_thread_fence(__ATOMIC_SEQ_CST);
-            #endif
+        case CC_TYPE_IS_INTEGER: {
+            CcQualType st = qt;
+            while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind);
             return 0;
         }
-        if(op == CC_ATOMIC_SIGNAL_FENCE){
-            // This is a compiler barrier, so do nothing here.
+        case CC_TYPE_IS_FLOAT: {
+            *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
             return 0;
         }
-        // Evaluate pointer argument to get memory address
-        void* ptr = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &ptr, sizeof ptr);
-        if(err) return err;
-        if(!ptr) return ci_error(ci, expr->loc, "null pointer in atomic operation");
-
-        CcQualType pointee = ccqt_as_ptr(expr->lhs->type)->pointee;
-        uint32_t sz;
-        err = cc_sizeof_as_uint(&ci->parser, pointee, expr->loc, &sz);
-        if(err) return err;
-
-        #ifdef _MSC_VER
-        #define ATOMIC_LOAD_DISPATCH(dest) \
-            switch(sz){ \
-                case 1:  *(uint8_t*)(dest)  = (uint8_t)_InterlockedOr8((volatile char*)ptr, 0); break; \
-                case 2:  *(uint16_t*)(dest) = (uint16_t)_InterlockedOr16((volatile short*)ptr, 0); break; \
-                case 4:  *(uint32_t*)(dest) = (uint32_t)_InterlockedOr((volatile long*)ptr, 0); break; \
-                case 8:  *(uint64_t*)(dest) = (uint64_t)_InterlockedOr64((volatile long long*)ptr, 0); break; \
-                case 16: { __int64 _tmp[2] = {0}; \
-                           _InterlockedCompareExchange128((volatile __int64*)ptr, 0, 0, _tmp); \
-                           memcpy((dest), _tmp, 16); break; } \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #else
-        #define ATOMIC_LOAD_DISPATCH(dest) \
-            switch(sz){ \
-                case 1:  __atomic_load(( uint8_t*)ptr, ( uint8_t*)(dest), __ATOMIC_SEQ_CST); break; \
-                case 2:  __atomic_load((uint16_t*)ptr, (uint16_t*)(dest), __ATOMIC_SEQ_CST); break; \
-                case 4:  __atomic_load((uint32_t*)ptr, (uint32_t*)(dest), __ATOMIC_SEQ_CST); break; \
-                case 8:  __atomic_load((uint64_t*)ptr, (uint64_t*)(dest), __ATOMIC_SEQ_CST); break; \
-                case 16: __atomic_load((CiAtomic16*)ptr, (CiAtomic16*)(dest), __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #endif
-        if(op == CC_ATOMIC_LOAD_N){
-            ATOMIC_LOAD_DISPATCH(result);
+        case CC_TYPE_IS_ARITHMETIC: {
+            *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
             return 0;
         }
-        if(op == CC_ATOMIC_LOAD){
-            void* dest = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[0], &dest, sizeof dest);
-            if(err) return err;
-            ATOMIC_LOAD_DISPATCH(dest);
+        case CC_TYPE_IS_POINTER: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_POINTER;
             return 0;
         }
-        #undef ATOMIC_LOAD_DISPATCH
-        #ifdef _MSC_VER
-        #define ATOMIC_CAS_DISPATCH(desired_ptr) \
-            switch(sz){ \
-                case 1: { uint8_t  _exp = *(uint8_t*)expected_ptr; \
-                          uint8_t  _old = (uint8_t)_InterlockedCompareExchange8((volatile char*)ptr, *(char*)(desired_ptr), (char)_exp); \
-                          r = (_old == _exp); if(!r) *(uint8_t*)expected_ptr = _old; break; } \
-                case 2: { uint16_t _exp = *(uint16_t*)expected_ptr; \
-                          uint16_t _old = (uint16_t)_InterlockedCompareExchange16((volatile short*)ptr, *(short*)(desired_ptr), (short)_exp); \
-                          r = (_old == _exp); if(!r) *(uint16_t*)expected_ptr = _old; break; } \
-                case 4: { uint32_t _exp = *(uint32_t*)expected_ptr; \
-                          uint32_t _old = (uint32_t)_InterlockedCompareExchange((volatile long*)ptr, *(long*)(desired_ptr), (long)_exp); \
-                          r = (_old == _exp); if(!r) *(uint32_t*)expected_ptr = _old; break; } \
-                case 8: { uint64_t _exp = *(uint64_t*)expected_ptr; \
-                          uint64_t _old = (uint64_t)_InterlockedCompareExchange64((volatile long long*)ptr, *(long long*)(desired_ptr), (long long)_exp); \
-                          r = (_old == _exp); if(!r) *(uint64_t*)expected_ptr = _old; break; } \
-                case 16: { __int64 _dp[2]; memcpy(_dp, (desired_ptr), 16); \
-                           r = _InterlockedCompareExchange128((volatile __int64*)ptr, _dp[1], _dp[0], (__int64*)expected_ptr); break; } \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #else
-        #define ATOMIC_CAS_DISPATCH(desired_ptr) \
-            switch(sz){ \
-                case 1:  r = __atomic_compare_exchange(( uint8_t*)ptr, ( uint8_t*)expected_ptr, ( uint8_t*)(desired_ptr), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; \
-                case 2:  r = __atomic_compare_exchange((uint16_t*)ptr, (uint16_t*)expected_ptr, (uint16_t*)(desired_ptr), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; \
-                case 4:  r = __atomic_compare_exchange((uint32_t*)ptr, (uint32_t*)expected_ptr, (uint32_t*)(desired_ptr), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; \
-                case 8:  r = __atomic_compare_exchange((uint64_t*)ptr, (uint64_t*)expected_ptr, (uint64_t*)(desired_ptr), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; \
-                case 16: r = __atomic_compare_exchange((CiAtomic16*)ptr, (CiAtomic16*)expected_ptr, (CiAtomic16*)(desired_ptr), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #endif
-        if(op == CC_ATOMIC_COMPARE_EXCHANGE_N || op == CC_ATOMIC_COMPARE_EXCHANGE){
-            void* expected_ptr = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[0], &expected_ptr, sizeof expected_ptr);
-            if(err) return err;
-            _Bool r;
-            if(op == CC_ATOMIC_COMPARE_EXCHANGE_N){
-                _Alignas(16) char desired_buf[16] = {0};
-                err = ci_interp_expr(ci, frame, expr->values[1], desired_buf, sz);
-                if(err) return err;
-                ATOMIC_CAS_DISPATCH(desired_buf);
-            }
-            else {
-                void* desired_ptr = NULL;
-                err = ci_interp_expr(ci, frame, expr->values[1], &desired_ptr, sizeof desired_ptr);
-                if(err) return err;
-                ATOMIC_CAS_DISPATCH(desired_ptr);
-            }
-            *(_Bool*)result = r;
+        case CC_TYPE_IS_STRUCT: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_STRUCT;
             return 0;
         }
-        #undef ATOMIC_CAS_DISPATCH
-        #ifdef _MSC_VER
-        #define ATOMIC_STORE_DISPATCH(val_ptr) \
-            switch(sz){ \
-                case 1:  _InterlockedExchange8((volatile char*)ptr, *(char*)(val_ptr)); break; \
-                case 2:  _InterlockedExchange16((volatile short*)ptr, *(short*)(val_ptr)); break; \
-                case 4:  _InterlockedExchange((volatile long*)ptr, *(long*)(val_ptr)); break; \
-                case 8:  _InterlockedExchange64((volatile long long*)ptr, *(long long*)(val_ptr)); break; \
-                case 16: { __int64 _nv[2]; memcpy(_nv, (val_ptr), 16); \
-                           __int64 _cmp[2] = {0}; \
-                           while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp)); break; } \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #else
-        #define ATOMIC_STORE_DISPATCH(val_ptr) \
-            switch(sz){ \
-                case 1:  __atomic_store(( uint8_t*)ptr, ( uint8_t*)(val_ptr), __ATOMIC_SEQ_CST); break; \
-                case 2:  __atomic_store((uint16_t*)ptr, (uint16_t*)(val_ptr), __ATOMIC_SEQ_CST); break; \
-                case 4:  __atomic_store((uint32_t*)ptr, (uint32_t*)(val_ptr), __ATOMIC_SEQ_CST); break; \
-                case 8:  __atomic_store((uint64_t*)ptr, (uint64_t*)(val_ptr), __ATOMIC_SEQ_CST); break; \
-                case 16: __atomic_store((CiAtomic16*)ptr, (CiAtomic16*)(val_ptr), __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #endif
-        if(op == CC_ATOMIC_STORE){
-            void* val_ptr = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[0], &val_ptr, sizeof val_ptr);
-            if(err) return err;
-            ATOMIC_STORE_DISPATCH(val_ptr);
+        case CC_TYPE_IS_UNION: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_UNION;
             return 0;
         }
-        #undef ATOMIC_STORE_DISPATCH
-        if(op == CC_ATOMIC_EXCHANGE){
-            void* val_ptr = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[0], &val_ptr, sizeof val_ptr);
-            if(err) return err;
-            void* ret_ptr = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[1], &ret_ptr, sizeof ret_ptr);
-            if(err) return err;
-            #ifdef _MSC_VER
-            switch(sz){
-                case 1:  *(uint8_t*)ret_ptr  = (uint8_t)_InterlockedExchange8((volatile char*)ptr, *(char*)val_ptr); break;
-                case 2:  *(uint16_t*)ret_ptr = (uint16_t)_InterlockedExchange16((volatile short*)ptr, *(short*)val_ptr); break;
-                case 4:  *(uint32_t*)ret_ptr = (uint32_t)_InterlockedExchange((volatile long*)ptr, *(long*)val_ptr); break;
-                case 8:  *(uint64_t*)ret_ptr = (uint64_t)_InterlockedExchange64((volatile long long*)ptr, *(long long*)val_ptr); break;
-                case 16: { __int64 _nv[2]; memcpy(_nv, val_ptr, 16);
-                           __int64 _cmp[2] = {0};
-                           while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp));
-                           memcpy(ret_ptr, _cmp, 16); break; }
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-            }
-            #else
-            switch(sz){
-                case 1:  __atomic_exchange(( uint8_t*)ptr, ( uint8_t*)val_ptr, ( uint8_t*)ret_ptr, __ATOMIC_SEQ_CST); break;
-                case 2:  __atomic_exchange((uint16_t*)ptr, (uint16_t*)val_ptr, (uint16_t*)ret_ptr, __ATOMIC_SEQ_CST); break;
-                case 4:  __atomic_exchange((uint32_t*)ptr, (uint32_t*)val_ptr, (uint32_t*)ret_ptr, __ATOMIC_SEQ_CST); break;
-                case 8:  __atomic_exchange((uint64_t*)ptr, (uint64_t*)val_ptr, (uint64_t*)ret_ptr, __ATOMIC_SEQ_CST); break;
-                case 16: __atomic_exchange((CiAtomic16*)ptr, (CiAtomic16*)val_ptr, (CiAtomic16*)ret_ptr, __ATOMIC_SEQ_CST); break;
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-            }
-            #endif
+        case CC_TYPE_IS_ARRAY: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY;
             return 0;
         }
-        if(op == CC_ATOMIC_INTERLOCKED_INCREMENT || op == CC_ATOMIC_INTERLOCKED_DECREMENT){
-            #ifdef _MSC_VER
-            if(op == CC_ATOMIC_INTERLOCKED_INCREMENT){
-                switch(sz){
-                    case 2: *(uint16_t*)result = (uint16_t)_InterlockedIncrement16((volatile short*)ptr); break;
-                    case 4: *(uint32_t*)result = (uint32_t)_InterlockedIncrement((volatile long*)ptr); break;
-                    case 8: *(uint64_t*)result = (uint64_t)_InterlockedIncrement64((volatile long long*)ptr); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            else {
-                switch(sz){
-                    case 2: *(uint16_t*)result = (uint16_t)_InterlockedDecrement16((volatile short*)ptr); break;
-                    case 4: *(uint32_t*)result = (uint32_t)_InterlockedDecrement((volatile long*)ptr); break;
-                    case 8: *(uint64_t*)result = (uint64_t)_InterlockedDecrement64((volatile long long*)ptr); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            #else
-            if(op == CC_ATOMIC_INTERLOCKED_INCREMENT){
-                switch(sz){
-                    case 2: *(uint16_t*)result = __atomic_fetch_add((uint16_t*)ptr, (uint16_t)1, __ATOMIC_SEQ_CST) + 1; break;
-                    case 4: *(uint32_t*)result = __atomic_fetch_add((uint32_t*)ptr, (uint32_t)1, __ATOMIC_SEQ_CST) + 1; break;
-                    case 8: *(uint64_t*)result = __atomic_fetch_add((uint64_t*)ptr, (uint64_t)1, __ATOMIC_SEQ_CST) + 1; break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            else {
-                switch(sz){
-                    case 2: *(uint16_t*)result = __atomic_fetch_sub((uint16_t*)ptr, (uint16_t)1, __ATOMIC_SEQ_CST) - 1; break;
-                    case 4: *(uint32_t*)result = __atomic_fetch_sub((uint32_t*)ptr, (uint32_t)1, __ATOMIC_SEQ_CST) - 1; break;
-                    case 8: *(uint64_t*)result = __atomic_fetch_sub((uint64_t*)ptr, (uint64_t)1, __ATOMIC_SEQ_CST) - 1; break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            #endif
+        case CC_TYPE_IS_SLICE: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_SLICE;
             return 0;
         }
-        // fetch_add, fetch_sub, store_n, exchange_n: values[0]=val
-        _Alignas(16) char val_buf[16] = {0};
-        uint32_t val_sz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->values[0]->loc, &val_sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->values[0], val_buf, val_sz);
-        if(err) return err;
-        CcQualType atomic_obj_type = ccqt_as_ptr(expr->lhs->type)->pointee;
-        CcQualType unatomic_obj_type = atomic_obj_type;
-        unatomic_obj_type.is_atomic = 0;
-        if((op == CC_ATOMIC_FETCH_ADD || op == CC_ATOMIC_FETCH_SUB || op == CC_ATOMIC_ADD_FETCH || op == CC_ATOMIC_SUB_FETCH) && ccqt_kind(unatomic_obj_type) == CC_POINTER){
-            CcQualType delta_type = expr->values[0]->type;
-            _Bool delta_unsigned = 0;
-            if(ccqt_is_basic(delta_type))
-                delta_unsigned = ccbt_is_unsigned(delta_type.basic.kind, !ci_target(ci)->char_is_signed);
-            int64_t delta = ci_read_int_any(val_buf, val_sz, delta_unsigned);
-            uint32_t elem_sz;
-            err = cc_sizeof_as_uint(&ci->parser, ccqt_as_ptr(unatomic_obj_type)->pointee, expr->loc, &elem_sz);
-            if(err) return err;
-            ci_write_uint(val_buf, sz, (uint64_t)delta * elem_sz);
-        }
-        #ifdef _MSC_VER
-        #define ATOMIC_FETCH_ADD_DISPATCH() \
-            switch(sz){ \
-                case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedExchangeAdd8((volatile char*)ptr, *(char*)val_buf); break; \
-                case 2:  *(uint16_t*)result = (uint16_t)_InterlockedExchangeAdd16((volatile short*)ptr, *(short*)val_buf); break; \
-                case 4:  *(uint32_t*)result = (uint32_t)_InterlockedExchangeAdd((volatile long*)ptr, *(long*)val_buf); break; \
-                case 8:  *(uint64_t*)result = (uint64_t)_InterlockedExchangeAdd64((volatile long long*)ptr, *(long long*)val_buf); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        /* MSVC ExchangeAdd intrinsics return the old value; add/sub-fetch fix up only the local result. */ \
-        #define ATOMIC_ADD_FETCH_DISPATCH() do { \
-            ATOMIC_FETCH_ADD_DISPATCH(); \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result += *( uint8_t*)val_buf; break; \
-                case 2:  *(uint16_t*)result += *(uint16_t*)val_buf; break; \
-                case 4:  *(uint32_t*)result += *(uint32_t*)val_buf; break; \
-                case 8:  *(uint64_t*)result += *(uint64_t*)val_buf; break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            } \
-        } while(0)
-        #define ATOMIC_FETCH_SUB_DISPATCH() \
-            switch(sz){ \
-                case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedExchangeAdd8((volatile char*)ptr, -(*(char*)val_buf)); break; \
-                case 2:  *(uint16_t*)result = (uint16_t)_InterlockedExchangeAdd16((volatile short*)ptr, -(*(short*)val_buf)); break; \
-                case 4:  *(uint32_t*)result = (uint32_t)_InterlockedExchangeAdd((volatile long*)ptr, -(*(long*)val_buf)); break; \
-                case 8:  *(uint64_t*)result = (uint64_t)_InterlockedExchangeAdd64((volatile long long*)ptr, -(*(long long*)val_buf)); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #define ATOMIC_SUB_FETCH_DISPATCH() do { \
-            ATOMIC_FETCH_SUB_DISPATCH(); \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result -= *( uint8_t*)val_buf; break; \
-                case 2:  *(uint16_t*)result -= *(uint16_t*)val_buf; break; \
-                case 4:  *(uint32_t*)result -= *(uint32_t*)val_buf; break; \
-                case 8:  *(uint64_t*)result -= *(uint64_t*)val_buf; break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            } \
-        } while(0)
-        #else
-        #define ATOMIC_FETCH_ADD_DISPATCH() \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result = __atomic_fetch_add(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 2:  *(uint16_t*)result = __atomic_fetch_add((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 4:  *(uint32_t*)result = __atomic_fetch_add((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 8:  *(uint64_t*)result = __atomic_fetch_add((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #define ATOMIC_ADD_FETCH_DISPATCH() \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result = __atomic_add_fetch(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 2:  *(uint16_t*)result = __atomic_add_fetch((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 4:  *(uint32_t*)result = __atomic_add_fetch((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 8:  *(uint64_t*)result = __atomic_add_fetch((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #define ATOMIC_FETCH_SUB_DISPATCH() \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result = __atomic_fetch_sub(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 2:  *(uint16_t*)result = __atomic_fetch_sub((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 4:  *(uint32_t*)result = __atomic_fetch_sub((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 8:  *(uint64_t*)result = __atomic_fetch_sub((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #define ATOMIC_SUB_FETCH_DISPATCH() \
-            switch(sz){ \
-                case 1:  *( uint8_t*)result = __atomic_sub_fetch(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 2:  *(uint16_t*)result = __atomic_sub_fetch((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 4:  *(uint32_t*)result = __atomic_sub_fetch((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                case 8:  *(uint64_t*)result = __atomic_sub_fetch((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break; \
-                default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz); \
-            }
-        #endif
-        switch(op){
-            case CC_ATOMIC_FETCH_ADD: ATOMIC_FETCH_ADD_DISPATCH(); break;
-            case CC_ATOMIC_FETCH_SUB: ATOMIC_FETCH_SUB_DISPATCH(); break;
-            case CC_ATOMIC_ADD_FETCH: ATOMIC_ADD_FETCH_DISPATCH(); break;
-            case CC_ATOMIC_SUB_FETCH: ATOMIC_SUB_FETCH_DISPATCH(); break;
-            case CC_ATOMIC_FETCH_AND:
-            #ifdef _MSC_VER
-                switch(sz){
-                    case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedAnd8((volatile char*)ptr, *(char*)val_buf); break;
-                    case 2:  *(uint16_t*)result = (uint16_t)_InterlockedAnd16((volatile short*)ptr, *(short*)val_buf); break;
-                    case 4:  *(uint32_t*)result = (uint32_t)_InterlockedAnd((volatile long*)ptr, *(long*)val_buf); break;
-                    case 8:  *(uint64_t*)result = (uint64_t)_InterlockedAnd64((volatile long long*)ptr, *(long long*)val_buf); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #else
-                switch(sz){
-                    case 1:  *( uint8_t*)result = __atomic_fetch_and(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 2:  *(uint16_t*)result = __atomic_fetch_and((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 4:  *(uint32_t*)result = __atomic_fetch_and((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 8:  *(uint64_t*)result = __atomic_fetch_and((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #endif
-                break;
-            case CC_ATOMIC_FETCH_OR:
-            #ifdef _MSC_VER
-                switch(sz){
-                    case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedOr8((volatile char*)ptr, *(char*)val_buf); break;
-                    case 2:  *(uint16_t*)result = (uint16_t)_InterlockedOr16((volatile short*)ptr, *(short*)val_buf); break;
-                    case 4:  *(uint32_t*)result = (uint32_t)_InterlockedOr((volatile long*)ptr, *(long*)val_buf); break;
-                    case 8:  *(uint64_t*)result = (uint64_t)_InterlockedOr64((volatile long long*)ptr, *(long long*)val_buf); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #else
-                switch(sz){
-                    case 1:  *( uint8_t*)result = __atomic_fetch_or(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 2:  *(uint16_t*)result = __atomic_fetch_or((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 4:  *(uint32_t*)result = __atomic_fetch_or((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 8:  *(uint64_t*)result = __atomic_fetch_or((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #endif
-                break;
-            case CC_ATOMIC_FETCH_XOR:
-            #ifdef _MSC_VER
-                switch(sz){
-                    case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedXor8((volatile char*)ptr, *(char*)val_buf); break;
-                    case 2:  *(uint16_t*)result = (uint16_t)_InterlockedXor16((volatile short*)ptr, *(short*)val_buf); break;
-                    case 4:  *(uint32_t*)result = (uint32_t)_InterlockedXor((volatile long*)ptr, *(long*)val_buf); break;
-                    case 8:  *(uint64_t*)result = (uint64_t)_InterlockedXor64((volatile long long*)ptr, *(long long*)val_buf); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #else
-                switch(sz){
-                    case 1:  *( uint8_t*)result = __atomic_fetch_xor(( uint8_t*)ptr, *( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 2:  *(uint16_t*)result = __atomic_fetch_xor((uint16_t*)ptr, *(uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 4:  *(uint32_t*)result = __atomic_fetch_xor((uint32_t*)ptr, *(uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 8:  *(uint64_t*)result = __atomic_fetch_xor((uint64_t*)ptr, *(uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #endif
-                break;
-            case CC_ATOMIC_EXCHANGE_N:
-            #ifdef _MSC_VER
-                switch(sz){
-                    case 1:  *(uint8_t*)result  = (uint8_t)_InterlockedExchange8((volatile char*)ptr, *(char*)val_buf); break;
-                    case 2:  *(uint16_t*)result = (uint16_t)_InterlockedExchange16((volatile short*)ptr, *(short*)val_buf); break;
-                    case 4:  *(uint32_t*)result = (uint32_t)_InterlockedExchange((volatile long*)ptr, *(long*)val_buf); break;
-                    case 8:  *(uint64_t*)result = (uint64_t)_InterlockedExchange64((volatile long long*)ptr, *(long long*)val_buf); break;
-                    case 16: { __int64 _nv[2]; memcpy(_nv, val_buf, 16);
-                               __int64 _cmp[2] = {0};
-                               while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp));
-                               memcpy(result, _cmp, 16); break; }
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #else
-                switch(sz){
-                    case 1:  __atomic_exchange(( uint8_t*)ptr, ( uint8_t*)val_buf, ( uint8_t*)result, __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_exchange((uint16_t*)ptr, (uint16_t*)val_buf, (uint16_t*)result, __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_exchange((uint32_t*)ptr, (uint32_t*)val_buf, (uint32_t*)result, __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_exchange((uint64_t*)ptr, (uint64_t*)val_buf, (uint64_t*)result, __ATOMIC_SEQ_CST); break;
-                    case 16: __atomic_exchange((CiAtomic16*)ptr, (CiAtomic16*)val_buf, (CiAtomic16*)result, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #endif
-                break;
-            case CC_ATOMIC_STORE_N:
-            #ifdef _MSC_VER
-                switch(sz){
-                    case 1:  _InterlockedExchange8((volatile char*)ptr, *(char*)val_buf); break;
-                    case 2:  _InterlockedExchange16((volatile short*)ptr, *(short*)val_buf); break;
-                    case 4:  _InterlockedExchange((volatile long*)ptr, *(long*)val_buf); break;
-                    case 8:  _InterlockedExchange64((volatile long long*)ptr, *(long long*)val_buf); break;
-                    case 16: { __int64 _nv[2]; memcpy(_nv, val_buf, 16);
-                               __int64 _cmp[2] = {0};
-                               while(!_InterlockedCompareExchange128((volatile __int64*)ptr, _nv[1], _nv[0], _cmp)){} break; }
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #else
-                switch(sz){
-                    case 1:  __atomic_store(( uint8_t*)ptr, ( uint8_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_store((uint16_t*)ptr, (uint16_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_store((uint32_t*)ptr, (uint32_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_store((uint64_t*)ptr, (uint64_t*)val_buf, __ATOMIC_SEQ_CST); break;
-                    case 16: __atomic_store((CiAtomic16*)ptr, (CiAtomic16*)val_buf, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-            #endif
-                break;
-            case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE: {
-                // values[0] = exchange, values[1] = comparand, result = old value
-                _Alignas(8) char comp_buf[16] = {0};
-                err = ci_interp_expr(ci, frame, expr->values[1], comp_buf, sz);
-                if(err) return err;
-                // __atomic_compare_exchange writes the old value into comparand_val on failure.
-                // On success the old value equals comparand, already there.
-                #ifdef _MSC_VER
-                switch(sz){
-                    case 1: *(uint8_t*)result  = (uint8_t)_InterlockedCompareExchange8((volatile char*)ptr, *(char*)val_buf, *(char*)comp_buf); break;
-                    case 2: *(uint16_t*)result = (uint16_t)_InterlockedCompareExchange16((volatile short*)ptr, *(short*)val_buf, *(short*)comp_buf); break;
-                    case 4: *(uint32_t*)result = (uint32_t)_InterlockedCompareExchange((volatile long*)ptr, *(long*)val_buf, *(long*)comp_buf); break;
-                    case 8: *(uint64_t*)result = (uint64_t)_InterlockedCompareExchange64((volatile long long*)ptr, *(long long*)val_buf, *(long long*)comp_buf); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-                #else
-                switch(sz){
-                    case 1:  __atomic_compare_exchange(( uint8_t*)ptr, ( uint8_t*)comp_buf, ( uint8_t*)val_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_compare_exchange((uint16_t*)ptr, (uint16_t*)comp_buf, (uint16_t*)val_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_compare_exchange((uint32_t*)ptr, (uint32_t*)comp_buf, (uint32_t*)val_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_compare_exchange((uint64_t*)ptr, (uint64_t*)comp_buf, (uint64_t*)val_buf, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    default: return ci_error(ci, expr->loc, "unsupported atomic operand size %u", sz);
-                }
-                memcpy(result, comp_buf, sz);
-                #endif
-                break;
-            }
-            case CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE128: {
-                // values[0] = exchange_high, values[1] = exchange_low, values[2] = comparand_result ptr
-                // result = unsigned char (bool)
-                int64_t exchange_low = 0;
-                void* comparand_ptr = NULL;
-                err = ci_interp_expr(ci, frame, expr->values[1], &exchange_low, 8);
-                if(err) return err;
-                err = ci_interp_expr(ci, frame, expr->values[2], &comparand_ptr, sizeof comparand_ptr);
-                if(err) return err;
-                #ifdef _MSC_VER
-                *(unsigned char*)result = _InterlockedCompareExchange128((volatile __int64*)ptr, *(int64_t*)val_buf, exchange_low, (__int64*)comparand_ptr);
-                #else
-                typedef struct { _Alignas(16) uint64_t lo; uint64_t hi; } Pair128;
-                Pair128 desired = {(uint64_t)exchange_low, *(uint64_t*)val_buf};
-                _Bool r = __atomic_compare_exchange((Pair128*)ptr, (Pair128*)comparand_ptr, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-                *(unsigned char*)result = r;
-                #endif
-                break;
-            }
-            case CC_ATOMIC_LOAD_N:
-            case CC_ATOMIC_LOAD:
-            case CC_ATOMIC_STORE:
-            case CC_ATOMIC_EXCHANGE:
-            case CC_ATOMIC_COMPARE_EXCHANGE_N:
-            case CC_ATOMIC_COMPARE_EXCHANGE:
-            case CC_ATOMIC_THREAD_FENCE:
-            case CC_ATOMIC_SIGNAL_FENCE:
-            case CC_ATOMIC_INTERLOCKED_INCREMENT:
-            case CC_ATOMIC_INTERLOCKED_DECREMENT:
-                return ci_error(ci, expr->loc, "unsupported atomic operation");
-        }
-        #undef ATOMIC_FETCH_ADD_DISPATCH
-        #undef ATOMIC_FETCH_SUB_DISPATCH
-        return 0;
-    }
-    case CC_EXPR_VA: {
-        CcVaOp op = expr->va.op;
-        switch(op){
-        case CC_VA_START: {
-            // expr->lhs is a pointer to the va_list data.
-            void* ap_ptr = NULL;
-            int err = ci_interp_expr(ci, frame, expr->lhs, &ap_ptr, sizeof ap_ptr);
-            if(err) return err;
-            if(!frame->varargs_buf)
-                return ci_error(ci, expr->loc, "va_start used in non-variadic function");
-            switch(ci_target(ci)->target){
-            case CC_TARGET_AARCH64_MACOS:
-            case CC_TARGET_X86_64_WINDOWS:
-            case CC_TARGET_TEST: {
-                void* va_ptr = frame->varargs_buf;
-                memcpy(ap_ptr, &va_ptr, sizeof(void*));
-                return 0;
-            }
-            case CC_TARGET_AARCH64_LINUX: {
-                CiAapcs64VaList* va = ap_ptr;
-                va->__stack = frame->varargs_buf;
-                va->__gr_top = NULL;
-                va->__vr_top = NULL;
-                va->__gr_offs = 0;
-                va->__vr_offs = 0;
-                return 0;
-            }
-            case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS: {
-                CiSysvVaListTag* tag = ap_ptr;
-                tag->gp_offset = 48;
-                tag->fp_offset = 48 + 128;
-                tag->overflow_arg_area = frame->varargs_buf;
-                tag->reg_save_area = NULL;
-                return 0;
-            }
-            case CC_TARGET_COUNT:
-                break;
-            }
-            return ci_error(ci, expr->loc, "va_start: unsupported target");
-        }
-        case CC_VA_END:
+        case CC_TYPE_IS_FUNCTION: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_FUNCTION;
             return 0;
-        case CC_VA_ARG: {
-            // expr->lhs is a pointer to the va_list data.
-            void* ap_ptr = NULL;
-            int err = ci_interp_expr(ci, frame, expr->lhs, &ap_ptr, sizeof ap_ptr);
-            if(err) return err;
+        }
+        case CC_TYPE_IS_ENUM: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_ENUM;
+            return 0;
+        }
+        case CC_TYPE_IS_CONST: {
+            *(_Bool*)result = qt.is_const;
+            return 0;
+        }
+        case CC_TYPE_IS_VOLATILE: {
+            *(_Bool*)result = qt.is_volatile;
+            return 0;
+        }
+        case CC_TYPE_IS_ATOMIC: {
+            *(_Bool*)result = qt.is_atomic;
+            return 0;
+        }
+        case CC_TYPE_IS_UNSIGNED: {
+            *(_Bool*)result = ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
+            return 0;
+        }
+        case CC_TYPE_IS_SIGNED: {
+            CcQualType st = qt;
+            while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind) && !ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
+            return 0;
+        }
+        case CC_TYPE_SIZEOF: {
             uint32_t sz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &sz);
+            err = cc_sizeof_as_uint(&ci->parser, qt, loc, &sz);
             if(err) return err;
-            uint32_t advance = sz < 8 ? 8 : (sz + 7) & ~7u;
-            switch(ci_target(ci)->target){
-            case CC_TARGET_AARCH64_MACOS:
-            case CC_TARGET_X86_64_WINDOWS:
-            case CC_TARGET_TEST: {
-                void* cur;
-                memcpy(&cur, ap_ptr, sizeof(void*));
-                if(result != ci_discard_buf){
-                    if(sz > size)
-                        return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-                    memcpy(result, cur, sz);
-                }
-                cur = (char*)cur + advance;
-                memcpy(ap_ptr, &cur, sizeof(void*));
-                return 0;
-            }
-            case CC_TARGET_AARCH64_LINUX: {
-                CiAapcs64VaList* va = ap_ptr;
-                _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
-                const void* src;
-                if(is_fp){
-                    if(va->__vr_offs < 0){
-                        src = (char*)va->__vr_top + va->__vr_offs;
-                        va->__vr_offs += 16;
-                    }
-                    else {
-                        src = va->__stack;
-                        va->__stack = (char*)va->__stack + advance;
-                    }
-                }
-                else {
-                    if(va->__gr_offs < 0){
-                        src = (char*)va->__gr_top + va->__gr_offs;
-                        va->__gr_offs += 8;
-                    }
-                    else {
-                        src = va->__stack;
-                        va->__stack = (char*)va->__stack + advance;
-                    }
-                }
-                if(result != ci_discard_buf){
-                    if(sz > size)
-                        return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-                    memcpy(result, src, sz);
-                }
-                return 0;
-            }
-            case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS: {
-                CiSysvVaListTag* tag = ap_ptr;
-                _Bool is_fp = ccqt_is_basic(expr->type) && ccbt_is_float(expr->type.basic.kind);
-                const void* src;
-                if(is_fp){
-                    if(tag->fp_offset < 176){
-                        src = (char*)tag->reg_save_area + tag->fp_offset;
-                        tag->fp_offset += 16;
-                    }
-                    else {
-                        src = tag->overflow_arg_area;
-                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
-                    }
-                }
-                else {
-                    if(tag->gp_offset < 48){
-                        src = (char*)tag->reg_save_area + tag->gp_offset;
-                        tag->gp_offset += 8;
-                    }
-                    else {
-                        src = tag->overflow_arg_area;
-                        tag->overflow_arg_area = (char*)tag->overflow_arg_area + advance;
-                    }
-                }
-                if(result != ci_discard_buf){
-                    if(sz > size)
-                        return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-                    memcpy(result, src, sz);
-                }
-                return 0;
-            }
-            case CC_TARGET_COUNT:
-                break;
-            }
-            return ci_error(ci, expr->loc, "va_arg: unsupported target");
+            *(size_t*)result = sz;
+            return 0;
         }
-        case CC_VA_COPY: {
-            // Both operands are pointers to va_list data.
-            void* dest_ptr = NULL;
-            int err = ci_interp_expr(ci, frame, expr->lhs, &dest_ptr, sizeof dest_ptr);
+        case CC_TYPE_ALIGNOF: {
+            uint32_t al;
+            err = cc_alignof_as_uint(&ci->parser, qt, loc, &al);
             if(err) return err;
-            void* src_ptr = NULL;
-            err = ci_interp_expr(ci, frame, expr->values[0], &src_ptr, sizeof src_ptr);
-            if(err) return err;
-            switch(ci_target(ci)->target){
-            case CC_TARGET_AARCH64_MACOS:
-            case CC_TARGET_X86_64_WINDOWS:
-            case CC_TARGET_TEST:
-                memcpy(dest_ptr, src_ptr, sizeof(void*));
-                return 0;
-            case CC_TARGET_AARCH64_LINUX:
-                *(CiAapcs64VaList*)dest_ptr = *(CiAapcs64VaList*)src_ptr;
-                return 0;
-            case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS:
-                *(CiSysvVaListTag*)dest_ptr = *(CiSysvVaListTag*)src_ptr;
-                return 0;
-            case CC_TARGET_COUNT:
-                break;
-            }
-            return ci_error(ci, expr->loc, "va_copy: unsupported target");
+            *(size_t*)result = al;
+            return 0;
         }
+        case CC_TYPE_POINTEE: {
+            if(ccqt_kind(qt) != CC_POINTER)
+                return ci_error(ci, loc, "_Type.pointee: not a pointer type");
+            CcPointer* ptr = ccqt_as_ptr(qt);
+            *(uintptr_t*)result = ptr->pointee.bits;
+            return 0;
         }
-        return ci_error(ci, expr->loc, "interpreter: unsupported va operation");
-    }
-    case CC_EXPR_TYPE_INTROSPECTION: {
-        uintptr_t type_bits = 0;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &type_bits, sizeof type_bits);
-        if(err) return err;
-        CcQualType qt = {.bits = type_bits};
-        CcTypeIntrospectionOp op = expr->type_introspection.op;
-        switch(op){
-            case CC_TYPE_NONE:
-                return CI_UNREACHABLE_ERROR;
-            case CC_TYPE_NAME: {
-                MStringBuilder sb = {.allocator = ci_allocator(ci)};
-                cc_print_type(&sb, qt);
-                Atom a;
-                {
-                    AtomTable* at = ci_lock_atoms(ci);
-                    a = msb_atomize(&sb, at);
-                    ci_unlock_atoms(ci, at);
-                }
-                msb_destroy(&sb);
-                if(!a) return CI_OOM_ERROR;
-                *(const char**)result = a->data;
-                return 0;
+        case CC_TYPE_IS_CALLABLE: {
+            CcTypeKind k = ccqt_kind(qt);
+            *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
+            return 0;
+        }
+        case CC_TYPE_IS_INCOMPLETE: {
+            CcTypeKind k = ccqt_kind(qt);
+            switch(k){
+                DRP_CASES_EXHAUSTED;
+                case CC_STRUCT:
+                    *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
+                    break;
+                case CC_UNION:
+                    *(_Bool*)result = ccqt_as_union(qt)->is_incomplete;
+                    break;
+                case CC_ARRAY:
+                    *(_Bool*)result = ccqt_as_array(qt)->is_incomplete;
+                    break;
+                case CC_ENUM:
+                    *(_Bool*)result = ccqt_as_enum(qt)->is_incomplete;
+                    break;
+                case CC_FUNCTION:
+                case CC_BASIC:
+                case CC_POINTER:
+                case CC_BLOCK_POINTER:
+                case CC_SLICE:
+                    *(_Bool*)result = 0;
             }
-            case CC_TYPE_TAG: {
-                Atom tag = 0;
-                CcTypeKind k = ccqt_kind(qt);
-                if(k == CC_STRUCT)     tag = ccqt_as_struct(qt)->name;
-                else if(k == CC_UNION) tag = ccqt_as_union(qt)->name;
-                else if(k == CC_ENUM)  tag = ccqt_as_enum(qt)->name;
-                *(const char**)result = tag ? tag->data : "";
-                return 0;
-            }
-            case CC_TYPE_IS_INTEGER: {
-                CcQualType st = qt;
-                while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-                *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind);
-                return 0;
-            }
-            case CC_TYPE_IS_FLOAT: {
-                *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
-                return 0;
-            }
-            case CC_TYPE_IS_ARITHMETIC: {
-                *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
-                return 0;
-            }
-            case CC_TYPE_IS_POINTER: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_POINTER;
-                return 0;
-            }
-            case CC_TYPE_IS_STRUCT: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_STRUCT;
-                return 0;
-            }
-            case CC_TYPE_IS_UNION: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_UNION;
-                return 0;
-            }
-            case CC_TYPE_IS_ARRAY: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY;
-                return 0;
-            }
-            case CC_TYPE_IS_SLICE: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_SLICE;
-                return 0;
-            }
-            case CC_TYPE_IS_FUNCTION: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_FUNCTION;
-                return 0;
-            }
-            case CC_TYPE_IS_ENUM: {
-                *(_Bool*)result = ccqt_kind(qt) == CC_ENUM;
-                return 0;
-            }
-            case CC_TYPE_IS_CONST: {
-                *(_Bool*)result = qt.is_const;
-                return 0;
-            }
-            case CC_TYPE_IS_VOLATILE: {
-                *(_Bool*)result = qt.is_volatile;
-                return 0;
-            }
-            case CC_TYPE_IS_ATOMIC: {
-                *(_Bool*)result = qt.is_atomic;
-                return 0;
-            }
-            case CC_TYPE_IS_UNSIGNED: {
-                *(_Bool*)result = ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
-                return 0;
-            }
-            case CC_TYPE_IS_SIGNED: {
-                CcQualType st = qt;
-                while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-                *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind) && !ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
-                return 0;
-            }
-            case CC_TYPE_SIZEOF: {
-                uint32_t sz;
-                err = cc_sizeof_as_uint(&ci->parser, qt, expr->loc, &sz);
-                if(err) return err;
-                *(size_t*)result = sz;
-                return 0;
-            }
-            case CC_TYPE_ALIGNOF: {
-                uint32_t al;
-                err = cc_alignof_as_uint(&ci->parser, qt, expr->loc, &al);
-                if(err) return err;
-                *(size_t*)result = al;
-                return 0;
-            }
-            case CC_TYPE_POINTEE: {
-                if(ccqt_kind(qt) != CC_POINTER)
-                    return ci_error(ci, expr->loc, "_Type.pointee: not a pointer type");
-                CcPointer* ptr = ccqt_as_ptr(qt);
-                *(uintptr_t*)result = ptr->pointee.bits;
-                return 0;
-            }
-            case CC_TYPE_IS_CALLABLE: {
-                CcTypeKind k = ccqt_kind(qt);
-                *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
-                return 0;
-            }
-            case CC_TYPE_IS_INCOMPLETE: {
-                CcTypeKind k = ccqt_kind(qt);
-                switch(k){
-                    DRP_CASES_EXHAUSTED;
-                    case CC_STRUCT:
-                        *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
-                        break;
-                    case CC_UNION:
-                        *(_Bool*)result = ccqt_as_union(qt)->is_incomplete;
-                        break;
-                    case CC_ARRAY:
-                        *(_Bool*)result = ccqt_as_array(qt)->is_incomplete;
-                        break;
-                    case CC_ENUM:
-                        *(_Bool*)result = ccqt_as_enum(qt)->is_incomplete;
-                        break;
-                    case CC_FUNCTION:
-                    case CC_BASIC:
-                    case CC_POINTER:
-                    case CC_BLOCK_POINTER:
-                    case CC_SLICE:
-                        *(_Bool*)result = 0;
-                }
-                return 0;
-            }
-            case CC_TYPE_IS_VARIADIC: {
-                CcQualType ft = qt;
-                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                *(_Bool*)result = ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic;
-                return 0;
-            }
-            case CC_TYPE_UNQUAL: {
-                CcQualType uq = qt;
-                uq.quals = 0;
-                *(uintptr_t*)result = uq.bits;
-                return 0;
-            }
-            case CC_TYPE_COUNT: {
-                if(ccqt_kind(qt) != CC_ARRAY)
-                    return ci_error(ci, expr->loc, "_Type.count: not an array type");
-                *(size_t*)result = ccqt_as_array(qt)->length;
-                return 0;
-            }
-            case CC_TYPE_IS_CALLABLE_WITH: {
-                uintptr_t arg_bits = 0;
-                err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
-                if(err) return err;
-                CcQualType arg_type = {.bits = arg_bits};
-                CcQualType ft = qt;
-                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                _Bool v = 0;
-                if(ccqt_kind(ft) == CC_FUNCTION){
-                    CcFunction* f = ccqt_as_function(ft);
-                    if(f->param_count == 1)
-                        v = cc_implicit_convertible(arg_type, f->params[0]);
-                }
-                *(_Bool*)result = v;
-                return 0;
-            }
-            case CC_TYPE_CASTABLE_TO: {
-                uintptr_t arg_bits = 0;
-                err = ci_interp_expr(ci, frame, expr->values[0], &arg_bits, sizeof arg_bits);
-                if(err) return err;
-                CcQualType target = {.bits = arg_bits};
-                *(_Bool*)result = cc_explicit_castable(qt, target);
-                return 0;
-            }
-            case CC_TYPE_FIELD:{
-                CcTypeKind k = ccqt_kind(qt);
-                if(k != CC_STRUCT && k != CC_UNION)
-                    return ci_error(ci, expr->loc, "_Type.field: not a struct or union type");
-                uintptr_t idx = 0;
-                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
-                if(err) return err;
-                CcField* f;
-                if(k == CC_STRUCT){
-                    CcStruct* s = ccqt_as_struct(qt);
-                    if(idx >= s->field_count)
-                        return ci_error(ci, expr->loc, "_Type.field: index out of range");
-                    f = &s->fields[idx];
-                }
-                else {
-                    CcUnion* s = ccqt_as_union(qt);
-                    if(idx >= s->field_count)
-                        return ci_error(ci, expr->loc, "_Type.field: index out of range");
-                    f = &s->fields[idx];
-                }
-                CiRtField* out = (CiRtField*)result;
-                if(f->is_method){
-                    *out = (CiRtField){
-                        .type = f->type,
-                        .name = f->method->name ? f->method->name->data : "",
-                        .name_length = f->method->name ? f->method->name->length : 0,
-                        .offset = 0,
-                        .bitwidth = 0,
-                        .bitoffset = 0,
-                        .is_bitfield = 0,
-                    };
-                }
-                else {
-                    *out = (CiRtField){
-                        .type = f->type,
-                        .name = f->name ? f->name->data : "",
-                        .name_length = f->name ? f->name->length : 0,
-                        .offset = f->offset,
-                        .bitwidth = f->bitwidth,
-                        .bitoffset = f->bitoffset,
-                        .is_bitfield = f->is_bitfield,
-                    };
-                }
-                return 0;
-            }
-            case CC_TYPE_PUSH_METHOD:
-                return ci_error(ci, expr->loc, "push_method should be handled at parse time");
-            case CC_TYPE_ENUMERATORS: {
-                if(ccqt_kind(qt) != CC_ENUM)
-                    return ci_error(ci, expr->loc, "_Type.enumerators: not an enum type");
-                CcEnum* en = ccqt_as_enum(qt);
-                *(size_t*)result = en->enumerator_count;
-                return 0;
-            }
-            case CC_TYPE_ENUMERATOR: {
-                if(ccqt_kind(qt) != CC_ENUM)
-                    return ci_error(ci, expr->loc, "_Type.enumerator: not an enum type");
-                CcEnum* enum_ = ccqt_as_enum(qt);
-                uintptr_t idx = 0;
-                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
-                if(err) return err;
-                if(idx >= enum_->enumerator_count)
-                    return ci_error(ci, expr->loc, "_Type.enumerator: index out of range");
-                CcEnumerator* enumerator = enum_->enumerators[idx];
-                CiRtEnumerator* out = (CiRtEnumerator*)result;
-                out->name = enumerator->name ? enumerator->name->data : "";
-                out->name_length = enumerator->name ? enumerator->name->length: 0;
-                out->value = (long long)enumerator->value;
-                return 0;
-            }
-            case CC_TYPE_RETURN_TYPE: {
-                CcQualType ft = qt;
-                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                if(ccqt_kind(ft) != CC_FUNCTION)
-                    return ci_error(ci, expr->loc, "_Type.return_type: not a function type");
-                *(uintptr_t*)result = ccqt_as_function(ft)->return_type.bits;
-                return 0;
-            }
-            case CC_TYPE_PARAM_COUNT: {
-                CcQualType ft = qt;
-                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                if(ccqt_kind(ft) != CC_FUNCTION)
-                    return ci_error(ci, expr->loc, "_Type.param_count: not a function type");
-                *(size_t*)result = ccqt_as_function(ft)->param_count;
-                return 0;
-            }
-            case CC_TYPE_PARAM_TYPE: {
-                CcQualType ft = qt;
-                if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                if(ccqt_kind(ft) != CC_FUNCTION)
-                    return ci_error(ci, expr->loc, "_Type.param_type: not a function type");
+            return 0;
+        }
+        case CC_TYPE_IS_VARIADIC: {
+            CcQualType ft = qt;
+            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+            *(_Bool*)result = ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic;
+            return 0;
+        }
+        case CC_TYPE_UNQUAL: {
+            CcQualType uq = qt;
+            uq.quals = 0;
+            *(uintptr_t*)result = uq.bits;
+            return 0;
+        }
+        case CC_TYPE_COUNT: {
+            if(ccqt_kind(qt) != CC_ARRAY)
+                return ci_error(ci, loc, "_Type.count: not an array type");
+            *(size_t*)result = ccqt_as_array(qt)->length;
+            return 0;
+        }
+        case CC_TYPE_IS_CALLABLE_WITH: {
+            uintptr_t arg_bits = arg;
+            CcQualType arg_type = {.bits = arg_bits};
+            CcQualType ft = qt;
+            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+            _Bool v = 0;
+            if(ccqt_kind(ft) == CC_FUNCTION){
                 CcFunction* f = ccqt_as_function(ft);
-                uintptr_t idx = 0;
-                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
-                if(err) return err;
-                if(idx >= f->param_count)
-                    return ci_error(ci, expr->loc, "_Type.param_type: index out of range");
-                *(uintptr_t*)result = f->params[idx].bits;
-                return 0;
+                if(f->param_count == 1)
+                    v = cc_implicit_convertible(arg_type, f->params[0]);
             }
-            case CC_TYPE_ELEMENT_TYPE: {
-                if(ccqt_kind(qt) != CC_ARRAY)
-                    return ci_error(ci, expr->loc, "_Type.element_type: not an array type");
-                *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
-                return 0;
-            }
-            case CC_TYPE_UNDERLYING_TYPE: {
-                if(ccqt_kind(qt) != CC_ENUM)
-                    return ci_error(ci, expr->loc, "_Type.underlying_type: not an enum type");
-                *(uintptr_t*)result = ccqt_as_enum(qt)->underlying.bits;
-                return 0;
-            }
-            case CC_TYPE_FIELDS:{
-                CcTypeKind k = ccqt_kind(qt);
-                if(k != CC_STRUCT && k != CC_UNION)
-                    return ci_error(ci, expr->loc, "_Type.fields: not a struct or union type");
+            *(_Bool*)result = v;
+            return 0;
+        }
+        case CC_TYPE_CASTABLE_TO: {
+            uintptr_t arg_bits = arg;
+            CcQualType target = {.bits = arg_bits};
+            *(_Bool*)result = cc_explicit_castable(qt, target);
+            return 0;
+        }
+        case CC_TYPE_FIELD:{
+            CcTypeKind k = ccqt_kind(qt);
+            if(k != CC_STRUCT && k != CC_UNION)
+                return ci_error(ci, loc, "_Type.field: not a struct or union type");
+            uintptr_t idx = arg;
+            CcField* f;
+            if(k == CC_STRUCT){
                 CcStruct* s = ccqt_as_struct(qt);
-                *(size_t*)result = s->field_count;
-                return 0;
+                if(idx >= s->field_count)
+                    return ci_error(ci, loc, "_Type.field: index out of range");
+                f = &s->fields[idx];
             }
-        }
-        return ci_error(ci, expr->loc, "interpreter: unsupported type introspection op");
-    }
-    case CC_EXPR_BUILTIN: {
-        CcBuiltinOp op = expr->builtin.op;
-        switch(op){
-            case CC_BUILTIN_UNREACHABLE:
-                return ci_error(ci, expr->loc, "__builtin_unreachable reached");
-            case CC_BUILTIN_TRAP:
-                return ci_error(ci, expr->loc, "__builtin_trap");
-            case CC_BUILTIN_DEBUGTRAP:
-                return 0;
-            case CC_BUILTIN_ABORT:
-                return ci_error(ci, expr->loc, "__builtin_abort called");
-            case CC_BUILTIN_BACKTRACE:
-                return ci_backtrace(ci, frame, 0);
-        }
-        return ci_error(ci, expr->loc, "interpreter: unsupported builtin");
-    }
-    case CC_EXPR_COMPILE: {
-        if(result == ci_discard_buf) return 0;
-        const char* source = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &source, sizeof source);
-        if(err) return err;
-        CiModule* module = NULL;
-        if(source){
-            err = ci_compile_module(ci, source, &module);
-            if(err == CI_OOM_ERROR) return err;
-        }
-        if(sizeof module > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof module, size);
-        memcpy(result, &module, sizeof module);
-        return 0;
-    }
-    case CC_EXPR_MODULE_REFLECT: {
-        if(expr->module.op != CC_MODULE_RUN && result == ci_discard_buf) return 0;
-        CiModule* module = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &module, sizeof module);
-        if(err) return err;
-        if(module && PM_get(&ci->modules, module) != module)
-            return ci_error(ci, expr->loc, "_Module is not valid");
-        size_t idx = 0;
-        switch(expr->module.op){
-            case CC_MODULE_FUNC:
-            case CC_MODULE_VAR:
-            case CC_MODULE_TYPE:
-                err = ci_interp_expr(ci, frame, expr->values[0], &idx, sizeof idx);
-                if(err) return err;
-                break;
-            case CC_MODULE_FUNC_COUNT:
-            case CC_MODULE_VAR_COUNT:
-            case CC_MODULE_TYPE_COUNT:
-            case CC_MODULE_NONE:
-                break;
-            case CC_MODULE_SYMBOL:{
-                const char* name = NULL;
-                err = ci_interp_expr(ci, frame, expr->values[0], &name, sizeof name);
-                if(err) return err;
-                if(!name)
-                    return ci_error(ci, expr->loc, "_Module.symbol name must not be NULL");
-                CcQualType expected = ccqt_as_ptr(expr->type)->pointee;
-                void* sym = NULL;
-                err = ci_lookup_symbol(ci, expr->loc, module, name, expected, &sym);
-                if(err) return err;
-                if(sizeof sym > size)
-                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof sym, size);
-                memcpy(result, &sym, sizeof sym);
-                return 0;
+            else {
+                CcUnion* s = ccqt_as_union(qt);
+                if(idx >= s->field_count)
+                    return ci_error(ci, loc, "_Type.field: index out of range");
+                f = &s->fields[idx];
             }
-            case CC_MODULE_RUN:{
-                err = ci_resolve_module(ci, module);
-                if(err) return err;
-                err = ci_lower_module(ci, module);
-                if(err) return err;
-                void*_Null_unspecified slots = NULL;
-                if(module->slot_size){
-                    slots = Allocator_zalloc(ci_allocator(ci), module->slot_size);
-                    if(!slots) return CI_OOM_ERROR;
-                }
-                CiInterpFrame module_frame = {
-                    .parent = frame,
-                    .ops = module->ops.data,
-                    .op_count = module->ops.count,
-                    .slots = slots,
-                    .return_buf = ci_discard_buf,
-                    .return_size = sizeof ci_discard_buf,
+            CiRtField* out = (CiRtField*)result;
+            if(f->is_method){
+                *out = (CiRtField){
+                    .type = f->type,
+                    .name = f->method->name ? f->method->name->data : "",
+                    .name_length = f->method->name ? f->method->name->length : 0,
+                    .offset = 0,
+                    .bitwidth = 0,
+                    .bitoffset = 0,
+                    .is_bitfield = 0,
                 };
-                int ret = 0;
-                err = ci_interp_run(ci, &module_frame);
-                ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
-                if(slots)
-                    Allocator_free(ci_allocator(ci), slots, module->slot_size);
-                if(err) return err;
-                if(result == ci_discard_buf) return 0;
-                if(sizeof ret > size)
-                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
-                memcpy(result, &ret, sizeof ret);
-                return 0;
             }
-            case CC_MODULE_PARSE_TYPE:{
-                const char* name = NULL;
-                err = ci_interp_expr(ci, frame, expr->values[0], &name, sizeof name);
-                if(err) return err;
-                if(!name)
-                    return ci_error(ci, expr->loc, "_Module.parse_type name must not be NULL");
-                CcQualType type = {0};
-                err = ci_parse_module_type(ci, expr->loc, module, name, &type);
-                if(err) return err;
-                uintptr_t bits = type.bits;
-                if(sizeof bits > size)
-                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof bits, size);
-                memcpy(result, &bits, sizeof bits);
-                return 0;
+            else {
+                *out = (CiRtField){
+                    .type = f->type,
+                    .name = f->name ? f->name->data : "",
+                    .name_length = f->name ? f->name->length : 0,
+                    .offset = f->offset,
+                    .bitwidth = f->bitwidth,
+                    .bitoffset = f->bitoffset,
+                    .is_bitfield = f->is_bitfield,
+                };
             }
-        }
-        CiRtModuleMember member = {0};
-        err = ci_reflect_module(ci, expr->loc, module, expr->module.op, idx, &member);
-        if(err) return err;
-        switch(expr->module.op){
-            case CC_MODULE_FUNC_COUNT:
-            case CC_MODULE_VAR_COUNT:
-            case CC_MODULE_TYPE_COUNT:
-                if(sizeof member.name_length > size)
-                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof member.name_length, size);
-                memcpy(result, &member.name_length, sizeof member.name_length);
-                return 0;
-            case CC_MODULE_FUNC:
-            case CC_MODULE_VAR:
-            case CC_MODULE_TYPE:
-                if(sizeof member > size)
-                    return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof member, size);
-                memcpy(result, &member, sizeof member);
-                return 0;
-            case CC_MODULE_NONE:
-            default:
-                return CI_UNREACHABLE_ERROR;
-        }
-        return CI_UNREACHABLE_ERROR;
-    }
-    case CC_EXPR_HOTSWAP: {
-        void (*old_ptr)(void) = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &old_ptr, sizeof old_ptr);
-        if(err) return err;
-        void (*new_ptr)(void) = NULL;
-        err = ci_interp_expr(ci, frame, expr->values[0], &new_ptr, sizeof new_ptr);
-        if(err) return err;
-        int ret = 1;
-        CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
-        CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
-        if(old_func == new_func){
-            ret = 0;
-        }
-        else if(old_func && new_func && old_func->type == new_func->type){
-            drp_atomic_ptr_store(&old_func->hotswap, new_func);
-            ret = 0;
-        }
-        if(result == ci_discard_buf) return 0;
-        if(sizeof ret > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof ret, size);
-        memcpy(result, &ret, sizeof ret);
-        return 0;
-    }
-    case CC_EXPR_ALLOCA: {
-        uint64_t sz = 0;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &sz, sizeof sz);
-        if(err) return err;
-        sz = ci_read_uint(&sz, ci_target(ci)->sizeof_[CCBT_nullptr_t]);
-        CiAllocaBlock* block = Allocator_alloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
-        if(!block) return CI_OOM_ERROR;
-        memset(block + 1, 0, sz);
-        block->size = sz;
-        block->next = frame->alloca_list;
-        frame->alloca_list = block;
-        void* ptr = block + 1;
-        if(sizeof(void*) > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
-        memcpy(result, &ptr, sizeof(void*));
-        return 0;
-    }
-    case CC_EXPR_INTERN: {
-        // Evaluate the argument to get a char pointer.
-        void* ptr = NULL;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &ptr, sizeof ptr);
-        if(err) return err;
-        const char* s = ptr;
-        if(!s){
-            // NULL in, NULL out.
-            memset(result, 0, sizeof(void*));
             return 0;
         }
-        size_t len = strlen(s);
-        Atom a;
-        {
-            AtomTable* at = ci_lock_atoms(ci);
-            a = AT_atomize(at, s, len);
-            ci_unlock_atoms(ci, at);
+        case CC_TYPE_PUSH_METHOD:
+            return ci_error(ci, loc, "push_method should be handled at parse time");
+        case CC_TYPE_ENUMERATORS: {
+            if(ccqt_kind(qt) != CC_ENUM)
+                return ci_error(ci, loc, "_Type.enumerators: not an enum type");
+            CcEnum* en = ccqt_as_enum(qt);
+            *(size_t*)result = en->enumerator_count;
+            return 0;
         }
-        if(!a) return CI_OOM_ERROR;
-        const char* interned = a->data;
-        if(sizeof(void*) > size)
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(void*), size);
-        memcpy(result, &interned, sizeof(void*));
-        return 0;
+        case CC_TYPE_ENUMERATOR: {
+            if(ccqt_kind(qt) != CC_ENUM)
+                return ci_error(ci, loc, "_Type.enumerator: not an enum type");
+            CcEnum* enum_ = ccqt_as_enum(qt);
+            uintptr_t idx = arg;
+            if(idx >= enum_->enumerator_count)
+                return ci_error(ci, loc, "_Type.enumerator: index out of range");
+            CcEnumerator* enumerator = enum_->enumerators[idx];
+            CiRtEnumerator* out = (CiRtEnumerator*)result;
+            out->name = enumerator->name ? enumerator->name->data : "";
+            out->name_length = enumerator->name ? enumerator->name->length: 0;
+            out->value = (long long)enumerator->value;
+            return 0;
+        }
+        case CC_TYPE_RETURN_TYPE: {
+            CcQualType ft = qt;
+            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+            if(ccqt_kind(ft) != CC_FUNCTION)
+                return ci_error(ci, loc, "_Type.return_type: not a function type");
+            *(uintptr_t*)result = ccqt_as_function(ft)->return_type.bits;
+            return 0;
+        }
+        case CC_TYPE_PARAM_COUNT: {
+            CcQualType ft = qt;
+            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+            if(ccqt_kind(ft) != CC_FUNCTION)
+                return ci_error(ci, loc, "_Type.param_count: not a function type");
+            *(size_t*)result = ccqt_as_function(ft)->param_count;
+            return 0;
+        }
+        case CC_TYPE_PARAM_TYPE: {
+            CcQualType ft = qt;
+            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
+            if(ccqt_kind(ft) != CC_FUNCTION)
+                return ci_error(ci, loc, "_Type.param_type: not a function type");
+            CcFunction* f = ccqt_as_function(ft);
+            uintptr_t idx = arg;
+            if(idx >= f->param_count)
+                return ci_error(ci, loc, "_Type.param_type: index out of range");
+            *(uintptr_t*)result = f->params[idx].bits;
+            return 0;
+        }
+        case CC_TYPE_ELEMENT_TYPE: {
+            if(ccqt_kind(qt) != CC_ARRAY)
+                return ci_error(ci, loc, "_Type.element_type: not an array type");
+            *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
+            return 0;
+        }
+        case CC_TYPE_UNDERLYING_TYPE: {
+            if(ccqt_kind(qt) != CC_ENUM)
+                return ci_error(ci, loc, "_Type.underlying_type: not an enum type");
+            *(uintptr_t*)result = ccqt_as_enum(qt)->underlying.bits;
+            return 0;
+        }
+        case CC_TYPE_FIELDS:{
+            CcTypeKind k = ccqt_kind(qt);
+            if(k != CC_STRUCT && k != CC_UNION)
+                return ci_error(ci, loc, "_Type.fields: not a struct or union type");
+            CcStruct* s = ccqt_as_struct(qt);
+            *(size_t*)result = s->field_count;
+            return 0;
+        }
     }
-    case CC_EXPR_UMUL128: {
-        uint64_t a = 0, b = 0;
-        int err = ci_interp_expr(ci, frame, expr->lhs, &a, 8);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->values[0], &b, 8);
-        if(err) return err;
-        void* high_ptr = NULL;
-        err = ci_interp_expr(ci, frame, expr->values[1], &high_ptr, sizeof high_ptr);
-        if(err) return err;
-        #ifdef _MSC_VER
-        *(uint64_t*)result = _umul128(a, b, (uint64_t*)high_ptr);
-        #else
-        unsigned __int128 full = (unsigned __int128)a * b;
-        *(uint64_t*)result = (uint64_t)full;
-        if(high_ptr)
-            *(uint64_t*)high_ptr = (uint64_t)(full >> 64);
-        #endif
-        return 0;
-    }
-    case CC_EXPR_ADD_OVERFLOW:
-    case CC_EXPR_SUB_OVERFLOW:
-    case CC_EXPR_MUL_OVERFLOW: {
-        // Read a
-        uint64_t abuf = 0;
-        uint32_t asz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &asz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->lhs, &abuf, sizeof abuf);
-        if(err) return err;
-        _Bool a_unsigned = ccqt_is_unsigned(expr->lhs->type, !ci_target(ci)->char_is_signed);
-        CiInt128 a = a_unsigned ? ci_int128_from_uint64(ci_read_uint(&abuf, asz))
-                              : ci_int128_from_int64(ci_read_int(&abuf, asz));
-        // Read b
-        uint64_t bbuf = 0;
-        uint32_t bsz;
-        err = cc_sizeof_as_uint(&ci->parser, expr->values[0]->type, expr->loc, &bsz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->values[0], &bbuf, sizeof bbuf);
-        if(err) return err;
-        _Bool b_unsigned = ccqt_is_unsigned(expr->values[0]->type, !ci_target(ci)->char_is_signed);
-        CiInt128 b = b_unsigned ? ci_int128_from_uint64(ci_read_uint(&bbuf, bsz)) : ci_int128_from_int64(ci_read_int(&bbuf, bsz));
-        // Compute in infinite precision
-        CiInt128 r;
-        switch((uint32_t)expr->kind){
-            case CC_EXPR_ADD_OVERFLOW: r = ci_int128_add(a, b); break;
-            case CC_EXPR_SUB_OVERFLOW: r = ci_int128_sub(a, b); break;
-            case CC_EXPR_MUL_OVERFLOW: r = ci_int128_mul(a, b); break;
-            DRP_DEFAULT_UNREACHABLE;
+    return ci_error(ci, loc, "interpreter: unsupported type introspection op");
+}
+
+static
+int
+ci_module_reflect_validate(CiInterpreter* ci, SrcLoc loc, CiModule*_Null_unspecified module){
+    if(module && PM_get(&ci->modules, module) != module)
+        return ci_error(ci, loc, "_Module is not valid");
+    return 0;
+}
+
+static
+int
+ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleOp op, CiModule*_Null_unspecified module, uintptr_t arg, CcQualType expected, void* result, size_t size){
+    int err;
+    size_t idx = arg;
+    switch(op){
+        case CC_MODULE_FUNC:
+        case CC_MODULE_VAR:
+        case CC_MODULE_TYPE:
+            break;
+        case CC_MODULE_FUNC_COUNT:
+        case CC_MODULE_VAR_COUNT:
+        case CC_MODULE_TYPE_COUNT:
+        case CC_MODULE_NONE:
+            break;
+        case CC_MODULE_SYMBOL:{
+            const char* name = (const char*)arg;
+            if(!name)
+                return ci_error(ci, loc, "_Module.symbol name must not be NULL");
+            void* sym = NULL;
+            err = ci_lookup_symbol(ci, loc, module, name, expected, &sym);
+            if(err) return err;
+            if(sizeof sym > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof sym, size);
+            memcpy(result, &sym, sizeof sym);
+            return 0;
         }
-        // Get result pointer and destination type
-        void* res_ptr = NULL;
-        err = ci_interp_expr(ci, frame, expr->values[1], &res_ptr, sizeof res_ptr);
-        if(err) return err;
-        CcQualType dest_type = ccqt_as_ptr(expr->values[1]->type)->pointee;
-        uint32_t dsz;
-        err = cc_sizeof_as_uint(&ci->parser, dest_type, expr->loc, &dsz);
-        if(err) return err;
-        // Truncate and store
-        uint64_t truncated = ci_int128_lo(r);
-        ci_write_uint(res_ptr, dsz, truncated);
-        // Check for overflow: sign/zero-extend the truncated value
-        // back to CiInt128 and compare with the infinite precision result.
-        _Bool dest_unsigned = ccqt_is_unsigned(dest_type, !ci_target(ci)->char_is_signed);
-        CiInt128 back;
-        if(dest_unsigned){
-            if(dsz >= 8)
-                back = ci_int128_from_uint64(truncated);
-            else
-                back = ci_int128_from_uint64(truncated & (((uint64_t)1 << (dsz * 8)) - 1));
-        }
-        else {
-            int64_t sval;
-            switch(dsz){
-                case 1: sval = (int8_t)truncated; break;
-                case 2: sval = (int16_t)truncated; break;
-                case 4: sval = (int32_t)truncated; break;
-                default: sval = (int64_t)truncated; break;
+        case CC_MODULE_RUN:{
+            err = ci_resolve_module(ci, module);
+            if(err) return err;
+            err = ci_lower_module(ci, module);
+            if(err) return err;
+            void*_Null_unspecified slots = NULL;
+            if(module->slot_size){
+                slots = Allocator_zalloc(ci_allocator(ci), module->slot_size);
+                if(!slots) return CI_OOM_ERROR;
             }
-            back = ci_int128_from_int64(sval);
-        }
-        _Bool overflowed = !ci_int128_eq(r, back);
-        if(result != ci_discard_buf){
-            uint32_t rsz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
-            if(err) return err;
-            if(rsz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, rsz, size);
-            ci_write_uint(result, rsz, overflowed);
-        }
-        return 0;
-    }
-    case CC_EXPR_POPCOUNT: {
-        uint64_t val = 0;
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
-        if(err) return err;
-        val = ci_read_uint(&val, sz);
-        int count = popcount_64(val);
-        if(result != ci_discard_buf){
-            uint32_t rsz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
-            if(err) return err;
-            if(rsz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, rsz, size);
-            ci_write_uint(result, rsz, (uint64_t)count);
-        }
-        return 0;
-    }
-    case CC_EXPR_CTZ:
-    case CC_EXPR_CLZ: {
-        uint64_t val = 0;
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
-        if(err) return err;
-        val = ci_read_uint(&val, sz);
-        int count;
-        if(val == 0){
-            // UB per the spec, but common behavior is to return the bit width
-            count = (int)(sz * 8);
-        }
-        else if(expr->kind == CC_EXPR_CTZ)
-            count = ctz_64(val);
-        else
-            count = clz_64(val) - (int)(64 - sz * 8);
-        if(result != ci_discard_buf){
-            uint32_t rsz;
-            err = cc_sizeof_as_uint(&ci->parser, expr->type, expr->loc, &rsz);
-            if(err) return err;
-            if(rsz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, rsz, size);
-            ci_write_uint(result, rsz, (uint64_t)count);
-        }
-        return 0;
-    }
-    case CC_EXPR_SIZEOF_VMT:
-    case CC_EXPR_STATEMENT_EXPRESSION:
-        return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
-    case CC_EXPR_SLICE:{
-        if(size < sizeof(CiRtSlice))
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
-        int err;
-        CiUint128 lo_buff = {0}, hi_buff = {0};
-        uint32_t lo_sz, hi_sz;
-        CcExpr *lo = expr->values[0];
-        CcExpr *hi = expr->values[1];
-        err = cc_sizeof_as_uint(&ci->parser, lo->type, lo->loc, &lo_sz);
-        if(err) return err;
-        err = cc_sizeof_as_uint(&ci->parser, hi->type, hi->loc, &hi_sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, lo, &lo_buff, sizeof lo_buff);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, hi, &hi_buff, sizeof hi_buff);
-        if(err) return err;
-        int64_t lo_idx, hi_idx;
-        lo_idx = ci_read_int_any(&lo_buff, lo_sz, ccqt_is_unsigned(lo->type, !ci_target(ci)->char_is_signed));
-        if(lo_idx < 0) return ci_error(ci, lo->loc, "low slice subscript out of bounds: negative");
-        hi_idx = ci_read_int_any(&hi_buff, hi_sz, ccqt_is_unsigned(hi->type, !ci_target(ci)->char_is_signed));
-        if(hi_idx < 0) return ci_error(ci, hi->loc, "high slice subscript out of bounds: negative");
-        if(hi_idx < lo_idx) return ci_error(ci, lo->loc, "high slice subscript < low slice subscript");
-        CcExpr *base = expr->lhs;
-        uint32_t elem_sz;
-        err = cc_sizeof_as_uint(&ci->parser, ccqt_as_slice(expr->type)->pointee, expr->loc, &elem_sz);
-        if(err) return err;
-        if(ccqt_kind(base->type) == CC_ARRAY){
-            CcArray* a = ccqt_as_array(base->type);
-            if(!a->is_incomplete){
-                if((size_t)hi_idx > a->length)
-                    return ci_error(ci, hi->loc, "high slice subscript out of bounds");
-                if((size_t)lo_idx > a->length)
-                    return ci_error(ci, lo->loc, "low slice subscript out of bounds");
-            }
-            void* addr;
-            size_t addr_size;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
+            CiInterpFrame module_frame = {
+                .parent = frame,
+                .ops = module->ops.data,
+                .op_count = module->ops.count,
+                .slots = slots,
+                .return_buf = ci_discard_buf,
+                .return_size = sizeof ci_discard_buf,
+            };
+            int ret = 0;
+            err = ci_interp_run(ci, &module_frame);
+            ci_free_alloca_list(ci_allocator(ci), module_frame.alloca_list);
+            if(slots)
+                Allocator_free(ci_allocator(ci), slots, module->slot_size);
             if(err) return err;
             if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = (size_t)(hi_idx - lo_idx);
-            out->data = (char*)addr + lo_idx * elem_sz;
+            if(sizeof ret > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
+            memcpy(result, &ret, sizeof ret);
             return 0;
         }
-        else if(ccqt_kind(base->type) == CC_SLICE){
-            CiRtSlice slice;
-            err = ci_interp_expr(ci, frame, expr->lhs, &slice, sizeof slice);
+        case CC_MODULE_PARSE_TYPE:{
+            const char* name = (const char*)arg;
+            if(!name)
+                return ci_error(ci, loc, "_Module.parse_type name must not be NULL");
+            CcQualType type = {0};
+            err = ci_parse_module_type(ci, loc, module, name, &type);
             if(err) return err;
-            if((size_t)hi_idx > slice.count)
-                return ci_error(ci, hi->loc, "high slice subscript out of bounds");
-            if((size_t)lo_idx > slice.count)
-                return ci_error(ci, lo->loc, "low slice subscript out of bounds");
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = (size_t)(hi_idx - lo_idx);
-            out->data = (char*)slice.data + lo_idx * elem_sz;
-            return 0;
-        }
-        else { // rvalue
-            void* addr;
-            err = ci_interp_expr(ci, frame, expr->lhs, &addr, sizeof addr);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = (size_t)(hi_idx - lo_idx);
-            out->data = (char*)addr + lo_idx * elem_sz;
+            uintptr_t bits = type.bits;
+            if(sizeof bits > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof bits, size);
+            memcpy(result, &bits, sizeof bits);
             return 0;
         }
     }
-    case CC_EXPR_SLICE_LO:{
-        if(size < sizeof(CiRtSlice))
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
-        int err;
-        CiUint128 lo_buff = {0};
-        uint32_t lo_sz;
-        CcExpr *lo = expr->values[0];
-        err = cc_sizeof_as_uint(&ci->parser, lo->type, lo->loc, &lo_sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, lo, &lo_buff, sizeof lo_buff);
-        if(err) return err;
-        int64_t lo_idx;
-        lo_idx = ci_read_int_any(&lo_buff, lo_sz, ccqt_is_unsigned(lo->type, !ci_target(ci)->char_is_signed));
-        if(lo_idx < 0) return ci_error(ci, lo->loc, "low slice subscript out of bounds: negative");
-        CcExpr *base = expr->lhs;
-        uint32_t elem_sz;
-        err = cc_sizeof_as_uint(&ci->parser, ccqt_as_slice(expr->type)->pointee, expr->loc, &elem_sz);
-        if(err) return err;
-        if(ccqt_kind(base->type) == CC_ARRAY){
-            CcArray* a = ccqt_as_array(base->type);
-            if(a->is_incomplete)
-                return ci_unreachable(ci, expr->loc, "slice of incomplete array without upper bound");
-            size_t hi_idx = a->length;
-            if((size_t)lo_idx > a->length)
-                return ci_error(ci, lo->loc, "low slice subscript out of bounds");
-            void* addr;
-            size_t addr_size;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = (size_t)(hi_idx - lo_idx);
-            out->data = (char*)addr + lo_idx * elem_sz;
+    CiRtModuleMember member = {0};
+    err = ci_reflect_module(ci, loc, module, op, idx, &member);
+    if(err) return err;
+    switch(op){
+        case CC_MODULE_FUNC_COUNT:
+        case CC_MODULE_VAR_COUNT:
+        case CC_MODULE_TYPE_COUNT:
+            if(sizeof member.name_length > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof member.name_length, size);
+            memcpy(result, &member.name_length, sizeof member.name_length);
             return 0;
-        }
-        else if(ccqt_kind(base->type) == CC_SLICE){
-            CiRtSlice slice;
-            err = ci_interp_expr(ci, frame, expr->lhs, &slice, sizeof slice);
-            if(err) return err;
-            size_t hi_idx = slice.count;
-            if((size_t)lo_idx > slice.count)
-                return ci_error(ci, lo->loc, "low slice subscript out of bounds");
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = (size_t)(hi_idx - lo_idx);
-            out->data = (char*)slice.data + lo_idx * elem_sz;
+        case CC_MODULE_FUNC:
+        case CC_MODULE_VAR:
+        case CC_MODULE_TYPE:
+            if(sizeof member > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof member, size);
+            memcpy(result, &member, sizeof member);
             return 0;
-        }
-        else {
-            return ci_unreachable(ci, expr->loc, "slice of pointer without upper bound");
-        }
+        case CC_MODULE_NONE:
+        default:
+            return CI_UNREACHABLE_ERROR;
     }
-    case CC_EXPR_SLICE_HI:{
-        if(size < sizeof(CiRtSlice))
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
-        int err;
-        CiUint128 hi_buff = {0};
-        uint32_t hi_sz;
-        CcExpr *hi = expr->values[0];
-        err = cc_sizeof_as_uint(&ci->parser, hi->type, hi->loc, &hi_sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, hi, &hi_buff, sizeof hi_buff);
-        if(err) return err;
-        int64_t hi_idx;
-        hi_idx = ci_read_int_any(&hi_buff, hi_sz, ccqt_is_unsigned(hi->type, !ci_target(ci)->char_is_signed));
-        if(hi_idx < 0) return ci_error(ci, hi->loc, "high slice subscript out of bounds: negative");
-        CcExpr *base = expr->lhs;
-        if(ccqt_kind(base->type) == CC_ARRAY){
-            CcArray* a = ccqt_as_array(base->type);
-            if(!a->is_incomplete){
-                if((size_t)hi_idx > a->length)
-                    return ci_error(ci, hi->loc, "high slice subscript out of bounds");
-            }
-            CiRtSlice *out = result;
-            size_t addr_size;
-            void* addr;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            out->data = addr;
-            out->count = (size_t)hi_idx;
-            return 0;
-        }
-        else if(ccqt_kind(base->type) == CC_SLICE){
-            CiRtSlice slice;
-            err = ci_interp_expr(ci, frame, expr->lhs, &slice, sizeof slice);
-            if(err) return err;
-            if((size_t)hi_idx > slice.count)
-                return ci_error(ci, hi->loc, "high slice subscript out of bounds");
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->count = hi_idx;
-            out->data = slice.data;
-            return 0;
-        }
-        else { // rvalue
-            void* addr;
-            err = ci_interp_expr(ci, frame, expr->lhs, &addr, sizeof addr);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->data = addr;
-            out->count = (size_t)hi_idx;
-            return 0;
-        }
-    }
-    case CC_EXPR_SLICE_ALL:{
-        if(size < sizeof(CiRtSlice))
-            return CI_RESULT_TOO_SMALL(ci, expr->loc, sizeof(CiRtSlice), size);
-        int err;
-        CcExpr *base = expr->lhs;
-        if(ccqt_kind(base->type) == CC_ARRAY){
-            CcArray* a = ccqt_as_array(base->type);
-            if(a->is_incomplete)
-                return ci_unreachable(ci, expr->loc, "slice of incomplete array without upper bound");
-            size_t addr_size;
-            void* addr;
-            err = ci_interp_lvalue(ci, frame, expr->lhs, &addr, &addr_size);
-            if(err) return err;
-            if(result == ci_discard_buf) return 0;
-            CiRtSlice *out = result;
-            out->data = addr;
-            out->count = a->length;
-            return 0;
-        }
-        else if(ccqt_kind(base->type) == CC_SLICE){
-            return ci_interp_expr(ci, frame, expr->lhs, result, size);
-        }
-        else {
-            return ci_unreachable(ci, expr->loc, "slice of pointer without upper bound");
-        }
-    }
-    case CC_EXPR_BSWAP: {
-        uint64_t val;
-        uint32_t sz;
-        int err = cc_sizeof_as_uint(&ci->parser, expr->lhs->type, expr->loc, &sz);
-        if(err) return err;
-        err = ci_interp_expr(ci, frame, expr->lhs, &val, sizeof val);
-        if(err) return err;
-        val = ci_read_uint(&val, sz);
-        switch(sz){
-            case 2: val = bswap16((uint16_t)val); break;
-            case 4: val = bswap32((uint32_t)val); break;
-            case 8: val = bswap64((uint64_t)val); break;
-            default: return ci_unreachable(ci, expr->loc, "bswap of non 2,4,8 byte integer");
-        }
-        if(result != ci_discard_buf){
-            if(sz > size)
-                return CI_RESULT_TOO_SMALL(ci, expr->loc, sz, size);
-            ci_write_uint(result, sz, val);
-        }
-        return 0;
-    }
-    }
-    return ci_unimplemented(ci, expr->loc, "interpreter: unsupported expression kind");
+    return CI_UNREACHABLE_ERROR;
 }
 
 force_inline
@@ -3510,25 +765,36 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
         return 0;
     const CiOp* op = &frame->ops[frame->pc];
     switch(op->kind){
-        case CI_OP_EVAL: {
-            int err = ci_interp_expr(ci, frame, op->eval.expr, ci_discard_buf, sizeof ci_discard_buf);
-            if(err) return err;
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_EVAL_INTO: {
-            void* dest = (char*)frame->slots + op->eval_into.slot;
-            int err = ci_interp_expr(ci, frame, op->eval_into.expr, dest, op->eval_into.slot_size);
-            if(err) return err;
-            frame->pc++;
-            return 0;
-        }
         case CI_OP_RT_CALL: {
             void* result = op->rt_call.slot_size
                 ? (char*)frame->slots + op->rt_call.slot
                 : ci_discard_buf;
             int err = 0;
             switch(op->rt_call.op){
+                case CI_RT_TYPE_VALIDATE:
+                case CI_RT_MODULE_VALIDATE:
+                case CI_RT_TYPE_REFLECT:
+                case CI_RT_MODULE_REFLECT: {
+                    uintptr_t receiver = 0, arg = 0;
+                    memcpy(&receiver, (char*)frame->slots + op->rt_call.args[0], sizeof receiver);
+                    if(op->rt_call.nargs >= 2)
+                        memcpy(&arg, (char*)frame->slots + op->rt_call.args[1], sizeof arg);
+                    CcQualType expected = {0};
+                    if(op->rt_call.nargs == 3)
+                        memcpy(&expected.bits, (char*)frame->slots + op->rt_call.args[2], sizeof expected.bits);
+                    CcQualType qt = {.bits = receiver};
+                    if(op->rt_call.op == CI_RT_TYPE_VALIDATE)
+                        err = ci_type_reflect_validate(ci, op->rt_call.loc, op->rt_call.reflect_op, qt);
+                    else if(op->rt_call.op == CI_RT_MODULE_VALIDATE)
+                        err = ci_module_reflect_validate(ci, op->rt_call.loc, (CiModule*)receiver);
+                    else if(op->rt_call.op == CI_RT_TYPE_REFLECT)
+                        err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, result);
+                    else
+                        err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op,
+                            (CiModule*)receiver, arg, expected, result,
+                            op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf);
+                    break;
+                }
                 case CI_RT_INTERN: {
                     const char* s;
                     memcpy(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
@@ -5476,7 +2742,6 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
         // Evaluate initializers for non-automatic variables.
         {
             PointerMapItems items = PM_items(&p->used_vars);
-            CiInterpFrame dummy_frame = {0};
             for(size_t i = 0; i < items.count; i++){
                 CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
                 if(!var->interp_preinit) continue;
@@ -5486,7 +2751,7 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
                 uint32_t sz;
                 int err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
                 if(err) return err;
-                err = ci_interp_expr(ci, &dummy_frame, var->initializer, var->interp_val, sz);
+                err = ci_eval_lowered_expr(ci, NULL, var->initializer, var->interp_val, sz);
                 if(err) return err;
                 var->interp_initialized = 1;
             }
@@ -5690,13 +2955,11 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             suffixes[nsuffixes++] = SV(".dll");
             break;
     }
-    // Search lib_paths for {prefix}{name}{suffix}
     AtomMapItems items = AM_items(&ci->lib_paths);
     for(size_t i = 0; i < items.count; i++){
         if(!items.data[i].p) continue;
         Atom path = items.data[i].atom;
         for(size_t s = 0; s < nsuffixes; s++){
-            // Try {path}/{prefix}{name}{suffix}
             msb_reset(&sb);
             msb_write_str(&sb, path->data, path->length);
             if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
@@ -5712,7 +2975,6 @@ ci_load_library(CiInterpreter* ci, StringView sv){
         if(sv_endswith(sv, SV(".dylib"))
         || sv_endswith(sv, SV(".dll"))
         || sv_contains(sv, SV(".so"))){
-            // Try {path}/{name} verbatim
             msb_reset(&sb);
             msb_write_str(&sb, path->data, path->length);
             if(msb_peek(&sb) != '/') msb_write_char(&sb, '/');
@@ -5724,7 +2986,6 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             if(success) goto finally;
         }
     }
-    // Search framework paths for {path}/{name}.framework/{name} (macOS)
     if(ci_target(ci)->os == CC_OS_MACOS){
         for(size_t i = 0; !success && i < ci->parser.cpp.framework_paths.count; i++){
             StringView fp = ci->parser.cpp.framework_paths.data[i];
@@ -5741,7 +3002,6 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             if(success) goto finally;
         }
     }
-    // Fallback: {prefix}{name}{suffix} (let system search handle it)
     for(size_t s = 0; s < nsuffixes; s++){
         msb_reset(&sb);
         msb_write_str(&sb, prefix.text, prefix.length);
@@ -5753,7 +3013,6 @@ ci_load_library(CiInterpreter* ci, StringView sv){
         if(err) goto finally;
         if(success) goto finally;
     }
-    // Last resort: name verbatim (for absolute paths or full filenames)
     {
         msb_reset(&sb);
         msb_write_str(&sb, sv.text, sv.length);
@@ -6156,11 +3415,9 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     Allocator al = p->cpp.allocator;
     Marray(CcToken)* scratch = cc_get_scratch(p);
     Marray(CcToken) pending = p->pending;
-    // Build tokens: EOF funcname ( arg0 , arg1 , ... argN ) in reverse onto pending.
     CcToken eof = {.type = CC_EOF, .loc = loc};
     err = ma_push(CcToken)(scratch, al, eof);
     if(err) goto restore;
-    // Push ')'.
     CcToken rparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_rparen}, .loc = loc};
     err = ma_push(CcToken)(scratch, al, rparen);
     if(err) goto restore;
@@ -6178,22 +3435,19 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             if(err) goto restore;
         }
     }
-    // reverse
     for(size_t i = idx, j = scratch->count - 1; i < j; i++, j--){
         CcToken tok = scratch->data[j];
         scratch->data[j] = scratch->data[i];
         scratch->data[i] = tok;
     }
-    // Push '('.
     CcToken lparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_lparen}, .loc = loc};
     err = ma_push(CcToken)(scratch, al, lparen);
     if(err) goto restore;
-    // Push function name identifier.
     CcToken name_tok = {.ident = {.type = CC_IDENTIFIER, .ident = func->name}, .loc = loc};
     err = ma_push(CcToken)(scratch, al, name_tok);
     if(err)goto restore;
-    // Parse as expression — the parser will type-check the call.
     p->pending = *scratch;
+    // FIXME: should really be constexpr, but functions aren't supported...
     err = cc_parse_expr(p, CC_RUNTIME_VALUE, &expr);
     {
         restore:
@@ -6213,24 +3467,27 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             return CI_OOM_ERROR;
         }
     }
-    err = ci_interp_expr(ci, &ci->top_frame, expr, result, result_sz);
+    err = ci_eval_lowered_expr(ci, &ci->top_frame, expr, result, result_sz);
     if(err) goto cleanup;
     CcQualType rt = ftype->return_type;
     Atom a = NULL;
     int tok_type = CPP_NUMBER;
-    while(ccqt_kind(rt) == CC_ENUM)
-        rt = ccqt_as_enum(rt)->underlying;
     switch(ccqt_kind(rt)){
         case CC_BASIC:
             switch(rt.basic.kind){
+                case CCBT_nullptr_t:
+                    a = AT_ATOMIZE(cpp->at, "nullptr");
+                    tok_type = CPP_IDENTIFIER;
+                    break;
+                case CCBT__Type:
+                    err = ci_unimplemented(ci, loc, "TODO: _Type to tokens");
+                    goto cleanup;
                 case CCBT_COUNT:
                 case CCBT_INVALID:
-                case CCBT_nullptr_t:
-                case CCBT__Type:
                     err = ci_error(ci, loc, "Invalid return type");
                     goto cleanup;
                 case CCBT_void:
-                    goto cleanup; // output nothing
+                    goto cleanup;
                 case CCBT_bool:
                     a = *(_Bool*)result?AT_ATOMIZE(cpp->at, "true"):AT_ATOMIZE(cpp->at, "false");
                     tok_type = CPP_IDENTIFIER;
@@ -6273,10 +3530,10 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     break;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
-                    err = ci_error(ci, loc, "Invalid return type");
+                    err = ci_error(ci, loc, "Invalid return type: int128 not expressable as cpp token");
                     goto cleanup;
                 case CCBT_float16:
-                    err = ci_unimplemented(ci, loc, "TODO");
+                    err = ci_unimplemented(ci, loc, "TODO: float16a");
                     goto cleanup;
                 case CCBT_float:
                     a = cpp_atomizef(cpp, "%.9gf", (double)*(float*)result);
@@ -6294,14 +3551,15 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             }
             break;
         case CC_ENUM:
-            return CI_UNREACHABLE_ERROR;
+            err = ci_unimplemented(ci, loc, "TODO: enum to token");
+            goto cleanup;
         case CC_POINTER:{
             CcPointer* ptr = ccqt_as_ptr(rt);
             if(ccqt_is_basic(ptr->pointee) && ptr->pointee.basic.kind == CCBT_char){
                 // string literal
                 const char* s = *(const char**)result;
                 if(!s){
-                    a = AT_ATOMIZE(cpp->at, "NULL");
+                    a = AT_ATOMIZE(cpp->at, "nullptr");
                     tok_type = CPP_IDENTIFIER;
                 }
                 else {
@@ -6339,13 +3597,21 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             err = ci_unimplemented(ci, loc, "Unsupported return type pointer");
             goto cleanup;
         }
-        case CC_BLOCK_POINTER:
         case CC_STRUCT:
+            err = ci_unimplemented(ci, loc, "struct to cpp tokens");
+            goto cleanup;
         case CC_UNION:
-        case CC_FUNCTION:
-        case CC_ARRAY:
+            err = ci_unimplemented(ci, loc, "union to cpp tokens");
+            goto cleanup;
+        case CC_BLOCK_POINTER:
         case CC_SLICE:
             err = ci_unimplemented(ci, loc, "Unsupported return type");
+            goto cleanup;
+        case CC_ARRAY:
+            err = ci_ice(ci,loc, "Somehow returning an %s?", "array");
+            goto cleanup;
+        case CC_FUNCTION:
+            err = ci_ice(ci,loc, "Somehow returning a %s?", "function");
             goto cleanup;
     }
     if(!a) {err = CI_OOM_ERROR; goto cleanup;}
@@ -6367,12 +3633,10 @@ int
 ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
     int err;
     CiInterpreter* ci = ctx;
-    // Skip whitespace.
     while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
     if(!ntoks || toks->type != CPP_IDENTIFIER)
         return cpp_error(cpp, loc, "#pragma procmacro: expected function name");
     StringView name = toks->txt;
-    // Look up the function.
     Atom atom = AT_get_atom(cpp->at, name.text, name.length);
     if(!atom)
         return cpp_error(cpp, loc, "#pragma procmacro: unknown function '%.*s'", (int)name.length, name.text);

@@ -88,12 +88,14 @@ enum CiRuntimeOp TYPED_ENUM(uint32_t){
     CI_RT_INTERN,
     CI_RT_HOTSWAP,
     CI_RT_COMPILE,
+    CI_RT_TYPE_REFLECT,
+    CI_RT_MODULE_REFLECT,
+    CI_RT_TYPE_VALIDATE,
+    CI_RT_MODULE_VALIDATE,
 };
 TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
 
 enum CiOpKind TYPED_ENUM(uint32_t){
-    CI_OP_EVAL,
-    CI_OP_EVAL_INTO,
     CI_OP_CONST,
     CI_OP_COPY,
     CI_OP_ALU8,
@@ -174,31 +176,13 @@ struct CiOp {
             SrcLoc loc;
         };
         struct {
-            // evaluate expr, discard result
-            CiOpKind kind: 8; // CI_OP_EVAL
-            uint32_t _bitpad: 24;
-            uint32_t _pad;
-            CcExpr*_Nonnull expr;
-            uint64_t pad;
-            SrcLoc loc;
-        } eval;
-        struct {
-            // evaluate expr into slots[slot:slot+slot_size]
-            CiOpKind kind: 8; // CI_OP_EVAL_INTO
-            uint32_t _bitpad: 24;
-            uint32_t _pad;
-            CcExpr*_Nonnull expr;
-            uint32_t slot, slot_size;
-            SrcLoc loc;
-        } eval_into;
-        struct {
             // Call interpreter runtime support with already-lowered operands.
             CiOpKind kind: 8; // CI_OP_RT_CALL
             CiRuntimeOp op: 8;
             uint32_t nargs: 8;
-            uint32_t _bitpad: 8;
+            uint32_t reflect_op: 8; // CcTypeIntrospectionOp or CcModuleOp
             uint32_t slot, slot_size;
-            uint32_t args[3];
+            uint32_t args[3]; // reflection: receiver, optional index/name, symbol expected type
             SrcLoc loc;
         } rt_call;
         struct {

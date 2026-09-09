@@ -117,6 +117,7 @@ static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e
 static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
@@ -1911,28 +1912,12 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return ci_lower_rt_call(ci, ctx, e, CI_RT_COMPILE, dest, out);
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
-            break;
+            return ci_lower_reflect(ci, ctx, e, dest, out);
         case CC_EXPR_UMUL128:
             return ci_lower_umul128(ci, ctx, e, dest, out);
         DRP_CASES_EXHAUSTED;
     }
-    // fallback: evaluate the (sub)tree
-    err = ci_lower_dest(ctx, &dest, size);
-    if(err) return err;
-    out->slot = dest;
-    CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-    if(err) return err;
-    *op = (CiOp){
-        .eval_into = {
-            .kind = CI_OP_EVAL_INTO,
-            .slot = dest,
-            .slot_size = size,
-            .expr = e,
-            .loc = e->loc,
-        }
-    };
-    return 0;
+    return ci_unreachable(ci, e->loc, "unhandled expression kind");
 }
 
 static
@@ -1967,6 +1952,76 @@ ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         return 0;
     }
     return ci_lower_expr(ci, ctx, e, dest, out);
+}
+
+// Snapshot operands: evaluating an index/name may mutate the receiver's local.
+static
+int
+ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    _Bool module = e->kind == CC_EXPR_MODULE_REFLECT;
+    uint32_t subop = module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
+    if(module && !out && subop != CC_MODULE_RUN) return 0;
+    _Bool second = module
+        ? (subop == CC_MODULE_FUNC || subop == CC_MODULE_VAR || subop == CC_MODULE_TYPE
+            || subop == CC_MODULE_SYMBOL || subop == CC_MODULE_PARSE_TYPE)
+        : (subop == CC_TYPE_IS_CALLABLE_WITH || subop == CC_TYPE_CASTABLE_TO
+            || subop == CC_TYPE_FIELD || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE);
+    int err;
+    if(out){
+        err = ci_lower_dest(ctx, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t temp = ctx->temp;
+    CiOp call = {.rt_call = {
+        .kind = CI_OP_RT_CALL,
+        .op = module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
+        .nargs = second ? 2 : 1,
+        .slot = dest,
+        .slot_size = out ? out->size : 0,
+        .reflect_op = subop,
+        .loc = e->loc,
+    }};
+    for(uint32_t i = 0; i < call.rt_call.nargs; i++){
+        err = ci_alloc_slot(ctx, 8, 8, &call.rt_call.args[i]);
+        if(err) return err;
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, i ? e->values[0] : e->lhs, call.rt_call.args[i], &v);
+        if(err) return err;
+        if(i == 0 && (module || subop == CC_TYPE_FIELD
+            || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE)){
+            // Receiver errors must precede evaluation of the optional operand.
+            CiOp* check;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &check);
+            if(err) return err;
+            *check = call;
+            check->rt_call.op = module ? CI_RT_MODULE_VALIDATE : CI_RT_TYPE_VALIDATE;
+            check->rt_call.nargs = 1;
+            check->rt_call.slot = CI_NO_SLOT;
+            check->rt_call.slot_size = 0;
+        }
+    }
+    if(module && subop == CC_MODULE_SYMBOL){
+        err = ci_alloc_slot(ctx, 8, 8, &call.rt_call.args[2]);
+        if(err) return err;
+        CiOp* expected;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &expected);
+        if(err) return err;
+        *expected = (CiOp){.constant = {
+            .kind = CI_OP_CONST,
+            .slot = call.rt_call.args[2],
+            .immsize = 8,
+            .immediate = {ccqt_as_ptr(e->type)->pointee.bits},
+            .loc = e->loc,
+        }};
+        call.rt_call.nargs = 3;
+    }
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = call;
+    ctx->temp = temp;
+    return 0;
 }
 
 static
@@ -4305,21 +4360,10 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, CI_NO_SLOT, NULL);
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TYPE_INTROSPECTION:
-            break; // TODO: complicated? Maybe should be lowered just to calls to runtime functions?
+            return ci_lower_reflect(ci, ctx, e, CI_NO_SLOT, NULL);
         DRP_CASES_EXHAUSTED;
     }
-    // fallback: evaluate the (sub)tree for its side effects
-    CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-    if(err) return err;
-    *op = (CiOp){
-        .eval = {
-            .kind = CI_OP_EVAL,
-            .expr = e,
-            .loc = e->loc,
-        }
-    };
-    return 0;
+    return ci_unreachable(ci, e->loc, "unhandled discarded expression kind");
 }
 
 static
@@ -5028,6 +5072,58 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
     return 0;
 }
 
+
+// Execute a standalone expression without changing the caller's opcode stream.
+static
+int
+ci_eval_lowered_expr(CiInterpreter* ci, CiInterpFrame*_Nullable parent, CcExpr* expr, void* result, size_t size){
+    Allocator al = ci_allocator(ci);
+    Marray(CiOp) ops = {0};
+    AtomMap(uintptr_t) labels = {0};
+    uint32_t frame_size = 0;
+    const CcTargetConfig* t = ci_target(ci);
+    CiLowerCtx ctx = {
+        .a = al,
+        .out = &ops,
+        .labels = &labels,
+        .frame_size = &frame_size,
+        .size_size = t->sizeof_[t->size_type],
+        .ptr_size = t->sizeof_[CCBT_nullptr_t],
+        .char_is_unsigned = !t->char_is_signed,
+    };
+    CiInterpFrame frame = {.parent = parent, .return_buf = result, .return_size = size};
+    CiLowerVal value = {0};
+    _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
+    int err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
+    if(err) goto cleanup;
+    err = ci_lower_resolve_gotos(ci, &ctx);
+    if(err) goto cleanup;
+    if(!is_void && value.size > size){
+        err = CI_RESULT_TOO_SMALL(ci, expr->loc, value.size, size);
+        goto cleanup;
+    }
+    if(frame_size){
+        frame.slots = Allocator_zalloc(al, frame_size);
+        if(!frame.slots){ err = CI_OOM_ERROR; goto cleanup; }
+    }
+    frame.ops = ops.data;
+    frame.op_count = ops.count;
+    err = ci_interp_run(ci, &frame);
+    if(!err && !is_void && value.size)
+        memcpy(result, (char*)frame.slots + value.slot, value.size);
+    cleanup:
+    ci_free_alloca_list(al, frame.alloca_list);
+    if(frame.slots) Allocator_free(al, frame.slots, frame_size);
+    ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
+    if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
+    for(size_t i = 0; i < ops.count; i++){
+        CiOp* op = &ops.data[i];
+        if(op->kind == CI_OP_SWITCH && op->switch_.table)
+            Allocator_free(al, op->switch_.table, sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry));
+    }
+    ma_cleanup(CiOp)(&ops, al);
+    return err;
+}
 
 static
 int

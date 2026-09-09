@@ -137,23 +137,16 @@ static
 void
 ci_op_print(const CiOp* op, MStringBuilder* out){
     switch(op->kind){
-        case CI_OP_EVAL:
-            msb_write_literal(out, "(void)");
-            cc_print_expr(out, op->eval.expr);
-            msb_write_literal(out, " (tree walker)");
-            break;
-        case CI_OP_EVAL_INTO:
-            ci_op_print_range(out, op->eval_into.slot, op->eval_into.slot_size);
-            msb_write_literal(out, " = ");
-            cc_print_expr(out, op->eval_into.expr);
-            msb_write_literal(out, " (tree walker)");
-            break;
         case CI_OP_RT_CALL:
             if(op->rt_call.slot_size){
                 ci_op_print_range(out, op->rt_call.slot, op->rt_call.slot_size);
                 msb_write_literal(out, " = ");
             }
-            msb_sprintf(out, "runtime[%u](", (unsigned)op->rt_call.op);
+            msb_sprintf(out, "runtime[%u", (unsigned)op->rt_call.op);
+            if(op->rt_call.op == CI_RT_TYPE_REFLECT || op->rt_call.op == CI_RT_MODULE_REFLECT
+                || op->rt_call.op == CI_RT_TYPE_VALIDATE || op->rt_call.op == CI_RT_MODULE_VALIDATE)
+                msb_sprintf(out, ":%u", (unsigned)op->rt_call.reflect_op);
+            msb_write_literal(out, "](");
             for(uint32_t i = 0; i < op->rt_call.nargs; i++){
                 if(i) msb_write_literal(out, ", ");
                 msb_sprintf(out, "%%%u", op->rt_call.args[i]);

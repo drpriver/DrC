@@ -36,6 +36,17 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("struct S { int a[5]; };\n"
+         "int f(void){ static struct S s = {{1,2,3,4,5}}; return s.a[4]++; }\n"
+         "return f()+f();\n")},
+    {__LINE__, SVI("int twice(int x){ return x*2; }\n"
+         "#pragma procmacro twice\n"
+         "return twice(21);\n")},
+    {__LINE__, SVI("int x;\n"
+         "#pragma resolve x\n"
+         "int identity(int x){ return x; }\n"
+         "#pragma procmacro identity\n"
+         "return identity(({ x = 2; switch(x){case 2: x=3; break; default: x=4;} x; }));\n")},
     {__LINE__, SVI("return 13;\n")},
     {__LINE__, SVI("int x = 3 + 4;\nreturn x;\n")},
     {__LINE__, SVI("struct S { int x; int y; };\n"
@@ -142,6 +153,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     AtomTable at = {.allocator = arena_al};
     Environment env = {.allocator = arena_al, .at=&at};
     CiInterpreter interp = {
+        .procedural_macros = 1,
         .exit_code = -1,
         .parser = {
             .cpp = {

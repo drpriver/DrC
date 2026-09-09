@@ -97,7 +97,6 @@ struct CiArg {
 
 static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_run(CiInterpreter*, CiInterpFrame*);
-static int ci_interp_expr(CiInterpreter*, CiInterpFrame*, CcExpr* expr, void* result, size_t size);
 static int ci_lower_func(CiInterpreter*, CcFunc*);
 static int ci_lower_toplevel(CiInterpreter*);
 static int ci_append_lib_path(CiInterpreter*, StringView);

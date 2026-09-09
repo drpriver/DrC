@@ -43,6 +43,57 @@ TestFunction(test_interpreter){
         int lower_error;
     } testcases[] = {
         {
+            "reflection: discarded module run", __LINE__,
+            SVI("_Module m = __compile(\"int x; x = 42;\");\n"
+                "m.run();\n"
+                "return *m.symbol(\"x\", int);\n"),
+            .exit_code = 42,
+        },
+        {
+            "reflection: dynamic introspection in function", __LINE__,
+            SVI("int f(_Type t){ return t.is_integer; }\n"
+                "return f(int) && !f(float);\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: receiver snapshot", __LINE__,
+            SVI("struct S { int x; };\n"
+                "_Type t = struct S;\n"
+                "struct __builtin_Field f = t.field((t = int, 0));\n"
+                "return f.type == int && t == int;\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: discarded type evaluates operands", __LINE__,
+            SVI("struct S { int x; };\n"
+                "_Type t = struct S;\n"
+                "int n = 0;\n"
+                "t.field(n++);\n"
+                "return n;\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: discarded module skips operands", __LINE__,
+            SVI("int n = 0;\n"
+                "_Module m = __root_module();\n"
+                "(n++, m).symbol((n++, \"missing\"), int);\n"
+                "return n;\n"),
+            .exit_code = 0,
+        },
+        {
+            "reflection: module receiver snapshot", __LINE__,
+            SVI("_Module m = __compile(\"typedef int T;\");\n"
+                "_ModuleMember t = m.type((m = __root_module(), 0));\n"
+                "return t.type == int;\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: local result survives later operand", __LINE__,
+            SVI("int f(void){ _Type t = int; return t.is_integer + (t = float).is_float; }\n"
+                "return f();\n"),
+            .exit_code = 2,
+        },
+        {
             "basic", __LINE__,
             SVI("return 13;\n"),
             .exit_code = 13,
@@ -2441,6 +2492,20 @@ TestFunction(test_interpreter){
                "int (*p)(void) = 0;\n"
                "return __hotswap(f, p) != 0;\n"),
             .exit_code = 1,
+        },
+        {
+            "static local: aggregate preinitialization", __LINE__,
+            SVI("struct S { int a[3]; unsigned b:5; const char* s; };\n"
+                "int f(void){ static struct S x = {{3,4,5}, 17, \"ok\"}; return x.a[1]++ + x.b + x.s[0]; }\n"
+                "return f() + f();\n"),
+            .exit_code = 265,
+        },
+        {
+            "static local: pointer preinitialization", __LINE__,
+            SVI("int g;\n"
+                "int f(void){ static int* p = &g; return ++*p; }\n"
+                "return f() + f();\n"),
+            .exit_code = 3,
         },
         // Static locals
         {
@@ -8111,6 +8176,60 @@ TestFunction(test_interpreter_runtime_errors){
         StringView expect; // full expected diagnostic
         _Bool skip;
     } testcases[] = {
+        {
+            "reflection: module validation before name", __LINE__,
+            SVI("_Module m = __root_module(); *(unsigned long long*)&m = 1;\n"
+                "return m.symbol((__builtin_trap(), \"x\"), int) != 0;\n"),
+            SVI("(test):2:9: error: _Module is not valid\n"),
+        },
+        {
+            "reflection: null symbol name", __LINE__,
+            SVI("_Module m = __root_module();\n"
+                "return m.symbol((const char*)0, int) != 0;\n"),
+            SVI("(test):2:9: error: _Module.symbol name must not be NULL\n"),
+        },
+        {
+            "reflection: null parse type name", __LINE__,
+            SVI("_Module m = __root_module();\n"
+                "return m.parse_type((const char*)0) == int;\n"),
+            SVI("(test):2:9: error: _Module.parse_type name must not be NULL\n"),
+        },
+        {
+            "reflection: discarded enumerator bounds", __LINE__,
+            SVI("enum E { A }; _Type t = enum E;\n"
+                "t.enumerator(1);\n"),
+            SVI("(test):2:2: error: _Type.enumerator: index out of range\n"),
+        },
+        {
+            "reflection: discarded param bounds", __LINE__,
+            SVI("_Type t = int(int);\n"
+                "t.param_type(1);\n"),
+            SVI("(test):2:2: error: _Type.param_type: index out of range\n"),
+        },
+        {
+            "reflection: field validation before index", __LINE__,
+            SVI("_Type t = int;\n"
+                "t.field((__builtin_trap(), 0));\n"),
+            SVI("(test):2:2: error: _Type.field: not a struct or union type\n"),
+        },
+        {
+            "reflection: enumerator validation before index", __LINE__,
+            SVI("_Type t = int;\n"
+                "t.enumerator((__builtin_trap(), 0));\n"),
+            SVI("(test):2:2: error: _Type.enumerator: not an enum type\n"),
+        },
+        {
+            "reflection: param validation before index", __LINE__,
+            SVI("_Type t = int;\n"
+                "t.param_type((__builtin_trap(), 0));\n"),
+            SVI("(test):2:2: error: _Type.param_type: not a function type\n"),
+        },
+        {
+            "reflection: discarded field bounds", __LINE__,
+            SVI("struct S { int x; }; _Type t = struct S;\n"
+                "t.field(1);\n"),
+            SVI("(test):2:2: error: _Type.field: index out of range\n"),
+        },
         {
             "array store past end", __LINE__,
             SVI("int a[3];\n"
