@@ -35,6 +35,7 @@ static
 warn_unused
 int
 pa_ensure_additional(Parray* pa, Allocator a, size_t n_additional){
+    if(!n_additional) return 0;
     size_t required_capacity = pa->count + n_additional;
     if(pa->capacity >= required_capacity)
         return 0;
@@ -80,6 +81,7 @@ static
 warn_unused
 int
 pa_extend(Parray* pa, Allocator a, size_t count, void*_Null_unspecified*_Null_unspecified values){
+    if(!count) return 0;
     int err = pa_ensure_additional(pa, a, count);
     if(err) return err;
     memmove(pa->data+pa->count, values, count*sizeof *values);
@@ -90,6 +92,7 @@ static
 warn_unused
 int
 pa_zextend(Parray* pa, Allocator a, size_t count){
+    if(!count) return 0;
     int err = pa_ensure_additional(pa, a, count);
     if(err) return err;
     memset(pa->data+pa->count, 0, count*sizeof *pa->data);
