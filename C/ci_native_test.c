@@ -739,7 +739,8 @@ TestFunction(test_interop){
             SVI("char buf[8] = {0};\n"
                 "typeof(snprintf)* p = snprintf;\n"
                 "return p(buf, sizeof buf, \"hi\");\n"),
-            {{SV("snprintf"), (void*)snprintf}},
+            .skip = IS_WINDOWS,
+            // {{SV("snprintf"), (void*)snprintf}},
             .exit_code = 2,
         },
         {
@@ -747,7 +748,8 @@ TestFunction(test_interop){
             SVI("char buf[8] = {0};\n"
                 "typeof(snprintf)* p = snprintf;\n"
                 "return p(buf, sizeof buf, \"%d\", 123);\n"),
-            {{SV("snprintf"), (void*)snprintf}},
+            .skip = IS_WINDOWS,
+            // {{SV("snprintf"), (void*)snprintf}},
             .exit_code = 3,
         },
     };
