@@ -2,9 +2,9 @@
 *.cache.json
 *.deps
 Fetched/
-Bin/
 compile_commands.json
 tags
 *.dSYM/
 *.trace/
+*builddir/
 Tools/pymodules/

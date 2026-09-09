@@ -1,5 +1,5 @@
 BUILDTARGETS:=clean list print compile_commands.json all \
-  drcpp drc fetch-libffi native-tests tests self-tests \
+  drcpp drc fetch-libffi native-tests tests test self-tests \
   cc_opt cpp_test run_cpp_test cc_lex_test run_cc_lex_test \
   cc_test run_cc_test ci_test run_ci_test ci_oom_test \
   run_ci_oom_test ci_native_test run_ci_native_test \
@@ -24,12 +24,12 @@ ifeq ($(CC),cl)
 else
 	$(CC) -march=native build.c -o $@
 endif
-	./build -b Bin
+	./build -b builddir
 else
 $(BUILDTARGETS) $(UNKNOWN): | build
 	@./build $@
 build:
 	$(CC) -march=native build.c -o $@
-	./build -b Bin
+	./build -b builddir
 endif
 .DEFAULT_GOAL:=all

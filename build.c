@@ -1,10 +1,10 @@
-//usr/bin/cc "$0" -o build && exec ./build "$@" -b Bin || exit
+//usr/bin/cc "$0" -o build && exec ./build "$@" -b builddir || exit
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 // Nobuild build script.
 //
-// Bootstrap with `cc build.c -o build && ./build -b Bin`
+// Bootstrap with `cc build.c -o build && ./build -b builddir`
 // and then just `./build` from then on.
 //
 // Do `./build --help` to see full options.
@@ -520,13 +520,13 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         "else\n"
              "\t$(CC) -march=native build.c -o $@\n"
         "endif\n"
-             "\t./build -b Bin\n"
+             "\t./build -b builddir\n"
         "else\n"
         "$(BUILDTARGETS) $(UNKNOWN): | build\n"
              "\t@./build $@\n"
         "build:\n"
              "\t$(CC) -march=native build.c -o $@\n"
-             "\t./build -b Bin\n"
+             "\t./build -b builddir\n"
         "endif\n"
         ".DEFAULT_GOAL:=all\n");
     if(sb.errored) return sb.errored;
