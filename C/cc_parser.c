@@ -2225,7 +2225,7 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     err = cc_expect_punct(p, CC_lparen);
                     if(err) return err;
                     CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
+                    err = cc_parse_assignment_expr(p, CC_RUNTIME_VALUE, &arg, CCQT_NONE);
                     if(err) return err;
                     err = cc_expect_punct(p, CC_rparen);
                     if(err) return err;

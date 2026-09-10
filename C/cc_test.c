@@ -4453,6 +4453,18 @@ TestFunction(test_parse_decls){
                 {SVI("s"), SVI("struct S"), SVI("{1}")},
             },
         },
+        {
+            "__builtin_constant_p", __LINE__,
+            SVI("int x = __builtin_constant_p(1);\n"
+                "int y = __builtin_constant_p(x);\n"
+                "_Static_assert(__builtin_constant_p(1));\n"
+                "_Static_assert(!__builtin_constant_p(x));\n"
+               ),
+            .vars = {
+                {SVI("x"), SVI("int"), SVI("1")},
+                {SVI("y"), SVI("int"), SVI("0")},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
