@@ -2549,6 +2549,13 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "empty asm statement", __LINE__,
+            SVI(
+                "asm();\n"
+                "asm(\"\");\n"
+            ),
+        },
+        {
             "trailing comma in call", __LINE__,
             SVI("int f(int x, int y);\n"
                "int r = f(1, 2,);\n"),

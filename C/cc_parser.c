@@ -5643,6 +5643,33 @@ cc_parse_one(CcParser* p){
     CcToken tok;
     err = cc_peek(p, &tok);
     if(err) return err;
+    if(tok.type == CC_KEYWORD && tok.kw.kw == CC_asm){
+        cc_next_token(p, &tok);
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '('){
+            cc_next_token(p, &tok);
+            err = cc_peek(p, &tok);
+            if(err) return err;
+            if(tok.type == CC_STRING_LITERAL && tok.str.length <= 1){
+                cc_next_token(p, &tok);
+                err = cc_peek(p, &tok);
+                if(err) return err;
+            }
+            if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ')'){
+                cc_next_token(p, &tok);
+            }
+            else {
+                return cc_error(p, tok.loc, "Unable to handle this asm statement: expected empty string and then closing paren");
+            }
+            err = cc_expect_punct(p, ';');
+            if(err) return err;
+            return 0;
+        }
+        else {
+            return cc_error(p, tok.loc, "Unable to handle this asm statement");
+        }
+    }
     if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
         CcToken if_tok;
         cc_next_token(p, &tok);
