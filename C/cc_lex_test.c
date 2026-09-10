@@ -33,7 +33,7 @@ enum { MAX_TEST_TOKENS = 64 };
 // Helper: lex a string into an array of CcTokens, return count or -1 on error.
 static
 int
-cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, ArenaAllocator* out_aa, ArenaAllocator* out_synth, const char* file, const char* func, int line){
+cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, ArenaAllocator* out_aa, ArenaAllocator* out_synth, const char* file, const char* func, int line, _Bool array, _Bool short_wchar, _Bool quiet){
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
@@ -52,6 +52,9 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
         .env = &env,
         .target = cc_target_test(),
     };
+    if(short_wchar) cpp.target.wchar_type = CCBT_unsigned_short;
+    err = env_setenv4(&env, "literal_test", 12, "C:\\new\\test\"\n", 13);
+    if(err){ result = 1; goto finally; }
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
     if(err){ result = 1; goto finally; }
@@ -60,13 +63,28 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
     err = cpp_include_file_via_file_cache(&cpp, SV("(test)"));
     if(err){ result = 1; goto finally; }
     *count = 0;
+    CppTokens pp = {0};
+    const CppToken* cursor = NULL;
+    const CppToken* end = NULL;
+    if(array){
+        for(;;){
+            CppToken tok;
+            err = cpp_next_pp_token(&cpp, &tok);
+            if(err){ result = 1; goto finally; }
+            err = ma_push(CppToken)(&pp, a, tok);
+            if(err){ result = 1; goto finally; }
+            if(tok.type == CPP_EOF) break;
+        }
+        cursor = pp.data;
+        end = pp.data + pp.count;
+    }
     for(;;){
         if(*count >= MAX_TEST_TOKENS){
             result = 1;
             goto finally;
         }
         CcToken tok;
-        err = cpp_next_c_token(&cpp, &tok);
+        err = array ? cpp_next_c_token_array(&cpp, &cursor, end, &tok) : cpp_next_c_token(&cpp, &tok);
         if(err){
             result = 1;
             goto finally;
@@ -75,7 +93,7 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
         (*out)[(*count)++] = tok;
     }
     finally:
-    if(log_sb.cursor){
+    if(log_sb.cursor && !quiet){
         StringView sv = msb_borrow_sv(&log_sb);
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
@@ -83,7 +101,7 @@ cc_lex_string(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, Arena
     *out_synth = cpp.synth_arena;
     return result;
 }
-#define CC_LEX_STRING(txt, out, count, aa, synth) cc_lex_string(txt, &out, count, aa, synth, __FILE__, __func__, __LINE__)
+#define CC_LEX_STRING(txt, out, count, aa, synth) cc_lex_string_mode(txt, &out, count, aa, synth, __FILE__, __func__, __LINE__, 0, 0, 0)
 
 // Like cc_lex_string, but expects an error and captures the error message.
 // Returns 0 if an error occurred (success), 1 if no error (failure).
@@ -784,6 +802,106 @@ TestFunction(test_cc_lex_multi_token){
     TESTEND();
 }
 
+// Exercise both public token consumption paths with the same regression cases.
+TestFunction(test_literal_regressions){
+    TESTBEGIN();
+    struct { StringView input; CcToken expected; } cases[] = {
+        {SV("U'\\x1234'"), cc_int_tok(0x1234, CC_CHAR32)},
+        {SV("U'\\777'"), cc_int_tok(0777, CC_CHAR32)},
+        {SV("u'\\x1234'"), cc_int_tok(0x1234, CC_CHAR16)},
+        {SV("L'\\x1234'"), cc_int_tok(0x1234, CC_WCHAR)},
+        {SV("U'α'"), cc_int_tok(0x3B1, CC_CHAR32)},
+        {SV("u'α'"), cc_int_tok(0x3B1, CC_CHAR16)},
+        {SV("U'😀'"), cc_int_tok(0x1F600, CC_CHAR32)},
+        {SV("U'\\U0001f600'"), cc_int_tok(0x1F600, CC_CHAR32)},
+        {SV("u8'\\xff'"), cc_int_tok(255, CC_UCHAR)},
+        {SV("__calc(U'\\x1234')"), cc_int_tok(0x1234, CC_INT)},
+        {SV("__calc(U'α')"), cc_int_tok(0x3B1, CC_INT)},
+        {SV("__mixin(\"\\x31\")"), cc_int_tok(1, CC_INT)},
+        {SV("__mixin(\"\\u0031\")"), cc_int_tok(1, CC_INT)},
+        {SV("__mixin(\"\\U00000031\")"), cc_int_tok(1, CC_INT)},
+        {SV("__mixin(\"\\40\" \"1\")"), cc_int_tok(1, CC_INT)},
+        {SV("__mixin(u8\"123\")"), cc_int_tok(123, CC_INT)},
+        {SV("__mixin(L\"123\")"), cc_int_tok(123, CC_INT)},
+        {SV("__mixin(\"\\\"\\?\\\"\")"), cc_str_tok(CC_STRING, SV("?\0"))},
+        {SV("__mixin(\"\\\"a\\\\nb\\\"\")"), cc_str_tok(CC_STRING, SV("a\nb\0"))},
+        {SV("__format(\"%s2\", \"\\1\")"), cc_str_tok(CC_STRING, SV("\0012\0"))},
+        {SV("__format(\"%sA\", \"\\x1\")"), cc_str_tok(CC_STRING, SV("\001A\0"))},
+        {SV("__format(\"%s\", \"\\1\" \"23\")"), cc_str_tok(CC_STRING, SV("\00123\0"))},
+        {SV("__format(\"\\1\" \"23\")"), cc_str_tok(CC_STRING, SV("\00123\0"))},
+        {SV("__format(\"%\" \"s\", \"ok\")"), cc_str_tok(CC_STRING, SV("ok\0"))},
+        {SV("__format(u8\"abc\")"), cc_str_tok(CC_STRING, SV("abc\0"))},
+        {SV("__format(L\"%s\", U\"α\")"), cc_str_tok(CC_STRING, SV("α\0"))},
+        {SV("__format(\"%s\", \"\\0\\\"\\\\\\n\")"), cc_str_tok(CC_STRING, SV("\0\"\\\n\0"))},
+        {SV("__env(u8\"literal_\\164est\")"), cc_str_tok(CC_STRING, SV("C:\\new\\test\"\n\0"))},
+        {SV("#define decoded 42\n__ident(u8\"de\\143oded\")"), cc_int_tok(42, CC_INT)},
+        {SV("_Pragma(\"message(\\\"a\\\\nb\\\")\") 1"), cc_int_tok(1, CC_INT)},
+        {SV("_Pragma(L\"once\") 1"), cc_int_tok(1, CC_INT)},
+        {SV("_Pragma(\"message(\\\"a\\\\\\\"b\\\")\") 1"), cc_int_tok(1, CC_INT)},
+        {SV("\"\\xff\" \"f\""), cc_str_tok(CC_STRING, SV("\377f\0"))},
+        {SV("u\"\\x1234\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0x1234, 0}, 2)},
+        {SV("u\"😀\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0xD83D, 0xDE00, 0}, 3)},
+        {SV("U\"α\\U0001f600\""), cc_str32_tok(CC_USTRING, (const unsigned int[]){0x3B1, 0x1F600, 0}, 3)},
+        {SV("U\"\\xffffffff\""), cc_str32_tok(CC_USTRING, (const unsigned int[]){UINT32_MAX, 0}, 2)},
+        {SV("u\"\\xd800\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0xD800, 0}, 2)},
+    };
+    for(int array = 0; array < 2; array++){
+        for(size_t i = 0; i < arrlen(cases); i++){
+            CcToken out[MAX_TEST_TOKENS]; int count = 0;
+            ArenaAllocator aa = {0}, synth = {0};
+            int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
+            TestExpectFalse(err);
+            TestExpectEquals(int, count, 1);
+            if(!err && count == 1){
+                if(!cc_tok_matches(out[0], cases[i].expected))
+                    TestReport("literal regression (%s): %.*s", array ? "array" : "stream", sv_p(cases[i].input));
+                TestExpectTrue(cc_tok_matches(out[0], cases[i].expected));
+            }
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
+        }
+    }
+    StringView invalid[] = {
+        SV("'\\x'"), SV("'\\u12'"), SV("'\\U1234'"), SV("'\\q'"),
+        SV("\"\\x\""), SV("\"\\u12\""), SV("\"\\U1234\""), SV("\"\\q\""),
+        SV("u\"\\x\""), SV("U\"\\u12\""), SV("L\"\\U1234\""),
+        SV("'\\ud800'"), SV("U'\\U00110000'"), SV("u\"\\U00110000\""),
+        SV("\"\\udfff\""), SV("U\"\\Uffffffff\""),
+        SV("'\\U00100000\\U00100000\\U00100000'"),
+        SV("'\\Uffffffff\\Uffffffff'"),
+        SV("u8'é'"), SV("u'😀'"), SV("u'\\x10000'"), SV("'\\777'"),
+        SV("u\"\\x10000\""), SV("\"\\x100\""), SV("U\"\\x100000000\""),
+        SV("U'\\x100000000'"), SV("__calc(U'ab')"), SV("__calc('\\u12')"),
+        SV("__mixin(\"\\x\")"), SV("__format(\"%s\", \"\\u12\")"),
+        SV("\"\300\257\""), SV("u\"\355\240\200\""), SV("U\"\360\237\""),
+    };
+    for(int array = 0; array < 2; array++){
+        for(size_t i = 0; i < arrlen(invalid); i++){
+            CcToken out[MAX_TEST_TOKENS]; int count = 0;
+            ArenaAllocator aa = {0}, synth = {0};
+            int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
+            if(!err) TestReport("expected invalid literal (%s): %.*s", array ? "array" : "stream", sv_p(invalid[i]));
+            TestExpectTrue(err);
+            ArenaAllocator_free_all(&aa);
+            ArenaAllocator_free_all(&synth);
+        }
+        CcToken out[MAX_TEST_TOKENS]; int count = 0;
+        ArenaAllocator aa = {0}, synth = {0};
+        int err = cc_lex_string_mode(SV("L'\\x1234' L\"😀\""), &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 1, 1);
+        TestExpectFalse(err);
+        TestExpectEquals(int, count, 2);
+        if(!err && count == 2){
+            TestExpectEquals(uint64_t, out[0].constant.integer_value, 0x1234);
+            TestExpectEquals(uint32_t, out[1].str.length, 3);
+            TestExpectEquals(unsigned short, out[1].str.utf16[0], 0xD83D);
+            TestExpectEquals(unsigned short, out[1].str.utf16[1], 0xDE00);
+        }
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&synth);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
@@ -792,6 +910,7 @@ int main(int argc, char** argv){
     RegisterTest(test_cc_lex_floats);
     RegisterTest(test_cc_lex_chars);
     RegisterTest(test_cc_lex_strings);
+    RegisterTest(test_literal_regressions);
     RegisterTest(test_cc_lex_punctuators);
     RegisterTest(test_cc_lex_keywords);
     RegisterTest(test_cc_lex_multi_token);

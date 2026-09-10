@@ -56,14 +56,13 @@ static int cpp_substitute_and_paste(CppPreprocessor*, const CppToken*, size_t, c
 static int cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out);
 LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
 static int cpp_eval_tokens(CppPreprocessor*, CppToken*_Null_unspecified toks, size_t count, int64_t* value);
-// str should exclude outer quotes
-static int cpp_mixin_string(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
+// str is already decoded source text with arena lifetime
+static int cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
 static SrcLocExp*_Nullable cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
 static int cpp_ident_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_number_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
-static int cpp_string_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
-static int cpp_parse_char_body(CppPreprocessor*, SrcLoc, const char*, const char*, int64_t*, _Bool allow_multichar);
+static int cpp_parse_char_body(CppPreprocessor*, SrcLoc, const char*, const char*, int64_t*, CcConstantType);
 static int cpp_char_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_punct_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_handle_directive(CppPreprocessor *cpp);
@@ -445,72 +444,179 @@ cpp_merge_str_prefix(StringView sv, StringView* prefix){
     return 1;
 }
 
-// Decode one character or escape sequence from a string literal body.
-// Advances *c past the consumed bytes. Returns the decoded codepoint.
-static
-uint32_t
-cpp_decode_str_char(StringView s, size_t* c){
-    if(s.text[*c] != '\\'){
-        // UTF-8 decode
-        unsigned char b0 = (unsigned char)s.text[(*c)++];
-        if(b0 < 0x80) return b0;
-        uint32_t cp;
+// Numeric escapes denote code units; other characters denote Unicode scalars.
+static int
+cpp_hex_digit(unsigned char c){
+    if(c >= '0' && c <= '9') return c - '0';
+    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int
+cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* cursor,
+                        uint32_t* value, _Bool* numeric){
+    size_t i = *cursor;
+    uint32_t cp = (unsigned char)s.text[i++];
+    *numeric = 0;
+    if(cp == '\\'){
+        if(i == s.length) return cpp_error(cpp, loc, "Incomplete escape sequence");
+        unsigned char esc = (unsigned char)s.text[i++];
+        switch(esc){
+            case 'n': cp = '\n'; break;
+            case 't': cp = '\t'; break;
+            case 'r': cp = '\r'; break;
+            case '\\': case '\'': case '"': case '?': cp = esc; break;
+            case 'a': cp = '\a'; break;
+            case 'b': cp = '\b'; break;
+            case 'f': cp = '\f'; break;
+            case 'v': cp = '\v'; break;
+            case '0': case '1': case '2': case '3':
+            case '4': case '5': case '6': case '7':
+                *numeric = 1;
+                cp = esc - '0';
+                for(int n = 1; n < 3 && i < s.length && s.text[i] >= '0' && s.text[i] <= '7'; n++)
+                    cp = (cp << 3) | (uint32_t)(s.text[i++] - '0');
+                break;
+            case 'x': case 'u': case 'U': {
+                *numeric = esc == 'x';
+                size_t start = i;
+                size_t limit = esc == 'u' ? 4 : esc == 'U' ? 8 : s.length - i;
+                cp = 0;
+                while(i < s.length && i - start < limit){
+                    int d = cpp_hex_digit((unsigned char)s.text[i]);
+                    if(d < 0) break;
+                    if(cp > (UINT32_MAX - (uint32_t)d) / 16)
+                        return cpp_error(cpp, loc, "Escape sequence out of range");
+                    cp = cp * 16 + (uint32_t)d;
+                    i++;
+                }
+                if(i == start || (esc != 'x' && i - start != limit))
+                    return cpp_error(cpp, loc, "Invalid \\%c escape", esc);
+                break;
+            }
+            default: return cpp_error(cpp, loc, "Unknown escape sequence \\%c", esc);
+        }
+    }
+    else if(cp >= 0x80){
         int trail;
-        if(b0 < 0xE0){ cp = b0 & 0x1F; trail = 1; }
-        else if(b0 < 0xF0){ cp = b0 & 0x0F; trail = 2; }
-        else { cp = b0 & 0x07; trail = 3; }
-        for(int t = 0; t < trail && *c < s.length; t++)
-            cp = (cp << 6) | ((unsigned char)s.text[(*c)++] & 0x3F);
-        return cp;
+        uint32_t minimum;
+        if(cp >= 0xC2 && cp <= 0xDF){ trail = 1; minimum = 0x80; cp &= 0x1F; }
+        else if(cp >= 0xE0 && cp <= 0xEF){ trail = 2; minimum = 0x800; cp &= 0x0F; }
+        else if(cp >= 0xF0 && cp <= 0xF4){ trail = 3; minimum = 0x10000; cp &= 7; }
+        else return cpp_error(cpp, loc, "Invalid UTF-8 in literal");
+        for(int n = 0; n < trail; n++){
+            if(i == s.length || ((unsigned char)s.text[i] & 0xC0) != 0x80)
+                return cpp_error(cpp, loc, "Invalid UTF-8 in literal");
+            cp = (cp << 6) | ((unsigned char)s.text[i++] & 0x3F);
+        }
+        if(cp < minimum) return cpp_error(cpp, loc, "Invalid UTF-8 in literal");
     }
-    (*c)++; // skip backslash
-    if(*c >= s.length) return '\\';
-    switch(s.text[(*c)++]){
-        case 'n': return '\n';
-        case 't': return '\t';
-        case 'r': return '\r';
-        case '\\': return '\\';
-        case '\'': return '\'';
-        case '"': return '"';
-        case 'a': return '\a';
-        case 'b': return '\b';
-        case 'f': return '\f';
-        case 'v': return '\v';
-        case '?': return '?';
-        case '0': case '1': case '2': case '3':
-        case '4': case '5': case '6': case '7': {
-            (*c)--;
-            uint32_t ch = 0;
-            for(int ii = 0; ii < 3 && *c < s.length && s.text[*c] >= '0' && s.text[*c] <= '7'; ii++, (*c)++)
-                ch = (ch << 3) | (uint32_t)(s.text[*c] - '0');
-            return ch;
+    if(!*numeric && (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)))
+        return cpp_error(cpp, loc, "Invalid Unicode scalar in literal");
+    *cursor = i;
+    *value = cp;
+    return 0;
+}
+
+static StringView
+cpp_string_body(StringView spelling){
+    size_t prefix = cpp_str_prefix(spelling).length;
+    return (StringView){spelling.length - prefix - 2, spelling.text + prefix + 1};
+}
+
+// Append one literal's decoded contents, without its terminating zero.
+static int
+cpp_decode_string(CppPreprocessor* cpp, CppToken tok, unsigned width, MStringBuilder* sb){
+    StringView body = cpp_string_body(tok.txt);
+    for(size_t i = 0; i < body.length;){
+        uint32_t cp;
+        _Bool numeric;
+        int err = cpp_decode_literal_char(cpp, tok.loc, body, &i, &cp, &numeric);
+        if(err) return err;
+        if(numeric && ((width == 1 && cp > UINT8_MAX) || (width == 2 && cp > UINT16_MAX)))
+            return cpp_error(cpp, tok.loc, "Escape sequence out of range for string literal");
+        if(width == 1){
+            if(numeric) msb_write_char(sb, (char)cp);
+            else msb_write_utf32_codepoint(sb, cp);
         }
-        case 'x': {
-            uint32_t ch = 0;
-            while(*c < s.length){
-                if(s.text[*c] >= '0' && s.text[*c] <= '9')      ch = (ch << 4) | (uint32_t)(s.text[*c] - '0');
-                else if(s.text[*c] >= 'a' && s.text[*c] <= 'f') ch = (ch << 4) | (uint32_t)(s.text[*c] - 'a' + 10);
-                else if(s.text[*c] >= 'A' && s.text[*c] <= 'F') ch = (ch << 4) | (uint32_t)(s.text[*c] - 'A' + 10);
-                else break;
-                (*c)++;
+        else if(width == 2){
+            if(cp <= UINT16_MAX){
+                uint16_t v = (uint16_t)cp;
+                msb_write_str(sb, (const char*)&v, sizeof v);
             }
-            return ch;
-        }
-        case 'u': case 'U': {
-            int ndigits = s.text[*c - 1] == 'u' ? 4 : 8;
-            uint32_t cp = 0;
-            for(int ii = 0; ii < ndigits && *c < s.length; ii++, (*c)++){
-                uint32_t d;
-                if(s.text[*c] >= '0' && s.text[*c] <= '9')      d = (uint32_t)(s.text[*c] - '0');
-                else if(s.text[*c] >= 'a' && s.text[*c] <= 'f') d = (uint32_t)(s.text[*c] - 'a' + 10);
-                else if(s.text[*c] >= 'A' && s.text[*c] <= 'F') d = (uint32_t)(s.text[*c] - 'A' + 10);
-                else break;
-                cp = (cp << 4) | d;
+            else {
+                uint32_t adj = cp - 0x10000;
+                uint16_t pair[] = {(uint16_t)(0xD800 | (adj >> 10)), (uint16_t)(0xDC00 | (adj & 0x3FF))};
+                msb_write_str(sb, (const char*)pair, sizeof pair);
             }
-            return cp;
         }
-        default: return (unsigned char)s.text[*c - 1];
+        else msb_write_str(sb, (const char*)&cp, sizeof cp);
     }
+    return sb->errored ? CPP_OOM_ERROR : 0;
+}
+
+// Text-consuming extensions use UTF-8, including for prefixed literals.
+static int
+cpp_decode_text(CppPreprocessor* cpp, CppToken tok, MStringBuilder* sb){
+    return cpp_decode_string(cpp, tok, 1, sb);
+}
+
+// Fixed-width octal escapes cannot absorb digits from the following byte.
+static Atom _Nullable
+cpp_quote_string(CppPreprocessor* cpp, StringView text){
+    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    msb_write_char(&sb, '"');
+    for(size_t i = 0; i < text.length; i++){
+        unsigned char c = (unsigned char)text.text[i];
+        if(c == '"' || c == '\\'){
+            msb_write_char(&sb, '\\');
+            msb_write_char(&sb, (char)c);
+        }
+        else if(c < 32 || c >= 127){
+            msb_write_char(&sb, '\\');
+            msb_write_char(&sb, (char)('0' + (c >> 6)));
+            msb_write_char(&sb, (char)('0' + ((c >> 3) & 7)));
+            msb_write_char(&sb, (char)('0' + (c & 7)));
+        }
+        else msb_write_char(&sb, (char)c);
+    }
+    msb_write_char(&sb, '"');
+    Atom a = sb.errored ? NULL : AT_atomize(cpp->at, sb.data, sb.cursor);
+    msb_destroy(&sb);
+    return a;
+}
+
+static int
+cpp_strings_to_cc_tok(CppPreprocessor* cpp, const CppTokens* strings, StringView prefix, CcToken* ctok){
+    unsigned width = 4;
+    CcStringType stype = CC_USTRING;
+    if(!prefix.length || sv_equals(prefix, SV("u8"))){
+        width = 1;
+        stype = prefix.length ? CC_U8STRING : CC_STRING;
+    }
+    else if(sv_equals(prefix, SV("u"))){ width = 2; stype = CC_uSTRING; }
+    else if(sv_equals(prefix, SV("L"))){
+        width = cpp->target.wchar_type == CCBT_unsigned_short ? 2 : 4;
+        stype = CC_LSTRING;
+    }
+    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    int err = 0;
+    for(size_t i = 0; i < strings->count; i++){
+        err = cpp_decode_string(cpp, strings->data[i], width, &sb);
+        if(err) goto finally;
+    }
+    uint32_t zero = 0;
+    msb_write_str(&sb, (const char*)&zero, width);
+    if(sb.errored || sb.cursor / width > UINT32_MAX){ err = CPP_OOM_ERROR; goto finally; }
+    *ctok = (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .length=(uint32_t)(sb.cursor / width)}, .loc=strings->data[0].loc};
+    StringView data = msb_detach_sv(&sb);
+    if(width == 1) ctok->str.utf8 = data.text;
+    else if(width == 2) ctok->str.utf16 = (const unsigned short*)data.text;
+    else ctok->str.utf32 = (const unsigned int*)data.text;
+    finally:
+    msb_destroy(&sb);
+    return err;
 }
 
 static
@@ -571,165 +677,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
                     err = cpp_push_tok(cpp, strings, next);
                     if(err) goto string_finally;
                 }
-                if(!prefix.length || sv_equals(prefix, SV("u8"))){ // utf-8 strings
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){
-                            s.text++;
-                            s.length--;
-                        }
-                        s.text++;
-                        s.length--;
-                        s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            const char* b = memchr(s.text+c, '\\', s.length-c);
-                            if(!b){
-                                msb_write_str(&sb, s.text+c, s.length-c);
-                                break;
-                            }
-                            size_t bpos = (size_t)(b - s.text);
-                            if(bpos > c)
-                                msb_write_str(&sb, s.text+c, bpos - c);
-                            c = bpos + 1; // skip backslash
-                            if(c >= s.length) break;
-                            switch(s.text[c++]){
-                                case 'n':  msb_write_char(&sb, '\n'); continue;
-                                case 't':  msb_write_char(&sb, '\t'); continue;
-                                case 'r':  msb_write_char(&sb, '\r'); continue;
-                                case '\\': msb_write_char(&sb, '\\'); continue;
-                                case '\'': msb_write_char(&sb, '\''); continue;
-                                case '"':  msb_write_char(&sb, '"');  continue;
-                                case 'a':  msb_write_char(&sb, '\a'); continue;
-                                case 'b':  msb_write_char(&sb, '\b'); continue;
-                                case 'f':  msb_write_char(&sb, '\f'); continue;
-                                case 'v':  msb_write_char(&sb, '\v'); continue;
-                                case '?':  msb_write_char(&sb, '?');  continue;
-                                case '0': case '1': case '2': case '3':
-                                case '4': case '5': case '6': case '7': {
-                                    c--; // back up to re-read first octal digit
-                                    unsigned char ch = 0;
-                                    for(int ii = 0; ii < 3 && c < s.length && s.text[c] >= '0' && s.text[c] <= '7'; ii++, c++)
-                                        ch = (unsigned char)((ch << 3) | (s.text[c] - '0'));
-                                    msb_write_char(&sb, (char)ch);
-                                    continue;
-                                }
-                                case 'x': {
-                                    unsigned char ch = 0;
-                                    while(c < s.length){
-                                        if(s.text[c] >= '0' && s.text[c] <= '9')      ch = (unsigned char)((ch << 4) | (s.text[c] - '0'));
-                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') ch = (unsigned char)((ch << 4) | (s.text[c] - 'a' + 10));
-                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') ch = (unsigned char)((ch << 4) | (s.text[c] - 'A' + 10));
-                                        else break;
-                                        c++;
-                                    }
-                                    msb_write_char(&sb, (char)ch);
-                                    continue;
-                                }
-                                case 'u': case 'U': {
-                                    int ndigits = s.text[c-1] == 'u' ? 4 : 8;
-                                    uint32_t cp = 0;
-                                    for(int ii = 0; ii < ndigits && c < s.length; ii++, c++){
-                                        uint32_t d;
-                                        if(s.text[c] >= '0' && s.text[c] <= '9')      d = (uint32_t)(s.text[c] - '0');
-                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') d = (uint32_t)(s.text[c] - 'a' + 10);
-                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') d = (uint32_t)(s.text[c] - 'A' + 10);
-                                        else break;
-                                        cp = (cp << 4) | d;
-                                    }
-                                    msb_write_utf32_codepoint(&sb, cp);
-                                    continue;
-                                }
-                                default:
-                                    msb_write_char(&sb, s.text[c-1]);
-                                    continue;
-                            }
-                        }
-                    }
-                    msb_write_char(&sb, 0);
-                    if(sb.errored || sb.cursor > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = prefix.length ? CC_U8STRING : CC_STRING,
-                            .length = (uint32_t)sb.cursor,
-                            .utf8 = msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
-                else if(sv_equals(prefix, SV("u")) || (cpp->target.wchar_type == CCBT_unsigned_short && sv_equals(prefix, SV("L")))){ // utf-16
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){ s.text++; s.length--; }
-                        s.text++; s.length--; s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            uint32_t cp = cpp_decode_str_char(s, &c);
-                            if(cp <= 0xFFFF){
-                                uint16_t v = (uint16_t)cp;
-                                msb_write_str(&sb, (const char*)&v, 2);
-                            }
-                            else {
-                                uint32_t adj = cp - 0x10000;
-                                uint16_t hi = (uint16_t)(0xD800 | (adj >> 10));
-                                uint16_t lo = (uint16_t)(0xDC00 | (adj & 0x3FF));
-                                msb_write_str(&sb, (const char*)&hi, 2);
-                                msb_write_str(&sb, (const char*)&lo, 2);
-                            }
-                        }
-                    }
-                    uint16_t nul16 = 0;
-                    msb_write_str(&sb, (const char*)&nul16, 2);
-                    if(sb.errored || sb.cursor / 2 > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_uSTRING;
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = stype,
-                            .length = (uint32_t)(sb.cursor / 2),
-                            .utf16 = (const unsigned short*)msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
-                else { // utf-32 (U"..." or L"..." when wchar is 32-bit)
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){ s.text++; s.length--; }
-                        s.text++; s.length--; s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            uint32_t cp = cpp_decode_str_char(s, &c);
-                            msb_write_str(&sb, (const char*)&cp, 4);
-                        }
-                    }
-                    uint32_t nul32 = 0;
-                    msb_write_str(&sb, (const char*)&nul32, 4);
-                    if(sb.errored || sb.cursor / 4 > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_USTRING;
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = stype,
-                            .length = (uint32_t)(sb.cursor / 4),
-                            .utf32 = (const unsigned int*)msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
+                err = cpp_strings_to_cc_tok(cpp, strings, prefix, ctok);
                 string_finally:
                 cpp_release_scratch(cpp, strings);
                 return err;
@@ -797,165 +745,7 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
                     err = cpp_push_tok(cpp, strings, next);
                     if(err) goto string_finally;
                 }
-                if(!prefix.length || sv_equals(prefix, SV("u8"))){ // utf-8 strings
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){
-                            s.text++;
-                            s.length--;
-                        }
-                        s.text++;
-                        s.length--;
-                        s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            const char* b = memchr(s.text+c, '\\', s.length-c);
-                            if(!b){
-                                msb_write_str(&sb, s.text+c, s.length-c);
-                                break;
-                            }
-                            size_t bpos = (size_t)(b - s.text);
-                            if(bpos > c)
-                                msb_write_str(&sb, s.text+c, bpos - c);
-                            c = bpos + 1; // skip backslash
-                            if(c >= s.length) break;
-                            switch(s.text[c++]){
-                                case 'n':  msb_write_char(&sb, '\n'); continue;
-                                case 't':  msb_write_char(&sb, '\t'); continue;
-                                case 'r':  msb_write_char(&sb, '\r'); continue;
-                                case '\\': msb_write_char(&sb, '\\'); continue;
-                                case '\'': msb_write_char(&sb, '\''); continue;
-                                case '"':  msb_write_char(&sb, '"');  continue;
-                                case 'a':  msb_write_char(&sb, '\a'); continue;
-                                case 'b':  msb_write_char(&sb, '\b'); continue;
-                                case 'f':  msb_write_char(&sb, '\f'); continue;
-                                case 'v':  msb_write_char(&sb, '\v'); continue;
-                                case '?':  msb_write_char(&sb, '?');  continue;
-                                case '0': case '1': case '2': case '3':
-                                case '4': case '5': case '6': case '7': {
-                                    c--; // back up to re-read first octal digit
-                                    unsigned char ch = 0;
-                                    for(int ii = 0; ii < 3 && c < s.length && s.text[c] >= '0' && s.text[c] <= '7'; ii++, c++)
-                                        ch = (unsigned char)((ch << 3) | (s.text[c] - '0'));
-                                    msb_write_char(&sb, (char)ch);
-                                    continue;
-                                }
-                                case 'x': {
-                                    unsigned char ch = 0;
-                                    while(c < s.length){
-                                        if(s.text[c] >= '0' && s.text[c] <= '9')      ch = (unsigned char)((ch << 4) | (s.text[c] - '0'));
-                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') ch = (unsigned char)((ch << 4) | (s.text[c] - 'a' + 10));
-                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') ch = (unsigned char)((ch << 4) | (s.text[c] - 'A' + 10));
-                                        else break;
-                                        c++;
-                                    }
-                                    msb_write_char(&sb, (char)ch);
-                                    continue;
-                                }
-                                case 'u': case 'U': {
-                                    int ndigits = s.text[c-1] == 'u' ? 4 : 8;
-                                    uint32_t cp = 0;
-                                    for(int ii = 0; ii < ndigits && c < s.length; ii++, c++){
-                                        uint32_t d;
-                                        if(s.text[c] >= '0' && s.text[c] <= '9')      d = (uint32_t)(s.text[c] - '0');
-                                        else if(s.text[c] >= 'a' && s.text[c] <= 'f') d = (uint32_t)(s.text[c] - 'a' + 10);
-                                        else if(s.text[c] >= 'A' && s.text[c] <= 'F') d = (uint32_t)(s.text[c] - 'A' + 10);
-                                        else break;
-                                        cp = (cp << 4) | d;
-                                    }
-                                    msb_write_utf32_codepoint(&sb, cp);
-                                    continue;
-                                }
-                                default:
-                                    msb_write_char(&sb, s.text[c-1]);
-                                    continue;
-                            }
-                        }
-                    }
-                    msb_write_char(&sb, 0);
-                    if(sb.errored || sb.cursor > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = prefix.length ? CC_U8STRING : CC_STRING,
-                            .length = (uint32_t)sb.cursor,
-                            .utf8 = msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
-                else if(sv_equals(prefix, SV("u")) || (cpp->target.wchar_type == CCBT_unsigned_short && sv_equals(prefix, SV("L")))){ // utf-16
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){ s.text++; s.length--; }
-                        s.text++; s.length--; s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            uint32_t cp = cpp_decode_str_char(s, &c);
-                            if(cp <= 0xFFFF){
-                                uint16_t v = (uint16_t)cp;
-                                msb_write_str(&sb, (const char*)&v, 2);
-                            }
-                            else {
-                                uint32_t adj = cp - 0x10000;
-                                uint16_t hi = (uint16_t)(0xD800 | (adj >> 10));
-                                uint16_t lo = (uint16_t)(0xDC00 | (adj & 0x3FF));
-                                msb_write_str(&sb, (const char*)&hi, 2);
-                                msb_write_str(&sb, (const char*)&lo, 2);
-                            }
-                        }
-                    }
-                    uint16_t nul16 = 0;
-                    msb_write_str(&sb, (const char*)&nul16, 2);
-                    if(sb.errored || sb.cursor / 2 > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_uSTRING;
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = stype,
-                            .length = (uint32_t)(sb.cursor / 2),
-                            .utf16 = (const unsigned short*)msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
-                else { // utf-32 (U"..." or L"..." when wchar is 32-bit)
-                    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-                    for(size_t i = 0; i < strings->count; i++){
-                        StringView s = strings->data[i].txt;
-                        while(s.text[0] != '"'){ s.text++; s.length--; }
-                        s.text++; s.length--; s.length--;
-                        for(size_t c = 0; c < s.length;){
-                            uint32_t cp = cpp_decode_str_char(s, &c);
-                            msb_write_str(&sb, (const char*)&cp, 4);
-                        }
-                    }
-                    uint32_t nul32 = 0;
-                    msb_write_str(&sb, (const char*)&nul32, 4);
-                    if(sb.errored || sb.cursor / 4 > UINT32_MAX){
-                        msb_destroy(&sb);
-                        err = CPP_OOM_ERROR;
-                        goto string_finally;
-                    }
-                    CcStringType stype = sv_equals(prefix, SV("L")) ? CC_LSTRING : CC_USTRING;
-                    *ctok = (CcToken){
-                        .str = {
-                            .type = CC_STRING_LITERAL,
-                            .stype = stype,
-                            .length = (uint32_t)(sb.cursor / 4),
-                            .utf32 = (const unsigned int*)msb_detach_sv(&sb).text,
-                        },
-                        .loc = tok.loc,
-                    };
-                }
+                err = cpp_strings_to_cc_tok(cpp, strings, prefix, ctok);
                 string_finally:
                 cpp_release_scratch(cpp, strings);
                 return err;
@@ -5121,6 +4911,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#endif\n"
                               "#define __STDC_VERSION_STDINT_H__ 202311L\n"
                               // harmless to re-typedef
+                              // maybe we delete these since I just yolo predefine them in the parser?
                               "typedef __INT8_TYPE__ int8_t;\n"
                               "typedef __INT16_TYPE__ int16_t;\n"
                               "typedef __INT32_TYPE__ int32_t;\n"
@@ -5544,7 +5335,7 @@ cpp_builtin_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
         file_id = loc.file_id;
     }
     LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
-    Atom a = cpp_atomizef(cpp, "\"%s\"", path.text);
+    Atom a = cpp_quote_string(cpp, LS_to_SV(path));
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5575,7 +5366,7 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     windows = 1;
     #endif
     StringView basename = path_basename(LS_to_SV(path), windows);
-    Atom a = cpp_atomizef(cpp, "\"%.*s\"", sv_p(basename));
+    Atom a = cpp_quote_string(cpp, basename);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5606,7 +5397,7 @@ cpp_builtin_dir(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     #endif
     StringView dir = path_dirname(LS_to_SV(path), windows);
     if(!dir.length) dir = SV(".");
-    Atom a = cpp_atomizef(cpp, "\"%.*s\"", sv_p(dir));
+    Atom a = cpp_quote_string(cpp, dir);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5723,7 +5514,7 @@ cpp_builtin_base_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc 
     if(cpp->frames.count)
         file_id = cpp->frames.data[0].file_id;
     LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
-    Atom a = cpp_atomizef(cpp, "\"%s\"", path.text);
+    Atom a = cpp_quote_string(cpp, LS_to_SV(path));
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5813,14 +5604,14 @@ cpp_builtin_mixin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
         CppToken tok = args->data[i];
         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
         if(tok.type == CPP_STRING){
-            if(tok.txt.length > 2)
-                msb_write_str(&sb, tok.txt.text+1, tok.txt.length-2);
+            err = cpp_decode_text(cpp, tok, &sb);
+            if(err) goto finally;
             continue;
         }
         err = cpp_error(cpp, tok.loc, "Only string literals supported as arg to mixin");
         goto finally;
     }
-    err = cpp_mixin_string(cpp, loc, msb_borrow_sv(&sb), outtoks);
+    err = cpp_tokenize_text(cpp, loc, sb.cursor ? msb_detach_sv(&sb) : SV(""), outtoks);
     finally:
     msb_destroy(&sb);
     return err;
@@ -5851,15 +5642,15 @@ cpp_builtin_ident(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
         CppToken tok = args->data[i];
         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
         if(tok.type == CPP_STRING){
-            if(tok.txt.length > 2)
-                msb_write_str(&sb, tok.txt.text+1, tok.txt.length-2);
+            err = cpp_decode_text(cpp, tok, &sb);
+            if(err) goto finally;
             continue;
         }
         err = cpp_error(cpp, tok.loc, "Only string literals supported as arg to ident");
         goto finally;
     }
     StringView sv = msb_borrow_sv(&sb);
-    Atom a = cpp_atomizef(cpp, "%.*s", (int)sv.length, sv.text?sv.text:"");
+    Atom a = AT_atomize(cpp->at, sv.text ? sv.text : "", sv.length);
     if(!a){ err = CPP_OOM_ERROR; goto finally; }
     CppToken tok = {
         .loc = loc,
@@ -5878,7 +5669,7 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     (void)ctx;
     int err = 0;
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
-    msb_write_char(&sb, '"');
+    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     CppToken* fmts; size_t fmt_count;
     CppToken* va_args; size_t va_count;
     cpp_get_argument(args, arg_seps, 0, &fmts, &fmt_count);
@@ -5890,77 +5681,80 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
             err = cpp_error(cpp, fmt.loc, "Only string literals supported as fmt to format");
             goto finally;
         }
-        StringView s = sv_slice(fmt.txt, 1, fmt.txt.length-1);
-        for(size_t i = 0; i < s.length;){
-            char c = s.text[i++];
-            if(c == '%' && i < s.length){
-                c = s.text[i++];
-                switch(c){
-                    case '%': msb_write_char(&sb, '%'); break;
-                    case 's':{
-                        if(!va_count){
-                            err = cpp_error(cpp, loc, "Run out of va_args");
-                            goto finally;
-                        }
-                        for(;va_count;++va_args, --va_count){
-                            CppToken tok = *va_args;
-                            if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
-                                ++va_args; --va_count;
-                                break;
-                            }
-                            if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
-                            if(tok.type == CPP_STRING){
-                                msb_write_str(&sb, tok.txt.text+1, tok.txt.length-2);
-                                continue;
-                            }
-                            err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected string)");
-                            goto finally;
-                        }
-                    }break;
-                    case 'd':{
-                        if(!va_count){
-                            err = cpp_error(cpp, loc, "Run out of va_args");
-                            goto finally;
-                        }
-                        _Bool wrote_number = 0;
-                        for(;va_count;++va_args, --va_count){
-                            CppToken tok = *va_args;
-                            if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
-                                ++va_args; --va_count;
-                                break;
-                            }
-                            if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
-                            if(tok.type == CPP_NUMBER){
-                                if(wrote_number){
-                                    err = cpp_error(cpp, tok.loc, "Too many number args to format");
-                                    goto finally;
-                                }
-                                uint64_t uval; err = parse_unsigned_human(tok.txt.text, tok.txt.length, &uval);
-                                if(err){
-                                    err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
-                                    goto finally;
-                                }
-                                msb_sprintf(&sb, "%llu", (unsigned long long)uval);
-                                wrote_number = 1;
-                                continue;
-                            }
-                            err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
-                            goto finally;
-                        }
-                    }break;
-                    default:
-                        msb_write_char(&sb, '%');
-                        msb_write_char(&sb, c);
-                        break;
-                }
-            }
-            else
-                msb_write_char(&sb, c);
-        }
+        err = cpp_decode_text(cpp, fmt, &decoded);
+        if(err) goto finally;
     }
-    msb_write_char(&sb, '"');
+    StringView s = msb_borrow_sv(&decoded);
+    for(size_t i = 0; i < s.length;){
+        char c = s.text[i++];
+        if(c == '%' && i < s.length){
+            c = s.text[i++];
+            switch(c){
+                case '%': msb_write_char(&sb, '%'); break;
+                case 's':{
+                    if(!va_count){
+                        err = cpp_error(cpp, loc, "Run out of va_args");
+                        goto finally;
+                    }
+                    for(;va_count;++va_args, --va_count){
+                        CppToken tok = *va_args;
+                        if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
+                            ++va_args; --va_count;
+                            break;
+                        }
+                        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+                        if(tok.type == CPP_STRING){
+                            err = cpp_decode_text(cpp, tok, &sb);
+                            if(err) goto finally;
+                            continue;
+                        }
+                        err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected string)");
+                        goto finally;
+                    }
+                }break;
+                case 'd':{
+                    if(!va_count){
+                        err = cpp_error(cpp, loc, "Run out of va_args");
+                        goto finally;
+                    }
+                    _Bool wrote_number = 0;
+                    for(;va_count;++va_args, --va_count){
+                        CppToken tok = *va_args;
+                        if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
+                            ++va_args; --va_count;
+                            break;
+                        }
+                        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+                        if(tok.type == CPP_NUMBER){
+                            if(wrote_number){
+                                err = cpp_error(cpp, tok.loc, "Too many number args to format");
+                                goto finally;
+                            }
+                            uint64_t uval; err = parse_unsigned_human(tok.txt.text, tok.txt.length, &uval);
+                            if(err){
+                                err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
+                                goto finally;
+                            }
+                            msb_sprintf(&sb, "%llu", (unsigned long long)uval);
+                            wrote_number = 1;
+                            continue;
+                        }
+                        err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
+                        goto finally;
+                    }
+                }break;
+                default:
+                    msb_write_char(&sb, '%');
+                    msb_write_char(&sb, c);
+                    break;
+            }
+        }
+        else
+            msb_write_char(&sb, c);
+    }
+    if(sb.errored){ err = CPP_OOM_ERROR; goto finally; }
     StringView sv = msb_borrow_sv(&sb);
-    Atom a = AT_atomize(cpp->at, sv.text, sv.length);
+    Atom a = cpp_quote_string(cpp, sv);
     if(!a){
         err = CPP_OOM_ERROR;
         goto finally;
@@ -5972,6 +5766,7 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     };
     err = cpp_push_tok(cpp, outtoks, tok);
     finally:;
+    msb_destroy(&decoded);
     msb_destroy(&sb);
     return err;
 }
@@ -6040,10 +5835,10 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     for(size_t i = 0; i < arg0_count; i++){
         CppToken tok = arg0_toks[i];
-        if(tok.type == CPP_WHITESPACE) continue;
+        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
         if(tok.type == CPP_STRING){
-            if(tok.txt.length > 2)
-                msb_write_str(&sb, tok.txt.text+1, tok.txt.length-2);
+            err = cpp_decode_text(cpp, tok, &sb);
+            if(err) goto finally;
             continue;
         }
         err = cpp_error(cpp, tok.loc, "Only string literals supported as arg to env");
@@ -6062,7 +5857,7 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         goto finally;
     }
     if(!v) v = cpp_atomizef(cpp, "\"\"");
-    else v = cpp_atomizef(cpp, "\"%s\"", v->data);
+    else v = cpp_quote_string(cpp, (StringView){v->length, v->data});
     if(!v) {
         err = CPP_OOM_ERROR;
         goto finally;
@@ -6479,14 +6274,14 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CppPreprocessor* cpp, Sr
     for(size_t i = 0; i < en; i++){
         CppToken tok = etoks[i];
         if(tok.type == CPP_STRING){
-            // Strip quotes
-            if(tok.txt.length > 2)
-                msb_write_str(&sb, tok.txt.text + 1, tok.txt.length - 2);
+            err = cpp_decode_text(cpp, tok, &sb);
+            if(err){ msb_destroy(&sb); cpp_release_scratch(cpp, expanded); return err; }
         }
         else {
             msb_write_str(&sb, tok.txt.text, tok.txt.length);
         }
     }
+    if(sb.errored){ msb_destroy(&sb); cpp_release_scratch(cpp, expanded); return CPP_OOM_ERROR; }
     StringView msg = msb_borrow_sv(&sb);
     cpp_info(cpp, loc, "%.*s", (int)msg.length, msg.text ? msg.text : "");
     msb_destroy(&sb);
@@ -6518,8 +6313,11 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
     if(i < en)
         cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
-    // Extract path from string literal (strip quotes)
-    StringView path = {strtok.txt.length - 2, strtok.txt.text + 1};
+    // Decode the path and retain it in the synthesis arena.
+    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    err = cpp_decode_text(cpp, strtok, &decoded);
+    if(err){ msb_destroy(&decoded); cpp_release_scratch(cpp, expanded); return err; }
+    StringView path = decoded.cursor ? msb_detach_sv(&decoded) : SV("");
     err = ma_push(StringView)(&cpp->Ipaths, cpp->allocator, path);
     cpp_release_scratch(cpp, expanded);
     if(err) return CPP_OOM_ERROR;
@@ -6547,7 +6345,10 @@ cpp_builtin_pragma_framework_path(void* _Null_unspecified ctx, CppPreprocessor* 
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
     if(i < en)
         cpp_warn(cpp, loc, "Trailing tokens after #pragma framework_path");
-    StringView path = {strtok.txt.length - 2, strtok.txt.text + 1};
+    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    err = cpp_decode_text(cpp, strtok, &decoded);
+    if(err){ msb_destroy(&decoded); cpp_release_scratch(cpp, expanded); return err; }
+    StringView path = decoded.cursor ? msb_detach_sv(&decoded) : SV("");
     // Prepend so user framework paths are searched before system defaults.
     err = ma_insert(StringView)(&cpp->framework_paths, cpp->allocator, 0, path);
     if(err) err = CPP_OOM_ERROR;
@@ -6574,7 +6375,7 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(!strtok.type)
         return cpp_error(cpp, loc, "_Pragma requires a string literal");
     // Destringify: strip quotes, unescape backslash-quote and backslash-backslash
-    StringView str = {strtok.txt.length - 2, strtok.txt.text + 1};
+    StringView str = cpp_string_body(strtok.txt);
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     for(size_t i = 0; i < str.length; i++){
         char c = str.text[i];
@@ -6585,9 +6386,10 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         msb_write_char(&sb, c);
     }
     // Tokenize the destringified content
+    if(sb.errored){ msb_destroy(&sb); return CPP_OOM_ERROR; }
     CppTokens* toks = cpp_get_scratch(cpp);
     if(!toks){ msb_destroy(&sb); return CPP_OOM_ERROR; }
-    int err = cpp_mixin_string(cpp, loc, msb_borrow_sv(&sb), toks);
+    int err = cpp_tokenize_text(cpp, loc, sb.cursor ? msb_detach_sv(&sb) : SV(""), toks);
     msb_destroy(&sb);
     if(err) goto finish_Pragma;
     // Find pragma name (first non-whitespace identifier)
@@ -7140,95 +6942,53 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
 
 static
 int
-cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char* e, int64_t* value, _Bool allow_multichar){
-    int64_t v = 0;
-    int nchars = 0;
-    while(p < e){
-        if(nchars >= 4)
-            return cpp_error(cpp, loc, "Character constant too long");
-        nchars++;
-        unsigned char c;
-        if(*p == '\\'){
-            p++;
-            if(p == e)
-                return cpp_error(cpp, loc, "Invalid escape in character constant");
-            switch(*p){
-                case 'n':  c = '\n'; p++; break;
-                case 't':  c = '\t'; p++; break;
-                case 'r':  c = '\r'; p++; break;
-                case '\\': c = '\\'; p++; break;
-                case '\'': c = '\''; p++; break;
-                case '"':  c = '"';  p++; break;
-                case 'a':  c = '\a'; p++; break;
-                case 'b':  c = '\b'; p++; break;
-                case 'f':  c = '\f'; p++; break;
-                case 'v':  c = '\v'; p++; break;
-                case '0': case '1': case '2': case '3':
-                case '4': case '5': case '6': case '7':
-                    c = 0;
-                    for(int i = 0; i < 3 && p < e && *p >= '0' && *p <= '7'; i++, p++)
-                        c = (unsigned char)((c << 3) | (*p - '0'));
-                    break;
-                case 'x':
-                    p++;
-                    c = 0;
-                    while(p < e){
-                        if(*p >= '0' && *p <= '9')      c = (unsigned char)((c << 4) | (*p - '0'));
-                        else if(*p >= 'a' && *p <= 'f') c = (unsigned char)((c << 4) | (*p - 'a' + 10));
-                        else if(*p >= 'A' && *p <= 'F') c = (unsigned char)((c << 4) | (*p - 'A' + 10));
-                        else break;
-                        p++;
-                    }
-                    break;
-                case 'u': {
-                    p++;
-                    uint32_t uval = 0;
-                    for(int i = 0; i < 4 && p < e; i++, p++){
-                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
-                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
-                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, loc, "Invalid \\u escape");
-                    }
-                    v = (v << 16) | uval;
-                    continue;
-                }
-                case 'U': {
-                    p++;
-                    uint32_t uval = 0;
-                    for(int i = 0; i < 8 && p < e; i++, p++){
-                        if(*p >= '0' && *p <= '9')      uval = (uval << 4) | (uint32_t)(*p - '0');
-                        else if(*p >= 'a' && *p <= 'f') uval = (uval << 4) | (uint32_t)(*p - 'a' + 10);
-                        else if(*p >= 'A' && *p <= 'F') uval = (uval << 4) | (uint32_t)(*p - 'A' + 10);
-                        else return cpp_error(cpp, loc, "Invalid \\U escape");
-                    }
-                    v = (v << 32) | uval;
-                    continue;
-                }
-                default:
-                    c = (unsigned char)*p; p++; break;
-            }
+cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char* e, int64_t* value, CcConstantType ctype){
+    StringView body = {(size_t)(e - p), p};
+    uint64_t v = 0;
+    unsigned nchars = 0;
+    for(size_t i = 0; i < body.length;){
+        if(ctype != CC_INT && nchars)
+            return cpp_error(cpp, loc, "Multi-character character constant with prefix is not allowed");
+        if(nchars++ == 4) return cpp_error(cpp, loc, "Character constant too long");
+        uint32_t cp;
+        _Bool numeric;
+        size_t start = i;
+        // Preserve the ordinary multicharacter convention of packing raw bytes.
+        if(ctype == CC_INT && (unsigned char)body.text[i] >= 0x80){
+            cp = (unsigned char)body.text[i++];
+            numeric = 1;
         }
-        else
-            c = (unsigned char)*p++;
-        v = (v << 8) | c;
+        else {
+            int err = cpp_decode_literal_char(cpp, loc, body, &i, &cp, &numeric);
+            if(err) return err;
+        }
+        uint32_t limit = UINT32_MAX;
+        if(ctype == CC_UCHAR) limit = numeric ? UINT8_MAX : 0x7F;
+        else if(ctype == CC_CHAR16 || (ctype == CC_WCHAR && cpp->target.wchar_type == CCBT_unsigned_short))
+            limit = UINT16_MAX;
+        else if(ctype == CC_INT && numeric) limit = UINT8_MAX;
+        if(cp > limit) return cpp_error(cpp, loc, "Character constant out of range");
+        unsigned shift = 8;
+        // Preserve existing ordinary UCN values and packing, but check overflow.
+        if(ctype == CC_INT && body.text[start] == '\\' && start + 1 < body.length){
+            if(body.text[start+1] == 'u') shift = 16;
+            else if(body.text[start+1] == 'U') shift = 32;
+        }
+        if(v > (UINT64_MAX >> shift))
+            return cpp_error(cpp, loc, "Character constant too long");
+        v = (v << shift) | cp;
     }
-    if(!allow_multichar && nchars != 1)
-        return cpp_error(cpp, loc, "Multi-character character constant with prefix is not allowed");
-    *value = v;
+    *value = (int64_t)v;
     return 0;
 }
 
 static
 int
 cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
-    const char* s = tok.txt.text;
-    size_t len = tok.txt.length;
-    if(len && *s == 'L'){ s++; len--; }
-    else if(len >= 2 && s[0] == 'u' && s[1] == '8'){ s += 2; len -= 2; }
-    else if(len && (*s == 'u' || *s == 'U')){ s++; len--; }
-    if(len < 3 || s[0] != '\'' || s[len-1] != '\'')
-        return cpp_error(cpp, tok.loc, "Invalid character constant");
-    return cpp_parse_char_body(cpp, tok.loc, s + 1, s + len - 1, value, 1);
+    CcToken ctok;
+    int err = cpp_char_to_cc_tok(cpp, &tok, &ctok);
+    if(!err) *value = (int64_t)ctok.constant.integer_value;
+    return err;
 }
 
 static
@@ -7441,43 +7201,9 @@ cpp_register_pragma(CppPreprocessor* cpp, StringView name, CppPragmaFn* fn, void
 
 static
 int
-cpp_mixin_string(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
-    MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-    for(size_t i = 0; i < str.length;){
-        unsigned char c = (unsigned char)str.text[i++];
-        if(c != '\\'){
-            msb_write_char(&sb, c);
-            continue;
-        }
-        if(i >= str.length) break;
-        c = (unsigned char)str.text[i++];
-        unsigned char t;
-        switch(c){
-            case '\\': msb_write_char(&sb, c); break;
-            case 'n': msb_write_char(&sb, '\n'); break;
-            case 't': msb_write_char(&sb, '\t'); break;
-            case 'r': msb_write_char(&sb, '\r'); break;
-            case '\'': msb_write_char(&sb, '\''); break;
-            case '"': msb_write_char(&sb, '"'); break;
-            case 'a': msb_write_char(&sb, '\a'); break;
-            case 'b': msb_write_char(&sb, '\b'); break;
-            case 'f': msb_write_char(&sb, '\f'); break;
-            case 'v': msb_write_char(&sb, '\v'); break;
-            case '0': case '1': case '2': case '3':
-            case '4': case '5': case '6': case '7':
-                t = c - '0';
-                for(size_t j = 1; j < 3 && i < str.length && str.text[i] >= '0' && str.text[i] <= '7'; j++){
-                    t = (unsigned char)((t << 3)|((unsigned char)str.text[i++] - '0'));
-                }
-                msb_write_char(&sb, t);
-                break;
-            default:
-                return CPP_UNIMPLEMENTED_ERROR;
-        }
-    }
-
+cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
     CppFrame frame = {
-        .txt = sb.cursor?msb_detach_sv(&sb):SV(""),
+        .txt = str,
         .file_id = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->file_id:loc.file_id,
         .line = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->line:loc.line,
         .column = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->column:loc.column,
@@ -7807,7 +7533,7 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     if(e <= p || *e != '\'')
         return cpp_error(cpp, cpptok->loc, "Invalid character constant");
     int64_t v = 0;
-    int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype == CC_INT);
+    int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype);
     if(err) return err;
     *cctok = (CcToken){
         .constant = {

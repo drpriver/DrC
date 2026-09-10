@@ -2069,6 +2069,50 @@ TestFunction(test_framework_include){
     TESTEND();
 }
 
+TestFunction(test_literal_boundaries){
+    TESTBEGIN();
+    struct {
+        IncludeTestFile files[2];
+        StringView expected;
+    } cases[] = {
+        {{{SV("dir\"/file\".c"), SV("__FILE__ __FILE_NAME__ __DIR__ __BASE_FILE__")},
+          {SV("unused.h"), SV("")}},
+         SV("\"dir\\\"/file\\\".c\" \"file\\\".c\" \"dir\\\"\" \"dir\\\"/file\\\".c\"")},
+        {{{SV("C:\\new\\test.c"), SV("__FILE__ __BASE_FILE__")},
+          {SV("unused.h"), SV("")}},
+         SV("\"C:\\\\new\\\\test.c\" \"C:\\\\new\\\\test.c\"")},
+        {{{SV("main.c"), SV("#pragma include_path u8\"in\\143\"\n#include <header.h>\n")},
+          {SV("inc/header.h"), SV("OK\n")}},
+         SV("\n\nOK\n")},
+        {{{SV("main.c"), SV("_Pragma(\"include_path \\\"in\\\\143\\\"\")\n#include <header.h>\n")},
+          {SV("inc/header.h"), SV("OK\n")}},
+         SV("\n\nOK\n")},
+        {{{SV("main.c"), SV("#pragma framework_path L\"fra\\155eworks\"\n#include <Foo/header.h>\n")},
+          {SV("frameworks/Foo.framework/Headers/header.h"), SV("OK\n")}},
+         SV("\n\nOK\n")},
+        {{{SV("main.c"), SV("#include \"once.h\"\n#include \"once.h\"\n")},
+          {SV("once.h"), SV("_Pragma(L\"once\")\nOK\n")}},
+         SV("\n\nOK\n\n")},
+    };
+    for(size_t i = 0; i < arrlen(cases); i++){
+        StringView result = {0};
+        int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0,
+                                       &result, __FILE__, __func__, __LINE__);
+        TestExpectFalse(err);
+        if(!err) test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    // Stringification must preserve the spelling of string/character literals.
+    StringView result = {0};
+    int err = cpp_expand_string(SV("#define S(x) #x\nS(u\"\\x1234\" U'\\U0001f600')"),
+                                &result, __FILE__, __func__, __LINE__);
+    TestExpectFalse(err);
+    if(!err) test_expect_equals_sv(SV("\n\"u\\\"\\\\x1234\\\" U'\\\\U0001f600'\""), result,
+                                  "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
+    if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
@@ -2076,6 +2120,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_obj_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_func_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_func_macros_extensions, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTest(test_literal_boundaries);
     RegisterTest(test_for_each);
     RegisterTest(test_for_each_empty);
     RegisterTestFlags(test_c23, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
