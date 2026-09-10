@@ -10312,10 +10312,10 @@ TestFunction(test_float_folding){
                 int after_round = fegetround();
                 if(status != binary[i].status || (status == 0 && result.bits[0] != binary[i].expected))
                     TestPrintf("float binary fold case %zu, rounding mode %zu\n", i, m);
-                TestExpect(status, ==, binary[i].status);
-                TestExpect(after_flags, ==, flags);
-                TestExpect(after_round, ==, modes[m]);
-                if(status == 0) TestExpect(result.bits[0], ==, binary[i].expected);
+                TestExpect(int, status, ==, binary[i].status);
+                TestExpect(int, after_flags, ==, flags);
+                TestExpect(int, after_round, ==, modes[m]);
+                if(status == 0) TestExpect(uint64_t, result.bits[0], ==, binary[i].expected);
             }
         }
         {
@@ -10338,12 +10338,12 @@ TestFunction(test_float_folding){
                 int after_flags = fetestexcept(FE_ALL_EXCEPT);
                 int after_round = fegetround();
                 if(status != cases[i].status) TestPrintf("float fold case %zu, rounding mode %zu\n", i, m);
-                TestExpect(status, ==, cases[i].status);
-                TestExpect(after_flags, ==, flags);
-                TestExpect(after_round, ==, modes[m]);
+                TestExpect(int, status, ==, cases[i].status);
+                TestExpect(int, after_flags, ==, flags);
+                TestExpect(int, after_round, ==, modes[m]);
                 if(status == 0){
-                    TestExpect(to.bits[0], ==, cases[i].expected[0]);
-                    TestExpect(to.bits[1], ==, cases[i].expected[1]);
+                    TestExpect(uint64_t, to.bits[0], ==, cases[i].expected[0]);
+                    TestExpect(uint64_t, to.bits[1], ==, cases[i].expected[1]);
                 }
             }
         }

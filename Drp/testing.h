@@ -437,9 +437,9 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
 // ----------------
 // Expects lhs op rhs, using the op operator
 //
-#define TestExpect(lhs, op, rhs) do {\
-      __typeof__(lhs) _lhs = lhs; \
-      __typeof__(lhs) _rhs = rhs; \
+#define TestExpect(type, lhs, op, rhs) do {\
+      type _lhs = lhs; \
+      type _rhs = rhs; \
       TEST_stats.executed++;\
       if (!(_lhs op _rhs)) {\
           TEST_stats.failures++; \
@@ -477,9 +477,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // ----------------
 // Expects lhs == rhs, using the == operator
 //
-#define TestExpectEquals(lhs, rhs) do {\
-      __typeof__(lhs) _lhs = lhs; \
-      __typeof__(lhs) _rhs = rhs; \
+#define TestExpectEquals(type, lhs, rhs) do {\
+      type _lhs = lhs; \
+      type _rhs = rhs; \
       TEST_stats.executed++;\
       if (!(_lhs == _rhs)) {\
           TEST_stats.failures++; \
@@ -496,9 +496,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -----------------
 // Expects lhs == rhs, using the passed in binary function instead of == operator
 //
-#define TestExpectEquals2(func, lhs, rhs) do {\
-      __typeof__(lhs) _lhs = lhs; \
-      __typeof__(rhs) _rhs = rhs; \
+#define TestExpectEquals2(func, type1, lhs, type2, rhs) do {\
+      type1 _lhs = lhs; \
+      type2 _rhs = rhs; \
       TEST_stats.executed++;\
       if (!(func(_lhs, _rhs))) {\
           TEST_stats.failures++; \
@@ -516,9 +516,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -------------------
 // Expects lhs != rhs, using the != operator
 //
-#define TestExpectNotEquals(lhs, rhs) do {\
-      __typeof__(lhs) _lhs = lhs; \
-      __typeof__(lhs) _rhs = rhs; \
+#define TestExpectNotEquals(type, lhs, rhs) do {\
+      type _lhs = lhs; \
+      type _rhs = rhs; \
       TEST_stats.executed++;\
       if (!(_lhs != _rhs)) {\
           TEST_stats.failures++; \
@@ -536,9 +536,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -------------------
 // Checks for func(lhs, rhs) == 0
 //
-#define TestExpectNotEqual2(func, lhs, rhs) do{\
-      __typeof__(lhs) _lhs = lhs; \
-      __typeof__(rhs) _rhs = rhs; \
+#define TestExpectNotEqual2(func, type1, lhs, type2, rhs) do{\
+      type1 _lhs = lhs; \
+      type2 _rhs = rhs; \
       TEST_stats.executed++;\
       if (func(_lhs, _rhs)) {\
           TEST_stats.failures++; \
@@ -725,9 +725,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // ----------------
 // Asserts lhs is equal to rhs, using ==
 //
-#define TestAssertEquals(lhs, rhs) do{\
-    __typeof__(lhs) _lhs = lhs; \
-    __typeof__(lhs) _rhs = rhs; \
+#define TestAssertEquals(type, lhs, rhs) do{\
+    type _lhs = lhs; \
+    type _rhs = rhs; \
     TEST_stats.executed++;\
     if (! (_lhs==_rhs)){ \
         TEST_stats.failures++; \
@@ -748,9 +748,9 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // ----------------
 // Asserts lhs is equal to rhs, using ==
 //
-#define TestAssertNotEqual(lhs, rhs) do{\
-    __typeof__(lhs) _lhs = lhs; \
-    __typeof__(lhs) _rhs = rhs; \
+#define TestAssertNotEqual(type, lhs, rhs) do{\
+    type _lhs = lhs; \
+    type _rhs = rhs; \
     TEST_stats.executed++;\
     if (! (_lhs!=_rhs)){ \
         TEST_stats.failures++; \
@@ -768,11 +768,11 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 //
 // TestAssertEquals2
 // ----------------
-// Asserts lhs is equal to rhs, using ==
+// Asserts lhs is equal to rhs, using the provided func
 //
-#define TestAssertEquals2(func, lhs, rhs) do{\
-    __typeof__(lhs) _lhs = lhs; \
-    __typeof__(lhs) _rhs = rhs; \
+#define TestAssertEquals2(func, type1, lhs, type2,rhs) do{\
+    type1 _lhs = lhs; \
+    type2 _rhs = rhs; \
     TEST_stats.executed++;\
     if (!func(_lhs, _rhs)){ \
         TEST_stats.failures++; \
