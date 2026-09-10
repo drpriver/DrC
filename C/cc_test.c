@@ -4465,6 +4465,25 @@ TestFunction(test_parse_decls){
                 {SVI("y"), SVI("int"), SVI("0")},
             },
         },
+        {
+            "__builtin_types_compatible_p", __LINE__,
+            SVI(
+                "#define eq(a, b) _Static_assert(__builtin_types_compatible_p(a, b))\n"
+                "#define ne(a, b) _Static_assert(!__builtin_types_compatible_p(a, b))\n"
+                "eq(int, int);\n"
+                "eq(const int, int);\n"
+                "eq(int, const int);\n"
+                "ne(float, int);\n"
+                "ne(float[], int[]);\n"
+                "eq(int[3], int[]);\n"
+                "eq(const int[3], int[]);\n"
+                "ne(int*, int**);\n"
+                "ne(long, long long);\n"
+                "ne(char, signed char);\n"
+                "ne(char, unsigned char);\n"
+                "ne(signed char, unsigned char);\n"
+            ),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

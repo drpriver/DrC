@@ -2317,6 +2317,38 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_types_compatible_p:{
+                    err = cc_expect_punct(p, CC_lparen);
+                    if(err) return err;
+                    CcQualType type1, type2;
+                    err = cc_parse_type_name(p, &type1, NULL);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_comma);
+                    if(err) return err;
+                    err = cc_parse_type_name(p, &type2, NULL);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                    type1 = (CcQualType){.unqual=type1.unqual};
+                    type2 = (CcQualType){.unqual=type2.unqual};
+                    _Bool is_same = type1.bits == type2.bits;
+                    if(!is_same && ccqt_kind(type1) == CC_ARRAY && ccqt_kind(type2) == CC_ARRAY){
+                        CcArray* a = ccqt_as_array(type1);
+                        CcArray* b = ccqt_as_array(type2);
+                        if(!a->is_vector && !b->is_vector && a->element.unqual == b->element.unqual){
+                            if(a->is_incomplete || b->is_incomplete || a->length == b->length){
+                                is_same = 1;
+                            }
+                        }
+                    }
+                    // TODO: function types
+
+                    CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
+                    if(!node) return CC_OOM_ERROR;
+                    node->integer = is_same;
+                    *out = node;
+                    return 0;
+                }
                 case CC__func__:{
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
@@ -11706,6 +11738,7 @@ cc_define_builtin_types(CcParser* p){
         static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
             {SVI("__builtin_constant_p"), CC__builtin_constant_p},
             {SVI("__builtin_offsetof"), CC__builtin_offsetof},
+            {SVI("__builtin_types_compatible_p"), CC__builtin_types_compatible_p},
             {SVI("__func__"), CC__func__},
             {SVI("__FUNCTION__"), CC__func__},
             {SVI("__atomic_fetch_add"), CC__atomic_fetch_add},
