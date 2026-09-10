@@ -11671,15 +11671,35 @@ cc_define_builtin_types(CcParser* p){
         err = cc_scope_insert_typedef(al, &p->global, module_typedef, p->builtin_module);
         if(err) return CC_OOM_ERROR;
     }
-
-    // typedef __int128 __int128_t; typedef unsigned __int128 __uint128_t;
-    Atom int128_name = AT_atomize(p->cpp.at, "__int128_t", 10);
-    Atom uint128_name = AT_atomize(p->cpp.at, "__uint128_t", 11);
-    if(!int128_name || !uint128_name) return CC_OOM_ERROR;
-    err = cc_scope_insert_typedef(al, &p->global, int128_name, ccqt_basic(CCBT_int128));
-    if(err) return CC_OOM_ERROR;
-    err = cc_scope_insert_typedef(al, &p->global, uint128_name, ccqt_basic(CCBT_unsigned_int128));
-    if(err) return CC_OOM_ERROR;
+    {
+        // integer typedefs
+        const struct {
+            StringView name;
+            CcBasicTypeKind kind;
+        } to_register[] = {
+            { SVI("__int128_t"), CCBT_int128, },
+            { SVI("__uint128_t"), CCBT_unsigned_int128, },
+            { SVI("int128_t"), CCBT_int128},
+            { SVI("uint128_t"), CCBT_unsigned_int128},
+            { SVI("int64_t"), t.int64_type},
+            { SVI("uint64_t"), ccbt_to_unsigned(t.int64_type)},
+            { SVI("intptr_t"), t.intptr_type},
+            { SVI("uintptr_t"), ccbt_to_unsigned(t.intptr_type)},
+            { SVI("size_t"), t.size_type},
+            { SVI("uint32_t"), CCBT_unsigned},
+            { SVI("int32_t"), CCBT_int},
+            { SVI("uint16_t"), CCBT_unsigned_short},
+            { SVI("int16_t"), CCBT_short},
+            { SVI("uint8"), CCBT_unsigned_char},
+            { SVI("int8_t"), CCBT_signed_char},
+        };
+        for(size_t i = 0; i < sizeof to_register / sizeof to_register[0]; i++){
+            Atom name = AT_atomize(p->cpp.at, to_register[i].name.text, to_register[i].name.length);
+            if(!name) return CC_OOM_ERROR;
+            err = cc_scope_insert_typedef(al, &p->global, name, ccqt_basic(to_register[i].kind));
+            if(err) return CC_OOM_ERROR;
+        }
+    }
 
     // Register builtin functions
     {
