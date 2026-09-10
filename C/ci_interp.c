@@ -210,7 +210,15 @@ ci_write_uint(void* buf, uint32_t sz, uint64_t val){
         case 2: CI_INLINE_MEMCPY(buf, &val, 2); return;
         case 4: CI_INLINE_MEMCPY(buf, &val, 4); return;
         case 8: CI_INLINE_MEMCPY(buf, &val, 8); return;
-        default: memcpy(buf, &val, sz); return;
+        default:
+            if(sz > 8){
+                CI_INLINE_MEMCPY(buf, &val, 8);
+                memset((char*)buf+8, 0, sz-8);
+            }
+            else {
+                memcpy(buf, &val, sz);
+            }
+            return;
     }
 }
 

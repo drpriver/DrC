@@ -25,7 +25,6 @@
 #include "cc_target.h"
 #include "cc_errors.h"
 #include "ci_interp.h"
-#include <fenv.h>
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -10183,14 +10182,16 @@ int main(int argc, char** argv){
 #include "cc_parser.c"
 #include "native_call.c"
 
+#include <fenv.h>
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-// TODO: this tests the lowering internals, so it needs the internal stuff.
-// Normally I eschew that kind of thing, but these are pure math so it's nice
-// to have something that shows it works correctly.
 TestFunction(test_float_folding){
     TESTBEGIN();
+    #if defined __DRC__ && defined __GLIBC__
+    // fenv functions have inline gnu asm with glibc
+    #else
     CiInterpreter ci = {.parser.cpp.target = cc_target_funcs[CC_TARGET_TEST]()};
     CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed};
     static const struct {
@@ -10349,6 +10350,7 @@ TestFunction(test_float_folding){
     }
     if(fesetenv(&saved) != 0)
         EndTest("fesetenv failed");
+    #endif
     TESTEND();
 }
 #ifdef __clang__
