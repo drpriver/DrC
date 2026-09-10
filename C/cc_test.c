@@ -4484,6 +4484,19 @@ TestFunction(test_parse_decls){
                 "ne(signed char, unsigned char);\n"
             ),
         },
+        {
+            "__builtin_choose_expr", __LINE__,
+            SVI(
+            "int x = __builtin_choose_expr(1, 1, (void)0);\n"
+            "int y = __builtin_choose_expr(0, __builtin_unreachable(), 0);\n"
+            "int z = __builtin_choose_expr(1-1, aeiou(), 2);\n"
+            ),
+            .vars = {
+                { SVI("x"), SVI("int"), SVI("1") },
+                { SVI("y"), SVI("int"), SVI("0") },
+                { SVI("z"), SVI("int"), SVI("2") },
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

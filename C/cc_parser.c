@@ -30,6 +30,7 @@ static int cc_parse_primary(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnu
 static int cc_parse_postfix(CcParser* p, CcValueClass, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_lambda(CcParser* p, CcValueClass, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_lambda_body(CcParser* p, CcValueClass, SrcLoc loc, CcQualType type, Marray(Atom)* param_names, CcExpr* _Nullable* _Nonnull out);
+static int cc_skip_to_next_comma_or_paren(CcParser* p, const char* context);
 static int cc_parse_Generic(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
@@ -2349,6 +2350,39 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
+                case CC__builtin_choose_expr:{
+                    err = cc_expect_punct(p, CC_lparen);
+                    if(err) return err;
+                    CcExpr* cond;
+                    err = cc_parse_assignment_expr(p, CC_CONSTEXPR_VALUE, &cond, CCQT_NONE);
+                    if(err) return err;
+                    _Bool b;
+                    err = cc_eval_truthy(p, cond, &b);
+                    if(err) return err;
+                    err = cc_expect_punct(p, CC_comma);
+                    if(err) return err;
+                    CcExpr* result;
+                    if(b){
+                        err = cc_parse_assignment_expr(p, vc, &result, CCQT_NONE);
+                        if(err) return err;
+                        err = cc_expect_punct(p, CC_comma);
+                        if(err) return err;
+                        err = cc_skip_to_next_comma_or_paren(p, "__builtin_choose_expr");
+                        if(err) return err;
+                    }
+                    else {
+                        err = cc_skip_to_next_comma_or_paren(p, "__builtin_choose_expr");
+                        if(err) return err;
+                        err = cc_expect_punct(p, CC_comma);
+                        if(err) return err;
+                        err = cc_parse_assignment_expr(p, vc, &result, CCQT_NONE);
+                        if(err) return err;
+                    }
+                    err = cc_expect_punct(p, CC_rparen);
+                    if(err) return err;
+                    *out = result;
+                    return 0;
+                }
                 case CC__func__:{
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
@@ -3661,6 +3695,82 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
     }
     return cc_error(p, tok.loc, "Unexpected token in expression");
 }
+
+static 
+int 
+cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
+    int err;
+    int depth = 0;
+    CcToken tok;
+    for(;;){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF)
+            return cc_error(p, tok.loc, "unterminated %s", context);
+        if(tok.type != CC_PUNCTUATOR) continue;
+        switch(tok.punct.punct){
+            case '(': case '[': case '{': depth++; break;
+            case ')': case ']': case '}':
+                if(depth == 0){
+                    err = cc_unget(p, &tok);
+                    if(err) return err;
+                    goto done_skip;
+                }
+                depth--;
+                break;
+            case ',':
+                if(depth == 0){
+                    err = cc_unget(p, &tok);
+                    if(err) return err;
+                    goto done_skip;
+                }
+                break;
+            case CC_amp:
+            case CC_amp_assign:
+            case CC_and:
+            case CC_arrow:
+            case CC_assign:
+            case CC_bang:
+            case CC_colon:
+            case CC_dot:
+            case CC_double_colon:
+            case CC_ellipsis:
+            case CC_eq:
+            case CC_ge:
+            case CC_gt:
+            case CC_le:
+            case CC_lshift:
+            case CC_lshift_assign:
+            case CC_lt:
+            case CC_minus:
+            case CC_minus_assign:
+            case CC_minusminus:
+            case CC_ne:
+            case CC_or:
+            case CC_percent:
+            case CC_percent_assign:
+            case CC_pipe:
+            case CC_pipe_assign:
+            case CC_plus:
+            case CC_plus_assign:
+            case CC_plusplus:
+            case CC_question:
+            case CC_rshift:
+            case CC_rshift_assign:
+            case CC_semi:
+            case CC_slash:
+            case CC_slash_assign:
+            case CC_star:
+            case CC_star_assign:
+            case CC_tilde:
+            case CC_xor:
+            case CC_xor_assign:
+            break;
+        }
+    }
+    done_skip:;
+    return 0;
+}
 static
 int
 cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
@@ -3742,74 +3852,8 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
             if(err) return err;
         }
         else {
-            int depth = 0;
-            for(;;){
-                err = cc_next_token(p, &tok);
-                if(err) return err;
-                if(tok.type == CC_EOF)
-                    return cc_error(p, tok.loc, "unterminated _Generic");
-                if(tok.type != CC_PUNCTUATOR) continue;
-                switch(tok.punct.punct){
-                    case '(': case '[': case '{': depth++; break;
-                    case ')': case ']': case '}':
-                        if(depth == 0){
-                            err = cc_unget(p, &tok);
-                            if(err) return err;
-                            goto done_skip;
-                        }
-                        depth--;
-                        break;
-                    case ',':
-                        if(depth == 0){
-                            err = cc_unget(p, &tok);
-                            if(err) return err;
-                            goto done_skip;
-                        }
-                        break;
-                    case CC_amp:
-                    case CC_amp_assign:
-                    case CC_and:
-                    case CC_arrow:
-                    case CC_assign:
-                    case CC_bang:
-                    case CC_colon:
-                    case CC_dot:
-                    case CC_double_colon:
-                    case CC_ellipsis:
-                    case CC_eq:
-                    case CC_ge:
-                    case CC_gt:
-                    case CC_le:
-                    case CC_lshift:
-                    case CC_lshift_assign:
-                    case CC_lt:
-                    case CC_minus:
-                    case CC_minus_assign:
-                    case CC_minusminus:
-                    case CC_ne:
-                    case CC_or:
-                    case CC_percent:
-                    case CC_percent_assign:
-                    case CC_pipe:
-                    case CC_pipe_assign:
-                    case CC_plus:
-                    case CC_plus_assign:
-                    case CC_plusplus:
-                    case CC_question:
-                    case CC_rshift:
-                    case CC_rshift_assign:
-                    case CC_semi:
-                    case CC_slash:
-                    case CC_slash_assign:
-                    case CC_star:
-                    case CC_star_assign:
-                    case CC_tilde:
-                    case CC_xor:
-                    case CC_xor_assign:
-                    break;
-                }
-            }
-            done_skip:;
+            err = cc_skip_to_next_comma_or_paren(p, "_Generic");
+            if(err) return err;
         }
         err = cc_next_token(p, &tok);
         if(err) return err;
@@ -11739,6 +11783,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_constant_p"), CC__builtin_constant_p},
             {SVI("__builtin_offsetof"), CC__builtin_offsetof},
             {SVI("__builtin_types_compatible_p"), CC__builtin_types_compatible_p},
+            {SVI("__builtin_choose_expr"), CC__builtin_choose_expr},
             {SVI("__func__"), CC__func__},
             {SVI("__FUNCTION__"), CC__func__},
             {SVI("__atomic_fetch_add"), CC__atomic_fetch_add},

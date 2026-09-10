@@ -74,6 +74,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_constant_p,
     CC__builtin_offsetof,
     CC__builtin_types_compatible_p,
+    CC__builtin_choose_expr,
     CC__func__,
     CC__atomic_fetch_add, // (ptr, val, memorder)
     CC__atomic_fetch_sub, // (ptr, val, memorder)
