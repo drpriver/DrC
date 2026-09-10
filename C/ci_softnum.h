@@ -39,7 +39,8 @@ static inline void ci_uint128_write(void* buf, uint32_t sz, CiUint128 v){
     memcpy(buf, &v, sz <= 16 ? sz : 16);
 }
 #else
-typedef struct { _Alignas(16) uint64_t lo, hi; } CiUint128;
+typedef struct { _Alignas(16) uint64_t lo; uint64_t hi; } CiUint128;
+_Static_assert(sizeof(CiUint128) == 16, "CiUint128 must match the VM integer representation");
 static inline CiUint128 ci_uint128_from_uint64(uint64_t v){
     return (CiUint128){.lo = v, .hi = 0};
 }
@@ -271,7 +272,7 @@ union CiIEE754Float16 {
     #endif
     uint16_t u;
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint32_t sign: 1,
                  exponent: 5,
                  fraction: 10;
@@ -282,7 +283,7 @@ union CiIEE754Float16 {
         #endif
     };
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint32_t _sign: 1,
                  magnitude: 15;
         #else // Little-Endian
@@ -301,7 +302,7 @@ union CiIEE754Float32 {
     #endif
     uint32_t u;
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint32_t sign: 1,
                  exponent: 8,
                  fraction: 23;
@@ -312,7 +313,7 @@ union CiIEE754Float32 {
         #endif
     };
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint32_t _sign: 1,
                  magnitude: 31;
         #else // Little-Endian
@@ -330,7 +331,7 @@ union CiIEE754Float64 {
     #endif
     uint64_t u;
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint64_t sign: 1,
                  exponent: 11,
                  fraction: 52;
@@ -341,7 +342,7 @@ union CiIEE754Float64 {
         #endif
     };
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         uint64_t _sign: 1,
                  magnitude: 63;
         #else // Little-Endian
@@ -359,7 +360,7 @@ union CiIEE754Float128 {
     CiUint128 u;
     #if defined __SIZEOF_INT128__ && !defined __DRC__ // 128-bit bitfields unsupported
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         CiUint128 sign: 1,
                  exponent: 15,
                  fraction: 112;
@@ -370,7 +371,7 @@ union CiIEE754Float128 {
         #endif
     };
     struct {
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        #if defined __BYTE_ORDER__ && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         CiUint128 _sign: 1,
                  magnitude: 127;
         #else // Little-Endian

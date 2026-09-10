@@ -428,51 +428,29 @@ register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
 // * `TestExpectSuccess`
 // * `TestExpectFailure`
 //
-// Beware:
+// Note:
 // -------
-// With clang and gcc, we can use typeof or __auto_type to turn the lhs and rhs
-// of these conditions into local variables so that we don't have to worry
-// about multiple evaluation of the arguments.
-//
-// However, other compilers (MSVC in C mode) don't support that, so we are
-// faced between the choice of requiring the user to pass in the type as one of
-// the macro args (which is error prone) or allow double evaluation. I have
-// chosen to allow double evaluation with MSVC. Tests with side effects is
-// a bad idea anyway.
+// These macros are carefully design to evaluate their arguments only
+// once.
 
-  // TestExpect
-  // ----------------
-  // Expects lhs op rhs, using the op operator
-  //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestExpect(lhs, op, rhs) do {\
-          __auto_type _lhs = lhs; \
-          typeof(lhs) _rhs = rhs; \
-          TEST_stats.executed++;\
-          if (!(_lhs op _rhs)) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s %s %s", #lhs, #op, #rhs); \
-              TestPrintValue(#lhs, _lhs);\
-              TestPrintValue(#rhs, _rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#else
-  #define TestExpect(lhs, op, rhs) do {\
-          TEST_stats.executed++;\
-          if (!((lhs) op (rhs))) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s %s %s", #lhs, #op, #rhs); \
-              TestPrintValue(#lhs, lhs);\
-              TestPrintValue(#rhs, rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#endif
+// TestExpect
+// ----------------
+// Expects lhs op rhs, using the op operator
+//
+#define TestExpect(lhs, op, rhs) do {\
+      __typeof__(lhs) _lhs = lhs; \
+      __typeof__(lhs) _rhs = rhs; \
+      TEST_stats.executed++;\
+      if (!(_lhs op _rhs)) {\
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s %s %s", #lhs, #op, #rhs); \
+          TestPrintValue(#lhs, _lhs);\
+          TestPrintValue(#rhs, _rhs);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+      }\
+  }while(0)
 
 static
 _Bool
@@ -494,257 +472,198 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
     return 1;
 }
 #define TestExpectEqualsSv(lhs, rhs) test_expect_equals_sv(lhs, rhs, #lhs, #rhs, &TEST_stats, __FILE__, __func__, __LINE__)
-  //
-  // TestExpectEquals
-  // ----------------
-  // Expects lhs == rhs, using the == operator
-  //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestExpectEquals(lhs, rhs) do {\
-          __auto_type _lhs = lhs; \
-          typeof(lhs) _rhs = rhs; \
-          TEST_stats.executed++;\
-          if (!(_lhs == _rhs)) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s == %s", #lhs, #rhs); \
-              TestPrintValue(#lhs, _lhs);\
-              TestPrintValue(#rhs, _rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#else
-  #define TestExpectEquals(lhs, rhs) do {\
-          TEST_stats.executed++;\
-          if (!((lhs) == (rhs))) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s == %s", #lhs, #rhs); \
-              TestPrintValue(#lhs, lhs);\
-              TestPrintValue(#rhs, rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#endif
-  //
-  // TestExpectEquals2
-  // -----------------
-  // Expects lhs == rhs, using the passed in binary function instead of == operator
-  //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestExpectEquals2(func, lhs, rhs) do {\
-          __auto_type _lhs = lhs; \
-          __auto_type _rhs = rhs; \
-          TEST_stats.executed++;\
-          if (!(func(_lhs, _rhs))) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("!%s(%s, %s)", #func, #lhs, #rhs); \
-              TestPrintValue(#lhs, _lhs);\
-              TestPrintValue(#rhs, _rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      } while(0)
-#else
-  #define TestExpectEquals2(func, lhs, rhs) do {\
-          TEST_stats.executed++;\
-          if (!(func(lhs, rhs))) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("!%s(%s, %s)", #func, #lhs, #rhs); \
-              TestPrintValue(#lhs, lhs);\
-              TestPrintValue(#rhs, rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      } while(0)
-#endif
-
-  //
-  // TestExpectNotEquals
-  // -------------------
-  // Expects lhs != rhs, using the != operator
-  //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestExpectNotEquals(lhs, rhs) do {\
-          __auto_type _lhs = lhs; \
-          typeof(lhs) _rhs = rhs; \
-          TEST_stats.executed++;\
-          if (!(_lhs != _rhs)) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s != %s", #lhs, #rhs); \
-              TestPrintValue(#lhs, _lhs);\
-              TestPrintValue(#rhs, _rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#else
-  #define TestExpectNotEquals(lhs, rhs) do {\
-          TEST_stats.executed++;\
-          if (!((lhs) != (rhs))) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s != %s", #lhs, #rhs); \
-              TestPrintValue(#lhs, lhs);\
-              TestPrintValue(#rhs, rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-#endif
-
-  //
-  // TestExpectNotEqual2
-  // -------------------
-  // Checks for func(lhs, rhs) == 0
-  //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestExpectNotEqual2(func, lhs, rhs) do{\
-          __auto_type _lhs = lhs; \
-          __auto_type _rhs = rhs; \
-          TEST_stats.executed++;\
-          if (func(_lhs, _rhs)) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s(%s, %s)", #func, #lhs, #rhs); \
-              TestPrintValue(#lhs, _lhs);\
-              TestPrintValue(#rhs, _rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-              }\
-          }while(0)
-#else
-  #define TestExpectNotEqual2(func, lhs, rhs) do{\
-          TEST_stats.executed++;\
-          if (func(lhs, rhs)) {\
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s(%s, %s)", #func, #lhs, #rhs); \
-              TestPrintValue(#lhs, lhs);\
-              TestPrintValue(#rhs, rhs);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-              }\
-          }while(0)
-#endif
-
-  //
-  // TestExpectTrue
-  // --------------
-  // Expects the condition is truthy (for the usual C definition of truth).
-  //
-  #define TestExpectTrue(cond) do {\
-          TEST_stats.executed++;\
-          _Bool cond_ = !!(cond); \
-          if (! (cond_)){ \
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s", #cond);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-
-  //
-  // TestExpectFalse
-  // ---------------
-  // Expects the condition is falsey (for the usual C definition of truth).
-  //
-  #define TestExpectFalse(cond) do{\
-          _Bool cond_ = !!(cond); \
-          TEST_stats.executed++;\
-          if (cond_){ \
-              TEST_stats.failures++; \
-              TestReport("Test condition failed (expected falsey)");\
-              TestPrintValue(#cond, cond);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-
-  //
-  // TestExpectSuccess
-  // -----------------
-  // For an errorable (struct with .errored field), expects .errored is 0
-  //
-  #define TestExpectSuccess(cond) do{\
-          TEST_stats.executed++;\
-          if ((cond).errored){ \
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s = %d", #cond, (cond).errored);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-          }\
-      }while(0)
-
-  //
-  // TestExpectFailure
-  // -----------------
-  // For an errorable (struct with .errored field), expects .errored is not 0
-  //
-  #define TestExpectFailure(cond) do{\
-          TEST_stats.executed++;\
-          if (!(cond).errored){ \
-              TEST_stats.failures++; \
-              TestReport("Test condition failed");\
-              TestReport("%s = %d", #cond, (cond).errored);\
-              if(_test_do_debugbreak_on_fail) \
-                  TestDebugBreak(); \
-              }\
-          }while(0)
-
-  //
-  // TestArrayContains
-  // -----------------
-  // Check that a value is in an array, using `==`.
-  //
-  #define TestArrayContains(type, begin, end, item) do {\
-      _Bool found = 0; \
-      type item_ = item; \
-      for(type* it = begin; it != end; it++){ \
-          if(*it == item_){ \
-              found = 1; \
-              break; \
-          } \
-      } \
-      TEST_stats.executed++; \
-      if(!found){ \
+//
+// TestExpectEquals
+// ----------------
+// Expects lhs == rhs, using the == operator
+//
+#define TestExpectEquals(lhs, rhs) do {\
+      __typeof__(lhs) _lhs = lhs; \
+      __typeof__(lhs) _rhs = rhs; \
+      TEST_stats.executed++;\
+      if (!(_lhs == _rhs)) {\
           TEST_stats.failures++; \
-          TestReport("Test condition failed"); \
-          TestReport("%s not in [%s, %s)\n", #item, #begin, #end); \
+          TestReport("Test condition failed");\
+          TestReport("%s == %s", #lhs, #rhs); \
+          TestPrintValue(#lhs, _lhs);\
+          TestPrintValue(#rhs, _rhs);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
-      } \
+      }\
   }while(0)
-  //
-  // TestArrayContains2
-  // -----------------
-  // Check that a value is in an array, using provided func
-  //
-  #define TestArrayContains2(func, type, begin, end, item) do {\
-      _Bool found = 0; \
-      type item_ = item; \
-      for(type* it = begin; it != end; it++){ \
-          if(func(*it, item_)){ \
-              found = 1; \
-              break; \
-          } \
-      } \
-      TEST_stats.executed++; \
-      if(!found){ \
+//
+// TestExpectEquals2
+// -----------------
+// Expects lhs == rhs, using the passed in binary function instead of == operator
+//
+#define TestExpectEquals2(func, lhs, rhs) do {\
+      __typeof__(lhs) _lhs = lhs; \
+      __typeof__(rhs) _rhs = rhs; \
+      TEST_stats.executed++;\
+      if (!(func(_lhs, _rhs))) {\
           TEST_stats.failures++; \
-          TestReport("Test condition failed"); \
-          TestReport("%s not in [%s, %s)\n", #item, #begin, #end); \
+          TestReport("Test condition failed");\
+          TestReport("!%s(%s, %s)", #func, #lhs, #rhs); \
+          TestPrintValue(#lhs, _lhs);\
+          TestPrintValue(#rhs, _rhs);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
-      } \
+      }\
+  } while(0)
+
+//
+// TestExpectNotEquals
+// -------------------
+// Expects lhs != rhs, using the != operator
+//
+#define TestExpectNotEquals(lhs, rhs) do {\
+      __typeof__(lhs) _lhs = lhs; \
+      __typeof__(lhs) _rhs = rhs; \
+      TEST_stats.executed++;\
+      if (!(_lhs != _rhs)) {\
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s != %s", #lhs, #rhs); \
+          TestPrintValue(#lhs, _lhs);\
+          TestPrintValue(#rhs, _rhs);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+      }\
   }while(0)
+
+//
+// TestExpectNotEqual2
+// -------------------
+// Checks for func(lhs, rhs) == 0
+//
+#define TestExpectNotEqual2(func, lhs, rhs) do{\
+      __typeof__(lhs) _lhs = lhs; \
+      __typeof__(rhs) _rhs = rhs; \
+      TEST_stats.executed++;\
+      if (func(_lhs, _rhs)) {\
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s(%s, %s)", #func, #lhs, #rhs); \
+          TestPrintValue(#lhs, _lhs);\
+          TestPrintValue(#rhs, _rhs);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+          }\
+      }while(0)
+
+//
+// TestExpectTrue
+// --------------
+// Expects the condition is truthy (for the usual C definition of truth).
+//
+#define TestExpectTrue(cond) do {\
+      TEST_stats.executed++;\
+      _Bool cond_ = !!(cond); \
+      if (! (cond_)){ \
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s", #cond);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+      }\
+  }while(0)
+
+//
+// TestExpectFalse
+// ---------------
+// Expects the condition is falsey (for the usual C definition of truth).
+//
+#define TestExpectFalse(cond) do{\
+      _Bool cond_ = !!(cond); \
+      TEST_stats.executed++;\
+      if (cond_){ \
+          TEST_stats.failures++; \
+          TestReport("Test condition failed (expected falsey)");\
+          TestPrintValue(#cond, cond);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+      }\
+  }while(0)
+
+//
+// TestExpectSuccess
+// -----------------
+// For an errorable (struct with .errored field), expects .errored is 0
+//
+#define TestExpectSuccess(cond) do{\
+      TEST_stats.executed++;\
+      if ((cond).errored){ \
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s = %d", #cond, (cond).errored);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+      }\
+  }while(0)
+
+//
+// TestExpectFailure
+// -----------------
+// For an errorable (struct with .errored field), expects .errored is not 0
+//
+#define TestExpectFailure(cond) do{\
+      TEST_stats.executed++;\
+      if (!(cond).errored){ \
+          TEST_stats.failures++; \
+          TestReport("Test condition failed");\
+          TestReport("%s = %d", #cond, (cond).errored);\
+          if(_test_do_debugbreak_on_fail) \
+              TestDebugBreak(); \
+          }\
+      }while(0)
+
+//
+// TestArrayContains
+// -----------------
+// Check that a value is in an array, using `==`.
+//
+#define TestArrayContains(type, begin, end, item) do {\
+  _Bool found = 0; \
+  type item_ = item; \
+  for(type* it = begin; it != end; it++){ \
+      if(*it == item_){ \
+          found = 1; \
+          break; \
+      } \
+  } \
+  TEST_stats.executed++; \
+  if(!found){ \
+      TEST_stats.failures++; \
+      TestReport("Test condition failed"); \
+      TestReport("%s not in [%s, %s)\n", #item, #begin, #end); \
+      if(_test_do_debugbreak_on_fail) \
+          TestDebugBreak(); \
+  } \
+}while(0)
+
+//
+// TestArrayContains2
+// -----------------
+// Check that a value is in an array, using provided func
+//
+#define TestArrayContains2(func, type, begin, end, item) do {\
+  _Bool found = 0; \
+  type item_ = item; \
+  for(type* it = begin; it != end; it++){ \
+      if(func(*it, item_)){ \
+          found = 1; \
+          break; \
+      } \
+  } \
+  TEST_stats.executed++; \
+  if(!found){ \
+      TEST_stats.failures++; \
+      TestReport("Test condition failed"); \
+      TestReport("%s not in [%s, %s)\n", #item, #begin, #end); \
+      if(_test_do_debugbreak_on_fail) \
+          TestDebugBreak(); \
+  } \
+}while(0)
 
 // TestAsserts
 // -----------
@@ -806,121 +725,68 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // ----------------
 // Asserts lhs is equal to rhs, using ==
 //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestAssertEquals(lhs, rhs) do{\
-        __auto_type _lhs = lhs; \
-        typeof(lhs) _rhs = rhs; \
-        TEST_stats.executed++;\
-        if (! (_lhs==_rhs)){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s == %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, _lhs);\
-            TestPrintValue(#rhs, _rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#else
-  #define TestAssertEquals(lhs, rhs) do{\
-        TEST_stats.executed++;\
-        if (! ((lhs)==(rhs))){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s == %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, lhs);\
-            TestPrintValue(#rhs, rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#endif
+#define TestAssertEquals(lhs, rhs) do{\
+    __typeof__(lhs) _lhs = lhs; \
+    __typeof__(lhs) _rhs = rhs; \
+    TEST_stats.executed++;\
+    if (! (_lhs==_rhs)){ \
+        TEST_stats.failures++; \
+        TEST_stats.assert_failures++; \
+        TestReport("Test condition failed");\
+        TestReport("%s prematurely ended", __func__);\
+        TestReport("%s == %s", #lhs, #rhs); \
+        TestPrintValue(#lhs, _lhs);\
+        TestPrintValue(#rhs, _rhs); \
+        if(_test_do_debugbreak_on_fail) \
+            TestDebugBreak(); \
+        return TEST_stats;\
+    }\
+}while(0)
+
 //
 // TestAssertNotEqual
 // ----------------
 // Asserts lhs is equal to rhs, using ==
 //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestAssertNotEqual(lhs, rhs) do{\
-        __auto_type _lhs = lhs; \
-        typeof(lhs) _rhs = rhs; \
-        TEST_stats.executed++;\
-        if (! (_lhs!=_rhs)){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s != %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, _lhs);\
-            TestPrintValue(#rhs, _rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#else
-  #define TestAssertNotEqual(lhs, rhs) do{\
-        TEST_stats.executed++;\
-        if (! ((lhs)!=(rhs))){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s != %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, lhs);\
-            TestPrintValue(#rhs, rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#endif
+#define TestAssertNotEqual(lhs, rhs) do{\
+    __typeof__(lhs) _lhs = lhs; \
+    __typeof__(lhs) _rhs = rhs; \
+    TEST_stats.executed++;\
+    if (! (_lhs!=_rhs)){ \
+        TEST_stats.failures++; \
+        TEST_stats.assert_failures++; \
+        TestReport("Test condition failed");\
+        TestReport("%s prematurely ended", __func__);\
+        TestReport("%s != %s", #lhs, #rhs); \
+        TestPrintValue(#lhs, _lhs);\
+        TestPrintValue(#rhs, _rhs); \
+        if(_test_do_debugbreak_on_fail) \
+            TestDebugBreak(); \
+        return TEST_stats;\
+    }\
+}while(0)
 //
 // TestAssertEquals2
 // ----------------
 // Asserts lhs is equal to rhs, using ==
 //
-#if !defined(__IMPORTC__) && (defined(__GNUC__) || defined(__clang__))
-  #define TestAssertEquals2(func, lhs, rhs) do{\
-        __auto_type _lhs = lhs; \
-        typeof(lhs) _rhs = rhs; \
-        TEST_stats.executed++;\
-        if (!func(_lhs, _rhs)){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s == %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, _lhs);\
-            TestPrintValue(#rhs, _rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#else
-  #define TestAssertEquals2(func, lhs, rhs) do{\
-        TEST_stats.executed++;\
-        if (!func(lhs, rhs)){ \
-            TEST_stats.failures++; \
-            TEST_stats.assert_failures++; \
-            TestReport("Test condition failed");\
-            TestReport("%s prematurely ended", __func__);\
-            TestReport("%s == %s", #lhs, #rhs); \
-            TestPrintValue(#lhs, lhs);\
-            TestPrintValue(#rhs, rhs); \
-            if(_test_do_debugbreak_on_fail) \
-                TestDebugBreak(); \
-            return TEST_stats;\
-        }\
-    }while(0)
-#endif
+#define TestAssertEquals2(func, lhs, rhs) do{\
+    __typeof__(lhs) _lhs = lhs; \
+    __typeof__(lhs) _rhs = rhs; \
+    TEST_stats.executed++;\
+    if (!func(_lhs, _rhs)){ \
+        TEST_stats.failures++; \
+        TEST_stats.assert_failures++; \
+        TestReport("Test condition failed");\
+        TestReport("%s prematurely ended", __func__);\
+        TestReport("%s == %s", #lhs, #rhs); \
+        TestPrintValue(#lhs, _lhs);\
+        TestPrintValue(#rhs, _rhs); \
+        if(_test_do_debugbreak_on_fail) \
+            TestDebugBreak(); \
+        return TEST_stats;\
+    }\
+}while(0)
 
 //
 // TestAssertSuccess
@@ -1198,6 +1064,7 @@ test_thread_worker(void*_Nonnull thread_arg){
         jd->result.failures += func_result.failures;
         jd->result.executed += func_result.executed;
         jd->result.assert_failures += func_result.assert_failures;
+        jd->result.skips += func_result.skipped;
         if(func_result.assert_failures || func_result.failures)
             jd->result.failed_tests[jd->result.n_failed_tests++] = i;
     }
@@ -1215,6 +1082,7 @@ test_thread_worker(void*_Nonnull thread_arg){
         jd->result.failures += func_result.failures;
         jd->result.executed += func_result.executed;
         jd->result.assert_failures += func_result.assert_failures;
+        jd->result.skips += func_result.skipped;
         if(func_result.assert_failures || func_result.failures)
             jd->result.failed_tests[jd->result.n_failed_tests++] = idx;
     }

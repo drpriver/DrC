@@ -126,6 +126,17 @@ static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target)
 static int ci_lower_resolve_gotos(CiInterpreter*, CiLowerCtx*);
 static int ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b);
 
+typedef struct CiFoldValue CiFoldValue;
+struct CiFoldValue {
+    uint32_t sz;
+    CcQualType type;
+    uint64_t bits[2];
+};
+enum {FOLD_FAIL=-1};
+// return 0 on success, positive error code on real error, FOLD_FAIL on fold fail
+static int ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded);
+static uint64_t ci_fold_offset(CiLowerCtx* ctx, const CiFoldValue* index, uint32_t elem_sz);
+static int ci_fold_condition(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* truth);
 
 static
 int
@@ -503,6 +514,32 @@ static
 int
 ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     int err;
+    {
+        CiFoldValue fold_val;
+        int fold_fail = ci_fold_expr(ci, ctx, e, &fold_val);
+        if(fold_fail > 0) return fold_fail;
+        if(fold_fail == 0){
+            err = ci_lower_dest(ctx, &dest, fold_val.sz);
+            if(err) return err;
+            out->slot = dest;
+            out->size = fold_val.sz;
+            out->canonical = ccqt_is_integer(fold_val.type) && !fold_val.bits[1] && fold_val.bits[0] <= 1;
+            CiOp* op;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .constant = {
+                    .kind = CI_OP_CONST,
+                    .bt_kind = (uint32_t)(ccqt_is_basic(fold_val.type)? fold_val.type.basic.kind : CCBT_void),
+                    .slot = dest,
+                    .immsize = fold_val.sz,
+                    .loc = e->loc,
+                },
+            };
+            memcpy(op->constant.immediate, fold_val.bits, sizeof fold_val.bits);
+            return 0;
+        }
+    }
     CcParser* p = &ci->parser;
     uint32_t size;
     err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
@@ -550,30 +587,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 };
                 return 0;
             }
-            if(size > 16){
-                return ci_unimplemented(ci, e->loc, "oversized values");
-            }
-            err = ci_lower_dest(ctx, &dest, size);
-            if(err) return err;
-            out->slot = dest;
-            CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .constant = {
-                    .kind = CI_OP_CONST,
-                    .bt_kind = (uint32_t)(ccqt_is_basic(e->type)? e->type.basic.kind : CCBT_void),
-                    .slot = dest,
-                    .immsize = size,
-                    .loc = e->loc,
-                }
-            };
-            memcpy(op->constant.immediate, &e->uinteger, sizeof e->uinteger);
-            uint64_t val = op->constant.immediate[0];
-            if(size < 8)
-                val &= ((uint64_t)1 << (size*8)) - 1;
-            out->canonical = val <= 1;
-            return 0;
+            return ci_unimplemented(ci, e->loc, "oversized or unsupported values");
         }
         case CC_EXPR_VARIABLE:{
             CcVariable* var = e->var;
@@ -1149,14 +1163,23 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                     }
                 };
             }
-            _Bool use_imm = !is_ptr && rhs->kind == CC_EXPR_VALUE
-                && (opkind == CI_OP_ALU32 || opkind == CI_OP_ALU64);
+            CiFoldValue fold;
+            _Bool use_imm = 0;
+            if(opkind == CI_OP_ALU32 || opkind == CI_OP_ALU64){
+                int fold_fail = ci_fold_expr(ci, ctx, rhs, &fold);
+                if(fold_fail > 0) return fold_fail;
+                use_imm = fold_fail == 0 && fold.sz == size;
+                if(use_imm && is_ptr){
+                    fold.bits[0] = ci_fold_offset(ctx, &fold, elem_sz);
+                    op_unsigned = 1;
+                }
+            }
             CiLowerVal r = {0};
             if(!use_imm){
                 err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
                 if(err) return err;
             }
-            if(is_ptr && elem_sz != 1){
+            if(is_ptr && !use_imm && elem_sz != 1){
                 uint32_t esz, scaled;
                 err = ci_alloc_slot(ctx, ctx->size_size, ctx->size_size, &esz);
                 if(err) return err;
@@ -1204,7 +1227,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                         .loc = e->loc,
                     }
                 };
-                memcpy(&op->alu_imm.immediate, &rhs->uinteger, sizeof op->alu_imm.immediate);
+                memcpy(&op->alu_imm.immediate, fold.bits, sizeof op->alu_imm.immediate);
             }
             else if(opkind == CI_OP_ALU8 || opkind == CI_OP_ALU16 || opkind == CI_OP_ALU32 || opkind == CI_OP_ALU64 || opkind == CI_OP_ALU128){
                 *op = (CiOp){
@@ -1368,6 +1391,32 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 out->slot = dest;
                 uint32_t temp = ctx->temp;
+                if(ctx->ptr_size == 4 || ctx->ptr_size == 8){
+                    CiFoldValue index;
+                    int fold_fail = ci_fold_expr(ci, ctx, ie, &index);
+                    if(fold_fail > 0) return fold_fail;
+                    if(fold_fail == 0){
+                        CiLowerVal ptr;
+                        err = ci_lower_expr(ci, ctx, pe, CI_NO_SLOT, &ptr);
+                        if(err) return err;
+                        CiOp* op;
+                        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                        if(err) return err;
+                        *op = (CiOp){
+                            .alu_imm = {
+                                .kind = ctx->ptr_size == 4 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64,
+                                .op = e->kind == CC_EXPR_ADD ? CI_ALU_ADD : CI_ALU_SUB,
+                                .is_unsigned = 1,
+                                .slot = dest,
+                                .src = ptr.slot,
+                                .immediate = ci_fold_offset(ctx, &index, elem_sz),
+                                .loc = e->loc,
+                            }
+                        };
+                        ctx->temp = temp;
+                        return 0;
+                    }
+                }
                 CiLowerVal l, r;
                 err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &l);
                 if(err) return err;
@@ -1450,7 +1499,13 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 CiLowerVal l, r;
                 err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &l);
                 if(err) return err;
-                if((size == 4 || size == 8) && rsz == size && rhs->kind == CC_EXPR_VALUE){
+                CiFoldValue fold;
+                int fold_fail = -1;
+                if((size == 4 || size == 8) && rsz == size){
+                    fold_fail = ci_fold_expr(ci, ctx, rhs, &fold);
+                    if(fold_fail > 0) return fold_fail;
+                }
+                if(fold_fail == 0){
                     CiOp* op;
                     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
                     if(err) return err;
@@ -1464,7 +1519,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                             .loc = e->loc,
                         }
                     };
-                    memcpy(&op->alu_imm.immediate, &rhs->uinteger, sizeof op->alu_imm.immediate);
+                    memcpy(&op->alu_imm.immediate, fold.bits, sizeof op->alu_imm.immediate);
                     ctx->temp = temp;
                     return 0;
                 }
@@ -1721,6 +1776,11 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return 0;
         }
         case CC_EXPR_TERNARY:{
+            _Bool truth;
+            int folded = ci_fold_condition(ci, ctx, e->lhs, &truth);
+            if(folded > 0) return folded;
+            if(folded == 0)
+                return ci_lower_expr(ci, ctx, e->values[truth ? 0 : 1], dest, out);
             // cond; if(!cond) goto else; dest = then; goto end; else: dest = else; end:
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
@@ -2833,8 +2893,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     if(lhs->type.is_atomic || rhs->type.is_atomic)
         return 0; // atomics fall back
     uint32_t frame_slot;
-    if(rhs->kind == CC_EXPR_VALUE
-        && (ccqt_is_integer(rhs->type) || ci_falu_type(rhs->type)
+    if((ccqt_is_integer(rhs->type) || ci_falu_type(rhs->type)
             || ccqt_kind(rhs->type) == CC_POINTER || ccqt_bt_eq(rhs->type, CCBT_nullptr_t))
         && !((lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width)
         && !ci_frame_lvalue(lhs, &frame_slot)){
@@ -2843,7 +2902,10 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
         if(err) return err;
         err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rhs_size);
         if(err) return err;
-        if(size == rhs_size && (size == 1 || size == 2 || size == 4 || size == 8)){
+        CiFoldValue fold;
+        int fold_fail = ci_fold_expr(ci, ctx, rhs, &fold);
+        if(fold_fail > 0) return fold_fail;
+        if(fold_fail == 0 && size == rhs_size && (size == 1 || size == 2 || size == 4 || size == 8)){
             uint32_t temp = ctx->temp;
             CiLowerAddr a;
             err = ci_lower_addr(ci, ctx, lhs, 0, &a);
@@ -2860,7 +2922,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
                     .loc = e->loc,
                 }
             };
-            memcpy(&op->store_imm.immediate, &rhs->uinteger, sizeof op->store_imm.immediate);
+            memcpy(&op->store_imm.immediate, fold.bits, sizeof op->store_imm.immediate);
             ctx->temp = temp;
             *handled = 1;
             return 0;
@@ -4296,6 +4358,11 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
         }
         case CC_EXPR_TERNARY:{
+            _Bool truth;
+            int folded = ci_fold_condition(ci, ctx, e->lhs, &truth);
+            if(folded > 0) return folded;
+            if(folded == 0)
+                return ci_lower_expr_discard(ci, ctx, e->values[truth ? 0 : 1]);
             uint32_t temp = ctx->temp;
             CiOp* op;
             uint32_t chain = 0;
@@ -4408,6 +4475,16 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, S
                 .loc = loc,
             }
         };
+        return 0;
+    }
+    if(size == 4 || size == 8){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.alu_imm = {
+            .kind = size == 4 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64,
+            .slot = dest, .src = a.slot, .immediate = a.disp,
+            .op = CI_ALU_ADD, .is_unsigned = 1, .loc = loc,
+        }};
         return 0;
     }
     // dest = a.slot + a.disp; the displacement temp recycles at statement end
@@ -4674,13 +4751,24 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             err = cc_sizeof_as_uint(p, lv->type, lv->loc, &elem_sz);
             if(err) return err;
             CiOp* op;
+            CiFoldValue index;
+            int fold_fail = ci_fold_expr(ci, ctx, idx, &index);
+            if(fold_fail > 0) return fold_fail;
+            uint32_t base_temp = ctx->temp;
             uint32_t base_ptr;     // slot holding an 8-byte base pointer
             uint32_t base_disp = 0;// offset folded into the result displacement
             _Bool do_check = 0;
             uint32_t len_slot = 0;
             if(bk == CC_POINTER){
                 CiLowerVal b;
-                err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &b);
+                uint32_t base_dest = CI_NO_SLOT;
+                if(fold_fail == 0){
+                    // Preserve the evaluated address if a later RHS changes
+                    // a local pointer whose storage ci_lower_expr could reuse.
+                    err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &base_dest);
+                    if(err) return err;
+                }
+                err = ci_lower_expr(ci, ctx, base, base_dest, &b);
                 if(err) return err;
                 base_ptr = b.slot;
             }
@@ -4713,6 +4801,13 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                         }
                     }
                 }
+                if(!skip && fold_fail == 0){
+                    _Bool negative = !ccqt_is_unsigned(idx->type, ctx->char_is_unsigned) && ci_read_int(index.bits, index.sz) < 0;
+                    uint64_t i = ci_read_uint(index.bits, index.sz);
+                    // Invalid constant accesses must still fail at runtime,
+                    // including in code reached by a goto or a later call.
+                    skip = !negative && (i < arr->length || (one_past_ok && i == arr->length));
+                }
                 if(!skip){
                     err = ci_alloc_slot(ctx, ctx->size_size, ctx->size_size, &len_slot);
                     if(err) return err;
@@ -4741,6 +4836,40 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             }
             else {
                 return ci_unimplemented(ci, base->loc, "exotic base");
+            }
+            if(fold_fail == 0 && !do_check && (ctx->ptr_size == 4 || ctx->ptr_size == 8)){
+                if(base_ptr < base_temp){
+                    // An array member can use a local pointer as its base too.
+                    uint32_t snapshot;
+                    err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &snapshot);
+                    if(err) return err;
+                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    if(err) return err;
+                    *op = (CiOp){.copy = {
+                        .kind = CI_OP_COPY, .slot = snapshot, .src = base_ptr,
+                        .slot_size = ctx->ptr_size, .src_size = ctx->ptr_size, .loc = lv->loc,
+                    }};
+                    base_ptr = snapshot;
+                }
+                uint64_t offset = ci_fold_offset(ctx, &index, elem_sz);
+                if(offset <= UINT32_MAX - base_disp){
+                    out->slot = base_ptr;
+                    out->disp = base_disp + (uint32_t)offset;
+                    return 0;
+                }
+                uint32_t addr;
+                err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &addr);
+                if(err) return err;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                if(err) return err;
+                *op = (CiOp){.alu_imm = {
+                    .kind = ctx->ptr_size == 4 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64,
+                    .slot = addr, .src = base_ptr, .immediate = offset,
+                    .op = CI_ALU_ADD, .is_unsigned = 1, .loc = lv->loc,
+                }};
+                out->slot = addr;
+                out->disp = base_disp;
+                return 0;
             }
             CcExpr* index_expr = idx;
             if(!do_check && idx->kind == CC_EXPR_CAST && ccqt_is_integer(idx->lhs->type)){
@@ -4979,6 +5108,18 @@ static
 int
 ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, uint32_t* chain){
     int err;
+    _Bool truth;
+    int folded = ci_fold_condition(ci, ctx, cond, &truth);
+    if(folded > 0) return folded;
+    if(folded == 0){
+        if(truth != when_true) return 0;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.jump = {.kind = CI_OP_JUMP, .jump = *chain, .loc = loc}};
+        *chain = (uint32_t)(op - ctx->out->data) + 1;
+        return 0;
+    }
     if(cond->kind == CC_EXPR_LOGNOT)
         return ci_lower_branch(ci, ctx, cond->lhs, !when_true, loc, chain);
     if(cond->kind == CC_EXPR_COMMA){
@@ -5298,6 +5439,491 @@ int
 ci_lower_module(CiInterpreter* ci, CiModule* module){
     return ci_lower_nodes(ci, &module->nodes, &module->lowered,
         &module->ops, &module->labels, &module->slot_size);
+}
+
+static
+CiUint128
+ci_fold_integer(CiLowerCtx* ctx, const CiFoldValue* v){
+    CiUint128 result;
+    if(v->sz < 16 && !ccqt_is_unsigned(v->type, ctx->char_is_unsigned))
+        return ci_uint128_from_int64(ci_read_int(v->bits, v->sz));
+    ci_uint128_read(&result, v->bits, v->sz);
+    return result;
+}
+
+static
+uint64_t
+ci_fold_offset(CiLowerCtx* ctx, const CiFoldValue* index, uint32_t elem_sz){
+    uint64_t offset = ci_uint128_lo(ci_fold_integer(ctx, index)) * (uint64_t)elem_sz;
+    return ctx->ptr_size == 4 ? (uint32_t)offset : offset;
+}
+
+typedef struct CiFoldFloat CiFoldFloat;
+struct CiFoldFloat {
+    uint64_t significand;
+    int exponent;
+    _Bool negative, infinity;
+};
+
+static
+int
+ci_fold_float_read(const CiFoldValue* v, CiFoldFloat* out){
+    uint64_t fraction;
+    uint32_t exponent, max_exp, precision, bias;
+    if(ccqt_bt_eq(v->type, CCBT_float)){
+        CiIEE754Float32 f;
+        memcpy(&f.u, v->bits, sizeof f.u);
+        fraction = f.fraction;
+        exponent = f.exponent;
+        out->negative = f.sign;
+        max_exp = 255; precision = 23; bias = 127;
+    }
+    else if(ccqt_bt_eq(v->type, CCBT_double)){
+        CiIEE754Float64 f;
+        memcpy(&f.u, v->bits, sizeof f.u);
+        fraction = f.fraction;
+        exponent = (uint32_t)f.exponent;
+        out->negative = f.sign;
+        max_exp = 2047; precision = 52; bias = 1023;
+    }
+    else return FOLD_FAIL;
+    if((exponent == max_exp || exponent == 0) && fraction) return FOLD_FAIL;
+    out->infinity = exponent == max_exp;
+    out->significand = fraction | (exponent && !out->infinity ? (uint64_t)1 << precision : 0);
+    out->exponent = (int)exponent - (int)bias - (int)precision;
+    return 0;
+}
+
+static
+int
+ci_fold_float_write(CiFoldValue* out, CiUint128 magnitude, int exponent, _Bool negative, _Bool infinity){
+    uint32_t precision, bias, max_exp;
+    if(ccqt_bt_eq(out->type, CCBT_float)){
+        precision = 23; bias = 127; max_exp = 255;
+    }
+    else if(ccqt_bt_eq(out->type, CCBT_double)){
+        precision = 52; bias = 1023; max_exp = 2047;
+    }
+    else return FOLD_FAIL;
+    uint64_t fraction = 0;
+    uint32_t encoded_exp = 0;
+    if(infinity) encoded_exp = max_exp;
+    else if(ci_uint128_nonzero(magnitude)){
+        uint64_t hi = ci_uint128_hi(magnitude), lo = ci_uint128_lo(magnitude);
+        int top = hi ? 127 - clz_64(hi) : 63 - clz_64(lo);
+        int exp = exponent + top + (int)bias;
+        if(exp <= 0 || exp >= (int)max_exp) return FOLD_FAIL;
+        int shift = top - (int)precision;
+        if(shift > 0){
+            CiUint128 reduced = ci_uint128_shr(magnitude, (uint64_t)shift);
+            if(!ci_uint128_eq(ci_uint128_shl(reduced, (uint64_t)shift), magnitude)) return FOLD_FAIL;
+            fraction = ci_uint128_lo(reduced);
+        }
+        else fraction = lo << (uint32_t)-shift;
+        fraction &= ((uint64_t)1 << precision) - 1;
+        encoded_exp = (uint32_t)exp;
+    }
+    if(precision == 23){
+        CiIEE754Float32 f = {.u = 0};
+        f.sign = negative;
+        f.exponent = encoded_exp;
+        f.fraction = (uint32_t)fraction;
+        memcpy(out->bits, &f.u, sizeof f.u);
+    }
+    else {
+        CiIEE754Float64 f = {.u = 0};
+        f.sign = negative;
+        f.exponent = encoded_exp;
+        f.fraction = fraction;
+        memcpy(out->bits, &f.u, sizeof f.u);
+    }
+    return 0;
+}
+
+static
+int
+ci_fold_float_binary(CcExprKind kind, const CiFoldValue* lhs, const CiFoldValue* rhs, CiFoldValue* out){
+    if(lhs->type.unqual != rhs->type.unqual) return FOLD_FAIL;
+    CiFoldFloat a, b;
+    int err = ci_fold_float_read(lhs, &a);
+    if(err) return err;
+    err = ci_fold_float_read(rhs, &b);
+    if(err) return err;
+    switch((uint32_t)kind){
+        case CC_EXPR_EQ: case CC_EXPR_NE:
+        case CC_EXPR_LT: case CC_EXPR_GT: case CC_EXPR_LE: case CC_EXPR_GE:{
+            uint64_t mask = ((uint64_t)1 << (lhs->sz * 8 - 1)) - 1;
+            uint64_t am = ci_read_uint(lhs->bits, lhs->sz) & mask;
+            uint64_t bm = ci_read_uint(rhs->bits, rhs->sz) & mask;
+            int cmp;
+            if(!am && !bm) cmp = 0; // +0 == -0
+            else if(a.negative != b.negative) cmp = a.negative ? -1 : 1;
+            else {
+                cmp = am < bm ? -1 : am > bm ? 1 : 0;
+                if(a.negative) cmp = -cmp;
+            }
+            _Bool result = 0;
+            switch((uint32_t)kind){
+                case CC_EXPR_EQ: result = cmp == 0; break;
+                case CC_EXPR_NE: result = cmp != 0; break;
+                case CC_EXPR_LT: result = cmp < 0; break;
+                case CC_EXPR_GT: result = cmp > 0; break;
+                case CC_EXPR_LE: result = cmp <= 0; break;
+                case CC_EXPR_GE: result = cmp >= 0; break;
+            }
+            ci_write_uint(out->bits, out->sz, result);
+            return 0;
+        }
+    }
+    if(a.infinity || b.infinity) return FOLD_FAIL;
+    CiUint128 u = ci_uint128_from_uint64(a.significand);
+    CiUint128 v = ci_uint128_from_uint64(b.significand);
+    switch((uint32_t)kind){
+        case CC_EXPR_MUL:
+            return ci_fold_float_write(out, ci_uint128_mul(u, v), a.exponent + b.exponent, a.negative != b.negative, 0);
+        case CC_EXPR_DIV:{
+            if(!b.significand) return FOLD_FAIL;
+            // A binary-exact quotient requires the denominator's odd part to
+            // divide the numerator. Powers of two just adjust the exponent.
+            int twos = ctz_64(b.significand);
+            uint64_t odd = b.significand >> twos;
+            if(a.significand % odd) return FOLD_FAIL;
+            u = ci_uint128_from_uint64(a.significand / odd);
+            return ci_fold_float_write(out, u, a.exponent - b.exponent - twos, a.negative != b.negative, 0);
+        }
+        case CC_EXPR_ADD:
+        case CC_EXPR_SUB:{
+            if(kind == CC_EXPR_SUB) b.negative = !b.negative;
+            if(!a.significand && !b.significand){
+                if(a.negative != b.negative) return FOLD_FAIL; // zero sign depends on rounding
+                return ci_fold_float_write(out, u, 0, a.negative, 0);
+            }
+            if(!a.significand)
+                return ci_fold_float_write(out, v, b.exponent, b.negative, 0);
+            if(!b.significand)
+                return ci_fold_float_write(out, u, a.exponent, a.negative, 0);
+            int exponent = a.exponent < b.exponent ? a.exponent : b.exponent;
+            int ashift = a.exponent - exponent;
+            int bshift = b.exponent - exponent;
+            // Reserve a carry bit. Larger exponent gaps cannot be handled by
+            // this bounded exact accumulator; leave them to the VM.
+            if(ashift + 63 - clz_64(a.significand) >= 127 || bshift + 63 - clz_64(b.significand) >= 127) return FOLD_FAIL;
+            u = ci_uint128_shl(u, (uint64_t)ashift);
+            v = ci_uint128_shl(v, (uint64_t)bshift);
+            if(a.negative == b.negative) u = ci_uint128_add(u, v);
+            else {
+                if(ci_uint128_eq(u, v)) return FOLD_FAIL; // exact cancellation has rounding-dependent zero sign
+                if(ci_uint128_gt(u, v)) u = ci_uint128_sub(u, v);
+                else {
+                    u = ci_uint128_sub(v, u);
+                    a.negative = b.negative;
+                }
+            }
+            return ci_fold_float_write(out, u, exponent, a.negative, 0);
+        }
+        default: return FOLD_FAIL;
+    }
+}
+
+static
+int
+ci_fold_float_cast(CiLowerCtx* ctx, const CiFoldValue* from, CiFoldValue* to){
+    CiUint128 zero = ci_uint128_from_uint64(0);
+    if(ccqt_is_integer(from->type)){
+        CiUint128 u = ci_fold_integer(ctx, from);
+        _Bool negative = !ccqt_is_unsigned(from->type, ctx->char_is_unsigned) && (ci_uint128_hi(u) >> 63);
+        if(negative) u = ci_uint128_sub(zero, u);
+        return ci_fold_float_write(to, u, 0, negative, 0);
+    }
+    if(!ci_falu_type(from->type)) return FOLD_FAIL;
+    if(from->type.unqual == to->type.unqual){
+        memcpy(to->bits, from->bits, from->sz);
+        return 0;
+    }
+    CiFoldFloat f;
+    int err = ci_fold_float_read(from, &f);
+    if(err) return err;
+    CiUint128 u = ci_uint128_from_uint64(f.significand);
+    if(ci_falu_type(to->type))
+        return ci_fold_float_write(to, u, f.exponent, f.negative, f.infinity);
+    if(!ccqt_is_integer(to->type) || f.infinity) return FOLD_FAIL;
+    if(f.significand){
+        if(f.exponent < 0){
+            int shift = -f.exponent;
+            if(shift >= 64 || ((f.significand >> shift) << shift) != f.significand)
+                return FOLD_FAIL; // Fractional truncation may raise FE_INEXACT.
+            u = ci_uint128_from_uint64(f.significand >> shift);
+        }
+        else {
+            int top = 63 - clz_64(f.significand);
+            if(f.exponent + top >= 128) return FOLD_FAIL;
+            u = ci_uint128_shl(u, (uint64_t)f.exponent);
+        }
+    }
+    _Bool uns = ccqt_is_unsigned(to->type, ctx->char_is_unsigned);
+    uint32_t width = to->sz * 8;
+    if(uns){
+        if(f.negative && ci_uint128_nonzero(u)) return FOLD_FAIL;
+        if(width < 128 && ci_uint128_nonzero(ci_uint128_shr(u, width))) return FOLD_FAIL;
+    }
+    else {
+        CiUint128 limit = ci_uint128_shl(ci_uint128_from_uint64(1), width - 1);
+        if(ci_uint128_gt(u, limit) || (!f.negative && ci_uint128_eq(u, limit))) return FOLD_FAIL;
+    }
+    if(f.negative) u = ci_uint128_sub(zero, u);
+    ci_uint128_write(to->bits, to->sz, u);
+    return 0;
+}
+
+static
+int
+ci_fold_truth(const CiFoldValue* v, _Bool* truth){
+    if(ci_falu_type(v->type)){
+        CiFoldFloat f;
+        int err = ci_fold_float_read(v, &f);
+        if(err) return err;
+        *truth = f.infinity || f.significand != 0;
+    }
+    else if(ccqt_is_integer(v->type) || ccqt_kind(v->type) == CC_POINTER || ccqt_bt_eq(v->type, CCBT_nullptr_t)){
+        CiUint128 u;
+        ci_uint128_read(&u, v->bits, v->sz);
+        *truth = ci_uint128_nonzero(u);
+    }
+    else return FOLD_FAIL;
+    return 0;
+}
+
+static
+int
+ci_fold_condition(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* truth){
+    CiFoldValue value;
+    int err = ci_fold_expr(ci, ctx, e, &value);
+    if(err) return err;
+    return ci_fold_truth(&value, truth);
+}
+
+static
+int
+ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
+    if(ccqt_kind(e->type) == CC_ARRAY) return FOLD_FAIL;
+    if(e->kind != CC_EXPR_VALUE){
+        if(e->type.is_atomic || e->type.is_volatile) return FOLD_FAIL;
+        if(!ccqt_is_basic(e->type) && !ccqt_is_integer(e->type)
+            && ccqt_kind(e->type) != CC_POINTER) return FOLD_FAIL;
+    }
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &sz);
+    if(err) return err;
+    if(sz > 16) return FOLD_FAIL;
+    if(e->kind != CC_EXPR_VALUE && sz != 1 && sz != 2 && sz != 4 && sz != 8 && sz != 16) return FOLD_FAIL;
+    CiFoldValue result = {.sz = sz, .type = e->type};
+    CiFoldValue l, r;
+    CiUint128 zero = ci_uint128_from_uint64(0), u = zero;
+    _Bool truth;
+    switch((uint32_t)e->kind){
+        case CC_EXPR_VALUE:
+            // The literal payload is eight bytes, including for wide types.
+            memcpy(result.bits, &e->uinteger, sz < sizeof e->uinteger ? sz : sizeof e->uinteger);
+            *folded = result;
+            return 0;
+        case CC_EXPR_VARIABLE:
+            // I think we can also detect write-once variables.
+            if(!(e->var->constexpr_ || e->type.is_const) || !e->var->initializer) return FOLD_FAIL;
+            err = ci_fold_expr(ci, ctx, e->var->initializer, &l);
+            if(err) return err;
+            if(l.sz != sz) return FOLD_FAIL;
+            memcpy(result.bits, l.bits, sz);
+            *folded = result;
+            return 0;
+        case CC_EXPR_COMMA:
+        case CC_EXPR_TERNARY:
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR:
+        case CC_EXPR_LOGNOT:
+            err = ci_fold_expr(ci, ctx, e->lhs, &l);
+            if(err) return err;
+            if(e->kind == CC_EXPR_COMMA){
+                err = ci_fold_expr(ci, ctx, e->values[0], &r);
+            }
+            else {
+                err = ci_fold_truth(&l, &truth);
+                if(err) return err;
+                if(e->kind == CC_EXPR_TERNARY)
+                    err = ci_fold_expr(ci, ctx, e->values[truth ? 0 : 1], &r);
+                else {
+                    if(e->kind == CC_EXPR_LOGNOT) truth = !truth;
+                    else if(truth == (e->kind == CC_EXPR_LOGAND)){
+                        err = ci_fold_expr(ci, ctx, e->values[0], &r);
+                        if(err) return err;
+                        err = ci_fold_truth(&r, &truth);
+                        if(err) return err;
+                    }
+                    u = ci_uint128_from_uint64(truth);
+                    break;
+                }
+            }
+            if(err) return err;
+            if(r.sz != sz) return FOLD_FAIL;
+            memcpy(result.bits, r.bits, sz);
+            *folded = result;
+            return 0;
+        case CC_EXPR_CAST:
+        case CC_EXPR_POS:
+        case CC_EXPR_NEG:
+        case CC_EXPR_BITNOT:
+        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_CLZ:
+        case CC_EXPR_CTZ:
+        case CC_EXPR_BSWAP:
+            err = ci_fold_expr(ci, ctx, e->lhs, &l);
+            if(err) return err;
+            if(e->kind == CC_EXPR_CAST && ccqt_bt_eq(e->type, CCBT_bool)){
+                err = ci_fold_truth(&l, &truth);
+                if(err) return err;
+                u = ci_uint128_from_uint64(truth);
+                break;
+            }
+            if(e->kind == CC_EXPR_CAST && (ci_falu_type(l.type) || ci_falu_type(e->type))){
+                err = ci_fold_float_cast(ctx, &l, &result);
+                if(err) return err;
+                *folded = result;
+                return 0;
+            }
+            if((e->kind == CC_EXPR_POS || e->kind == CC_EXPR_NEG)
+                && ci_falu_type(l.type) && l.type.unqual == e->type.unqual){
+                // Unary sign operations do not round or quiet signaling NaNs.
+                memcpy(result.bits, l.bits, l.sz);
+                if(e->kind == CC_EXPR_NEG){
+                    if(l.sz == 4){
+                        uint32_t bits;
+                        memcpy(&bits, result.bits, sizeof bits);
+                        bits ^= (uint32_t)1 << 31;
+                        memcpy(result.bits, &bits, sizeof bits);
+                    }
+                    else result.bits[0] ^= (uint64_t)1 << 63;
+                }
+                *folded = result;
+                return 0;
+            }
+            if(e->kind == CC_EXPR_CAST){
+                _Bool from_ptr = ccqt_kind(l.type) == CC_POINTER || ccqt_bt_eq(l.type, CCBT_nullptr_t);
+                _Bool to_ptr = ccqt_kind(e->type) == CC_POINTER || ccqt_bt_eq(e->type, CCBT_nullptr_t);
+                if((from_ptr || ccqt_is_integer(l.type)) && (to_ptr || ccqt_is_integer(e->type))){
+                    if(from_ptr) ci_uint128_read(&u, l.bits, l.sz);
+                    else u = ci_fold_integer(ctx, &l);
+                    break;
+                }
+            }
+            if(!ccqt_is_integer(l.type) || !ccqt_is_integer(e->type)) return FOLD_FAIL;
+            u = ci_fold_integer(ctx, &l);
+            switch((uint32_t)e->kind){
+                case CC_EXPR_CAST: case CC_EXPR_POS: break;
+                case CC_EXPR_NEG: u = ci_uint128_sub(zero, u); break;
+                case CC_EXPR_BITNOT: u = ci_uint128_xor(u, ci_uint128_from_int64(-1)); break;
+                default:{
+                    if(l.sz > 8) return FOLD_FAIL;
+                    uint64_t v = ci_read_uint(l.bits, l.sz), n;
+                    if(e->kind == CC_EXPR_POPCOUNT) n = (uint64_t)popcount_64(v);
+                    else if(e->kind == CC_EXPR_CLZ) n = v ? (uint64_t)clz_64(v) - (64 - l.sz * 8) : l.sz * 8;
+                    else if(e->kind == CC_EXPR_CTZ) n = v ? (uint64_t)ctz_64(v) : l.sz * 8;
+                    else {
+                        n = 0;
+                        for(uint32_t i = 0; i < l.sz; i++, v >>= 8) n = (n << 8) | (v & 255);
+                    }
+                    u = ci_uint128_from_uint64(n);
+                    break;
+                }
+            }
+            break;
+        case CC_EXPR_ADD: case CC_EXPR_SUB: case CC_EXPR_MUL:
+        case CC_EXPR_DIV: case CC_EXPR_MOD:
+        case CC_EXPR_BITAND: case CC_EXPR_BITOR: case CC_EXPR_BITXOR:
+        case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT:
+        case CC_EXPR_EQ: case CC_EXPR_NE:
+        case CC_EXPR_LT: case CC_EXPR_GT: case CC_EXPR_LE: case CC_EXPR_GE:{
+            if(ci_falu_type(e->lhs->type) && ci_falu_type(e->values[0]->type)){
+                err = ci_fold_expr(ci, ctx, e->lhs, &l);
+                if(err) return err;
+                err = ci_fold_expr(ci, ctx, e->values[0], &r);
+                if(err) return err;
+                err = ci_fold_float_binary(e->kind, &l, &r, &result);
+                if(err) return err;
+                *folded = result;
+                return 0;
+            }
+            if(!ccqt_is_integer(e->lhs->type) || !ccqt_is_integer(e->values[0]->type)) return FOLD_FAIL;
+            err = ci_fold_expr(ci, ctx, e->lhs, &l);
+            if(err) return err;
+            err = ci_fold_expr(ci, ctx, e->values[0], &r);
+            if(err) return err;
+            CiUint128 a = ci_fold_integer(ctx, &l), b = ci_fold_integer(ctx, &r);
+            _Bool uns = ccqt_is_unsigned(l.type, ctx->char_is_unsigned);
+            CiInt128 sa = ci_int128_from_uint128(a), sb = ci_int128_from_uint128(b);
+            switch((uint32_t)e->kind){
+                case CC_EXPR_ADD: u = ci_uint128_add(a, b); break;
+                case CC_EXPR_SUB: u = ci_uint128_sub(a, b); break;
+                case CC_EXPR_MUL: u = ci_uint128_mul(a, b); break;
+                case CC_EXPR_DIV: case CC_EXPR_MOD:{
+                    if(!ci_uint128_nonzero(b)) return FOLD_FAIL;
+                    CiUint128 min = ci_uint128_shl(ci_uint128_from_uint64(1), l.sz * 8 - 1);
+                    if(!uns && ci_uint128_eq(b, ci_uint128_from_int64(-1))
+                        && ci_uint128_eq(a, ci_uint128_sub(zero, min))) return FOLD_FAIL;
+                    if(e->kind == CC_EXPR_DIV)
+                        u = uns ? ci_uint128_div(a, b) : ci_uint128_from_int128(ci_int128_div(sa, sb));
+                    else
+                        u = uns ? ci_uint128_mod(a, b) : ci_uint128_from_int128(ci_int128_mod(sa, sb));
+                    break;
+                }
+                case CC_EXPR_BITAND: u = ci_uint128_and(a, b); break;
+                case CC_EXPR_BITOR: u = ci_uint128_or(a, b); break;
+                case CC_EXPR_BITXOR: u = ci_uint128_xor(a, b); break;
+                case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT:
+                    if(ci_uint128_hi(b) || ci_uint128_lo(b) >= l.sz * 8) return FOLD_FAIL;
+                    if(e->kind == CC_EXPR_LSHIFT) u = ci_uint128_shl(a, ci_uint128_lo(b));
+                    else u = uns ? ci_uint128_shr(a, ci_uint128_lo(b))
+                        : ci_uint128_from_int128(ci_int128_shr(sa, ci_uint128_lo(b)));
+                    break;
+                case CC_EXPR_EQ: u = ci_uint128_from_uint64(ci_uint128_eq(a, b)); break;
+                case CC_EXPR_NE: u = ci_uint128_from_uint64(ci_uint128_ne(a, b)); break;
+                case CC_EXPR_LT: u = ci_uint128_from_uint64(uns ? ci_uint128_lt(a, b) : ci_int128_lt(sa, sb)); break;
+                case CC_EXPR_GT: u = ci_uint128_from_uint64(uns ? ci_uint128_gt(a, b) : ci_int128_gt(sa, sb)); break;
+                case CC_EXPR_LE: u = ci_uint128_from_uint64(uns ? ci_uint128_le(a, b) : ci_int128_le(sa, sb)); break;
+                case CC_EXPR_GE: u = ci_uint128_from_uint64(uns ? ci_uint128_ge(a, b) : ci_int128_ge(sa, sb)); break;
+            }
+            break;
+        }
+        case CC_EXPR_CALL: // I think gcc treats some libc/libm funcs as intrins, we could do the same
+        // TODO: folded lvalues? can't produce them in the bytecode,
+        // but we could have them as intermediaries.
+        // But especially with const/constexpr vars we should be
+        // able to fold out reads from them.
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
+        case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ADDR:
+
+
+        // This could be done, just requires work.
+        case CC_EXPR_TYPE_INTROSPECTION:
+
+        // could elide bounds checks etc.
+        case CC_EXPR_SLICE_ALL:
+        case CC_EXPR_SLICE:
+        case CC_EXPR_SLICE_LO:
+        case CC_EXPR_SLICE_HI:
+
+        // If it fits, why not?
+        // Also might be needed for type-punning like
+        // `(union {int i; float f;}){.f=1.f}.i`
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+        // rest are runtime
+        default: return FOLD_FAIL;
+    }
+    ci_uint128_write(result.bits, sz, u);
+    *folded = result;
+    return 0;
 }
 
 #ifdef __clang__

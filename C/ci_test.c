@@ -25,6 +25,7 @@
 #include "cc_target.h"
 #include "cc_errors.h"
 #include "ci_interp.h"
+#include <fenv.h>
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -40,8 +41,241 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
-        int lower_error;
     } testcases[] = {
+        {
+            "fold: constant pointer casts", __LINE__,
+            SVI("return (int)(unsigned long long)(void*)42;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: null pointer casts", __LINE__,
+            SVI("return !(int*)(void*)0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: fixed array displacement", __LINE__,
+            SVI("int a[4] = {10,20,30,42}; return a[1+2];\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer displacement", __LINE__,
+            SVI("int a[4] = {10,20,30,42}; int *p = a; return p[3];\n"),
+            .exit_code = 42
+        },
+        {
+            "fold: negative pointer displacement", __LINE__,
+            SVI("int a[4] = {42,20,30,40}; int *p = a+3; return p[-3];\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: one past array address", __LINE__,
+            SVI("int a[4]; return &a[4] == a+4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: pointer subscript snapshots address", __LINE__,
+            SVI("int f(void){int a[2]={0,0}; int *p=a; p[0]=(p=a+1,42); return a[0]+a[1]*2;} return f();\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: array member snapshots base", __LINE__,
+            SVI("int f(void){struct S {int a[2];}; struct S s={0}, t={0}; struct S *p=&s; p->a[1]=(p=&t,42); return s.a[1]+t.a[1]*2;} return f();\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: member address immediate", __LINE__,
+            SVI("struct S {int a,b;}; struct S s={0,42}; struct S *p=&s; int *q=&p->b; return *q;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: selected runtime ternary", __LINE__,
+            SVI("int f(void){return 42;} int g(void){return 99;} return 1 ? f() : g();\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: constant branch chain", __LINE__,
+            SVI("int x=0; if(0) x=99; if(1) x=42; while(0) x++; return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: goto into constant false branch", __LINE__,
+            SVI("int x=0; goto L; if(0){L: x=42;} return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: float exact arithmetic", __LINE__,
+            SVI("return (int)((800 / 2.0 + 20.0) / 10.0);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: float exact multiply subtract", __LINE__,
+            SVI("return (int)(8.0f * 6.0f - 6.0f);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: float constant comparisons", __LINE__,
+            SVI("return (-3.0 < -2.0) && (2.0 <= 3.0) && (4.0 > 3.0) && (2.0 >= 2.0) && (-0.0 == 0.0) && (2.0 != 3.0);\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: float inexact division retained", __LINE__,
+            SVI("return (1.0 / 3.0) > 0.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: float cancellation retained", __LINE__,
+            SVI("return (1.0 - 1.0) == 0.0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: pointer plus constant", __LINE__,
+            SVI("int a[4] = {10, 20, 30, 42}; int *p = a; return *(p + (1 + 2));\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: constant plus pointer", __LINE__,
+            SVI("int a[4] = {10, 20, 30, 42}; int *p = a; return *((1 + 2) + p);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer plus negative", __LINE__,
+            SVI("int a[4] = {42, 20, 30, 40}; int *p = a + 3; return *(p + -3);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer minus negative", __LINE__,
+            SVI("int a[4] = {10, 20, 30, 42}; int *p = a; return *(p - -3);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer compound scaled", __LINE__,
+            SVI("int a[4] = {10, 20, 42, 40}; int *p = a; p += (1 + 2); p -= 1; return *p;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer compound negative", __LINE__,
+            SVI("int a[4] = {10, 42, 30, 40}; int *p = a; p -= -3; p += -2; return *p;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: byte pointer immediate", __LINE__,
+            SVI("char a[2] = {0, 42}; char *p = a; p += 1; return *p;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: pointer lvalue evaluated once", __LINE__,
+            SVI("int a[2] = {10, 42}; int *p[2] = {a, a}; int **q = p; *q++ += 1; return **p + (q == p + 1);\n"),
+            .exit_code = 43,
+        },
+        {
+            "fold: pointer index side effects", __LINE__,
+            SVI("int a[4] = {10, 20, 30, 42}; int *p = a; int n = 0; p += (n++, 3); return *p + n;\n"),
+            .exit_code = 43,
+        },
+        {
+            "fold: pointer expression evaluated once", __LINE__,
+            SVI("int a[3] = {10, 42, 30}; int *p = a; int *q = 1 + p++; return *q + (p == a + 1);\n"),
+            .exit_code = 43,
+        },
+        {
+            "fold: exact floating cast chain", __LINE__,
+            SVI("return (int)(double)(float)42;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: negative floating cast", __LINE__,
+            SVI("return (int)(float)-42.0;\n"),
+            .exit_code = -42,
+        },
+        {
+            "fold: fractional conversion stays at runtime", __LINE__,
+            SVI("return (int)42.5;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: inexact integer conversion stays at runtime", __LINE__,
+            SVI("return (int)(float)16777217;\n"),
+            .exit_code = 16777216,
+        },
+        {
+            "fold: inexact float narrowing stays at runtime", __LINE__,
+            SVI("return (int)(float)1.000000059604644775390625;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: nested integer expression", __LINE__,
+            SVI("return (3 + 4) * 6;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: binary immediate from expression", __LINE__,
+            SVI("int x = 35; return x + (3 + 4);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: compound immediate from expression", __LINE__,
+            SVI("int x = 35; x += (3 + 4); return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: store immediate from expression", __LINE__,
+            SVI("int x; x = (3 + 4) * 6; return x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: narrow signed casts", __LINE__,
+            SVI("return (int)(signed char)255 + (int)(unsigned char)257 + 42;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: wide casts arithmetic and truth", __LINE__,
+            SVI("return (((unsigned __int128)1 << 100) != 0) &&\n"
+                "  (((__int128)-7 / 2) == -3) &&\n"
+                "  (((unsigned __int128)1 << 100) >> 100) == 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fold: short circuit unevaluated effects", __LINE__,
+            SVI("int f(void){return 99;}\n"
+                "return (0 && f()) + (1 || f()) + (1 ? 41 : f());\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: comma retains evaluated effects", __LINE__,
+            SVI("int x = 0; return (x++, 41) + x;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: negative zero condition", __LINE__,
+            SVI("return -0.0 ? 0 : 42;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: integer bit builtins", __LINE__,
+            SVI("return __builtin_popcount(7) + __builtin_clz(1u) + __builtin_ctz(256u);\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: unselected invalid arithmetic", __LINE__,
+            SVI("return (1 ? 42 : 1 / 0) + (0 && (1 << 99));\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: division by zero uses runtime behavior", __LINE__,
+            SVI("return 42 / 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "fold: constexpr variable", __LINE__,
+            SVI("constexpr int n = 6; return n * 7;\n"),
+            .exit_code = 42,
+        },
+        {
+            "fold: mutable const is runtime storage", __LINE__,
+            SVI("int x = 1; const int *p = &x; x = 42; return *p;\n"),
+            .exit_code = 42,
+        },
+
         {
             "reflection: discarded module run", __LINE__,
             SVI("_Module m = __compile(\"int x; x = 42;\");\n"
@@ -6167,13 +6401,13 @@ TestFunction(test_interpreter){
             SVI("int n = 7;\n"
                 "long double a = (long double)n;\n"
                 "return 0;\n"),
-            .lower_error = _cc_unimplemented_error,
+            .skip = 1,
         },
         {
             "cast: long double to bool unsupported", __LINE__,
             SVI("long double a = 0.5L;\n"
                 "return (_Bool)a;\n"),
-            .lower_error = _cc_unimplemented_error,
+            .skip = 1,
         },
         {
             "cast: qualified slice evaluates once", __LINE__,
@@ -6262,7 +6496,7 @@ TestFunction(test_interpreter){
             "numeric literal: long double", __LINE__,
             SVI("long double x = 7.0L;\n"
                "return (int)x;\n"),
-            .lower_error = _cc_unimplemented_error,
+            .skip = 1,
         },
         {
             "nullptr", __LINE__,
@@ -7587,7 +7821,7 @@ TestFunction(test_interpreter){
             SVI("long double a = 3.5L;\n"
                "long double b = 2.5L;\n"
                "return (int)(a + b);\n"),
-            .lower_error = _cc_unimplemented_error,
+            .skip = 1,
         },
         {
             "array of structs init", __LINE__,
@@ -8432,14 +8666,6 @@ TestFunction(test_interpreter){
 
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_lower_toplevel(&interp);
-        if(tc->lower_error){
-            TestExpect(err, ==, tc->lower_error);
-            if(err == tc->lower_error){
-                err = 0;
-                msb_reset(&log_sb);
-            }
-            goto finally;
-        }
         if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
@@ -9158,6 +9384,17 @@ TestFunction(test_cross_target){
         _Bool skip;
         CcTarget target;
     } testcases[] = {
+        {
+            "fold: windows long truncates", __LINE__,
+            SVI("return (long)0x100000001ULL == 1;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS,
+        },
+        {
+            "fold: linux long preserves high bits", __LINE__,
+            SVI("return (long)0x100000001ULL == 0x100000001ULL;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+
         {
             "sysv va_list param", __LINE__,
             SVI(
@@ -9914,6 +10151,8 @@ TestFunction(test_ci_call_by_name){
     }
     TESTEND();
 }
+TestFunction(test_float_folding);
+
 
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
@@ -9925,6 +10164,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();
@@ -9942,3 +10182,175 @@ int main(int argc, char** argv){
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
 #include "native_call.c"
+
+#ifdef __clang__
+#pragma clang assume_nonnull begin
+#endif
+// TODO: this tests the lowering internals, so it needs the internal stuff.
+// Normally I eschew that kind of thing, but these are pure math so it's nice
+// to have something that shows it works correctly.
+TestFunction(test_float_folding){
+    TESTBEGIN();
+    CiInterpreter ci = {.parser.cpp.target = cc_target_funcs[CC_TARGET_TEST]()};
+    CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed};
+    static const struct {
+        CcBasicTypeKind from, to;
+        uint64_t input[2], expected[2];
+        int status;
+    } cases[] = {
+        {CCBT_int, CCBT_double, {800}, {0x4089000000000000}},
+        {CCBT_int, CCBT_float, {2}, {0x40000000}},
+        {CCBT_int, CCBT_float, {0}, {0}},
+        {CCBT_int, CCBT_double, {0xffffffff}, {0xbff0000000000000}},
+        {CCBT_unsigned, CCBT_float, {16777216}, {0x4b800000}},
+        {CCBT_unsigned, CCBT_float, {16777217}, {0}, -1},
+        {CCBT_unsigned_long_long, CCBT_double, {9007199254740992ULL}, {0x4340000000000000}},
+        {CCBT_unsigned_long_long, CCBT_double, {9007199254740993ULL}, {0}, -1},
+        {CCBT_long_long, CCBT_double, {0x8000000000000000}, {0xc3e0000000000000}},
+        {CCBT_unsigned_int128, CCBT_double, {0, 0x1000000000}, {0x4630000000000000}}, // 2^100
+        {CCBT_unsigned_int128, CCBT_float, {0, 0x1000000000}, {0x71800000}},
+        {CCBT_unsigned_int128, CCBT_double, {1, 0x1000000000}, {0}, -1},
+        {CCBT_int128, CCBT_double, {0, 0x8000000000000000}, {0xc7e0000000000000}},
+        {CCBT_unsigned_int128, CCBT_float, {UINT64_MAX, UINT64_MAX}, {0}, -1},
+        {CCBT_float, CCBT_double, {0x3fc00000}, {0x3ff8000000000000}}, // 1.5
+        {CCBT_double, CCBT_float, {0x3ff8000000000000}, {0x3fc00000}},
+        {CCBT_double, CCBT_float, {0x3ff0000000000001}, {0}, -1},
+        {CCBT_double, CCBT_float, {0x47f0000000000000}, {0}, -1}, // 2^128
+        {CCBT_double, CCBT_float, {0x3810000000000000}, {0x00800000}}, // min normal
+        {CCBT_double, CCBT_float, {0x3800000000000000}, {0}, -1}, // subnormal result
+        {CCBT_float, CCBT_double, {1}, {0}, -1}, // subnormal input
+        {CCBT_double, CCBT_float, {1}, {0}, -1},
+        {CCBT_double, CCBT_float, {0x8000000000000000}, {0x80000000}},
+        {CCBT_float, CCBT_double, {0x80000000}, {0x8000000000000000}},
+        {CCBT_double, CCBT_float, {0x7ff0000000000000}, {0x7f800000}},
+        {CCBT_float, CCBT_double, {0xff800000}, {0xfff0000000000000}},
+        {CCBT_double, CCBT_float, {0x7ff0000000000001}, {0}, -1}, // sNaN
+        {CCBT_float, CCBT_double, {0x7f800001}, {0}, -1},
+        {CCBT_double, CCBT_float, {0x7ff8000000000000}, {0}, -1}, // qNaN
+        {CCBT_float, CCBT_float, {0x7f800001}, {0x7f800001}}, // identity is a copy
+        {CCBT_double, CCBT_int, {0x4045000000000000}, {42}},
+        {CCBT_float, CCBT_int, {0xc2280000}, {0xffffffd6}}, // -42
+        {CCBT_double, CCBT_int, {0x3ff8000000000000}, {0}, -1}, // fractional
+        {CCBT_double, CCBT_int, {0x8000000000000000}, {0}},
+        {CCBT_double, CCBT_unsigned, {0xbff0000000000000}, {0}, -1},
+        {CCBT_double, CCBT_signed_char, {0x4060000000000000}, {0}, -1}, // 128
+        {CCBT_double, CCBT_signed_char, {0xc060000000000000}, {0x80}},
+        {CCBT_double, CCBT_long_long, {0x43e0000000000000}, {0}, -1}, // 2^63
+        {CCBT_double, CCBT_long_long, {0xc3e0000000000000}, {0x8000000000000000}},
+        {CCBT_double, CCBT_unsigned_long_long, {0x43e0000000000000}, {0x8000000000000000}},
+        {CCBT_double, CCBT_unsigned_long_long, {0x43f0000000000000}, {0}, -1}, // 2^64
+        {CCBT_double, CCBT_int128, {0x4630000000000000}, {0, 0x1000000000}},
+        {CCBT_double, CCBT_int128, {0xc7e0000000000000}, {0, 0x8000000000000000}},
+        {CCBT_double, CCBT_int128, {0x47e0000000000000}, {0}, -1},
+        {CCBT_double, CCBT_unsigned_int128, {0x47e0000000000000}, {0, 0x8000000000000000}},
+        {CCBT_double, CCBT_unsigned_int128, {0x47f0000000000000}, {0}, -1},
+        {CCBT_double, CCBT_int, {0x7ff0000000000000}, {0}, -1},
+        {CCBT_double, CCBT_int, {0x7ff0000000000001}, {0}, -1},
+        {CCBT_double, CCBT_bool, {0x8000000000000000}, {0}},
+        {CCBT_double, CCBT_bool, {0x3ff8000000000000}, {1}},
+        {CCBT_double, CCBT_bool, {0x7ff0000000000001}, {0}, -1},
+        {CCBT_float, CCBT_bool, {0x7f800001}, {0}, -1},
+    };
+    static const struct {
+        CcExprKind kind;
+        CcBasicTypeKind type;
+        uint64_t a, b, expected;
+        int status;
+        _Bool comparison;
+    } binary[] = {
+        {CC_EXPR_DIV, CCBT_double, 0x4089000000000000, 0x4000000000000000, 0x4079000000000000},
+        {CC_EXPR_DIV, CCBT_double, 0x4018000000000000, 0x4008000000000000, 0x4000000000000000},
+        {CC_EXPR_DIV, CCBT_double, 0x3ff0000000000000, 0x4008000000000000, 0, -1},
+        {CC_EXPR_DIV, CCBT_double, 0x3ff0000000000000, 0, 0, -1},
+        {CC_EXPR_DIV, CCBT_double, 0, 0, 0, -1},
+        {CC_EXPR_DIV, CCBT_double, 0x8000000000000000, 0x4000000000000000, 0x8000000000000000},
+        {CC_EXPR_MUL, CCBT_double, 0x8000000000000000, 0xc000000000000000, 0},
+        {CC_EXPR_MUL, CCBT_double, 0x7fefffffffffffff, 0x4000000000000000, 0, -1},
+        {CC_EXPR_MUL, CCBT_double, 0x0010000000000000, 0x3fe0000000000000, 0, -1},
+        {CC_EXPR_ADD, CCBT_double, 0x3ff0000000000000, 0x4000000000000000, 0x4008000000000000},
+        {CC_EXPR_ADD, CCBT_double, 0x3ff0000000000000, 0x39b0000000000000, 0, -1},
+        {CC_EXPR_ADD, CCBT_double, 0, 0x8000000000000000, 0, -1},
+        {CC_EXPR_ADD, CCBT_double, 0x8000000000000000, 0x8000000000000000, 0x8000000000000000},
+        {CC_EXPR_SUB, CCBT_double, 0x4008000000000000, 0x4000000000000000, 0x3ff0000000000000},
+        {CC_EXPR_SUB, CCBT_double, 0x4000000000000000, 0x4008000000000000, 0xbff0000000000000},
+        {CC_EXPR_SUB, CCBT_double, 0x3ff0000000000000, 0x3ff0000000000000, 0, -1},
+        {CC_EXPR_MUL, CCBT_float, 0x3fc00000, 0x40000000, 0x40400000},
+        {CC_EXPR_DIV, CCBT_float, 0x40400000, 0x40000000, 0x3fc00000},
+        {CC_EXPR_ADD, CCBT_float, 0x3f800000, 0x33800000, 0, -1},
+        {CC_EXPR_EQ, CCBT_double, 0, 0x8000000000000000, 1, 0, 1},
+        {CC_EXPR_LT, CCBT_double, 0xc008000000000000, 0xc000000000000000, 1, 0, 1},
+        {CC_EXPR_GT, CCBT_double, 0x7ff0000000000000, 0x7fefffffffffffff, 1, 0, 1},
+        {CC_EXPR_LE, CCBT_double, 0xfff0000000000000, 0xfff0000000000000, 1, 0, 1},
+        {CC_EXPR_NE, CCBT_double, 0x7ff8000000000000, 0, 0, -1, 1},
+        {CC_EXPR_NE, CCBT_double, 0x7ff0000000000001, 0, 0, -1, 1},
+        {CC_EXPR_GT, CCBT_double, 1, 0, 0, -1, 1},
+        {CC_EXPR_EQ, CCBT_float, 0x7f800001, 0, 0, -1, 1},
+    };
+    fenv_t saved;
+    int hold = feholdexcept(&saved);
+    if(hold != 0)
+        EndTest("feholdexcept != 0");
+    if(hold) return TEST_stats;
+    int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    for(size_t m = 0; m < sizeof modes / sizeof modes[0]; m++){
+        if(fesetround(modes[m]) != 0)
+            EndTest("fesetround failed");
+        {
+            static int idx[sizeof modes/sizeof modes[0]] = {0};
+            for(size_t i = test_atomic_increment(idx+m); i < sizeof binary/sizeof binary[0]; i = test_atomic_increment(idx+m)){
+                CcQualType type = ccqt_basic(binary[i].type);
+                uint32_t size = ci_target(&ci)->sizeof_[binary[i].type];
+                CiFoldValue a = {.type = type, .sz = size, .bits = {binary[i].a}};
+                CiFoldValue b = {.type = type, .sz = size, .bits = {binary[i].b}};
+                CiFoldValue result = {.type = binary[i].comparison ? ccqt_basic(CCBT_int) : type, .sz = binary[i].comparison ? 4 : size};
+                feclearexcept(FE_ALL_EXCEPT);
+                if(i & 1) feraiseexcept(FE_DIVBYZERO);
+                int flags = fetestexcept(FE_ALL_EXCEPT);
+                int status = ci_fold_float_binary(binary[i].kind, &a, &b, &result);
+                int after_flags = fetestexcept(FE_ALL_EXCEPT);
+                int after_round = fegetround();
+                if(status != binary[i].status || (status == 0 && result.bits[0] != binary[i].expected))
+                    TestPrintf("float binary fold case %zu, rounding mode %zu\n", i, m);
+                TestExpect(status, ==, binary[i].status);
+                TestExpect(after_flags, ==, flags);
+                TestExpect(after_round, ==, modes[m]);
+                if(status == 0) TestExpect(result.bits[0], ==, binary[i].expected);
+            }
+        }
+        {
+            static int idx[sizeof modes/sizeof modes[0]] = {0};
+            for(size_t i = test_atomic_increment(idx+m); i < sizeof cases/sizeof cases[0]; i = test_atomic_increment(idx+m)){
+                CiFoldValue from = {.type = ccqt_basic(cases[i].from), .sz = ci_target(&ci)->sizeof_[cases[i].from]};
+                memcpy(from.bits, cases[i].input, sizeof from.bits);
+                CiFoldValue to = {.type = ccqt_basic(cases[i].to), .sz = ci_target(&ci)->sizeof_[cases[i].to]};
+                feclearexcept(FE_ALL_EXCEPT);
+                // Verify both a clean environment and preservation of existing flags.
+                if(i & 1) feraiseexcept(FE_DIVBYZERO);
+                int flags = fetestexcept(FE_ALL_EXCEPT);
+                int status;
+                if(from.sz <= 8){
+                    CcExpr value = {.kind = CC_EXPR_VALUE, .type = from.type, .uinteger = from.bits[0]};
+                    CcExpr cast = {.kind = CC_EXPR_CAST, .type = to.type, .lhs = &value};
+                    status = ci_fold_expr(&ci, &ctx, &cast, &to);
+                }
+                else status = ci_fold_float_cast(&ctx, &from, &to);
+                int after_flags = fetestexcept(FE_ALL_EXCEPT);
+                int after_round = fegetround();
+                if(status != cases[i].status) TestPrintf("float fold case %zu, rounding mode %zu\n", i, m);
+                TestExpect(status, ==, cases[i].status);
+                TestExpect(after_flags, ==, flags);
+                TestExpect(after_round, ==, modes[m]);
+                if(status == 0){
+                    TestExpect(to.bits[0], ==, cases[i].expected[0]);
+                    TestExpect(to.bits[1], ==, cases[i].expected[1]);
+                }
+            }
+        }
+    }
+    if(fesetenv(&saved) != 0)
+        EndTest("fesetenv failed");
+    TESTEND();
+}
+#ifdef __clang__
+#pragma clang assume_nonnull end
+#endif
