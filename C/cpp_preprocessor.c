@@ -454,8 +454,7 @@ cpp_hex_digit(unsigned char c){
 }
 
 static int
-cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* cursor,
-                        uint32_t* value, _Bool* numeric){
+cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* cursor, uint32_t* value, _Bool* numeric){
     size_t i = *cursor;
     uint32_t cp = (unsigned char)s.text[i++];
     *numeric = 0;

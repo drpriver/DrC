@@ -229,6 +229,10 @@ LOG_PRINTF(2, 3)
 static Atom _Nullable
 cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
 
+// Decode text-consuming extension arguments as UTF-8 and quote arbitrary bytes.
+static int cpp_decode_text(CppPreprocessor*, CppToken, MStringBuilder*);
+static Atom _Nullable cpp_quote_string(CppPreprocessor*, StringView);
+
 // phase 5, phase 6, part of 7
 static int cpp_next_c_token(CppPreprocessor* cpp, CcToken* tok);
 

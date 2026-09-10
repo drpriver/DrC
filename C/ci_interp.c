@@ -3922,7 +3922,17 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
             cmd_destroy(&cmd);
             return err;
         }
-        Atom a = AT_atomize(cpp->at, t.txt.text + 1, t.txt.length - 2);
+        MStringBuilder decoded = {.allocator = scratch};
+        err = cpp_decode_text(cpp, t, &decoded);
+        if(!err && decoded.cursor && memchr(decoded.data, 0, decoded.cursor))
+            err = cpp_error(cpp, t.loc, "__SHELL__: arguments must not contain NUL bytes");
+        if(err){
+            msb_destroy(&decoded);
+            cmd_destroy(&cmd);
+            return err;
+        }
+        Atom a = AT_atomize(cpp->at, decoded.data ? decoded.data : "", decoded.cursor);
+        msb_destroy(&decoded);
         if(!a){ cmd_destroy(&cmd); return CI_OOM_ERROR; }
         if(!cmd.args.count){
             cmd_prog(&cmd, (LongString){a->length, a->data});
@@ -3957,7 +3967,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     size_t output_alloc_size = output.length + 1;
     while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
         output.length--;
-    Atom v = cpp_atomizef(cpp, "\"%.*s\"", (int)output.length, output.text);
+    Atom v = cpp_quote_string(cpp, LS_to_SV(output));
     Allocator_free(scratch, output.text, output_alloc_size);
     if(!v) return CI_OOM_ERROR;
     CppToken result = {
