@@ -7325,6 +7325,105 @@ cpp_ident_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     return 0;
 }
 
+// Parse directly into IEEE binary32/binary64 bits
+static
+int
+cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
+    const char* s = tok->txt.text;
+    size_t len = tok->txt.length;
+    if(len > 255) return cpp_error(cpp, tok->loc, "Number literal too long");
+    size_t i = 2;
+    uint64_t leading = 0;
+    int bits = 0, fractional_digits = 0, digits = 0;
+    _Bool point = 0, sticky = 0;
+    for(; i < len; i++){
+        int d = cpp_hex_digit((unsigned char)s[i]);
+        if(d >= 0){
+            digits++;
+            fractional_digits += point;
+            for(int b = 3; b >= 0; b--){
+                unsigned bit = (d >> b) & 1;
+                if(!bits && !bit) continue;
+                if(bits < 64) leading |= (uint64_t)bit << (63 - bits);
+                else sticky |= bit;
+                bits++;
+            }
+        }
+        else if(s[i] == '.' && !point) point = 1;
+        else if(s[i] == '\'' && i > 2 && i+1 < len &&
+                cpp_hex_digit((unsigned char)s[i-1]) >= 0 &&
+                cpp_hex_digit((unsigned char)s[i+1]) >= 0) continue;
+        else break;
+    }
+    if(!digits || i == len || (s[i] != 'p' && s[i] != 'P')) goto invalid;
+    i++;
+    _Bool negative_exp = 0;
+    if(i < len && (s[i] == '+' || s[i] == '-')) negative_exp = s[i++] == '-';
+    int exponent = 0, exponent_digits = 0;
+    for(; i < len; i++){
+        if(s[i] >= '0' && s[i] <= '9'){
+            exponent_digits++;
+            // Saturation is safe given the bounded significand length.
+            if(exponent < 1000000) exponent = exponent*10 + s[i]-'0';
+        }
+        else if(s[i] == '\'' && exponent_digits && i+1 < len &&
+                s[i-1] >= '0' && s[i-1] <= '9' &&
+                s[i+1] >= '0' && s[i+1] <= '9') continue;
+        else break;
+    }
+    if(!exponent_digits) goto invalid;
+    CcConstantType type = CC_DOUBLE;
+    if(i < len){
+        if(s[i] == 'f' || s[i] == 'F') type = CC_FLOAT;
+        else if(s[i] == 'l' || s[i] == 'L') type = CC_LONG_DOUBLE;
+        else goto invalid;
+        i++;
+    }
+    if(i != len) goto invalid;
+    if(negative_exp) exponent = -exponent;
+    exponent += bits - 1 - 4*fractional_digits;
+    int precision = type == CC_FLOAT ? 24 : 53;
+    int bias = type == CC_FLOAT ? 127 : 1023;
+    uint64_t encoded = 0;
+    if(bits){
+        // Subnormals retain fewer significant bits at a fixed exponent.
+        int keep = precision;
+        if(exponent < 1-bias) keep -= (1-bias) - exponent;
+        uint64_t significand = 0;
+        if(keep > 0){
+            int shift = 64-keep;
+            significand = leading >> shift;
+            uint64_t remainder = leading & ((UINT64_C(1) << shift)-1);
+            uint64_t half = UINT64_C(1) << (shift-1);
+            if(remainder > half || (remainder == half && (sticky || (significand & 1))))
+                significand++;
+        }
+        else if(keep == 0){
+            // Half the least subnormal rounds to zero; anything above to one.
+            significand = leading > (UINT64_C(1) << 63) || sticky;
+        }
+        if(exponent < 1-bias) encoded = significand;
+        else {
+            if(significand == (UINT64_C(1) << precision)){
+                significand >>= 1;
+                exponent++;
+            }
+            if(exponent > bias) encoded = (uint64_t)(2*bias+1) << (precision-1);
+            else encoded = ((uint64_t)(exponent+bias) << (precision-1)) |
+                           (significand & ((UINT64_C(1) << (precision-1))-1));
+        }
+    }
+    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=type}, .loc=tok->loc};
+    if(type == CC_FLOAT){
+        uint32_t u = (uint32_t)encoded;
+        memcpy(&out->constant.float_value, &u, sizeof u);
+    }
+    else memcpy(&out->constant.double_value, &encoded, sizeof encoded);
+    return 0;
+invalid:
+    return cpp_error(cpp, tok->loc, "Invalid hexadecimal floating-point literal");
+}
+
 static
 int
 cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
@@ -7332,6 +7431,11 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     size_t len = cpptok->txt.length;
     // Detect hex prefix before suffix stripping so we don't eat hex digits
     _Bool maybe_hex = (len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'));
+    if(maybe_hex){
+        for(size_t i = 2; i < len; i++)
+            if(s[i] == '.' || s[i] == 'p' || s[i] == 'P')
+                return cpp_hex_float_to_cc_tok(cpp, cpptok, cctok);
+    }
     // Check for MSVC integer suffixes: [uU]?i(8|16|32|64)
     int msvc_bits = 0; // 0 = no MSVC suffix, 8/16/32/64 = explicit width
     _Bool has_u = 0;
@@ -7415,8 +7519,6 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     if(is_float){
         if(has_u)
             return cpp_error(cpp, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
-        if(is_hex)
-            return cpp_error(cpp, cpptok->loc, "Hex floating-point literals not yet supported");
         CcConstantType ctype;
         if(has_f){
             ctype = CC_FLOAT;
