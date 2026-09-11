@@ -252,8 +252,8 @@ struct CiRtField {
 typedef struct CiRtModuleMember CiRtModuleMember;
 struct CiRtModuleMember {
     CcQualType type;
-    const char* name;
     size_t name_length;
+    const char* name;
     void* _Nullable address;
 };
 

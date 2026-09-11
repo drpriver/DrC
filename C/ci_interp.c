@@ -569,6 +569,22 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(_Bool*)result = cc_explicit_castable(&ci->parser, qt, target);
             return 0;
         }
+        case CC_TYPE_MAKE_ANY:{
+            CiRtAny* any = result;
+            memset(any, 0, sizeof *any);
+            uint32_t sz;
+            err = cc_sizeof_as_uint(&ci->parser, qt, loc, &sz);
+            if(err) return err;
+            if(sz > sizeof any->payload){
+                return ci_error(ci, loc, "Type doesn't fit in an _Any");
+            }
+            if(sz && !arg){
+                return ci_error(ci, loc, "Null pointer as arg to make_any");
+            }
+            any->type.unqual = qt.unqual;
+            if(sz) memcpy(any->payload, (const void*)arg, sz);
+            return 0;
+        }
         case CC_TYPE_FIELD:{
             CcTypeKind k = ccqt_kind(qt);
             if(k != CC_STRUCT && k != CC_UNION)
@@ -664,10 +680,16 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_ELEMENT_TYPE: {
-            if(ccqt_kind(qt) != CC_ARRAY)
-                return ci_error(ci, loc, "_Type.element_type: not an array type");
-            *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
-            return 0;
+            CcTypeKind k = ccqt_kind(qt);
+            if(k == CC_ARRAY){
+                *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
+                return 0;
+            }
+            if(k == CC_SLICE){
+                *(uintptr_t*)result = ccqt_as_slice(qt)->pointee.bits;
+                return 0;
+            }
+            return ci_error(ci, loc, "_Type.element_type: not an array, slice or vector type");
         }
         case CC_TYPE_UNDERLYING_TYPE: {
             if(ccqt_kind(qt) != CC_ENUM)
@@ -801,7 +823,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_RT_MODULE_VALIDATE:
                 case CI_RT_TYPE_REFLECT:
                 case CI_RT_MODULE_REFLECT: {
-                    uintptr_t receiver = 0, arg = 0;
+                    uintptr_t receiver, arg = 0;
                     CI_INLINE_MEMCPY(&receiver, (char*)frame->slots + op->rt_call.args[0], sizeof receiver);
                     if(op->rt_call.nargs >= 2)
                         CI_INLINE_MEMCPY(&arg, (char*)frame->slots + op->rt_call.args[1], sizeof arg);
@@ -816,9 +838,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     else if(op->rt_call.op == CI_RT_TYPE_REFLECT)
                         err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, result);
                     else
-                        err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op,
-                            (CiModule*)receiver, arg, expected, result,
-                            op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
+                        err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op, (CiModule*)receiver, arg, expected, result, op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
                     break;
                 }
                 case CI_RT_INTERN: {

@@ -4416,6 +4416,10 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         result_type = ccqt_basic(CCBT_bool);
                         is_method = 1;
                         break;
+                    case CC_TYPE_MAKE_ANY:
+                        result_type = ccqt_basic(CCBT__Any);
+                        is_method= 1;
+                        break;
                     }
                     if(is_method){
                         err = cc_expect_punct(p, '(');
@@ -4427,6 +4431,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             if(err) return err;
                             CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                             err = cc_implicit_cast(p, arg_expr, size_type, &arg_expr);
+                            if(err) return err;
+                            arg_val = arg_expr;
+                        }
+                        else if(ti_op == CC_TYPE_MAKE_ANY){
+                            CcExpr* arg_expr;
+                            err = cc_parse_assignment_expr(p, vc, &arg_expr, CCQT_NONE);
+                            if(err) return err;
+                            err = cc_implicit_cast(p, arg_expr, p->const_void_star, &arg_expr);
                             if(err) return err;
                             arg_val = arg_expr;
                         }
@@ -6519,6 +6531,7 @@ cc_expr_nvalues(CcExpr* e){
             switch(e->type_introspection.op){
                 case CC_TYPE_IS_CALLABLE_WITH:
                 case CC_TYPE_CASTABLE_TO:
+                case CC_TYPE_MAKE_ANY:
                 case CC_TYPE_FIELD:
                 case CC_TYPE_PARAM_TYPE:
                 case CC_TYPE_ENUMERATOR:
@@ -12205,6 +12218,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("count"), CC_TYPE_COUNT},
             {SVI("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
             {SVI("is_castable_to"), CC_TYPE_CASTABLE_TO},
+            {SVI("make_any"), CC_TYPE_MAKE_ANY},
             {SVI("field"), CC_TYPE_FIELD}, // field name or index;
             {SVI("fields"), CC_TYPE_FIELDS},
             {SVI("push_method"), CC_TYPE_PUSH_METHOD},
@@ -13684,6 +13698,9 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     cc_release_expr(p, arg);
                     INTRES(castable);
                 }
+                case CC_TYPE_MAKE_ANY:{
+                    return CC_NOT_CONSTANT_ERROR; // TODO: we could do this
+                }
                 case CC_TYPE_FIELDS: {
                     CcTypeKind k = ccqt_kind(qt);
                     if(k != CC_STRUCT && k != CC_UNION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
@@ -13713,9 +13730,19 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(i < 0 || (uint64_t)i >= f->param_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(f->params[i]);
                 }
-                case CC_TYPE_ELEMENT_TYPE:
-                    if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
-                    TYPERES(ccqt_as_array(qt)->element);
+                case CC_TYPE_ELEMENT_TYPE:{
+                    CcTypeKind k = ccqt_kind(qt);
+                    CcQualType val;
+                    if(k == CC_ARRAY)
+                        val = ccqt_as_array(qt)->element;
+                    else if(k == CC_SLICE)
+                        val = ccqt_as_slice(qt)->pointee;
+                    else {
+                        err = CC_NOT_CONSTANT_ERROR;
+                        goto fini_introspection;
+                    }
+                    TYPERES(val);
+                }
                 case CC_TYPE_UNDERLYING_TYPE:
                     if(ccqt_kind(qt) != CC_ENUM) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_enum(qt)->underlying);

@@ -504,7 +504,7 @@ C::md
         `.unqual` | `_Type` | Type with qualifiers removed
         `.count` | `size_t` | Element count (arrays only)
         `.fields` | `size_t` | Number of fields (structs/unions)
-        `.element_type` | `_Type` | Element type (arrays only)
+        `.element_type` | `_Type` | Element type (arrays/slices only)
         `.return_type` | `_Type` | Return type (functions/function pointers)
         `.param_count` | `size_t` | Parameter count (functions/function pointers)
         `.underlying_type` | `_Type` | Underlying integer type (enums only)
@@ -518,6 +518,7 @@ C::md
         `.enumerator(i)` | Returns the <i>i</i>th enumerator
         `.is_callable_with(T)` | True if callable with argument type `T`
         `.is_castable_to(T)` | True if explicitly castable to type `T`
+        `.make_any(const void*) ` | make an `_Any` of this type, copying .sizeof_ bytes from the pointer.
 
     `push_method`::md
       `push_method` is a compile-time mutation that adds a method to

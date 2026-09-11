@@ -392,6 +392,17 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "any: dynamic any", __LINE__,
+            SVI(
+                "int x = 3;\n"
+                "_Any a = x;\n"
+                "_Type T = typeof(x);\n"
+                "_Any b = T.make_any(&x);\n"
+                "return a.as(int) == b.as(int);\n"
+            ),
+            .exit_code = 1,
+        },
+        {
             "fold: constant pointer casts", __LINE__,
             SVI("return (int)(unsigned long long)(void*)42;\n"),
             .exit_code = 42,

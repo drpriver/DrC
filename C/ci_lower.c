@@ -2057,18 +2057,26 @@ ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
     return ci_lower_expr(ci, ctx, e, dest, out);
 }
 
-// Snapshot operands: evaluating an index/name may mutate the receiver's local.
 static
 int
 ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     _Bool module = e->kind == CC_EXPR_MODULE_REFLECT;
     uint32_t subop = module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
     if(module && !out && subop != CC_MODULE_RUN) return 0;
-    _Bool second = module
-        ? (subop == CC_MODULE_FUNC || subop == CC_MODULE_VAR || subop == CC_MODULE_TYPE
-            || subop == CC_MODULE_SYMBOL || subop == CC_MODULE_PARSE_TYPE)
-        : (subop == CC_TYPE_IS_CALLABLE_WITH || subop == CC_TYPE_CASTABLE_TO
-            || subop == CC_TYPE_FIELD || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE);
+    int nargs = 1;
+    if(module ?
+        (  subop == CC_MODULE_FUNC
+        || subop == CC_MODULE_VAR
+        || subop == CC_MODULE_TYPE
+        || subop == CC_MODULE_SYMBOL
+        || subop == CC_MODULE_PARSE_TYPE)
+        : (subop == CC_TYPE_IS_CALLABLE_WITH
+        || subop == CC_TYPE_CASTABLE_TO
+        || subop == CC_TYPE_FIELD
+        || subop == CC_TYPE_ENUMERATOR
+        || subop == CC_TYPE_PARAM_TYPE
+        || subop == CC_TYPE_MAKE_ANY))
+        nargs++;
     int err;
     if(out){
         err = ci_lower_dest(ctx, &dest, out->size);
@@ -2079,7 +2087,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     CiOp call = {.rt_call = {
         .kind = CI_OP_RT_CALL,
         .op = module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
-        .nargs = second ? 2 : 1,
+        .nargs = nargs,
         .slot = dest,
         .slot_size = out ? out->size : 0,
         .reflect_op = subop,
