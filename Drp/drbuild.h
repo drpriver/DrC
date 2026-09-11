@@ -433,6 +433,9 @@ struct BuildCtx {
         int (*func)(intptr_t, const char*, size_t);
         int level;
     } logger;
+
+    _Bool measure_time;
+    uint64_t t0;
 };
 
 enum BLogLevel {

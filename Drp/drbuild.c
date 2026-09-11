@@ -18,6 +18,7 @@
 #include "MStringBuilder16.h"
 #include "offsetof.h"
 #include "bcoro.h"
+#include "measure_time.h"
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h> // For _NSGetExecutablePath
@@ -598,6 +599,7 @@ BuildCtx*_Nullable
 b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile){
     BuildCtx* ctx = Allocator_zalloc(MALLOCATOR, sizeof *ctx);
     if(!ctx) return NULL;
+    ctx->t0 = performance_counter();
     if(0){
         fail:
         if(ctx){
@@ -1436,7 +1438,13 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .dest = BARGDEST(&no_rebuild),
             .help = "Don't rebuild the build program.",
             .hidden = 1,
-        }
+        },
+        {
+            .name = SV("--time"),
+            .dest = BARGDEST(&ctx->measure_time),
+            .help = "Time the build",
+        },
+
         #undef BARGDEST
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -2764,6 +2772,12 @@ b_execute_targets(BuildCtx* ctx){
         ctx->jobs.count = 0;
     }
     write_to_json_file(ctx, &ctx->cmd_history, &TI_AM_MA_Atom.type_info, ctx->cmd_cache_path);
+
+    if(ctx->measure_time){
+        uint64_t t1 = performance_counter();
+        uint64_t diff = t1 - ctx->t0;
+        b_log(ctx, "Time elapsed: %.3fs\n", (double)diff/1e6);
+    }
     return err;
 }
 

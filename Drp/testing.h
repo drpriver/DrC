@@ -888,6 +888,7 @@ run_the_tests(size_t*_Nonnull which_tests, size_t test_count, struct TestResults
 #include "argument_parsing.h"
 #include "term_util.h"
 #include "thread_utils.h"
+#include "measure_time.h"
 
 // shuffling stuff
 #ifdef __linux__
@@ -1153,6 +1154,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         fprintf(stderr, "Somehow this program was called without an argv.\n");
         return 1;
     }
+    uint64_t t0 = performance_counter();
     const char* filename = argv[0];
     _Bool no_colors = 0;
     _Bool force_colors = 0;
@@ -1184,6 +1186,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     #endif
     #if !defined(__wasm__)
     _Bool multithreaded = 0;
+    _Bool time = 0;
     #endif
     int n_threads = 0;
     int n_cpus = num_cpus();
@@ -1294,6 +1297,11 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
                 .name = SV("--num-threads"),
                 .dest = ARGDEST(&n_threads),
                 .help = "Run the tests in this many threads.",
+            },
+            {
+                .name = SV("--time"),
+                .dest = ARGDEST(&time),
+                .help = "Measure the total time of the tests.",
             },
         #endif
         {
@@ -1525,6 +1533,12 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         }
         fprintf(stdout, "\n");
     }
+    if(time){
+        uint64_t t1 = performance_counter();
+        uint64_t diff = t1 - t0;
+        fprintf(stderr, "Time elapsed: %.3fs\n", (double)diff/1e6);
+    }
+
     return result.failures + result.assert_failures == 0? 0 : 1;
 }
 

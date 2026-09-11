@@ -1,5 +1,5 @@
 //
-// Copyright © 2024-2025, David Priver <david@davidpriver.com>
+// Copyright © 2024-2026, David Priver <david@davidpriver.com>
 //
 #ifndef MEASURE_TIME_H
 #define MEASURE_TIME_H
@@ -9,7 +9,7 @@
 // Always succeeds.
 // Used for ad-hoc profiling of different parts of the program.
 //
-static inline uint64_t get_t(void);
+static inline uint64_t performance_counter(void);
 #include "posixheader.h"
 #include "windowsheader.h"
 
@@ -19,25 +19,25 @@ static inline uint64_t get_t(void);
 // returns microseconds
 static inline
 uint64_t
-get_t(void){
+performance_counter(void){
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC_RAW, &t);
     return t.tv_sec * 1000000llu + t.tv_nsec/1000;
 }
 
 #elif defined(_WIN32)
-static uint64_t freq;
+static uint64_t performance_counter_freq;
 
 // returns microseconds
 static inline
 uint64_t
-get_t(void){
+performance_counter(void){
     uint64_t time;
-    if(!freq){
+    if(!performance_counter_freq){
         // This should never fail.
         // "On systems that run Windows XP or later, the function will always
         // succeed and will thus never return zero."
-        BOOL ok = QueryPerformanceFrequency((LARGE_INTEGER*)&freq);
+        BOOL ok = QueryPerformanceFrequency((LARGE_INTEGER*)&performance_counter_freq);
         (void)ok;
     }
 
@@ -46,13 +46,13 @@ get_t(void){
     // succeed and will thus never return zero."
     BOOL ok = QueryPerformanceCounter((LARGE_INTEGER*)&time);
     (void)ok;
-    return  (1000000llu * time) / freq;
+    return  (1000000llu * time) / performance_counter_freq;
 }
 #elif defined(__wasm__)
 
 static inline
 uint64_t
-get_t(void){
+performance_counter(void){
     return 0;
 }
 #endif
