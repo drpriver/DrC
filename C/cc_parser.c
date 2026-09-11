@@ -3443,6 +3443,8 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '{'){
+                    if(vc == CC_CONSTEXPR_VALUE)
+                        return cc_error(p, tok.loc, "statement expression in constant expression");
                     err = cc_next_token(p, &tok);
                     if(err) return err;
                     // statement expression
