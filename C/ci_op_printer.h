@@ -20,13 +20,13 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static void ci_op_print(const CiOp* op, MStringBuilder* out);
+static void ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt);
 static void ci_op_print_range(MStringBuilder* out, uint32_t slot, uint32_t size);
 static void ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offset);
 static const char* ci_op_alu_sym(CiAluOp op);
 static const char* ci_op_cmp_sym(CiCmpOp op);
 static const char* ci_op_falu_sym(CiFaluOp op);
-static const char* ci_op_float_suffix(uint32_t float_kind);
+static const char* ci_op_float_suffix(uint32_t float_kind, CcLongDoubleFormat ldbl_fmt);
 
 static
 void
@@ -92,12 +92,18 @@ ci_op_falu_sym(CiFaluOp op){
 
 static
 const char*
-ci_op_float_suffix(uint32_t float_kind){
+ci_op_float_suffix(uint32_t float_kind, CcLongDoubleFormat ldbl_fmt){
     switch((CcBasicTypeKind)float_kind){
         case CCBT_float16:     return ".f16";
         case CCBT_float:       return ".f32";
         case CCBT_double:      return ".f64";
-        case CCBT_long_double: return ".f80";
+        case CCBT_long_double:
+            switch(ldbl_fmt){
+                case CC_LONG_DOUBLE_BINARY64: return ".f64";
+                case CC_LONG_DOUBLE_X87: return ".f80";
+                case CC_LONG_DOUBLE_BINARY128: return ".f128";
+            }
+            return ".f?";
         case CCBT_float128:    return ".f128";
         default:               return ".f?";
     }
@@ -135,7 +141,7 @@ ci_op_memory_order(CcMemoryOrder m){
 
 static
 void
-ci_op_print(const CiOp* op, MStringBuilder* out){
+ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
     switch(op->kind){
         case CI_OP_RT_CALL:
             if(op->rt_call.slot_size){
@@ -278,7 +284,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
                         msb_sprintf(out, " = %f (0x%x)", (double)f, (unsigned)v);
                         return;
                     }
-                    case CCBT_double:{
+                    case CCBT_long_double:
+                        if(ldbl_fmt != CC_LONG_DOUBLE_BINARY64) break;
+                        goto print_double;
+                    case CCBT_double:
+                    print_double:;{
                         double f;
                         memcpy(&f, &v, sizeof f);
                         msb_sprintf(out, " = %f (0x%llx)", f, (unsigned long long)v);
@@ -541,7 +551,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out){
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);
             msb_sprintf(out, " = %s%s ",
                 op->istrue.negate?"isfalse":"istrue",
-                op->istrue.float_kind?ci_op_float_suffix(op->istrue.float_kind):"");
+                op->istrue.float_kind?ci_op_float_suffix(op->istrue.float_kind, ldbl_fmt):"");
             ci_op_print_range(out, op->istrue.src, op->istrue.src_size);
             break;
         case CI_OP_JUMP:

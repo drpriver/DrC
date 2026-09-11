@@ -10591,6 +10591,7 @@ TestFunction(test_ci_call_by_name){
     TESTEND();
 }
 TestFunction(test_float_folding);
+TestFunction(test_long_double_folding);
 
 
 int main(int argc, char** argv){
@@ -10603,6 +10604,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTest(test_long_double_folding);
     RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
@@ -10623,17 +10625,96 @@ int main(int argc, char** argv){
 #include "native_call.c"
 
 #include <fenv.h>
+#include "ci_op_printer.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+TestFunction(test_long_double_folding){
+    TESTBEGIN();
+    for(int target = 0; target < CC_TARGET_COUNT; target++){
+        CcTargetConfig t = cc_target_funcs[target]();
+        CiLowerCtx ctx = {.ldbl_fmt = t.long_double_format, .char_is_unsigned = !t.char_is_signed};
+        // change this as we support more formats.
+        int expected_status = t.long_double_format == CC_LONG_DOUBLE_BINARY64 ? 0 : FOLD_FAIL;
+        CcQualType ld = ccqt_basic(CCBT_long_double);
+        CiFoldValue a = {.type = ld, .sz = t.sizeof_[CCBT_long_double], .bits = {0x4000000000000000}};
+        CiFoldValue b = a, out = a;
+        int status = ci_fold_float_binary(&ctx, CC_EXPR_ADD, &a, &b, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, UINT64_C(0x4010000000000000));
+        out = (CiFoldValue){.type = ccqt_basic(CCBT_int), .sz = 4};
+        status = ci_fold_float_binary(&ctx, CC_EXPR_EQ, &a, &b, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, 1);
+        status = ci_fold_float_cast(&ctx, &a, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, 2);
+        CiFoldValue integer = {.type = ccqt_basic(CCBT_int), .sz = 4, .bits = {2}};
+        out = a;
+        status = ci_fold_float_cast(&ctx, &integer, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
+        out = (CiFoldValue){.type = ccqt_basic(CCBT_float), .sz = 4};
+        status = ci_fold_float_cast(&ctx, &a, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, 0x40000000);
+        out = (CiFoldValue){.type = ccqt_basic(CCBT_double), .sz = 8};
+        status = ci_fold_float_cast(&ctx, &a, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
+        b = out;
+        b.bits[0] = a.bits[0];
+        out = a;
+        status = ci_fold_float_cast(&ctx, &b, &out);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
+        // Inexact results and exceptional inputs must still fall back.
+        b = a;
+        b.bits[0] = UINT64_C(0x4008000000000000); // 3
+        TestExpect(int, ci_fold_float_binary(&ctx, CC_EXPR_DIV, &a, &b, &out), ==, FOLD_FAIL);
+        a.bits[0] = UINT64_C(0x7ff0000000000001); // signaling NaN
+        TestExpect(int, ci_fold_float_cast(&ctx, &a, &integer), ==, FOLD_FAIL);
+        a.bits[0] = 1; // subnormal
+        TestExpect(int, ci_fold_float_cast(&ctx, &a, &integer), ==, FOLD_FAIL);
+        _Bool truth = 1;
+        a.bits[0] = UINT64_C(0x8000000000000000);
+        status = ci_fold_truth(&ctx, &a, &truth);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpectFalse(truth);
+        a.bits[0] = UINT64_C(0x3ff0000000000000);
+        status = ci_fold_truth(&ctx, &a, &truth);
+        TestExpect(int, status, ==, expected_status);
+        if(!status) TestExpectTrue(truth);
+    }
+    MStringBuilder sb = {.allocator = MALLOCATOR};
+    CiOp op = {.istrue = {.kind = CI_OP_ISTRUE, .slot_size = 1, .src = 8,
+        .src_size = 8, .float_kind = CCBT_long_double}};
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
+    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f64 [8:16]")));
+    msb_reset(&sb);
+    op.istrue.src_size = 16;
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_X87);
+    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f80 [8:24]")));
+    msb_reset(&sb);
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY128);
+    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f128 [8:24]")));
+    msb_reset(&sb);
+    op = (CiOp){.constant = {.kind = CI_OP_CONST, .immsize = 8,
+        .bt_kind = CCBT_long_double, .immediate = {0x4000000000000000}}};
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
+    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:8] = 2.000000 (0x4000000000000000)")));
+    msb_destroy(&sb);
+    TESTEND();
+}
+
 TestFunction(test_float_folding){
     TESTBEGIN();
     #if defined __DRC__ && defined __GLIBC__
     // fenv functions have inline gnu asm with glibc
     #else
     CiInterpreter ci = {.parser.cpp.target = cc_target_funcs[CC_TARGET_TEST]()};
-    CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed};
+    CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed, .ldbl_fmt=ci_target(&ci)->long_double_format};
     static const struct {
         CcBasicTypeKind from, to;
         uint64_t input[2], expected[2];
@@ -10747,7 +10828,7 @@ TestFunction(test_float_folding){
                 feclearexcept(FE_ALL_EXCEPT);
                 if(i & 1) feraiseexcept(FE_DIVBYZERO);
                 int flags = fetestexcept(FE_ALL_EXCEPT);
-                int status = ci_fold_float_binary(binary[i].kind, &a, &b, &result);
+                int status = ci_fold_float_binary(&ctx, binary[i].kind, &a, &b, &result);
                 int after_flags = fetestexcept(FE_ALL_EXCEPT);
                 int after_round = fegetround();
                 if(status != binary[i].status || (status == 0 && result.bits[0] != binary[i].expected))

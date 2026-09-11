@@ -465,7 +465,7 @@ int main(int argc, char** argv, char** envp){
                 CiOp* op = &interp.toplevel_ops.data[i];
                 size_t cur = sb->cursor;
                 msb_sprintf(sb, "  0x%02zx)  ", i);
-                ci_op_print(op, sb);
+                ci_op_print(op, sb, interp.parser.cpp.target.long_double_format);
                 size_t dif = sb->cursor - cur;
                 if(dif < 60)
                     msb_write_nchar(sb, ' ', 60-dif);
@@ -936,7 +936,7 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
             CiOp* op = &func->interp_ops->code.data[i];
             size_t cur = sb->cursor;
             msb_sprintf(sb, "  0x%02zx)  ", i);
-            ci_op_print(op, sb);
+            ci_op_print(op, sb, p->cpp.target.long_double_format);
             size_t dif = sb->cursor - cur;
             if(dif < 60)
                 msb_write_nchar(sb, ' ', 60-dif);
