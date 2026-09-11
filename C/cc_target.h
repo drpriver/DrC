@@ -52,6 +52,13 @@ enum CcBitfieldABI TYPED_ENUM(uint8_t) {
 };
 TYPEDEF_ENUM(CcBitfieldABI, uint8_t);
 
+enum CcLongDoubleFormat TYPED_ENUM(uint8_t) {
+    CC_LONG_DOUBLE_BINARY64,  // IEEE 754 binary64 (same format as double)
+    CC_LONG_DOUBLE_X87,       // x87 80-bit extended precision, explicit integer bit
+    CC_LONG_DOUBLE_BINARY128, // IEEE 754 binary128
+};
+TYPEDEF_ENUM(CcLongDoubleFormat, uint8_t);
+
 // Target-specific type configuration.
 // Sizes are in bytes. Type fields use CcBasicTypeKind.
 typedef struct CcTargetConfig CcTargetConfig;
@@ -62,6 +69,7 @@ struct CcTargetConfig {
     uint8_t sizeof_[CCBT_COUNT];
     uint8_t alignof_[CCBT_COUNT];
     CcBitfieldABI bitfield_abi;
+    CcLongDoubleFormat long_double_format;
     CcBasicTypeKind size_type;
     CcBasicTypeKind ptrdiff_type;
     CcBasicTypeKind max_align_type;
@@ -94,6 +102,7 @@ static inline CcTargetConfig
 cc_target_x86_64_linux(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_LINUX,
+        .long_double_format = CC_LONG_DOUBLE_X87,
         .os = CC_OS_LINUX,
         .arch = CC_ARCH_x86_64,
         .sizeof_ = {
@@ -193,6 +202,7 @@ static inline CcTargetConfig
 cc_target_aarch64_linux(void){
     return (CcTargetConfig){
         .target = CC_TARGET_AARCH64_LINUX,
+        .long_double_format = CC_LONG_DOUBLE_BINARY128,
         .os = CC_OS_LINUX,
         .arch = CC_ARCH_ARM64,
         .sizeof_ = {
@@ -290,6 +300,7 @@ static inline CcTargetConfig
 cc_target_x86_64_macos(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_MACOS,
+        .long_double_format = CC_LONG_DOUBLE_X87,
         .os = CC_OS_MACOS,
         .arch = CC_ARCH_x86_64,
         .sizeof_ = {
@@ -389,6 +400,7 @@ static inline CcTargetConfig
 cc_target_aarch64_macos(void){
     return (CcTargetConfig){
         .target = CC_TARGET_AARCH64_MACOS,
+        .long_double_format = CC_LONG_DOUBLE_BINARY64,
         .os = CC_OS_MACOS,
         .arch = CC_ARCH_ARM64,
         .sizeof_ = {
@@ -487,6 +499,7 @@ static inline CcTargetConfig
 cc_target_x86_64_windows(void){
     return (CcTargetConfig){
         .target = CC_TARGET_X86_64_WINDOWS,
+        .long_double_format = CC_LONG_DOUBLE_BINARY64,
         .os = CC_OS_WINDOWS,
         .arch = CC_ARCH_x86_64,
         .bitfield_abi = CC_BITFIELD_MSVC,
@@ -590,6 +603,7 @@ static inline CcTargetConfig
 cc_target_test(void){
     return (CcTargetConfig){
         .target = CC_TARGET_TEST,
+        .long_double_format = CC_LONG_DOUBLE_BINARY128,
         .os = CC_OS_TEST,
         .arch = CC_ARCH_TEST,
         .sizeof_ = {
