@@ -42,6 +42,356 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "auto: const array members preserve pointee qualifiers", __LINE__,
+            SVI("struct S {int a[2];}; const struct S s={{1,2}};\n"
+                "auto p=s.a;\n"
+                "const _Any a=(struct S){{3,4}}; auto q=a.as(struct S).a;\n"
+                "return _Generic(p,const int*:1,default:0)\n"
+                " && _Generic(q,const int*:1,default:0)\n"
+                " && p[0]==1 && p[1]==2 && q[0]==3 && q[1]==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "init: shorter string replaces whole array", __LINE__,
+            SVI(
+                "struct S {char s[4]; int sentinel;};\n"
+                "struct S s={.s=\"abc\",.sentinel=42,.s=\"x\"};\n"
+                "return s.s[0]==120 && s.s[1]==0 && s.s[2]==0 && s.s[3]==0 && s.sentinel==42;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "init: wide string replacement clears omitted elements", __LINE__,
+            SVI(
+                "struct S {unsigned short s[4];};\n"
+                "struct S s={.s=u\"abc\",.s=u\"x\"};\n"
+                "return s.s[0]==120 && s.s[1]==0 && s.s[2]==0 && s.s[3]==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "init: disjoint strings avoid extra zeroing", __LINE__,
+            SVI(
+                "struct S {char a[4]; char b[4];};\n"
+                "struct S s={.b=\"bc\",.a=\"a\"};\n"
+                "return s.a[0]==97 && s.a[3]==0 && s.b[1]==99 && s.b[3]==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: const array permits qualified pointer and slice", __LINE__,
+            SVI(
+                "struct S {int a[2];}; const _Any a=(struct S){{1,2}};\n"
+                "const int* p=a.as(struct S).a;\n"
+                "const int s[:]=a.as(struct S).a;\n"
+                "return p[0]==1 && s[1]==2;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: conditional aggregate agrees with constexpr", __LINE__,
+            SVI(
+                "struct S {int x,y;}; constexpr struct S ss[2]={{3,4},{5,6}};\n"
+                "constexpr _Any a=1?ss[0]:ss[1];\n"
+                "_Static_assert(a.as(struct S).y==4);\n"
+                "return a.as(struct S).y==4;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: boxed array element agrees with constexpr", __LINE__,
+            SVI("struct S {int x,y;};\n"
+                "constexpr struct S values[2]={{1,2},{3,4}};\n"
+                "constexpr _Any a=values[1];\n"
+                "constexpr int x=a.as(struct S).x, y=a.as(struct S).y;\n"
+                "return x==3 && y==4 && a.as(struct S).x==x && a.as(struct S).y==y;"),
+            .exit_code = 1,
+        },
+        {
+            "any: vector boxes a value and preserves its tag", __LINE__,
+            SVI(
+                "typedef int V __attribute__((vector_size(8)));\n"
+                "V v={3,4}; _Any a=v;\n"
+                "if(a.type!=V) return 0;\n"
+                "v[0]=99;\n"
+                "if(a.as(V)[0]!=3 || a.as(V)[1]!=4) return 0;\n"
+                "a.as(V)[1]=7;\n"
+                "return a.type==V && a.as(V)[1]==7 && v[1]==4;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: small vector payload view is writable", __LINE__,
+            SVI(
+                "typedef int V __attribute__((vector_size(8)));\n"
+                "_Any a=0ull;\n"
+                "a.as(V)[0]=3; a.as(V)[1]=4;\n"
+                "return a.type==unsigned long long && a.as(V)[0]==3 && a.as(V)[1]==4;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: empty array initializer overwrites tag and payload", __LINE__,
+            SVI(
+                "_Any values[1]={[0]=0xffffffffffffffffull,[0]={}};\n"
+                "return values[0].type.is_invalid && values[0].as(unsigned long long)==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: empty struct member initializer overwrites tag and payload", __LINE__,
+            SVI(
+                "struct S {_Any a; int sentinel;};\n"
+                "struct S s={.a=0xffffffffffffffffull,.sentinel=42,.a={}};\n"
+                "return s.a.type.is_invalid && s.a.as(unsigned long long)==0 && s.sentinel==42;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: empty assignment clears an existing value", __LINE__,
+            SVI(
+                "_Any a=0xffffffffffffffffull; a={};\n"
+                "return a.type.is_invalid && a.as(unsigned long long)==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: const aggregate preserves payload pointer qualifiers", __LINE__,
+            SVI(
+                "struct S {_Any a;}; const struct S s={3};\n"
+                "return _Generic(s.a.payload, const void*:1, default:0)\n"
+                " && _Generic(&s.a.as(int), const int*:1, default:0)\n"
+                " && _Generic(&s.a.type, const _Type*:1, default:0);\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: empty elements in print-style macro", __LINE__,
+            SVI("int check(unsigned long count, _Any* args){\n"
+                " return count==4 && args[0].type==char(*)[6]\n"
+                " && args[1].type.is_invalid && args[2].type==int\n"
+                " && args[2].as(int)==0 && args[3].type.is_invalid;\n"
+                "}\n"
+                "#define check(...) check(__VA_COUNT__, (_Any[]){__VA_ARGS__})\n"
+                "return check(\"empty\", {}, {0}, {{}});\n"),
+            .exit_code = 1,
+        },
+        {
+            "empty scalar members and nested braces", __LINE__,
+            SVI("struct S {int x; _Any a; _Type t;};\n"
+                "struct S s={{}, {}, {}}; int values[2]={{}, {{}}};\n"
+                "_Any a={{}};\n"
+                "return s.x==0 && s.a.type.is_invalid && s.t.is_invalid\n"
+                " && values[0]==0 && values[1]==0 && a.type.is_invalid;\n"),
+            .exit_code = 1,
+        },
+        {
+            "any: bitfield views", __LINE__,
+            SVI("struct Bits {unsigned a:3; signed b:3;};\n"
+                "constexpr struct Bits bits={3,-1}; constexpr _Any a=bits;\n"
+                "_Static_assert(a.as(struct Bits).a==3);\n"
+                "_Static_assert(a.as(struct Bits).b==-1);\n"
+                "return a.as(struct Bits).a==3 && a.as(struct Bits).b==-1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "any: conditional copies and type payload", __LINE__,
+            SVI("_Any a=3, b=4; int flag=1; _Any c=flag?a:b;\n"
+                "if(c.as(int)!=3) return 0;\n"
+                "a=int; return a.type==_Type && a.as(_Type)==int;\n"),
+            .exit_code = 1,
+        },
+        {
+            "any: constant pointer tags", __LINE__,
+            SVI("constexpr _Any a=\"hello\";\n"
+                "_Static_assert(a.type==char(*)[6]);\n"
+                "constexpr _Any b=nullptr;\n"
+                "_Static_assert(b.type==typeof(nullptr));\n"
+                "return a.as(char*)[0]=='h' && b.as(unsigned long long)==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "any: enum and small union", __LINE__,
+            SVI("enum E {value=42}; enum E e=value; _Any a=e;\n"
+                "if(a.type!=enum E || a.as(enum E)!=value) return 0;\n"
+                "union U {int i; float f;}; union U u={.f=1.f}; a=u;\n"
+                "return a.type==union U && a.as(union U).i==0x3f800000;\n"),
+            .exit_code = 1,
+        },
+        {
+            "any: empty, zero, and layout", __LINE__,
+            SVI(
+                "_Any empty = {}; _Any zero = {0}; static _Any global;\n"
+                "struct Holder {_Any a[2];}; struct Holder h = {};\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8 && __ANY_PAYLOAD_SIZE__==8\n"
+                " && empty.type.is_invalid && !empty.type.is_valid && global.type.is_invalid\n"
+                " && h.a[0].type.is_invalid && h.a[1].type.is_invalid\n"
+                " && zero.type==int && zero.as(int)==0 && empty.as(unsigned long long)==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: copy, retag, and aliasing", __LINE__,
+            SVI(
+                "int f(void){\n"
+                "    _Any a = 3; a = a.as(int) + 4;\n"
+                "    if(a.type != int || a.as(int)!=7) return 0;\n"
+                "    a.as(int) = 9.f;\n"
+                "    a.type = unsigned;\n"
+                "    const _Any b = a; a = b; a = a;\n"
+                "    _Any* p = &a; p->as(unsigned) += 2;\n"
+                "    return a.type == unsigned && b.as(unsigned)==9 && a.as(unsigned)==11;\n"
+                "}\n"
+                "return f();\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: wrapped function", __LINE__,
+            SVI(
+            "int f(void){\n"
+            "    return 42;\n"
+            "}\n"
+            "_Any a = f;\n"
+            "return a.as(int(*)(void))();\n"
+            ),
+            .exit_code = 42,
+        },
+        {
+            "any: wrapped function: convert function type to pointer", __LINE__,
+            SVI(
+            "int f(void){\n"
+            "    return 42;\n"
+            "}\n"
+            "_Any a = f;\n"
+            "return a.as(int(void))();\n"
+            ),
+            .exit_code = 42,
+        },
+        {
+            "any: zero-fill versus typed writes", __LINE__,
+            SVI(
+                "_Any a = 0xffffffffffffffffull;\n"
+                "a = (unsigned char)5;\n"
+                "if(a.as(unsigned long long)!=5) return 0;\n"
+                "a = 0xffffffffffffffffull; a.as(unsigned)=0;\n"
+                "return a.type==unsigned long long && a.as(unsigned long long)==0xffffffff00000000ull;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: qualifiers and payload address", __LINE__,
+            SVI(
+                "int x=3; const int* ptr=&x; const float f=2.f;\n"
+                "_Any a=f; if(a.type!=float) return 0;\n"
+                "a=ptr; if(a.type!=const int*) return 0;\n"
+                "const _Any c=3;\n"
+                "if(!_Generic(c.payload, const void*:1, default:0)) return 0;\n"
+                "if(!_Generic(&c.as(int), const int*:1, default:0)) return 0;\n"
+                "if(!_Generic(&c.type, const _Type*:1, default:0)) return 0;\n"
+                "_Any b=2; int* ip=b.payload; *ip=7;\n"
+                "return b.as(int)==7 && (char*)b.payload-(char*)&b==8;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: array and function addresses", __LINE__,
+            SVI(
+                "int data[2]={3,4}; const int cs[3]={1,2,3};\n"
+                "int f(int x){return x+1;}\n"
+                "_Any a=data;\n"
+                "if(a.type!=int(*)[2]) return 0;\n"
+                "a.as(int(*)[2])[0][1]=8;\n"
+                "a=cs; if(a.type!=const int(*)[3]) return 0;\n"
+                "a=\"hello\"; if(a.type!=char(*)[6] || a.as(char*)[1]!='e') return 0;\n"
+                "a=f; return a.type==int(*)(int) && a.as(int(*)(int))(data[1])==9;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: calls, returns, and temporary receivers", __LINE__,
+            SVI(
+                "_Any identity(_Any a){return a;}\n"
+                "_Any make(int x){return x;}\n"
+                "int read(_Any a){return a.type==int ? a.as(int):0;}\n"
+                "return read(42)==42 && identity(3.f).type==float && make(7).as(int)==7;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: small aggregates and destination pointers", __LINE__,
+            SVI(
+                "struct S {int x,y;}; struct S s={3,4};\n"
+                "_Any a=s; s.x=99;\n"
+                "if(a.type!=struct S || a.as(struct S).x!=3) return 0;\n"
+                "a.as(struct S).y=6;\n"
+                "int parse(_Any dst){\n"
+                " if(dst.type.pointee!=struct S) return 1;\n"
+                " dst.as(struct S*).x=42;\n"
+                " return 0;\n"
+                "}\n"
+                "return parse(&s)==0 && s.x==42 && a.as(struct S).y==6;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: compound literal storage", __LINE__,
+            SVI(
+                "int f(void){\n"
+                " _Any a=&(struct S {int x,y;}){3,4};\n"
+                " int* p=((_Any){7}).payload;\n"
+                " _Any b=99;\n"
+                " return *p==7 && a.as(struct S*).y==4 && b.as(int)==99;\n"
+                "} return f();\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: constexpr representations", __LINE__,
+            SVI(
+                "constexpr _Any e={}; constexpr _Any z={0}; constexpr _Any f=1.f;\n"
+                "constexpr _Any c=f;\n"
+                "_Static_assert(e.type.is_invalid && !e.type.is_valid);\n"
+                "_Static_assert(z.type==int && z.as(int)==0);\n"
+                "_Static_assert(f.type==float && f.as(float)==1.f);\n"
+                "_Static_assert(c.type==float && c.as(const float)==1.f);\n"
+                "constexpr _Any neg=-3;\n"
+                "_Static_assert(neg.as(int)==-3);\n"
+                "return 1;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: explicit boxing and type reflection", __LINE__,
+            SVI(
+                "_Any a=(_Any)4;\n"
+                "_Type t=int; _Type none={};\n"
+                "int accepts(_Any a){return a.as(int);}\n"
+                "return a.as(int)==4 && t.is_valid && none.is_invalid\n"
+                " && t.is_castable_to(_Any) && (int(int)).is_callable_with(int)\n"
+                " && (int(_Any)).is_callable_with(int) && !(int(_Any)).is_callable_with(int[:]);\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: payload of temporary", __LINE__,
+            SVI(
+                "_Any f(void){return 42;}\n"
+                "int read(const void* p){return *(const int*)p;}\n"
+                "return read(f().payload)==42;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "any: arrays of boxed values", __LINE__,
+            SVI(
+                "_Any a[3]={1,2.f,\"hello\"};\n"
+                "return a[0].type==int && a[1].type==float && a[2].type==char(*)[6]\n"
+                " && a[0].as(int)==1 && a[1].as(float)==2.f && a[2].as(char*)[0]=='h';\n"
+            ),
+            .exit_code = 1,
+        },
+        {
             "fold: constant pointer casts", __LINE__,
             SVI("return (int)(unsigned long long)(void*)42;\n"),
             .exit_code = 42,
@@ -5434,7 +5784,43 @@ TestFunction(test_interpreter){
                "return r == 0xFF0;\n"),
             .exit_code = 1,
         },
+        {
+            "init: positional replacement after backwards designator", __LINE__,
+            SVI("struct S {int a[2]; int b[2];};\nstruct S s={.b={1,2},.a={}, {3}};\nreturn s.a[0]==0 && s.a[1]==0 && s.b[0]==3 && s.b[1]==0;\n"),
+            .exit_code = 1,
+        },
         // Initialization: designated array
+        {
+            "init: nested lists need only the enclosing zero", __LINE__,
+            SVI("int n=3;\n"
+                "struct S {int a[2]; int b[2];};\n"
+                "struct S s={{n},{n+1}};\n"
+                "return s.a[0]==3 && s.a[1]==0 && s.b[0]==4 && s.b[1]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "init: disjoint backwards designators need no extra zero", __LINE__,
+            SVI("int n=3;\n"
+                "struct S {int a[2]; int b[2];};\n"
+                "struct S s={.b={n+1},.a={n}};\n"
+                "return s.a[0]==3 && s.a[1]==0 && s.b[0]==4 && s.b[1]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "init: partial replacement clears omitted elements", __LINE__,
+            SVI("int n=3;\n"
+                "struct S {int a[2]; int sentinel;};\n"
+                "struct S s={.a={n,n+1},.sentinel=42,.a={7}};\n"
+                "return s.a[0]==7 && s.a[1]==0 && s.sentinel==42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "init: member write followed by enclosing empty list", __LINE__,
+            SVI("struct S {int a[2]; int sentinel;};\n"
+                "struct S s={.a[1]=7,.sentinel=42,.a={}};\n"
+                "return s.a[0]==0 && s.a[1]==0 && s.sentinel==42;\n"),
+            .exit_code = 1,
+        },
         {
             "init: designated array", __LINE__,
             SVI("int a[5] = {[2] = 42, [4] = 99};\n"
@@ -8601,6 +8987,14 @@ TestFunction(test_interpreter){
                 "return f();\n"),
             .exit_code = 4,
         },
+        {
+            "vector", __LINE__,
+            SVI("typedef int __attribute__((vector_size(16))) int4;\n"
+                "int4 i = {0, 1, 2, 3};\n"
+                "i[0] = 2;\n"
+                "return i[0] + i[1] + i[2] + i[3]\n"),
+            .exit_code = 8,
+        },
     };
     int err;
     static int idx = 0;
@@ -9383,6 +9777,41 @@ TestFunction(test_cross_target){
         _Bool skip;
         CcTarget target;
     } testcases[] = {
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_MACOS,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS,
+        },
         {
             "fold: windows long truncates", __LINE__,
             SVI("return (long)0x100000001ULL == 1;\n"),

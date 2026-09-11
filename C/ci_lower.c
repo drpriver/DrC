@@ -460,6 +460,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         };
     }
     CcInitList* l = e->init_list;
+    uint64_t written_end = 0;
     for(uint32_t i = 0; i < l->count; i++){
         CcInitEntry* entry = &l->entries[i];
         CcExpr* value = entry->value;
@@ -468,11 +469,39 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         err = cc_sizeof_as_uint(p, value->type, value->loc, &esz);
         if(err) return err;
         uint32_t off = dst.disp + (uint32_t)entry->field_loc.byte_offset;
+        uint64_t start = entry->field_loc.byte_offset;
+        uint64_t end = start + (entry->field_loc.bit_width ? (entry->field_loc.bit_offset + entry->field_loc.bit_width + 7u) / 8u : esz);
         if(!entry->field_loc.bit_width && value->kind == CC_EXPR_INIT_LIST){
-            err = ci_lower_init_list(ci, ctx, value, (CiLowerAddr){.slot = dst.slot, .disp = off}, 0);
+            _Bool overwritten = 0;
+            // In-order, disjoint initializers need no scan or extra zeroing.
+            // A backwards designator may replace an already written subobject.
+            if(start < written_end && esz){
+                for(uint32_t j = 0; j < i; j++){
+                    CcInitEntry* prev = &l->entries[j];
+                    if(!prev->value) continue;
+                    uint64_t prev_start = prev->field_loc.byte_offset;
+                    if(prev_start >= end) continue;
+                    uint32_t prev_size;
+                    err = cc_sizeof_as_uint(p, prev->value->type, prev->value->loc, &prev_size);
+                    if(err) return err;
+                    uint64_t prev_end = prev_start + prev_size;
+                    if(prev->field_loc.bit_width){
+                        prev_start += prev->field_loc.bit_offset / 8;
+                        prev_end = prev->field_loc.byte_offset
+                            + (prev->field_loc.bit_offset + prev->field_loc.bit_width + 7) / 8;
+                    }
+                    if(prev_start < end && start < prev_end){
+                        overwritten = 1;
+                        break;
+                    }
+                }
+            }
+            err = ci_lower_init_list(ci, ctx, value, (CiLowerAddr){.slot = dst.slot, .disp = off}, overwritten);
             if(err) return err;
+            if(end > written_end) written_end = end;
             continue;
         }
+        if(end > written_end) written_end = end;
         uint32_t temp = ctx->temp;
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, value, CI_NO_SLOT, &v);
@@ -766,6 +795,41 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 return ci_lower_expr(ci, ctx, operand, dest, out);
             if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
+            if(ccqt_bt_eq(to, CCBT__Any)){
+                err = ci_lower_dest(ctx, &dest, size);
+                if(err) return err;
+                out->slot = dest;
+                uint32_t temp = ctx->temp;
+                uint32_t src_size;
+                err = cc_sizeof_as_uint(p, from, e->loc, &src_size);
+                if(err) return err;
+                // Stage before writing the tag or zeroing the payload: the
+                // source may refer to the destination's own payload.
+                uint32_t src;
+                err = ci_alloc_slot(ctx, src_size, 8, &src);
+                if(err) return err;
+                CiLowerVal v;
+                err = ci_lower_expr(ci, ctx, operand, src, &v);
+                if(err) return err;
+                CiOp* ops;
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &ops);
+                if(err) return err;
+                ops[0] = (CiOp){.constant = {
+                    .kind = CI_OP_CONST, .bt_kind = CCBT__Any,
+                    .slot = dest, .immsize = sizeof(CiRtAny),
+                    .immediate = {((CcQualType){.unqual = from.unqual}).bits, 0},
+                    .loc = e->loc,
+                }};
+                err = ma_alloc(CiOp)(ctx->out, ctx->a, &ops);
+                if(err) return err;
+                ops[0] = (CiOp){.copy = {
+                    .kind = CI_OP_COPY, .slot = dest + offsetof(CiRtAny, payload),
+                    .slot_size = src_size, .src = v.slot, .src_size = src_size,
+                    .loc = e->loc,
+                }};
+                ctx->temp = temp;
+                return 0;
+            }
             _Bool from_float = ci_falu_type(from);
             _Bool from_addr = ccqt_kind(from) == CC_POINTER || ccqt_kind(from) == CC_ARRAY
                            || ccqt_kind(from) == CC_FUNCTION || ccqt_bt_eq(from, CCBT_nullptr_t);

@@ -137,8 +137,9 @@ static void ci_unlock_resolver(CiInterpreter*);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
-static _Bool cc_implicit_convertible(CcQualType from, CcQualType to);
-static _Bool cc_explicit_castable(CcQualType from, CcQualType to);
+static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
+static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
+static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
@@ -407,6 +408,10 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(const char**)result = tag ? tag->data : "";
             return 0;
         }
+        case CC_TYPE_IS_VALID:
+        case CC_TYPE_IS_INVALID:
+            *(_Bool*)result = (qt.bits != 0) == (op == CC_TYPE_IS_VALID);
+            return 0;
         case CC_TYPE_IS_INTEGER: {
             CcQualType st = qt;
             while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
@@ -434,7 +439,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_IS_ARRAY: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY;
+            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY && !ccqt_as_array(qt)->is_vector;
+            return 0;
+        }
+        case CC_TYPE_IS_VECTOR: {
+            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY && ccqt_as_array(qt)->is_vector;
             return 0;
         }
         case CC_TYPE_IS_SLICE: {
@@ -549,7 +558,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             if(ccqt_kind(ft) == CC_FUNCTION){
                 CcFunction* f = ccqt_as_function(ft);
                 if(f->param_count == 1)
-                    v = cc_implicit_convertible(arg_type, f->params[0]);
+                    v = cc_implicit_convertible(&ci->parser, arg_type, f->params[0]);
             }
             *(_Bool*)result = v;
             return 0;
@@ -557,7 +566,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_CASTABLE_TO: {
             uintptr_t arg_bits = arg;
             CcQualType target = {.bits = arg_bits};
-            *(_Bool*)result = cc_explicit_castable(qt, target);
+            *(_Bool*)result = cc_explicit_castable(&ci->parser, qt, target);
             return 0;
         }
         case CC_TYPE_FIELD:{
@@ -3542,17 +3551,20 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(err) return err;
     _Alignas(16) char result_buf[16];
     char* result = result_buf;
+    uint32_t orig_result_sz = result_sz;
     if(result_sz > 16){
         result = Allocator_zalloc(ci_scratch_allocator(ci), result_sz);
         if(!result){
             return CI_OOM_ERROR;
         }
     }
+    char* orig_result = result;
     err = ci_eval_lowered_expr(ci, &ci->top_frame, expr, result, result_sz);
     if(err) goto cleanup;
     CcQualType rt = ftype->return_type;
     Atom a = NULL;
     int tok_type = CPP_NUMBER;
+    retry:;
     switch(ccqt_kind(rt)){
         case CC_BASIC:
             switch(rt.basic.kind){
@@ -3560,6 +3572,17 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     a = AT_ATOMIZE(cpp->at, "nullptr");
                     tok_type = CPP_IDENTIFIER;
                     break;
+                case CCBT__Any:{
+                    CiRtAny any;
+                    CI_INLINE_MEMCPY(&any, result, sizeof any);
+                    if(!cc_any_payload_type(p, any.type)){
+                        err = ci_error(ci, loc, "Invalid _Any payload type in procedural macro result");
+                        goto cleanup;
+                    }
+                    rt = any.type;
+                    result += offsetof(CiRtAny, payload);
+                    goto retry;
+                }
                 case CCBT__Type:
                     err = ci_unimplemented(ci, loc, "TODO: _Type to tokens");
                     goto cleanup;
@@ -3636,7 +3659,13 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
             goto cleanup;
         case CC_POINTER:{
             CcPointer* ptr = ccqt_as_ptr(rt);
+            size_t max_slen = -1;
+            if(ccqt_kind(ptr->pointee) == CC_ARRAY && ccqt_bt_eq((CcQualType){.unqual=ccqt_as_array(ptr->pointee)->element.unqual}, CCBT_char)){
+                max_slen = ccqt_as_array(ptr->pointee)->length;
+                goto handle_string;
+            }
             if(ccqt_is_basic(ptr->pointee) && ptr->pointee.basic.kind == CCBT_char){
+                handle_string:;
                 // string literal
                 const char* s = *(const char**)result;
                 if(!s){
@@ -3648,7 +3677,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     // escape processing reconstructs the original bytes.
                     MStringBuilder sb = {.allocator = ci_scratch_allocator(ci)};
                     msb_write_char(&sb, '"');
-                    for(size_t i = 0, slen = strlen(s); i < slen; i++){
+                    for(size_t i = 0, slen = strnlen(s, max_slen); i < slen; i++){
                         unsigned char c = (unsigned char)s[i];
                         switch(c){
                             case '\\': msb_write_literal(&sb, "\\\\"); break;
@@ -3705,7 +3734,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     goto cleanup;
     cleanup:
     if(expr) cc_release_expr(&ci->parser, expr);
-    if(result != result_buf) Allocator_free(ci_scratch_allocator(ci), result, result_sz);
+    if(orig_result != result_buf) Allocator_free(ci_scratch_allocator(ci), orig_result, orig_result_sz);
     return err;
 }
 

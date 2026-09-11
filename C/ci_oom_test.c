@@ -36,6 +36,14 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("constexpr _Any c=1.f; _Static_assert(c.as(float)==1.f);\n"
+         "constexpr _Type T=c.type; _Static_assert(T==float);\n"
+         "constexpr const char* text=\"ok\"; _Static_assert(text[1]=='k');\n"
+         "_Any f(_Any a){a=a.as(int)+1; return a;}\n"
+         "_Any a=f(41); return a.as(int);\n")},
+    {__LINE__, SVI("_Any boxed(int x){return x+1;}\n"
+         "#pragma procmacro boxed\n"
+         "return boxed(41);\n")},
     {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\");\n"
          "if(m) m.run();\n"
          "return 0;\n")},

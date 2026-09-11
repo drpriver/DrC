@@ -4130,6 +4130,9 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
         case CCBT__Type:
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Type")};
             break;
+        case CCBT__Any:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Any")};
+            break;
         case CCBT_INVALID:
         case CCBT_COUNT:
             return CPP_UNIMPLEMENTED_ERROR;
@@ -4167,6 +4170,7 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT_long_double_complex:
         case CCBT_nullptr_t:
         case CCBT__Type:
+        case CCBT__Any:
         case CCBT_COUNT:
             return "";
         DRP_CASES_EXHAUSTED;
@@ -4217,6 +4221,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     } while(0)
 
     DEFINT("__DRC__", 1);
+    DEFINT("__ANY_PAYLOAD_SIZE__", 8);
     DEFINT("_FORTIFY_SOURCE", 0);
     DEFINT("__FLT_EVAL_METHOD__", t.flt_eval_method);
 
@@ -6986,6 +6991,7 @@ int
 cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     CcToken ctok;
     int err = cpp_char_to_cc_tok(cpp, &tok, &ctok);
+    if(err) return err;
     if(!err) *value = (int64_t)ctok.constant.integer_value;
     return err;
 }
@@ -7526,11 +7532,11 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     else if(p + 1 < end && p[0] == 'u' && p[1] == '8'){ p += 2; ctype = CC_UCHAR; }
     else if(p < end && *p == 'u'){ p++; ctype = CC_CHAR16; }
     if(p >= end || *p != '\'')
-        return cpp_error(cpp, cpptok->loc, "Invalid character constant");
+        return ((void)cpp_error(cpp, cpptok->loc, "Invalid character constant"), CPP_SYNTAX_ERROR); // old version of GCC gets confused without this comma expr
     p++; // skip opening quote
     const char* e = end - 1; // closing quote
     if(e <= p || *e != '\'')
-        return cpp_error(cpp, cpptok->loc, "Invalid character constant");
+        return ((void)cpp_error(cpp, cpptok->loc, "Invalid character constant"), CPP_SYNTAX_ERROR);
     int64_t v = 0;
     int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype);
     if(err) return err;

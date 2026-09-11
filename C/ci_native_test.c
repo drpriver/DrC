@@ -29,6 +29,9 @@
 #endif
 
 
+static CiRtAny test_any_identity(CiRtAny a){ return a; }
+static CiRtAny test_any_callback(CiRtAny (*f)(CiRtAny), CiRtAny a){ return f(a); }
+
 // Integer types
 static int test_add(int a, int b){ return a + b; }
 static int test_sub(int a, int b){ return a - b; }
@@ -185,6 +188,23 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
+        {
+            "any: native argument and return", __LINE__,
+            SV("_Any identity(_Any);\n"
+               "_Any a=identity(42);\n"
+               "return a.type==int && a.as(int)==42;\n"),
+            {{SV("identity"), (void*)test_any_identity}},
+            .exit_code = 1,
+        },
+        {
+            "any: native callback", __LINE__,
+            SV("_Any apply(_Any(*)(_Any), _Any);\n"
+               "_Any inc(_Any a){return a.as(int)+1;}\n"
+               "_Any a=apply(inc, 41);\n"
+               "return a.type==int && a.as(int)==42;\n"),
+            {{SV("apply"), (void*)test_any_callback}},
+            .exit_code = 1,
+        },
         // ---- Integer types ----
         {
             "int add", __LINE__,
@@ -866,6 +886,51 @@ TestFunction(test_interp){
         _Bool skip;
         const char*_Nullable parse_error;
     } testcases[] = {
+        {
+            "procmacro: any string literal result", __LINE__,
+            SVI(
+                "_Any text(void){return \"hello\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='h' && s[4]=='o' && s[5]==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "procmacro: any char array result respects its bound", __LINE__,
+            SVI(
+                "_Any text(void){return *(char(*)[2])\"xyzz\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='x' && s[1]=='y' && s[2]==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "procmacro: any const char array result", __LINE__,
+            SVI(
+                "_Any text(void){return *(const char(*)[3])\"ok\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='o' && s[1]=='k' && s[2]==0;\n"
+            ),
+            .exit_code = 1,
+        },
+        {
+            "procmacro: any result", __LINE__,
+            SVI("_Any boxed(int x){return x+1;}\n"
+                "#pragma procmacro boxed\n"
+                "return boxed(41);\n"),
+            .exit_code = 42,
+        },
+        {
+            "procmacro: any result-2", __LINE__,
+            SVI("_Any a(void){return \"x\\0y\";}\n" // embedded nul -> short string
+                "int x = 42;\n"
+                "#pragma procmacro a\n"
+                "return __mixin(a());\n"),
+            .exit_code = 42,
+        },
         {
             "procmacro: aggregate argument", __LINE__,
             SVI("struct S { int a[5]; };\n"

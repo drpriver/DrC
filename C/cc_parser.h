@@ -269,6 +269,14 @@ struct CiRtSlice {
     size_t count;
     void* data;
 };
+typedef struct CiRtAny CiRtAny;
+struct CiRtAny {
+    CcQualType type;
+    _Alignas(8) unsigned char payload[8];
+};
+_Static_assert(sizeof(CiRtAny) == 16, "");
+_Static_assert(offsetof(CiRtAny, type) == 0, "");
+_Static_assert(offsetof(CiRtAny, payload) == 8, "");
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

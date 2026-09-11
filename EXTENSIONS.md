@@ -36,6 +36,7 @@
     * [Methods](#methods)
     * [`push_method`](#pushmethod)
     * [Types as expressions](#types-as-expressions)
+  * [`_Any`](#any)
   * [Top-level statements](#top-level-statements)
   * [Named / numbered arguments](#named-numbered-arguments)
   * [Lambdas](#lambdas)
@@ -626,6 +627,12 @@ const char* type_kind(_Type T){
 </thead>
 <tbody>
 <tr>
+<td>`.is_valid`</td><td>`_Bool`</td><td>Is this `_Type` valid or the empty `_Type` ((_Type){}). `false` for the empty type, `true` otherwise.</td>
+</tr>
+<tr>
+<td>`.is_invalid`</td><td>`_Bool`</td><td>!`.is_valid`</td>
+</tr>
+<tr>
 <td>`.name`</td><td>`const char*`</td><td>Name of the type (including `struct`, etc.)</td>
 </tr>
 <tr>
@@ -656,7 +663,10 @@ const char* type_kind(_Type T){
 <td>`.is_union`</td><td>`_Bool`</td><td>True for union types</td>
 </tr>
 <tr>
-<td>`.is_array`</td><td>`_Bool`</td><td>True for array types</td>
+<td>`.is_array`</td><td>`_Bool`</td><td>True for non-vector array types</td>
+</tr>
+<tr>
+<td>`.is_vector`</td><td>`_Bool`</td><td>True for vector array types</td>
 </tr>
 <tr>
 <td>`.is_slice`</td><td>`_Bool`</td><td>True for slice types</td>
@@ -825,6 +835,118 @@ void print(_Type t){printf("%s\n", t.name);}
 // int.print();
 // parens disambiguate.
 (int).print();
+```
+
+### `_Any`
+
+`_Any` is a companion to first-class `_Type` values. It is an open-ended sumtype.
+In memory an `_Any` is structured as follows:
+
+```C
+struct _Any {
+  _Alignas(8) _Type type;
+  // access to `.payload` yields `void*` instead of `unsigned char *`
+  _Alignas(8) unsigned char payload[8];
+};
+```
+
+
+An `_Any` can hold any value that fits into `payload`. When assigning to an
+`_Any`, `type` is automatically set to the unqualified type of the rhs
+(removing top level qualifiers, so `const int*` is preserved).
+Types that fit in `payload` are automatically converted to `_Any`
+and unused bytes of `payload` are zeroed.
+Assignment from another `_Any` copies the entire thing.
+
+```C
+_Any a = 3; // .type = int
+const float f = 4.f;
+a = f; // .type = float
+_Any b = 5.; // .type = double
+a.type = unsigned long; // .type is assignable, but doesn't change the contents of .payload
+a = b; // a.type is now double
+const _Any c = a; // c.payload is `const void *` instead of `void *`.
+c.as(int) = 3; // error (const `_Any` makes `.as()` yield a qualified version).
+```
+
+
+The empty/zero-initialized `_Any` has a `.type` equal to the empty type (`.is_invalid == true`).
+Note that this is different than initializing an `_Any` with 0 as that is an `int`.
+
+```C
+_Any empty = {}; // empty.type.is_invalid == true
+_Any i = {0}; // i.type == int
+```
+
+
+The `.as(T)` pseudo-method on an `_Any` reinterprets the payload as the given type `T`.
+This is an lvalue if the receiver is an lvalue.
+The `T` parameter must fit in `payload` and must be a complete, non-array object type.
+For convenience, if it is a function type it is decayed to a pointer to function type instead.
+`T` must be known at compile-time. For runtime dynamic type stuff, just use `.payload`
+and usual `void *` techniques.
+At runtime this is intentionally unchecked to allow type-punning and does not change `.type`.
+During constant evaluation, `T` must match the stored type.
+
+```C
+_Any a = 3; // .type = int
+printf("%d\n", a.as(int));
+const float f = 4.f;
+a.as(int) = f; // .type = int, f is implicitly cast to int using normal conversion rules.
+```
+
+
+Types larger than `payload` can't be stored in an `_Any`. In practice,
+use a pointer. This copies the pointer by value, so usual pointer lifetime rules apply.
+
+```C
+struct Big {int x, y, z, w;};
+_Any global;
+void foo(void){
+  struct Big b = {1,2,3,4};
+  _Any a = b; // error
+  _Any a = &b; // .type = struct Big *
+  printf("%d", a.as(struct Big).x); // error, payload can't be reinterpreted as `struct Big` (also wrong type, but that's not checked)
+  printf("%d", a.as(struct Big*).x); // ok
+  global = &b; // will dangle after this function returns.
+  {
+    a = &(struct Big){0}; // compound literal has block scope, so `a` will have dangling pointer after this scope exits.
+  }
+}
+```
+
+
+Functions decay to pointers to the function.
+Arrays decay to pointer to that array (preserving the array type and thus length).
+
+```C
+_Any a = "hello"; // .type = char(*)[6], *.payload = &"hello"
+printf("a = '%s'\n", a.as(char*));
+void foo(void);
+a = foo; // .type = void(*)(void), *.payload = &foo
+a.as(void(void))(); // error
+a.as(void(*)(void))(); // correct
+int data[2];
+a = data; // .type = int(*)[2], *.payload = &data
+a.as(int[2])[0] = 1; // error, even though it fits in payload
+a.as(int(*)[2])[0][0] = 1; // correct
+a.as(int *)[0] = 1; // ok, probably easier to work with
+```
+
+
+`__ANY_PAYLOAD_SIZE__` is a predefined preprocessor constant that is the size of `.payload`.
+
+
+To dynamically construct an `_Any`, use code like the following:
+
+```C
+_Any make_any(_Type T, const void* payload){
+  _Any any = {};
+  any.type = T;
+  if(T.sizeof_ > __ANY_PAYLOAD_SIZE__) __builtin_trap();
+  memcpy(any.payload, payload, T.sizeof_);
+  return any;
+}
 ```
 
 ### Top-level statements

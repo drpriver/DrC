@@ -13,6 +13,7 @@
     X(asm, asm) \
 
 #define CCKWS4(X) \
+    X(_Any, _Any) \
     X(true, true) \
     X(long, long) \
     X(char, char) \

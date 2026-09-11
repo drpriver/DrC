@@ -115,6 +115,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_long_double: base = &ffi_type_longdouble; break;
                         case CCBT_COUNT:
                         case CCBT_INVALID:
+                        case CCBT__Any:
                         case CCBT__Type:
                         case CCBT_bool:
                         case CCBT_char:
@@ -203,6 +204,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_long_double: base = &ffi_type_longdouble; break;
                         case CCBT_COUNT:
                         case CCBT_INVALID:
+                        case CCBT__Any:
                         case CCBT__Type:
                         case CCBT_bool:
                         case CCBT_char:
@@ -360,6 +362,8 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 case CCBT_float128:
                 case CCBT_float16:
                     return NC_UNSUPPORTED_TYPE;
+                case CCBT__Any:
+                    return cctype_integer_ffi(a, 16, 8, out);
                 case CCBT_INVALID:
                 case CCBT_COUNT:
                     return NC_UNSUPPORTED_TYPE;

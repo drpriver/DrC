@@ -59,6 +59,7 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_long_double_complex,
     CCBT_nullptr_t,
     CCBT__Type,
+    CCBT__Any,
     CCBT_COUNT,
 };
 TYPEDEF_ENUM(CcBasicTypeKind, uintptr_t);
@@ -334,6 +335,7 @@ ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
             return 1;
         case CCBT_COUNT:
         case CCBT_INVALID:
+        case CCBT__Any:
         case CCBT__Type:
         case CCBT_double:
         case CCBT_double_complex:
@@ -384,6 +386,7 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_COUNT:
         case CCBT_INVALID:
         case CCBT__Type:
+        case CCBT__Any:
         case CCBT_double:
         case CCBT_double_complex:
         case CCBT_float:
@@ -418,6 +421,7 @@ ccbt_to_unsigned(CcBasicTypeKind k){
             return CCBT_unsigned_int128;
         case CCBT_COUNT:
         case CCBT_INVALID:
+        case CCBT__Any:
         case CCBT__Type:
         case CCBT_bool:
         case CCBT_double:
@@ -460,6 +464,7 @@ ccbt_to_signed(CcBasicTypeKind k){
             return CCBT_int128;
         case CCBT_COUNT:
         case CCBT_INVALID:
+        case CCBT__Any:
         case CCBT__Type:
         case CCBT_bool:
         case CCBT_double:

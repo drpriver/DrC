@@ -146,6 +146,8 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     // Properties (no parens, lhs = _Type expr)
     CC_TYPE_NAME,
     CC_TYPE_TAG,
+    CC_TYPE_IS_VALID,
+    CC_TYPE_IS_INVALID,
     CC_TYPE_IS_INTEGER,
     CC_TYPE_IS_FLOAT,
     CC_TYPE_IS_ARITHMETIC,
@@ -153,6 +155,7 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_IS_STRUCT,
     CC_TYPE_IS_UNION,
     CC_TYPE_IS_ARRAY,
+    CC_TYPE_IS_VECTOR,
     CC_TYPE_IS_SLICE,
     CC_TYPE_IS_FUNCTION,
     CC_TYPE_IS_ENUM,

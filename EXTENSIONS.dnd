@@ -364,7 +364,7 @@ C::md
       count = _Countof x;
       count = x.count; // same as _Countof x
       count = x.length; // alias for x.count
-      int* data = x.data; // underlying pointer to first element 
+      int* data = x.data; // underlying pointer to first element
                           // (could be null or one-past-the-end of an array)
 
     Slices are created either by implicit conversion from an array, explicit
@@ -475,6 +475,8 @@ C::md
     Properties::md
       ::table
         Property | Type | Description
+        `.is_valid` | `_Bool` | Is this `_Type` valid or the empty `_Type` ((_Type){}). `false` for the empty type, `true` otherwise.
+        `.is_invalid` | `_Bool` | !`.is_valid`
         `.name` | `const char*` | Name of the type (including `struct`, etc.)
         `.tag` | `const char*` | Tag name only (e.g. `"Color"`)
         `.sizeof_` | `size_t` | Size in bytes
@@ -485,7 +487,8 @@ C::md
         `.is_pointer` | `_Bool` | True for pointer types
         `.is_struct` | `_Bool` | True for struct types
         `.is_union` | `_Bool` | True for union types
-        `.is_array` | `_Bool` | True for array types
+        `.is_array` | `_Bool` | True for non-vector array types
+        `.is_vector` | `_Bool` | True for vector array types
         `.is_slice` | `_Bool` | True for slice types
         `.is_function` | `_Bool` | True for function types
         `.is_enum` | `_Bool` | True for enum types
@@ -586,6 +589,102 @@ C::md
         // int.print();
         // parens disambiguate.
         (int).print();
+
+  `_Any`::md
+    `_Any` is a companion to first-class `_Type` values. It is an open-ended sumtype.
+    In memory an `_Any` is structured as follows:
+
+    ::pre.C
+      struct _Any {
+        _Alignas(8) _Type type;
+        // access to `.payload` yields `void*` instead of `unsigned char *`
+        _Alignas(8) unsigned char payload[8];
+      };
+
+    An `_Any` can hold any value that fits into `payload`. When assigning to an
+    `_Any`, `type` is automatically set to the unqualified type of the rhs
+    (removing top level qualifiers, so `const int*` is preserved).
+    Types that fit in `payload` are automatically converted to `_Any`
+    and unused bytes of `payload` are zeroed.
+    Assignment from another `_Any` copies the entire thing.
+
+    ::pre.C
+      _Any a = 3; // .type = int
+      const float f = 4.f;
+      a = f; // .type = float
+      _Any b = 5.; // .type = double
+      a.type = unsigned long; // .type is assignable, but doesn't change the contents of .payload
+      a = b; // a.type is now double
+      const _Any c = a; // c.payload is `const void *` instead of `void *`.
+      c.as(int) = 3; // error (const `_Any` makes `.as()` yield a qualified version).
+
+    The empty/zero-initialized `_Any` has a `.type` equal to the empty type (`.is_invalid == true`).
+    Note that this is different than initializing an `_Any` with 0 as that is an `int`.
+    ::pre.C
+      _Any empty = {}; // empty.type.is_invalid == true
+      _Any i = {0}; // i.type == int
+
+    The `.as(T)` pseudo-method on an `_Any` reinterprets the payload as the given type `T`.
+    This is an lvalue if the receiver is an lvalue.
+    The `T` parameter must fit in `payload` and must be a complete, non-array object type.
+    For convenience, if it is a function type it is decayed to a pointer to function type instead.
+    `T` must be known at compile-time. For runtime dynamic type stuff, just use `.payload`
+    and usual `void *` techniques.
+    At runtime this is intentionally unchecked to allow type-punning and does not change `.type`.
+    During constant evaluation, `T` must match the stored type.
+
+    ::pre.C
+      _Any a = 3; // .type = int
+      printf("%d\n", a.as(int));
+      const float f = 4.f;
+      a.as(int) = f; // .type = int, f is implicitly cast to int using normal conversion rules.
+
+    Types larger than `payload` can't be stored in an `_Any`. In practice,
+    use a pointer. This copies the pointer by value, so usual pointer lifetime rules apply.
+
+    ::pre.C
+      struct Big {int x, y, z, w;};
+      _Any global;
+      void foo(void){
+        struct Big b = {1,2,3,4};
+        _Any a = b; // error
+        _Any a = &b; // .type = struct Big *
+        printf("%d", a.as(struct Big).x); // error, payload can't be reinterpreted as `struct Big` (also wrong type, but that's not checked)
+        printf("%d", a.as(struct Big*).x); // ok
+        global = &b; // will dangle after this function returns.
+        {
+          a = &(struct Big){0}; // compound literal has block scope, so `a` will have dangling pointer after this scope exits.
+        }
+      }
+
+    Functions decay to pointers to the function.
+    Arrays decay to pointer to that array (preserving the array type and thus length).
+    ::pre.C
+      _Any a = "hello"; // .type = char(*)[6], *.payload = &"hello"
+      printf("a = '%s'\n", a.as(char*));
+      void foo(void);
+      a = foo; // .type = void(*)(void), *.payload = &foo
+      a.as(void(void))(); // error
+      a.as(void(*)(void))(); // correct
+      int data[2];
+      a = data; // .type = int(*)[2], *.payload = &data
+      a.as(int[2])[0] = 1; // error, even though it fits in payload
+      a.as(int(*)[2])[0][0] = 1; // correct
+      a.as(int *)[0] = 1; // ok, probably easier to work with
+
+    `__ANY_PAYLOAD_SIZE__` is a predefined preprocessor constant that is the size of `.payload`.
+
+    To dynamically construct an `_Any`, use code like the following:
+
+    ::pre.C
+      _Any make_any(_Type T, const void* payload){
+        _Any any = {};
+        any.type = T;
+        if(T.sizeof_ > __ANY_PAYLOAD_SIZE__) __builtin_trap();
+        memcpy(any.payload, payload, T.sizeof_);
+        return any;
+      }
+
 
   Top-level statements::md
     Code at the top level of a file is executed as if it were in an implicit
