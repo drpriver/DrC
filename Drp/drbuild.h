@@ -707,13 +707,26 @@ static inline
 BuildTarget*
 b_exec_target(BuildCtx* ctx, const char* name, BuildTarget*);
 
-static inline
-BuildTarget*
-b_exe_target(BuildCtx* ctx, const char* name, const char* sr, enum OS target_os);
+// Flags for controlling compilation flags,
+// ignoring the global settings.
+// The NO variant wins. Not setting either option means use the global setting.
+enum {
+    B_COMPILE_NO_FLAGS = 0x0,
+    B_COMPILE_NO_OPTIMIZE = 0x1,
+    B_COMPILE_OPTIMIZE = 0x2,
+    B_COMPILE_NO_DEBUG_INFO = 0x4,
+    B_COMPILE_DEBUG_INFO = 0x8,
+    B_COMPILE_NO_SANITIZE = 0x10,
+    B_COMPILE_SANITIZE = 0x20,
+};
 
 static inline
 BuildTarget*
-b_obj_target(BuildCtx* ctx, const char* name, const char* src, enum OS target_os);
+b_exe_target(BuildCtx* ctx, const char* name, const char* sr, enum OS target_os, unsigned flags);
+
+static inline
+BuildTarget*
+b_obj_target(BuildCtx* ctx, const char* name, const char* src, enum OS target_os, unsigned flags);
 
 static inline
 BuildTarget*

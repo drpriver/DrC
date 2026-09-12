@@ -3089,7 +3089,7 @@ enum BuildCompileKind{B_COMPILE_EXE, B_COMPILE_OBJ};
 
 static inline
 BuildTarget*
-b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, enum BuildCompileKind kind){
+b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, enum BuildCompileKind kind, unsigned flags){
     // char sep = BUILD_OS == OS_WINDOWS?'\\':'/';
     char sep = '/';
     Atom cc = ctx->target.cc;
@@ -3099,6 +3099,7 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
     _Bool optimize = ctx->target.optimize;
     _Bool native = 0;
     _Bool debug = !ctx->target.no_debug_symbols;
+
     if(target_os == OS_NATIVE){
         target_os = BUILD_OS;
         cc = ctx->build_cc;
@@ -3108,6 +3109,18 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
         native = 1;
         debug = 1;
     }
+    if(flags & B_COMPILE_DEBUG_INFO)
+        debug = 1;
+    if(flags & B_COMPILE_NO_DEBUG_INFO)
+        debug = 0;
+    if(flags & B_COMPILE_OPTIMIZE)
+        optimize = 1;
+    if(flags & B_COMPILE_NO_OPTIMIZE)
+        optimize = 0;
+    if(flags & B_COMPILE_SANITIZE)
+        sanitize = 1;
+    if(flags & B_COMPILE_NO_SANITIZE)
+        sanitize = 0;
     enum ArchFam arch = ctx->target.arch;
     if(arch == AFAM_NATIVE)
         native = 1;
@@ -3222,14 +3235,14 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
 }
 static inline
 BuildTarget*
-b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
-    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_EXE);
+b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, unsigned flags){
+    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_EXE, flags);
 }
 
 static inline
 BuildTarget*
-b_obj_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
-    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_OBJ);
+b_obj_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, unsigned flags){
+    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_OBJ, flags);
 }
 
 static inline

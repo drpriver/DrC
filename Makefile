@@ -1,9 +1,8 @@
 BUILDTARGETS:=clean list print compile_commands.json all \
   soft_float drcpp drc fetch-libffi native-tests tests test \
-  self-tests cc_opt softfloat_primitives_test \
-  run-softfloat_primitives_test cpp_test run-cpp_test \
-  cc_lex_test run-cc_lex_test cc_test run-cc_test ci_test \
-  run-ci_test ci_oom_test run-ci_oom_test ci_native_test \
+  self-tests cc_opt cpp_test run-cpp_test cc_lex_test \
+  run-cc_lex_test cc_test run-cc_test ci_test run-ci_test \
+  ci_oom_test run-ci_oom_test ci_native_test \
   run-ci_native_test ci_concurrent_test \
   run-ci_concurrent_test drc_test run-drc_test coverage \
   cc_fuzz run_cc_fuzz selfhost self-cpp_test \

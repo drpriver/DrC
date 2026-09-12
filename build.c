@@ -57,14 +57,14 @@ int main(int argc, char** argv, char** envp){
     Makefile->is_phony = 1;
     Makefile->description = b_atomize(ctx, "Generate a Makefile that invokes this build system.");
 
-    BuildTarget* cpp = b_exe_target(ctx, "drcpp", "cpp.c", ctx->target.os);
+    BuildTarget* cpp = b_exe_target(ctx, "drcpp", "cpp.c", ctx->target.os, B_COMPILE_NO_FLAGS);
     b_add_dep(ctx, all, cpp);
     cpp->description = b_atomize(ctx, "C Preprocessor.");
     if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, cpp, "-lsynchronization");
     b_get_target(ctx, "drcpp")->description = cpp->description;
 
-    BuildTarget* cc = b_exe_target(ctx, "drc", "cc.c", ctx->target.os);
+    BuildTarget* cc = b_exe_target(ctx, "drc", "cc.c", ctx->target.os, B_COMPILE_NO_FLAGS);
     cc->description = b_atomize(ctx, "C interpreter.");
     if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, cc, "-lsynchronization");
@@ -104,23 +104,19 @@ int main(int argc, char** argv, char** envp){
     b_add_deps(ctx, tests, native_tests, self_tests);
     BuildTarget* cc_opt, *cc_cov;
     {
-        _Bool saved_ns = ctx->target.native_sanitize;
-        ctx->target.native_sanitize = 0;
-
         {
-            cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", ctx->target.os);
+            cc_opt = b_exe_target(ctx, "cc_opt", "cc.c", ctx->target.os, B_COMPILE_OPTIMIZE|B_COMPILE_DEBUG_INFO);
             cc_opt->is_compile_command = 0;
             cc_opt->description = b_atomize(ctx, "Optimized C interpreter for self-hosted tests.");
             b_get_target(ctx, "cc_opt")->description = cc_opt->description;
             b_add_dep(ctx, all, cc_opt);
-            b_arg(ctx, cc_opt, "-O2");
             link_libffi(ctx, cc_opt, ctx->target.os, ffi_lib);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_opt, "-lsynchronization");
             b_linkinp(ctx, cc_opt, soft_float);
         }
         {
-            cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", ctx->target.os);
+            cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", ctx->target.os, B_COMPILE_NO_OPTIMIZE|B_COMPILE_NO_SANITIZE|B_COMPILE_DEBUG_INFO);
             cc_cov->description = b_atomize(ctx, "C interpreter with coverage enabled.");
             b_get_target(ctx, "cc_cov")->description = cc_cov->description;
             cc_cov->is_compile_command = 0;
@@ -140,7 +136,6 @@ int main(int argc, char** argv, char** envp){
                 b_linkarg(ctx, cc_cov, "-lsynchronization");
             b_linkinp(ctx, cc_cov, soft_float);
         }
-        ctx->target.native_sanitize = saved_ns;
     }
     static const struct {
         const char* file;
@@ -164,7 +159,7 @@ int main(int argc, char** argv, char** envp){
             const char* file = test_files[i].file;
             const char* name = test_files[i].name;
             const char* cmd_name = test_files[i].cmd_name;
-            BuildTarget* bin = b_exe_target(ctx, name, file, ctx->target.os);
+            BuildTarget* bin = b_exe_target(ctx, name, file, ctx->target.os, B_COMPILE_DEBUG_INFO);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW){
                 b_linkarg(ctx, bin, "-lsynchronization");
                 b_linkarg(ctx, bin, "-ldbghelp");
@@ -188,7 +183,7 @@ int main(int argc, char** argv, char** envp){
 
             // Coverage variant
             Atom cov_name = b_atomize_f(ctx, "coverage-%s", name);
-            BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, ctx->target.os);
+            BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, ctx->target.os, B_COMPILE_DEBUG_INFO|B_COMPILE_NO_SANITIZE);
             b_get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
             cov_bin->is_compile_command = 0; // exclude from compile_commands.json
             if(cov_bin->compiler_flavor != COMPILER_CL){
@@ -578,7 +573,7 @@ build_soft_float(BuildCtx* ctx){
         basename = basename ? basename+1 : source;
         Atom name = b_atomize_f(ctx, "softfloat_%.*s", (int)strlen(basename)-2, basename);
         Atom src = b_atomize_f(ctx, "Vendored/softfloat/SoftFloat-3e/source/%s", source);
-        BuildTarget* obj = b_obj_target(ctx, name->data, src->data, ctx->target.os);
+        BuildTarget* obj = b_obj_target(ctx, name->data, src->data, ctx->target.os, B_COMPILE_OPTIMIZE|B_COMPILE_DEBUG_INFO|B_COMPILE_NO_SANITIZE);
         b_args(ctx, obj, "-IVendored/softfloat", "-IVendored/softfloat/SoftFloat-3e/source/include", "-IVendored/softfloat/SoftFloat-3e/source/8086-SSE");
         b_inp(ctx, lib, obj);
     }
