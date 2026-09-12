@@ -9500,10 +9500,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(base_type->bits || spec->sp_typebits){
                             Atom a = AT_atomize(p->cpp.at, "_Any", 4);
                             if(!a) return CC_OOM_ERROR;
-                            tok = (CcToken){
-                                .ident = {.type = CC_IDENTIFIER, .ident = a},
-                                .loc = tok.loc,
-                            };
+                            tok = (CcToken){.ident = {.type = CC_IDENTIFIER, .ident = a, .loc = tok.loc}};
                             return cc_unget(p, &tok);
                         }
                         *base_type = ccqt_basic(CCBT__Any);
@@ -9512,10 +9509,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(base_type->bits || spec->sp_typebits){
                             Atom a = AT_atomize(p->cpp.at, "_Type", 5);
                             if(!a) return CC_OOM_ERROR;
-                            tok = (CcToken){
-                                .ident = {.type = CC_IDENTIFIER, .ident = a},
-                                .loc = tok.loc,
-                            };
+                            tok = (CcToken){.ident = {.type = CC_IDENTIFIER, .ident = a, .loc = tok.loc}};
                             return cc_unget(p, &tok);
                         }
                         *base_type = ccqt_basic(CCBT__Type);
@@ -9524,10 +9518,7 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                         if(base_type->bits || spec->sp_typebits || !p->current_tag_type.bits){
                             Atom a = AT_atomize(p->cpp.at, "_Self", 5);
                             if(!a) return CC_OOM_ERROR;
-                            tok = (CcToken){
-                                .ident = {.type = CC_IDENTIFIER, .ident = a},
-                                .loc = tok.loc,
-                            };
+                            tok = (CcToken){.ident = {.type = CC_IDENTIFIER, .ident = a, .loc = tok.loc}};
                             return cc_unget(p, &tok);
                         }
                         *base_type = p->current_tag_type;

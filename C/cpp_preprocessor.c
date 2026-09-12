@@ -608,7 +608,7 @@ cpp_strings_to_cc_tok(CppPreprocessor* cpp, const CppTokens* strings, StringView
     uint32_t zero = 0;
     msb_write_str(&sb, (const char*)&zero, width);
     if(sb.errored || sb.cursor / width > UINT32_MAX){ err = CPP_OOM_ERROR; goto finally; }
-    *ctok = (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .length=(uint32_t)(sb.cursor / width)}, .loc=strings->data[0].loc};
+    *ctok = (CcToken){.str={.type=CC_STRING_LITERAL, .stype=stype, .length=(uint32_t)(sb.cursor / width), .loc=strings->data[0].loc}};
     StringView data = msb_detach_sv(&sb);
     if(width == 1) ctok->str.utf8 = data.text;
     else if(width == 2) ctok->str.utf16 = (const unsigned short*)data.text;
@@ -7304,24 +7304,12 @@ int
 cpp_ident_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     uint32_t kw = cpp_lex_str_to_keyword(cpptok->txt);
     if(kw != (uint32_t)-1){
-        *cctok = (CcToken){
-            .kw = {
-                .type = CC_KEYWORD,
-                .kw = (CcKeyword)kw,
-            },
-            .loc = cpptok->loc,
-        };
+        *cctok = (CcToken){.kw={.type = CC_KEYWORD, .kw = (CcKeyword)kw, .loc = cpptok->loc}};
         return 0;
     }
     Atom a = AT_atomize(cpp->at, cpptok->txt.text, cpptok->txt.length);
     if(!a) return CC_LEX_OOM_ERROR;
-    *cctok = (CcToken){
-        .ident = {
-            .type = CC_IDENTIFIER,
-            .ident = a,
-        },
-        .loc = cpptok->loc,
-    };
+    *cctok = (CcToken){.ident={.type = CC_IDENTIFIER, .ident = a, .loc = cpptok->loc}};
     return 0;
 }
 
@@ -7413,7 +7401,7 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
                            (significand & ((UINT64_C(1) << (precision-1))-1));
         }
     }
-    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=type}, .loc=tok->loc};
+    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=type, .loc=tok->loc}};
     if(type == CC_FLOAT){
         uint32_t u = (uint32_t)encoded;
         memcpy(&out->constant.float_value, &u, sizeof u);
@@ -7524,13 +7512,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
             ctype = CC_FLOAT;
             float fval; err = parse_float(buf, buf_len, &fval);
             if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
-            *cctok = (CcToken){
-                .constant = {
-                    .type = CC_CONSTANT,
-                    .ctype = ctype,
-                    .float_value = fval,
-                },
-                .loc = cpptok->loc,
+            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .float_value = fval, .loc = cpptok->loc},
             };
         }
         else {
@@ -7540,14 +7522,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
                 ctype = CC_LONG_DOUBLE;
             else
                 ctype = CC_DOUBLE;
-            *cctok = (CcToken){
-                .constant = {
-                    .type = CC_CONSTANT,
-                    .ctype = ctype,
-                    .double_value = dval,
-                },
-                .loc = cpptok->loc,
-            };
+            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .double_value = dval, .loc = cpptok->loc }};
         }
         return 0;
     }
@@ -7610,14 +7585,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         #undef SMAX
         #undef UMAX
     }
-    *cctok = (CcToken){
-        .constant = {
-            .type = CC_CONSTANT,
-            .ctype = ctype,
-            .integer_value = v,
-        },
-        .loc = cpptok->loc,
-    };
+    *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .integer_value = v, .loc = cpptok->loc}};
     return 0;
 }
 static
@@ -7642,14 +7610,7 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     int64_t v = 0;
     int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype);
     if(err) return err;
-    *cctok = (CcToken){
-        .constant = {
-            .type = CC_CONSTANT,
-            .ctype = ctype,
-            .integer_value = (uint64_t)v,
-        },
-        .loc = cpptok->loc,
-    };
+    *cctok = (CcToken){.constant={.type = CC_CONSTANT, .ctype = ctype, .integer_value = (uint64_t)v, .loc = cpptok->loc}};
     return 0;
 }
 static
@@ -7665,13 +7626,7 @@ cpp_punct_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
     #endif
-    *cctok = (CcToken){
-        .punct = {
-            .type = CC_PUNCTUATOR,
-            .punct = (CcPunct)p,
-        },
-        .loc = cpptok->loc,
-    };
+    *cctok = (CcToken){.punct={.type = CC_PUNCTUATOR, .punct = (CcPunct)p, .loc = cpptok->loc}};
     return 0;
 }
 

@@ -3663,7 +3663,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     CcToken eof = {.type = CC_EOF, .loc = loc};
     err = ma_push(CcToken)(scratch, al, eof);
     if(err) goto restore;
-    CcToken rparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_rparen}, .loc = loc};
+    CcToken rparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_rparen, .loc = loc}};
     err = ma_push(CcToken)(scratch, al, rparen);
     if(err) goto restore;
     size_t idx = scratch->count;
@@ -3685,10 +3685,10 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         scratch->data[j] = scratch->data[i];
         scratch->data[i] = tok;
     }
-    CcToken lparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_lparen}, .loc = loc};
+    CcToken lparen = {.punct = {.type = CC_PUNCTUATOR, .punct = CC_lparen, .loc = loc}};
     err = ma_push(CcToken)(scratch, al, lparen);
     if(err) goto restore;
-    CcToken name_tok = {.ident = {.type = CC_IDENTIFIER, .ident = func->name}, .loc = loc};
+    CcToken name_tok = {.ident = {.type = CC_IDENTIFIER, .ident = func->name, .loc = loc}};
     err = ma_push(CcToken)(scratch, al, name_tok);
     if(err)goto restore;
     p->pending = *scratch;
