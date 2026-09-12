@@ -8,7 +8,11 @@
 #define SOFTFLOAT_FAST_DIV32TO16 1
 #define SOFTFLOAT_FAST_DIV64TO32 1
 #define INLINE static inline
+#if defined _MSC_VER && !defined __clang__
+#define THREAD_LOCAL __declspec(thread)
+#else
 #define THREAD_LOCAL _Thread_local
+#endif
 
 #if defined __GNUC__ || defined __clang__
 #define SOFTFLOAT_BUILTIN_CLZ 1

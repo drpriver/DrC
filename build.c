@@ -459,7 +459,7 @@ static
 int
 copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
     (void)tgt;
-    Atom dst = b_atomize_f(ctx, "%s/" LIBFFI_DLL, ctx->build_dir->data);
+    Atom dst = b_atomize_f(ctx, "%s/" LIBFFI_DLL, ctx->bin_dir->data);
     b_log(ctx, "cp Fetched/libffi/" LIBFFI_DLL " %s\n", dst->data);
     int err = b_copy_file(ctx, "Fetched/libffi/" LIBFFI_DLL, dst->data);
     if(err)
