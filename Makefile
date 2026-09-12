@@ -1,12 +1,14 @@
 BUILDTARGETS:=clean list print compile_commands.json all \
-  drcpp drc fetch-libffi native-tests tests test self-tests \
-  cc_opt cpp_test run_cpp_test cc_lex_test run_cc_lex_test \
-  cc_test run_cc_test ci_test run_ci_test ci_oom_test \
-  run_ci_oom_test ci_native_test run_ci_native_test \
-  ci_concurrent_test run_ci_concurrent_test drc_test \
-  run_drc_test coverage cc_fuzz run_cc_fuzz selfhost \
-  self_cpp_test self_cc_lex_test self_cc_test self_ci_test \
-  self_ci_native_test self_ci_concurrent_test self_drc_test \
+  soft_float drcpp drc fetch-libffi native-tests tests test \
+  self-tests cc_opt softfloat_primitives_test \
+  run-softfloat_primitives_test cpp_test run-cpp_test \
+  cc_lex_test run-cc_lex_test cc_test run-cc_test ci_test \
+  run-ci_test ci_oom_test run-ci_oom_test ci_native_test \
+  run-ci_native_test ci_concurrent_test \
+  run-ci_concurrent_test drc_test run-drc_test coverage \
+  cc_fuzz run_cc_fuzz selfhost self-cpp_test \
+  self-cc_lex_test self-cc_test self-ci_test \
+  self-ci_native_test self-ci_concurrent_test self-drc_test \
   run_drcpp debug_drcpp run_drc debug_drc repl install tags \
   docs
 UNKNOWN:=$(filter-out $(BUILDTARGETS) build build.exe Makefile,$(MAKECMDGOALS))

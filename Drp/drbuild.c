@@ -516,7 +516,7 @@ ap_ma_atom_append(ArgToParse* dst, const void* parg){
 
 static struct BctxInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
-    MemberInfo members[13];
+    MemberInfo members[16];
 } TI_BuildCtxGlobal;
 
 enum {
@@ -616,6 +616,10 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     ctx->env.at = &ctx->at;
     ctx->env.windows = BUILD_OS == OS_WINDOWS;
     ctx->build_dir = nil_atom;
+    ctx->bin_dir = nil_atom;
+    ctx->lib_dir = nil_atom;
+    ctx->obj_dir = nil_atom;
+    ctx->deps_dir = nil_atom;
     ctx->cwd = nil_atom;
     ctx->njobs = -1;
     #ifdef _WIN32
@@ -710,6 +714,27 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                     .name = b_atomize(ctx, "gen_dir"),
                     .type = &TI_Atom.type_info,
                     .offset = offsetof(BuildCtx, gen_dir),
+                    .noser = 1,
+                    .nodeser = 1,
+                },
+                {
+                    .name = b_atomize(ctx, "bin_dir"),
+                    .type = &TI_Atom.type_info,
+                    .offset = offsetof(BuildCtx, bin_dir),
+                    .noser = 1,
+                    .nodeser = 1,
+                },
+                {
+                    .name = b_atomize(ctx, "lib_dir"),
+                    .type = &TI_Atom.type_info,
+                    .offset = offsetof(BuildCtx, lib_dir),
+                    .noser = 1,
+                    .nodeser = 1,
+                },
+                {
+                    .name = b_atomize(ctx, "obj_dir"),
+                    .type = &TI_Atom.type_info,
+                    .offset = offsetof(BuildCtx, obj_dir),
                     .noser = 1,
                     .nodeser = 1,
                 },
@@ -1553,6 +1578,9 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     }
     {
         ctx->gen_dir = b_atomize_f(ctx, "%s/Generated", ctx->build_dir->data);
+        ctx->bin_dir = b_atomize_f(ctx, "%s/bin", ctx->build_dir->data);
+        ctx->lib_dir = b_atomize_f(ctx, "%s/lib", ctx->build_dir->data);
+        ctx->obj_dir = b_atomize_f(ctx, "%s/objs", ctx->build_dir->data);
         ctx->deps_dir = b_atomize_f(ctx, "%s/Depends", ctx->build_dir->data);
         ctx->cmd_cache_path = b_atomize_f(ctx, "%s/cmd_cache.json", ctx->build_dir->data);
         err = read_from_json_file(ctx, &ctx->cmd_history, &TI_AM_MA_Atom.type_info, ctx->cmd_cache_path);
@@ -1608,6 +1636,9 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     if(has_clean) b_rm_directory(ctx, ctx->build_dir->data);
     b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->build_dir));
     b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->gen_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->bin_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->lib_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->obj_dir));
     b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->deps_dir));
     write_to_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
     if(ctx->njobs == 0) ctx->njobs = 1;
@@ -1658,11 +1689,13 @@ list_targets(BuildCtx* ctx, BuildTarget* tgt){
     (void)tgt;
     AtomMapItems items = AM_items(&ctx->targets);
     b_printf(ctx, "targets:\n");
+    StringView builddir = {ctx->build_dir->length, ctx->build_dir->data};
     MARRAY_FOR_EACH_VALUE(AtomMapItem, item, items){
         BuildTarget* t = item.p;
         if(t->is_src) continue;
         StringView sv = {item.atom->length, item.atom->data};
         if(sv_startswith(sv, SV("./"))) continue;
+        if(sv_startswith(sv, builddir)) continue;
         b_printf(ctx, "  %s\n", item.atom->data);
         if(t->description && t->description->length)
             b_printf(ctx, "      %s\n", t->description->data);
@@ -2346,7 +2379,7 @@ parse_depfile(BuildCtx* ctx, const char* filename){
         StringView base = path_basename(fn, BUILD_OS == OS_WINDOWS);
         size_t name_len = base.length - (sizeof ".deps.json" - 1);
         StringView name = {name_len, base.text};
-        const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe"))) ? ".exe" : "";
+        const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe")) && !sv_endswith(name, SV(".obj"))) ? ".exe" : "";
         Atom target_name = b_atomize_f(ctx, "%s/%.*s%s", ctx->build_dir->data, (int)name_len, base.text, ext);
         BuildTarget* target = b_get_targeta(ctx, target_name);
         if(target)
@@ -2776,7 +2809,7 @@ b_execute_targets(BuildCtx* ctx){
     if(ctx->measure_time){
         uint64_t t1 = performance_counter();
         uint64_t diff = t1 - ctx->t0;
-        b_log(ctx, "Time elapsed: %.3fs\n", (double)diff/1e6);
+        b_loglvl(BLOG_ERROR, ctx, "Time elapsed: %.3fs\n", (double)diff/1e6);
     }
     return err;
 }
@@ -3052,9 +3085,11 @@ b_add_src_dep(BuildCtx* ctx, BuildTarget* tgt, const char* dep){
     b_add_src_depa(ctx, tgt, a);
 }
 
+enum BuildCompileKind{B_COMPILE_EXE, B_COMPILE_OBJ};
+
 static inline
 BuildTarget*
-b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
+b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, enum BuildCompileKind kind){
     // char sep = BUILD_OS == OS_WINDOWS?'\\':'/';
     char sep = '/';
     Atom cc = ctx->target.cc;
@@ -3082,8 +3117,8 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
             arch = AFAM_x86;
         }
     }
-    const char* ext = target_os == OS_WINDOWS?".exe":"";
-    Atom binary = b_atomize_f(ctx, "%s%c%s%s", ctx->build_dir->data, sep, name, ext);
+    const char* ext = kind == B_COMPILE_OBJ ? (target_os == OS_WINDOWS ? ".obj" : ".o") : (target_os == OS_WINDOWS ? ".exe" : "");
+    Atom binary = b_atomize_f(ctx, "%s%c%s%s", kind == B_COMPILE_OBJ?ctx->obj_dir->data:ctx->bin_dir->data, sep, name, ext);
     BuildTarget* target = b_targeta(ctx, binary);
     target->is_binary = 1;
     target->is_cmd = 1;
@@ -3092,6 +3127,7 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
     CmdBuilder* cmd = &target->cmd;
     cmd->allocator = allocator_from_arena(&ctx->perm_aa);
     cmd_prog(cmd, AT_to_LS(cc));
+    if(kind == B_COMPILE_OBJ) b_arg(ctx, target, flavor == COMPILER_CL || flavor == COMPILER_CLANG_CL ? "/c" : "-c");
     switch(flavor){
         case COMPILER_GCC_MINGW:
             b_args(ctx, target, "-std=gnu11");
@@ -3135,8 +3171,8 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
                 }
             }
             if(flavor == COMPILER_CLANG_CL){
-                b_argf(ctx, target, "/Fe:%s", binary->data);
-                b_argf(ctx, target, "/Fo%s/%s.obj", ctx->build_dir->data, name);
+                if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
+                b_argf(ctx, target, "/Fo%s/%s.obj", ctx->obj_dir->data, name);
                 b_args(ctx, target, "/clang:-MMD", "/clang:-MP");
                 b_argf(ctx, target, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
                 b_argf(ctx, target, "/clang:-MT%s", binary->data);
@@ -3154,18 +3190,20 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
         case COMPILER_CL:
             b_args(ctx, target, "/nologo", "/std:c11", "/Zc:preprocessor", "/wd5105");
             if(debug){
-                b_args(ctx, target, "/Zi", "/DEBUG");
-                b_argf(ctx, target, "/Fd:%s/%s.pdb", ctx->build_dir->data, name);
+                b_arg(ctx, target, "/Zi");
+                if(kind == B_COMPILE_EXE) b_arg(ctx, target, "/DEBUG");
+                b_argf(ctx, target, "/Fd:%s/%s.pdb", ctx->bin_dir->data, name);
             }
             if(optimize) b_args(ctx, target, "/O2");
-            b_argf(ctx, target, "/Fe:%s", binary->data);
-            b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->build_dir->data, name);
+            if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
+            b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->obj_dir->data, name);
             b_args(ctx, target, "/sourceDependencies");
-            b_argf(ctx, target, "%s/%s.deps.json", ctx->deps_dir->data, name);
+            b_argf(ctx, target, "%s/%s%s.deps.json", ctx->deps_dir->data, name, kind == B_COMPILE_OBJ ? ".obj" : "");
             break;
     }
     b_argf(ctx, target, "-I%s", ctx->gen_dir->data);
     b_src_inp(ctx, target, src_dep);
+    if(kind == B_COMPILE_OBJ) return target;
     if(target_os == OS_LINUX){
         b_linkarg(ctx, target, "-lm");
         b_linkarg(ctx, target, "-lpthread");
@@ -3181,6 +3219,17 @@ b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS targe
     BuildTarget* phony = b_phony_target(ctx, name);
     b_add_dep(ctx, phony, target);
     return target;
+}
+static inline
+BuildTarget*
+b_exe_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
+    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_EXE);
+}
+
+static inline
+BuildTarget*
+b_obj_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os){
+    return b_compile_target(ctx, name, src_dep, target_os, B_COMPILE_OBJ);
 }
 
 static inline
@@ -3213,7 +3262,7 @@ b_exec_target(BuildCtx* ctx, const char* name, BuildTarget* t){
 static inline
 BuildTarget*
 b_bin_target(BuildCtx* ctx, const char* name){
-    Atom a = b_atomize_f(ctx, "%s/%s", ctx->build_dir->data, name);
+    Atom a = b_atomize_f(ctx, "%s/%s", ctx->bin_dir->data, name);
     BuildTarget* target = b_targeta(ctx, a);
     target->is_binary = 1;
     target->is_generated = 1;

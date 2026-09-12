@@ -412,8 +412,7 @@ struct BuildCtx {
         };
     };
 
-    Atom gen_dir;
-    Atom deps_dir;
+    Atom gen_dir, bin_dir, lib_dir, obj_dir, deps_dir;
     Atom git_hash;
     Atom exe_path;
     Atom cache_path;
@@ -711,6 +710,10 @@ b_exec_target(BuildCtx* ctx, const char* name, BuildTarget*);
 static inline
 BuildTarget*
 b_exe_target(BuildCtx* ctx, const char* name, const char* sr, enum OS target_os);
+
+static inline
+BuildTarget*
+b_obj_target(BuildCtx* ctx, const char* name, const char* src, enum OS target_os);
 
 static inline
 BuildTarget*

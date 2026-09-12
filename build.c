@@ -28,6 +28,10 @@
 #define LIBFFI_LIB "libffi-8.lib"
 #define LIBFFI_DLL "libffi-8.dll"
 
+static const char* softfloat_sources[] = {
+    #include "Vendored/softfloat/softfloat_sources.inc"
+};
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -40,12 +44,14 @@ static int do_install(BuildCtx*, BuildTarget*);
 static int fetch_libffi(BuildCtx*, BuildTarget*);
 static int copy_libffi_dll(BuildCtx*, BuildTarget*);
 static void link_libffi(BuildCtx*, BuildTarget*, enum OS, BuildTarget* _Null_unspecified);
+static BuildTarget* build_soft_float(BuildCtx*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
     if(!ctx) return 1;
     BuildTarget* all = b_phony_target(ctx, "all");
     all->description = b_atomize(ctx, "Build all binaries (including tests).");
+    BuildTarget* soft_float = build_soft_float(ctx);
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
@@ -82,6 +88,7 @@ int main(int argc, char** argv, char** envp){
     }
     link_libffi(ctx, cc, ctx->target.os, ffi_lib);
     b_add_dep(ctx, all, cc);
+    b_linkinp(ctx, cc, soft_float);
 
     BuildTarget* native_tests = b_phony_target(ctx, "native-tests");
     native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
@@ -110,6 +117,7 @@ int main(int argc, char** argv, char** envp){
             link_libffi(ctx, cc_opt, ctx->target.os, ffi_lib);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_opt, "-lsynchronization");
+            b_linkinp(ctx, cc_opt, soft_float);
         }
         {
             cc_cov = b_exe_target(ctx, "cc_cov", "cc.c", ctx->target.os);
@@ -130,6 +138,7 @@ int main(int argc, char** argv, char** envp){
             link_libffi(ctx, cc_cov, ctx->target.os, ffi_lib);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_cov, "-lsynchronization");
+            b_linkinp(ctx, cc_cov, soft_float);
         }
         ctx->target.native_sanitize = saved_ns;
     }
@@ -141,14 +150,14 @@ int main(int argc, char** argv, char** envp){
         _Bool skip_self_hosted;
         _Bool needs_drc_path;
     } test_files[] = {
-        {"C/cpp_test.c", "cpp_test", "run_cpp_test", 0, 0, 0},
-        {"C/cc_lex_test.c", "cc_lex_test", "run_cc_lex_test", 0, 0, 0},
-        {"C/cc_test.c", "cc_test", "run_cc_test", 0, 0, 0},
-        {"C/ci_test.c", "ci_test", "run_ci_test", 0, 0, 0},
-        {"C/ci_oom_test.c", "ci_oom_test", "run_ci_oom_test", 0, 1, 0},
-        {"C/ci_native_test.c", "ci_native_test", "run_ci_native_test", 1, 0, 0},
-        {"C/ci_concurrent_test.c", "ci_concurrent_test", "run_ci_concurrent_test", 1, 0, 0},
-        {"drc_test.c", "drc_test", "run_drc_test", 0, 0, 1},
+        {"C/cpp_test.c", "cpp_test", "run-cpp_test", 0, 0, 0},
+        {"C/cc_lex_test.c", "cc_lex_test", "run-cc_lex_test", 0, 0, 0},
+        {"C/cc_test.c", "cc_test", "run-cc_test", 0, 0, 0},
+        {"C/ci_test.c", "ci_test", "run-ci_test", 0, 0, 0},
+        {"C/ci_oom_test.c", "ci_oom_test", "run-ci_oom_test", 0, 1, 0},
+        {"C/ci_native_test.c", "ci_native_test", "run-ci_native_test", 1, 0, 0},
+        {"C/ci_concurrent_test.c", "ci_concurrent_test", "run-ci_concurrent_test", 1, 0, 0},
+        {"drc_test.c", "drc_test", "run-drc_test", 0, 0, 1},
     };
     {
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
@@ -162,6 +171,7 @@ int main(int argc, char** argv, char** envp){
             }
             if(test_files[i].needs_lffi)
                 link_libffi(ctx, bin, ctx->target.os, ffi_lib);
+            b_linkinp(ctx, bin, soft_float);
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
             cmd->is_phony = 1;
@@ -177,7 +187,7 @@ int main(int argc, char** argv, char** envp){
             b_add_dep(ctx, native_tests, cmd);
 
             // Coverage variant
-            Atom cov_name = b_atomize_f(ctx, "coverage_%s", name);
+            Atom cov_name = b_atomize_f(ctx, "coverage-%s", name);
             BuildTarget* cov_bin = b_exe_target(ctx, cov_name->data, file, ctx->target.os);
             b_get_targeta(ctx, cov_name)->user_bits |= EXCLUDE_FROM_MAKEFILE;
             cov_bin->is_compile_command = 0; // exclude from compile_commands.json
@@ -193,6 +203,7 @@ int main(int argc, char** argv, char** envp){
             }
             if(test_files[i].needs_lffi)
                 link_libffi(ctx, cov_bin, ctx->target.os, ffi_lib);
+            b_linkinp(ctx, cov_bin, soft_float);
             Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
             cov_cmd->is_phony = 1;
@@ -235,6 +246,7 @@ int main(int argc, char** argv, char** envp){
             "-g", "-O1", "-march=native",
             "-fsanitize=fuzzer,address,undefined",
             "-fno-sanitize-recover=undefined");
+        b_linkinp(ctx, fuzz, soft_float);
         if(ctx->target.fuzz_sysroot->length)
             b_argf(ctx, fuzz, "--sysroot=%s", ctx->target.fuzz_sysroot->data);
         b_src_inp(ctx, fuzz, "C/cc_fuzz.c");
@@ -268,7 +280,7 @@ int main(int argc, char** argv, char** envp){
 
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             if(test_files[i].skip_self_hosted) continue;
-            Atom name = b_atomize_f(ctx, "self_%s", test_files[i].name);
+            Atom name = b_atomize_f(ctx, "self-%s", test_files[i].name);
             BuildTarget* cmd = b_cmd_target_prog(ctx, name->data, cc_opt);
             cmd->is_phony = 1;
             if(test_files[i].needs_lffi && ffi_lib)
@@ -538,6 +550,42 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         return 1;
     }
     return 0;
+}
+
+static
+BuildTarget*
+build_soft_float(BuildCtx* ctx){
+    enum OS os = ctx->target.os == OS_NATIVE ? BUILD_OS : ctx->target.os;
+    enum CompilerFlavor flavor = ctx->target.os == OS_NATIVE ? ctx->build_compiler_flavor : ctx->target.compiler_flavor;
+    _Bool msvc = flavor == COMPILER_CL || flavor == COMPILER_CLANG_CL;
+    const char* ar;
+    if(msvc) ar = flavor == COMPILER_CLANG_CL? "llvm-lib":"lib";
+    else if(os == OS_APPLE) ar = "libtool";
+    else if(os == OS_WINDOWS && flavor == COMPILER_CLANG) ar = "llvm-ar";
+    else ar = "ar";
+    Atom path = b_atomize_f(ctx, "%s/%s", ctx->lib_dir->data, os == OS_WINDOWS ? "softfloat.lib" : "libsoftfloat.a");
+    BuildTarget* lib = b_cmd_target(ctx, path->data, ar);
+    lib->is_binary = 1;
+    if(msvc){
+        b_arg(ctx, lib, "/nologo");
+        b_argf(ctx, lib, "/OUT:%s", path->data);
+    }
+    else if(os == OS_APPLE) b_args(ctx, lib, "-static", "-o", path->data);
+    else b_args(ctx, lib, "rcs", path->data);
+    for(size_t i = 0; i < sizeof softfloat_sources / sizeof softfloat_sources[0]; i++){
+        const char* source = softfloat_sources[i];
+        const char* basename = strrchr(source, '/');
+        basename = basename ? basename+1 : source;
+        Atom name = b_atomize_f(ctx, "softfloat_%.*s", (int)strlen(basename)-2, basename);
+        Atom src = b_atomize_f(ctx, "Vendored/softfloat/SoftFloat-3e/source/%s", source);
+        BuildTarget* obj = b_obj_target(ctx, name->data, src->data, ctx->target.os);
+        b_args(ctx, obj, "-IVendored/softfloat", "-IVendored/softfloat/SoftFloat-3e/source/include", "-IVendored/softfloat/SoftFloat-3e/source/8086-SSE");
+        b_inp(ctx, lib, obj);
+    }
+    BuildTarget* alias = b_phony_target(ctx, "soft_float");
+    alias->description = b_atomize(ctx, "Build the portable SoftFloat static library.");
+    b_add_dep(ctx, alias, lib);
+    return lib;
 }
 
 #ifdef __clang__
