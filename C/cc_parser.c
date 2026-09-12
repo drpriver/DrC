@@ -83,6 +83,7 @@ static CcExpr* _Nullable cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc,
 static CcExpr* _Nullable cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* left, CcExpr* right);
 typedef struct CcDeclBase CcDeclBase;
 static int cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_type, SrcLoc loc);
+static int cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out);
 static int cc_parse_attributes(CcParser* p, CcAttributes* attrs);
 static _Bool cc_is_c23_attribute_start(CcParser* p);
 static int cc_parse_c23_attributes(CcParser* p, CcAttributes* attrs);
@@ -1019,6 +1020,145 @@ cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, 
             return cc_error(p, loc, "conflicting type for parameter %u of '%.*s'", i + 1, existing->name->length, existing->name->data);
     }
     return 0;
+}
+
+// Returns CC_SYNTAX_ERROR for incompatible declarations, without emitting a
+// diagnostic
+static
+int
+cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out){
+    *out = new_;
+    if(old.bits == new_.bits) return 0;
+    CcTypeKind kind = ccqt_kind(old);
+    if(kind != ccqt_kind(new_) || old.quals != new_.quals) return CC_SYNTAX_ERROR;
+    switch(kind){
+        case CC_ARRAY: {
+            CcArray* a = ccqt_as_array(old);
+            CcArray* b = ccqt_as_array(new_);
+            if(a->is_vector != b->is_vector || a->vector_size != b->vector_size)
+                return CC_SYNTAX_ERROR;
+            if(!a->is_vla && !b->is_vla && !a->is_incomplete && !b->is_incomplete && a->length != b->length)
+                return CC_SYNTAX_ERROR;
+            CcQualType element;
+            int err = cc_merge_compatible_decl_types(p, a->element, b->element, &element);
+            if(err) return err;
+            CcArray* bound = b->is_incomplete ? a : b;
+            if(bound->is_vla){
+                CcArray* arr = Allocator_alloc(cc_allocator(p), sizeof *arr);
+                if(!arr) return CC_OOM_ERROR;
+                *arr = *bound;
+                arr->element = element;
+                *out = (CcQualType){.bits = (uintptr_t)arr | new_.quals};
+                return 0;
+            }
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element,
+                bound->length, bound->is_static, bound->is_incomplete, bound->is_vector, bound->vector_size);
+            if(!arr) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits = (uintptr_t)arr | new_.quals};
+            return 0;
+        }
+        case CC_POINTER:
+        case CC_BLOCK_POINTER: {
+            CcPointer* a = ccqt_as_ptr(old);
+            CcPointer* b = ccqt_as_ptr(new_);
+            if(a->restrict_ != b->restrict_) return CC_SYNTAX_ERROR;
+            CcQualType pointee;
+            int err = cc_merge_compatible_decl_types(p, a->pointee, b->pointee, &pointee);
+            if(err) return err;
+            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, b->restrict_, kind == CC_BLOCK_POINTER);
+            if(!ptr) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits = (uintptr_t)ptr | new_.quals};
+            return 0;
+        }
+        case CC_SLICE: {
+            CcSlice* a = ccqt_as_slice(old);
+            CcSlice* b = ccqt_as_slice(new_);
+            if(a->restrict_ != b->restrict_) return CC_SYNTAX_ERROR;
+            CcQualType pointee;
+            int err = cc_merge_compatible_decl_types(p, a->pointee, b->pointee, &pointee);
+            if(err) return err;
+            CcSlice* slice = cc_intern_slice(&p->type_cache, cc_allocator(p), pointee, b->restrict_);
+            if(!slice) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits = (uintptr_t)slice | new_.quals};
+            return 0;
+        }
+        case CC_FUNCTION: {
+            CcFunction* a = ccqt_as_function(old);
+            CcFunction* b = ccqt_as_function(new_);
+            CcQualType ret;
+            int err = cc_merge_compatible_decl_types(p, a->return_type, b->return_type, &ret);
+            if(err) return err;
+            CcFunction* proto = b->no_prototype ? a : b;
+            if(a->no_prototype || b->no_prototype){
+                if(proto->is_variadic) return CC_SYNTAX_ERROR;
+                for(uint32_t i = 0; i < proto->param_count; i++){
+                    CcQualType pt = proto->params[i];
+                    if(ccqt_kind(pt) == CC_ENUM) pt = ccqt_as_enum(pt)->underlying;
+                    if(ccqt_is_basic(pt) && (pt.basic.kind == CCBT_float
+                        || (ccbt_is_integer(pt.basic.kind) && ccbt_int_rank(pt.basic.kind) < ccbt_int_rank(CCBT_int))))
+                        return CC_SYNTAX_ERROR;
+                }
+            }
+            else if(a->param_count != b->param_count || a->is_variadic != b->is_variadic)
+                return CC_SYNTAX_ERROR;
+            Marray(CcQualType) params = {0};
+            for(uint32_t i = 0; i < proto->param_count; i++){
+                CcQualType pt = proto->params[i];
+                pt.quals = 0;
+                if(!a->no_prototype && !b->no_prototype){
+                    CcQualType ap = a->params[i], bp = b->params[i];
+                    ap.quals = bp.quals = 0;
+                    err = cc_merge_compatible_decl_types(p, ap, bp, &pt);
+                    if(err) break;
+                }
+                err = ma_push(CcQualType)(&params, cc_scratch_allocator(p), pt);
+                if(err){ err = CC_OOM_ERROR; break; }
+            }
+            if(!err){
+                CcFunction* f = cc_intern_function(&p->type_cache, cc_allocator(p), ret,
+                    params.data, proto->param_count, proto->is_variadic, proto->no_prototype);
+                if(!f) err = CC_OOM_ERROR;
+                else *out = (CcQualType){.bits = (uintptr_t)f | new_.quals};
+            }
+            ma_cleanup(CcQualType)(&params, cc_scratch_allocator(p));
+            return err;
+        }
+        case CC_BASIC:
+        case CC_STRUCT:
+        case CC_UNION:
+        case CC_ENUM:
+            return CC_SYNTAX_ERROR;
+        DRP_CASES_EXHAUSTED;
+    }
+}
+
+static
+int
+cc_check_var_type(CcParser* p, CcVariable* var, CcQualType* type, SrcLoc loc){
+    CcQualType composite;
+    int err = cc_merge_compatible_decl_types(p, var->type, *type, &composite);
+    if(!err){ *type = composite; return 0; }
+    if(err != CC_SYNTAX_ERROR) return err;
+    MStringBuilder* sb;
+    if(ccqt_kind(var->type) == CC_ARRAY && ccqt_kind(*type) == CC_ARRAY
+        && !ccqt_as_array(var->type)->is_incomplete && !ccqt_as_array(*type)->is_incomplete
+        && !ccqt_as_array(var->type)->is_vla && !ccqt_as_array(*type)->is_vla
+        && ccqt_as_array(var->type)->length != ccqt_as_array(*type)->length){
+        sb = cc_start_error(p, loc, "conflicting array length for '%s': %zu; previous declaration has length %zu ('",
+            var->name->data, ccqt_as_array(*type)->length, ccqt_as_array(var->type)->length);
+        cc_print_type(sb, *type);
+        msb_write_literal(sb, "' vs '");
+        cc_print_type(sb, var->type);
+        msb_write_literal(sb, "')");
+    }
+    else {
+        sb = cc_start_error(p, loc, "conflicting type for '%s': '", var->name->data);
+        cc_print_type(sb, *type);
+        msb_write_literal(sb, "'; previous declaration has type '");
+        cc_print_type(sb, var->type);
+        msb_write_char(sb, '\'');
+    }
+    return cc_finish_error(p, loc);
 }
 
 static
@@ -11363,6 +11503,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         // the variable into scope before parsing the initializer so that
         // self-referential expressions like sizeof(*var) work.
         CcVariable* _Null_unspecified var = NULL;
+        _Bool redecl = 0;
         _Bool is_func_decl = is_fndef || (type.ptr && ccqt_kind(type) == CC_FUNCTION);
         if(name && !declbase->spec.sp_typedef && !is_func_decl){
             if(declbase->spec.sp_inline)
@@ -11376,13 +11517,20 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     case CC_SYM_VAR:
                         if(p->current != &p->global)
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
-                        // merge tentative definitions
+                        // Validate declarations before constructing their composite type.
                         var = sym.var;
-                        // A later declaration with an omitted array bound must
-                        // retain the known bound, including for its initializer.
-                        if(ccqt_kind(type) == CC_ARRAY && ccqt_as_array(type)->is_incomplete
-                            && ccqt_kind(var->type) == CC_ARRAY && !ccqt_as_array(var->type)->is_incomplete)
-                            type = var->type;
+                        redecl = 1;
+                        if((declbase->spec.sp_static && !var->static_) || (var->static_ && !declbase->spec.sp_static && !declbase->spec.sp_extern)){
+                            return cc_error(p, tok.loc, "conflicting storage class for '%s': %s; previous declaration has %s",
+                                name->data, declbase->spec.sp_static ? "'static'" : "no storage class",
+                                var->static_ ? "'static'" : var->extern_ ? "'extern'" : "no storage class"
+                            );
+                        }
+                        if(!declbase->spec.sp_infer_type){
+                            err = cc_check_var_type(p, var, &type, tok.loc);
+                            if(err) return err;
+                            var->type = type;
+                        }
                         goto skip_var_alloc;
                     case CC_SYM_FUNC:
                     case CC_SYM_TYPEDEF:
@@ -11457,7 +11605,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 CcArray* target_arr = ccqt_as_array(type);
                 CcArray* init_arr = ccqt_as_array(initializer->type);
                 if(target_arr->is_incomplete){
-                    // char s[] = "abc" → size from string literal.
+                    // char s[] = "abc" -> size from string literal.
                     // Intern a new complete array with the original element type.
                     CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p),
                         target_arr->element, init_arr->length,
@@ -11583,6 +11731,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(var){
                 if(initializer && var->initializer)
                     return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
+                if(redecl && declbase->spec.sp_infer_type){
+                    err = cc_check_var_type(p, var, &type, tok.loc);
+                    if(err) return err;
+                }
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;

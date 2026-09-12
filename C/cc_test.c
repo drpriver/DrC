@@ -883,7 +883,7 @@ TestFunction(test_parse_decls){
         },
         {
             "UAC: float mixed with integer", __LINE__,
-            SVI("char c; typeof(1.0f + c) a;\n"
+            SVI("char ch; typeof(1.0f + ch) a;\n"
                 "short s; typeof(1.0f + s) b;\n"
                 "typeof(1.0f + 1LL) c;\n"
                 "typeof(1.0 + 1.0f) d;\n"
@@ -4329,6 +4329,37 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "compatible variable redeclarations", __LINE__,
+            SVI("extern int x;\n"
+                "int x;\n"
+                "extern int x;\n"
+                "static int y;\n"
+                "extern int y;\n"
+                "static int y;\n"),
+            .vars = {{SVI("x"), SVI("int")}, {SVI("y"), SVI("int")}},
+        },
+        {
+            "pointer to array composite type", __LINE__,
+            SVI("extern int (*p)[];\n"
+                "extern int (*p)[2];\n"
+                "extern int (*p)[];\n"
+                "static_assert(sizeof(*p) == 2 * sizeof(int));\n"),
+            .vars = {{SVI("p"), SVI("int (*)[2]")}},
+        },
+        {
+            "function pointer compatible parameter qualifiers", __LINE__,
+            SVI("int (*p)(const int);\n"
+                "extern int (*p)(int);\n"),
+            .vars = {{SVI("p"), SVI("int (*)(int)")}},
+        },
+        {
+            "function pointer composite prototype", __LINE__,
+            SVI("int (*p)();\n"
+                "extern int (*p)(int);\n"
+                "extern int (*p)();\n"),
+            .vars = {{SVI("p"), SVI("int (*)(int)")}},
+        },
+        {
             "__declspec align struct", __LINE__,
             SVI("struct __declspec(align(32)) S { int x; };\n"
                "struct S s;\n"),
@@ -6855,10 +6886,76 @@ TestFunction(test_parse_errors){
             SVI("(test):2:19: error: static declaration of 'f' follows non-static declaration\n"),
         },
         {
+            "variable redecl different scalar type", __LINE__,
+            SVI("int x;\n"
+                "extern float x;\n"),
+            SVI("(test):2:15: error: conflicting type for 'x': 'float'; previous declaration has type 'int'\n"),
+        },
+        {
+            "variable redecl different pointer target", __LINE__,
+            SVI("int *x;\n"
+                "extern float *x;\n"),
+            SVI("(test):2:16: error: conflicting type for 'x': 'float *'; previous declaration has type 'int *'\n"),
+        },
+        {
+            "variable redecl different qualifiers", __LINE__,
+            SVI("const int x;\n"
+                "extern int x;\n"),
+            SVI("(test):2:13: error: conflicting type for 'x': 'int'; previous declaration has type 'const int'\n"),
+        },
+        {
+            "array redecl different element type with omitted bound", __LINE__,
+            SVI("const int array[2] = {1, 2};\n"
+                "extern const float array[];\n"),
+            SVI("(test):2:27: error: conflicting type for 'array': 'const float[]'; previous declaration has type 'const int[2]'\n"),
+        },
+        {
+            "array redecl different bound", __LINE__,
+            SVI("int array[2];\n"
+                "extern int array[3];\n"),
+            SVI("(test):2:20: error: conflicting array length for 'array': 3; previous declaration has length 2 ('int[3]' vs 'int[2]')\n"),
+        },
+        {
+            "variable redecl as static", __LINE__,
+            SVI("int x;\n"
+                "static int x;\n"),
+            SVI("(test):2:13: error: conflicting storage class for 'x': 'static'; previous declaration has no storage class\n"),
+        },
+        {
+            "extern variable redecl as static", __LINE__,
+            SVI("extern int x;\n"
+                "static int x;\n"),
+            SVI("(test):2:13: error: conflicting storage class for 'x': 'static'; previous declaration has 'extern'\n"),
+        },
+        {
             "redecl diff return", __LINE__,
             SVI("int f(void);\n"
                 "float f(void);\n"),
             SVI("(test):2:14: error: conflicting return type for 'f'\n"),
+        },
+        {
+            "static variable redecl without storage class", __LINE__,
+            SVI("static int x;\n"
+                "int x;\n"),
+            SVI("(test):2:6: error: conflicting storage class for 'x': no storage class; previous declaration has 'static'\n"),
+        },
+        {
+            "pointer to array redecl different bound", __LINE__,
+            SVI("int (*p)[2];\n"
+                "extern int (*p)[3];\n"),
+            SVI("(test):2:19: error: conflicting type for 'p': 'int (*)[3]'; previous declaration has type 'int (*)[2]'\n"),
+        },
+        {
+            "function pointer redecl different parameter", __LINE__,
+            SVI("int (*p)(int);\n"
+                "extern int (*p)(float);\n"),
+            SVI("(test):2:23: error: conflicting type for 'p': 'int (*)(float)'; previous declaration has type 'int (*)(int)'\n"),
+        },
+        {
+            "function pointer prototype incompatible with promotions", __LINE__,
+            SVI("int (*p)();\n"
+                "extern int (*p)(float);\n"),
+            SVI("(test):2:23: error: conflicting type for 'p': 'int (*)(float)'; previous declaration has type 'int (*)()'\n"),
         },
         {
             "redecl diff variadic", __LINE__,
