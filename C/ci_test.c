@@ -11119,3 +11119,10 @@ TestFunction(test_float_folding){
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+
+#ifdef __DRC__
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/include"
+#pragma include_path "Vendored/softfloat"
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/8086-SSE"
+#include "../Vendored/softfloat/softfloat_unity.c"
+#endif

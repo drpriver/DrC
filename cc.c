@@ -984,3 +984,10 @@ cc_stringify_error(int err){
 #include "C/native_call.c"
 #include "C/ci_interp.c"
 #include "Drp/dre.c"
+
+#ifdef __DRC__
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/include"
+#pragma include_path "Vendored/softfloat"
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/8086-SSE"
+#include "Vendored/softfloat/softfloat_unity.c"
+#endif

@@ -334,3 +334,10 @@ int main(int argc, char** argv){
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
 #include "native_call.c"
+
+#ifdef __DRC__
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/include"
+#pragma include_path "Vendored/softfloat"
+#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/8086-SSE"
+#include "../Vendored/softfloat/softfloat_unity.c"
+#endif

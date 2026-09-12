@@ -1,11 +1,5 @@
 #ifndef SOFTFLOAT_UNITY_C
 #define SOFTFLOAT_UNITY_C
-#ifdef __DRC__
-// FIXME: relative include paths
-#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/include"
-#pragma include_path "Vendored/softfloat"
-#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/8086-SSE"
-#endif
 #include "platform.h"
 #include "primitives.h"
 #include "softfloat.h"
