@@ -11378,6 +11378,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                         // merge tentative definitions
                         var = sym.var;
+                        // A later declaration with an omitted array bound must
+                        // retain the known bound, including for its initializer.
+                        if(ccqt_kind(type) == CC_ARRAY && ccqt_as_array(type)->is_incomplete
+                            && ccqt_kind(var->type) == CC_ARRAY && !ccqt_as_array(var->type)->is_incomplete)
+                            type = var->type;
                         goto skip_var_alloc;
                     case CC_SYM_FUNC:
                     case CC_SYM_TYPEDEF:

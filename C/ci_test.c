@@ -9006,6 +9006,45 @@ TestFunction(test_interpreter){
                 "return i[0] + i[1] + i[2] + i[3]\n"),
             .exit_code = 8,
         },
+        {
+            "extern array regression", __LINE__,
+            SVI(
+                "const int array[2] = {1, 2};\n"
+                "extern const int array[];\n"
+                "return array[0] + array[1];\n"
+            ),
+            .exit_code = 3,
+        },
+        {
+            "extern array preserves inferred bound", __LINE__,
+            SVI(
+                "const int array[] = {1, 2};\n"
+                "extern const int array[];\n"
+                "static_assert(sizeof(array) == 2 * sizeof(int));\n"
+                "return array[0] + array[1];\n"
+            ),
+            .exit_code = 3,
+        },
+        {
+            "extern array completed by definition", __LINE__,
+            SVI(
+                "extern const int array[];\n"
+                "const int array[2] = {1, 2};\n"
+                "static_assert(sizeof(array) == 2 * sizeof(int));\n"
+                "return array[0] + array[1];\n"
+            ),
+            .exit_code = 3,
+        },
+        {
+            "extern array preserves tentative bound for initializer", __LINE__,
+            SVI(
+                "int array[2];\n"
+                "extern int array[] = {1};\n"
+                "static_assert(sizeof(array) == 2 * sizeof(int));\n"
+                "return array[0] + array[1];\n"
+            ),
+            .exit_code = 1,
+        },
     };
     int err;
     static int idx = 0;
