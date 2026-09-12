@@ -187,6 +187,7 @@ struct CcToken {
             CcTokenType type: 8;
             uint32_t _bitpadding: 24;
             uint32_t _pad;
+            SrcLoc loc;
             uint64_t _pad2;
             uint64_t _pad3;
         };
@@ -195,6 +196,7 @@ struct CcToken {
             CcKeyword kw: 8;
             uint32_t _bitpadding: 16;
             uint32_t _pad;
+            SrcLoc loc;
             uint64_t _pad2;
             uint64_t _pad3;
         } kw;
@@ -202,6 +204,7 @@ struct CcToken {
             CcTokenType type: 8;
             uint32_t _bitpadding: 24;
             uint32_t _pad;
+            SrcLoc loc;
             Atom ident;
             uint64_t _pad3;
         } ident;
@@ -210,6 +213,7 @@ struct CcToken {
             CcConstantType ctype: 8;
             uint32_t _bitpadding: 16;
             uint32_t _pad;
+            SrcLoc loc;
             union {
                 uint64_t integer_value;
                 float float_value;
@@ -223,6 +227,7 @@ struct CcToken {
             CcStringType stype: 8;
             uint32_t _bitpadding: 16;
             uint32_t length;
+            SrcLoc loc;
             union {
                 const char* utf8;
                 const unsigned short* utf16;
@@ -234,12 +239,15 @@ struct CcToken {
             CcTokenType type: 8;
             CcPunct punct: 24;
             uint32_t _pad;
+            SrcLoc loc;
             uint64_t _pad2;
             uint64_t _pad3;
         } punct;
     };
-    SrcLoc loc;
 };
+
+_Static_assert(sizeof(CiFloat128)==16, "");
+_Static_assert(sizeof(CiFloat80)==16, "");
 _Static_assert(sizeof(CcToken) == 4*sizeof(uint64_t), "");
 #ifdef __clang__
 #pragma clang assume_nonnull end
