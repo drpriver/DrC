@@ -382,4 +382,352 @@ union CiIEE754Float128 {
     #endif
 };
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wimplicit-int-conversion"
+#endif
+#include "../Vendored/softfloat/softfloat.h"
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+#if defined __LDBL_MANT_DIG__ && __LDBL_MANT_DIG__ == 64 && __LDBL_MAX_EXP__ == 16384
+#define CI_NATIVE_FLOAT80 1
+typedef long double CiFloat80;
+#else
+typedef extFloat80_t CiFloat80;
+#endif
+static inline CiFloat80 ci_float80_read(const void* buf){ CiFloat80 r = {0}; memcpy(&r, buf, 10); return r; }
+static inline void ci_float80_write(void* buf, uint32_t sz, CiFloat80 v){ memset(buf, 0, sz); memcpy(buf, &v, 10); }
+static inline CiFloat80 ci_float80_add(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a + b;
+#else
+    CiFloat80 r; extF80M_add(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat80 ci_float80_sub(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a - b;
+#else
+    CiFloat80 r; extF80M_sub(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat80 ci_float80_mul(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a * b;
+#else
+    CiFloat80 r; extF80M_mul(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat80 ci_float80_div(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a / b;
+#else
+    CiFloat80 r; extF80M_div(&a, &b, &r); return r;
+#endif
+}
+static inline _Bool ci_float80_eq(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a == b;
+#else
+    return extF80M_eq(&a, &b);
+#endif
+}
+static inline _Bool ci_float80_lt(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a < b;
+#else
+    return extF80M_lt(&a, &b);
+#endif
+}
+static inline _Bool ci_float80_le(CiFloat80 a, CiFloat80 b){
+#ifdef CI_NATIVE_FLOAT80
+    return a <= b;
+#else
+    return extF80M_le(&a, &b);
+#endif
+}
+static inline CiFloat80 ci_float80_neg(CiFloat80 a){
+#ifdef CI_NATIVE_FLOAT80
+    return -a;
+#else
+    a.signExp ^= 0x8000;
+    return a;
+#endif
+}
+static inline CiFloat80 ci_float80_from_uint64(uint64_t v){
+#ifdef CI_NATIVE_FLOAT80
+    return (CiFloat80)v;
+#else
+    CiFloat80 r; ui64_to_extF80M(v, &r); return r;
+#endif
+}
+static inline uint64_t ci_float80_to_uint64(CiFloat80 v){
+#ifdef CI_NATIVE_FLOAT80
+    return (uint64_t)v;
+#else
+    return extF80M_to_ui64_r_minMag(&v, false);
+#endif
+}
+static inline CiFloat80 ci_float80_from_int64(int64_t v){
+#ifdef CI_NATIVE_FLOAT80
+    return (CiFloat80)v;
+#else
+    CiFloat80 r; i64_to_extF80M(v, &r); return r;
+#endif
+}
+static inline int64_t ci_float80_to_int64(CiFloat80 v){
+#ifdef CI_NATIVE_FLOAT80
+    return (int64_t)v;
+#else
+    return extF80M_to_i64_r_minMag(&v, false);
+#endif
+}
+static inline CiFloat80 ci_float80_from_float(float v){
+#ifdef CI_NATIVE_FLOAT80
+    return (CiFloat80)v;
+#else
+    float32_t a; memcpy(&a, &v, sizeof a); CiFloat80 r; f32_to_extF80M(a, &r); return r;
+#endif
+}
+static inline float ci_float80_to_float(CiFloat80 v){
+#ifdef CI_NATIVE_FLOAT80
+    return (float)v;
+#else
+    float32_t a = extF80M_to_f32(&v); float r; memcpy(&r, &a, sizeof r); return r;
+#endif
+}
+static inline CiFloat80 ci_float80_from_double(double v){
+#ifdef CI_NATIVE_FLOAT80
+    return (CiFloat80)v;
+#else
+    float64_t a; memcpy(&a, &v, sizeof a); CiFloat80 r; f64_to_extF80M(a, &r); return r;
+#endif
+}
+static inline double ci_float80_to_double(CiFloat80 v){
+#ifdef CI_NATIVE_FLOAT80
+    return (double)v;
+#else
+    float64_t a = extF80M_to_f64(&v); double r; memcpy(&r, &a, sizeof r); return r;
+#endif
+}
+static inline _Bool ci_float80_nonzero(CiFloat80 a){ return !ci_float80_eq(a, ci_float80_from_int64(0)); }
+
+#if defined __LDBL_MANT_DIG__ && __LDBL_MANT_DIG__ == 113 && __LDBL_MAX_EXP__ == 16384
+#define CI_NATIVE_FLOAT128 1
+typedef long double CiFloat128;
+#elif defined __SIZEOF_FLOAT128__ && (defined __GNUC__ || defined __clang__ || defined __DRC__)
+#define CI_NATIVE_FLOAT128 1
+typedef __float128 CiFloat128;
+#else
+typedef float128_t CiFloat128;
+#endif
+static inline CiFloat128 ci_float128_read(const void* buf){ CiFloat128 r = {0}; memcpy(&r, buf, 16); return r; }
+static inline void ci_float128_write(void* buf, uint32_t sz, CiFloat128 v){ memset(buf, 0, sz); memcpy(buf, &v, 16); }
+static inline CiFloat128 ci_float128_add(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a + b;
+#else
+    CiFloat128 r; f128M_add(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat128 ci_float128_sub(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a - b;
+#else
+    CiFloat128 r; f128M_sub(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat128 ci_float128_mul(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a * b;
+#else
+    CiFloat128 r; f128M_mul(&a, &b, &r); return r;
+#endif
+}
+static inline CiFloat128 ci_float128_div(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a / b;
+#else
+    CiFloat128 r; f128M_div(&a, &b, &r); return r;
+#endif
+}
+static inline _Bool ci_float128_eq(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a == b;
+#else
+    return f128M_eq(&a, &b);
+#endif
+}
+static inline _Bool ci_float128_lt(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a < b;
+#else
+    return f128M_lt(&a, &b);
+#endif
+}
+static inline _Bool ci_float128_le(CiFloat128 a, CiFloat128 b){
+#ifdef CI_NATIVE_FLOAT128
+    return a <= b;
+#else
+    return f128M_le(&a, &b);
+#endif
+}
+static inline CiFloat128 ci_float128_neg(CiFloat128 a){
+#ifdef CI_NATIVE_FLOAT128
+    return -a;
+#else
+    a.v[1] ^= UINT64_C(0x8000000000000000);
+    return a;
+#endif
+}
+static inline CiFloat128 ci_float128_from_uint64(uint64_t v){
+#ifdef CI_NATIVE_FLOAT128
+    return (CiFloat128)v;
+#else
+    CiFloat128 r; ui64_to_f128M(v, &r); return r;
+#endif
+}
+static inline uint64_t ci_float128_to_uint64(CiFloat128 v){
+#ifdef CI_NATIVE_FLOAT128
+    return (uint64_t)v;
+#else
+    return f128M_to_ui64_r_minMag(&v, false);
+#endif
+}
+static inline CiFloat128 ci_float128_from_int64(int64_t v){
+#ifdef CI_NATIVE_FLOAT128
+    return (CiFloat128)v;
+#else
+    CiFloat128 r; i64_to_f128M(v, &r); return r;
+#endif
+}
+static inline int64_t ci_float128_to_int64(CiFloat128 v){
+#ifdef CI_NATIVE_FLOAT128
+    return (int64_t)v;
+#else
+    return f128M_to_i64_r_minMag(&v, false);
+#endif
+}
+static inline CiFloat128 ci_float128_from_float(float v){
+#ifdef CI_NATIVE_FLOAT128
+    return (CiFloat128)v;
+#else
+    float32_t a; memcpy(&a, &v, sizeof a); CiFloat128 r; f32_to_f128M(a, &r); return r;
+#endif
+}
+static inline float ci_float128_to_float(CiFloat128 v){
+#ifdef CI_NATIVE_FLOAT128
+    return (float)v;
+#else
+    float32_t a = f128M_to_f32(&v); float r; memcpy(&r, &a, sizeof r); return r;
+#endif
+}
+static inline CiFloat128 ci_float128_from_double(double v){
+#ifdef CI_NATIVE_FLOAT128
+    return (CiFloat128)v;
+#else
+    float64_t a; memcpy(&a, &v, sizeof a); CiFloat128 r; f64_to_f128M(a, &r); return r;
+#endif
+}
+static inline double ci_float128_to_double(CiFloat128 v){
+#ifdef CI_NATIVE_FLOAT128
+    return (double)v;
+#else
+    float64_t a = f128M_to_f64(&v); double r; memcpy(&r, &a, sizeof r); return r;
+#endif
+}
+static inline _Bool ci_float128_nonzero(CiFloat128 a){ return !ci_float128_eq(a, ci_float128_from_int64(0)); }
+
+static inline CiFloat128 ci_float128_from_float80(CiFloat80 v){
+    extFloat80_t a = {0}; float128_t b;
+    memcpy(&a, &v, 10);
+    extF80M_to_f128M(&a, &b);
+    CiFloat128 r; memcpy(&r, &b, sizeof r); return r;
+}
+static inline CiFloat80 ci_float80_from_float128(CiFloat128 v){
+    float128_t a; extFloat80_t b;
+    memcpy(&a, &v, sizeof a);
+    f128M_to_extF80M(&a, &b);
+    return ci_float80_read(&b);
+}
+
+static inline CiFloat80 ci_float80_from_uint128(CiUint128 v, _Bool uns){
+#if defined CI_NATIVE_FLOAT80 && defined __SIZEOF_INT128__
+    return uns ? (CiFloat80)v : (CiFloat80)(__int128)v;
+#else
+    _Bool neg = !uns && (ci_uint128_hi(v) >> 63);
+    if(neg) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    int top = 127;
+    while(top && !ci_uint128_nonzero(ci_uint128_shr(v, top))) top--;
+    uint64_t raw[2] = {0, 0};
+    if(ci_uint128_nonzero(v)){
+        int shift = top - 63;
+        CiUint128 sig = shift > 0 ? ci_uint128_shr(v, shift) : ci_uint128_shl(v, -shift);
+        if(shift > 0){
+            CiUint128 rem = ci_uint128_sub(v, ci_uint128_shl(sig, shift));
+            CiUint128 half = ci_uint128_shl(ci_uint128_from_uint64(1), shift - 1);
+            if(ci_uint128_gt(rem, half) || (ci_uint128_eq(rem, half) && (ci_uint128_lo(sig) & 1))){
+                sig = ci_uint128_add(sig, ci_uint128_from_uint64(1));
+                if(ci_uint128_nonzero(ci_uint128_shr(sig, 64))){ sig = ci_uint128_shr(sig, 1); top++; }
+            }
+        }
+        raw[0] = ci_uint128_lo(sig);
+        raw[1] = (uint64_t)(top + 16383);
+    }
+    raw[1] |= (uint64_t)neg << 15;
+    return ci_float80_read(raw);
+#endif
+}
+static inline CiUint128 ci_float80_to_uint128(CiFloat80 v){
+    uint64_t raw[2]; ci_float80_write(raw, 16, v);
+    int exp = (int)(raw[1] & 0x7fff);
+    _Bool neg = (raw[1] & 0x8000) != 0;
+    CiUint128 sig = ci_uint128_from_uint64(raw[0]);
+    int shift = exp - 16383 - 63;
+    if(exp == 0 || exp == 0x7fff || shift <= -128 || shift >= 128) return ci_uint128_from_uint64(0);
+    CiUint128 r = shift < 0 ? ci_uint128_shr(sig, -shift) : ci_uint128_shl(sig, shift);
+    return neg ? ci_uint128_sub(ci_uint128_from_uint64(0), r) : r;
+}
+
+static inline CiFloat128 ci_float128_from_uint128(CiUint128 v, _Bool uns){
+#if defined CI_NATIVE_FLOAT128 && defined __SIZEOF_INT128__
+    return uns ? (CiFloat128)v : (CiFloat128)(__int128)v;
+#else
+    _Bool neg = !uns && (ci_uint128_hi(v) >> 63);
+    if(neg) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    int top = 127;
+    while(top && !ci_uint128_nonzero(ci_uint128_shr(v, top))) top--;
+    uint64_t raw[2] = {0, 0};
+    if(ci_uint128_nonzero(v)){
+        int shift = top - 112;
+        CiUint128 sig = shift > 0 ? ci_uint128_shr(v, shift) : ci_uint128_shl(v, -shift);
+        if(shift > 0){
+            CiUint128 rem = ci_uint128_sub(v, ci_uint128_shl(sig, shift));
+            CiUint128 half = ci_uint128_shl(ci_uint128_from_uint64(1), shift - 1);
+            if(ci_uint128_gt(rem, half) || (ci_uint128_eq(rem, half) && (ci_uint128_lo(sig) & 1))){
+                sig = ci_uint128_add(sig, ci_uint128_from_uint64(1));
+                if(ci_uint128_nonzero(ci_uint128_shr(sig, 113))){ sig = ci_uint128_shr(sig, 1); top++; }
+            }
+        }
+        raw[0] = ci_uint128_lo(sig);
+        raw[1] = (ci_uint128_hi(sig) & UINT64_C(0x0000ffffffffffff)) | ((uint64_t)(top + 16383) << 48);
+    }
+    raw[1] |= (uint64_t)neg << 63;
+    return ci_float128_read(raw);
+#endif
+}
+static inline CiUint128 ci_float128_to_uint128(CiFloat128 v){
+    uint64_t raw[2]; ci_float128_write(raw, 16, v);
+    int exp = (int)((raw[1] >> 48) & 0x7fff);
+    _Bool neg = (raw[1] >> 63) != 0;
+    raw[1] = (raw[1] & UINT64_C(0x0000ffffffffffff)) | (exp ? UINT64_C(0x0001000000000000) : 0);
+    CiUint128 sig; ci_uint128_read(&sig, raw, 16);
+    int shift = exp - 16383 - 112;
+    if(exp == 0 || exp == 0x7fff || shift <= -128 || shift >= 128) return ci_uint128_from_uint64(0);
+    CiUint128 r = shift < 0 ? ci_uint128_shr(sig, -shift) : ci_uint128_shl(sig, shift);
+    return neg ? ci_uint128_sub(ci_uint128_from_uint64(0), r) : r;
+}
+
 #endif

@@ -7,6 +7,7 @@
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
+#include "ci_softnum.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -187,6 +188,7 @@ struct CcToken {
             uint32_t _bitpadding: 24;
             uint32_t _pad;
             uint64_t _pad2;
+            uint64_t _pad3;
         };
         struct {
             CcTokenType type: 8;
@@ -194,12 +196,14 @@ struct CcToken {
             uint32_t _bitpadding: 16;
             uint32_t _pad;
             uint64_t _pad2;
+            uint64_t _pad3;
         } kw;
         struct {
             CcTokenType type: 8;
             uint32_t _bitpadding: 24;
             uint32_t _pad;
             Atom ident;
+            uint64_t _pad3;
         } ident;
         struct {
             CcTokenType type: 8;
@@ -210,6 +214,8 @@ struct CcToken {
                 uint64_t integer_value;
                 float float_value;
                 double double_value;
+                CiFloat80 x87_value;
+                CiFloat128 quad_value;
             };
         } constant;
         struct {
@@ -222,16 +228,19 @@ struct CcToken {
                 const unsigned short* utf16;
                 const unsigned int* utf32;
             };
+            uint64_t _pad3;
         } str;
         struct {
             CcTokenType type: 8;
             CcPunct punct: 24;
             uint32_t _pad;
             uint64_t _pad2;
+            uint64_t _pad3;
         } punct;
     };
     SrcLoc loc;
 };
+_Static_assert(sizeof(CcToken) == 4*sizeof(uint64_t), "");
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

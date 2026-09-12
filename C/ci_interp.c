@@ -240,8 +240,8 @@ ci_copy(void* dst, const void* src, uint32_t sz){
 
 static inline
 double
-ci_read_float(const void* buf, CcBasicTypeKind k){
-    if(k == CCBT_float){
+ci_read_float(const void* buf, uint32_t width){
+    if(width == 32){
         float f;
         CI_INLINE_MEMCPY(&f, buf, sizeof f);
         return (double)f;
@@ -1250,6 +1250,66 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
+        case CI_OP_FALU80: {
+            CiFloat80 a = ci_float80_read((char*)frame->slots + op->falu32.src);
+            CiFloat80 b = ci_float80_read((char*)frame->slots + op->falu32.src2), r;
+            switch(op->falu32.op){
+                case CI_FALU_ADD: r = ci_float80_add(a, b); break;
+                case CI_FALU_SUB: r = ci_float80_sub(a, b); break;
+                case CI_FALU_MUL: r = ci_float80_mul(a, b); break;
+                case CI_FALU_DIV: r = ci_float80_div(a, b); break;
+                case CI_FALU_NEG: r = ci_float80_neg(a); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_float80_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r);
+            frame->pc++; return 0;
+        }
+        case CI_OP_FCMP80: {
+            CiFloat80 a = ci_float80_read((char*)frame->slots + op->fcmp32.src);
+            CiFloat80 b = ci_float80_read((char*)frame->slots + op->fcmp32.src2);
+            _Bool r;
+            switch(op->fcmp32.op){
+                case CI_CMP_EQ: r = ci_float80_eq(a, b); break;
+                case CI_CMP_NE: r = !ci_float80_eq(a, b); break;
+                case CI_CMP_LT: r = ci_float80_lt(a, b); break;
+                case CI_CMP_LE: r = ci_float80_le(a, b); break;
+                case CI_CMP_GT: r = ci_float80_lt(b, a); break;
+                case CI_CMP_GE: r = ci_float80_le(b, a); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
+            frame->pc++; return 0;
+        }
+        case CI_OP_FALU128: {
+            CiFloat128 a = ci_float128_read((char*)frame->slots + op->falu32.src);
+            CiFloat128 b = ci_float128_read((char*)frame->slots + op->falu32.src2), r;
+            switch(op->falu32.op){
+                case CI_FALU_ADD: r = ci_float128_add(a, b); break;
+                case CI_FALU_SUB: r = ci_float128_sub(a, b); break;
+                case CI_FALU_MUL: r = ci_float128_mul(a, b); break;
+                case CI_FALU_DIV: r = ci_float128_div(a, b); break;
+                case CI_FALU_NEG: r = ci_float128_neg(a); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_float128_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r);
+            frame->pc++; return 0;
+        }
+        case CI_OP_FCMP128: {
+            CiFloat128 a = ci_float128_read((char*)frame->slots + op->fcmp32.src);
+            CiFloat128 b = ci_float128_read((char*)frame->slots + op->fcmp32.src2);
+            _Bool r;
+            switch(op->fcmp32.op){
+                case CI_CMP_EQ: r = ci_float128_eq(a, b); break;
+                case CI_CMP_NE: r = !ci_float128_eq(a, b); break;
+                case CI_CMP_LT: r = ci_float128_lt(a, b); break;
+                case CI_CMP_LE: r = ci_float128_le(a, b); break;
+                case CI_CMP_GT: r = ci_float128_lt(b, a); break;
+                case CI_CMP_GE: r = ci_float128_le(b, a); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
+            frame->pc++; return 0;
+        }
         case CI_OP_FALU32: {
             float a, b;
             CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu32.src, sizeof a);
@@ -1392,6 +1452,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_ITOF: {
+            if(op->convert.dst_float == 80){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiUint128 v;
+                if(op->convert.src_size > 8) ci_uint128_read(&v, src, op->convert.src_size);
+                else v = op->convert.is_unsigned ? ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size)) : ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
+                ci_float80_write(dest, op->convert.slot_size, ci_float80_from_uint128(v, op->convert.is_unsigned));
+                frame->pc++; return 0;
+            }
+            if(op->convert.dst_float == 128){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiUint128 v;
+                if(op->convert.src_size > 8) ci_uint128_read(&v, src, op->convert.src_size);
+                else v = op->convert.is_unsigned ? ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size)) : ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
+                ci_float128_write(dest, op->convert.slot_size, ci_float128_from_uint128(v, op->convert.is_unsigned));
+                frame->pc++; return 0;
+            }
+
             const void* src = (char*)frame->slots + op->itof.src;
             void* dest = (char*)frame->slots + op->itof.slot;
             if(op->itof.src_size > 8){
@@ -1426,6 +1505,21 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_FTOI: {
+            if(op->convert.src_float == 80){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiUint128 v = ci_float80_to_uint128(ci_float80_read(src));
+                ci_uint128_write(dest, op->convert.slot_size, v);
+                frame->pc++; return 0;
+            }
+            if(op->convert.src_float == 128){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiUint128 v = ci_float128_to_uint128(ci_float128_read(src));
+                ci_uint128_write(dest, op->convert.slot_size, v);
+                frame->pc++; return 0;
+            }
+
             const void* src = (char*)frame->slots + op->ftoi.src;
             double d;
             if(op->ftoi.src_size == 4){
@@ -1449,6 +1543,43 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_FTOF: {
+            if(op->convert.dst_float == 80){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiFloat80 v;
+                if(op->convert.src_float == 80) v = ci_float80_read(src);
+                else if(op->convert.src_float == 128) v = ci_float80_from_float128(ci_float128_read(src));
+                else if(op->convert.src_size == 4){ float f; memcpy(&f, src, 4); v = ci_float80_from_float(f); }
+                else { double d; memcpy(&d, src, 8); v = ci_float80_from_double(d); }
+                ci_float80_write(dest, op->convert.slot_size, v);
+                frame->pc++; return 0;
+            }
+            if(op->convert.dst_float == 128){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                CiFloat128 v;
+                if(op->convert.src_float == 128) v = ci_float128_read(src);
+                else if(op->convert.src_float == 80) v = ci_float128_from_float80(ci_float80_read(src));
+                else if(op->convert.src_size == 4){ float f; memcpy(&f, src, 4); v = ci_float128_from_float(f); }
+                else { double d; memcpy(&d, src, 8); v = ci_float128_from_double(d); }
+                ci_float128_write(dest, op->convert.slot_size, v);
+                frame->pc++; return 0;
+            }
+            if(op->convert.src_float == 80){
+                CiFloat80 v = ci_float80_read((char*)frame->slots + op->convert.src);
+                void* dest = (char*)frame->slots + op->convert.slot;
+                if(op->convert.slot_size == 4){ float f = ci_float80_to_float(v); memcpy(dest, &f, 4); }
+                else { double d = ci_float80_to_double(v); memcpy(dest, &d, 8); }
+                frame->pc++; return 0;
+            }
+            if(op->convert.src_float == 128){
+                CiFloat128 v = ci_float128_read((char*)frame->slots + op->convert.src);
+                void* dest = (char*)frame->slots + op->convert.slot;
+                if(op->convert.slot_size == 4){ float f = ci_float128_to_float(v); memcpy(dest, &f, 4); }
+                else { double d = ci_float128_to_double(v); memcpy(dest, &d, 8); }
+                frame->pc++; return 0;
+            }
+
             const void* src = (char*)frame->slots + op->ftof.src;
             void* dest = (char*)frame->slots + op->ftof.slot;
             double d;
@@ -1662,10 +1793,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_ISTRUE: {
             const void* src = (char*)frame->slots + op->istrue.src;
-            uint32_t float_kind = op->istrue.float_kind;
+            uint32_t float_width = op->istrue.float_width;
             _Bool v;
-            if(float_kind)
-                v = ci_read_float(src, (CcBasicTypeKind)float_kind) != 0.0;
+            if(float_width == 128)
+                v = ci_float128_nonzero(ci_float128_read(src));
+            else if(float_width == 80)
+                v = ci_float80_nonzero(ci_float80_read(src));
+            else if(float_width)
+                v = ci_read_float(src, float_width) != 0.0;
             else if(op->istrue.src_size > 8){
                 CiUint128 u;
                 ci_uint128_read(&u, src, op->istrue.src_size);

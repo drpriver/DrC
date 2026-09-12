@@ -26,7 +26,7 @@ static void ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offse
 static const char* ci_op_alu_sym(CiAluOp op);
 static const char* ci_op_cmp_sym(CiCmpOp op);
 static const char* ci_op_falu_sym(CiFaluOp op);
-static const char* ci_op_float_suffix(uint32_t float_kind, CcLongDoubleFormat ldbl_fmt);
+static const char* ci_op_float_suffix(uint32_t float_width);
 
 static
 void
@@ -92,20 +92,14 @@ ci_op_falu_sym(CiFaluOp op){
 
 static
 const char*
-ci_op_float_suffix(uint32_t float_kind, CcLongDoubleFormat ldbl_fmt){
-    switch((CcBasicTypeKind)float_kind){
-        case CCBT_float16:     return ".f16";
-        case CCBT_float:       return ".f32";
-        case CCBT_double:      return ".f64";
-        case CCBT_long_double:
-            switch(ldbl_fmt){
-                case CC_LONG_DOUBLE_BINARY64: return ".f64";
-                case CC_LONG_DOUBLE_X87: return ".f80";
-                case CC_LONG_DOUBLE_BINARY128: return ".f128";
-            }
-            return ".f?";
-        case CCBT_float128:    return ".f128";
-        default:               return ".f?";
+ci_op_float_suffix(uint32_t float_width){
+    switch(float_width){
+        case 16:  return ".f16";
+        case 32:  return ".f32";
+        case 64:  return ".f64";
+        case 80:  return ".f80";
+        case 128: return ".f128";
+        default:  return ".f?";
     }
 }
 
@@ -394,9 +388,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             break;
         }
         case CI_OP_FALU32:
-        case CI_OP_FALU64:{
-            uint32_t width = op->kind == CI_OP_FALU32? 4 : 8;
-            const char* suffix = op->kind == CI_OP_FALU32? "f32" : "f64";
+        case CI_OP_FALU64:
+        case CI_OP_FALU80:
+        case CI_OP_FALU128:{
+            uint32_t width = op->kind == CI_OP_FALU32? 4 : op->kind == CI_OP_FALU64? 8 : 16;
+            const char* suffix = op->kind == CI_OP_FALU32? "f32" : op->kind == CI_OP_FALU64? "f64" : op->kind == CI_OP_FALU80? "f80" : "f128";
             ci_op_print_range(out, op->falu32.slot, op->falu32.slot_size);
             msb_write_literal(out, " = ");
             if(op->falu32.op == CI_FALU_NEG){
@@ -410,9 +406,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             }
         } break;
         case CI_OP_FCMP32:
-        case CI_OP_FCMP64:{
-            uint32_t width = op->kind == CI_OP_FCMP32? 4 : 8;
-            const char* suffix = op->kind == CI_OP_FCMP32? "f32" : "f64";
+        case CI_OP_FCMP64:
+        case CI_OP_FCMP80:
+        case CI_OP_FCMP128:{
+            uint32_t width = op->kind == CI_OP_FCMP32? 4 : op->kind == CI_OP_FCMP64? 8 : 16;
+            const char* suffix = op->kind == CI_OP_FCMP32? "f32" : op->kind == CI_OP_FCMP64? "f64" : op->kind == CI_OP_FCMP80? "f80" : "f128";
             ci_op_print_range(out, op->fcmp32.slot, op->fcmp32.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->fcmp32.src, width);
@@ -551,7 +549,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);
             msb_sprintf(out, " = %s%s ",
                 op->istrue.negate?"isfalse":"istrue",
-                op->istrue.float_kind?ci_op_float_suffix(op->istrue.float_kind, ldbl_fmt):"");
+                op->istrue.float_width?ci_op_float_suffix(op->istrue.float_width):"");
             ci_op_print_range(out, op->istrue.src, op->istrue.src_size);
             break;
         case CI_OP_JUMP:

@@ -6793,17 +6793,17 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
-            "cast: to long double unsupported", __LINE__,
+            "cast: to long double", __LINE__,
             SVI("int n = 7;\n"
                 "long double a = (long double)n;\n"
                 "return 0;\n"),
-            .skip = 1,
+            .exit_code = 0,
         },
         {
-            "cast: long double to bool unsupported", __LINE__,
+            "cast: long double to bool", __LINE__,
             SVI("long double a = 0.5L;\n"
                 "return (_Bool)a;\n"),
-            .skip = 1,
+            .exit_code = 1,
         },
         {
             "cast: qualified slice evaluates once", __LINE__,
@@ -6892,7 +6892,7 @@ TestFunction(test_interpreter){
             "numeric literal: long double", __LINE__,
             SVI("long double x = 7.0L;\n"
                "return (int)x;\n"),
-            .skip = 1,
+            .exit_code = 7,
         },
         {
             "nullptr", __LINE__,
@@ -8217,7 +8217,7 @@ TestFunction(test_interpreter){
             SVI("long double a = 3.5L;\n"
                "long double b = 2.5L;\n"
                "return (int)(a + b);\n"),
-            .skip = 1,
+            .exit_code = 6,
         },
         {
             "array of structs init", __LINE__,
@@ -9984,6 +9984,175 @@ TestFunction(test_cross_target){
             .target = CC_TARGET_X86_64_LINUX,
         },
         {
+            "x87: arithmetic and conversions", __LINE__,
+            SVI("long double a = (long double)9007199254740993ull;\n"
+                "long double b = (long double)9007199254740992ull;\n"
+                "long double c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "binary128 long double: arithmetic and conversions", __LINE__,
+            SVI("long double a = (long double)9007199254740993ull;\n"
+                "long double b = (long double)9007199254740992ull;\n"
+                "long double c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "float128: arithmetic and conversions", __LINE__,
+            SVI("_Float128 a = (_Float128)9007199254740993ull;\n"
+                "_Float128 b = (_Float128)9007199254740992ull;\n"
+                "_Float128 c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "extended literal sign and casts", __LINE__,
+            SVI("long double a = -2.5L;\n"
+                "long double z = -0.0L;\n"
+                "return a < 0 && (double)a == -2.5 && !z;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "extended literal sign and casts", __LINE__,
+            SVI("long double a = -2.5L;\n"
+                "long double z = -0.0L;\n"
+                "return a < 0 && (double)a == -2.5 && !z;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "long double: special values", __LINE__,
+            SVI("long double z = (long double)0;\n"
+                "long double n = z/z;\n"
+                "long double inf = (long double)1/z;\n"
+                "long double nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "long double: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "long double: memory increments and float conversions", __LINE__,
+            SVI("long double a[1] = {(long double)1.5f};\n"
+                "long double *p = a;\n"
+                "long double old = (*p)++;\n"
+                "--*p;\n"
+                "*p += (long double)2.25;\n"
+                "*p -= (long double)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "long double: special values", __LINE__,
+            SVI("long double z = (long double)0;\n"
+                "long double n = z/z;\n"
+                "long double inf = (long double)1/z;\n"
+                "long double nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "long double: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "long double: memory increments and float conversions", __LINE__,
+            SVI("long double a[1] = {(long double)1.5f};\n"
+                "long double *p = a;\n"
+                "long double old = (*p)++;\n"
+                "--*p; *p += (long double)2.25;\n"
+                "*p -= (long double)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "_Float128: special values", __LINE__,
+            SVI("_Float128 z = (_Float128)0;\n"
+                "_Float128 n = z/z;\n"
+                "_Float128 inf = (_Float128)1/z;\n"
+                "_Float128 nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "_Float128: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "_Float128 a = (_Float128)u;\n"
+                "_Float128 b = (_Float128)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(_Float128)-3.75 == -3;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "_Float128: memory increments and float conversions", __LINE__,
+            SVI("_Float128 a[1] = {(_Float128)1.5f};\n"
+                "_Float128 *p = a;\n"
+                "_Float128 old = (*p)++;\n"
+                "--*p; *p += (_Float128)2.25;\n"
+                "*p -= (_Float128)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "binary128 precision and x87 conversion", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 112) + 1;\n"
+                " _Float128 q = (_Float128)u;\n"
+                " _Float128 one = q - (_Float128)(u - 1);\n"
+                " long double e = (long double)one;\n"
+                " return (unsigned __int128)q == u && e == 1 && (_Float128)e == one;\n"
+            ),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "long double: rounding ties and subnormal truth", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 64) + 1;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)(u + 2);\n"
+                "union U { long double f;\n"
+                "   unsigned long long bits[2];\n"
+                "} tiny = {.bits = {1, 0}};\n"
+                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
+            ),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "_Float128: rounding ties and subnormal truth", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 113) + 1;\n"
+                "_Float128 a = (_Float128)u;\n"
+                "_Float128 b = (_Float128)(u + 2);\n"
+                "union U { _Float128 f;\n"
+                "   unsigned long long bits[2];\n"
+                "} tiny = {.bits = {1, 0}};\n"
+                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
+            ),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
+        },
+        {
             "windows sizeof size_t", __LINE__,
             SVI("return sizeof(__SIZE_TYPE__);\n"),
             .exit_code = 8, // unsigned long long is 8
@@ -10687,17 +10856,52 @@ TestFunction(test_long_double_folding){
         TestExpect(int, status, ==, expected_status);
         if(!status) TestExpectTrue(truth);
     }
+    static const struct {
+        CcLongDoubleFormat format;
+        uint32_t size;
+        uint64_t one[2], negative_zero[2];
+    } truth_cases[] = {
+        {CC_LONG_DOUBLE_BINARY64, 8, {0x3ff0000000000000, 0}, {0x8000000000000000, 0}},
+        {CC_LONG_DOUBLE_X87, 16, {0x8000000000000000, 0x3fff}, {0, 0x8000}},
+        {CC_LONG_DOUBLE_BINARY128, 16, {0, 0x3fff000000000000}, {0, 0x8000000000000000}},
+    };
+    for(size_t i = 0; i < arrlen(truth_cases); i++){
+        for(size_t j = 0; j < arrlen(truth_cases); j++){
+            for(int negate = 0; negate < 2; negate++){
+                Marray(CiOp) ops = {0};
+                CiLowerCtx ctx = {.a = MALLOCATOR, .out = &ops, .ldbl_fmt = truth_cases[i].format};
+                CiLowerVal value = {.slot = 8, .size = truth_cases[i].size};
+                int err = ci_lower_istrue(&ctx, &value, ccqt_basic(CCBT_long_double), 0, 1, (_Bool)negate, (SrcLoc){0});
+                TestExpect(int, err, ==, 0);
+                if(!err){
+                    CiInterpreter ci = {0};
+                    ci.parser.cpp.target.long_double_format = truth_cases[j].format;
+                    for(int nonzero = 0; nonzero < 2; nonzero++){
+                        uint64_t slots[3] = {0};
+                        memcpy(slots + 1, nonzero ? truth_cases[i].one : truth_cases[i].negative_zero, value.size);
+                        CiInterpFrame frame = {.ops = ops.data, .op_count = ops.count, .slots = slots};
+                        TestExpect(int, ci_interp_step(&ci, &frame), ==, 0);
+                        TestExpect(uint64_t, slots[0], ==, (uint64_t)(nonzero ^ negate));
+                        TestExpect(size_t, frame.pc, ==, 1);
+                    }
+                }
+                ma_cleanup(CiOp)(&ops, MALLOCATOR);
+            }
+        }
+    }
     MStringBuilder sb = {.allocator = MALLOCATOR};
     CiOp op = {.istrue = {.kind = CI_OP_ISTRUE, .slot_size = 1, .src = 8,
-        .src_size = 8, .float_kind = CCBT_long_double}};
+        .src_size = 8, .float_width = 64}};
     ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
     TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f64 [8:16]")));
     msb_reset(&sb);
     op.istrue.src_size = 16;
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_X87);
+    op.istrue.float_width = 80;
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
     TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f80 [8:24]")));
     msb_reset(&sb);
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY128);
+    op.istrue.float_width = 128;
+    ci_op_print(&op, &sb, CC_LONG_DOUBLE_X87);
     TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f128 [8:24]")));
     msb_reset(&sb);
     op = (CiOp){.constant = {.kind = CI_OP_CONST, .immsize = 8,
@@ -10846,7 +11050,6 @@ TestFunction(test_float_folding){
                 memcpy(from.bits, cases[i].input, sizeof from.bits);
                 CiFoldValue to = {.type = ccqt_basic(cases[i].to), .sz = ci_target(&ci)->sizeof_[cases[i].to]};
                 feclearexcept(FE_ALL_EXCEPT);
-                // Verify both a clean environment and preservation of existing flags.
                 if(i & 1) feraiseexcept(FE_DIVBYZERO);
                 int flags = fetestexcept(FE_ALL_EXCEPT);
                 int status;

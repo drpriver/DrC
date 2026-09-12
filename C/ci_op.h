@@ -113,8 +113,12 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_CMP_JUMP64,
     CI_OP_FALU32,
     CI_OP_FALU64,
+    CI_OP_FALU80,
+    CI_OP_FALU128,
     CI_OP_FCMP32,
     CI_OP_FCMP64,
+    CI_OP_FCMP80,
+    CI_OP_FCMP128,
     CI_OP_CHECKED,
     CI_OP_BITCOUNT,
     CI_OP_CONVERT,
@@ -314,7 +318,9 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
             uint32_t is_unsigned: 1,
-                     _bitpad: 23;
+                     src_float: 8,
+                     dst_float: 8,
+                     _bitpad: 7;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src, src_size;
@@ -527,10 +533,10 @@ struct CiOp {
         } call;
         struct {
             // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
-            // float_kind = CcBasicTypeKind when the source is a float, else 0;
+            // float_width = resolved format width (16/32/64/80/128), else 0;
             // negate computes !truthy instead
             CiOpKind kind: 8; // CI_OP_ISTRUE
-            uint32_t float_kind: 16,
+            uint32_t float_width: 16,
                      negate: 1,
                      _bitpad: 7;
             uint32_t pad;

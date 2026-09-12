@@ -93,6 +93,7 @@
     X(__alignof, alignof) \
 
 #define CCKWS10(X) \
+    X(__float128, _Float128) \
     X(_Imaginary, _Imaginary) \
     X(_Decimal32, _Decimal32) \
     X(_Decimal64, _Decimal64) \
