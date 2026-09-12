@@ -28,10 +28,6 @@
 #define LIBFFI_LIB "libffi-8.lib"
 #define LIBFFI_DLL "libffi-8.dll"
 
-static const char* softfloat_sources[] = {
-    #include "Vendored/softfloat/softfloat_sources.inc"
-};
-
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -567,18 +563,11 @@ build_soft_float(BuildCtx* ctx){
     }
     else if(os == OS_APPLE) b_args(ctx, lib, "-static", "-o", path->data);
     else b_args(ctx, lib, "rcs", path->data);
-    for(size_t i = 0; i < sizeof softfloat_sources / sizeof softfloat_sources[0]; i++){
-        const char* source = softfloat_sources[i];
-        const char* basename = strrchr(source, '/');
-        basename = basename ? basename+1 : source;
-        Atom name = b_atomize_f(ctx, "softfloat_%.*s", (int)strlen(basename)-2, basename);
-        Atom src = b_atomize_f(ctx, "Vendored/softfloat/SoftFloat-3e/source/%s", source);
-        BuildTarget* obj = b_obj_target(ctx, name->data, src->data, ctx->target.os, B_COMPILE_OPTIMIZE|B_COMPILE_DEBUG_INFO|B_COMPILE_NO_SANITIZE);
-        b_args(ctx, obj, "-IVendored/softfloat", "-IVendored/softfloat/SoftFloat-3e/source/include", "-IVendored/softfloat/SoftFloat-3e/source/8086-SSE");
-        b_inp(ctx, lib, obj);
-    }
+    BuildTarget* obj = b_obj_target(ctx, "softfloat", "Vendored/softfloat/softfloat_unity.c", ctx->target.os, B_COMPILE_OPTIMIZE|B_COMPILE_DEBUG_INFO|B_COMPILE_NO_SANITIZE);
+    b_args(ctx, obj, "-IVendored/softfloat", "-IVendored/softfloat/SoftFloat-3e/source/include", "-IVendored/softfloat/SoftFloat-3e/source/8086-SSE");
+    b_inp(ctx, lib, obj);
     BuildTarget* alias = b_phony_target(ctx, "soft_float");
-    alias->description = b_atomize(ctx, "Build the portable SoftFloat static library.");
+    alias->description = b_atomize(ctx, "Build the SoftFloat library.");
     b_add_dep(ctx, alias, lib);
     return lib;
 }
