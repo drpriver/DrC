@@ -1220,8 +1220,6 @@ TestFunction(test_fast_float_wide){
     }
     {
         static int idx = 0;
-        // Claim each format/boundary case separately so up to eight workers
-        // can share the slow conversions. Each job owns its input buffer.
         for(int job = test_atomic_increment(&idx); job < 8; job = test_atomic_increment(&idx)){
             int x87 = job/4;
             int variant = job%4;
@@ -1248,24 +1246,6 @@ TestFunction(test_fast_float_wide){
                 }
                 remaining -= step;
             }
-            #if 0
-            char text[12200];
-            int count = snprintf(text, sizeof text, "%u", chunks[nchunks-1]);
-            for(int i = nchunks-2; i >= 0; i--)
-                count += snprintf(text+count, sizeof text-count, "%09u", chunks[i]);
-            int length;
-            if(variant < 3){
-                int offset = variant-1;
-                text[count-1] = (char)('5' + offset); // 5^n ends in 5, so no decimal carry.
-                length = count + snprintf(text+count, sizeof text-count, "e-%d", power);
-            }
-            else {
-                // A nonzero digit beyond the retained buffer must break the tie too.
-                memset(text+count, '0', 200);
-                text[count+199] = '1';
-                length = count+200 + snprintf(text+count+200, sizeof text-count-200, "e-%d", power+200);
-            }
-            #else
             MStringBuilder sb = {.allocator=MALLOCATOR};
             msb_sprintf(&sb, "%u", chunks[nchunks-1]);
             for(size_t i = nchunks-1; i--;)
@@ -1289,7 +1269,6 @@ TestFunction(test_fast_float_wide){
             StringView sv = msb_borrow_sv(&sb);
             size_t length = sv.length;
             const char* text = sv.text;
-            #endif
             uint64_t words[2];
             fast_float_from_chars_result r = x87
                 ? fast_float_from_chars_x87(text, text+length, words, FASTFLOAT_FORMAT_GENERAL)
@@ -1298,9 +1277,7 @@ TestFunction(test_fast_float_wide){
             if(variant < 3) TestExpectTrue(r.ptr == text+length);
             TestExpectEquals(uint64_t, words[0], variant >= 2 ? 1 : 0);
             TestExpectEquals(uint64_t, words[1], 0);
-            #if 1
             msb_destroy(&sb);
-            #endif
         }
     }
     TESTEND();
