@@ -43,6 +43,7 @@
   * [Nested functions](#nested-functions)
   * [`__builtin_intern(s)`](#builtininterns)
   * [`#pragma typedef`](#pragma-typedef)
+  * [Other Vendor Extensions](#other-vendor-extensions)
   * [Minor extensions](#minor-extensions)
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
@@ -1075,12 +1076,34 @@ struct Bar {
 Bar b = {2}; /// error
 ```
 
+### Other Vendor Extensions
+
+A best-effort attempt is made to support other vendor extensions.
+
+
+An incomplete list:
+
+
+* GNU statement expressions
+* MSVC integer suffixes (`i64`, etc.)
+* GNU-style `__attribute__`
+* GNU vector types.
+* GNU asm for symbol mangling.
+* GNU `__builtin_*`-style intrinsics
+* some MSVC intrinsics
+* pointer arithmetic on `void *` (treat `sizeof(void)==1`)
+* ... and more
+
 ### Minor extensions
 
 * `_Float128` is supported on all targets.
 * `__int128` is supported on all targets.
     + `long long long` is also a spelling for int128.
     + use `i128/lll` suffixes for int128 literals
+* Arrays can be assigned to other arrays.
+    + `int a[3](3) = {1,2,3}; int b[3](3) = a; int c[3](3); c = b;`
+* `_Self` names the enclosing type in `struct` or `union` declarations, including anonymous types.
+    + `typedef struct { _Self* next; } Node;`
 * FIXME: list all the other random minor extensions.
 
 ## Interpreter-only
