@@ -43,6 +43,7 @@
   * [Nested functions](#nested-functions)
   * [`__builtin_intern(s)`](#builtininterns)
   * [`#pragma typedef`](#pragma-typedef)
+  * [Minor extensions](#minor-extensions)
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
   * [`_Argc` / `_Argv`](#argc-argv)
@@ -1073,6 +1074,14 @@ struct Bar {
 };
 Bar b = {2}; /// error
 ```
+
+### Minor extensions
+
+* `_Float128` is supported on all targets.
+* `__int128` is supported on all targets.
+    + `long long long` is also a spelling for int128.
+    + use `i128/lll` suffixes for int128 literals
+* FIXME: list all the other random minor extensions.
 
 ## Interpreter-only
 

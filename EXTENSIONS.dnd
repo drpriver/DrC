@@ -706,7 +706,6 @@ C::md
         return any;
       }
 
-
   Top-level statements::md
     Code at the top level of a file is executed as if it were in an implicit
     `main` function. This makes C work as a scripting language ---
@@ -787,6 +786,13 @@ C::md
           int x;
       };
       Bar b = {2}; /// error
+
+  Minor extensions::md
+    - `_Float128` is supported on all targets.
+    - `__int128` is supported on all targets.
+      - `long long long` is also a spelling for int128.
+      - use `i128/lll` suffixes for int128 literals
+    - FIXME: list all the other random minor extensions.
 
 Interpreter-only::md
   These extensions are only available when running under the interpreter, not

@@ -4355,8 +4355,22 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "long long long variable", __LINE__,
+            SVI("long long long x;\n"),
+            .vars = {
+                { SVI("x"), SVI("__int128") },
+            },
+        },
+        {
             "unsigned __int128 variable", __LINE__,
             SVI("unsigned __int128 x;\n"),
+            .vars = {
+                { SVI("x"), SVI("unsigned __int128") },
+            },
+        },
+        {
+            "unsigned long long long variable", __LINE__,
+            SVI("unsigned long long long x;\n"),
             .vars = {
                 { SVI("x"), SVI("unsigned __int128") },
             },
@@ -6489,9 +6503,9 @@ TestFunction(test_parse_errors){
             SVI("(test):1:6: error: short after long\n"),
         },
         {
-            "long long long", __LINE__,
-            SVI("long long long x;\n"),
-            SVI("(test):1:11: error: Duplicate long after long long in declaration\n"),
+            "long long long long", __LINE__,
+            SVI("long long long long x;\n"),
+            SVI("(test):1:16: error: Duplicate long after long long long in declaration\n"),
         },
         {
             "duplicate int", __LINE__,

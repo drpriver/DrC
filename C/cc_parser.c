@@ -9625,8 +9625,8 @@ cc_parse_declaration_specifier(CcParser* p, CcDeclBase* base){
                     case CC_long:
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_long > 1)
-                            return cc_error(p, tok.loc, "Duplicate long after long long in declaration");
+                        if(spec->sp_long > 2)
+                            return cc_error(p, tok.loc, "Duplicate long after long long long in declaration");
                         if(spec->sp_char)
                             return cc_error(p, tok.loc, "long after char");
                         if(spec->sp_short)
