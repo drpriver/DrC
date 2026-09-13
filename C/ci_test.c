@@ -3404,7 +3404,6 @@ TestFunction(test_interpreter){
                 "if(normal!=0x1p-126f || sub!=0x1p-149f || max!=0x1.fffffep127f) return 3;\n"
                 "return next==0x1.000002p0f ? 0 : 4;\n"),
             .exit_code = 0,
-            .skip = 1, // hex floats
         },
         {
             "float constant conversion: finite widening", __LINE__,
@@ -3412,7 +3411,6 @@ TestFunction(test_interpreter){
                 "if(a!=2.5 || b!=-2.5 || sub!=0x1p-149 || zero!=0.0) return 1;\n"
                 "return 1.0/zero<0.0 ? 0 : 2;\n"),
             .exit_code = 0,
-            .skip = 1, // hex floats
         },
         {
             "float constant conversion: inexact narrowing stays runtime", __LINE__,
@@ -3420,7 +3418,6 @@ TestFunction(test_interpreter){
                 "if(decimal!=0.1f || halfway!=1.0f || tiny!=0.0f) return 1;\n"
                 "return 0;\n"),
             .exit_code = 0,
-            .skip = 1, // hex floats
         },
         {
             "float constant conversion: preserve side effects and dynamic casts", __LINE__,

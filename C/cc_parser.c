@@ -2372,7 +2372,18 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     break;
                 case CC_LONG_DOUBLE:
                     node->type.basic.kind = CCBT_long_double;
-                    node->double_ = tok.constant.double_value;
+                    // FIXME: Expressions store long-double constants as doubles.
+                    switch(p->cpp.target.long_double_format){
+                        case CC_LONG_DOUBLE_BINARY64:
+                            node->double_ = tok.constant.double_value;
+                            break;
+                        case CC_LONG_DOUBLE_X87:
+                            node->double_ = ci_float80_to_double(tok.constant.x87_value);
+                            break;
+                        case CC_LONG_DOUBLE_BINARY128:
+                            node->double_ = ci_float128_to_double(tok.constant.quad_value);
+                            break;
+                    }
                     break;
                 case CC_INT:
                     node->type.basic.kind = CCBT_int;

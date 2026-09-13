@@ -157,7 +157,8 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
 static CcToken cc_int_tok(uint64_t v, CcConstantType ctype){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=ctype, .integer_value=v}}; }
 static CcToken cc_float_tok(float v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_FLOAT, .float_value=v}}; }
 static CcToken cc_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_DOUBLE, .double_value=v}}; }
-// static CcToken cc_long_double_tok(long double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE, .double_value=v}}; }
+// IEEE 754 binary128 words, least significant word first.
+static CcToken cc_long_double_tok(uint64_t val[2]){ CcToken tok = {.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE}}; memcpy(&tok.constant.quad_value, val, 16); return tok;}
 static CcToken cc_kw_tok(CcKeyword kw){ return (CcToken){.kw={.type=CC_KEYWORD, .kw=kw}}; }
 static CcToken cc_punct_tok(CcPunct p){ return (CcToken){.punct={.type=CC_PUNCTUATOR, .punct=p}}; }
 // Abuse: stash a const char* in the Atom field. cc_tok_matches knows to
@@ -203,8 +204,9 @@ cc_tok_matches(CcToken got, CcToken exp){
                 case CC_FLOAT:
                     return got.constant.float_value == exp.constant.float_value;
                 case CC_DOUBLE:
-                case CC_LONG_DOUBLE:
                     return got.constant.double_value == exp.constant.double_value;
+                case CC_LONG_DOUBLE:
+                    return memcmp(&got.constant.quad_value, &exp.constant.quad_value, sizeof got.constant.quad_value) == 0;
                 case CC_INT:
                 case CC_UNSIGNED:
                 case CC_LONG:
@@ -288,7 +290,8 @@ TestFunction(test_cc_lex_integers){
         {"msvc_hex_ui64",SV("0xFFFFFFFFFFFFFFFFui64"), cc_int_tok(UINT64_MAX, CC_UNSIGNED_LONG_LONG), __LINE__},
         {"msvc_I64_upper", SV("42I64"),    cc_int_tok(42, CC_LONG_LONG), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -320,7 +323,8 @@ TestFunction(test_cc_lex_integers){
             {"fu", SV("0fu"), SV("(test):1:1: error: Invalid suffix: 'f' and 'u' are mutually exclusive\n"), __LINE__},
             {"fll", SV("0fll"), SV("(test):1:1: error: Invalid suffix: 'f' and 'll' are mutually exclusive\n"), __LINE__},
         };
-        for(size_t i = 0; i < arrlen(error_cases); i++){
+        static int error_idx = 0;
+        for(size_t i = test_atomic_increment(&error_idx); i < arrlen(error_cases); i = test_atomic_increment(&error_idx)){
             StringView err_msg;
             int err = cc_lex_string_expect_error(error_cases[i].inp, &err_msg);
             TEST_stats.executed++;
@@ -352,7 +356,7 @@ TestFunction(test_cc_lex_floats){
         {"double_trail", SV("1."),         cc_double_tok(1.), __LINE__},
         {"float_exp",    SV("1.5e2f"),     cc_float_tok(1.5e2f), __LINE__},
         {"zero_f",       SV("0.0f"),       cc_float_tok(0.0f), __LINE__},
-        // {"long_double",  SV("3.14L"),      cc_long_double_tok(3.14), __LINE__},
+        {"long_double",  SV("3.14L"),      cc_long_double_tok((uint64_t[2]){0xeb851eb851eb851fULL, 0x400091eb851eb851ULL}), __LINE__},
         {"digit_sep_f",  SV("1'000.5f"),   cc_float_tok(1000.5f), __LINE__},
         // Negative exponent
         {"neg_exp",      SV("1e-10"),      cc_double_tok(1e-10), __LINE__},
@@ -360,7 +364,8 @@ TestFunction(test_cc_lex_floats){
         // Positive exponent with +
         {"pos_exp",      SV("1e+10"),      cc_double_tok(1e+10), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -416,7 +421,8 @@ TestFunction(test_cc_lex_chars){
         {"L_escape_0",  SV("L'\\0'"),     '\0',             CC_WCHAR,  __LINE__},
         {"U_hex_esc",   SV("U'\\x41'"),   0x41,             CC_CHAR32, __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -453,7 +459,8 @@ TestFunction(test_cc_lex_chars){
             {"U_multi",   SV("U'ab'"),  SV("(test):1:1: error: Multi-character character constant with prefix is not allowed\n"), __LINE__},
             {"empty",     SV("''"),     SV("(test):1:1: error: Invalid character constant\n"), __LINE__},
         };
-        for(size_t i = 0; i < arrlen(error_cases); i++){
+        static int error_idx = 0;
+        for(size_t i = test_atomic_increment(&error_idx); i < arrlen(error_cases); i = test_atomic_increment(&error_idx)){
             StringView err_msg;
             int err = cc_lex_string_expect_error(error_cases[i].inp, &err_msg);
             TEST_stats.executed++;
@@ -516,7 +523,8 @@ TestFunction(test_cc_lex_strings){
         // u string with UCN above BMP (surrogate pair)
         {"u_ucn_U_surr", SV("u\"\\U0001F600\""), cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0xD83D, 0xDE00, 0}, 3), __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -599,7 +607,8 @@ TestFunction(test_cc_lex_punctuators){
     #ifdef __GNUC__
     #pragma GCC diagnostic pop
     #endif
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -695,7 +704,8 @@ TestFunction(test_cc_lex_keywords){
         {"_Countof", SV("_Countof"), CC__Countof, __LINE__},
         {"countof", SV("countof"), CC__Countof, __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -775,7 +785,8 @@ TestFunction(test_cc_lex_multi_token){
             cc_ident_tok("_Boo"),
         }, __LINE__},
     };
-    for(size_t i = 0; i < arrlen(test_cases); i++){
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
@@ -844,7 +855,7 @@ TestFunction(test_literal_regressions){
         {SV("0x1.000003p0f"), cc_float_tok(0x1.000003p0f)},
         {SV("0x1.00000100000000001p0f"), cc_float_tok(0x1.00000100000000001p0f)},
         {SV("0x0.ffffffp-126f"), cc_float_tok(0x0.ffffffp-126f)},
-        // {SV("0x1.abp3L"), cc_long_double_tok(0x1.abp3L)},
+        {SV("0x1.abp3L"), cc_long_double_tok((uint64_t[2]){0x0000000000000000ULL, 0x4002ab0000000000ULL})},
         {SV("0x1.a'bp1'0"), cc_double_tok(0x1.abp10)},
         {SV("#define HEX 0x1.8p2f\nHEX"), cc_float_tok(6.0f)},
         {SV("#define CAT(a,b) a##b\nCAT(0x1p, 2)"), cc_double_tok(4.0)},
@@ -888,7 +899,8 @@ TestFunction(test_literal_regressions){
         {SV("u\"\\xd800\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0xD800, 0}, 2)},
     };
     for(int array = 0; array < 2; array++){
-        for(size_t i = 0; i < arrlen(cases); i++){
+        static int case_idx[2] = {0};
+        for(size_t i = test_atomic_increment(case_idx+array); i < arrlen(cases); i = test_atomic_increment(case_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
             ArenaAllocator aa = {0}, synth = {0};
             int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
@@ -937,7 +949,8 @@ TestFunction(test_literal_regressions){
         SV("\"\300\257\""), SV("u\"\355\240\200\""), SV("U\"\360\237\""),
     };
     for(int array = 0; array < 2; array++){
-        for(size_t i = 0; i < arrlen(invalid); i++){
+        static int invalid_idx[2] = {0};
+        for(size_t i = test_atomic_increment(invalid_idx+array); i < arrlen(invalid); i = test_atomic_increment(invalid_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
             ArenaAllocator aa = {0}, synth = {0};
             int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
@@ -946,6 +959,9 @@ TestFunction(test_literal_regressions){
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
         }
+    }
+    static int short_wchar_idx = 0;
+    for(int array = test_atomic_increment(&short_wchar_idx); array < 2; array = test_atomic_increment(&short_wchar_idx)){
         CcToken out[MAX_TEST_TOKENS]; int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
         int err = cc_lex_string_mode(SV("L'\\x1234' L\"😀\""), &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 1, 1);
@@ -963,18 +979,256 @@ TestFunction(test_literal_regressions){
     TESTEND();
 }
 
+static int cpp_number_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+
+// Check target representations directly, without host long-double literals.
+TestFunction(test_long_double_targets){
+    TESTBEGIN();
+    struct { StringView text; uint64_t quad[2], x87[2], binary64; } cases[] = {
+        {SV("3.14L"), {0xeb851eb851eb851fULL, 0x400091eb851eb851ULL}, {0xc8f5c28f5c28f5c3ULL, 0x4000}, 0x40091eb851eb851fULL},
+        {SV("0x1.abp3L"), {0, 0x4002ab0000000000ULL}, {0xd580000000000000ULL, 0x4002}, 0x402ab00000000000ULL},
+        {SV("1.0000000000000000000000000000000002L"), {1, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}, 0x3ff0000000000000ULL},
+        {SV("0x1.0000000000000000000000000001p0L"), {1, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}, 0x3ff0000000000000ULL},
+        {SV("0x1.0000000000000001p0L"), {0x1000000000000ULL, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}, 0x3ff0000000000000ULL},
+        {SV("0x1.00000000000000010001p0L"), {0x1000100000000ULL, 0x3fff000000000000ULL}, {0x8000000000000001ULL, 0x3fff}, 0x3ff0000000000000ULL},
+        {SV("0x1p-16494L"), {1, 0}, {0, 0}, 0},
+        {SV("0x1p-16495L"), {0, 0}, {0, 0}, 0},
+        {SV("0x1.00000000000000000000000000001p-16495L"), {1, 0}, {0, 0}, 0},
+        {SV("0x1p-16445L"), {0x2000000000000ULL, 0}, {1, 0}, 0},
+        {SV("0x1p16384L"), {0, 0x7fff000000000000ULL}, {0x8000000000000000ULL, 0x7fff}, 0x7ff0000000000000ULL},
+        {SV("1e4000L"), {0x18c21ab905450cc3ULL, 0x73e6a3750647fcabULL}, {0xd1ba8323fe558c61ULL, 0x73e6}, 0x7ff0000000000000ULL},
+        {SV("1e-4000L"), {0x0b8049732d11a23dULL, 0x0c17387ae70c9e70ULL}, {0x9c3d73864f3805c0ULL, 0xc17}, 0x0000000000000000ULL},
+        {SV("0x1.ffffffffffffffffffffffffffff8p0L"), {0x0000000000000000ULL, 0x4000000000000000ULL}, {0x8000000000000000ULL, 0x4000}, 0x4000000000000000ULL},
+        {SV("0x0.ffffffffffffffffffffffffffff8p-16382L"), {0x0000000000000000ULL, 0x0001000000000000ULL}, {0x8000000000000000ULL, 0x1}, 0x0000000000000000ULL},
+        {SV("0x1.fffffffffffffffep0L"), {0xfffe000000000000ULL, 0x3fffffffffffffffULL}, {0xffffffffffffffffULL, 0x3fff}, 0x4000000000000000ULL},
+        {SV("0.0L"), {0, 0}, {0, 0}, 0},
+        {SV("1e6000L"), {0, 0x7fff000000000000ULL}, {0x8000000000000000ULL, 0x7fff}, 0x7ff0000000000000ULL},
+        {SV("1e-6000L"), {0, 0}, {0, 0}, 0},
+    };
+    CcLongDoubleFormat formats[] = {CC_LONG_DOUBLE_BINARY128, CC_LONG_DOUBLE_X87, CC_LONG_DOUBLE_BINARY64};
+    for(size_t f = 0; f < arrlen(formats); f++){
+        CppPreprocessor cpp = {.target = cc_target_test()};
+        cpp.target.long_double_format = formats[f];
+        static int case_idx[3] = {0};
+        for(size_t i = test_atomic_increment(case_idx+f); i < arrlen(cases); i = test_atomic_increment(case_idx+f)){
+            CppToken input = {.txt = cases[i].text};
+            CcToken out;
+            int err = cpp_number_to_cc_tok(&cpp, &input, &out);
+            TestExpectFalse(err);
+            TestExpectEquals(int, out.constant.ctype, CC_LONG_DOUBLE);
+            uint64_t words[2] = {0};
+            if(formats[f] == CC_LONG_DOUBLE_BINARY128){
+                memcpy(words, &out.constant.quad_value, 16);
+                TestExpectEquals(uint64_t, words[0], cases[i].quad[0]);
+                TestExpectEquals(uint64_t, words[1], cases[i].quad[1]);
+            }
+            else if(formats[f] == CC_LONG_DOUBLE_X87){
+                memcpy(words, &out.constant.x87_value, 10);
+                TestExpectEquals(uint64_t, words[0], cases[i].x87[0]);
+                TestExpectEquals(uint64_t, words[1], cases[i].x87[1]);
+            }
+            else {
+                memcpy(words, &out.constant.double_value, 8);
+                TestExpectEquals(uint64_t, words[0], cases[i].binary64);
+            }
+        }
+    }
+    TESTEND();
+}
+
+TestFunction(test_fast_float_wide){
+    TESTBEGIN();
+    struct { StringView text; uint64_t quad[2], x87[2]; } cases[] = {
+        {SV("3.14"), {0xeb851eb851eb851fULL, 0x400091eb851eb851ULL}, {0xc8f5c28f5c28f5c3ULL, 0x4000}},
+        {SV("-3.14"), {0xeb851eb851eb851fULL, 0xc00091eb851eb851ULL}, {0xc8f5c28f5c28f5c3ULL, 0xc000}},
+        {SV("-0"), {0, 0x8000000000000000ULL}, {0, 0x8000}},
+        {SV("+1.5"), {0, 0x3fff800000000000ULL}, {0xc000000000000000ULL, 0x3fff}},
+        {SV("1e4000"), {0x18c21ab905450cc3ULL, 0x73e6a3750647fcabULL}, {0xd1ba8323fe558c61ULL, 0x73e6}},
+        {SV("1e-4000"), {0x0b8049732d11a23dULL, 0x0c17387ae70c9e70ULL}, {0x9c3d73864f3805c0ULL, 0xc17}},
+        {SV("1e999999"), {0, 0x7fff000000000000ULL}, {0x8000000000000000ULL, 0x7fff}},
+        {SV("-1e-999999"), {0, 0x8000000000000000ULL}, {0, 0x8000}},
+        {SV("inf"), {0, 0x7fff000000000000ULL}, {0x8000000000000000ULL, 0x7fff}},
+        {SV("-infinity"), {0, 0xffff000000000000ULL}, {0x8000000000000000ULL, 0xffff}},
+        {SV("nan(payload)"), {0, 0x7fff800000000000ULL}, {0xc000000000000000ULL, 0x7fff}},
+        {SV("1.00000000000000000000000000000000009629649721936179265279889712924636592690508241076940976199693977832794189453125"), {0x0000000000000000ULL, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}},
+        {SV("1.00000000000000000000000000000000028888949165808537795839669138773909778071524723230822928599081933498382568359375"), {0x0000000000000002ULL, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}},
+        {SV("1.99999999999999999999999999999999990370350278063820734720110287075363407309491758923059023800306022167205810546875"), {0x0000000000000000ULL, 0x4000000000000000ULL}, {0x8000000000000000ULL, 0x4000}},
+        // Exact halfway values: even significand wins, including carry to 2.
+        {SV("1.0000000000000000000542101086242752217003726400434970855712890625"), {0x1000000000000ULL, 0x3fff000000000000ULL}, {0x8000000000000000ULL, 0x3fff}},
+        {SV("1.9999999999999999999457898913757247782996273599565029144287109375"), {0xffff000000000000ULL, 0x3fffffffffffffffULL}, {0x8000000000000000ULL, 0x4000}},
+    };
+    struct { StringView text; float f; double d; } small[] = {
+        {SV("0"), 0.0f, 0.0},
+        {SV("0.1"), 0.1f, 0.1},
+        {SV("1.000000059604644775390625"), 1.0f, 0x1.000001p0},
+        {SV("1.000000059604644775390626"), 0x1.000002p0f, 0x1.000001p0},
+        {SV("1.00000000000000011102230246251565404236316680908203125"), 1.0f, 1.0},
+        {SV("1.99999999999999988897769753748434595763683319091796875"), 2.0f, 2.0},
+        {SV("1e-45"), 0x1p-149f, 1e-45},
+        {SV("5e-324"), 0.0f, 0x1p-1074},
+        {SV("1e-400"), 0.0f, 0.0},
+        {SV("1e400"), HUGE_VALF, HUGE_VAL},
+    };
+    {
+        static int idx = 0;
+        for(size_t i = test_atomic_increment(&idx); i < arrlen(small); i = test_atomic_increment(&idx)){
+            StringView sv = small[i].text;
+            float f;
+            double d;
+            fast_float_to_float_float(0, fast_float_parse_long_mantissa_float(sv.text, sv.text+sv.length), &f);
+            fast_float_to_float_double(0, fast_float_parse_long_mantissa_double(sv.text, sv.text+sv.length), &d);
+            TestExpectEquals(float, f, small[i].f);
+            TestExpectEquals(double, d, small[i].d);
+        }
+    }
+    for(int x87 = 0; x87 < 2; x87++){
+        {
+            static int idx[2] = {0};
+            for(size_t i = test_atomic_increment(idx+x87); i < arrlen(cases); i = test_atomic_increment(idx+x87)){
+                StringView sv = cases[i].text;
+                uint64_t words[2] = {0};
+                fast_float_from_chars_result r = x87
+                    ? fast_float_from_chars_x87(sv.text, sv.text+sv.length, words, FASTFLOAT_FORMAT_GENERAL)
+                    : fast_float_from_chars_binary128(sv.text, sv.text+sv.length, words, FASTFLOAT_FORMAT_GENERAL);
+                TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
+                TestExpectTrue(r.ptr == sv.text+sv.length);
+                TestExpectEquals(uint64_t, words[0], x87 ? cases[i].x87[0] : cases[i].quad[0]);
+                TestExpectEquals(uint64_t, words[1], x87 ? cases[i].x87[1] : cases[i].quad[1]);
+            }
+        }
+        struct { StringView text; enum fast_float_chars_format fmt; int error, consumed; } syntax[] = {
+            {SV(""), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 0},
+            {SV("."), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 0},
+            {SV("1.5"), (enum fast_float_chars_format)0, FASTFLOAT_BAD_FORMAT, 0},
+            {SV("1.5tail"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_NO_ERROR, 3},
+            {SV("1.5e+"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_NO_ERROR, 3},
+            {SV("1.5e2"), FASTFLOAT_FORMAT_FIXED, FASTFLOAT_NO_ERROR, 3},
+            {SV("1.5"), FASTFLOAT_FORMAT_SCIENTIFIC, FASTFLOAT_INVALID_VALUE, 0},
+            {SV("1.5e0"), FASTFLOAT_FORMAT_SCIENTIFIC, FASTFLOAT_NO_ERROR, 5},
+        };
+        {
+            static int idx[2] = {0};
+            for(size_t i = test_atomic_increment(idx+x87); i < arrlen(syntax); i = test_atomic_increment(idx+x87)){
+                StringView sv = syntax[i].text;
+                uint64_t words[2] = {42, 43};
+                fast_float_from_chars_result r = x87
+                    ? fast_float_from_chars_x87(sv.text, sv.text+sv.length, words, syntax[i].fmt)
+                    : fast_float_from_chars_binary128(sv.text, sv.text+sv.length, words, syntax[i].fmt);
+                TestExpectEquals(int, r.error, syntax[i].error);
+                TestExpectTrue(r.ptr == sv.text+syntax[i].consumed);
+                if(r.error){
+                    TestExpectEquals(uint64_t, words[0], 42);
+                    TestExpectEquals(uint64_t, words[1], 43);
+                }
+                else {
+                    TestExpectEquals(uint64_t, words[0], x87 ? 0xc000000000000000ULL : 0);
+                    TestExpectEquals(uint64_t, words[1], x87 ? 0x3fff : 0x3fff800000000000ULL);
+                }
+            }
+        }
+    }
+    {
+        static int idx = 0;
+        // Claim each format/boundary case separately so up to eight workers
+        // can share the slow conversions. Each job owns its input buffer.
+        for(int job = test_atomic_increment(&idx); job < 8; job = test_atomic_increment(&idx)){
+            int x87 = job/4;
+            int variant = job%4;
+            // Construct the exact midpoint between zero and the least subnormal:
+            // 2^-n = 5^n * 10^-n. Test below, at, and above it without host floats.
+            int power = x87 ? 16446 : 16495;
+            // Base 10^9 and factors up to 5^13 avoid ~190 million single-digit
+            // iterations under the interpreter. Products stay below 2^61.
+            uint32_t chunks[1300] = {1}; // 5^16495 has 11530 digits: 1282 chunks.
+            int nchunks = 1;
+            for(int remaining = power; remaining;){
+                int step = remaining < 13 ? remaining : 13;
+                uint32_t factor = 1;
+                for(int i = 0; i < step; i++) factor *= 5;
+                uint64_t carry = 0;
+                for(int j = 0; j < nchunks; j++){
+                    uint64_t v = (uint64_t)chunks[j]*factor + carry;
+                    chunks[j] = (uint32_t)(v%1000000000);
+                    carry = v/1000000000;
+                }
+                while(carry){
+                    chunks[nchunks++] = (uint32_t)(carry%1000000000);
+                    carry /= 1000000000;
+                }
+                remaining -= step;
+            }
+            #if 0
+            char text[12200];
+            int count = snprintf(text, sizeof text, "%u", chunks[nchunks-1]);
+            for(int i = nchunks-2; i >= 0; i--)
+                count += snprintf(text+count, sizeof text-count, "%09u", chunks[i]);
+            int length;
+            if(variant < 3){
+                int offset = variant-1;
+                text[count-1] = (char)('5' + offset); // 5^n ends in 5, so no decimal carry.
+                length = count + snprintf(text+count, sizeof text-count, "e-%d", power);
+            }
+            else {
+                // A nonzero digit beyond the retained buffer must break the tie too.
+                memset(text+count, '0', 200);
+                text[count+199] = '1';
+                length = count+200 + snprintf(text+count+200, sizeof text-count-200, "e-%d", power+200);
+            }
+            #else
+            MStringBuilder sb = {.allocator=MALLOCATOR};
+            msb_sprintf(&sb, "%u", chunks[nchunks-1]);
+            for(size_t i = nchunks-1; i--;)
+                msb_sprintf(&sb, "%09u", chunks[i]);
+            if(variant < 3){
+                msb_erase(&sb, 1);
+                int offset = variant-1;
+                msb_write_char(&sb, (char)('5'+offset));
+                msb_sprintf(&sb, "e-%d", power);
+            }
+            else {
+                // A nonzero digit beyond the retained buffer must break the tie too.
+                msb_write_nchar(&sb, '0', 199);
+                msb_write_char(&sb, '1');
+                msb_sprintf(&sb, "e-%d", power+200);
+            }
+            if(sb.errored){
+                msb_destroy(&sb);
+                EndTest("OOM");
+            }
+            StringView sv = msb_borrow_sv(&sb);
+            size_t length = sv.length;
+            const char* text = sv.text;
+            #endif
+            uint64_t words[2];
+            fast_float_from_chars_result r = x87
+                ? fast_float_from_chars_x87(text, text+length, words, FASTFLOAT_FORMAT_GENERAL)
+                : fast_float_from_chars_binary128(text, text+length, words, FASTFLOAT_FORMAT_GENERAL);
+            TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
+            if(variant < 3) TestExpectTrue(r.ptr == text+length);
+            TestExpectEquals(uint64_t, words[0], variant >= 2 ? 1 : 0);
+            TestExpectEquals(uint64_t, words[1], 0);
+            #if 1
+            msb_destroy(&sb);
+            #endif
+        }
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
     #endif
-    RegisterTest(test_cc_lex_integers);
-    RegisterTest(test_cc_lex_floats);
-    RegisterTest(test_cc_lex_chars);
-    RegisterTest(test_cc_lex_strings);
-    RegisterTest(test_literal_regressions);
-    RegisterTest(test_cc_lex_punctuators);
-    RegisterTest(test_cc_lex_keywords);
-    RegisterTest(test_cc_lex_multi_token);
+    RegisterTestFlags(test_cc_lex_integers,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_floats,       TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_long_double_targets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_fast_float_wide,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_chars,        TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_strings,      TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_literal_regressions, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_punctuators,  TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_keywords,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_cc_lex_multi_token,  TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
     testing_assert_all_freed();

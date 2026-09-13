@@ -171,7 +171,7 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_drc_path)
                 b_arginp(ctx, cmd, "--drc", cc_opt);
             if(!ctx->dash_dash_args.count)
-                b_arg(ctx, cmd, "--multithreaded");
+                b_args(ctx, cmd, "--multithreaded", "--time");
             else
                 for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                     b_aarg(ctx, cmd, ctx->dash_dash_args.data[j]);
@@ -280,7 +280,7 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_drc_path)
                 b_arginp(ctx, cmd, "--drc", cc_opt);
             if(!ctx->dash_dash_args.count)
-                b_arg(ctx, cmd, "--multithreaded");
+                b_args(ctx, cmd, "--multithreaded", "--time");
             else
                 for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                     b_aarg(ctx, cmd, ctx->dash_dash_args.data[j]);

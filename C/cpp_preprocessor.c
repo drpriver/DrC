@@ -445,7 +445,8 @@ cpp_merge_str_prefix(StringView sv, StringView* prefix){
 }
 
 // Numeric escapes denote code units; other characters denote Unicode scalars.
-static int
+static
+int
 cpp_hex_digit(unsigned char c){
     if(c >= '0' && c <= '9') return c - '0';
     if(c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -453,7 +454,8 @@ cpp_hex_digit(unsigned char c){
     return -1;
 }
 
-static int
+static
+int
 cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* cursor, uint32_t* value, _Bool* numeric){
     size_t i = *cursor;
     uint32_t cp = (unsigned char)s.text[i++];
@@ -518,14 +520,16 @@ cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* 
     return 0;
 }
 
-static StringView
+static
+StringView
 cpp_string_body(StringView spelling){
     size_t prefix = cpp_str_prefix(spelling).length;
     return (StringView){spelling.length - prefix - 2, spelling.text + prefix + 1};
 }
 
 // Append one literal's decoded contents, without its terminating zero.
-static int
+static
+int
 cpp_decode_string(CppPreprocessor* cpp, CppToken tok, unsigned width, MStringBuilder* sb){
     StringView body = cpp_string_body(tok.txt);
     for(size_t i = 0; i < body.length;){
@@ -556,13 +560,15 @@ cpp_decode_string(CppPreprocessor* cpp, CppToken tok, unsigned width, MStringBui
 }
 
 // Text-consuming extensions use UTF-8, including for prefixed literals.
-static int
+static
+int
 cpp_decode_text(CppPreprocessor* cpp, CppToken tok, MStringBuilder* sb){
     return cpp_decode_string(cpp, tok, 1, sb);
 }
 
 // Fixed-width octal escapes cannot absorb digits from the following byte.
-static Atom _Nullable
+static
+Atom _Nullable
 cpp_quote_string(CppPreprocessor* cpp, StringView text){
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     msb_write_char(&sb, '"');
@@ -586,7 +592,8 @@ cpp_quote_string(CppPreprocessor* cpp, StringView text){
     return a;
 }
 
-static int
+static
+int
 cpp_strings_to_cc_tok(CppPreprocessor* cpp, const CppTokens* strings, StringView prefix, CcToken* ctok){
     unsigned width = 4;
     CcStringType stype = CC_USTRING;
@@ -3131,7 +3138,6 @@ cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t cou
     };
 }
 
-// Forward declaration for tokenizing from a frame directly
 static int cpp_tokenize_from_frame(CppPreprocessor *cpp, CppFrame *f, CppToken *tok);
 
 // Helper: Paste two tokens (C23 6.10.4.3)
@@ -5381,7 +5387,8 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     return err;
 }
 
-static int
+static
+int
 cpp_builtin_dir(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
     uint64_t file_id = 0;
@@ -7313,7 +7320,24 @@ cpp_ident_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     return 0;
 }
 
-// Parse directly into IEEE binary32/binary64 bits
+static
+int
+cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok,
+        const char* s, size_t len, CcToken* out){
+    uint64_t words[2];
+    _Bool x87 = cpp->target.long_double_format == CC_LONG_DOUBLE_X87;
+    fast_float_from_chars_result result = x87
+        ? fast_float_from_chars_x87(s, s+len, words, FASTFLOAT_FORMAT_GENERAL)
+        : fast_float_from_chars_binary128(s, s+len, words, FASTFLOAT_FORMAT_GENERAL);
+    if(result.error || result.ptr != s+len)
+        return cpp_error(cpp, tok->loc, "Invalid floating-point literal");
+    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE, .loc=tok->loc}};
+    if(x87) out->constant.x87_value = ci_float80_read(words);
+    else memcpy(&out->constant.quad_value, words, 16);
+    return 0;
+}
+
+// Parse hex directly into target bits, retaining 128 leading bits and sticky.
 static
 int
 cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
@@ -7321,7 +7345,7 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     size_t len = tok->txt.length;
     if(len > 255) return cpp_error(cpp, tok->loc, "Number literal too long");
     size_t i = 2;
-    uint64_t leading = 0;
+    uint64_t leading_hi = 0, leading_lo = 0;
     int bits = 0, fractional_digits = 0, digits = 0;
     _Bool point = 0, sticky = 0;
     for(; i < len; i++){
@@ -7332,7 +7356,8 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
             for(int b = 3; b >= 0; b--){
                 unsigned bit = (d >> b) & 1;
                 if(!bits && !bit) continue;
-                if(bits < 64) leading |= (uint64_t)bit << (63 - bits);
+                if(bits < 64) leading_hi |= (uint64_t)bit << (63 - bits);
+                else if(bits < 128) leading_lo |= (uint64_t)bit << (127 - bits);
                 else sticky |= bit;
                 bits++;
             }
@@ -7370,43 +7395,71 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     if(i != len) goto invalid;
     if(negative_exp) exponent = -exponent;
     exponent += bits - 1 - 4*fractional_digits;
-    int precision = type == CC_FLOAT ? 24 : 53;
-    int bias = type == CC_FLOAT ? 127 : 1023;
-    uint64_t encoded = 0;
+    _Bool x87 = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_X87;
+    _Bool quad = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_BINARY128;
+    int precision = quad ? 113 : x87 ? 64 : type == CC_FLOAT ? 24 : 53;
+    int bias = (quad || x87) ? 16383 : type == CC_FLOAT ? 127 : 1023;
+    uint64_t lo = 0, hi = 0;
+    int encoded_exponent = 0;
     if(bits){
-        // Subnormals retain fewer significant bits at a fixed exponent.
+        // Subnormals round at their fixed exponent, before packing.
         int keep = precision;
-        if(exponent < 1-bias) keep -= (1-bias) - exponent;
-        uint64_t significand = 0;
-        if(keep > 0){
-            int shift = 64-keep;
-            significand = leading >> shift;
-            uint64_t remainder = leading & ((UINT64_C(1) << shift)-1);
-            uint64_t half = UINT64_C(1) << (shift-1);
-            if(remainder > half || (remainder == half && (sticky || (significand & 1))))
-                significand++;
+        if(exponent < 1-bias) keep -= (1-bias)-exponent;
+        if(keep >= 0){
+            for(int j = 0; j < keep; j++){
+                unsigned bit = j < 64 ? (unsigned)((leading_hi >> (63-j)) & 1)
+                                      : (unsigned)((leading_lo >> (127-j)) & 1);
+                hi = (hi << 1) | (lo >> 63);
+                lo = (lo << 1) | bit;
+            }
+            _Bool guard;
+            if(keep < 64){
+                guard = (leading_hi >> (63-keep)) & 1;
+                sticky |= leading_lo != 0 || (leading_hi & (((uint64_t)1 << (63-keep))-1)) != 0;
+            }
+            else {
+                guard = (leading_lo >> (127-keep)) & 1;
+                sticky |= (leading_lo & (((uint64_t)1 << (127-keep))-1)) != 0;
+            }
+            if(guard && (sticky || (lo & 1))){
+                if(++lo == 0) hi++;
+            }
         }
-        else if(keep == 0){
-            // Half the least subnormal rounds to zero; anything above to one.
-            significand = leading > (UINT64_C(1) << 63) || sticky;
+        if(exponent < 1-bias){
+            if(quad ? (hi >> 48) != 0 : (lo >> (precision-1)) != 0)
+                encoded_exponent = 1; // Rounded up to the least normal.
         }
-        if(exponent < 1-bias) encoded = significand;
         else {
-            if(significand == (UINT64_C(1) << precision)){
-                significand >>= 1;
+            _Bool carry = quad ? (hi >> 49) != 0 : x87 ? hi != 0 : (lo >> precision) != 0;
+            if(carry){
+                lo = (lo >> 1) | (hi << 63);
+                hi >>= 1;
                 exponent++;
             }
-            if(exponent > bias) encoded = (uint64_t)(2*bias+1) << (precision-1);
-            else encoded = ((uint64_t)(exponent+bias) << (precision-1)) |
-                           (significand & ((UINT64_C(1) << (precision-1))-1));
+            if(exponent > bias){
+                encoded_exponent = 2*bias+1;
+                lo = hi = 0;
+            }
+            else encoded_exponent = exponent+bias;
         }
     }
     *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=type, .loc=tok->loc}};
-    if(type == CC_FLOAT){
-        uint32_t u = (uint32_t)encoded;
-        memcpy(&out->constant.float_value, &u, sizeof u);
+    if(quad){
+        uint64_t words[2] = {lo, (hi & UINT64_C(0x0000ffffffffffff)) | ((uint64_t)encoded_exponent << 48)};
+        memcpy(&out->constant.quad_value, words, 16);
     }
-    else memcpy(&out->constant.double_value, &encoded, sizeof encoded);
+    else if(x87){
+        uint64_t words[2] = {lo | (encoded_exponent ? (uint64_t)1 << 63 : 0), (uint64_t)encoded_exponent};
+        out->constant.x87_value = ci_float80_read(words);
+    }
+    else if(type == CC_FLOAT){
+        uint32_t word = ((uint32_t)lo & 0x7fffff) | ((uint32_t)encoded_exponent << 23);
+        memcpy(&out->constant.float_value, &word, sizeof word);
+    }
+    else {
+        uint64_t word = (lo & UINT64_C(0x000fffffffffffff)) | ((uint64_t)encoded_exponent << 52);
+        memcpy(&out->constant.double_value, &word, sizeof word);
+    }
     return 0;
 invalid:
     return cpp_error(cpp, tok->loc, "Invalid hexadecimal floating-point literal");
@@ -7514,6 +7567,9 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
             if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
             *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .float_value = fval, .loc = cpptok->loc},
             };
+        }
+        else if(num_l && cpp->target.long_double_format != CC_LONG_DOUBLE_BINARY64){
+            return cpp_long_double_to_cc_tok(cpp, cpptok, buf, buf_len, cctok);
         }
         else {
             double dval; err = parse_double(buf, buf_len, &dval);

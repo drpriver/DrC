@@ -157,6 +157,16 @@ FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_float(const char *first, const char *last, float *value, enum fast_float_chars_format fmt);
 
+// Host-independent encodings, least significant word first. For x87,
+// value[0] is the explicit significand and value[1] holds the 16-bit sign/exponent.
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_binary128(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt);
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_x87(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt);
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
@@ -300,7 +310,13 @@ enum{FAST_FLOAT_DECIMAL_MAX_DIGITS = 768};
 // const uint32_t
 enum{FAST_FLOAT_MAX_DIGIT_WITHOUT_OVERFLOW = 19};
 // const int32_t
-enum{FAST_FLOAT_DECIMAL_POINT_RANGE = 2047};
+enum{FAST_FLOAT_DECIMAL_POINT_RANGE = 32767};
+// A binary128 rounding midpoint has the form m * 2^-n, with at most
+// 114 bits in m and n <= 16495. Its terminating decimal significand has
+// at most ceil(114*log10(2) + 16495*log10(5)) = 11564 digits.
+// Retain one more digit, plus a sticky flag, to distinguish either side.
+// Only the wide fallback uses this buffer; float/double retain 768 digits.
+enum{FAST_FLOAT_WIDE_DECIMAL_MAX_DIGITS = 11565};
 
 typedef struct value128{
     uint64_t low;
@@ -415,7 +431,8 @@ typedef struct fast_float_decimal{
     int32_t decimal_point;
     _Bool negative;
     _Bool truncated;
-    uint8_t digits[FAST_FLOAT_DECIMAL_MAX_DIGITS];
+    uint32_t capacity;
+    uint8_t *digits;
 } fast_float_decimal;
 
 static const double POWERS_OF_TEN_DOUBLE[] ={
@@ -682,8 +699,10 @@ fast_float_parse_number_string(const char *p, const char *pend, enum fast_float_
 // exponent from the pass in parse_number_string.
 FASTFLOAT_REALLY_INLINE
 fast_float_decimal
-fast_float_parse_decimal(const char *p, const char *pend){
+fast_float_parse_decimal(const char *p, const char *pend, uint8_t *digits, uint32_t capacity){
     fast_float_decimal answer;
+    answer.digits = digits;
+    answer.capacity = capacity;
     answer.num_digits = 0;
     answer.decimal_point = 0;
     answer.truncated = 0;
@@ -696,7 +715,7 @@ fast_float_parse_decimal(const char *p, const char *pend){
         ++p;
     }
     while((p != pend) && fast_float_is_integer(*p)){
-        if(answer.num_digits < FAST_FLOAT_DECIMAL_MAX_DIGITS){
+        if(answer.num_digits < answer.capacity){
             answer.digits[answer.num_digits] = (uint8_t)(*p - '0');
         }
         answer.num_digits++;
@@ -714,7 +733,7 @@ fast_float_parse_decimal(const char *p, const char *pend){
         }
         // We expect that this loop will often take the bulk of the running time
         // because when a value has lots of digits, these digits often
-        while((p + 8 <= pend) && (answer.num_digits + 8 < FAST_FLOAT_DECIMAL_MAX_DIGITS)){
+        while((p + 8 <= pend) && (answer.num_digits + 8 < answer.capacity)){
             uint64_t val = fast_float_read_u64(p);
             if(! fast_float_is_made_of_eight_digits_fast_inner(val)){ break; }
             // We have eight digits, process them in one go!
@@ -724,7 +743,7 @@ fast_float_parse_decimal(const char *p, const char *pend){
             p += 8;
         }
         while((p != pend) && fast_float_is_integer(*p)){
-            if(answer.num_digits < FAST_FLOAT_DECIMAL_MAX_DIGITS){
+            if(answer.num_digits < answer.capacity){
                 answer.digits[answer.num_digits] = (uint8_t)(*p - '0');
             }
             answer.num_digits++;
@@ -748,9 +767,9 @@ fast_float_parse_decimal(const char *p, const char *pend){
         answer.decimal_point += (int32_t)(answer.num_digits);
         answer.num_digits -= (uint32_t)(trailing_zeros);
     }
-    if(answer.num_digits > FAST_FLOAT_DECIMAL_MAX_DIGITS){
+    if(answer.num_digits > answer.capacity){
         answer.truncated = 1;
-        answer.num_digits = FAST_FLOAT_DECIMAL_MAX_DIGITS;
+        answer.num_digits = answer.capacity;
     }
     if((p != pend) && (('e' == *p) || ('E' == *p))){
         ++p;
@@ -1854,34 +1873,29 @@ fast_float_number_of_digits_decimal_left_shift(const fast_float_decimal *h, uint
 }
 
 static inline
-uint64_t
+value128
 fast_float_round_decimal(const fast_float_decimal *h){
-    if((h->num_digits == 0) || (h->decimal_point < 0)){
-        return 0;
-    } else if(h->decimal_point > 18){
-        return UINT64_MAX;
-    }
-    // at this point, we know that h.decimal_point >= 0
-    uint32_t dp = (uint32_t)(h->decimal_point);
-    uint64_t n = 0;
+    value128 n = {0, 0};
+    if((h->num_digits == 0) || (h->decimal_point < 0)) return n;
+    // The caller scales to at most 113 bits before rounding.
+    uint32_t dp = (uint32_t)h->decimal_point;
     for(uint32_t i = 0; i < dp; i++){
-        n = (10 * n) + ((i < h->num_digits) ? h->digits[i] : 0);
+        value128 product = fast_float_full_multiplication(n.low, 10);
+        product.high += n.high * 10;
+        uint64_t digit = i < h->num_digits ? h->digits[i] : 0;
+        n.low = product.low + digit;
+        n.high = product.high + (n.low < product.low);
     }
-    _Bool round_up = 0;
     if(dp < h->num_digits){
-        round_up = h->digits[dp] >= 5; // normally, we round up
-        // but we may need to round to even!
-        if((h->digits[dp] == 5) && (dp + 1 == h->num_digits)){
-            round_up = h->truncated || ((dp > 0) && (1 & h->digits[dp - 1]));
-        }
-    }
-    if(round_up){
-        n++;
+        _Bool round_up = h->digits[dp] >= 5;
+        if(h->digits[dp] == 5 && dp+1 == h->num_digits)
+            round_up = h->truncated || (n.low & 1);
+        if(round_up && ++n.low == 0) n.high++;
     }
     return n;
 }
 
-// computes h * 2^-shift
+// computes h * 2^shift, for 1 <= shift <= 60
 static inline
 void
 fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
@@ -1897,7 +1911,7 @@ fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
         n += (uint64_t)(h->digits[read_index]) << shift;
         uint64_t quotient = n / 10;
         uint64_t remainder = n - (10 * quotient);
-        if(write_index < FAST_FLOAT_DECIMAL_MAX_DIGITS){
+        if(write_index < h->capacity){
             h->digits[write_index] = (uint8_t)(remainder);
         } else if(remainder > 0){
             h->truncated = 1;
@@ -1909,7 +1923,7 @@ fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
     while(n > 0){
         uint64_t quotient = n / 10;
         uint64_t remainder = n - (10 * quotient);
-        if(write_index < FAST_FLOAT_DECIMAL_MAX_DIGITS){
+        if(write_index < h->capacity){
             h->digits[write_index] = (uint8_t)(remainder);
         } else if(remainder > 0){
             h->truncated = 1;
@@ -1918,14 +1932,14 @@ fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
         write_index--;
     }
     h->num_digits += num_new_digits;
-    if(h->num_digits > FAST_FLOAT_DECIMAL_MAX_DIGITS){
-        h->num_digits = FAST_FLOAT_DECIMAL_MAX_DIGITS;
+    if(h->num_digits > h->capacity){
+        h->num_digits = h->capacity;
     }
     h->decimal_point += (int32_t)(num_new_digits);
     fast_float_trim(h);
 }
 
-// computes h * 2^shift
+// computes h * 2^-shift, for 1 <= shift <= 60
 static inline
 void
 fast_float_decimal_right_shift(fast_float_decimal *h, uint32_t shift){
@@ -1964,7 +1978,7 @@ fast_float_decimal_right_shift(fast_float_decimal *h, uint32_t shift){
     while(n > 0){
         uint8_t new_digit = (uint8_t)(n >> shift);
         n = 10 * (n & mask);
-        if(write_index < FAST_FLOAT_DECIMAL_MAX_DIGITS){
+        if(write_index < h->capacity){
             h->digits[write_index++] = new_digit;
         } else if(new_digit > 0){
             h->truncated = 1;
@@ -1975,241 +1989,105 @@ fast_float_decimal_right_shift(fast_float_decimal *h, uint32_t shift){
 }
 
 
+typedef struct fast_float_wide_mantissa{
+    value128 mantissa; // Includes the leading bit for normal numbers.
+    int power2;       // Biased exponent; zero for subnormals.
+} fast_float_wide_mantissa;
+
+static inline
+_Bool
+fast_float_wide_at_least_power2(value128 n, unsigned bit){
+    if(bit >= 64) return n.high >= ((uint64_t)1 << (bit-64));
+    return n.high != 0 || n.low >= ((uint64_t)1 << bit);
+}
+
+// Simple Decimal Conversion, shared by all four destination precisions.
 static
-fast_float_adjusted_mantissa
-fast_float_compute_float_spec_float(fast_float_decimal* d){
-    fast_float_adjusted_mantissa answer ={0};
-    if(d->num_digits == 0){
-        // should be zero
-        answer.power2 = 0;
-        answer.mantissa = 0;
-        return answer;
-    }
-    // At this point, going further, we can assume that d.num_digits > 0.
-    //
-    // We want to guard against excessive fast_float_decimal point values because
-    // they can result in long running times. Indeed, we do
-    // shifts by at most 60 bits. We have that log(10**400)/log(2**60) ~= 22
-    // which is fine, but log(10**299995)/log(2**60) ~= 16609 which is not
-    // fine (runs for a long time).
-    //
-    if(d->decimal_point < -324){
-        // We have something smaller than 1e-324 which is always zero
-        // in binary64 and binary32.
-        // It should be zero.
-        answer.power2 = 0;
-        answer.mantissa = 0;
-        return answer;
-    } else if(d->decimal_point >= 310){
-        // We have something at least as large as 0.1e310 which is
-        // always infinite.
-        answer.power2 = FLOAT_INFINITE_POWER;
-        answer.mantissa = 0;
+fast_float_wide_mantissa
+fast_float_compute_float_spec(fast_float_decimal* d, unsigned precision,
+        int min_exponent, int infinite_power, int min_decimal, int max_decimal){
+    fast_float_wide_mantissa answer = {{0, 0}, 0};
+    if(d->num_digits == 0 || d->decimal_point < min_decimal) return answer;
+    if(d->decimal_point >= max_decimal){
+        answer.power2 = infinite_power;
         return answer;
     }
     static const uint32_t max_shift = 60;
-    static const uint32_t num_powers = 19;
-    static const uint8_t decimal_powers[19] ={
-            0,    3,    6,    9,    13, 16, 19, 23, 26, 29, //
-            33, 36, 39, 43, 46, 49, 53, 56, 59,         //
+    static const uint8_t decimal_powers[19] = {
+        0, 3, 6, 9, 13, 16, 19, 23, 26, 29, 33, 36, 39, 43, 46, 49, 53, 56, 59,
     };
     int32_t exp2 = 0;
     while(d->decimal_point > 0){
-        uint32_t n = (uint32_t)(d->decimal_point);
-        uint32_t shift = (n < num_powers) ? decimal_powers[n] : max_shift;
+        uint32_t n = (uint32_t)d->decimal_point;
+        uint32_t shift = n < 19 ? decimal_powers[n] : max_shift;
         fast_float_decimal_right_shift(d, shift);
-        if(d->decimal_point < -FAST_FLOAT_DECIMAL_POINT_RANGE){
-            // should be zero
-            answer.power2 = 0;
-            answer.mantissa = 0;
-            return answer;
-        }
-        exp2 += (int32_t)(shift);
+        exp2 += (int32_t)shift;
     }
-    // We shift left toward [1/2 ... 1].
+    // Normalize into [1/2, 1).
     while(d->decimal_point <= 0){
         uint32_t shift;
         if(d->decimal_point == 0){
-            if(d->digits[0] >= 5){
-                break;
-            }
-            shift = (d->digits[0] < 2) ? 2 : 1;
-        } else{
-            uint32_t n = (uint32_t)(-d->decimal_point);
-            shift = (n < num_powers) ? decimal_powers[n] : max_shift;
+            if(d->digits[0] >= 5) break;
+            shift = d->digits[0] < 2 ? 2 : 1;
+        }
+        else {
+            uint32_t n = (uint32_t)-d->decimal_point;
+            shift = n < 19 ? decimal_powers[n] : max_shift;
         }
         fast_float_decimal_left_shift(d, shift);
-        if(d->decimal_point > FAST_FLOAT_DECIMAL_POINT_RANGE){
-            // we want to get infinity:
-            answer.power2 = FLOAT_INFINITE_POWER;
-            answer.mantissa = 0;
-            return answer;
-        }
-        exp2 -= (int32_t)(shift);
+        exp2 -= (int32_t)shift;
     }
-    // We are now in the range [1/2 ... 1] but the binary format uses [1 ... 2].
-    exp2--;
-    const int32_t min_exponent = FLOAT_MINIMUM_EXPONENT;
-    while((min_exponent + 1) > exp2){
-        uint32_t n = (uint32_t)((min_exponent + 1) - exp2);
-        if(n > max_shift){
-            n = max_shift;
-        }
-        fast_float_decimal_right_shift(d, n);
-        exp2 += (int32_t)(n);
-    }
-    if((exp2 - min_exponent) >= FLOAT_INFINITE_POWER){
-        answer.power2 = FLOAT_INFINITE_POWER;
-        answer.mantissa = 0;
-        return answer;
-    }
-
-    const int mantissa_size_in_bits = FLOAT_MANTISSA_EXPLICIT_BITS + 1;
-    fast_float_decimal_left_shift(d, mantissa_size_in_bits);
-
-    uint64_t mantissa = fast_float_round_decimal(d);
-    // It is possible that we have an overflow, in which case we need
-    // to shift back.
-    if(mantissa >= ((uint64_t)(1) << mantissa_size_in_bits)){
-        fast_float_decimal_right_shift(d, 1);
-        exp2 += 1;
-        mantissa = fast_float_round_decimal(d);
-        if((exp2 - min_exponent) >= FLOAT_INFINITE_POWER){
-            answer.power2 = FLOAT_INFINITE_POWER;
-            answer.mantissa = 0;
-            return answer;
-        }
-    }
-    answer.power2 = exp2    - FLOAT_MINIMUM_EXPONENT;
-    if(mantissa < ((uint64_t)(1) << FLOAT_MANTISSA_EXPLICIT_BITS)){ answer.power2--; }
-    answer.mantissa = mantissa & (((uint64_t)(1) << FLOAT_MANTISSA_EXPLICIT_BITS) - 1);
-    return answer;
-}
-
-static
-fast_float_adjusted_mantissa
-fast_float_compute_float_spec_double(fast_float_decimal* d){
-    fast_float_adjusted_mantissa answer ={0};
-    if(d->num_digits == 0){
-        // should be zero
-        answer.power2 = 0;
-        answer.mantissa = 0;
-        return answer;
-    }
-    // At this point, going further, we can assume that d.num_digits > 0.
-    //
-    // We want to guard against excessive fast_float_decimal point values because
-    // they can result in long running times. Indeed, we do
-    // shifts by at most 60 bits. We have that log(10**400)/log(2**60) ~= 22
-    // which is fine, but log(10**299995)/log(2**60) ~= 16609 which is not
-    // fine (runs for a long time).
-    //
-    if(d->decimal_point < -324){
-        // We have something smaller than 1e-324 which is always zero
-        // in binary64 and binary32.
-        // It should be zero.
-        answer.power2 = 0;
-        answer.mantissa = 0;
-        return answer;
-    } else if(d->decimal_point >= 310){
-        // We have something at least as large as 0.1e310 which is
-        // always infinite.
-        answer.power2 = DOUBLE_INFINITE_POWER;
-        answer.mantissa = 0;
-        return answer;
-    }
-    static const uint32_t max_shift = 60;
-    static const uint32_t num_powers = 19;
-    static const uint8_t decimal_powers[19] ={
-            0,    3,    6,    9,    13, 16, 19, 23, 26, 29, //
-            33, 36, 39, 43, 46, 49, 53, 56, 59,         //
-    };
-    int32_t exp2 = 0;
-    while(d->decimal_point > 0){
-        uint32_t n = (uint32_t)(d->decimal_point);
-        uint32_t shift = (n < num_powers) ? decimal_powers[n] : max_shift;
+    exp2--; // The encoding uses [1, 2).
+    while(min_exponent+1 > exp2){
+        uint32_t shift = (uint32_t)(min_exponent+1-exp2);
+        if(shift > max_shift) shift = max_shift;
         fast_float_decimal_right_shift(d, shift);
-        if(d->decimal_point < -FAST_FLOAT_DECIMAL_POINT_RANGE){
-            // should be zero
-            answer.power2 = 0;
-            answer.mantissa = 0;
-            return answer;
-        }
-        exp2 += (int32_t)(shift);
+        exp2 += (int32_t)shift;
     }
-    // We shift left toward [1/2 ... 1].
-    while(d->decimal_point <= 0){
-        uint32_t shift;
-        if(d->decimal_point == 0){
-            if(d->digits[0] >= 5){
-                break;
-            }
-            shift = (d->digits[0] < 2) ? 2 : 1;
-        } else{
-            uint32_t n = (uint32_t)(-d->decimal_point);
-            shift = (n < num_powers) ? decimal_powers[n] : max_shift;
-        }
-        fast_float_decimal_left_shift(d, shift);
-        if(d->decimal_point > FAST_FLOAT_DECIMAL_POINT_RANGE){
-            // we want to get infinity:
-            answer.power2 = DOUBLE_INFINITE_POWER;
-            answer.mantissa = 0;
-            return answer;
-        }
-        exp2 -= (int32_t)(shift);
-    }
-    // We are now in the range [1/2 ... 1] but the binary format uses [1 ... 2].
-    exp2--;
-    const int32_t min_exponent = DOUBLE_MINIMUM_EXPONENT;
-    while((min_exponent + 1) > exp2){
-        uint32_t n = (uint32_t)((min_exponent + 1) - exp2);
-        if(n > max_shift){
-            n = max_shift;
-        }
-        fast_float_decimal_right_shift(d, n);
-        exp2 += (int32_t)(n);
-    }
-    if((exp2 - min_exponent) >= DOUBLE_INFINITE_POWER){
-        answer.power2 = DOUBLE_INFINITE_POWER;
-        answer.mantissa = 0;
+    if(exp2-min_exponent >= infinite_power){
+        answer.power2 = infinite_power;
         return answer;
     }
-
-    const int mantissa_size_in_bits = DOUBLE_MANTISSA_EXPLICIT_BITS + 1;
-    fast_float_decimal_left_shift(d, mantissa_size_in_bits);
-
-    uint64_t mantissa = fast_float_round_decimal(d);
-    // It is possible that we have an overflow, in which case we need
-    // to shift back.
-    if(mantissa >= ((uint64_t)(1) << mantissa_size_in_bits)){
+    // Shift in chunks so the decimal helpers' 64-bit accumulators cannot overflow.
+    for(unsigned remaining = precision; remaining;){
+        unsigned shift = remaining > max_shift ? max_shift : remaining;
+        fast_float_decimal_left_shift(d, shift);
+        remaining -= shift;
+    }
+    value128 mantissa = fast_float_round_decimal(d);
+    if(fast_float_wide_at_least_power2(mantissa, precision)){
         fast_float_decimal_right_shift(d, 1);
-        exp2 += 1;
+        exp2++;
         mantissa = fast_float_round_decimal(d);
-        if((exp2 - min_exponent) >= DOUBLE_INFINITE_POWER){
-            answer.power2 = DOUBLE_INFINITE_POWER;
-            answer.mantissa = 0;
+        if(exp2-min_exponent >= infinite_power){
+            answer.power2 = infinite_power;
             return answer;
         }
     }
-    answer.power2 = exp2    - DOUBLE_MINIMUM_EXPONENT;
-    if(mantissa < ((uint64_t)(1) << DOUBLE_MANTISSA_EXPLICIT_BITS)){ answer.power2--; }
-    answer.mantissa = mantissa & (((uint64_t)(1) << DOUBLE_MANTISSA_EXPLICIT_BITS) - 1);
+    answer.power2 = exp2-min_exponent;
+    if(!fast_float_wide_at_least_power2(mantissa, precision-1)) answer.power2--;
+    answer.mantissa = mantissa;
     return answer;
 }
-
 
 static
 fast_float_adjusted_mantissa
 fast_float_parse_long_mantissa_float(const char *first, const char* last){
-        fast_float_decimal d = fast_float_parse_decimal(first, last);
-        return fast_float_compute_float_spec_float(&d);
+    uint8_t digits[FAST_FLOAT_DECIMAL_MAX_DIGITS];
+    fast_float_decimal d = fast_float_parse_decimal(first, last, digits, sizeof digits);
+    fast_float_wide_mantissa wide = fast_float_compute_float_spec(&d, 24, FLOAT_MINIMUM_EXPONENT, FLOAT_INFINITE_POWER, -324, 310);
+    fast_float_adjusted_mantissa result = {wide.mantissa.low & (((uint64_t)1 << 23)-1), wide.power2};
+    return result;
 }
 
 static
 fast_float_adjusted_mantissa
 fast_float_parse_long_mantissa_double(const char *first, const char* last){
-        fast_float_decimal d = fast_float_parse_decimal(first, last);
-        return fast_float_compute_float_spec_double(&d);
+    uint8_t digits[FAST_FLOAT_DECIMAL_MAX_DIGITS];
+    fast_float_decimal d = fast_float_parse_decimal(first, last, digits, sizeof digits);
+    fast_float_wide_mantissa wide = fast_float_compute_float_spec(&d, 53, DOUBLE_MINIMUM_EXPONENT, DOUBLE_INFINITE_POWER, -324, 310);
+    fast_float_adjusted_mantissa result = {wide.mantissa.low & (((uint64_t)1 << 52)-1), wide.power2};
+    return result;
 }
 
 /**
@@ -2426,6 +2304,66 @@ fast_float_from_chars_double(const char *first, const char *last, double *value,
         am = fast_float_parse_long_mantissa_double(first,last);
     fast_float_to_float_double(pns.negative, am, value);
     return answer;
+}
+
+static
+fast_float_from_chars_result
+fast_float_from_chars_wide(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt, _Bool x87){
+    while(first != last && *first == '+') first++;
+    fast_float_from_chars_result result = {first, FASTFLOAT_NO_ERROR};
+    if(first == last){
+        result.error = FASTFLOAT_INVALID_VALUE;
+        return result;
+    }
+    if((fmt & FASTFLOAT_FORMAT_GENERAL) == 0){
+        result.error = FASTFLOAT_BAD_FORMAT;
+        return result;
+    }
+    fast_float_parsed_number_string pns = fast_float_parse_number_string(first, last, fmt);
+    fast_float_wide_mantissa am = {{0, 0}, 0};
+    _Bool negative = *first == '-';
+    if(!pns.valid){
+        // Reuse the existing inf/nan syntax scanner; no finite conversion is involved.
+        double special;
+        result = fast_float_parse_infnan_double(first, last, &special);
+        if(result.error) return result;
+        const char *name = first + negative;
+        _Bool nan = fast_float_strncasecmp(name, "nan", 3);
+        am.power2 = 0x7fff;
+        if(nan){
+            if(x87) am.mantissa.low = (uint64_t)1 << 62;
+            else am.mantissa.high = (uint64_t)1 << 47;
+        }
+    }
+    else {
+        result.ptr = pns.lastmatch;
+        uint8_t digits[FAST_FLOAT_WIDE_DECIMAL_MAX_DIGITS];
+        fast_float_decimal d = fast_float_parse_decimal(first, pns.lastmatch, digits, sizeof digits);
+        am = fast_float_compute_float_spec(&d, x87 ? 64 : 113, -16383, 0x7fff, -4966, 4934);
+    }
+    if(x87){
+        // The integer bit is explicit, including in infinity and NaN encodings.
+        value[0] = am.mantissa.low | (am.power2 ? (uint64_t)1 << 63 : 0);
+        value[1] = (uint64_t)am.power2 | ((uint64_t)negative << 15);
+    }
+    else {
+        value[0] = am.mantissa.low;
+        value[1] = (am.mantissa.high & UINT64_C(0x0000ffffffffffff)) |
+                   ((uint64_t)am.power2 << 48) | ((uint64_t)negative << 63);
+    }
+    return result;
+}
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_binary128(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt){
+    return fast_float_from_chars_wide(first, last, value, fmt, 0);
+}
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_x87(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt){
+    return fast_float_from_chars_wide(first, last, value, fmt, 1);
 }
 
 #ifdef __clang__

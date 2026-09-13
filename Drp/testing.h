@@ -366,7 +366,7 @@ struct TestCase {
 
 static inline
 void
-register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags);
+register_test(StringView test_name, TestFunc* func, unsigned flags);
 
 // test_names
 // ----------
@@ -387,7 +387,7 @@ static size_t test_funcs_count;
 // and so can use this function instead.
 static inline
 void
-register_test(StringView test_name, TestFunc* func, enum TestCaseFlags flags){
+register_test(StringView test_name, TestFunc* func, unsigned flags){
     assert(test_funcs_count < arrlen(test_funcs));
     test_names[test_funcs_count] = test_name;
     test_funcs[test_funcs_count++] = (TestCase){
@@ -1536,7 +1536,9 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     if(time){
         uint64_t t1 = performance_counter();
         uint64_t diff = t1 - t0;
-        fprintf(stderr, "Time elapsed: %.3fs\n", (double)diff/1e6);
+        TestPrintf("%s%s%s: Time elapsed: %s%.3f%ss\n",
+                gray, filename, reset,
+                blue, (double)diff/1e6, reset);
     }
 
     return result.failures + result.assert_failures == 0? 0 : 1;
