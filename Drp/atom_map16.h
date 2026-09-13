@@ -16,6 +16,9 @@
 #ifndef _Null_unspecified
 #define _Null_unspecified
 #endif
+#ifndef _Nonnull
+#define _Nonnull
+#endif
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -99,7 +102,7 @@ AM16_del(AtomMap16* am, Atom key){
 warn_unused
 static inline
 int
-AM16_put(AtomMap16* am, Allocator al, Atom key, uint64_t payload[_Nonnull static 2]){
+AM16_put(AtomMap16* am, Allocator al, Atom key, uint64_t payload[_Nonnull /*static*/ 2]){
     if(!payload[0] && !payload[1]){
         AM16_del(am, key);
         return 0;
