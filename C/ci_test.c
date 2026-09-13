@@ -6763,13 +6763,13 @@ TestFunction(test_interpreter){
         {
             "type introspection: tag", __LINE__,
             SVI("struct Foo { int x; };\n"
-               "const char* s = (struct Foo).tag;\n"
+               "const char s[:] = (struct Foo).tag;\n"
                "return s[0] == 'F' && s[1] == 'o' && s[2] == 'o';\n"),
             .exit_code = 1,
         },
         {
             "type introspection: name", __LINE__,
-            SVI("const char* s = (int).name;\n"
+            SVI("const char s[:] = (int).name;\n"
                "return s[0] == 'i' && s[1] == 'n' && s[2] == 't';\n"),
             .exit_code = 1,
         },

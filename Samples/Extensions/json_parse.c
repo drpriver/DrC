@@ -14,12 +14,10 @@ struct Player {
     Vec2 pos;
 };
 
-#define print(p) json_write(typeof(*p), stdout, p);
-#define parse(p, json) json_parse(typeof(*p), json, p)
 
 printf("--- Parsing Player from JSON ---\n");
 Player p1;
-parse(&p1,
+json_parse(&p1,
     "{"
     "  \"name\": \"Alice\","
     "  \"hp\": 100,"
@@ -28,11 +26,11 @@ parse(&p1,
     "  \"role\": \"MAGE\","
     "  \"pos\": [ 3.5,  -7.2 ]"
     "}");
-print(&p1);
+json_write(&p1, stdout);
 
 printf("\n--- Parsing Player with unknown field ---\n");
 Player p2;
-parse(&p2,
+json_parse(&p2,
     "{"
     "  \"name\": \"Bob\","
     "  \"hp\": 55,"
@@ -42,13 +40,13 @@ parse(&p2,
     "  \"guild\": \"Shadows\","
     "  \"pos\": [ 0.0, 100.0 ]"
     "}");
-print(&p2);
+json_write(&p2, stdout);
 
 printf("\n--- Parsing Vec2 directly ---\n");
 Vec2 v;
-parse(&v, "[ 42.0, -1.5 ]");
-print(&v);
+json_parse(&v, "[ 42.0, -1.5 ]");
+json_write(&v, stdout);
 
 printf("\n--- Inline type printing ---\n");
-json_write(struct Foo, stdout, &(struct Foo{int x, y;}){1, 2});
+json_write(&(struct Foo{int x, y;}){1, 2}, stdout);
 printf("\n");

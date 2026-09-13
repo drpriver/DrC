@@ -9,11 +9,12 @@
 int json_parse_(_Type T, const char** p, void* out);
 int json_write_(_Type T, FILE* f, const void* data, int indent);
 
-int json_parse(_Type T, const char* p, void* out){
-    return json_parse_(T, &p, out);
+int json_parse(_Any out, const char* p){
+    if(!out.type.is_pointer) return 1;
+    return json_parse_(out.type.pointee, &p, out.as(void*));
 }
-int json_write(_Type T, FILE* f, const void* data){
-    return json_write_(T, f, data, 0);
+int json_write(_Any val, FILE* f){
+    return json_write_(val.type.pointee, f, val.as(void*), 0);
 }
 
 int json_parse_(_Type T, const char** p, void* out){
@@ -95,12 +96,12 @@ int json_parse_(_Type T, const char** p, void* out){
         if(!s) return -1;
         for(size_t i = 0; i < T.enumerators; i++){
             auto e = T.enumerator(i);
-            if(strcmp(s, e.name) == 0){
+            if(strcmp(s, e.name.data) == 0){
                 memcpy(out, &i, T.sizeof_);
                 return 0;
             }
         }
-        fprintf(stderr, "json: unknown enumerator '%s' for %s\n", s, T.name);
+        fprintf(stderr, "json: unknown enumerator '%s' for %s\n", s, T.name.data);
         return -1;
     }
     if(T.is_integer){
@@ -158,7 +159,7 @@ int json_parse_(_Type T, const char** p, void* out){
             ++*p;
             for(size_t i = 0; i < T.fields; i++){
                 auto f = T.field(i);
-                if(strcmp(key, f.name) == 0){
+                if(strcmp(key, f.name.data) == 0){
                     int err = json_parse_(f.type, p, (char*)out + f.offset);
                     if(err) return err;
                     goto found;
@@ -187,7 +188,7 @@ int json_parse_(_Type T, const char** p, void* out){
         if(**p == ']') { ++*p; return 0; }
         return -1;
     }
-    fprintf(stderr, "json: unsupported type '%s'\n", T.name);
+    fprintf(stderr, "json: unsupported type '%s'\n", T.name.data);
     return -1;
 }
 
@@ -233,7 +234,7 @@ int json_write_(_Type T, FILE* f, const void* data, int indent){
         for(size_t i = 0; i < T.enumerators; i++){
             auto e = T.enumerator(i);
             if(e.value == v){
-                fprintf(f, "\"%s\"", e.name);
+                fprintf(f, "\"%s\"", e.name.data);
                 return 0;
             }
         }
@@ -283,7 +284,7 @@ int json_write_(_Type T, FILE* f, const void* data, int indent){
         for(size_t i = 0; i < n; i++){
             auto field = T.field(i);
             json_indent(f, indent + 1);
-            fprintf(f, "\"%s\": ", field.name);
+            fprintf(f, "\"%s\": ", field.name.data);
             json_write_(field.type, f, (const char*)data + field.offset, indent + 1);
             if(i + 1 < n) fputc(',', f);
             fputc('\n', f);
@@ -310,6 +311,7 @@ int json_write_(_Type T, FILE* f, const void* data, int indent){
         if(et.is_struct)
             json_indent(f, indent);
         fprintf(f, "]");
+        return 0;
     }
     return 1;
 }

@@ -26,12 +26,12 @@ const char* gen_enum_strings(_Type T){
     off += snprintf(buf+off, sizeof buf-off,
         "const char* %s_to_string(%s v){\n"
         "    switch(v){\n",
-        T.tag, T.name);
+        T.tag.data, T.name.data);
     for(int i = 0; i < count; i++){
         auto e = T.enumerator(i);
         off += snprintf(buf+off, sizeof buf-off,
             "        case %lld: return \"%s\";\n",
-            e.value, e.name);
+            e.value, e.name.data);
     }
     off += snprintf(buf+off, sizeof buf-off,
         "    }\n"
@@ -41,12 +41,12 @@ const char* gen_enum_strings(_Type T){
     // _Bool <Name>_from_string(const char* s, <Name>* out)
     off += snprintf(buf+off, sizeof buf-off,
         "_Bool %s_from_string(const char* s, %s* out){\n",
-        T.tag, T.name);
+        T.tag.data, T.name.data);
     for(int i = 0; i < count; i++){
         auto e = T.enumerator(i);
         off += snprintf(buf+off, sizeof buf-off,
             "    if(strieq(s, \"%s\")){ *out = %lld; return 1; }\n",
-            e.name, e.value);
+            e.name.data, e.value);
     }
     off += snprintf(buf+off, sizeof buf-off,
         "    return 0;\n"

@@ -964,7 +964,7 @@ TestFunction(test_interp){
                 "       \"struct {\\n\"\n"
                 "       \"  %s *data;\\n\"\n"
                 "       \"  unsigned long count, capacity;\\n\"\n"
-                "       \"}\\n\", T.name);\n"
+                "       \"}\\n\", T.name.data);\n"
                 "     return __builtin_intern(buff);\n"
                 "}\n"
                 "#pragma procmacro dagen\n"

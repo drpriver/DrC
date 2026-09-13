@@ -4549,7 +4549,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         break;
                     case CC_TYPE_NAME:
                     case CC_TYPE_TAG:
-                        result_type = p->const_char_star;
+                        result_type = p->const_char_slice;
                         break;
                     case CC_TYPE_IS_VALID:
                     case CC_TYPE_IS_INVALID:
@@ -14370,12 +14370,10 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     MStringBuilder sb = {.allocator = allocator_from_arena(&p->scratch_arena)};
                     cc_print_type(&sb, qt);
                     Atom a = msb_atomize(&sb, p->cpp.at);
-                    msb_destroy(&sb);
                     if(!a) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    CcExpr* node = cc_value_expr(p, e->loc, p->const_char_star);
+                    msb_destroy(&sb);
+                    CcExpr *node = cc_constexpr_string_slice_expr(p, e->loc, a, 0);
                     if(!node) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    node->text = a->data;
-                    node->str.length = a->length + 1;
                     *result = node;
                     err = 0;
                     goto fini_introspection;
@@ -14386,10 +14384,9 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(k == CC_STRUCT)     tag = ccqt_as_struct(qt)->name;
                     else if(k == CC_UNION) tag = ccqt_as_union(qt)->name;
                     else if(k == CC_ENUM)  tag = ccqt_as_enum(qt)->name;
-                    CcExpr* node = cc_value_expr(p, e->loc, p->const_char_star);
+                    if(!tag) tag = nil_atom;
+                    CcExpr* node = cc_constexpr_string_slice_expr(p, e->loc, tag, 0);
                     if(!node) { err = CC_OOM_ERROR; goto fini_introspection; }
-                    node->text = tag ? tag->data : "";
-                    node->str.length = tag ? tag->length + 1 : 1;
                     *result = node;
                     err = 0;
                     goto fini_introspection;

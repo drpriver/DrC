@@ -642,146 +642,63 @@ const char* type_kind(_Type T){
 ```
 
 #### Properties
-<table>
-<thead>
-<tr>
-<th>Property</th><th>Type</th><th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>`.is_valid`</td><td>`_Bool`</td><td>Is this `_Type` valid or the empty `_Type` ((_Type){}). `false` for the empty type, `true` otherwise.</td>
-</tr>
-<tr>
-<td>`.is_invalid`</td><td>`_Bool`</td><td>!`.is_valid`</td>
-</tr>
-<tr>
-<td>`.name`</td><td>`const char*`</td><td>Name of the type (including `struct`, etc.)</td>
-</tr>
-<tr>
-<td>`.tag`</td><td>`const char*`</td><td>Tag name only (e.g. `"Color"`)</td>
-</tr>
-<tr>
-<td>`.sizeof_`</td><td>`size_t`</td><td>Size in bytes</td>
-</tr>
-<tr>
-<td>`.alignof_`</td><td>`size_t`</td><td>Alignment in bytes</td>
-</tr>
-<tr>
-<td>`.is_integer`</td><td>`_Bool`</td><td>True for integer types</td>
-</tr>
-<tr>
-<td>`.is_float`</td><td>`_Bool`</td><td>True for floating-point types</td>
-</tr>
-<tr>
-<td>`.is_arithmetic`</td><td>`_Bool`</td><td>True for arithmetic types</td>
-</tr>
-<tr>
-<td>`.is_pointer`</td><td>`_Bool`</td><td>True for pointer types</td>
-</tr>
-<tr>
-<td>`.is_struct`</td><td>`_Bool`</td><td>True for struct types</td>
-</tr>
-<tr>
-<td>`.is_union`</td><td>`_Bool`</td><td>True for union types</td>
-</tr>
-<tr>
-<td>`.is_array`</td><td>`_Bool`</td><td>True for non-vector array types</td>
-</tr>
-<tr>
-<td>`.is_vector`</td><td>`_Bool`</td><td>True for vector array types</td>
-</tr>
-<tr>
-<td>`.is_slice`</td><td>`_Bool`</td><td>True for slice types</td>
-</tr>
-<tr>
-<td>`.is_function`</td><td>`_Bool`</td><td>True for function types</td>
-</tr>
-<tr>
-<td>`.is_enum`</td><td>`_Bool`</td><td>True for enum types</td>
-</tr>
-<tr>
-<td>`.is_const`</td><td>`_Bool`</td><td>True if const-qualified</td>
-</tr>
-<tr>
-<td>`.is_volatile`</td><td>`_Bool`</td><td>True if volatile-qualified</td>
-</tr>
-<tr>
-<td>`.is_atomic`</td><td>`_Bool`</td><td>True if `_Atomic`-qualified</td>
-</tr>
-<tr>
-<td>`.is_unsigned`</td><td>`_Bool`</td><td>True for unsigned integer types</td>
-</tr>
-<tr>
-<td>`.is_signed`</td><td>`_Bool`</td><td>True for signed integer types</td>
-</tr>
-<tr>
-<td>`.is_callable`</td><td>`_Bool`</td><td>True for functions and function pointers</td>
-</tr>
-<tr>
-<td>`.is_incomplete`</td><td>`_Bool`</td><td>True for incomplete types</td>
-</tr>
-<tr>
-<td>`.is_variadic`</td><td>`_Bool`</td><td>True for variadic functions/function pointers</td>
-</tr>
-<tr>
-<td>`.pointee`</td><td>`_Type`</td><td>Pointed-to type (pointers only)</td>
-</tr>
-<tr>
-<td>`.unqual`</td><td>`_Type`</td><td>Type with qualifiers removed</td>
-</tr>
-<tr>
-<td>`.count`</td><td>`size_t`</td><td>Element count (arrays only)</td>
-</tr>
-<tr>
-<td>`.fields`</td><td>`size_t`</td><td>Number of fields (structs/unions)</td>
-</tr>
-<tr>
-<td>`.element_type`</td><td>`_Type`</td><td>Element type (arrays/slices only)</td>
-</tr>
-<tr>
-<td>`.return_type`</td><td>`_Type`</td><td>Return type (functions/function pointers)</td>
-</tr>
-<tr>
-<td>`.param_count`</td><td>`size_t`</td><td>Parameter count (functions/function pointers)</td>
-</tr>
-<tr>
-<td>`.underlying_type`</td><td>`_Type`</td><td>Underlying integer type (enums only)</td>
-</tr>
-<tr>
-<td>`.enumerators`</td><td>`size_t`</td><td>Number of enumerators (enums only)</td>
-</tr>
-</tbody>
-</table>
+```C
+_Bool is_valid;        // False for the empty type, true otherwise.
+_Bool is_invalid;      // !.is_valid
+const char name[:];    // Name of the type (including `struct`, etc.)
+const char tag[:];     // Tag name only (e.g. "Color")
+size_t sizeof_;        // Size in bytes
+size_t alignof_;       // Alignment in bytes
+_Bool is_integer;      // True for integer types
+_Bool is_float;        // True for floating-point types
+_Bool is_arithmetic;   // True for arithmetic types
+_Bool is_pointer;      // True for pointer types
+_Bool is_struct;       // True for struct types
+_Bool is_union;        // True for union types
+_Bool is_array;        // True for non-vector array types
+_Bool is_vector;       // True for vector array types
+_Bool is_slice;        // True for slice types
+_Bool is_function;     // True for function types
+_Bool is_enum;         // True for enum types
+_Bool is_const;        // True if const-qualified
+_Bool is_volatile;     // True if volatile-qualified
+_Bool is_atomic;       // True if `_Atomic`-qualified
+_Bool is_unsigned;     // True for unsigned integer types
+_Bool is_signed;       // True for signed integer types
+_Bool is_callable;     // True for functions and function pointers
+_Bool is_incomplete;   // True for incomplete types
+_Bool is_variadic;     // True for variadic functions/function pointers
+_Type pointee;         // Pointed-to type (pointers only)
+_Type unqual;          // Type with qualifiers removed
+size_t count;          // Element count (arrays only)
+size_t fields;         // Number of fields (structs/unions)
+_Type element_type;    // Element type (arrays/slices only)
+_Type return_type;     // Return type (functions/function pointers)
+size_t param_count;    // Parameter count (functions/function pointers)
+_Type underlying_type; // Underlying integer type (enums only)
+size_t enumerators;    // Number of enumerators (enums only)
+```
 
 #### Methods
-<table>
-<thead>
-<tr>
-<th>Method</th><th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>`.field(size_t i)`</td><td>Returns field info for the *i*th field. See `__builtin_Field`.</td>
-</tr>
-<tr>
-<td>`.param_type(size_t)`</td><td>Returns the *i*th parameter type</td>
-</tr>
-<tr>
-<td>`.enumerator(size_t i)`</td><td>Returns the *i*th enumerator. See `__builtin_Enumerator`.</td>
-</tr>
-<tr>
-<td>`.is_callable_with(_Type T)`</td><td>True if callable with argument type `T`</td>
-</tr>
-<tr>
-<td>`.is_castable_to(_Type T)`</td><td>True if explicitly castable to type `T`</td>
-</tr>
-<tr>
-<td>`.make_any(const void*) `</td><td>make an `_Any` of this type, copying .sizeof_ bytes from the pointer.</td>
-</tr>
-</tbody>
-</table>
+```C
+// Returns field info for the `i`th field. See `__builtin_Field`.
+__bultin_Field field(size_t i);
+
+// Returns the `i`th parameter type.
+_Type param_type(size_t);
+
+// Returns the `i`th enumerator. See `__builtin_Enumerator`.
+__builtin_Enumerator enumerator(size_t i);
+
+// True if callable with argument type `T`.
+_Bool is_callable_with(_Type T);
+
+// True if explicitly castable to type `T`.
+_Bool is_castable_to(_Type T)
+
+// make an `_Any` of this type, copying .sizeof_ bytes from the pointer.
+_Any make_any(const void*)
+```
 
 ##### `__builtin_Field`
 

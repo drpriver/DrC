@@ -396,16 +396,23 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             }
             msb_destroy(&sb);
             if(!a) return CI_OOM_ERROR;
-            *(const char**)result = a->data;
+            *(CiRtSlice*)result = (CiRtSlice){
+                .count = a->length,
+                .data = (void*)(uintptr_t)a->data,
+            };
             return 0;
         }
         case CC_TYPE_TAG: {
-            Atom tag = 0;
+            Atom tag = NULL;
             CcTypeKind k = ccqt_kind(qt);
             if(k == CC_STRUCT)     tag = ccqt_as_struct(qt)->name;
             else if(k == CC_UNION) tag = ccqt_as_union(qt)->name;
             else if(k == CC_ENUM)  tag = ccqt_as_enum(qt)->name;
-            *(const char**)result = tag ? tag->data : "";
+            if(!tag) tag = nil_atom;
+            *(CiRtSlice*)result = (CiRtSlice){
+                .count = tag->length,
+                .data = (void*)(uintptr_t)tag->data,
+            };
             return 0;
         }
         case CC_TYPE_IS_VALID:

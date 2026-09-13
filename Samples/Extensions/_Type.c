@@ -2,21 +2,21 @@
 int printf(const char*, ...);
 _Type t = int;
 // special fields
-log("%s.is_integer: %s\n", t.name, t.is_integer?"true":"false");
+log("%s.is_integer: %s\n", t.name.data, t.is_integer?"true":"false");
 t = float;
-log("%s.is_integer: %s\n", t.name, t.is_integer?"true":"false");
+log("%s.is_integer: %s\n", t.name.data, t.is_integer?"true":"false");
 t = int(int);
-log("%s.is_integer: %s\n", t.name, t.is_integer?"true":"false");
-log("%s.is_callable: %s\n", t.name, t.is_callable?"true":"false");
+log("%s.is_integer: %s\n", t.name.data, t.is_integer?"true":"false");
+log("%s.is_callable: %s\n", t.name.data, t.is_callable?"true":"false");
 // special methods
-log("%s.is_callable_with(int): %s\n", t.name, t.is_callable_with(int)?"true":"false");
+log("%s.is_callable_with(int): %s\n", t.name.data, t.is_callable_with(int)?"true":"false");
 // this one is type-or-expression
-log("%s.is_callable_with(1): %s\n", t.name, t.is_callable_with(1)?"true":"false");
+log("%s.is_callable_with(1): %s\n", t.name.data, t.is_callable_with(1)?"true":"false");
 t = int[4];
-log("%s.count: %zu\n", t.name, t.count);
-log("%s.is_castable_to(int*): %s\n", t.name, t.is_castable_to(int*)?"true":"false");
+log("%s.count: %zu\n", t.name.data, t.count);
+log("%s.is_castable_to(int*): %s\n", t.name.data, t.is_castable_to(int*)?"true":"false");
 
-log("%s\n", int.name);
+log("%s\n", int.name.data);
 
 // usable in static if: 
 static if(int[4].is_castable_to(int*)){
@@ -28,11 +28,11 @@ else {
 
 _Type id(_Type T){ return T; }
 
-log("%s\n", id(int).name);
+log("%s\n", id(int).name.data);
 
 _Type ty = _Type;
-log("%s\n", ty.name);
+log("%s\n", ty.name.data);
 
 _Type intty(void){ return int;}
 ty = id(intty());
-log("%s\n", ty.name);
+log("%s\n", ty.name.data);
