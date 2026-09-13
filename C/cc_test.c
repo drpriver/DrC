@@ -55,6 +55,14 @@ TestFunction(test_parse_decls){
         _Bool skip;
     } testcases[] = {
         {
+            "reflection: enumerator value uses target int64_t", __LINE__,
+            SVI("enum E { NEGATIVE = -17 };\n"
+                "_Static_assert(typeof((enum E).enumerator(0).value) == __INT64_TYPE__);\n"
+                "constexpr struct __builtin_Enumerator e = (enum E).enumerator(0);\n"
+                "_Static_assert(typeof(e.value).unqual == __INT64_TYPE__);\n"
+                "_Static_assert(e.value == -17);\n"),
+        },
+        {
             "any constexpr: matching qualified types and selected views", __LINE__,
             SVI("constexpr _Any a=3;\n"
                 "_Static_assert(a.as(const int)==3);\n"

@@ -513,12 +513,32 @@ C::md
     Methods::md
       ::table
         Method | Description
-        `.field(i)` | Returns field info for the <i>i</i>th field
-        `.param_type(i)` | Returns the <i>i</i>th parameter type
-        `.enumerator(i)` | Returns the <i>i</i>th enumerator
-        `.is_callable_with(T)` | True if callable with argument type `T`
-        `.is_castable_to(T)` | True if explicitly castable to type `T`
+        `.field(size_t i)` | Returns field info for the <i>i</i>th field. See `__builtin_Field`.
+        `.param_type(size_t)` | Returns the <i>i</i>th parameter type
+        `.enumerator(size_t i)` | Returns the <i>i</i>th enumerator. See `__builtin_Enumerator`.
+        `.is_callable_with(_Type T)` | True if callable with argument type `T`
+        `.is_castable_to(_Type T)` | True if explicitly castable to type `T`
         `.make_any(const void*) ` | make an `_Any` of this type, copying .sizeof_ bytes from the pointer.
+
+      `__builtin_Field`::md
+        The structure returned by `.field()`. It is laid out as follows on all supported targets:
+        ::pre.C
+          struct __builtin_Field {
+              _Type type;
+              const char name[:];
+              unsigned offset,
+                       bitwidth,
+                       bitoffset,
+                       is_bitfield;
+          };
+      `__builtin_Enumerator`::md
+        The structure returned by `.enumerator()`. It is laid out as follows on all supported targets:
+        ::pre.C
+          struct __builtin_Enumerator {
+              const char name[:];
+              int64_t value;
+          };
+
 
     `push_method`::md
       `push_method` is a compile-time mutation that adds a method to
@@ -559,12 +579,12 @@ C::md
             off += snprintf(buf+off, sizeof buf-off,
                 "(%s).push_method(print, void (%s* v){\n"
                 "    printf(\"%s {\\n\");\n",
-                T.name, T.name, T.name);
+                T.name.data, T.name.data, T.name.data);
             for(int i = 0; i < (int)T.fields; i++){
                 auto f = T.field(i);
                 off += snprintf(buf+off, sizeof buf-off,
                     "    printf(\"    %s = %%d\\n\", v->%s);\n",
-                    f.name, f.name);
+                    f.name.data, f.name.data);
             }
             off += snprintf(buf+off, sizeof buf-off,
                 "    printf(\"}\\n\");\n"
@@ -788,23 +808,21 @@ Interpreter-only::md
       const char* input = _Argc > 1 ? _Argv[1] : "default.txt";
 
   `_Module` / `__compile(source)`::md
-    `_Module` is an opaque interpreter module handle. Internally it is a
-    typedef for a pointer to `__builtin_Module`, so it can be compared with
-    `NULL` and passed around like any other pointer.
+    `_Module` is an opaque interpreter module handle. It is a typedef to
+    a pointer to an opaque struct.
 
     `__root_module()` returns a `_Module` handle for the interpreter's global
     scope.
 
-    `__compile(source)` parses `source` as C code in a new overlay scope whose
-    parent is the global scope. Declarations in the compiled source are visible
-    through the returned module handle, and code in the module can refer to
-    global declarations. The compiled source does not insert its declarations
-    into the global scope.
+    `__compile(source)` parses `source` as C code in a new scope whose
+    parent is the global scope. Code in the source can refer to symbols
+    in the global scope of the parent.
 
     `__compile` returns `NULL` if parsing fails. Diagnostics are still emitted.
     Top-level statements are stored in the module and are not run
-    automatically. Call `module.run()` to execute them. It returns `0` on
-    success and nonzero if the module handle is `NULL` or invalid.
+    automatically. Call `module.run()` to execute them.
+
+    It returns `0` on success and nonzero if the module handle is `NULL` or invalid.
 
     ::pre.C
       _Module m = __compile("int add(int a, int b){ return a + b; }");
@@ -814,50 +832,78 @@ Interpreter-only::md
       int (*add)(int, int) = m.symbol("add", typeof(*add));
       printf("%d\n", add(2, 3));
 
-    Use `module.symbol(name, type-name)` to look up a runtime symbol. It
-    returns a pointer to `type-name`, or `NULL` if the symbol is not known,
-    cannot be resolved, or does not exactly match `type-name`.
+    `_Module` methods::md
+      ::table
+        Method / Field | Description
+        `size_t func_count` | how many global functions are declared in the module
+        `_ModuleMember func(size_t)` | Get the `i`th function.
+        `size_t var_count` | how many global variables are declared in the module
+        `_ModuleMember var(size_t)` | Get the `i`th variable.
+        `size_t type_count` | how many global types are declared in the module
+        `_ModuleMember type(size_t)` | Get the `i`th type.
+        `_Type parse_type(const char*)` | Parse a type name string in this `_Module`'s scope
+        `int run()` | Run the top-level statements in this module,
+        `T* symbol(const char*, constexpr _Type T)` | Retrieve a symbol of the given type.
 
-    ::pre.C
-      _Module root = __root_module();
-      int (*mainish)(void) = root.symbol("mainish", typeof(*mainish));
+      `_Module.symbol(const char*, constexpr _Type T)`::md
+        Looks up a symbol from the `_Module`, like a strongly typed `dlsym()`.
+        Returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
+        cannot be resolved or does not match the type given.
+        ::pre.C
+          _Module root = __root_module();
+          int (*mainish)(void) = root.symbol("mainish", typeof(*mainish));
+          if(mainish)
+              mainish();
 
-    For object symbols, pass the pointed-to object type.
+        For object symbols, pass the pointed-to object type.
+        ::pre.C
+          int counter;
+          // will fail to compile as the return type is `int **`
+          // int* p = __root_module().symbol("counter", typeof(p));
+          int* p = __root_module().symbol("counter", typeof(*p));
+          if(p)
+              *p += 1;
+      `_Module.parse_type(const char*)`::md
+        Parses the given string as a type name. This can return typedefs,
+        structs, unions, enums, or basic types if you wanted.
+        On error, returns the invalid type (check `.is_valid`/`is_invalid`).
 
-    ::pre.C
-      int counter;
-      int* p = __root_module().symbol("counter", typeof(*p));
-      if(p)
-          *p += 1;
+        ::pre.C
+          _Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
+          _Type T = m.parse_type("struct S");
+          if(T.is_struct)
+              printf("%s\n", T.name);
+      `_Module.var(size_t)` / `_Module.type(size_t)` / `_Module.func(size_t)`::md
+        These functions and their corresponding fields expose the declarations at global scope
+        of the module. The methods return a `_ModuleMember`. For functions and variables address
+        is the address of the function or object. For types it is always null.
 
-    Use `module.parse_type(source)` to parse a type name string as `_Type` in the
-    module's scope. The root module parses in global scope; compiled modules
-    can parse their own typedefs, structs, unions, and enums.
+        ::pre.C
+          for(size_t i = 0; i < m.func_count; i++){
+              _ModuleMember f = m.func(i);
+              printf("%.*s : %s\n", (int)f.name.count, f.name.data, f.type.name);
+          }
 
-    ::pre.C
-      _Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
-      _Type T = m.parse_type("struct S");
-      if(T.is_struct)
-          printf("%s\n", T.name);
+        `_ModuleMember`::md
+          ::pre.C
+            struct __builtin_ModuleMember {
+                _Type type;
+                const char name[:];
+                void* address;
+            };
+            typedef struct __builtin_ModuleMember _ModuleMember;
+      `_Module.run()`::md
+        Top-level statements are not automatically executed. To execute them, use this method.
+        This is all or nothing, you can't run some of them.
 
-    Modules expose declarations through reflection. Counts
-    return `size_t`; entries return `_ModuleMember`, whose fields are
-    `name`, `name_length`, `type`, and `address`. `address` is populated
-    for functions and non-automatic variables when resolvable, and is `NULL`
-    for type declarations.
-
-    ::pre.C
-      for(size_t i = 0; i < m.func_count; i++){
-          _ModuleMember f = m.func(i);
-          printf("%.*s : %s\n", (int)f.name_length, f.name, f.type.name);
-      }
-
-    Top-level statements can be used for explicit setup.
-
-    ::pre.C
-      _Module m = __compile("int x; x = 42;");
-      m.run();
-      int* x = m.symbol("x", typeof(*x));
+        The return value is 0 or the result of a top level return statement.
+        ::pre.C
+          #include <assert.h>
+          _Module m = __compile("int x; x = 42;");
+          int* x = m.symbol("x", typeof(*x));
+          assert(x && *x == 0);
+          m.run();
+          assert(x && *x == 42);
 
   `__hotswap(original, replacement)`::md
     Replaces the interpreted function reached by `original` with
@@ -874,6 +920,7 @@ Interpreter-only::md
       int f(void){ return 1; }
       int g(void){ return 2; }
 
+      printf("%d\n", f()); // prints 1
       if(__hotswap(f, g) == 0)
           printf("%d\n", f()); // prints 2
 
@@ -884,6 +931,7 @@ Interpreter-only::md
       void new_tick(void){ puts("new"); }
 
       void (*fp)(void) = old_tick;
+      fp(); // prints "old"
       __hotswap(fp, new_tick);
       fp(); // prints "new"
 

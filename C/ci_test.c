@@ -2992,6 +2992,16 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "__compile module run returns top-level value", __LINE__,
+            SVI("_Module m = __compile(\"int x; x++; return -17; x = 99;\");\n"
+               "if(!m) return 99;\n"
+               "int* x = m.symbol(\"x\", int);\n"
+               "int first = m.run();\n"
+               "m.run();\n"
+               "return first == -17 && *x == 2;\n"),
+            .exit_code = 1,
+        },
+        {
             "__compile module run recursion", __LINE__,
             SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\");\n"
                 "_Module* self = m.symbol(\"self\", _Module);\n"
@@ -3022,6 +3032,17 @@ TestFunction(test_interpreter){
                "const char* s = file();\n"
                "return s[0] == '<' && s[1] == '_' && s[2] == '_' && s[3] == 'c' ? 7 : 97;\n"),
             .exit_code = 7,
+        },
+        {
+            "_Module.parse_type invalid input and recovery", __LINE__,
+            SVI("_Module m = __compile(\"typedef int MyInt;\");\n"
+               "if(!m) return 99;\n"
+               "if(!m.parse_type(\"int name\").is_invalid) return 98;\n"
+               "if(!m.parse_type(\"int;\").is_invalid) return 97;\n"
+               "if(!m.parse_type(\"\").is_invalid) return 96;\n"
+               "if(!m.parse_type(\"missing_type\").is_invalid) return 95;\n"
+               "return m.parse_type(\"MyInt\") == int && __root_module().parse_type(\"int\") == int;\n"),
+            .exit_code = 1,
         },
         {
             "_Module.parse_type root", __LINE__,
@@ -3059,6 +3080,10 @@ TestFunction(test_interpreter){
                "_ModuleMember f = m.func(0);\n"
                "_ModuleMember v = m.var(0);\n"
                "_ModuleMember t = m.type(0);\n"
+               "if(f.name.count != 1 || v.name.count != 1 || t.name.count != 1) return 95;\n"
+               "if(f.name[0] != 'f' || v.name[0] != 'x' || t.name[0] != 'T') return 94;\n"
+               "const char name[:] = f.name;\n"
+               "if(name.count != 1 || name.data[0] != 'f') return 93;\n"
                "if(!f.address || !v.address || t.address) return 98;\n"
                "return f.type.is_function && v.type == int && t.type == int ? 7 : 96;\n"),
             .exit_code = 7,
@@ -6687,6 +6712,23 @@ TestFunction(test_interpreter){
             SVI("struct S { int x; int y; int z; };\n"
                "return (int)(struct S).fields;\n"),
             .exit_code = 3,
+        },
+        {
+            "constexpr reflection: field name slice", __LINE__,
+            SVI("struct S { int hello; };\n"
+               "constexpr struct __builtin_Field f = (struct S).field(0);\n"
+               "_Static_assert(f.name.count == 5);\n"
+               "return f.name.count == 5 && f.name[0] == 'h' && f.name[4] == 'o' && f.type == int && f.offset == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr reflection: enumerator name slice", __LINE__,
+            SVI("enum E { HELLO = -17 };\n"
+               "constexpr struct __builtin_Enumerator e = (enum E).enumerator(0);\n"
+               "_Static_assert(e.name.count == 5);\n"
+               "_Static_assert(e.value == -17);\n"
+               "return e.name.count == 5 && e.name[0] == 'H' && e.name[4] == 'O' && e.value == -17;\n"),
+            .exit_code = 1,
         },
         {
             "type introspection: field name", __LINE__,

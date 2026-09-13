@@ -60,7 +60,7 @@ This project uses a "nobuild" build system. Bootstrap the build system by
 doing something like:
 
 ```console
-$ cc build.c -o build && ./build -b Bin && ./build tests
+$ cc build.c -o build && ./build -b builddir && ./build tests
 ```
 
 

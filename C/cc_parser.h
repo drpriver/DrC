@@ -213,6 +213,8 @@ struct CcParser {
                const_char_star,
                void_star,
                const_void_star,
+               char_slice,
+               const_char_slice,
                builtin_field,
                builtin_enumerator,
                builtin_module_member,
@@ -238,37 +240,36 @@ static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 
 // NOTE: these structs are designed so they match the layout on 
 // any of our targets.
-typedef struct CiRtField CiRtField; // return by _Type.fields
-struct CiRtField {
-    CcQualType type;
-    const char* name;
-    unsigned name_length,
-             offset,
-             bitwidth,
-             bitoffset,
-             is_bitfield;
-};
-
-typedef struct CiRtModuleMember CiRtModuleMember;
-struct CiRtModuleMember {
-    CcQualType type;
-    size_t name_length;
-    const char* name;
-    void* _Nullable address;
-};
-
-typedef struct CiRtEnumerator CiRtEnumerator;
-struct CiRtEnumerator {
-    const char* name;
-    unsigned name_length;
-    long long value;
-};
-
 typedef struct CiRtSlice CiRtSlice;
 struct CiRtSlice {
     size_t count;
     void* data;
 };
+
+typedef struct CiRtField CiRtField; // return by _Type.fields
+struct CiRtField {
+    CcQualType type;
+    CiRtSlice name;
+    unsigned offset,
+             bitwidth,
+             bitoffset,
+             is_bitfield;
+};
+
+
+typedef struct CiRtModuleMember CiRtModuleMember;
+struct CiRtModuleMember {
+    CcQualType type;
+    CiRtSlice name;
+    void* _Nullable address;
+};
+
+typedef struct CiRtEnumerator CiRtEnumerator;
+struct CiRtEnumerator {
+    CiRtSlice name;
+    int64_t value;
+};
+
 typedef struct CiRtAny CiRtAny;
 struct CiRtAny {
     CcQualType type;

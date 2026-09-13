@@ -1,5 +1,5 @@
 void print_dynamic(_Type T, const void* p){
-    switch(T){
+    switch(T.unqual){
         case float:              printf("%g", *(const float*)p); break;
         case double:             printf("%g", *(const double*)p); break;
         case char:               printf("%d", *(const char*)p); break;
@@ -26,6 +26,10 @@ void print_dynamic(_Type T, const void* p){
                     size_t count;
                     void* data;
                 } *slice = p;
+                if(E.unqual == char){
+                    printf("%.*s", (int)slice.count, (char*)slice.data);
+                    break;
+                }
                 printf("[");
                 for(size_t i = 0, count=slice.count; i < count; i++){
                     if(i) printf(", ");

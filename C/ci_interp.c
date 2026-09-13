@@ -607,8 +607,8 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             if(f->is_method){
                 *out = (CiRtField){
                     .type = f->type,
-                    .name = f->method->name ? f->method->name->data : "",
-                    .name_length = f->method->name ? f->method->name->length : 0,
+                    .name.data = (void*)(uintptr_t)(f->method->name ? f->method->name->data : ""),
+                    .name.count = f->method->name ? f->method->name->length : 0,
                     .offset = 0,
                     .bitwidth = 0,
                     .bitoffset = 0,
@@ -618,8 +618,8 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             else {
                 *out = (CiRtField){
                     .type = f->type,
-                    .name = f->name ? f->name->data : "",
-                    .name_length = f->name ? f->name->length : 0,
+                    .name.data = (void*)(uintptr_t)(f->name ? f->name->data : ""),
+                    .name.count = f->name ? f->name->length : 0,
                     .offset = f->offset,
                     .bitwidth = f->bitwidth,
                     .bitoffset = f->bitoffset,
@@ -646,9 +646,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                 return ci_error(ci, loc, "_Type.enumerator: index out of range");
             CcEnumerator* enumerator = enum_->enumerators[idx];
             CiRtEnumerator* out = (CiRtEnumerator*)result;
-            out->name = enumerator->name ? enumerator->name->data : "";
-            out->name_length = enumerator->name ? enumerator->name->length: 0;
-            out->value = (long long)enumerator->value;
+            *out = (CiRtEnumerator){
+                .name.data = (void*)(uintptr_t)(enumerator->name ? enumerator->name->data : ""),
+                .name.count = enumerator->name?enumerator->name->length:0,
+                .value = enumerator->value,
+            };
             return 0;
         }
         case CC_TYPE_RETURN_TYPE: {
@@ -760,8 +762,8 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
                 .op_count = module->ops.count,
                 .slots = module_frame + 1,
                 .data_length = module->slot_size,
-                .return_buf = ci_discard_buf,
-                .return_size = sizeof ci_discard_buf,
+                .return_buf = result,
+                .return_size = result == ci_discard_buf ? sizeof ci_discard_buf : size,
             };
             if(result != ci_discard_buf) CI_INLINE_MEMCPY(result, &ret, sizeof ret);
             *child = module_frame;
@@ -788,9 +790,9 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
         case CC_MODULE_FUNC_COUNT:
         case CC_MODULE_VAR_COUNT:
         case CC_MODULE_TYPE_COUNT:
-            if(sizeof member.name_length > size)
-                return CI_RESULT_TOO_SMALL(ci, loc, sizeof member.name_length, size);
-            memcpy(result, &member.name_length, sizeof member.name_length);
+            if(sizeof member.name.count > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof member.name.count, size);
+            memcpy(result, &member.name.count, sizeof member.name.count);
             return 0;
         case CC_MODULE_FUNC:
         case CC_MODULE_VAR:
@@ -2613,6 +2615,12 @@ ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, c
 
     ci_lock_resolver(ci);
     err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, (StringView){strlen(source), source}, out);
+    if(err && err != CI_OOM_ERROR){
+        // Like __compile, report parse diagnostics without stopping execution.
+        // Parsing may have filled out a type before rejecting trailing tokens.
+        *out = (CcQualType){0};
+        err = 0;
+    }
     ci_unlock_resolver(ci);
     (void)loc;
     return err;
@@ -2653,8 +2661,10 @@ ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModule
     }
     *out = (CiRtModuleMember){
         .type = (CcQualType){.bits = (uintptr_t)func->type},
-        .name = func->name ? func->name->data : "",
-        .name_length = func->name ? func->name->length : 0,
+        .name = {
+            .count = func->name ? func->name->length : 0,
+            .data = (void*)(uintptr_t)(func->name ? func->name->data : ""),
+        },
         .address = address,
     };
     (void)loc;
@@ -2688,8 +2698,10 @@ ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModu
     }
     *out = (CiRtModuleMember){
         .type = var->type,
-        .name = var->name ? var->name->data : "",
-        .name_length = var->name ? var->name->length : 0,
+        .name = {
+            .count = var->name ? var->name->length : 0,
+            .data = (void*)(uintptr_t)(var->name ? var->name->data : ""),
+        },
         .address = address,
     };
     (void)loc;
@@ -2705,8 +2717,10 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
         if(idx--) continue;
         *out = (CiRtModuleMember){
             .type = (CcQualType){.bits = (uintptr_t)typedefs.data[i].p},
-            .name = typedefs.data[i].atom ? typedefs.data[i].atom->data : "",
-            .name_length = typedefs.data[i].atom ? typedefs.data[i].atom->length : 0,
+            .name = {
+                .count = typedefs.data[i].atom ? typedefs.data[i].atom->length : 0,
+                .data = (void*)(uintptr_t)(typedefs.data[i].atom ? typedefs.data[i].atom->data : ""),
+            },
             .address = NULL,
         };
         return 0;
@@ -2718,8 +2732,10 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
         CcStruct* s = structs.data[i].p;
         *out = (CiRtModuleMember){
             .type = (CcQualType){.bits = (uintptr_t)s},
-            .name = s->name ? s->name->data : "",
-            .name_length = s->name ? s->name->length : 0,
+            .name = {
+                .count = s->name ? s->name->length : 0,
+                .data = (void*)(uintptr_t)(s->name ? s->name->data : ""),
+            },
             .address = NULL,
         };
         return 0;
@@ -2731,8 +2747,10 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
         CcUnion* u = unions.data[i].p;
         *out = (CiRtModuleMember){
             .type = (CcQualType){.bits = (uintptr_t)u},
-            .name = u->name ? u->name->data : "",
-            .name_length = u->name ? u->name->length : 0,
+            .name = {
+                .count = u->name ? u->name->length : 0,
+                .data = (void*)(uintptr_t)(u->name ? u->name->data : ""),
+            },
             .address = NULL,
         };
         return 0;
@@ -2744,8 +2762,10 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
         CcEnum* e = enums.data[i].p;
         *out = (CiRtModuleMember){
             .type = (CcQualType){.bits = (uintptr_t)e},
-            .name = e->name ? e->name->data : "",
-            .name_length = e->name ? e->name->length : 0,
+            .name = {
+                .count = e->name ? e->name->length : 0,
+                .data = (void*)(uintptr_t)(e->name ? e->name->data : ""),
+            },
             .address = NULL,
         };
         return 0;
@@ -2762,13 +2782,13 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
     ci_lock_resolver(ci);
     switch(op){
         case CC_MODULE_FUNC_COUNT:
-            out->name_length = ci_count_atom_items(AM_items(&scope->functions));
+            out->name.count = ci_count_atom_items(AM_items(&scope->functions));
             break;
         case CC_MODULE_VAR_COUNT:
-            out->name_length = ci_count_atom_items(AM_items(&scope->variables));
+            out->name.count = ci_count_atom_items(AM_items(&scope->variables));
             break;
         case CC_MODULE_TYPE_COUNT:
-            out->name_length =
+            out->name.count =
                 ci_count_atom_items(AM_items(&scope->typedefs))
                 + ci_count_atom_items(AM_items(&scope->structs))
                 + ci_count_atom_items(AM_items(&scope->unions))

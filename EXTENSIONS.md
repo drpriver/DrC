@@ -47,6 +47,7 @@
   * [Native FFI](#native-ffi)
   * [`_Argc` / `_Argv`](#argc-argv)
   * [`_Module` / `__compile(source)`](#module-compilesource)
+    * [`_Module` methods](#module-methods)
   * [`__hotswap(original, replacement)`](#hotswaporiginal-replacement)
   * [`__shell(program, args...)`](#shellprogram-args)
   * [`#pragma lib "name"`](#pragma-lib-name)
@@ -714,7 +715,7 @@ const char* type_kind(_Type T){
 <td>`.fields`</td><td>`size_t`</td><td>Number of fields (structs/unions)</td>
 </tr>
 <tr>
-<td>`.element_type`</td><td>`_Type`</td><td>Element type (arrays only)</td>
+<td>`.element_type`</td><td>`_Type`</td><td>Element type (arrays/slices only)</td>
 </tr>
 <tr>
 <td>`.return_type`</td><td>`_Type`</td><td>Return type (functions/function pointers)</td>
@@ -740,22 +741,51 @@ const char* type_kind(_Type T){
 </thead>
 <tbody>
 <tr>
-<td>`.field(i)`</td><td>Returns field info for the *i*th field</td>
+<td>`.field(size_t i)`</td><td>Returns field info for the *i*th field. See `__builtin_Field`.</td>
 </tr>
 <tr>
-<td>`.param_type(i)`</td><td>Returns the *i*th parameter type</td>
+<td>`.param_type(size_t)`</td><td>Returns the *i*th parameter type</td>
 </tr>
 <tr>
-<td>`.enumerator(i)`</td><td>Returns the *i*th enumerator</td>
+<td>`.enumerator(size_t i)`</td><td>Returns the *i*th enumerator. See `__builtin_Enumerator`.</td>
 </tr>
 <tr>
-<td>`.is_callable_with(T)`</td><td>True if callable with argument type `T`</td>
+<td>`.is_callable_with(_Type T)`</td><td>True if callable with argument type `T`</td>
 </tr>
 <tr>
-<td>`.is_castable_to(T)`</td><td>True if explicitly castable to type `T`</td>
+<td>`.is_castable_to(_Type T)`</td><td>True if explicitly castable to type `T`</td>
+</tr>
+<tr>
+<td>`.make_any(const void*) `</td><td>make an `_Any` of this type, copying .sizeof_ bytes from the pointer.</td>
 </tr>
 </tbody>
 </table>
+
+##### `__builtin_Field`
+
+The structure returned by `.field()`. It is laid out as follows on all supported targets:
+
+```C
+struct __builtin_Field {
+    _Type type;
+    const char name[:];
+    unsigned offset,
+             bitwidth,
+             bitoffset,
+             is_bitfield;
+};
+```
+
+##### `__builtin_Enumerator`
+
+The structure returned by `.enumerator()`. It is laid out as follows on all supported targets:
+
+```C
+struct __builtin_Enumerator {
+    const char name[:];
+    int64_t value;
+};
+```
 
 #### `push_method`
 
@@ -802,12 +832,12 @@ const char* gen_print(_Type T){
     off += snprintf(buf+off, sizeof buf-off,
         "(%s).push_method(print, void (%s* v){\n"
         "    printf(\"%s {\\n\");\n",
-        T.name, T.name, T.name);
+        T.name.data, T.name.data, T.name.data);
     for(int i = 0; i < (int)T.fields; i++){
         auto f = T.field(i);
         off += snprintf(buf+off, sizeof buf-off,
             "    printf(\"    %s = %%d\\n\", v->%s);\n",
-            f.name, f.name);
+            f.name.data, f.name.data);
     }
     off += snprintf(buf+off, sizeof buf-off,
         "    printf(\"}\\n\");\n"
@@ -1070,26 +1100,25 @@ const char* input = _Argc > 1 ? _Argv[1] : "default.txt";
 
 ### `_Module` / `__compile(source)`
 
-`_Module` is an opaque interpreter module handle. Internally it is a
-typedef for a pointer to `__builtin_Module`, so it can be compared with
-`NULL` and passed around like any other pointer.
+`_Module` is an opaque interpreter module handle. It is a typedef to
+a pointer to an opaque struct.
 
 
 `__root_module()` returns a `_Module` handle for the interpreter's global
 scope.
 
 
-`__compile(source)` parses `source` as C code in a new overlay scope whose
-parent is the global scope. Declarations in the compiled source are visible
-through the returned module handle, and code in the module can refer to
-global declarations. The compiled source does not insert its declarations
-into the global scope.
+`__compile(source)` parses `source` as C code in a new scope whose
+parent is the global scope. Code in the source can refer to symbols
+in the global scope of the parent.
 
 
 `__compile` returns `NULL` if parsing fails. Diagnostics are still emitted.
 Top-level statements are stored in the module and are not run
-automatically. Call `module.run()` to execute them. It returns `0` on
-success and nonzero if the module handle is `NULL` or invalid.
+automatically. Call `module.run()` to execute them.
+
+
+It returns `0` on success and nonzero if the module handle is `NULL` or invalid.
 
 ```C
 _Module m = __compile("int add(int a, int b){ return a + b; }");
@@ -1100,14 +1129,55 @@ int (*add)(int, int) = m.symbol("add", typeof(*add));
 printf("%d\n", add(2, 3));
 ```
 
+#### `_Module` methods
+<table>
+<thead>
+<tr>
+<th>Method / Field</th><th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>`size_t func_count`</td><td>how many global functions are declared in the module</td>
+</tr>
+<tr>
+<td>`_ModuleMember func(size_t)`</td><td>Get the `i`th function.</td>
+</tr>
+<tr>
+<td>`size_t var_count`</td><td>how many global variables are declared in the module</td>
+</tr>
+<tr>
+<td>`_ModuleMember var(size_t)`</td><td>Get the `i`th variable.</td>
+</tr>
+<tr>
+<td>`size_t type_count`</td><td>how many global types are declared in the module</td>
+</tr>
+<tr>
+<td>`_ModuleMember type(size_t)`</td><td>Get the `i`th type.</td>
+</tr>
+<tr>
+<td>`_Type parse_type(const char*)`</td><td>Parse a type name string in this `_Module`'s scope</td>
+</tr>
+<tr>
+<td>`int run()`</td><td>Run the top-level statements in this module,</td>
+</tr>
+<tr>
+<td>`T* symbol(const char*, constexpr _Type T)`</td><td>Retrieve a symbol of the given type.</td>
+</tr>
+</tbody>
+</table>
 
-Use `module.symbol(name, type-name)` to look up a runtime symbol. It
-returns a pointer to `type-name`, or `NULL` if the symbol is not known,
-cannot be resolved, or does not exactly match `type-name`.
+##### `_Module.symbol(const char*, constexpr _Type T)`
+
+Looks up a symbol from the `_Module`, like a strongly typed `dlsym()`.
+Returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
+cannot be resolved or does not match the type given.
 
 ```C
 _Module root = __root_module();
 int (*mainish)(void) = root.symbol("mainish", typeof(*mainish));
+if(mainish)
+    mainish();
 ```
 
 
@@ -1115,15 +1185,18 @@ For object symbols, pass the pointed-to object type.
 
 ```C
 int counter;
+// will fail to compile as the return type is `int **`
+// int* p = __root_module().symbol("counter", typeof(p));
 int* p = __root_module().symbol("counter", typeof(*p));
 if(p)
     *p += 1;
 ```
 
+##### `_Module.parse_type(const char*)`
 
-Use `module.parse_type(source)` to parse a type name string as `_Type` in the
-module's scope. The root module parses in global scope; compiled modules
-can parse their own typedefs, structs, unions, and enums.
+Parses the given string as a type name. This can return typedefs,
+structs, unions, enums, or basic types if you wanted.
+On error, returns the invalid type (check `.is_valid`/`is_invalid`).
 
 ```C
 _Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
@@ -1132,27 +1205,44 @@ if(T.is_struct)
     printf("%s\n", T.name);
 ```
 
+##### `_Module.var(size_t)` / `_Module.type(size_t)` / `_Module.func(size_t)`
 
-Modules expose declarations through reflection. Counts
-return `size_t`; entries return `_ModuleMember`, whose fields are
-`name`, `name_length`, `type`, and `address`. `address` is populated
-for functions and non-automatic variables when resolvable, and is `NULL`
-for type declarations.
+These functions and their corresponding fields expose the declarations at global scope
+of the module. The methods return a `_ModuleMember`. For functions and variables address
+is the address of the function or object. For types it is always null.
 
 ```C
 for(size_t i = 0; i < m.func_count; i++){
     _ModuleMember f = m.func(i);
-    printf("%.*s : %s\n", (int)f.name_length, f.name, f.type.name);
+    printf("%.*s : %s\n", (int)f.name.count, f.name.data, f.type.name);
 }
 ```
 
+###### `_ModuleMember`
+```C
+struct __builtin_ModuleMember {
+    _Type type;
+    const char name[:];
+    void* address;
+};
+typedef struct __builtin_ModuleMember _ModuleMember;
+```
 
-Top-level statements can be used for explicit setup.
+##### `_Module.run()`
+
+Top-level statements are not automatically executed. To execute them, use this method.
+This is all or nothing, you can't run some of them.
+
+
+The return value is 0 or the result of a top level return statement.
 
 ```C
+#include <assert.h>
 _Module m = __compile("int x; x = 42;");
-m.run();
 int* x = m.symbol("x", typeof(*x));
+assert(x && *x == 0);
+m.run();
+assert(x && *x == 42);
 ```
 
 ### `__hotswap(original, replacement)`
@@ -1173,6 +1263,7 @@ interpreter-created function pointers. Chained swaps are followed.
 int f(void){ return 1; }
 int g(void){ return 2; }
 
+printf("%d\n", f()); // prints 1
 if(__hotswap(f, g) == 0)
     printf("%d\n", f()); // prints 2
 ```
@@ -1185,6 +1276,7 @@ void old_tick(void){ puts("old"); }
 void new_tick(void){ puts("new"); }
 
 void (*fp)(void) = old_tick;
+fp(); // prints "old"
 __hotswap(fp, new_tick);
 fp(); // prints "new"
 ```
