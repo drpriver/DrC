@@ -2664,6 +2664,15 @@ ci_count_atom_items(AtomMapItems items){
 }
 
 static
+size_t
+ci_count_atom_items16(AtomMap16Items items){
+    size_t count = 0;
+    for(size_t i = 0; i < items.count; i++)
+        count += items.data[i].payload[0] != 0;
+    return count;
+}
+
+static
 int
 ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModuleMember* out){
     void* address = NULL;
@@ -2741,18 +2750,20 @@ ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModu
 static
 int
 ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
-    AtomMapItems typedefs = AM_items(&scope->typedefs);
+    AtomMap16Items typedefs = AM16_items(&scope->typedefs);
     for(size_t i = 0; i < typedefs.count; i++){
-        if(!typedefs.data[i].p) continue;
+        AtomMap16Item item = typedefs.data[i];
+        CcTypedef* td = (CcTypedef*)item.payload;
+        if(!td->type.bits) continue;
         if(idx--) continue;
         *out = (CiRtModuleMember){
-            .type = (CcQualType){.bits = (uintptr_t)typedefs.data[i].p},
+            .type = td->type,
             .name = {
-                .count = typedefs.data[i].atom ? typedefs.data[i].atom->length : 0,
-                .data = (void*)(uintptr_t)(typedefs.data[i].atom ? typedefs.data[i].atom->data : ""),
+                .count = item.atom?item.atom->length:0,
+                .data = (void*)(uintptr_t)(item.atom?item.atom->data:""),
             },
             .address = NULL,
-            // .loc = ?,
+            .loc = cc_typedef_loc(td),
         };
         return 0;
     }
@@ -2823,7 +2834,7 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
             break;
         case CC_MODULE_TYPE_COUNT:
             out->name.count =
-                ci_count_atom_items(AM_items(&scope->typedefs))
+                ci_count_atom_items16(AM16_items(&scope->typedefs))
                 + ci_count_atom_items(AM_items(&scope->structs))
                 + ci_count_atom_items(AM_items(&scope->unions))
                 + ci_count_atom_items(AM_items(&scope->enums));

@@ -5,8 +5,10 @@
 //
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
+#include "../Drp/atom_map16.h"
 #include "../Drp/Allocators/allocator.h"
 #include "cc_type.h"
+#include "srcloc.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -15,9 +17,22 @@ typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
 typedef struct CcUnion CcUnion;
 typedef struct CcEnum CcEnum;
+typedef struct CcTypedef CcTypedef;
+struct CcTypedef {
+    union {
+        struct {
+            CcQualType type;
+            SrcLoc loc; // zero for builtins and automatic aliases that inherit the tag location
+        };
+        uint64_t payload[2];
+    };
+};
+_Static_assert(sizeof(CcQualType) == sizeof(uint64_t), "");
+_Static_assert(sizeof(SrcLoc) == sizeof(uint64_t), "");
+_Static_assert(sizeof(CcTypedef) == 2*sizeof(uint64_t), "");
 struct CcScope {
     CcScope* parent;
-    AtomMap(CcQualType) typedefs; // these are actually stored by value as they are pointer sized, but whatever
+    AtomMap16(CcTypedef) typedefs;
     AtomMap(CcVariable) variables;
     AtomMap(CcFunc) functions;
     AtomMap(CcStruct) structs;
@@ -27,6 +42,7 @@ struct CcScope {
 };
 
 static inline void cc_scope_clear(CcScope* scope);
+static SrcLoc cc_typedef_loc(const CcTypedef*);
 
 enum {
     CC_SCOPE_NO_WALK,
@@ -71,7 +87,7 @@ cc_scope_lookup_typedef(CcScope*, Atom, int walk);
 
 static
 int
-cc_scope_insert_typedef(Allocator, CcScope*, Atom, CcQualType);
+cc_scope_insert_typedef(Allocator, CcScope*, Atom, CcQualType, SrcLoc);
 
 static
 CcFunc* _Nullable

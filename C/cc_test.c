@@ -53,6 +53,7 @@ TestFunction(test_parse_decls){
         struct {
             StringView name;
             StringView repr;
+            unsigned loc_line, loc_col;
         } typedefs[N];
         struct {
             StringView name;
@@ -61,6 +62,35 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "typedef source locations retain the alias declaration", __LINE__,
+            SVI("typedef int A, (*F)(int param);\n"
+                "typedef int A;\n"
+                "typedef struct S T;\n"
+                "struct S {int x;};\n"
+                "constexpr _Type U = int;\n"),
+            .typedefs = {
+                {SVI("A"), SVI("int"), 1, 13},
+                {SVI("F"), SVI("int (*)(int)"), 1, 18},
+                {SVI("T"), SVI("struct S"), 3, 18},
+                {SVI("U"), SVI("int"), 5, 17},
+            },
+        },
+        {
+            "automatic typedef locations follow tag definitions", __LINE__,
+            SVI("#pragma typedef on\n"
+                "struct S; union U; enum E;\n"
+                "  struct S {int x;};\n"
+                "  union U {int x;};\n"
+                "  enum E {A};\n"
+                "struct S; union U; enum E;\n"),
+            .typedefs = {
+                {SVI("S"), SVI("struct S"), 3, 3},
+                {SVI("U"), SVI("union U"), 4, 3},
+                {SVI("E"), SVI("enum E"), 5, 3},
+            },
+        },
+
         {
             "source locations: declarator names", __LINE__,
             SVI("int *a, (*b)(int param);\n"
@@ -5002,6 +5032,15 @@ TestFunction(test_parse_decls){
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            if(c->typedefs[n].loc_line){
+                CcTypedef* td = AM16_get(&cc.global.typedefs, a);
+                TestExpectTrue(td);
+                if(td){
+                    SrcLoc loc = cc_typedef_loc(td);
+                    TestExpectEquals(unsigned, loc.line, c->typedefs[n].loc_line);
+                    TestExpectEquals(unsigned, loc.column, c->typedefs[n].loc_col);
+                }
+            }
         }
         for(size_t n = 0; n < N && c->tags[n].name.length; n++){
             StringView name = c->tags[n].name;

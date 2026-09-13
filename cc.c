@@ -826,7 +826,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         }
     }
     if(dump & DUMP_TYPEDEFS){
-        AtomMapItems mi = AM_items(&scope->typedefs);
+        AtomMap16Items mi = AM16_items(&scope->typedefs);
         if(mi.count){
             log_sprintf(l, "Typedefs (%zu):\n", mi.count);
             for(size_t i = 0; i < mi.count; i++){
@@ -834,7 +834,7 @@ repl_builtin_command(CcParser* parser, StringView input){
                 if(re.length && !dre_match_entire(re.text, re.length, a->data, a->length))
                     continue;
                 log_sprintf(l, "  %.*s: ", (int)a->length, a->data);
-                CcQualType t = {.bits = (uintptr_t)mi.data[i].p};
+                CcQualType t = {.bits = (uintptr_t)mi.data[i].payload[0]};
                 cc_print_type(&l->buff, t);
                 log_sprintf(l, "\n");
             }

@@ -3141,10 +3141,20 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
-            "_SrcLoc unavailable properties", __LINE__,
+            "_SrcLoc typedef properties", __LINE__,
             SVI("_Module m = __compile(\"typedef int T;\");\n"
                "_SrcLoc loc = m.type(0).srcloc;\n"
-               "return loc.line == 0 && loc.col == 0 && loc.file.count == 0 ? 7 : 91;\n"),
+               "return loc.line == 1 && loc.col == 13 && loc.file.count > 0 ? 7 : 91;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_SrcLoc builtin typedef has no location", __LINE__,
+            SVI("_Module m = __root_module();\n"
+                "for(size_t i = 0; i < m.type_count; i++){\n"
+                "_ModuleMember t = m.type(i);\n"
+                "if(t.name.count != 6 || t.name[0] != 's' || t.name[1] != 'i') continue;\n"
+                "return t.srcloc.line == 0 && t.srcloc.col == 0 && t.srcloc.file.count == 0 ? 7 : 91;\n"
+                "}\nreturn 92;\n"),
             .exit_code = 7,
         },
         {

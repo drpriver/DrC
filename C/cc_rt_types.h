@@ -5,7 +5,7 @@
 //
 #include <stdint.h>
 #include <stddef.h>
-#include "cc_tok.h"
+#include "srcloc.h"
 #if !defined __clang__ && !defined _Null_unspecified
 #define _Null_unspecified
 #endif

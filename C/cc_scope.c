@@ -29,22 +29,31 @@ static
 CcQualType
 cc_scope_lookup_typedef(CcScope* scope, Atom name, int walk){
     for(CcScope* s = scope; s; s = s->parent){
-        // Typedefs are stored by value (pointer-sized), cast back.
-        void* v = AM_get(&s->typedefs, name);
-        if(v){
-            CcQualType t;
-            t.bits = (uintptr_t)v;
-            return t;
-        }
+        CcTypedef* v = AM16_get(&s->typedefs, name);
+        if(v) return v->type;
         if(walk == CC_SCOPE_NO_WALK) break;
     }
     return (CcQualType){0};
 }
 
 static
+SrcLoc
+cc_typedef_loc(const CcTypedef* td){
+    if(td->loc.bits) return td->loc;
+    // Automatic aliases follow the tag as a forward declaration is completed.
+    switch(ccqt_kind(td->type)){
+        case CC_STRUCT: return ccqt_as_struct(td->type)->loc;
+        case CC_UNION: return ccqt_as_union(td->type)->loc;
+        case CC_ENUM: return ccqt_as_enum(td->type)->loc;
+        default: return (SrcLoc){0};
+    }
+}
+
+static
 int
-cc_scope_insert_typedef(Allocator al, CcScope* scope, Atom name, CcQualType type){
-    return AM_put(&scope->typedefs, al, name, (void*)type.bits);
+cc_scope_insert_typedef(Allocator al, CcScope* scope, Atom name, CcQualType type, SrcLoc loc){
+    uint64_t payload[2] = {type.bits, loc.bits};
+    return AM16_put(&scope->typedefs, al, name, payload);
 }
 
 static
@@ -136,10 +145,10 @@ static
 _Bool
 cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
     for(CcScope* s = scope; s; s = s->parent){
-        void* td = AM_get(&s->typedefs, name);
+        CcTypedef* td = AM16_get(&s->typedefs, name);
         if(td){
             out->kind = CC_SYM_TYPEDEF;
-            out->type.bits = (uintptr_t)td;
+            out->type = td->type;
             return 1;
         }
         CcVariable* v = AM_get(&s->variables, name);
@@ -168,7 +177,7 @@ cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
 static inline
 void
 cc_scope_clear(CcScope* scope){
-    AM_clear(&scope->typedefs);
+    AM16_clear(&scope->typedefs);
     AM_clear(&scope->variables);
     AM_clear(&scope->functions);
     AM_clear(&scope->structs);

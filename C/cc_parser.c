@@ -8976,7 +8976,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     if(err) return CC_OOM_ERROR;
                     existing = u;
                     if(p->auto_typedef){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)u});
+                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)u}, (SrcLoc){0});
                         if(err) return err;
                     }
                 }
@@ -8993,7 +8993,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     if(err) return CC_OOM_ERROR;
                     existing = s;
                     if(p->auto_typedef){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)s});
+                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)s}, (SrcLoc){0});
                         if(err) return err;
                     }
                 }
@@ -11368,7 +11368,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         if(tag_name){
             CcQualType existing_td = cc_scope_lookup_typedef(p->current, tag_name, CC_SCOPE_NO_WALK);
             if(!existing_td.bits){
-                err = cc_scope_insert_typedef(cc_allocator(p), p->current, tag_name, base);
+                err = cc_scope_insert_typedef(cc_allocator(p), p->current, tag_name, base, (SrcLoc){0});
                 if(err) return err;
             }
         }
@@ -11751,8 +11751,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                         return cc_error(p, tok.loc, "redefinition of '%.*s' as a different kind of symbol", name->length, name->data);
                 }
             }
-            err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type);
-            if(err) return err;
+            if(!found){
+                err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type, name_loc);
+                if(err) return err;
+            }
         }
         else if(is_func_decl){
             CcSymbol sym;
@@ -11835,7 +11837,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     CcQualType defined_type = value->type_value;
                     cc_release_expr(p, value);
                     if(defined_type.bits){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, var->name, defined_type);
+                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, var->name, defined_type, var->loc);
                         if(err) return err;
                     }
                 }
@@ -12124,9 +12126,9 @@ cc_define_builtin_types(CcParser* p){
             return CC_UNREACHABLE_ERROR;
         DRP_CASES_EXHAUSTED;
     }
-    err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type);
+    err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type, (SrcLoc){0});
     if(err) return CC_OOM_ERROR;
-    err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type);
+    err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type, (SrcLoc){0});
     if(err) return CC_OOM_ERROR;
     p->builtin_va_list = va_list_type;
     if(ccqt_kind(va_list_type) == CC_ARRAY){
@@ -12175,7 +12177,7 @@ cc_define_builtin_types(CcParser* p){
         err = cc_scope_insert_struct_tag(al, &p->global, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_field = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_field);
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_field, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
 
@@ -12210,7 +12212,7 @@ cc_define_builtin_types(CcParser* p){
         err = cc_scope_insert_struct_tag(al, &p->global, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_enumerator = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_enumerator);
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_enumerator, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -12230,7 +12232,7 @@ cc_define_builtin_types(CcParser* p){
         if(err) return err;
         Atom typedef_ = AT_ATOMIZE(p->cpp.at, "_SrcLoc");
         if(!typedef_) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, typedef_, p->builtin_src_loc);
+        err = cc_scope_insert_typedef(al, &p->global, typedef_, p->builtin_src_loc, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -12266,11 +12268,11 @@ cc_define_builtin_types(CcParser* p){
         err = cc_scope_insert_struct_tag(al, &p->global, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_module_member = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_module_member);
+        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_module_member, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
         Atom public_name = AT_ATOMIZE(p->cpp.at, "_ModuleMember");
         if(!public_name) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, public_name, p->builtin_module_member);
+        err = cc_scope_insert_typedef(al, &p->global, public_name, p->builtin_module_member, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
 
@@ -12291,7 +12293,7 @@ cc_define_builtin_types(CcParser* p){
         if(err) return err;
         Atom module_typedef = AT_ATOMIZE(p->cpp.at, "_Module");
         if(!module_typedef) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, module_typedef, p->builtin_module);
+        err = cc_scope_insert_typedef(al, &p->global, module_typedef, p->builtin_module, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -12319,7 +12321,7 @@ cc_define_builtin_types(CcParser* p){
         for(size_t i = 0; i < sizeof to_register / sizeof to_register[0]; i++){
             Atom name = AT_atomize(p->cpp.at, to_register[i].name.text, to_register[i].name.length);
             if(!name) return CC_OOM_ERROR;
-            err = cc_scope_insert_typedef(al, &p->global, name, ccqt_basic(to_register[i].kind));
+            err = cc_scope_insert_typedef(al, &p->global, name, ccqt_basic(to_register[i].kind), (SrcLoc){0});
             if(err) return CC_OOM_ERROR;
         }
     }
