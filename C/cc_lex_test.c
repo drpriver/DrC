@@ -1047,6 +1047,86 @@ TestFunction(test_long_double_targets){
     TESTEND();
 }
 
+// Verify predefined limits by their target bits, including subnormal minima.
+TestFunction(test_long_double_macros){
+    TESTBEGIN();
+    struct {
+        uint64_t bits[4][2];
+        StringView properties;
+    } expected[] = {
+        [CC_LONG_DOUBLE_BINARY64] = {
+            {{0x7fefffffffffffffULL, 0}, {0x0010000000000000ULL, 0},
+             {0x3cb0000000000000ULL, 0}, {1, 0}},
+            SV("53 15 -1021 1024 -307 308 1 1 1 17"),
+        },
+        [CC_LONG_DOUBLE_X87] = {
+            {{0xffffffffffffffffULL, 0x7ffe}, {0x8000000000000000ULL, 1},
+             {0x8000000000000000ULL, 0x3fc0}, {1, 0}},
+            SV("64 18 -16381 16384 -4931 4932 1 1 1 21"),
+        },
+        [CC_LONG_DOUBLE_BINARY128] = {
+            {{0xffffffffffffffffULL, 0x7ffeffffffffffffULL}, {0, 0x0001000000000000ULL},
+             {0, 0x3f8f000000000000ULL}, {1, 0}},
+            SV("113 33 -16381 16384 -4931 4932 1 1 1 36"),
+        },
+    };
+    StringView source = SV(
+        "__LDBL_MAX__ __LDBL_MIN__ __LDBL_EPSILON__ __LDBL_DENORM_MIN__ "
+        "__LDBL_MANT_DIG__ __LDBL_DIG__ __LDBL_MIN_EXP__ __LDBL_MAX_EXP__ "
+        "__LDBL_MIN_10_EXP__ __LDBL_MAX_10_EXP__ __LDBL_HAS_DENORM__ "
+        "__LDBL_HAS_INFINITY__ __LDBL_HAS_QUIET_NAN__ __DECIMAL_DIG__");
+    static int idx = 0;
+    for(size_t target = test_atomic_increment(&idx); target < CC_TARGET_COUNT; target=test_atomic_increment(&idx)){
+        ArenaAllocator aa = {0};
+        Allocator a = allocator_from_arena(&aa);
+        AtomTable at = {.allocator = a};
+        FileCache* fc = fc_create(a);
+        CppPreprocessor cpp = {
+            .allocator = a, .at = &at, .fc = fc,
+            .target = cc_target_funcs[target](),
+        };
+        CcLongDoubleFormat format = cpp.target.long_double_format;
+        fc_write_path(fc, "(test)", 6);
+        int err = fc_cache_file(fc, source);
+        TestExpectFalse(err);
+        err = cpp_define_builtin_macros(&cpp);
+        TestExpectFalse(err);
+        err = cpp_include_file_via_file_cache(&cpp, SV("(test)"));
+        TestExpectFalse(err);
+        for(size_t i = 0; i < 4; i++){
+            CcToken tok = {0};
+            err = cpp_next_c_token(&cpp, &tok);
+            TestExpectFalse(err);
+            TestExpectEquals(int, tok.type, CC_CONSTANT);
+            if(err || tok.type != CC_CONSTANT) continue;
+            TestExpectEquals(int, tok.constant.ctype, CC_LONG_DOUBLE);
+            uint64_t bits[2] = {0};
+            switch(format){
+                case CC_LONG_DOUBLE_BINARY64: memcpy(bits, &tok.constant.double_value, 8); break;
+                case CC_LONG_DOUBLE_X87: memcpy(bits, &tok.constant.x87_value, 10); break;
+                case CC_LONG_DOUBLE_BINARY128: memcpy(bits, &tok.constant.quad_value, 16); break;
+            }
+            TestExpectEquals(uint64_t, bits[0], expected[format].bits[i][0]);
+            TestExpectEquals(uint64_t, bits[1], expected[format].bits[i][1]);
+        }
+        MStringBuilder properties = {.allocator = a};
+        for(;;){
+            CppToken tok;
+            err = cpp_next_pp_token(&cpp, &tok);
+            TestExpectFalse(err);
+            if(err || tok.type == CPP_EOF) break;
+            if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+            if(properties.cursor) msb_write_char(&properties, ' ');
+            msb_write_str(&properties, tok.txt.text, tok.txt.length);
+        }
+        test_expect_equals_sv(expected[format].properties, msb_borrow_sv(&properties),
+            "expected properties", "properties", &TEST_stats, __FILE__, __func__, __LINE__);
+        ArenaAllocator_free_all(&cpp.synth_arena);
+        ArenaAllocator_free_all(&aa);
+    }
+    TESTEND();
+}
+
 TestFunction(test_fast_float_wide){
     TESTBEGIN();
     struct { StringView text; uint64_t quad[2], x87[2]; } cases[] = {
@@ -1232,6 +1312,7 @@ int main(int argc, char** argv){
     #endif
     RegisterTestFlags(test_cc_lex_integers,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cc_lex_floats,       TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_long_double_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_long_double_targets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_fast_float_wide,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cc_lex_chars,        TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

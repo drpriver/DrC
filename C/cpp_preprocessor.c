@@ -4464,7 +4464,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__INT_FAST32_WIDTH__", t.sizeof_[t.int_fast32_type] * 8);
     DEFINT("__INT_FAST64_WIDTH__", t.sizeof_[t.int_fast64_type] * 8);
 
-    // Floating-point property macros (GCC/Clang compatible)
+    // Floating-point property macros
     // float
     DEFNUM("__FLT_MAX__",        "3.40282346638528859811704183484516925440e+38F");
     DEFNUM("__FLT_MIN__",        "1.17549435082228750796873653722224567781e-38F");
@@ -4495,25 +4495,52 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__DBL_HAS_DENORM__", 1);
     DEFINT("__DBL_HAS_INFINITY__", 1);
     DEFINT("__DBL_HAS_QUIET_NAN__", 1);
-    // TODO: long double properties are target-dependent
-    // (64-bit, 80-bit x87 extended, or 128-bit quad)
-    if(0){
-        // These values are for long double == double
-        DEFNUM("__LDBL_MAX__",        "1.7976931348623157e+308L");
-        DEFNUM("__LDBL_MIN__",        "2.2250738585072014e-308L");
-        DEFNUM("__LDBL_EPSILON__",    "2.2204460492503131e-16L");
-        DEFNUM("__LDBL_DENORM_MIN__", "4.9406564584124654e-324L");
-        DEFINT("__LDBL_MANT_DIG__",   53);
-        DEFINT("__LDBL_DIG__",        15);
-        DEFINT("__LDBL_MIN_EXP__",    -1021);
-        DEFINT("__LDBL_MAX_EXP__",    1024);
-        DEFINT("__LDBL_MIN_10_EXP__", -307);
-        DEFINT("__LDBL_MAX_10_EXP__", 308);
-        DEFINT("__LDBL_HAS_DENORM__", 1);
-        DEFINT("__LDBL_HAS_INFINITY__", 1);
-        DEFINT("__LDBL_HAS_QUIET_NAN__", 1);
-        DEFINT("__DECIMAL_DIG__", 17); // depends on widest float type
+    // long double
+    switch(t.long_double_format){
+        DRP_CASES_EXHAUSTED;
+        case CC_LONG_DOUBLE_BINARY64:
+            DEFNUM("__LDBL_MAX__",        "1.7976931348623157e+308L");
+            DEFNUM("__LDBL_MIN__",        "2.2250738585072014e-308L");
+            DEFNUM("__LDBL_EPSILON__",    "2.2204460492503131e-16L");
+            DEFNUM("__LDBL_DENORM_MIN__", "4.9406564584124654e-324L");
+            DEFINT("__LDBL_MANT_DIG__",   53);
+            DEFINT("__LDBL_DIG__",        15);
+            DEFINT("__LDBL_MIN_EXP__",    -1021);
+            DEFINT("__LDBL_MAX_EXP__",    1024);
+            DEFINT("__LDBL_MIN_10_EXP__", -307);
+            DEFINT("__LDBL_MAX_10_EXP__", 308);
+            DEFINT("__DECIMAL_DIG__", 17);
+            break;
+        case CC_LONG_DOUBLE_X87:
+            DEFNUM("__LDBL_MAX__",        "1.18973149535723176502126385303097021e+4932L");
+            DEFNUM("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
+            DEFNUM("__LDBL_EPSILON__",    "1.08420217248550443400745280086994171e-19L");
+            DEFNUM("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
+            DEFINT("__LDBL_MANT_DIG__",   64);
+            DEFINT("__LDBL_DIG__",        18);
+            DEFINT("__LDBL_MIN_EXP__",    -16381);
+            DEFINT("__LDBL_MAX_EXP__",    16384);
+            DEFINT("__LDBL_MIN_10_EXP__", -4931);
+            DEFINT("__LDBL_MAX_10_EXP__", 4932);
+            DEFINT("__DECIMAL_DIG__", 21);
+            break;
+        case CC_LONG_DOUBLE_BINARY128:
+            DEFNUM("__LDBL_MAX__",        "1.18973149535723176508575932662800702e+4932L");
+            DEFNUM("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
+            DEFNUM("__LDBL_EPSILON__",    "1.92592994438723585305597794258492732e-34L");
+            DEFNUM("__LDBL_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966L");
+            DEFINT("__LDBL_MANT_DIG__",   113);
+            DEFINT("__LDBL_DIG__",        33);
+            DEFINT("__LDBL_MIN_EXP__",    -16381);
+            DEFINT("__LDBL_MAX_EXP__",    16384);
+            DEFINT("__LDBL_MIN_10_EXP__", -4931);
+            DEFINT("__LDBL_MAX_10_EXP__", 4932);
+            DEFINT("__DECIMAL_DIG__", 36);
+            break;
     }
+    DEFINT("__LDBL_HAS_DENORM__", 1);
+    DEFINT("__LDBL_HAS_INFINITY__", 1);
+    DEFINT("__LDBL_HAS_QUIET_NAN__", 1);
     // __*_C function-like macros
     {
         // Suffix for 64-bit literal depends on whether long is 64-bit
@@ -4526,10 +4553,12 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             {SVI("__INT16_C"),   NULL},
             {SVI("__INT32_C"),   NULL},
             {SVI("__INT64_C"),   i64_suf},
+            {SVI("__INT128_C"),  "LLL"},
             {SVI("__UINT8_C"),   NULL},
             {SVI("__UINT16_C"),  "U"},
             {SVI("__UINT32_C"),  "U"},
             {SVI("__UINT64_C"),  u64_suf},
+            {SVI("__UINT128_C"),  "ULLL"},
             {SVI("__INTMAX_C"),  imax_suf},
             {SVI("__UINTMAX_C"), umax_suf},
         };
