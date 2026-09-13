@@ -536,8 +536,7 @@ cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
     }
     if(fk == CC_FUNCTION && tk == CC_POINTER) return 1;
     if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t && tk == CC_POINTER) return 1;
-    if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t
-    && tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t) return 1;
+    if(fk == CC_BASIC && from.basic.kind == CCBT_nullptr_t && tk == CC_BASIC && to.basic.kind == CCBT_nullptr_t) return 1;
     if(tk == CC_BASIC && to.basic.kind == CCBT_bool){
         if(fk == CC_POINTER) return 1;
         if(fk == CC_ARRAY) return 1;
@@ -559,7 +558,7 @@ cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to){
 static
 int
 cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
-    if(target.basic.kind == CCBT_void && ccqt_is_basic(target)){
+    if(ccqt_bt_eq(target, CCBT_void)){
         *out = e;
         return 0;
     }
@@ -567,11 +566,16 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         *out = e;
         return 0;
     }
-    _Bool is_null_pointer_constant = ccqt_kind(target) == CC_POINTER
-        && e->kind == CC_EXPR_VALUE
-        && ccqt_is_basic(e->type)
-        && ccbt_is_integer(e->type.basic.kind)
-        && e->uinteger == 0;
+
+    _Bool is_null_pointer_constant = ccqt_bt_eq(e->type, CCBT_nullptr_t)
+        || (( ccqt_kind(target) == CC_POINTER
+           || ccqt_bt_eq(target, CCBT_nullptr_t)
+           || ccqt_kind(target) == CC_BLOCK_POINTER
+           || ccqt_bt_eq(target, CCBT__Type))
+           && e->kind == CC_EXPR_VALUE
+           && ccqt_is_basic(e->type)
+           && ccbt_is_integer(e->type.basic.kind)
+           && e->uinteger == 0);
     if(!is_null_pointer_constant && !cc_implicit_convertible(p, e->type, target)){
         cpp_msg_preamble(&p->cpp, e->loc, "error");
         MStringBuilder* buff = &p->cpp.logger->buff;
@@ -1835,13 +1839,17 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
                         err = cc_implicit_cast(p, right, ptr_type, &right);
                         if(err) return err;
                     }
-                    CcQualType lpointee, rpointee;
-                    cc_deref_type(p, left->type, &lpointee, tok.loc, 0);
-                    cc_deref_type(p, right->type, &rpointee, tok.loc, 0);
-                    if(_ccqt_to_type_ptr(lpointee) != _ccqt_to_type_ptr(rpointee)
-                    && !(ccqt_is_basic(lpointee) && lpointee.basic.kind == CCBT_void)
-                    && !(ccqt_is_basic(rpointee) && rpointee.basic.kind == CCBT_void))
-                        return cc_error(p, tok.loc, "comparison of incompatible pointer types");
+                    if(!ccqt_bt_eq(left->type, CCBT_nullptr_t) && !ccqt_bt_eq(right->type, CCBT_nullptr_t)){
+                        CcQualType lpointee, rpointee;
+                        err = cc_deref_type(p, left->type, &lpointee, tok.loc, 0);
+                        if(err) return cc_unreachable(p, tok.loc, "Error dereferencing lhs pointer");
+                        err = cc_deref_type(p, right->type, &rpointee, tok.loc, 0);
+                        if(err) return cc_unreachable(p, tok.loc, "Error dereferencing rhs pointer");
+                        if(lpointee.unqual != rpointee.unqual
+                        && !(ccqt_is_basic(lpointee) && lpointee.basic.kind == CCBT_void)
+                        && !(ccqt_is_basic(rpointee) && rpointee.basic.kind == CCBT_void))
+                            return cc_error(p, tok.loc, "comparison of incompatible pointer types");
+                    }
                 }
                 else if(lp){
                     err = cc_implicit_cast(p, right, left->type, &right);

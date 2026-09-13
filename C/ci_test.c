@@ -7638,7 +7638,21 @@ TestFunction(test_interpreter){
                "struct S {int x;} s = {}; union U {int x;} u = {};\n"
                "int array[2] = {}; V v = {}; _Atomic(int) ai = {};\n"
                "return i == 0 && d == 0 && e == 0 && p == nullptr && fp == nullptr\n"
-               "    && (void*)n == nullptr && a.type.is_invalid && t.is_invalid\n"
+               "    && n == nullptr && a.type.is_invalid && t.is_invalid\n"
+               "    && m == nullptr && loc == nullptr && s.x == 0 && u.x == 0\n"
+               "    && array[0] == 0 && array[1] == 0 && v[0] == 0 && v[1] == 0 && ai == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "zero braced object types", __LINE__,
+            SVI("enum E { ONE = 1 }; typedef int V __attribute__((vector_size(8)));\n"
+               "int i = {0}; double d = {0}; enum E e = {0}; int* p = {0};\n"
+               "int (*fp)(void) = {0}; typeof(nullptr) n = {0};\n"
+               "_Any a = {0}; _Type t = {0}; _Module m = {0}; _SrcLoc loc = {0};\n"
+               "struct S {int x;} s = {0}; union U {int x;} u = {0};\n"
+               "int array[2] = {0}; V v = {0}; _Atomic(int) ai = {0};\n"
+               "return i == 0 && d == 0 && e == 0 && p == nullptr && fp == nullptr\n"
+               "    && n == nullptr && a.type == int && t.is_invalid\n"
                "    && m == nullptr && loc == nullptr && s.x == 0 && u.x == 0\n"
                "    && array[0] == 0 && array[1] == 0 && v[0] == 0 && v[1] == 0 && ai == 0;\n"),
             .exit_code = 1,

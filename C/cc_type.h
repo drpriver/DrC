@@ -499,7 +499,7 @@ static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
+    return k == CC_POINTER || (k == CC_BASIC && t.basic.kind == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
 }
 
 static inline
