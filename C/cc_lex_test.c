@@ -207,6 +207,9 @@ cc_tok_matches(CcToken got, CcToken exp){
                     return got.constant.double_value == exp.constant.double_value;
                 case CC_LONG_DOUBLE:
                     return memcmp(&got.constant.quad_value, &exp.constant.quad_value, sizeof got.constant.quad_value) == 0;
+                case CC_INT128:
+                case CC_UNSIGNED_INT128:
+                    return ci_uint128_eq(got.constant.integer128_value, exp.constant.integer128_value);
                 case CC_INT:
                 case CC_UNSIGNED:
                 case CC_LONG:
@@ -239,6 +242,11 @@ cc_tok_matches(CcToken got, CcToken exp){
             return got.punct.punct == exp.punct.punct;
     }
     return 0;
+}
+
+static CcToken cc_int128_tok(uint64_t hi, uint64_t lo, CcConstantType ctype){
+    return (CcToken){.constant={.type=CC_CONSTANT, .ctype=ctype,
+        .integer128_value=ci_uint128_or(ci_uint128_shl(ci_uint128_from_uint64(hi), 64), ci_uint128_from_uint64(lo))}};
 }
 
 TestFunction(test_cc_lex_integers){
@@ -277,6 +285,9 @@ TestFunction(test_cc_lex_integers){
         // 0 through decimal path (not octal)
         {"zero_u",       SV("0u"),         cc_int_tok(0, CC_UNSIGNED), __LINE__},
         {"zero_ll",      SV("0LL"),        cc_int_tok(0, CC_LONG_LONG), __LINE__},
+        {"binary_i128", SV("0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001i128"), cc_int128_tok(UINT64_C(1) << 36, 1, CC_INT128), __LINE__},
+        {"decimal_i128", SV("18446744073709551617i128"), cc_int128_tok(1, 1, CC_INT128), __LINE__},
+        {"hex_ulll", SV("0xffffffffffffffffffffffffffffffffulll"), cc_int128_tok(UINT64_MAX, UINT64_MAX, CC_UNSIGNED_INT128), __LINE__},
         // MSVC integer suffixes
         {"msvc_i8",      SV("42i8"),       cc_int_tok(42, CC_INT), __LINE__},
         {"msvc_i16",     SV("42i16"),      cc_int_tok(42, CC_INT), __LINE__},

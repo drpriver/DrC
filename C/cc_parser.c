@@ -2408,6 +2408,11 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     node->type.basic.kind = CCBT_unsigned_long_long;
                     node->uinteger = tok.constant.integer_value;
                     break;
+                case CC_INT128:
+                case CC_UNSIGNED_INT128:
+                    node->type.basic.kind = tok.constant.ctype == CC_INT128 ? CCBT_int128 : CCBT_unsigned_int128;
+                    node->uinteger128 = tok.constant.integer128_value;
+                    break;
                 case CC_WCHAR:
                     node->type.basic.kind = cc_target(p)->wchar_type;
                     node->uinteger = tok.constant.integer_value;

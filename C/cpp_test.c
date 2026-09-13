@@ -1632,6 +1632,8 @@ TestFunction(test_if_eval){
             SV("#if 42uLL == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix LLU", __LINE__, 0,
             SV("#if 100LLU == 100\nyes\n#endif"), SV("\nyes\n")},
+        {"suffix i128", __LINE__, 0,
+            SV("#if 42i128 == 42ui128 && 1lll == 1ULLL && 2LLLU == 2I128\nYES\n#endif"), SV("\nYES\n")},
         {"suffix i8", __LINE__, 0,
             SV("#if 42i8 == 42\nyes\n#endif"), SV("\nyes\n")},
         {"suffix i16", __LINE__, 0,

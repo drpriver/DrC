@@ -3346,6 +3346,76 @@ TestFunction(test_parse_decls){
                "_Static_assert((unsigned long long)(-(unsigned)0) == 0ull);\n"),
         },
         {
+            "int128 suffix i128", __LINE__,
+            SVI("_Static_assert(_Generic(42i128, __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617i128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix I128", __LINE__,
+            SVI("_Static_assert(_Generic(42I128, __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617I128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix ui128", __LINE__,
+            SVI("_Static_assert(_Generic(42ui128, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617ui128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix UI128", __LINE__,
+            SVI("_Static_assert(_Generic(42UI128, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617UI128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix Ui128", __LINE__,
+            SVI("_Static_assert(_Generic(42Ui128, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617Ui128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix lll", __LINE__,
+            SVI("_Static_assert(_Generic(42lll, __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617lll == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix LLL", __LINE__,
+            SVI("_Static_assert(_Generic(42LLL, __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617LLL == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix ulll", __LINE__,
+            SVI("_Static_assert(_Generic(42ulll, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617ulll == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix ULLL", __LINE__,
+            SVI("_Static_assert(_Generic(42ULLL, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617ULLL == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix lllu", __LINE__,
+            SVI("_Static_assert(_Generic(42lllu, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617lllu == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix LLLU", __LINE__,
+            SVI("_Static_assert(_Generic(42LLLU, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617LLLU == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 suffix uLlL", __LINE__,
+            SVI("_Static_assert(_Generic(42uLlL, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(18446744073709551617uLlL == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
+            "int128 literal boundaries and bases", __LINE__,
+            SVI("_Static_assert(170141183460469231731687303715884105727lll == (((__int128)1 << 126) - 1) * 2 + 1);\n"
+                "_Static_assert(0xffffffffffffffffffffffffffffffffi128 == -1);\n"
+                "_Static_assert(_Generic(0x80000000000000000000000000000000lll, unsigned __int128: 1, default: 0));\n"
+                "_Static_assert(340282366920938463463374607431768211455ulll == ~(unsigned __int128)0);\n"
+                "_Static_assert(0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001i128 == ((__int128)1 << 100) + 1);\n"
+                "_Static_assert(02000000000000000000001lll == ((__int128)1 << 64) + 1);\n"
+                "_Static_assert(18'446'744'073'709'551'617ui128 == ((__int128)1 << 64) + 1);\n"),
+        },
+        {
             "msvc suffix i8", __LINE__,
             SVI("_Static_assert(42i8 == 42);\n"),
         },
@@ -6349,8 +6419,48 @@ TestFunction(test_parse_errors){
             SVI("(test):1:9: error: Invalid digit in number\n"),
         },
         {
-            "msvc suffix i128 invalid", __LINE__,
-            SVI("int x = 42i128;\n"),
+            "int128 decimal overflow", __LINE__,
+            SVI("int x = 340282366920938463463374607431768211456ui128;\n"),
+            SVI("(test):1:9: error: 128-bit integer literal too large\n"),
+        },
+        {
+            "int128 hex overflow", __LINE__,
+            SVI("int x = 0x100000000000000000000000000000000lll;\n"),
+            SVI("(test):1:9: error: 128-bit integer literal too large\n"),
+        },
+        {
+            "int128 bad octal", __LINE__,
+            SVI("int x = 08lll;\n"),
+            SVI("(test):1:9: error: Invalid digit in 128-bit integer literal\n"),
+        },
+        {
+            "int128 bad binary", __LINE__,
+            SVI("int x = 0b2i128;\n"),
+            SVI("(test):1:9: error: Invalid digit in 128-bit integer literal\n"),
+        },
+        {
+            "int128 float suffix", __LINE__,
+            SVI("int x = 1.0i128;\n"),
+            SVI("(test):1:9: error: Invalid integer suffix on floating-point literal\n"),
+        },
+        {
+            "triple long float suffix", __LINE__,
+            SVI("int x = 1.0lll;\n"),
+            SVI("(test):1:9: error: Invalid integer suffix on floating-point literal\n"),
+        },
+        {
+            "four longs invalid", __LINE__,
+            SVI("int x = 42llll;\n"),
+            SVI("(test):1:9: error: Invalid digit in 128-bit integer literal\n"),
+        },
+        {
+            "duplicate unsigned int128", __LINE__,
+            SVI("int x = 42uui128;\n"),
+            SVI("(test):1:9: error: Invalid digit in 128-bit integer literal\n"),
+        },
+        {
+            "msvc suffix i256 invalid", __LINE__,
+            SVI("int x = 42i256;\n"),
             SVI("(test):1:9: error: Invalid digit in number\n"),
         },
         {

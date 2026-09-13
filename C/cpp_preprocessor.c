@@ -6915,8 +6915,10 @@ int
 cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
-    // Strip MSVC integer suffixes: [uU]?i(8|16|32|64)
-    if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I'))
+    // Strip MSVC integer suffixes: [uU]?[iI](8|16|32|64|128)
+    if(len >= 4 && s[len-1] == '8' && s[len-2] == '2' && s[len-3] == '1' && (s[len-4] == 'i' || s[len-4] == 'I'))
+        len -= 4;
+    else if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I'))
         len -= 3;
     else if(len >= 3 && s[len-1] == '2' && s[len-2] == '3' && (s[len-3] == 'i' || s[len-3] == 'I'))
         len -= 3;
@@ -7477,10 +7479,13 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
             if(s[i] == '.' || s[i] == 'p' || s[i] == 'P')
                 return cpp_hex_float_to_cc_tok(cpp, cpptok, cctok);
     }
-    // Check for MSVC integer suffixes: [uU]?i(8|16|32|64)
-    int msvc_bits = 0; // 0 = no MSVC suffix, 8/16/32/64 = explicit width
+    // Check for MSVC integer suffixes: [uU]?[iI](8|16|32|64|128)
+    int msvc_bits = 0; // 0 = no MSVC suffix, 8/16/32/64/128 = explicit width
     _Bool has_u = 0;
-    if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I')){
+    if(len >= 4 && s[len-1] == '8' && s[len-2] == '2' && s[len-3] == '1' && (s[len-4] == 'i' || s[len-4] == 'I')){
+        msvc_bits = 128; len -= 4;
+    }
+    else if(len >= 3 && s[len-1] == '4' && s[len-2] == '6' && (s[len-3] == 'i' || s[len-3] == 'I')){
         msvc_bits = 64; len -= 3;
     }
     else if(len >= 3 && s[len-1] == '2' && s[len-2] == '3' && (s[len-3] == 'i' || s[len-3] == 'I')){
@@ -7510,7 +7515,7 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
                 len--;
             }
             else if(c == 'l' || c == 'L'){
-                if(num_l >= 2) break;
+                if(num_l >= 3) break;
                 num_l++;
                 len--;
             }
@@ -7558,6 +7563,8 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         }
     }
     if(is_float){
+        if(msvc_bits == 128 || num_l == 3)
+            return cpp_error(cpp, cpptok->loc, "Invalid integer suffix on floating-point literal");
         if(has_u)
             return cpp_error(cpp, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
         CcConstantType ctype;
@@ -7580,6 +7587,40 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
                 ctype = CC_DOUBLE;
             *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .double_value = dval, .loc = cpptok->loc }};
         }
+        return 0;
+    }
+    // Explicit 128-bit literals retain both words through tokenization.
+    if(msvc_bits == 128 || num_l == 3){
+        unsigned base = 10;
+        size_t start = 0;
+        if(is_hex){ base = 16; start = 2; }
+        else if(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B')){
+            base = 2; start = 2;
+        }
+        else if(buf_len > 1 && buf[0] == '0'){ base = 8; start = 1; }
+        CiUint128 v = ci_uint128_from_uint64(0);
+        CiUint128 max = ci_uint128_sub(v, ci_uint128_from_uint64(1));
+        CiUint128 radix = ci_uint128_from_uint64(base);
+        CiUint128 limit = ci_uint128_div(max, radix);
+        unsigned remainder = (unsigned)ci_uint128_lo(ci_uint128_mod(max, radix));
+        for(size_t i = start; i < buf_len; i++){
+            unsigned char c = (unsigned char)buf[i];
+            unsigned digit = c >= '0' && c <= '9' ? c - '0'
+                : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+            if(digit >= base)
+                return cpp_error(cpp, cpptok->loc, "Invalid digit in 128-bit integer literal");
+            if(ci_uint128_gt(v, limit) || (ci_uint128_eq(v, limit) && digit > remainder))
+                return cpp_error(cpp, cpptok->loc, "128-bit integer literal too large");
+            v = ci_uint128_add(ci_uint128_mul(v, radix), ci_uint128_from_uint64(digit));
+        }
+        // Like ll, lll selects unsigned when the signed range is exceeded.
+        // The i128 spelling keeps its explicitly requested signedness.
+        _Bool unsigned_type = has_u || (!msvc_bits && (ci_uint128_hi(v) >> 63));
+        *cctok = (CcToken){.constant = {
+            .type = CC_CONSTANT, .ctype = unsigned_type ? CC_UNSIGNED_INT128 : CC_INT128,
+            .integer128_value = v, .loc = cpptok->loc,
+        }};
         return 0;
     }
     // Integer

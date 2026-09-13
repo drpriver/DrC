@@ -5672,6 +5672,14 @@ TestFunction(test_interpreter){
             .exit_code = 0,
         },
         {
+            "int128 literals full width", __LINE__,
+            SVI("static unsigned __int128 max = 340282366920938463463374607431768211455ui128;\n"
+                "volatile __int128 x = 18446744073709551617lll;\n"
+                "volatile unsigned __int128 y = 0xffffffffffffffffffffffffffffffffULLL;\n"
+                "return max == y && x == ((__int128)1 << 64) + 1 && -42i128 == -42;\n"),
+            .exit_code = 1,
+        },
+        {
             "int128 signed div", __LINE__,
             SVI("__int128 a = -10;\n"
                "__int128 b = 3;\n"

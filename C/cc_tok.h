@@ -30,6 +30,8 @@ enum CcConstantType TYPED_ENUM(uint32_t){
     CC_UNSIGNED_LONG,
     CC_LONG_LONG,
     CC_UNSIGNED_LONG_LONG,
+    CC_INT128,
+    CC_UNSIGNED_INT128,
     CC_FLOAT,
     CC_DOUBLE,
     CC_LONG_DOUBLE,
@@ -216,6 +218,7 @@ struct CcToken {
             SrcLoc loc;
             union {
                 uint64_t integer_value;
+                CiUint128 integer128_value;
                 float float_value;
                 double double_value;
                 CiFloat80 x87_value;
