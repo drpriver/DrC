@@ -8137,6 +8137,63 @@ TestFunction(test_interpreter){
             .exit_code = 5,
         },
         {
+            "FUCS opaque builtins", __LINE__,
+            SVI("int module_ok(_Module m){ return (int)m.type_count; }\n"
+               "int loc_ok(_SrcLoc loc){ return loc == nullptr; }\n"
+               "return __compile(\"typedef int T;\").module_ok() + ((_SrcLoc)nullptr).loc_ok();\n"),
+            .exit_code = 2,
+        },
+        {
+            "FUCS atomic aggregates", __LINE__,
+            SVI("struct S { int x; }; union U { int x; };\n"
+               "int read_s(struct S s){ return s.x; }\n"
+               "int read_u(union U u){ return u.x; }\n"
+               "int ptr_s(_Atomic(struct S)* s){ return read_s(*s); }\n"
+               "_Atomic(struct S) s = {3}; _Atomic(union U) u = {4};\n"
+               "return s.read_s() + u.read_u() + s.ptr_s();\n"),
+            .exit_code = 10,
+        },
+        {
+            "FUCS array and function decay", __LINE__,
+            SVI("int first(const int* p){ return *p; }\n"
+               "int value(void){ return 7; }\n"
+               "int invoke(int (*f)(void)){ return f(); }\n"
+               "int a[] = {5};\n"
+               "return a.first() + value.invoke();\n"),
+            .exit_code = 12,
+        },
+        {
+            "FUCS direct pointer conversions precede dereference", __LINE__,
+            SVI("int truth(_Bool b){ return b; }\n"
+               "int boxed(_Any a){ return a.type == int*; }\n"
+               "int empty(void* p){ return p == nullptr; }\n"
+               "int x = 0; int* p = &x; typeof(nullptr) n = nullptr;\n"
+               "return p.truth() + p.boxed() + n.empty();\n"),
+            .exit_code = 3,
+        },
+        {
+            "FUCS scalars enums unions vectors and reflection", __LINE__,
+            SVI("int number(double x){ return (int)x; }\n"
+               "enum E { A = 2 }; union U { int x; };\n"
+               "int unpack(union U u){ return u.x; }\n"
+               "typedef int V __attribute__((vector_size(8)));\n"
+               "int sum(V v){ return v[0] + v[1]; }\n"
+               "int type_ok(_Type t){ return t == int; }\n"
+               "int any_ok(_Any a){ return a.as(int); }\n"
+               "enum E e = A; union U u = {3}; V v = {4,5};\n"
+               "_Type t = int; _Any a = 6;\n"
+               "return e.number() + u.unpack() + v.sum() + t.type_ok() + a.any_ok();\n"),
+            .exit_code = 21,
+        },
+        {
+            "FUCS slices", __LINE__,
+            SVI("int size(const char s[:]){ return (int)s.count; }\n"
+               "int first(const char (*s)[:]){ return (*s).data[0]; }\n"
+               "const char s[:] = \"hello\";\n"
+               "return s.size() + (&s).size() + s.first();\n"),
+            .exit_code = 116,
+        },
+        {
             "FUCS basic", __LINE__,
             SVI("struct Vec2 { float x; float y; };\n"
                "float length_sq(struct Vec2* v){ return v->x * v->x + v->y * v->y; }\n"

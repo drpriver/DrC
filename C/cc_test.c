@@ -6827,6 +6827,27 @@ TestFunction(test_parse_errors){
             SVI("(test):1:15: error: variable has incomplete type 'void'\n"),
         },
         {
+            "FUCS preserves pointer qualifiers", __LINE__,
+            SVI("void f(int* p){}\n"
+               "const int* p;\n"
+               "p.f();\n"),
+            SVI("(test):3:1: error: cannot implicitly convert from 'const int *' to 'int *'\n"),
+        },
+        {
+            "FUCS preserves slice qualifiers", __LINE__,
+            SVI("void f(int s[:]){}\n"
+               "const int s[:];\n"
+               "s.f();\n"),
+            SVI("(test):3:1: error: cannot implicitly convert from 'const int[:]' to 'int[:]'\n"),
+        },
+        {
+            "FUCS rejects incompatible receiver", __LINE__,
+            SVI("void f(int x){}\n"
+               "struct S { int x; } s;\n"
+               "s.f();\n"),
+            SVI("(test):3:1: error: cannot implicitly convert from 'struct S' to 'int'\n"),
+        },
+        {
             "member access on atomic struct", __LINE__,
             SVI("_Atomic(struct S { int x, y; }) a;\n"
                "int f(void){ return a.x; }\n"),

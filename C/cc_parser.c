@@ -4327,8 +4327,6 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 CcQualType member_type = {0};
                 CcFunc* _Null_unspecified method = NULL;
                 CcTypeKind tk = ccqt_kind(agg_type);
-                if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
-                    return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
                 if(tk == CC_STRUCT && p->builtin_src_loc.bits && agg_type.ptr == ccqt_as_ptr(p->builtin_src_loc)->pointee.ptr){
                     StringView name = {member_name->length, member_name->data};
                     CcSrcLocOp op;
@@ -4342,7 +4340,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     else if(sv_equals(name, SV("col")))
                         op = CC_SRCLOC_COL;
                     else
-                        return cc_error(p, member.loc, "No member named '%s' for '_SrcLoc'", member_name->data);
+                        goto fucs;
                     CcExpr* node = cc_unary_expr(p, CC_EXPR_SRCLOC_REFLECT, tok.loc, type, operand);
                     if(!node) return CC_OOM_ERROR;
                     node->srcloc.op = op;
@@ -4458,10 +4456,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         operand = node;
                         continue;
                     }
-                    MStringBuilder* sb = cc_start_error(p, member.loc, "No member named '%s' for '", member_name->data);
-                    cc_print_type(sb, agg_type);
-                    msb_sprintf(sb, "'");
-                    return cc_finish_error(p, member.loc);
+                    goto fucs;
                 }
                 if(tk == CC_STRUCT){
                     CcStruct* s = ccqt_as_struct(agg_type);
@@ -4724,12 +4719,6 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         // All of our supported platforms match the host though, so idk.
                         floc.byte_offset = offsetof(CiRtSlice, data);
                     }
-                    else {
-                        MStringBuilder* sb = cc_start_error(p, member.loc, "No member named '%s' for '", member_name->data);
-                        cc_print_type(sb, agg_type);
-                        msb_sprintf(sb, "' (not a struct or union)");
-                        return cc_finish_error(p, member.loc);
-                    }
                 }
                 else {
                 }
@@ -4750,7 +4739,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     fnode->func = fucs_func;
                     err = PM_put(&p->used_funcs, cc_allocator(p), fucs_func, fucs_func);
                     if(err) return CC_OOM_ERROR;
-                    if(fucs_func->type->param_count > 0 && ccqt_kind(fucs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
+                    if(operand->kind == CC_EXPR_FUNCTION)
+                        operand->func->addr_taken = 1;
+                    // Prefer normal argument conversion (including decay and boxing)
+                    // before adapting a receiver by address or dereference.
+                    if(fucs_func->type->param_count > 0 && cc_implicit_convertible(p, operand->type, fucs_func->type->params[0])){
+                        receiver = operand;
+                    }
+                    else if(fucs_func->type->param_count > 0 && ccqt_kind(fucs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
                         CcQualType addr_type;
                         err = cc_pointer_of(p, operand->type, &addr_type);
                         if(err) return err;
@@ -4775,6 +4771,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     operand = fnode;
                     continue;
                 }
+                if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
+                    return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
                 if(method){
                     CcExpr* mnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, member_type, 0);
                     if(!mnode) return CC_OOM_ERROR;

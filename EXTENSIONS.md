@@ -453,7 +453,8 @@ If `.member` doesn't find anything and there is a matching
 function in scope that either takes the first arg, pointer to first arg or
 deref of first arg, we rewrite it into a call to that function with the
 target of the dot expression as the first arg (with either `&`
-or `*` applied as needed).
+or `*` applied as needed). Normal implicit argument conversion is
+tried first.
 
 ```C
 #include <stdio.h>
