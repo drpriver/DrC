@@ -6329,6 +6329,49 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CppPreprocessor* cpp, Sr
     return 0;
 }
 
+static 
+int 
+cpp_add_search_path_from_pragma(CppPreprocessor* cpp, CppToken tok, size_t include_path_idx){
+    int err = 0;
+    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    err = cpp_decode_text(cpp, tok, &decoded);
+    if(decoded.errored) err = CPP_OOM_ERROR;
+    else if(!decoded.cursor) err = cpp_error(cpp, tok.loc, "#pragma include path requires a non-empty string literal path");
+    if(err) goto cleanup;
+    StringView path = msb_borrow_sv(&decoded);
+    if(!path_is_abspath(path, IS_WINDOWS)){
+        CppFrame* frame = &ma_tail(cpp->frames);
+        if(frame->file_id < cpp->fc->map.count){
+            LongString file_path = cpp->fc->map.data[frame->file_id].path;
+            StringView dir = path_dirname(LS_to_SV(file_path), 0);
+            if(sv_equals(path, SV("."))){
+                msb_reset(&decoded);
+                msb_write_str(&decoded, dir.text, dir.length);
+            }
+            else {
+                if(dir.length){
+                    if(dir.text[dir.length-1] != '/')
+                        msb_write_front(&decoded, "/", 1);
+                    msb_write_front(&decoded, dir.text, dir.length);
+                }
+            }
+        }
+    }
+    if(decoded.errored){
+        err = CPP_OOM_ERROR;
+        goto cleanup;
+    }
+    path = msb_detach_sv(&decoded);
+    if(include_path_idx > 4)
+        err = ma_insert(StringView)(&cpp->framework_paths, cpp->allocator, 0, path);
+    else
+        err = ma_push(StringView)(&cpp->include_paths[include_path_idx], cpp->allocator, path);
+    if(err) err = CPP_OOM_ERROR;
+    cleanup:
+    msb_destroy(&decoded);
+    return err;
+}
+
 static
 int
 cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
@@ -6353,15 +6396,9 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
     if(i < en)
         cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
-    // Decode the path and retain it in the synthesis arena.
-    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-    err = cpp_decode_text(cpp, strtok, &decoded);
-    if(err){ msb_destroy(&decoded); cpp_release_scratch(cpp, expanded); return err; }
-    StringView path = decoded.cursor ? msb_detach_sv(&decoded) : SV("");
-    err = ma_push(StringView)(&cpp->Ipaths, cpp->allocator, path);
+    err = cpp_add_search_path_from_pragma(cpp, strtok, 1);
     cpp_release_scratch(cpp, expanded);
-    if(err) return CPP_OOM_ERROR;
-    return 0;
+    return err;
 }
 
 static
@@ -6383,15 +6420,8 @@ cpp_builtin_pragma_framework_path(void* _Null_unspecified ctx, CppPreprocessor* 
     CppToken strtok = etoks[i];
     i++;
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
-    if(i < en)
-        cpp_warn(cpp, loc, "Trailing tokens after #pragma framework_path");
-    MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-    err = cpp_decode_text(cpp, strtok, &decoded);
-    if(err){ msb_destroy(&decoded); cpp_release_scratch(cpp, expanded); return err; }
-    StringView path = decoded.cursor ? msb_detach_sv(&decoded) : SV("");
-    // Prepend so user framework paths are searched before system defaults.
-    err = ma_insert(StringView)(&cpp->framework_paths, cpp->allocator, 0, path);
-    if(err) err = CPP_OOM_ERROR;
+    if(i < en) cpp_warn(cpp, loc, "Trailing tokens after #pragma framework_path");
+    err = cpp_add_search_path_from_pragma(cpp, strtok, 5);
     finally:
     cpp_release_scratch(cpp, expanded);
     return err;

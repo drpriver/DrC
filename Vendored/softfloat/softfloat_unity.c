@@ -1,5 +1,8 @@
 #ifndef SOFTFLOAT_UNITY_C
 #define SOFTFLOAT_UNITY_C
+#pragma include_path "SoftFloat-3e/source/include"
+#pragma include_path "."
+#pragma include_path "SoftFloat-3e/source/8086-SSE"
 #include "platform.h"
 #include "primitives.h"
 #include "softfloat.h"

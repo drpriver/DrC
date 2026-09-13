@@ -8297,8 +8297,5 @@ int main(int argc, char** argv){
 #include "cc_parser.c"
 
 #ifdef __DRC__
-#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/include"
-#pragma include_path "Vendored/softfloat"
-#pragma include_path "Vendored/softfloat/SoftFloat-3e/source/8086-SSE"
 #include "../Vendored/softfloat/softfloat_unity.c"
 #endif

@@ -1,3 +1,10 @@
+::comment
+  Copyright © 2026-2026, David Priver <david@davidpriver.com>
+
+  .dnd is the superior format, but websites insist on markdown.
+  At least let us use raw html..., but no - webdevs don't actually
+  know their own platform and so can't just use a html parser to strip
+  unsafe elements...
 Table of Contents::md #noid
   ::toc
 Extensions::title
@@ -232,6 +239,10 @@ Preprocessor::md
     `__RAND__` (also spelled `__RANDOM__`) expands to a
     random integer.
 
+  `#pragma include_path`::md
+    Add a path to the `-I` search paths. If it is a relative path, it is
+    relative to the directory of this file.
+
 C::md
   `static if`::md
     Compile-time conditional at the language level. The condition must be a
@@ -267,11 +278,13 @@ C::md
     Methods are called with `.` syntax and the receiver is passed
     automatically.
 
+    `_Self` names the enclosing type.
+
     ::pre.C
       struct DA {
           int* data;
           size_t count, capacity;
-          int push(DA* self, int value){
+          int push(_Self* self, int value){
               if(self.count >= self.capacity){
                   size_t cap = self.capacity ? 2*self.capacity : 2;
                   void* p = realloc(self.data, cap * sizeof *self.data);
@@ -282,7 +295,7 @@ C::md
               self.data[self.count++] = value;
               return 0;
           }
-          void dump(const DA* self){
+          void dump(const _Self* self){
               for(size_t i = 0; i < self.count; i++)
                   printf("%d ", self.data[i]);
               printf("\n");
@@ -695,21 +708,12 @@ C::md
 
     `__ANY_PAYLOAD_SIZE__` is a predefined preprocessor constant that is the size of `.payload`.
 
-    To dynamically construct an `_Any`, use code like the following:
-
-    ::pre.C
-      _Any make_any(_Type T, const void* payload){
-        _Any any = {};
-        any.type = T;
-        if(T.sizeof_ > __ANY_PAYLOAD_SIZE__) __builtin_trap();
-        memcpy(any.payload, payload, T.sizeof_);
-        return any;
-      }
+    To dynamically construct an `_Any`, use the `.make_any()` method on a `_Type`.
 
   Top-level statements::md
-    Code at the top level of a file is executed as if it were in an implicit
-    `main` function. This makes C work as a scripting language ---
-    no `main` boilerplate needed.
+    Code at the top level of a file is executed before `main()` is called.
+    This makes C work as a scripting language and also allows static constructors
+    without constructors.
 
     ::pre.C
       #include <stdio.h>
@@ -717,8 +721,8 @@ C::md
       for(int i = 0; i < 10; i++)
           printf("%d\n", i);
 
-    If a `main` function is defined, it is used as the entry point
-    instead.
+    If a `main` function is defined, it is called after all top-level statements
+    have executed.
 
   Named / numbered arguments::md
     Function calls support designated-style syntax for passing arguments by
@@ -814,7 +818,8 @@ C::md
 
 Interpreter-only::md
   These extensions are only available when running under the interpreter, not
-  when compiling to native code.
+  when compiling to native code. Not that we support compiling to native code
+  yet, but a man can dream.
 
   Native FFI::md
     Functions declared but not defined are automatically resolved against
@@ -961,7 +966,25 @@ Interpreter-only::md
 
   `__shell(program, args...)`::md
     `__shell()` (also spelled `__SHELL__()`) executes a
-    command during preprocessing and expands to its stdout as a string literal.
+    command during preprocessing and expands to its stdout as a string literal. Trailing newlines are stripped.
+
+    To give args to the command, use separate string literals. The strings are not
+    tokenized on whitespace.
+
+    ::pre.C
+      const char* commit = __shell("git" "describe" "--always" "--dirty");
+      printf("%s\n", commit);
+
+    Note that commas are optional as this is expanded before strings are
+    joined together so the preprocessor sees the individual strings.
+
+    If you do need to join the strings, use `__format`.
+
+    ::pre.C
+      #define SAMPLES "Samples"
+      const char* contents = __shell("cat" __format("%s/%s", SAMPLES, "hello.c"));
+      printf("%s\n", contents);
+
 
   `#pragma lib "name"`::md
     Link against a native shared library.

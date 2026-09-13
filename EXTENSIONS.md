@@ -24,6 +24,7 @@
   * [`__let(binding, body)`](#letbinding-body)
   * [`__where(name)`](#wherename)
   * [`__RAND__`](#rand)
+  * [`#pragma include_path`](#pragma-includepath)
 * [C](#c)
   * [`static if`](#static-if)
   * [Methods](#methods)
@@ -344,6 +345,11 @@ definition is active.
 `__RAND__` (also spelled `__RANDOM__`) expands to a
 random integer.
 
+### `#pragma include_path`
+
+Add a path to the `-I` search paths. If it is a relative path, it is
+relative to the directory of this file.
+
 ## C
 
 ### `static if`
@@ -385,11 +391,14 @@ affect the struct's size or layout. The first parameter is the receiver.
 Methods are called with `.` syntax and the receiver is passed
 automatically.
 
+
+`_Self` names the enclosing type.
+
 ```C
 struct DA {
     int* data;
     size_t count, capacity;
-    int push(DA* self, int value){
+    int push(_Self* self, int value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity ? 2*self.capacity : 2;
             void* p = realloc(self.data, cap * sizeof *self.data);
@@ -400,7 +409,7 @@ struct DA {
         self.data[self.count++] = value;
         return 0;
     }
-    void dump(const DA* self){
+    void dump(const _Self* self){
         for(size_t i = 0; i < self.count; i++)
             printf("%d ", self.data[i]);
         printf("\n");
@@ -969,23 +978,13 @@ a.as(int *)[0] = 1; // ok, probably easier to work with
 `__ANY_PAYLOAD_SIZE__` is a predefined preprocessor constant that is the size of `.payload`.
 
 
-To dynamically construct an `_Any`, use code like the following:
-
-```C
-_Any make_any(_Type T, const void* payload){
-  _Any any = {};
-  any.type = T;
-  if(T.sizeof_ > __ANY_PAYLOAD_SIZE__) __builtin_trap();
-  memcpy(any.payload, payload, T.sizeof_);
-  return any;
-}
-```
+To dynamically construct an `_Any`, use the `.make_any()` method on a `_Type`.
 
 ### Top-level statements
 
-Code at the top level of a file is executed as if it were in an implicit
-`main` function. This makes C work as a scripting language ---
-no `main` boilerplate needed.
+Code at the top level of a file is executed before `main()` is called.
+This makes C work as a scripting language and also allows static constructors
+without constructors.
 
 ```C
 #include <stdio.h>
@@ -995,8 +994,8 @@ for(int i = 0; i < 10; i++)
 ```
 
 
-If a `main` function is defined, it is used as the entry point
-instead.
+If a `main` function is defined, it is called after all top-level statements
+have executed.
 
 ### Named / numbered arguments
 
@@ -1109,7 +1108,8 @@ An incomplete list:
 ## Interpreter-only
 
 These extensions are only available when running under the interpreter, not
-when compiling to native code.
+when compiling to native code. Not that we support compiling to native code
+yet, but a man can dream.
 
 ### Native FFI
 
@@ -1316,7 +1316,29 @@ fp(); // prints "new"
 ### `__shell(program, args...)`
 
 `__shell()` (also spelled `__SHELL__()`) executes a
-command during preprocessing and expands to its stdout as a string literal.
+command during preprocessing and expands to its stdout as a string literal. Trailing newlines are stripped.
+
+
+To give args to the command, use separate string literals. The strings are not
+tokenized on whitespace.
+
+```C
+const char* commit = __shell("git" "describe" "--always" "--dirty");
+printf("%s\n", commit);
+```
+
+
+Note that commas are optional as this is expanded before strings are
+joined together so the preprocessor sees the individual strings.
+
+
+If you do need to join the strings, use `__format`.
+
+```C
+#define SAMPLES "Samples"
+const char* contents = __shell("cat" __format("%s/%s", SAMPLES, "hello.c"));
+printf("%s\n", contents);
+```
 
 ### `#pragma lib "name"`
 

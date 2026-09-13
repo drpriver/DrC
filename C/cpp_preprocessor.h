@@ -289,6 +289,7 @@ LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...
 static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix);
 static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
 static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
+static int cpp_add_search_path_from_pragma(CppPreprocessor* cpp, CppToken tok, size_t include_path_idx);
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

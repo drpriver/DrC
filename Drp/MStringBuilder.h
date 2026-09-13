@@ -387,6 +387,19 @@ msb_replace_range(MStringBuilder* msb, size_t start, size_t end, const char* rep
     msb->cursor = new_cursor;
 }
 
+static
+void
+msb_write_front(MStringBuilder* msb, const char* str, size_t len){
+    if(!len) return;
+    if(msb_ensure_additional(msb, len))
+        msb->errored = 1;
+    if(msb->errored) return;
+    if(msb->cursor)
+        memmove(msb->data+len, msb->data, msb->cursor);
+    memmove(msb->data, str, len);
+    msb->cursor += len;
+}
+
 // Writes a string literal into the builder. Avoids the need to strlen
 // as the literal's size is known at compile time.
 // The "" forces it to be a string literal.
