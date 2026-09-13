@@ -6093,6 +6093,51 @@ TestFunction(test_parse_errors){
             SVI("(test):2:10: error: expression is not a constant expression\n"),
         },
         {
+            "wide inexact float conversion", __LINE__,
+            SVI("_Static_assert((float)((unsigned __int128)16777217));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide inexact double conversion", __LINE__,
+            SVI("_Static_assert((double)((_Float128)9007199254740992ull+1));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide signed addition overflow", __LINE__,
+            SVI("_Static_assert(((__int128)1<<126)+((__int128)1<<126));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide signed multiplication overflow", __LINE__,
+            SVI("_Static_assert(((__int128)1<<100)*((__int128)1<<30));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide signed negation overflow", __LINE__,
+            SVI("_Static_assert(-((__int128)1<<127));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide division overflow", __LINE__,
+            SVI("_Static_assert(((__int128)1<<127)/-1);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide zero divisor", __LINE__,
+            SVI("_Static_assert(((unsigned __int128)1<<100)/0);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide shift overflow", __LINE__,
+            SVI("_Static_assert((unsigned __int128)1<<128);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide float to integer overflow", __LINE__,
+            SVI("_Static_assert((unsigned __int128)(_Float128)0x1p128L);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
             "signed neg overflow in constexpr", __LINE__,
             SVI("enum { X = -(-2147483647 - 1) };\n"),
             SVI("(test):1:10: error: enumerator value must be a constant integer expression\n"),

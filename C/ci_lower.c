@@ -5822,14 +5822,7 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
     _Bool truth;
     switch((uint32_t)e->kind){
         case CC_EXPR_VALUE:
-            // The literal payload is eight bytes, including for wide types.
-            memcpy(result.bits, &e->uinteger, sz < sizeof e->uinteger ? sz : sizeof e->uinteger);
-            if(ccqt_bt_eq(e->type, CCBT_long_double)){
-                if(ctx->ldbl_fmt == CC_LONG_DOUBLE_X87)
-                    ci_float80_write(result.bits, sz, ci_float80_from_double(e->double_));
-                else if(ctx->ldbl_fmt == CC_LONG_DOUBLE_BINARY128)
-                    ci_float128_write(result.bits, sz, ci_float128_from_double(e->double_));
-            }
+            memcpy(result.bits, e->data, sz);
             *folded = result;
             return 0;
         case CC_EXPR_VARIABLE:

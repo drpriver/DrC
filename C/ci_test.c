@@ -9870,6 +9870,123 @@ TestFunction(test_cross_target){
         CcTarget target;
     } testcases[] = {
         {
+            "long double literal precision and range X86_64_LINUX", __LINE__,
+            SVI("constexpr long double x=0x1.000000000000001p60L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
+                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
+                "volatile long double y=0x1.000000000000001p60L;\n"
+                "return y-0x1p60L==1.L;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "long double literal precision and range AARCH64_LINUX", __LINE__,
+            SVI("constexpr long double x=0x1.0000000000000000000000001p100L;\n"
+                "_Static_assert(x-0x1p100L==1.L);\n"
+                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
+                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
+                "volatile long double y=0x1.0000000000000000000000001p100L;\n"
+                "return y-0x1p100L==1.L;"),
+            .exit_code=1, .target=CC_TARGET_AARCH64_LINUX,
+        },
+        {"wide long double x87 runtime", __LINE__,
+            SVI("long double x=0x1p60L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"wide long double x87 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p60L+1.L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"wide long double binary128 runtime", __LINE__,
+            SVI("long double x=0x1p100L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p100L==1.L;"), .exit_code=1, .target=CC_TARGET_AARCH64_LINUX},
+        {"wide long double binary128 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p100L+1.L;\n"
+                "_Static_assert(x-0x1p100L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p100L==1.L;"), .exit_code=1, .target=CC_TARGET_AARCH64_LINUX},
+        {"wide long double binary64 runtime", __LINE__,
+            SVI("long double x=0x1p50L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS},
+        {"wide long double binary64 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p50L+1.L;\n"
+                "_Static_assert(x-0x1p50L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS},
+        {
+            "constexpr wide conversions", __LINE__,
+            SVI("constexpr long double a=42;\n"
+                "constexpr _Float128 b=a;\n"
+                "_Static_assert((float)b==42.f && (double)b==42.);\n"
+                "_Static_assert((long long)b==42 && (unsigned long long)b==42);\n"
+                "_Static_assert((__int128)-b==-42 && (bool)b && !(bool)-0.L);\n"
+                "_Static_assert((long double)b==42.L);\n"
+                "_Static_assert(((__int128)-1>>100)==-1);\n"
+                "_Static_assert(((unsigned __int128)-1+1)==0);\n"
+                "return 1;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX,
+        },
+        {"constexpr wide truth", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert(x && !(!x));\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide add", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((x+3)-x==3);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide mul", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((x*7)/7==x && (x*7)%7==0);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide bits", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((~x & x)==0 && ((x|3)^x)==3);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide neg", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "constexpr __int128 n=-(__int128)x;\n"
+                "_Static_assert(n<0 && -n==x);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide aggregate", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "struct S {unsigned __int128 x;\n"
+                "   long double y;\n"
+                "};\n"
+                "constexpr struct S s={x,0x1.000000000000001p60L};\n"
+                "_Static_assert(s.x==x && s.y-0x1p60L==1.L);\n"
+                "volatile long double d=s.y;"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x && d-0x1p60L==1.L;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+        {"constexpr wide quad", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "constexpr _Float128 q=(_Float128)x+1;\n"
+                "_Static_assert(q-(_Float128)x==1);\n"
+                "_Static_assert((unsigned __int128)q==x+1);"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
+
+        {
             "any: layout and target long width", __LINE__,
             SVI("_Any a=(long)0x100000001ull;\n"
                 "return sizeof(_Any)==16 && alignof(_Any)==8\n"
@@ -10431,7 +10548,7 @@ TestFunction(test_cross_target){
         ma_tail(interp.parser.cpp.frames).line = tc->line+1;
 
         err = cc_parse_all(&interp.parser);
-        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        if(err){TestPrintf("%s:%d: failed to parse (error %d)\n%.*s", __FILE__, tc->line, err, (int)log_sb.cursor, log_sb.data); goto finally;}
         err = ci_resolve_refs(&interp, 0);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 

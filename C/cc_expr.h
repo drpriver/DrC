@@ -9,6 +9,7 @@
 #include "../Drp/typed_enum.h"
 #include "cc_type.h"
 #include "cc_memory_order.h"
+#include "ci_softnum.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -312,6 +313,11 @@ struct CcExpr {
         CcQualType type_value; // for expressions of type type
         CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
                                // value/type = trailing CC_STMT_EXPR's expr
+        CiFloat80 x87;
+        CiFloat128 quad;
+        CiUint128 uinteger128;
+        CiInt128 integer128;
+        unsigned char data[16];
     };
     CcExpr*_Nonnull values[];
 };
