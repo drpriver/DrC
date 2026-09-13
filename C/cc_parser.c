@@ -8832,7 +8832,7 @@ cc_parse_init_list(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out
     CcInitList* list = NULL;
     CcQualType resolved_type = target_type;
     CcTypeKind tk = ccqt_kind(target_type);
-    if(tk == CC_BASIC || tk == CC_POINTER || tk == CC_ENUM){
+    if(tk == CC_BASIC || tk == CC_POINTER || tk == CC_ENUM || tk == CC_BLOCK_POINTER || tk == CC_SLICE){
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;

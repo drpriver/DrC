@@ -7606,6 +7606,44 @@ TestFunction(test_interpreter){
             .exit_code = 'a' + 'c',
         },
         {
+            "empty braced slice init", __LINE__,
+            SVI("const char global[:] = {};\n"
+               "int check(void){\n"
+               "  int local[:] = {};\n"
+               "  const char literal[:] = (const char[:]){};\n"
+               "  return global.data == nullptr && global.count == 0\n"
+               "      && local.data == nullptr && local.count == 0\n"
+               "      && literal.data == nullptr && literal.count == 0;\n"
+               "}\n"
+               "return check();\n"),
+            .exit_code = 1,
+        },
+        {
+            "empty braced slice subobjects overwrite previous values", __LINE__,
+            SVI("int values[] = {1,2};\n"
+               "struct S { int s[:]; int tail; };\n"
+               "struct S s = {.s = values, .s = {}, .tail = 7};\n"
+               "int slices[2][:] = {[0] = values, [0] = {}, [1] = {}};\n"
+               "return s.s.data == nullptr && s.s.count == 0 && s.tail == 7\n"
+               "    && slices[0].data == nullptr && slices[0].count == 0\n"
+               "    && slices[1].data == nullptr && slices[1].count == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "empty braced object types", __LINE__,
+            SVI("enum E { ONE = 1 }; typedef int V __attribute__((vector_size(8)));\n"
+               "int i = {}; double d = {}; enum E e = {}; int* p = {};\n"
+               "int (*fp)(void) = {}; typeof(nullptr) n = {};\n"
+               "_Any a = {}; _Type t = {}; _Module m = {}; _SrcLoc loc = {};\n"
+               "struct S {int x;} s = {}; union U {int x;} u = {};\n"
+               "int array[2] = {}; V v = {}; _Atomic(int) ai = {};\n"
+               "return i == 0 && d == 0 && e == 0 && p == nullptr && fp == nullptr\n"
+               "    && (void*)n == nullptr && a.type.is_invalid && t.is_invalid\n"
+               "    && m == nullptr && loc == nullptr && s.x == 0 && u.x == 0\n"
+               "    && array[0] == 0 && array[1] == 0 && v[0] == 0 && v[1] == 0 && ai == 0;\n"),
+            .exit_code = 1,
+        },
+        {
             "empty braced scalar init", __LINE__,
             SVI("int x = {};\n"
                "return x;\n"),

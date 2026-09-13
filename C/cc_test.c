@@ -371,6 +371,11 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "empty braced block pointer initializer", __LINE__,
+            SVI("void (^block)(void) = {};\n"),
+            .vars = {{SVI("block"), SVI("void (^)(void)")}},
+        },
+        {
             "block pointers", __LINE__,
             SVI("typedef void (^dispatch_block_t)(void);\n"
                "int (^blk)(int, int);\n"
