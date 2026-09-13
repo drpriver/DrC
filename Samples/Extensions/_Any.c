@@ -44,7 +44,7 @@ void print_dynamic(_Type T, const void* p){
                 for(size_t i = 0, n = T.fields; i < n; i++){
                     if(i) printf(", ");
                     auto f = T.field(i);
-                    printf(".%s=", f.name);
+                    printf(".%.*s=", (int)f.name.count, f.name.data);
                     if(f.is_bitfield){
                         printf("<bitfield>");
                         continue;
@@ -83,15 +83,38 @@ void print_dynamic(_Type T, const void* p){
         break;
     }
 }
-_Any print(_Any args[:]){
+void print(_Any args[:]){
     for(size_t i = 0; i < _Countof args; i++){
         if(i) printf(" ");
         print_dynamic(args[i].type, args[i].payload);
     }
     printf("\n");
 }
-
 #define print(...) print((_Any[]){__VA_ARGS__})
+void printfmt(const char fmt[:], _Any args[:]){
+    size_t i, prev, n, argidx;
+    for(i = 0, n = fmt.count, prev=0, argidx=0; i < n; i++){
+        if(fmt[i] == '%'){
+            if(argidx < args.count){
+                if(i-prev){
+                    printf("%.*s", (int)(i-prev), &fmt[prev]);
+                }
+                _Any a = args[argidx++];
+                print_dynamic(a.type, a.payload);
+                prev = i+1;
+                continue;
+            }
+        }
+    }
+    if(i-prev){
+        printf("%.*s", (int)(i-prev), &fmt[prev]);
+    }
+}
+#define printfmt(fmt, ...) printfmt(fmt, (_Any[]){__VA_ARGS__})
+
+
+
+#if __INCLUDE_LEVEL__ == 1
 print("hello", "world");
 print(1);
 struct S { int x, y;} s = {1, 2};
@@ -107,3 +130,6 @@ int slice[:] = x[:3];
 print("slice =", &slice);
 
 print(int, float, const char*);
+printfmt("Formatted % is pretty cool\n", "output");
+printfmt("My favorite type is %\n", void*);
+#endif

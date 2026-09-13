@@ -88,6 +88,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
     CC_EXPR_HOTSWAP, // __hotswap(function-pointer, function-pointer) -> int
+    CC_EXPR_SRCLOC_REFLECT, // _SrcLoc properties; op in srcloc field
     CC_EXPR_COMPILE, // __compile(const char*) -> _Module
     CC_EXPR_MODULE_REFLECT, // _Module reflection methods/properties; op in extra field
     CC_EXPR_TYPE_INTROSPECTION, // _Type method; op in extra field, lhs = _Type expr
@@ -205,6 +206,13 @@ enum CcModuleOp TYPED_ENUM(uint32_t) {
 };
 TYPEDEF_ENUM(CcModuleOp, uint32_t);
 
+enum CcSrcLocOp TYPED_ENUM(uint32_t) {
+    CC_SRCLOC_FILE,
+    CC_SRCLOC_LINE,
+    CC_SRCLOC_COL,
+};
+TYPEDEF_ENUM(CcSrcLocOp, uint32_t);
+
 typedef struct CcStatement CcStatement;
 typedef struct CcStmtNode CcStmtNode;
 typedef struct CcVariable CcVariable;
@@ -292,6 +300,13 @@ struct CcExpr {
             uint32_t is_lvalue: 1;
             uint32_t _pad;
         } module;
+        struct {
+            CcExprKind kind: 8;
+            CcSrcLocOp op: 8;
+            uint32_t _padding:15;
+            uint32_t is_lvalue: 1;
+            uint32_t _pad;
+        } srcloc;
     };
     SrcLoc loc;
     CcQualType type;

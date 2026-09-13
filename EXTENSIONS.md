@@ -1266,9 +1266,24 @@ struct __builtin_ModuleMember {
     _Type type;
     const char name[:];
     void* address;
+    _SrcLoc srcloc;
 };
 typedef struct __builtin_ModuleMember _ModuleMember;
 ```
+
+
+`_SrcLoc` is an opaque source-location handle, with the following const properties:
+
+```C
+const char file[:];
+size_t line; // 1-based.
+size_t col; // 1-based.
+```
+
+
+`srcloc` points to the definition of the symbol if it exists,
+otherwise the first declaration. Unavailable locations
+return an empty file slice and zero for line and column.
 
 ##### `_Module.run()`
 

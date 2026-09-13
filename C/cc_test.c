@@ -42,18 +42,84 @@ TestFunction(test_parse_decls){
             StringView repr;
             StringView init; // expected cc_print_expr output, empty = no check
             StringView mangle; // expected asm label, empty = no check
+            unsigned loc_line, loc_col;
         } vars[N];
         struct {
             StringView name;
             StringView repr;
             StringView mangle; // expected asm label, empty = no check
+            unsigned loc_line, loc_col;
         } funcs[N];
         struct {
             StringView name;
             StringView repr;
         } typedefs[N];
+        struct {
+            StringView name;
+            CcTypeKind kind;
+            unsigned loc_line, loc_col;
+        } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "source locations: declarator names", __LINE__,
+            SVI("int *a, (*b)(int param);\n"
+                "int (*f(int param))(void) { return 0; }\n"
+                "__auto_type c = 1;\n"),
+            .vars = {
+                {SVI("a"), SVI("int *"), .loc_line=1, .loc_col=6},
+                {SVI("b"), SVI("int (*)(int)"), .loc_line=1, .loc_col=11},
+                {SVI("c"), SVI("int"), .loc_line=3, .loc_col=13},
+            },
+            .funcs = {{SVI("f"), SVI("int (*(int))(void)"), .loc_line=2, .loc_col=7}},
+        },
+        {
+            "source locations: first declarations", __LINE__,
+            SVI("int f(void);\n"
+                "  int f(void);\n"
+                "extern int x;\n"
+                "  extern int x;\n"
+                "struct S; union U; enum E;\n"
+                "  struct S; union U; enum E;\n"),
+            .vars = {{SVI("x"), SVI("int"), .loc_line=3, .loc_col=12}},
+            .funcs = {{SVI("f"), SVI("int(void)"), .loc_line=1, .loc_col=5}},
+            .tags = {
+                {SVI("S"), CC_STRUCT, 5, 1},
+                {SVI("U"), CC_UNION, 5, 11},
+                {SVI("E"), CC_ENUM, 5, 20},
+            },
+        },
+        {
+            "source locations: definitions replace forward declarations", __LINE__,
+            SVI("int f(void); extern int x; struct S; union U; enum E;\n"
+                "  int f(void){return 0;}\n"
+                "  int x = 1;\n"
+                "  struct S {int x;};\n"
+                "  union U {int x;};\n"
+                "  enum E {A};\n"
+                "int f(void); extern int x; struct S; union U; enum E;\n"),
+            .vars = {{SVI("x"), SVI("int"), .loc_line=3, .loc_col=7}},
+            .funcs = {{SVI("f"), SVI("int(void)"), .loc_line=2, .loc_col=7}},
+            .tags = {
+                {SVI("S"), CC_STRUCT, 4, 3},
+                {SVI("U"), CC_UNION, 5, 3},
+                {SVI("E"), CC_ENUM, 6, 3},
+            },
+        },
+        {
+            "source locations: tentative variable definitions", __LINE__,
+            SVI("extern int x;\n"
+                "  int x;\n"
+                "int x; extern int x;\n"
+                "int y;\n"
+                "  int y = 1;\n"
+                "int y; extern int y;\n"),
+            .vars = {
+                {SVI("x"), SVI("int"), .loc_line=2, .loc_col=7},
+                {SVI("y"), SVI("int"), .loc_line=5, .loc_col=7},
+            },
+        },
+
         {
             "reflection: enumerator value uses target int64_t", __LINE__,
             SVI("enum E { NEGATIVE = -17 };\n"
@@ -4880,6 +4946,10 @@ TestFunction(test_parse_decls){
                     test_expect_equals_sv(c->vars[n].init, ir, "expected init", "actual init", &TEST_stats, __FILE__, __func__, c->line);
                 }
             }
+            if(c->vars[n].loc_line){
+                TestExpectEquals(unsigned, var->loc.line, c->vars[n].loc_line);
+                TestExpectEquals(unsigned, var->loc.column, c->vars[n].loc_col);
+            }
             if(c->vars[n].mangle.length){
                 TestExpectTrue(var->mangle);
                 if(var->mangle){
@@ -4904,6 +4974,10 @@ TestFunction(test_parse_decls){
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->funcs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            if(c->funcs[n].loc_line){
+                TestExpectEquals(unsigned, func->loc.line, c->funcs[n].loc_line);
+                TestExpectEquals(unsigned, func->loc.column, c->funcs[n].loc_col);
+            }
             if(c->funcs[n].mangle.length){
                 TestExpectTrue(func->mangle);
                 if(func->mangle){
@@ -4928,6 +5002,30 @@ TestFunction(test_parse_decls){
             if(sb.errored) { err = 1; TestReport("allocation failure"); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+        }
+        for(size_t n = 0; n < N && c->tags[n].name.length; n++){
+            StringView name = c->tags[n].name;
+            Atom a = AT_get_atom(&at, name.text, name.length);
+            TestExpectTrue(a);
+            if(!a) continue;
+            SrcLoc loc = {0};
+            if(c->tags[n].kind == CC_STRUCT){
+                CcStruct* t = cc_scope_lookup_struct_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                TestExpectTrue(t);
+                if(t) loc = t->loc;
+            }
+            else if(c->tags[n].kind == CC_UNION){
+                CcUnion* t = cc_scope_lookup_union_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                TestExpectTrue(t);
+                if(t) loc = t->loc;
+            }
+            else {
+                CcEnum* t = cc_scope_lookup_enum_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                TestExpectTrue(t);
+                if(t) loc = t->loc;
+            }
+            TestExpectEquals(unsigned, loc.line, c->tags[n].loc_line);
+            TestExpectEquals(unsigned, loc.column, c->tags[n].loc_col);
         }
         finally:
         if(log_sb.cursor && ! log_sb.errored){

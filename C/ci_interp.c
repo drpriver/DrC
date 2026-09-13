@@ -843,6 +843,34 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op, (CiModule*)receiver, arg, expected, result, op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
                     break;
                 }
+                case CI_RT_SRCLOC_REFLECT: {
+                    SrcLoc loc;
+                    CI_INLINE_MEMCPY(&loc, (char*)frame->slots + op->rt_call.args[0], sizeof loc);
+                    size_t line = loc.line, col = loc.column, file_id = loc.file_id;
+                    if(loc.is_actually_a_pointer){
+                        SrcLocExp* exp = (SrcLocExp*)((uintptr_t)loc.pointer.bits << 1);
+                        while(exp->parent) exp = exp->parent;
+                        line = exp->line;
+                        col = exp->column;
+                        file_id = exp->file_id;
+                    }
+                    if(op->rt_call.reflect_op == CC_SRCLOC_FILE){
+                        CiRtSlice file = {0};
+                        ci_lock_resolver(ci);
+                        FileCache* fc = ci->parser.cpp.fc;
+                        if(loc.bits && file_id < fc->map.count){
+                            LongString path = fc->map.data[file_id].path;
+                            file = (CiRtSlice){.count = path.length, .data = (void*)(uintptr_t)path.text};
+                        }
+                        ci_unlock_resolver(ci);
+                        if(op->rt_call.slot_size) CI_INLINE_MEMCPY(result, &file, sizeof file);
+                    }
+                    else {
+                        size_t value = op->rt_call.reflect_op == CC_SRCLOC_LINE ? line : col;
+                        if(op->rt_call.slot_size) CI_INLINE_MEMCPY(result, &value, sizeof value);
+                    }
+                    break;
+                }
                 case CI_RT_INTERN: {
                     const char* s;
                     CI_INLINE_MEMCPY(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
@@ -2666,6 +2694,7 @@ ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModule
             .data = (void*)(uintptr_t)(func->name ? func->name->data : ""),
         },
         .address = address,
+        .loc = func->loc,
     };
     (void)loc;
     return 0;
@@ -2703,6 +2732,7 @@ ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModu
             .data = (void*)(uintptr_t)(var->name ? var->name->data : ""),
         },
         .address = address,
+        .loc = var->loc,
     };
     (void)loc;
     return 0;
@@ -2722,6 +2752,7 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
                 .data = (void*)(uintptr_t)(typedefs.data[i].atom ? typedefs.data[i].atom->data : ""),
             },
             .address = NULL,
+            // .loc = ?,
         };
         return 0;
     }
@@ -2737,6 +2768,7 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
                 .data = (void*)(uintptr_t)(s->name ? s->name->data : ""),
             },
             .address = NULL,
+            .loc = s->loc,
         };
         return 0;
     }
@@ -2752,6 +2784,7 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
                 .data = (void*)(uintptr_t)(u->name ? u->name->data : ""),
             },
             .address = NULL,
+            .loc = u->loc,
         };
         return 0;
     }
@@ -2767,6 +2800,7 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
                 .data = (void*)(uintptr_t)(e->name ? e->name->data : ""),
             },
             .address = NULL,
+            .loc = e->loc,
         };
         return 0;
     }

@@ -18,6 +18,7 @@
 #include "cc_var.h"
 #include "cc_scope.h"
 #include "cpp_preprocessor.h"
+#include "cc_rt_types.h"
 #ifndef MARRAY_CCTOKEN
 #define MARRAY_CCTOKEN
 #define MARRAY_T CcToken
@@ -186,6 +187,7 @@ struct CcParser {
     uint16_t pragma_pack; // 0 = default (no pack), otherwise pack(N) value
     CcScope global;
     CcScope* current;
+    CcScope* _Nullable file_scope; // active root or compiled-module scope during cc_parse_all
     CcFunc*_Nullable current_func;
     CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
@@ -220,7 +222,9 @@ struct CcParser {
                builtin_module_member,
                builtin_module,
                builtin_va_list,
-               builtin_va_list_ptr;
+               builtin_va_list_ptr,
+               builtin_src_loc
+               ;
 };
 
 
@@ -238,46 +242,6 @@ static void cc_print_statement(MStringBuilder* sb, CcStmtNode*);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 
-// NOTE: these structs are designed so they match the layout on 
-// any of our targets.
-typedef struct CiRtSlice CiRtSlice;
-struct CiRtSlice {
-    size_t count;
-    void* data;
-};
-
-typedef struct CiRtField CiRtField; // return by _Type.fields
-struct CiRtField {
-    CcQualType type;
-    CiRtSlice name;
-    unsigned offset,
-             bitwidth,
-             bitoffset,
-             is_bitfield;
-};
-
-
-typedef struct CiRtModuleMember CiRtModuleMember;
-struct CiRtModuleMember {
-    CcQualType type;
-    CiRtSlice name;
-    void* _Nullable address;
-};
-
-typedef struct CiRtEnumerator CiRtEnumerator;
-struct CiRtEnumerator {
-    CiRtSlice name;
-    int64_t value;
-};
-
-typedef struct CiRtAny CiRtAny;
-struct CiRtAny {
-    CcQualType type;
-    _Alignas(8) unsigned char payload[8];
-};
-_Static_assert(sizeof(CiRtAny) == 16, "");
-_Static_assert(offsetof(CiRtAny, type) == 0, "");
-_Static_assert(offsetof(CiRtAny, payload) == 8, "");
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

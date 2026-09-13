@@ -2036,6 +2036,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return ci_lower_rt_call(ci, ctx, e, CI_RT_INTERN, dest, out);
         case CC_EXPR_HOTSWAP:
             return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, dest, out);
+        case CC_EXPR_SRCLOC_REFLECT:
+            return ci_lower_reflect(ci, ctx, e, dest, out);
         case CC_EXPR_COMPILE:
             return ci_lower_rt_call(ci, ctx, e, CI_RT_COMPILE, dest, out);
         case CC_EXPR_MODULE_REFLECT:
@@ -2086,10 +2088,12 @@ static
 int
 ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     _Bool module = e->kind == CC_EXPR_MODULE_REFLECT;
-    uint32_t subop = module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
+    _Bool srcloc = e->kind == CC_EXPR_SRCLOC_REFLECT;
+    uint32_t subop = srcloc ? (uint32_t)e->srcloc.op
+        : module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
     if(module && !out && subop != CC_MODULE_RUN) return 0;
     int nargs = 1;
-    if(module ?
+    if(!srcloc && (module ?
         (  subop == CC_MODULE_FUNC
         || subop == CC_MODULE_VAR
         || subop == CC_MODULE_TYPE
@@ -2100,7 +2104,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         || subop == CC_TYPE_FIELD
         || subop == CC_TYPE_ENUMERATOR
         || subop == CC_TYPE_PARAM_TYPE
-        || subop == CC_TYPE_MAKE_ANY))
+        || subop == CC_TYPE_MAKE_ANY)))
         nargs++;
     int err;
     if(out){
@@ -2111,7 +2115,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     uint32_t temp = ctx->temp;
     CiOp call = {.rt_call = {
         .kind = CI_OP_RT_CALL,
-        .op = module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
+        .op = srcloc ? CI_RT_SRCLOC_REFLECT : module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
         .nargs = nargs,
         .slot = dest,
         .slot_size = out ? out->size : 0,
@@ -2124,7 +2128,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, i ? e->values[0] : e->lhs, call.rt_call.args[i], &v);
         if(err) return err;
-        if(i == 0 && (module || subop == CC_TYPE_FIELD
+        if(!srcloc && i == 0 && (module || subop == CC_TYPE_FIELD
             || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE)){
             // Receiver errors must precede evaluation of the optional operand.
             CiOp* check;
@@ -4391,6 +4395,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             return err;
         case CC_EXPR_INTERN:
+        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
             // idk maybe these should be treated as having side effects?
             err = ci_lower_expr_discard(ci, ctx, e->lhs);

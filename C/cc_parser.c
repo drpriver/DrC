@@ -63,7 +63,7 @@ static Marray(CcToken)*_Nullable cc_get_scratch(CcParser* p);
 static void cc_release_scratch(CcParser* p, Marray(CcToken)*);
 static Allocator cc_allocator(CcParser*p);
 static Allocator cc_scratch_allocator(CcParser*p);
-static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, Marray(Atom) *_Nullable out_param_names);
+static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, SrcLoc* _Nullable out_name_loc, Marray(Atom) *_Nullable out_param_names);
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
@@ -702,7 +702,7 @@ cc_parse_type_name(CcParser* p, CcQualType* out, Marray(Atom)* _Nullable param_n
         return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
     CcQualType head = {0};
     CcQualType* tail = &head;
-    err = cc_parse_declarator(p, &head, &tail, NULL, param_names);
+    err = cc_parse_declarator(p, &head, &tail, NULL, NULL, param_names);
     if(err) return err;
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
@@ -728,7 +728,7 @@ cc_parse_abstract_type_name(CcParser* p, CcQualType* out){
     CcQualType head = {0};
     CcQualType* tail = &head;
     Atom name = NULL;
-    err = cc_parse_declarator(p, &head, &tail, &name, NULL);
+    err = cc_parse_declarator(p, &head, &tail, &name, NULL, NULL);
     if(err) return err;
     if(name)
         return cc_error(p, base.loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
@@ -811,7 +811,7 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
     CcQualType* tail = &head;
     Marray(Atom) param_names = {0};
     Atom name = NULL;
-    err = cc_parse_declarator(p, &head, &tail, &name, &param_names);
+    err = cc_parse_declarator(p, &head, &tail, &name, NULL, &param_names);
     if(err){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); return err; }
     if(name){
         ma_cleanup(Atom)(&param_names, cc_allocator(p));
@@ -2024,6 +2024,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_ALLOCA:
             case CC_EXPR_INTERN:
             case CC_EXPR_HOTSWAP:
+            case CC_EXPR_SRCLOC_REFLECT:
             case CC_EXPR_COMPILE:
             case CC_EXPR_MODULE_REFLECT:
             case CC_EXPR_TYPE_INTROSPECTION:
@@ -2325,6 +2326,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ALLOCA:
                 case CC_EXPR_INTERN:
                 case CC_EXPR_HOTSWAP:
+                case CC_EXPR_SRCLOC_REFLECT:
                 case CC_EXPR_COMPILE:
                 case CC_EXPR_MODULE_REFLECT:
                 case CC_EXPR_TYPE_INTROSPECTION:
@@ -4327,6 +4329,26 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 CcTypeKind tk = ccqt_kind(agg_type);
                 if(agg_type.is_atomic && (tk == CC_STRUCT || tk == CC_UNION))
                     return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
+                if(tk == CC_STRUCT && p->builtin_src_loc.bits && agg_type.ptr == ccqt_as_ptr(p->builtin_src_loc)->pointee.ptr){
+                    StringView name = {member_name->length, member_name->data};
+                    CcSrcLocOp op;
+                    CcQualType type = ccqt_basic(cc_target(p)->size_type);
+                    if(sv_equals(name, SV("file"))){
+                        op = CC_SRCLOC_FILE;
+                        type = p->const_char_slice;
+                    }
+                    else if(sv_equals(name, SV("line")))
+                        op = CC_SRCLOC_LINE;
+                    else if(sv_equals(name, SV("col")))
+                        op = CC_SRCLOC_COL;
+                    else
+                        return cc_error(p, member.loc, "No member named '%s' for '_SrcLoc'", member_name->data);
+                    CcExpr* node = cc_unary_expr(p, CC_EXPR_SRCLOC_REFLECT, tok.loc, type, operand);
+                    if(!node) return CC_OOM_ERROR;
+                    node->srcloc.op = op;
+                    operand = node;
+                    continue;
+                }
                 if(tk == CC_STRUCT && p->builtin_module.bits && agg_type.ptr == ccqt_as_ptr(p->builtin_module)->pointee.ptr){
                     StringView mname = {member_name->length, member_name->data};
                     if(sv_equals(mname, SV("symbol"))){
@@ -4459,7 +4481,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     case CC_TYPE_NONE:
                         goto fucs;
                     case CC_TYPE_PUSH_METHOD: {
-                        if(p->current != &p->global)
+                        if(p->current != &p->global && p->current != p->file_scope)
                             return cc_error(p, member.loc, "push method only allowed at global scope");
                         CcExpr* tv;
                         err = cc_eval_expr(p, operand, &tv);
@@ -5602,6 +5624,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
@@ -6073,6 +6096,8 @@ cc_parse_all(CcParser* p){
     size_t goto_mark = lctx->gotos.count;
     CcStmtSink* sink = cc_push_stmt_sink(p);
     if(!sink) return CC_OOM_ERROR;
+    CcScope* saved_file_scope = p->file_scope;
+    p->file_scope = p->current;
     for(;;){
         err = cc_peek(p, &tok);
         if(err) break;
@@ -6093,6 +6118,7 @@ cc_parse_all(CcParser* p){
         if(!err) sink->stmts.count = 0;
     }
     cc_pop_stmt_sink(p, sink);
+    p->file_scope = saved_file_scope;
     return err;
 }
 
@@ -6583,6 +6609,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_BSWAP:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
+        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
@@ -6827,6 +6854,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_SUBSCRIPT:
         case CC_EXPR_SUB_OVERFLOW:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TERNARY:
@@ -9106,7 +9134,8 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     CcQualType head = {0};
                     CcQualType* tail = &head;
                     Marray(Atom) param_names = {0};
-                    err = cc_parse_declarator(p, &head, &tail, &member_name, &param_names);
+                    SrcLoc name_loc = {0};
+                    err = cc_parse_declarator(p, &head, &tail, &member_name, &name_loc, &param_names);
                     if(err){
                         ma_cleanup(Atom)(&param_names, cc_allocator(p));
                         goto struct_err;
@@ -9124,7 +9153,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         if(!func){ ma_cleanup(Atom)(&param_names, cc_allocator(p)); err = CC_OOM_ERROR; goto struct_err; }
                         func->name = member_name;
                         func->type = ccqt_as_function(member_type);
-                        func->loc = tok.loc;
+                        func->loc = name_loc;
                         func->params.count = param_names.count;
                         func->params.data = param_names.data;
                         // Check for method body
@@ -10963,7 +10992,7 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
 // https://mkukri.xyz/2022/05/01/declarators.html
 static
 int
-cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, Marray(Atom) *_Nullable out_param_names){
+cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, SrcLoc* _Nullable out_name_loc, Marray(Atom) *_Nullable out_param_names){
     int err = 0;
     CcToken tok;
     err = cc_next_token(p, &tok);
@@ -10994,7 +11023,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             }
             break;
         }
-        err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
+        err = cc_parse_declarator(p, out_head, out_tail, out_name, out_name_loc, out_param_names);
         if(err) return err;
         CcPointer* ptr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *ptr);
         if(!ptr) return CC_OOM_ERROR;
@@ -11023,7 +11052,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
             grouped = !cc_scope_lookup_symbol(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN, &sym) || sym.kind != CC_SYM_TYPEDEF;
         }
         if(grouped){
-            err = cc_parse_declarator(p, out_head, out_tail, out_name, out_param_names);
+            err = cc_parse_declarator(p, out_head, out_tail, out_name, out_name_loc, out_param_names);
             if(err) return err;
             err = cc_expect_punct(p, CC_rparen);
             if(err) return err;
@@ -11037,6 +11066,8 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
     else if(tok.type == CC_IDENTIFIER){
         if(out_name)
             *out_name = tok.ident.ident;
+        if(out_name_loc)
+            *out_name_loc = tok.loc;
     }
     else {
         // Abstract declarator or end of declarator
@@ -11179,7 +11210,7 @@ cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonn
                 CcQualType param_head = {0};
                 CcQualType* param_tail = &param_head;
                 Atom param_name = NULL;
-                err = cc_parse_declarator(p, &param_head, &param_tail, &param_name, NULL);
+                err = cc_parse_declarator(p, &param_head, &param_tail, &param_name, NULL, NULL);
                 if(err) goto param_err;
                 *param_tail = param_base.type;
                 if(ccqt_is_basic(param_head) && param_head.basic.kind == CCBT_void){
@@ -11344,6 +11375,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
     }
     for(_Bool first = 1;;first=0){
         Atom name = NULL;
+        SrcLoc name_loc = {0};
         CcQualType type;
         _Bool is_fndef = 0;
         CcExpr* initializer = NULL;
@@ -11354,12 +11386,13 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(tok.type != CC_IDENTIFIER)
                 return cc_error(p, tok.loc, "Expected identifier for type-inferred declaration");
             name = tok.ident.ident;
+            name_loc = tok.loc;
             type = declbase->type;
         }
         else {
             CcQualType head = {0};
             CcQualType* tail = &head;
-            err = cc_parse_declarator(p, &head, &tail, &name, &param_names);
+            err = cc_parse_declarator(p, &head, &tail, &name, &name_loc, &param_names);
             if(err){
                 ma_cleanup(Atom)(&param_names, cc_allocator(p));
                 return err;
@@ -11505,7 +11538,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 if(err) return err;
             }
             func->type = ccqt_as_function(type);
-            func->loc = tok.loc;
+            func->loc = name_loc;
             func->mangle = asm_label;
             func->defined = 1;
             if(declbase->spec.sp_extern || declbase->spec.sp_static){
@@ -11562,7 +11595,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             if(found){
                 switch(sym.kind){
                     case CC_SYM_VAR:
-                        if(p->current != &p->global)
+                        if(p->current != &p->global && p->current != p->file_scope)
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                         // Validate declarations before constructing their composite type.
                         var = sym.var;
@@ -11590,7 +11623,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             *var = (CcVariable){
                 .name = name,
                 .mangle = asm_label,
-                .loc = tok.loc,
+                .loc = name_loc,
                 .type = type,
                 .alignment = declbase->alignment,
                 .extern_ = declbase->spec.sp_extern,
@@ -11744,7 +11777,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 func = Allocator_zalloc(cc_allocator(p), sizeof *func);
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
-                func->loc = tok.loc;
+                func->loc = name_loc;
                 err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
                 if(err) return err;
             }
@@ -11782,6 +11815,12 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                     err = cc_check_var_type(p, var, &type, tok.loc);
                     if(err) return err;
                 }
+                // An initialized definition supersedes tentative definitions.
+                // Otherwise keep the first declaration that provides storage.
+                if(initializer || (var->extern_ && !var->initializer && !declbase->spec.sp_extern))
+                    var->loc = name_loc;
+                if(!declbase->spec.sp_extern)
+                    var->extern_ = 0;
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;
@@ -12174,12 +12213,32 @@ cc_define_builtin_types(CcParser* p){
         err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_enumerator);
         if(err) return CC_OOM_ERROR;
     }
-
+    {
+        Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_SrcLoc");
+        if(!name) return CC_OOM_ERROR;
+        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        if(!s) return CC_OOM_ERROR;
+        *s = (CcStruct){
+            .kind = CC_STRUCT,
+            .is_incomplete = 1,
+            .name = name,
+        };
+        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        if(err) return CC_OOM_ERROR;
+        CcQualType struct_ = {.bits = (uintptr_t)s};
+        err = cc_pointer_of(p, struct_, &p->builtin_src_loc);
+        if(err) return err;
+        Atom typedef_ = AT_ATOMIZE(p->cpp.at, "_SrcLoc");
+        if(!typedef_) return CC_OOM_ERROR;
+        err = cc_scope_insert_typedef(al, &p->global, typedef_, p->builtin_src_loc);
+        if(err) return CC_OOM_ERROR;
+    }
     {
         struct f {StringView name; CcQualType type; size_t offset;} memberinfos[] = {
             {SVI("type"), ccqt_basic(CCBT__Type), offsetof(CiRtModuleMember, type)},
             {SVI("name"), p->const_char_slice, offsetof(CiRtModuleMember, name)},
             {SVI("address"), p->void_star, offsetof(CiRtModuleMember, address)},
+            {SVI("srcloc"), p->builtin_src_loc, offsetof(CiRtModuleMember, loc)},
         };
         CcField* fields = Allocator_zalloc(al, (sizeof memberinfos / sizeof memberinfos[0]) * sizeof *fields);
         if(!fields) return CC_OOM_ERROR;
@@ -14266,7 +14325,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     err = 0;
                     goto fini_introspection;
                 }
-                case CC_TYPE_ENUMERATOR: {
+                case CC_TYPE_ENUMERATOR:{
                     if(ccqt_kind(qt) != CC_ENUM) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcEnum* enum_ = ccqt_as_enum(qt);
                     int64_t idx;
@@ -14286,7 +14345,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     entries->field_loc.byte_offset = offsetof(CiRtEnumerator, name);
                     entries->value = name_val;
                     entries++;
-                    // long long value;
+                    // int64_t value;
                     CcExpr* val_node = cc_int64_expr(p, e->loc, ccqt_basic(cc_target(p)->int64_type), en->value);
                     if(!val_node) { err = CC_OOM_ERROR; goto fini_introspection; }
                     entries->field_loc.byte_offset = offsetof(CiRtEnumerator, value);
@@ -14583,6 +14642,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_HOTSWAP:
+        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:

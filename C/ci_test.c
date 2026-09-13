@@ -3089,6 +3089,75 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "_SrcLoc module properties", __LINE__,
+            SVI("_Module m = __compile(\"int f(void){return 1;}\\n  int x;\\nstruct S {int x;};\");\n"
+               "_SrcLoc f = m.func(0).srcloc;\n"
+               "_SrcLoc v = m.var(0).srcloc;\n"
+               "_SrcLoc t = m.type(0).srcloc;\n"
+               "const char file[:] = f.file;\n"
+               "if(file.count < 4 || file[0] != '<' || file[1] != '_') return 91;\n"
+               "if(f.line != 1 || f.col != 5) return 92;\n"
+               "if(v.line != 2 || v.col != 7) return 93;\n"
+               "if(t.line != 3 || t.col != 1) return 94;\n"
+               "return 7;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_SrcLoc definition locations survive redeclarations", __LINE__,
+            SVI("_Module m = __compile(\"int f(void); extern int x; struct S; union U; enum E;\\n"
+                "  int f(void){return 1;}\\n"
+                "  int x;\\n"
+                "  struct S {int a;};\\n"
+                "  union U {int a;};\\n"
+                "  enum E {A};\\n"
+                "int f(void); extern int x; struct S; union U; enum E;\");\n"
+                "if(!m) return 90;\n"
+                "if(m.func(0).srcloc.line != 2 || m.func(0).srcloc.col != 7) return 91;\n"
+                "if(m.var(0).srcloc.line != 3 || m.var(0).srcloc.col != 7) return 92;\n"
+                "for(size_t i = 0; i < m.type_count; i++){\n"
+                "_ModuleMember t = m.type(i);\n"
+                "size_t line = t.name[0] == 'S' ? 4 : t.name[0] == 'U' ? 5 : 6;\n"
+                "if(t.srcloc.line != line || t.srcloc.col != 3) return 93;\n"
+                "}\n"
+                "int* x = m.symbol(\"x\", int);\n"
+                "return x && *x == 0 ? 7 : 94;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_SrcLoc root and macro properties", __LINE__,
+            SVI("#define DECL int x;\n"
+               "DECL int expected_line = __LINE__;\n"
+               "_Module m = __root_module();\n"
+               "_SrcLoc loc = nullptr;\n"
+               "for(size_t i = 0; i < m.var_count; i++){\n"
+               "_ModuleMember v = m.var(i);\n"
+               "if(v.name.count == 1 && v.name[0] == 'x') loc = v.srcloc;\n"
+               "}\n"
+               "const char file[:] = loc.file;\n"
+               "const char* expected_file = __FILE__;\n"
+               "for(size_t i = 0; i < file.count; i++) if(file[i] != expected_file[i]) return 91;\n"
+               "if(expected_file[file.count]) return 93;\n"
+               "return loc.line == expected_line && loc.col == 1 ? 7 : 92;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_SrcLoc unavailable properties", __LINE__,
+            SVI("_Module m = __compile(\"typedef int T;\");\n"
+               "_SrcLoc loc = m.type(0).srcloc;\n"
+               "return loc.line == 0 && loc.col == 0 && loc.file.count == 0 ? 7 : 91;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_SrcLoc receiver evaluated once", __LINE__,
+            SVI("int x; int expected_line = __LINE__;\n"
+               "int calls;\n"
+               "_SrcLoc get(void){ calls++; _Module m = __root_module(); for(size_t i = 0; i < m.var_count; i++){ _ModuleMember v = m.var(i); if(v.name.count == 1 && v.name[0] == 'x') return v.srcloc; } return nullptr; }\n"
+               "int line = get().line;\n"
+               "get().file;\n"
+               "return calls == 2 && line == expected_line ? 7 : 91;\n"),
+            .exit_code = 7,
+        },
+        {
             "__hotswap direct call", __LINE__,
             SVI("int f(void){ return 1; }\n"
                "int g(void){ return 2; }\n"
@@ -10652,7 +10721,7 @@ TestFunction(test_ci_call_main){
             .argc = 1,
             .argv = {"prog"},
             .expect_err = 1,
-            .expected_msg = SVI("(test):1:16: error: main has unsupported signature (1 params)\n"),
+            .expected_msg = SVI("(test):1:5: error: main has unsupported signature (1 params)\n"),
         },
     };
     int err;
@@ -10826,7 +10895,7 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("add"),
             .args = {{CCBT_int, .i=3}},
             .expect_err = _cc_runtime_error,
-            .expected_msg = SVI("(test):1:22: error: ci_call_by_name 'add': expected 2 args, got 1\n"),
+            .expected_msg = SVI("(test):1:5: error: ci_call_by_name 'add': expected 2 args, got 1\n"),
         },
         {
             "too many args", __LINE__,
@@ -10834,7 +10903,7 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("zero"),
             .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}},
             .expect_err = _cc_runtime_error,
-            .expected_msg = SVI("(test):1:15: error: ci_call_by_name 'zero': expected 0 args, got 2\n"),
+            .expected_msg = SVI("(test):1:5: error: ci_call_by_name 'zero': expected 0 args, got 2\n"),
         },
         {
             "wrong arg type", __LINE__,
@@ -10842,7 +10911,7 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("add"),
             .args = {{CCBT_int, .i=3}, {CCBT_double, .d=4.}},
             .expect_err = _cc_runtime_error,
-            .expected_msg = SVI("(test):1:22: error: ci_call_by_name 'add': arg 1 type mismatch\n"),
+            .expected_msg = SVI("(test):1:5: error: ci_call_by_name 'add': arg 1 type mismatch\n"),
         },
         {
             "doubles", __LINE__,

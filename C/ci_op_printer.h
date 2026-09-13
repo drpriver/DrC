@@ -144,7 +144,8 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             }
             msb_sprintf(out, "runtime[%u", (unsigned)op->rt_call.op);
             if(op->rt_call.op == CI_RT_TYPE_REFLECT || op->rt_call.op == CI_RT_MODULE_REFLECT
-                || op->rt_call.op == CI_RT_TYPE_VALIDATE || op->rt_call.op == CI_RT_MODULE_VALIDATE)
+                || op->rt_call.op == CI_RT_TYPE_VALIDATE || op->rt_call.op == CI_RT_MODULE_VALIDATE
+                || op->rt_call.op == CI_RT_SRCLOC_REFLECT)
                 msb_sprintf(out, ":%u", (unsigned)op->rt_call.reflect_op);
             msb_write_literal(out, "](");
             for(uint32_t i = 0; i < op->rt_call.nargs; i++){
