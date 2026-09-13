@@ -9093,6 +9093,7 @@ TestFunction(test_interpreter){
             TEST_stats.skipped++;
             continue;
         }
+        _Bool ok = 0;
         err = 0;
         TEST_stats.executed++;
         FileCache* fc = fc_create(al);
@@ -9158,9 +9159,11 @@ TestFunction(test_interpreter){
             TEST_stats.failures++;
             TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
         }
+        else
+            ok = 1;
 
         finally:
-        if(log_sb.cursor && !log_sb.errored){
+        if(log_sb.cursor && !log_sb.errored && !ok){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%.*s\n", sv_p(sv));
         }
