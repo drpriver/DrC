@@ -6387,16 +6387,46 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
     size_t i = 0;
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
     if(i >= en || etoks[i].type != CPP_STRING){
-        cpp_release_scratch(cpp, expanded);
-        return cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
+        err = cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
+        goto cleanup;
     }
-    CppToken strtok = etoks[i];
-    i++;
+    CppToken strtok = etoks[i++];
+    size_t idx = -1;
+    {
+        MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+        err = cpp_decode_text(cpp, strtok, &sb);
+        if(err){
+            msb_destroy(&sb);
+            goto cleanup;
+        }
+        {
+            StringView sv = msb_borrow_sv(&sb);
+            if(sv_equals(sv, SV("-I")))
+                idx = 1;
+            else if(sv_equals(sv, SV("-isystem")))
+                idx = 2;
+            else if(sv_equals(sv, SV("-iquote")))
+                idx = 0;
+            else if(sv_equals(sv, SV("-idirafter")))
+                idx = 4;
+        }
+        msb_destroy(&sb);
+        if(idx != (size_t)-1){
+            while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+            if(i >= en || etoks[i].type != CPP_STRING){
+                err = cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
+                goto cleanup;
+            }
+            strtok = etoks[i++];
+        }
+        else
+            idx = 1;
+    }
     // Warn on trailing tokens
     while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
-    if(i < en)
-        cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
-    err = cpp_add_search_path_from_pragma(cpp, strtok, 1);
+    if(i < en) cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
+    err = cpp_add_search_path_from_pragma(cpp, strtok, idx);
+    cleanup:
     cpp_release_scratch(cpp, expanded);
     return err;
 }

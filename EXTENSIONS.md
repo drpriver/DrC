@@ -347,8 +347,18 @@ random integer.
 
 ### `#pragma include_path`
 
-Add a path to the `-I` search paths. If it is a relative path, it is
-relative to the directory of this file.
+Add a path to the given include search path. If two strings are given, the
+first is one of "-I", "-isystem", "-idirafter", "-iquote", which determines
+which include search path to append to and the second one is the path. If
+only one string is given, "-I" is assumed and the string is the path.
+
+
+If the path given is a relative path, it is relative to the directory of
+the file that issued the pragma.
+
+```C
+#pragma include_path "-iquote" "." // add directory of this file
+```
 
 ## C
 
