@@ -362,7 +362,7 @@ TestFunction(test_func_macros){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
@@ -391,7 +391,7 @@ TestFunction(test_func_macros_extensions){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
@@ -428,7 +428,7 @@ TestFunction(test_obj_macros){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -691,7 +691,7 @@ TestFunction(test_c23){
     for(size_t i = test_atomic_increment(&idx); i < sizeof test_cases / sizeof test_cases[0]; i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         err = cpp_expand_string(test_cases[i].input, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err){
             TestPrintf("%s%s:%d: %s%s test_cases[%zu].input = \"%.*s\"\n", _test_color_gray, __FILE__, __LINE__, __func__, _test_color_reset, i, sv_p(test_cases[i].input));
             continue;
@@ -807,7 +807,7 @@ TestFunction(test_torture){
         StringView in = test_cases[i].in;
         StringView out = test_cases[i].out;
         err = cpp_expand_string(in, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err){
             TestPrintValue("input   ", in);
             TestPrintValue("expected", out);
@@ -1028,7 +1028,7 @@ TestFunction(test_builtin_macros){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -1087,7 +1087,7 @@ TestFunction(test_error_locations){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -1440,7 +1440,7 @@ TestFunction(test_condition){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -1585,7 +1585,7 @@ TestFunction(test_erroneous_condition){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -1897,7 +1897,7 @@ TestFunction(test_if_eval){
         int line = test_cases[i].line;
         StringView result;
         int err = cpp_expand_string(inp, &result, __FILE__, __func__, line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
@@ -2014,7 +2014,7 @@ TestFunction(test_include){
             test_cases[i].Ipath.length ? 1 : 0,
             NULL, 0,
             &result, __FILE__, __func__, test_cases[i].line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
@@ -2061,7 +2061,7 @@ TestFunction(test_framework_include){
             NULL, 0,
             &fpath, 1,
             &result, __FILE__, __func__, test_cases[i].line);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(err) continue;
         if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
@@ -2100,7 +2100,7 @@ TestFunction(test_literal_boundaries){
         StringView result = {0};
         int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0,
                                        &result, __FILE__, __func__, __LINE__);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         if(!err) test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
         if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
     }
@@ -2108,7 +2108,7 @@ TestFunction(test_literal_boundaries){
     StringView result = {0};
     int err = cpp_expand_string(SV("#define S(x) #x\nS(u\"\\x1234\" U'\\U0001f600')"),
                                 &result, __FILE__, __func__, __LINE__);
-    TestExpectFalse(err);
+    TestExpectFalse(int, err);
     if(!err) test_expect_equals_sv(SV("\n\"u\\\"\\\\x1234\\\" U'\\\\U0001f600'\""), result,
                                   "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
     if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);

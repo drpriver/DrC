@@ -4971,7 +4971,7 @@ TestFunction(test_parse_decls){
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->vars[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
             if(c->vars[n].init.length){
-                TestExpectTrue(var->initializer);
+                TestExpectTrue(void*, var->initializer);
                 if(var->initializer){
                     msb_reset(&sb);
                     CcExpr* init = var->initializer;
@@ -4986,7 +4986,7 @@ TestFunction(test_parse_decls){
                 TestExpectEquals(unsigned, var->loc.column, c->vars[n].loc_col);
             }
             if(c->vars[n].mangle.length){
-                TestExpectTrue(var->mangle);
+                TestExpectTrue(const void*, var->mangle);
                 if(var->mangle){
                     StringView mr = {var->mangle->length, var->mangle->data};
                     test_expect_equals_sv(c->vars[n].mangle, mr, "expected mangle", "actual mangle", &TEST_stats, __FILE__, __func__, c->line);
@@ -4999,7 +4999,7 @@ TestFunction(test_parse_decls){
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
             CcFunc* func = cc_scope_lookup_func(&cc.global, a, CC_SCOPE_NO_WALK);
-            TestExpectTrue(func);
+            TestExpectTrue(void*, func);
             if(!func){
                 TestPrintf("%s:%d: %s %.*s is undefined\n", __FILE__, c->line, c->test, sv_p(name));
                 continue;
@@ -5014,7 +5014,7 @@ TestFunction(test_parse_decls){
                 TestExpectEquals(unsigned, func->loc.column, c->funcs[n].loc_col);
             }
             if(c->funcs[n].mangle.length){
-                TestExpectTrue(func->mangle);
+                TestExpectTrue(const void*, func->mangle);
                 if(func->mangle){
                     StringView mr = {func->mangle->length, func->mangle->data};
                     test_expect_equals_sv(c->funcs[n].mangle, mr, "expected mangle", "actual mangle", &TEST_stats, __FILE__, __func__, c->line);
@@ -5039,7 +5039,7 @@ TestFunction(test_parse_decls){
             test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
             if(c->typedefs[n].loc_line){
                 CcTypedef* td = AM16_get(&cc.global.typedefs, a);
-                TestExpectTrue(td);
+                TestExpectTrue(void*, td);
                 if(td){
                     SrcLoc loc = cc_typedef_loc(td);
                     TestExpectEquals(unsigned, loc.line, c->typedefs[n].loc_line);
@@ -5050,22 +5050,22 @@ TestFunction(test_parse_decls){
         for(size_t n = 0; n < N && c->tags[n].name.length; n++){
             StringView name = c->tags[n].name;
             Atom a = AT_get_atom(&at, name.text, name.length);
-            TestExpectTrue(a);
+            TestExpectTrue(const void*, a);
             if(!a) continue;
             SrcLoc loc = {0};
             if(c->tags[n].kind == CC_STRUCT){
                 CcStruct* t = cc_scope_lookup_struct_tag(&cc.global, a, CC_SCOPE_NO_WALK);
-                TestExpectTrue(t);
+                TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
             else if(c->tags[n].kind == CC_UNION){
                 CcUnion* t = cc_scope_lookup_union_tag(&cc.global, a, CC_SCOPE_NO_WALK);
-                TestExpectTrue(t);
+                TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
             else {
                 CcEnum* t = cc_scope_lookup_enum_tag(&cc.global, a, CC_SCOPE_NO_WALK);
-                TestExpectTrue(t);
+                TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
             TestExpectEquals(unsigned, loc.line, c->tags[n].loc_line);
@@ -5076,7 +5076,7 @@ TestFunction(test_parse_decls){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -7969,7 +7969,7 @@ TestFunction(test_struct_layout){
             CcField* _Nullable actual_fields;
             if(c->is_union){
                 CcUnion* u = cc_scope_lookup_union_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
-                TestExpectTrue(u);
+                TestExpectTrue(void*, u);
                 if(!u){ err = 1; goto fin; }
                 actual_size = u->size;
                 actual_align = u->alignment;
@@ -7978,7 +7978,7 @@ TestFunction(test_struct_layout){
             }
             else {
                 CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
-                TestExpectTrue(s);
+                TestExpectTrue(void*, s);
                 if(!s){ err = 1; goto fin; }
                 actual_size = s->size;
                 actual_align = s->alignment;
@@ -8049,7 +8049,7 @@ TestFunction(test_struct_layout){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -8233,7 +8233,7 @@ TestFunction(test_bitfield_abi){
             Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
             if(!tag){ TestReport("tag atom not found"); err = 1; goto bffin; }
             CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
-            TestExpectTrue(s);
+            TestExpectTrue(void*, s);
             if(!s){ err = 1; goto bffin; }
             TEST_stats.executed++;
             if(s->size != c->size){
@@ -8279,7 +8279,7 @@ TestFunction(test_bitfield_abi){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);

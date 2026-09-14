@@ -304,7 +304,7 @@ TestFunction(test_oom){
                         LOCK_T_init(&ta.lock);
                         Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
                         int err = run_one(al, tc->program, &tc->setup_allocs);
-                        TestExpectFalse(err);
+                        TestExpectFalse(int, err);
                         tc->max_allocs = err ? 0 : ta.nallocs;
                         recording_free_all(&ta.recorder);
                         recording_cleanup(&ta.recorder);

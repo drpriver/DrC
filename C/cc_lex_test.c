@@ -915,12 +915,12 @@ TestFunction(test_literal_regressions){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
             ArenaAllocator aa = {0}, synth = {0};
             int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
-            TestExpectFalse(err);
+            TestExpectFalse(int, err);
             TestExpectEquals(int, count, 1);
             if(!err && count == 1){
                 if(!cc_tok_matches(out[0], cases[i].expected))
                     TestReport("literal regression (%s): %.*s", array ? "array" : "stream", sv_p(cases[i].input));
-                TestExpectTrue(cc_tok_matches(out[0], cases[i].expected));
+                TestExpectTrue(_Bool, cc_tok_matches(out[0], cases[i].expected));
             }
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
@@ -966,7 +966,7 @@ TestFunction(test_literal_regressions){
             ArenaAllocator aa = {0}, synth = {0};
             int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
             if(!err) TestReport("expected invalid literal (%s): %.*s", array ? "array" : "stream", sv_p(invalid[i]));
-            TestExpectTrue(err);
+            TestExpectTrue(int, err);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
         }
@@ -976,7 +976,7 @@ TestFunction(test_literal_regressions){
         CcToken out[MAX_TEST_TOKENS]; int count = 0;
         ArenaAllocator aa = {0}, synth = {0};
         int err = cc_lex_string_mode(SV("L'\\x1234' L\"😀\""), &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 1, 1);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         TestExpectEquals(int, count, 2);
         if(!err && count == 2){
             TestExpectEquals(uint64_t, out[0].constant.integer_value, 0x1234);
@@ -1025,7 +1025,7 @@ TestFunction(test_long_double_targets){
             CppToken input = {.txt = cases[i].text};
             CcToken out;
             int err = cpp_number_to_cc_tok(&cpp, &input, &out);
-            TestExpectFalse(err);
+            TestExpectFalse(int, err);
             TestExpectEquals(int, out.constant.ctype, CC_LONG_DOUBLE);
             uint64_t words[2] = {0};
             if(formats[f] == CC_LONG_DOUBLE_BINARY128){
@@ -1088,15 +1088,15 @@ TestFunction(test_long_double_macros){
         CcLongDoubleFormat format = cpp.target.long_double_format;
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, source);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         err = cpp_define_builtin_macros(&cpp);
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         err = cpp_include_file_via_file_cache(&cpp, SV("(test)"));
-        TestExpectFalse(err);
+        TestExpectFalse(int, err);
         for(size_t i = 0; i < 4; i++){
             CcToken tok = {0};
             err = cpp_next_c_token(&cpp, &tok);
-            TestExpectFalse(err);
+            TestExpectFalse(int, err);
             TestExpectEquals(int, tok.type, CC_CONSTANT);
             if(err || tok.type != CC_CONSTANT) continue;
             TestExpectEquals(int, tok.constant.ctype, CC_LONG_DOUBLE);
@@ -1113,7 +1113,7 @@ TestFunction(test_long_double_macros){
         for(;;){
             CppToken tok;
             err = cpp_next_pp_token(&cpp, &tok);
-            TestExpectFalse(err);
+            TestExpectFalse(int, err);
             if(err || tok.type == CPP_EOF) break;
             if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
             if(properties.cursor) msb_write_char(&properties, ' ');
@@ -1182,7 +1182,7 @@ TestFunction(test_fast_float_wide){
                     ? fast_float_from_chars_x87(sv.text, sv.text+sv.length, words, FASTFLOAT_FORMAT_GENERAL)
                     : fast_float_from_chars_binary128(sv.text, sv.text+sv.length, words, FASTFLOAT_FORMAT_GENERAL);
                 TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
-                TestExpectTrue(r.ptr == sv.text+sv.length);
+                TestExpectTrue(_Bool, r.ptr == sv.text+sv.length);
                 TestExpectEquals(uint64_t, words[0], x87 ? cases[i].x87[0] : cases[i].quad[0]);
                 TestExpectEquals(uint64_t, words[1], x87 ? cases[i].x87[1] : cases[i].quad[1]);
             }
@@ -1206,7 +1206,7 @@ TestFunction(test_fast_float_wide){
                     ? fast_float_from_chars_x87(sv.text, sv.text+sv.length, words, syntax[i].fmt)
                     : fast_float_from_chars_binary128(sv.text, sv.text+sv.length, words, syntax[i].fmt);
                 TestExpectEquals(int, r.error, syntax[i].error);
-                TestExpectTrue(r.ptr == sv.text+syntax[i].consumed);
+                TestExpectTrue(_Bool, r.ptr == sv.text+syntax[i].consumed);
                 if(r.error){
                     TestExpectEquals(uint64_t, words[0], 42);
                     TestExpectEquals(uint64_t, words[1], 43);
@@ -1274,7 +1274,7 @@ TestFunction(test_fast_float_wide){
                 ? fast_float_from_chars_x87(text, text+length, words, FASTFLOAT_FORMAT_GENERAL)
                 : fast_float_from_chars_binary128(text, text+length, words, FASTFLOAT_FORMAT_GENERAL);
             TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
-            if(variant < 3) TestExpectTrue(r.ptr == text+length);
+            if(variant < 3) TestExpectTrue(_Bool, r.ptr == text+length);
             TestExpectEquals(uint64_t, words[0], variant >= 2 ? 1 : 0);
             TestExpectEquals(uint64_t, words[1], 0);
             msb_destroy(&sb);

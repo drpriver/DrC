@@ -11244,11 +11244,11 @@ TestFunction(test_long_double_folding){
         a.bits[0] = UINT64_C(0x8000000000000000);
         status = ci_fold_truth(&ctx, &a, &truth);
         TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpectFalse(truth);
+        if(!status) TestExpectFalse(_Bool, truth);
         a.bits[0] = UINT64_C(0x3ff0000000000000);
         status = ci_fold_truth(&ctx, &a, &truth);
         TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpectTrue(truth);
+        if(!status) TestExpectTrue(_Bool, truth);
     }
     static const struct {
         CcLongDoubleFormat format;
@@ -11287,21 +11287,21 @@ TestFunction(test_long_double_folding){
     CiOp op = {.istrue = {.kind = CI_OP_ISTRUE, .slot_size = 1, .src = 8,
         .src_size = 8, .float_width = 64}};
     ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f64 [8:16]")));
+    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f64 [8:16]")));
     msb_reset(&sb);
     op.istrue.src_size = 16;
     op.istrue.float_width = 80;
     ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f80 [8:24]")));
+    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f80 [8:24]")));
     msb_reset(&sb);
     op.istrue.float_width = 128;
     ci_op_print(&op, &sb, CC_LONG_DOUBLE_X87);
-    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f128 [8:24]")));
+    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f128 [8:24]")));
     msb_reset(&sb);
     op = (CiOp){.constant = {.kind = CI_OP_CONST, .immsize = 8,
         .bt_kind = CCBT_long_double, .immediate = {0x4000000000000000}}};
     ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(sv_equals(msb_borrow_sv(&sb), SV("[0:8] = 2.000000 (0x4000000000000000)")));
+    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:8] = 2.000000 (0x4000000000000000)")));
     msb_destroy(&sb);
     TESTEND();
 }

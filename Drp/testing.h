@@ -556,13 +556,13 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // --------------
 // Expects the condition is truthy (for the usual C definition of truth).
 //
-#define TestExpectTrue(cond) do {\
+#define TestExpectTrue(type, cond) do {\
       TEST_stats.executed++;\
-      _Bool cond_ = !!(cond); \
+      type cond_ = cond; \
       if (! (cond_)){ \
           TEST_stats.failures++; \
           TestReport("Test condition failed");\
-          TestReport("%s", #cond);\
+          TestPrintValue(#cond, cond_);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
       }\
@@ -573,13 +573,13 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // ---------------
 // Expects the condition is falsey (for the usual C definition of truth).
 //
-#define TestExpectFalse(cond) do{\
-      _Bool cond_ = !!(cond); \
+#define TestExpectFalse(type, cond) do{\
+      type cond_ = cond; \
       TEST_stats.executed++;\
       if (cond_){ \
           TEST_stats.failures++; \
           TestReport("Test condition failed (expected falsey)");\
-          TestPrintValue(#cond, cond);\
+          TestPrintValue(#cond, cond_);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
       }\
@@ -590,12 +590,13 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -----------------
 // For an errorable (struct with .errored field), expects .errored is 0
 //
-#define TestExpectSuccess(cond) do{\
+#define TestExpectSuccess(type, cond) do{\
       TEST_stats.executed++;\
-      if ((cond).errored){ \
+      type cond_ = cond; \
+      if ((cond_).errored){ \
           TEST_stats.failures++; \
           TestReport("Test condition failed");\
-          TestReport("%s = %d", #cond, (cond).errored);\
+          TestReport("%s = %d", #cond, (cond_).errored);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
       }\
@@ -606,12 +607,13 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -----------------
 // For an errorable (struct with .errored field), expects .errored is not 0
 //
-#define TestExpectFailure(cond) do{\
+#define TestExpectFailure(type, cond) do{\
       TEST_stats.executed++;\
-      if (!(cond).errored){ \
+      type cond_; = cond; \
+      if (!(cond_).errored){ \
           TEST_stats.failures++; \
           TestReport("Test condition failed");\
-          TestReport("%s = %d", #cond, (cond).errored);\
+          TestReport("%s = %d", #cond, (cond_).errored);\
           if(_test_do_debugbreak_on_fail) \
               TestDebugBreak(); \
           }\
@@ -793,14 +795,15 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -----------------
 // For an errorable (struct with .errored field), asserts .errored is 0
 //
-#define TestAssertSuccess(cond) do{\
+#define TestAssertSuccess(type, cond) do{\
         TEST_stats.executed++;\
+        type cond_ = cond; \
         if ((cond).errored){ \
             TEST_stats.failures++; \
             TEST_stats.assert_failures++; \
             TestReport("Test condition failed");\
             TestReport("%s prematurely ended", __func__);\
-            TestReport("%s = %d", #cond, (cond).errored); \
+            TestReport("%s = %d", #cond, (cond_).errored); \
             if(_test_do_debugbreak_on_fail) \
                 TestDebugBreak(); \
             return TEST_stats;\
@@ -812,14 +815,15 @@ test_expect_equals_sv(StringView lhs, StringView rhs, const char* lhs_, const ch
 // -----------------
 // For an errorable (struct with .errored field), asserts .errored is not 0
 //
-#define TestAssertFailure(cond) do{\
+#define TestAssertFailure(type, cond) do{\
         TEST_stats.executed++;\
-        if ((!cond.errored)){ \
+        type cond_ = cond; \
+        if ((!cond_.errored)){ \
             TEST_stats.failures++; \
             TEST_stats.assert_failures++; \
             TestReport("Test condition failed");\
             TestReport("%s prematurely ended", __func__);\
-            TestReport("%s = %d", #cond, (cond).errored); \
+            TestReport("%s = %d", #cond, (cond_).errored); \
             if(_test_do_debugbreak_on_fail) \
                 TestDebugBreak(); \
             return TEST_stats;\
@@ -1067,7 +1071,7 @@ test_thread_worker(void*_Nonnull thread_arg){
         jd->result.assert_failures += func_result.assert_failures;
         jd->result.skips += func_result.skipped;
         if(func_result.assert_failures || func_result.failures)
-            jd->result.failed_tests[jd->result.n_failed_tests++] = i;
+            jd->result.failed_tests[jd->result.n_failed_tests++] = which_test;
     }
     // Then: work-steal non-DUPLICATE tests
     for(;;){
@@ -1085,7 +1089,7 @@ test_thread_worker(void*_Nonnull thread_arg){
         jd->result.assert_failures += func_result.assert_failures;
         jd->result.skips += func_result.skipped;
         if(func_result.assert_failures || func_result.failures)
-            jd->result.failed_tests[jd->result.n_failed_tests++] = idx;
+            jd->result.failed_tests[jd->result.n_failed_tests++] = which_test;
     }
     return 0;
 }
@@ -1512,10 +1516,6 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
                 color, result.skips, reset,
                 text);
     }
-    for(size_t i = 0 ; i < TestOutFileCount; i++){
-        if(TestOutFiles[i] != stderr)
-            fclose(TestOutFiles[i]);
-    }
     for(size_t i = 0; i < result.n_failed_tests; i++){
         StringView name = test_funcs[result.failed_tests[i]].test_name;
         TestPrintf("%s%.*s%s %sfailed%s.\n", bold, (int)name.length, name.text, nobold, red, reset);
@@ -1539,6 +1539,10 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         TestPrintf("%s%s%s: Time elapsed: %s%.3f%ss\n",
                 gray, filename, reset,
                 blue, (double)diff/1e6, reset);
+    }
+    for(size_t i = 0 ; i < TestOutFileCount; i++){
+        if(TestOutFiles[i] != stderr)
+            fclose(TestOutFiles[i]);
     }
 
     return result.failures + result.assert_failures == 0? 0 : 1;
