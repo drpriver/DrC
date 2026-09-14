@@ -334,6 +334,7 @@ struct CcExpr {
         CiFloat128 quad;
         CiUint128 uinteger128;
         CiInt128 integer128;
+        SrcLoc loc_value;
         unsigned char data[16];
     };
     CcExpr*_Nonnull values[];

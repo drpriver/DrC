@@ -14209,9 +14209,22 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_COUNT:
                     if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     UINTRES(ccqt_as_array(qt)->length);
-                case CC_TYPE_LOC:
-                    err = CC_NOT_CONSTANT_ERROR;
-                    goto fini_introspection;
+                case CC_TYPE_LOC:{
+                    switch(ccqt_kind(qt)){
+                        DRP_CASES_EXHAUSTED;
+                        case CC_ENUM: UINTRES(ccqt_as_enum(qt)->loc.bits);
+                        case CC_UNION: UINTRES(ccqt_as_union(qt)->loc.bits);
+                        case CC_STRUCT: UINTRES(ccqt_as_struct(qt)->loc.bits);
+                        case CC_BASIC:
+                        case CC_BLOCK_POINTER:
+                        case CC_POINTER:
+                        case CC_ARRAY:
+                        case CC_SLICE:
+                        case CC_FUNCTION:
+                            err = CC_NOT_CONSTANT_ERROR;
+                            goto fini_introspection;
+                    }
+                }
                 case CC_TYPE_IS_CALLABLE_WITH: {
                     CcExpr* arg;
                     err = cc_eval_expr(p, e->values[0], &arg);
@@ -14680,10 +14693,47 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             cc_release_expr(p, operand);
             return err;
         }
+        case CC_EXPR_SRCLOC_REFLECT:{
+            CcExpr* operand;
+            int err = cc_eval_expr(p, e->lhs, &operand);
+            if(err) return err;
+            SrcLoc loc = operand->loc_value;
+            if(!loc.bits) return CC_NOT_CONSTANT_ERROR;
+            size_t line = loc.line, col = loc.column, file_id = loc.file_id;
+            if(loc.is_actually_a_pointer){
+                SrcLocExp* exp = (SrcLocExp*)((uintptr_t)loc.pointer.bits << 1);
+                while(exp->parent) exp = exp->parent;
+                line = exp->line;
+                col = exp->column;
+                file_id = exp->file_id;
+            }
+            CcExpr* node;
+            switch(e->srcloc.op){
+                DRP_CASES_EXHAUSTED;
+                case CC_SRCLOC_FILE:{
+                    FileCache* fc = p->cpp.fc;
+                    if(file_id >= fc->map.count)
+                        return CC_NOT_CONSTANT_ERROR;
+                    LongString path = fc->map.data[file_id].path;
+                    Atom a = AT_atomize(p->cpp.at, path.text, path.length);
+                    if(!a) return CC_OOM_ERROR;
+                    node = cc_constexpr_string_slice_expr(p, e->loc, a, 0);
+                    if(!node) return CC_OOM_ERROR;
+                    break;
+                }
+                case CC_SRCLOC_LINE:
+                case CC_SRCLOC_COL:
+                    node = cc_value_expr(p, e->loc, e->type);
+                    if(!node) return CC_OOM_ERROR;
+                    node->uinteger = e->srcloc.op == CC_SRCLOC_LINE?line:col;
+                    break;
+            }
+            *result = node;
+            return 0;
+        }
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_HOTSWAP:
-        case CC_EXPR_SRCLOC_REFLECT:
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_UMUL128:
