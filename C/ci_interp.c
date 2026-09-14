@@ -127,7 +127,7 @@ static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
 static int ci_make_call_frame(CiInterpreter*, CiInterpFrame*_Nullable, CcFunc*, void*_Nonnull*_Null_unspecified, uint32_t, const uint32_t*_Nullable, void*, size_t, SrcLoc, CiInterpFrame*_Nullable*_Nonnull);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame*_Nullable caller, CcFunc*, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc);
 static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
-static int ci_compile_module(CiInterpreter*, const char*, CiModule*_Nullable*_Nonnull);
+static int ci_compile_module(CiInterpreter*, const char*_Null_unspecified, const char* _Null_unspecified, CiModule*_Nullable*_Nonnull);
 static int ci_resolve_module(CiInterpreter*, CiModule*);
 static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
 static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
@@ -761,6 +761,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
     size_t idx = arg;
     switch(op){
         case CC_MODULE_FUNC:
+        case CC_MODULE_FUNC_INFO:
         case CC_MODULE_VAR:
         case CC_MODULE_TYPE:
             break;
@@ -830,6 +831,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             memcpy(result, &member.name.count, sizeof member.name.count);
             return 0;
         case CC_MODULE_FUNC:
+        case CC_MODULE_FUNC_INFO:
         case CC_MODULE_VAR:
         case CC_MODULE_TYPE:
             if(sizeof member > size)
@@ -939,11 +941,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     break;
                 }
                 case CI_RT_COMPILE: {
-                    const char* source;
+                    const char* source, *path;
                     CI_INLINE_MEMCPY(&source, (char*)frame->slots + op->rt_call.args[0], sizeof source);
+                    CI_INLINE_MEMCPY(&path, (char*)frame->slots + op->rt_call.args[1], sizeof path);
                     CiModule* module = NULL;
                     if(source){
-                        err = ci_compile_module(ci, source, &module);
+                        err = ci_compile_module(ci, source, path, &module);
                         if(err == CI_OOM_ERROR) return err;
                         // Compilation diagnostics produce a null module, not
                         // an interpreter execution failure.
@@ -2578,7 +2581,8 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
 
 static
 int
-ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Nonnull out){
+ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const char*_Null_unspecified path, CiModule*_Nullable*_Nonnull out){
+    if(!source) source = "";
     int err = 0;
     *out = NULL;
     ci_lock_resolver(ci);
@@ -2608,7 +2612,8 @@ ci_compile_module(CiInterpreter* ci, const char* source, CiModule*_Nullable*_Non
     p->current = &module->scope;
     cc_parser_discard_input(p);
 
-    fc_write_pathf(p->cpp.fc, "<__compile:%zu>", ci->next_module_id++);
+    if(path) fc_write_pathf(p->cpp.fc, "%s", path);
+    else fc_write_pathf(p->cpp.fc, "<__compile:%zu>", ci->next_module_id++);
     uint32_t file_id = 0;
     err = fc_intern_path(p->cpp.fc, &file_id);
     if(err) goto done;
@@ -2709,27 +2714,29 @@ ci_count_atom_items16(AtomMap16Items items){
 
 static
 int
-ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModuleMember* out){
+ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModuleMember* out, _Bool define){
     void* address = NULL;
-    if(!func->defined){
-        if(!func->native_func){
-            LongString fsym = func->mangle
-                ? (LongString){func->mangle->length, func->mangle->data}
-                : (LongString){func->name->length, func->name->data};
-            int err = ci_try_dlsym(ci, fsym, &address);
-            if(err) return err;
-            if(address)
-                func->native_func = (void(*)(void))address;
+    if(define){
+        if(!func->defined){
+            if(!func->native_func){
+                LongString fsym = func->mangle
+                    ? (LongString){func->mangle->length, func->mangle->data}
+                    : (LongString){func->name->length, func->name->data};
+                int err = ci_try_dlsym(ci, fsym, &address);
+                if(err) return err;
+                if(address)
+                    func->native_func = (void(*)(void))address;
+            }
+            address = (void*)func->native_func;
         }
-        address = (void*)func->native_func;
-    }
-    else {
-        func->addr_taken = 1;
-        int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
-        if(err) return CI_OOM_ERROR;
-        err = ci_resolve_refs(ci, 0);
-        if(err) return err;
-        address = (void*)func->native_func;
+        else {
+            func->addr_taken = 1;
+            int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
+            if(err) return CI_OOM_ERROR;
+            err = ci_resolve_refs(ci, 0);
+            if(err) return err;
+            address = (void*)func->native_func;
+        }
     }
     *out = (CiRtModuleMember){
         .type = (CcQualType){.bits = (uintptr_t)func->type},
@@ -2874,6 +2881,7 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
                 + ci_count_atom_items(AM_items(&scope->unions))
                 + ci_count_atom_items(AM_items(&scope->enums));
             break;
+        case CC_MODULE_FUNC_INFO:
         case CC_MODULE_FUNC: {
             AtomMapItems items = AM_items(&scope->functions);
             CcFunc* func = NULL;
@@ -2884,7 +2892,7 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
                 break;
             }
             if(!func){ ret = ci_error(ci, loc, "_Module.func index out of range"); break; }
-            ret = ci_reflect_func_unlocked(ci, loc, func, out);
+            ret = ci_reflect_func_unlocked(ci, loc, func, out, op == CC_MODULE_FUNC);
             break;
         }
         case CC_MODULE_VAR: {

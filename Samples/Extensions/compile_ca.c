@@ -77,7 +77,7 @@ int install_rule(const char* expr){
         return 1;
     }
 
-    _Module m = __compile(src);
+    _Module m = __compile(src, nullptr);
     if(!m){
         snprintf(status, sizeof status, "compile failed; keeping old rule");
         return 1;

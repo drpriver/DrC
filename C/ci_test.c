@@ -638,7 +638,7 @@ TestFunction(test_interpreter){
 
         {
             "reflection: discarded module run", __LINE__,
-            SVI("_Module m = __compile(\"int x; x = 42;\");\n"
+            SVI("_Module m = __compile(\"int x; x = 42;\", nullptr);\n"
                 "m.run();\n"
                 "return *m.symbol(\"x\", int);\n"),
             .exit_code = 42,
@@ -676,7 +676,7 @@ TestFunction(test_interpreter){
         },
         {
             "reflection: module receiver snapshot", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T;\");\n"
+            SVI("_Module m = __compile(\"typedef int T;\", nullptr);\n"
                 "_ModuleMember t = m.type((m = __root_module(), 0));\n"
                 "return t.type == int;\n"),
             .exit_code = 1,
@@ -2948,7 +2948,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module symbol", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){ return 42; }\");\n"
+            SVI("_Module m = __compile(\"int f(void){ return 42; }\", nullptr);\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -2956,7 +2956,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module method symbol", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){ return 7; }\");\n"
+            SVI("_Module m = __compile(\"int f(void){ return 7; }\", nullptr);\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -2965,7 +2965,7 @@ TestFunction(test_interpreter){
         {
             "__compile module sees global", __LINE__,
             SVI("int g(void){ return 5; }\n"
-               "_Module m = __compile(\"int f(void){ return g() + 2; }\");\n"
+               "_Module m = __compile(\"int f(void){ return g() + 2; }\", nullptr);\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -2974,7 +2974,7 @@ TestFunction(test_interpreter){
         {
             "__compile module shadows global", __LINE__,
             SVI("int f(void){ return 1; }\n"
-               "_Module m = __compile(\"int f(void){ return 7; }\");\n"
+               "_Module m = __compile(\"int f(void){ return 7; }\", nullptr);\n"
                "if(!m) return 99;\n"
                "int (*mf)(void) = m.symbol(\"f\", typeof(*mf));\n"
                "int (*rf)(void) = __root_module().symbol(\"f\", typeof(*rf));\n"
@@ -2983,7 +2983,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run", __LINE__,
-            SVI("_Module m = __compile(\"int x = 1; x = x + 41;\");\n"
+            SVI("_Module m = __compile(\"int x = 1; x = x + 41;\", nullptr);\n"
                "if(!m) return 99;\n"
                "if(m.run()) return 98;\n"
                "int* x = m.symbol(\"x\", typeof(*x));\n"
@@ -2992,7 +2992,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run returns top-level value", __LINE__,
-            SVI("_Module m = __compile(\"int x; x++; return -17; x = 99;\");\n"
+            SVI("_Module m = __compile(\"int x; x++; return -17; x = 99;\", nullptr);\n"
                "if(!m) return 99;\n"
                "int* x = m.symbol(\"x\", int);\n"
                "int first = m.run();\n"
@@ -3002,7 +3002,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run recursion", __LINE__,
-            SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\");\n"
+            SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\", nullptr);\n"
                 "_Module* self = m.symbol(\"self\", _Module);\n"
                 "int* n = m.symbol(\"n\", int);\n"
                 "*self = m; *n = 100;\n"
@@ -3013,7 +3013,7 @@ TestFunction(test_interpreter){
         {
             "__compile owns source", __LINE__,
             SVI("char src[] = \"const char* f(void){ return \\\"ok\\\"; }\";\n"
-               "_Module m = __compile(src);\n"
+               "_Module m = __compile(src, nullptr);\n"
                "if(!m) return 99;\n"
                "for(int i = 0; src[i]; i++) src[i] = '?';\n"
                "const char* (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
@@ -3024,7 +3024,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile synthetic file", __LINE__,
-            SVI("_Module m = __compile(\"const char* file(void){ return __FILE__; }\");\n"
+            SVI("_Module m = __compile(\"const char* file(void){ return __FILE__; }\", nullptr);\n"
                "if(!m) return 99;\n"
                "const char* (*file)(void) = m.symbol(\"file\", typeof(*file));\n"
                "if(!file) return 98;\n"
@@ -3034,7 +3034,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module.parse_type invalid input and recovery", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt;\");\n"
+            SVI("_Module m = __compile(\"typedef int MyInt;\", nullptr);\n"
                "if(!m) return 99;\n"
                "if(!m.parse_type(\"int name\").is_invalid) return 98;\n"
                "if(!m.parse_type(\"int;\").is_invalid) return 97;\n"
@@ -3051,7 +3051,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module.parse_type module typedef", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt;\");\n"
+            SVI("_Module m = __compile(\"typedef int MyInt;\", nullptr);\n"
                "if(!m) return 99;\n"
                "_Type T = m.parse_type(\"MyInt\");\n"
                "return T == int ? 7 : 98;\n"),
@@ -3059,7 +3059,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module.parse_type module struct", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\");\n"
+            SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\", nullptr);\n"
                "if(!m) return 99;\n"
                "_Type T = m.parse_type(\"struct S\");\n"
                "return T.is_struct && T.fields == 1 ? 7 : 98;\n"),
@@ -3067,20 +3067,21 @@ TestFunction(test_interpreter){
         },
         {
             "_Module reflection counts", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\");\n"
+            SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\", nullptr);\n"
                "if(!m) return 99;\n"
                "return m.func_count == 1 && m.var_count == 1 && m.type_count == 2 ? 7 : 98;\n"),
             .exit_code = 7,
         },
         {
             "_Module reflection entries", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T; int f(void){return 3;} int x;\");\n"
+            SVI("_Module m = __compile(\"typedef int T; int f(void){return 3;} int x;\", nullptr);\n"
                "if(!m) return 99;\n"
                "_ModuleMember f = m.func(0);\n"
+               "_ModuleMember fd = m.func_decl(0);\n"
                "_ModuleMember v = m.var(0);\n"
                "_ModuleMember t = m.type(0);\n"
-               "if(f.name.count != 1 || v.name.count != 1 || t.name.count != 1) return 95;\n"
-               "if(f.name[0] != 'f' || v.name[0] != 'x' || t.name[0] != 'T') return 94;\n"
+               "if(f.name.count != 1 || fd.name.count != 1|| v.name.count != 1 || t.name.count != 1) return 95;\n"
+               "if(f.name[0] != 'f' || fd.name[0] != 'f' || v.name[0] != 'x' || t.name[0] != 'T') return 94;\n"
                "const char name[:] = f.name;\n"
                "if(name.count != 1 || name.data[0] != 'f') return 93;\n"
                "if(!f.address || !v.address || t.address) return 98;\n"
@@ -3089,7 +3090,7 @@ TestFunction(test_interpreter){
         },
         {
             "_SrcLoc module properties", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){return 1;}\\n  int x;\\nstruct S {int x;};\");\n"
+            SVI("_Module m = __compile(\"int f(void){return 1;}\\n  int x;\\nstruct S {int x;};\", nullptr);\n"
                "_SrcLoc f = m.func(0).srcloc;\n"
                "_SrcLoc v = m.var(0).srcloc;\n"
                "_SrcLoc t = m.type(0).srcloc;\n"
@@ -3109,7 +3110,7 @@ TestFunction(test_interpreter){
                 "  struct S {int a;};\\n"
                 "  union U {int a;};\\n"
                 "  enum E {A};\\n"
-                "int f(void); extern int x; struct S; union U; enum E;\");\n"
+                "int f(void); extern int x; struct S; union U; enum E;\", nullptr);\n"
                 "if(!m) return 90;\n"
                 "if(m.func(0).srcloc.line != 2 || m.func(0).srcloc.col != 7) return 91;\n"
                 "if(m.var(0).srcloc.line != 3 || m.var(0).srcloc.col != 7) return 92;\n"
@@ -3141,7 +3142,7 @@ TestFunction(test_interpreter){
         },
         {
             "_SrcLoc typedef properties", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T;\");\n"
+            SVI("_Module m = __compile(\"typedef int T;\", nullptr);\n"
                "_SrcLoc loc = m.type(0).srcloc;\n"
                "return loc.line == 1 && loc.col == 13 && loc.file.count > 0 ? 7 : 91;\n"),
             .exit_code = 7,
@@ -8191,7 +8192,7 @@ TestFunction(test_interpreter){
             "FUCS opaque builtins", __LINE__,
             SVI("int module_ok(_Module m){ return (int)m.type_count; }\n"
                "int loc_ok(_SrcLoc loc){ return loc == nullptr; }\n"
-               "return __compile(\"typedef int T;\").module_ok() + ((_SrcLoc)nullptr).loc_ok();\n"),
+               "return __compile(\"typedef int T;\", nullptr).module_ok() + ((_SrcLoc)nullptr).loc_ok();\n"),
             .exit_code = 2,
         },
         {

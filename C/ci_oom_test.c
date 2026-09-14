@@ -44,7 +44,7 @@ static struct OomTestCase {
     {__LINE__, SVI("_Any boxed(int x){return x+1;}\n"
          "#pragma procmacro boxed\n"
          "return boxed(41);\n")},
-    {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\");\n"
+    {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\", nullptr);\n"
          "if(m) m.run();\n"
          "return 0;\n")},
     {__LINE__, SVI("int recurse(int n){\n"

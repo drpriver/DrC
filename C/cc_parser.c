@@ -3442,18 +3442,39 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC__compile:{
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
-                    CcExpr* arg;
+                    CcExpr* arg = NULL, *arg2 = NULL;
+                    if(0){
+                        __compile_fail:
+                        if(arg) cc_release_expr(p, arg);
+                        if(arg2) cc_release_expr(p, arg2);
+                        return err;
+                    }
                     err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
-                    if(!cc_implicit_convertible(p, arg->type, p->const_char_star))
-                        return cc_error(p, arg->loc, "__compile argument must be convertible to const char*");
+                    if(!cc_implicit_convertible(p, arg->type, p->const_char_star)){
+                        err = cc_error(p, arg->loc, "__compile argument must be convertible to const char*");
+                        goto __compile_fail;
+                    }
                     err = cc_implicit_cast(p, arg, p->const_char_star, &arg);
-                    if(err) return err;
+                    if(err) goto __compile_fail;
+
+                    err = cc_expect_punct(p, ',');
+                    if(err) goto __compile_fail;
+                    err = cc_parse_assignment_expr(p, vc, &arg2, CCQT_NONE);
+                    if(err) goto __compile_fail;
+                    if(!cc_implicit_convertible(p, arg2->type, p->const_char_star)){
+                        err = cc_error(p, arg2->loc, "__compile argument must be convertible to const char*");
+                        goto __compile_fail;
+                    }
+                    err = cc_implicit_cast(p, arg2, p->const_char_star, &arg2);
+                    if(err) goto __compile_fail;
+
                     err = cc_expect_punct(p, ')');
-                    if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_COMPILE, tok.loc, p->builtin_module, 0);
-                    if(!node) return CC_OOM_ERROR;
+                    if(err)  goto __compile_fail;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_COMPILE, tok.loc, p->builtin_module, 1);
+                    if(!node) { err = CC_OOM_ERROR; goto __compile_fail;}
                     node->lhs = arg;
+                    node->values[0] = arg2;
                     *out = node;
                     return 0;
                 }
@@ -4424,6 +4445,11 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         module_op = CC_MODULE_FUNC_COUNT;
                     else if(sv_equals(mname, SV("func"))){
                         module_op = CC_MODULE_FUNC;
+                        module_result_type = p->builtin_module_member;
+                        module_method = 1;
+                    }
+                    else if(sv_equals(mname, SV("func_decl"))){
+                        module_op = CC_MODULE_FUNC_INFO;
                         module_result_type = p->builtin_module_member;
                         module_method = 1;
                     }
@@ -6619,14 +6645,16 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
         case CC_EXPR_SRCLOC_REFLECT:
-        case CC_EXPR_COMPILE:
         case CC_EXPR_STATEMENT_EXPRESSION:
             return 0;
+        case CC_EXPR_COMPILE:
+            return 1;
         case CC_EXPR_MODULE_REFLECT:
             switch(e->module.op){
                 case CC_MODULE_NONE:
                 case CC_MODULE_FUNC_COUNT:
                 case CC_MODULE_FUNC:
+                case CC_MODULE_FUNC_INFO:
                 case CC_MODULE_VAR_COUNT:
                 case CC_MODULE_VAR:
                 case CC_MODULE_TYPE_COUNT:

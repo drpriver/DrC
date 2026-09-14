@@ -2095,6 +2095,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     int nargs = 1;
     if(!srcloc && (module ?
         (  subop == CC_MODULE_FUNC
+        || subop == CC_MODULE_FUNC_INFO
         || subop == CC_MODULE_VAR
         || subop == CC_MODULE_TYPE
         || subop == CC_MODULE_SYMBOL
@@ -2167,7 +2168,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
 static
 int
 ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out){
-    uint32_t nargs = rt_op == CI_RT_HOTSWAP ? 2 : 1;
+    uint32_t nargs = (rt_op == CI_RT_HOTSWAP || rt_op == CI_RT_COMPILE) ? 2 : 1;
     CcExpr* args[2] = {e->lhs, NULL};
     if(nargs == 2)
         args[1] = e->values[0];
@@ -4396,9 +4397,13 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             return err;
         case CC_EXPR_INTERN:
         case CC_EXPR_SRCLOC_REFLECT:
-        case CC_EXPR_COMPILE:
             // idk maybe these should be treated as having side effects?
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            return err;
+        case CC_EXPR_COMPILE:
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
             return err;
         case CC_EXPR_PREINC:
         case CC_EXPR_PREDEC:

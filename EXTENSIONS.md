@@ -49,7 +49,7 @@
 * [Interpreter-only](#interpreter-only)
   * [Native FFI](#native-ffi)
   * [`_Argc` / `_Argv`](#argc-argv)
-  * [`_Module` / `__compile(source)`](#module-compilesource)
+  * [`_Module` / `__compile(source, path)`](#module-compilesource-path)
     * [`_Module` methods](#module-methods)
   * [`__hotswap(original, replacement)`](#hotswaporiginal-replacement)
   * [`__shell(program, args...)`](#shellprogram-args)
@@ -1061,7 +1061,7 @@ They work like standard C `argc`/`argv`.
 const char* input = _Argc > 1 ? _Argv[1] : "default.txt";
 ```
 
-### `_Module` / `__compile(source)`
+### `_Module` / `__compile(source, path)`
 
 `_Module` is an opaque interpreter module handle. It is a typedef to
 a pointer to an opaque struct.
@@ -1071,7 +1071,7 @@ a pointer to an opaque struct.
 scope.
 
 
-`__compile(source)` parses `source` as C code in a new scope whose
+`__compile(source, path)` parses `source` as C code in a new scope whose
 parent is the global scope. Code in the source can refer to symbols
 in the global scope of the parent.
 
@@ -1084,7 +1084,7 @@ automatically. Call `module.run()` to execute them.
 It returns `0` on success and nonzero if the module handle is `NULL` or invalid.
 
 ```C
-_Module m = __compile("int add(int a, int b){ return a + b; }");
+_Module m = __compile("int add(int a, int b){ return a + b; }", nullptr);
 if(!m)
     return 1;
 
@@ -1104,7 +1104,10 @@ printf("%d\n", add(2, 3));
 <td>`size_t func_count`</td><td>how many global functions are declared in the module</td>
 </tr>
 <tr>
-<td>`_ModuleMember func(size_t)`</td><td>Get the `i`th function.</td>
+<td>`_ModuleMember func(size_t)`</td><td>Get the `i`th function, resolving its address.</td>
+</tr>
+<tr>
+<td>`_ModuleMember func_info(size_t)`</td><td>Get the `i`th function, without resolving its address.</td>
 </tr>
 <tr>
 <td>`size_t var_count`</td><td>how many global variables are declared in the module</td>
@@ -1162,7 +1165,7 @@ structs, unions, enums, or basic types if you wanted.
 On error, returns the invalid type (check `.is_valid`/`is_invalid`).
 
 ```C
-_Module m = __compile("typedef int MyInt; struct S { MyInt x; };");
+_Module m = __compile("typedef int MyInt; struct S { MyInt x; };", nullptr);
 _Type T = m.parse_type("struct S");
 if(T.is_struct)
     printf("%s\n", T.name);
@@ -1170,13 +1173,17 @@ if(T.is_struct)
 
 ##### `_Module.var(size_t)` / `_Module.type(size_t)` / `_Module.func(size_t)`
 
-These functions and their corresponding fields expose the declarations at global scope
-of the module. The methods return a `_ModuleMember`. For functions and variables address
-is the address of the function or object. For types it is always null.
+These functions and their corresponding fields expose the declarations
+at global scope of the module. The methods return a `_ModuleMember`.
+For functions and variables address is the address of the function or
+object. For types it is always null.  `.func_info()` is like `.func()`,
+but it doesn't resolve the address which can fail for various reasons
+and you just want to inspect the metadata like its type and its
+location.
 
 ```C
 for(size_t i = 0; i < m.func_count; i++){
-    _ModuleMember f = m.func(i);
+    _ModuleMember f = m.func_info(i);
     printf("%.*s : %s\n", (int)f.name.count, f.name.data, f.type.name);
 }
 ```
@@ -1216,7 +1223,7 @@ The return value is 0 or the result of a top level return statement.
 
 ```C
 #include <assert.h>
-_Module m = __compile("int x; x = 42;");
+_Module m = __compile("int x; x = 42;", nullptr);
 int* x = m.symbol("x", typeof(*x));
 assert(x && *x == 0);
 m.run();

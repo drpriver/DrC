@@ -18,7 +18,7 @@ void print_dynamic(_Type T, const void* p){
         case void*:
         case const void*:        printf("%p", *(const void**)p); break;
         case typeof(nullptr):    printf("(NULL)"); break;
-        case _Type:              printf("%s", (*(_Type*)p).name); break;
+        case _Type:              printf("%s", (*(_Type*)p).name.data); break;
         default:
             if(T.is_slice){
                 const E = T.element_type;
@@ -79,7 +79,7 @@ void print_dynamic(_Type T, const void* p){
                 printf("]");
                 break;
             }
-            printf("Unhandled T: %s\n", T.name);
+            printf("Unhandled T: %s\n", T.name.data);
         break;
     }
 }
