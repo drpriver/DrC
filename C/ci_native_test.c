@@ -982,6 +982,15 @@ TestFunction(test_interp){
             .exit_code = 3,
         },
         {
+            "procmacro with name", __LINE__,
+            SVI("int add(int x, int y){return x + y;}\n"
+                "#pragma procmacro ADD add\n"
+                "#if ADD(1, 2) == 3\n"
+                "return add(1, 2);\n"
+                "#endif"),
+            .exit_code = 3,
+        },
+        {
             "procmacro codegen", __LINE__,
             SVI("const char* dagen(_Type T){\n"
                 "     char buff[1024];\n"

@@ -4010,6 +4010,12 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(!ntoks || toks->type != CPP_IDENTIFIER)
         return cpp_error(cpp, loc, "#pragma procmacro: expected function name");
     StringView name = toks->txt;
+    StringView macro_name = name;
+    toks++;
+    ntoks--;
+    while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
+    if(ntoks && toks->type == CPP_IDENTIFIER)
+        name = toks->txt;
     Atom atom = AT_get_atom(cpp->at, name.text, name.length);
     if(!atom)
         return cpp_error(cpp, loc, "#pragma procmacro: unknown function '%.*s'", (int)name.length, name.text);
@@ -4026,7 +4032,7 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     }
     err = ci_resolve_refs(ci, 1);
     if(err) return err;
-    return cpp_define_builtin_func_macro(cpp, name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
+    return cpp_define_builtin_func_macro(cpp, macro_name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
 }
 
 static

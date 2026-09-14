@@ -58,7 +58,7 @@
   * [`#pragma framework "name"`](#pragma-framework-name)
   * [`#pragma framework_path "path"`](#pragma-frameworkpath-path)
   * [`#pragma pkg_config "package"`](#pragma-pkgconfig-package)
-  * [`#pragma procmacro name`](#pragma-procmacro-name)
+  * [`#pragma procmacro`](#pragma-procmacro)
 
 # Extensions
 
@@ -1318,22 +1318,57 @@ loading.
 Use `pkg-config` to find include paths and libraries for a
 package.
 
-### `#pragma procmacro name`
+### `#pragma procmacro`
 
-Registers a previously defined C function as a preprocessor macro. When
-invoked, the cpp tokens are expanded and converted to c tokens, then parsed
-as actual C arguments. This means this macro has C semantics (it can see
-enums), but because it runs in the preprocessor other functions are not
-defined yet and cannot be called and global variables can't be referenced.
+Registers a C function as a preprocessor function-like macro.
+This has two forms:
 
-
-The return value is converted to a preprocessor token: integers/floats
-become pp-numbers, `const char*` becomes a string literal,
-`_Bool` becomes `true`/`false`, and
-`void` produces no output.
+```C
+#pragma procmacro name
+#pragma procmacro macroname funcname
+```
 
 
-This lets you write arbitrary compile-time computation in plain C.
+In the first form, name is both the name of the function and the macro that
+will be defined.  The second form, you can choose the macroname so that it
+doesn't shadow the original function name.
+
+
+When the macro is invoked, the arguments are expanded like with any other
+macro then converted to C tokens. Those C tokens are then parsed as args to
+the function and constexpr evaluated at global scope. The return of the
+function call is then converted to a preprocessor token.
+
+
+The following return values are supported:
+
+<table>
+<thead>
+<tr>
+<th>Type</th><th>CPP Token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>`_Bool`</td><td>`true` / `false`</td>
+</tr>
+<tr>
+<td>`int`, `float`, etc.</td><td>pp-number</td>
+</tr>
+<tr>
+<td>`void`</td><td>expands to no tokens</td>
+</tr>
+<tr>
+<td>`char *` or `char` slice</td><td>string literal or `nullptr`</td>
+</tr>
+<tr>
+<td>`nullptr_t`</td><td>`nullptr`</td>
+</tr>
+<tr>
+<td>`_Any`</td><td>type is introspected and payload is converted as above.</td>
+</tr>
+</tbody>
+</table>
 
 ```C
 unsigned long hash(const char* s){
@@ -1342,28 +1377,29 @@ unsigned long hash(const char* s){
         h = h * 33 + *s++;
     return h;
 }
-#pragma procmacro hash
+#pragma procmacro HASH hash
 
-// case labels must be constant expressions. The proc macro computes
-// hash("quit") etc. at compile time, while (hash)(cmd) runs at runtime.
+// Note that case labels must be constant expressions.
 void handle(const char* cmd){
-    switch((hash)(cmd)){
-        case hash("quit"): exit(0);
-        case hash("help"): print_help(); break;
-        case hash("run"):  do_run(); break;
+    switch(hash(cmd)){
+        case HASH("quit"): exit(0);
+        case HASH("help"): print_help(); break;
+        case HASH("run"):  do_run(); break;
     }
 }
 ```
 
 
-The function must be defined (not just declared) before the pragma. The
-macro takes the same number of arguments as the function's parameter list.
-
-
-Use `(hash)(cmd)` to call the original function.
+If you don't rename the macro, you can access the original function by
+suppressing macro expansion by wrapping it in parens, like `(hash)(cmd)`,
+like any other function-like macro.
 
 
 Comboing this with `__mixin` allows you to generate code.
+
+
+This example kind of sucks because you have to use snprintf instead of
+a string builder, but we'll fix that later.
 
 ```C
 const char* gen_vec(int n){
@@ -1374,7 +1410,7 @@ const char* gen_vec(int n){
     for(int i = 0; i < n; i++)
         off += snprintf(buf + off, sizeof buf - off, " float v%d;", i);
     off += snprintf(buf + off, sizeof buf - off, " };");
-    return __builtin_intern(buf);
+    return __builtin_intern(buf); // avoid dangling pointer
 }
 #pragma procmacro gen_vec
 
@@ -1384,4 +1420,4 @@ __mixin(gen_vec(4))  // generates struct Vec4 with 4 float fields
 ```
 
 
-Things can get even crazier with `_Type` (types as values).
+Things can get even crazier with `_Type`.
