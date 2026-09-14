@@ -35,6 +35,7 @@
 #include "native_call.h"
 #include "cc_func.h"
 #include "cc_target.h"
+#include "cc_rt_types.h"
 
 enum {
     NC_NO_ERROR = _cc_no_error,
@@ -155,9 +156,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 break;
             case CC_TARGET_X86_64_LINUX:
             case CC_TARGET_X86_64_MACOS:
-                if(!s->sysv.is_memory_class
-                    && (s->sysv.class0 == CC_SYSV_SSE || (s->size > 8 && s->sysv.class1 == CC_SYSV_SSE)))
-                {
+                if(!s->sysv.is_memory_class && (s->sysv.class0 == CC_SYSV_SSE || (s->size > 8 && s->sysv.class1 == CC_SYSV_SSE))){
                     uint32_t sz = s->size;
                     uint32_t eb0 = sz > 8 ? 8 : sz;
                     uint32_t eb1 = sz > 8 ? sz - 8 : 0;
@@ -363,7 +362,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 case CCBT_float16:
                     return NC_UNSUPPORTED_TYPE;
                 case CCBT__Any:
-                    return cctype_integer_ffi(a, 16, 8, out);
+                    return cctype_integer_ffi(a, sizeof(CiRtAny), _Alignof(CiRtAny), out);
                 case CCBT_INVALID:
                 case CCBT_COUNT:
                     return NC_UNSUPPORTED_TYPE;
