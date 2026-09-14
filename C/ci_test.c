@@ -2853,7 +2853,6 @@ TestFunction(test_interpreter){
                "int (*fp)(int, int) = add;\n"
                "return fp(3, 4);\n"),
             .exit_code = 7,
-            .skip = 0,
         },
         {
             "function pointer: call inside function body", __LINE__,

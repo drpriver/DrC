@@ -176,6 +176,22 @@ struct HasUnion {
     int x, y;
 };
 static int test_has_union(struct HasUnion hs){ return hs.a+hs.x+hs.y; }
+struct CharSlice {
+    size_t count;
+    char* data;
+};
+_Static_assert(sizeof(struct CharSlice) == sizeof(CiRtSlice), "");
+_Static_assert(_Alignof(struct CharSlice) == _Alignof(CiRtSlice), "");
+_Static_assert(offsetof(struct CharSlice, count) == offsetof(CiRtSlice, count), "");
+_Static_assert(offsetof(struct CharSlice, data) == offsetof(CiRtSlice, data), "");
+static struct CharSlice char_slice_rstrip(struct CharSlice s){
+    for(;s.count;s.count--){
+        char c = s.data[s.count-1];
+        if(!(c == '\0' || c == ' ' || c == '\r' || c == '\n' || c == '\t'))
+            break;
+    }
+    return s;
+}
 
 TestFunction(test_interop){
     TESTBEGIN();
@@ -780,6 +796,15 @@ TestFunction(test_interop){
             .skip = IS_WINDOWS,
             // {{SV("snprintf"), (void*)snprintf}},
             .exit_code = 3,
+        },
+        {
+            "char slice", __LINE__,
+            SVI("char rstrip(char[:])[:];\n"
+                "char s[:] = \"hello \\r\\n\\0\";\n"
+                "s = rstrip(s);\n"
+                "return (int)s.count;\n"),
+            {{SV("rstrip"), (void*)char_slice_rstrip}},
+            .exit_code = 5,
         },
     };
     int err;

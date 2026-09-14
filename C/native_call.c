@@ -74,7 +74,7 @@ int
 cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
         case CC_SLICE:
-            return NC_UNSUPPORTED_TYPE;
+            return cctype_integer_ffi(a, sizeof(CiRtSlice), _Alignof(CiRtSlice), out);
         case CC_BLOCK_POINTER:
         case CC_POINTER:
         case CC_FUNCTION:
