@@ -1297,8 +1297,17 @@ ap_parse_flag_value(ArgToParse* arg, StringView s){
 static inline
 intptr_t
 check_for_early_out_args(ArgParser* parser, const Args* args){
+    _Bool has_dash_dash = 0;
+    for(size_t i = 0; i < parser->keyword.count; i++){
+        if(sv_equals(parser->keyword.args[i].name, SV("--"))){
+            has_dash_dash = 1;
+            break;
+        }
+    }
     for(int i = 0; i < args->argc; i++){
         StringView argstring = {strlen(args->argv[i]), args->argv[i]};
+        if(has_dash_dash && sv_equals(argstring, SV("--")))
+            break;
         for(size_t j = 0; j < parser->early_out.count; j++){
             ArgToParse* early = &parser->early_out.args[j];
             if(sv_equals(argstring, early->name))
