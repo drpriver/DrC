@@ -556,6 +556,30 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(size_t*)result = ccqt_as_array(qt)->length;
             return 0;
         }
+        case CC_TYPE_LOC:{
+            SrcLoc* out = result;
+            switch(ccqt_kind(qt)){
+                DRP_CASES_EXHAUSTED;
+                case CC_ENUM:
+                    *out = ccqt_as_enum(qt)->loc;
+                    break;
+                case CC_STRUCT:
+                    *out = ccqt_as_struct(qt)->loc;
+                    break;
+                case CC_UNION:
+                    *out = ccqt_as_union(qt)->loc;
+                    break;
+                case CC_FUNCTION:
+                case CC_BLOCK_POINTER:
+                case CC_SLICE:
+                case CC_ARRAY:
+                case CC_POINTER:
+                case CC_BASIC:
+                    out->bits = 0;
+                    break;
+            }
+            return 0;
+        }
         case CC_TYPE_IS_CALLABLE_WITH: {
             uintptr_t arg_bits = arg;
             CcQualType arg_type = {.bits = arg_bits};

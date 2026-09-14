@@ -530,6 +530,7 @@ C::md
         size_t param_count;    // Parameter count (functions/function pointers)
         _Type underlying_type; // Underlying integer type (enums only)
         size_t enumerators;    // Number of enumerators (enums only)
+        _SrcLoc loc;           // Where this type was defined (tagged only).
 
     Methods::md
       ::pre.C

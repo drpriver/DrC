@@ -4580,6 +4580,9 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     case CC_TYPE_PARAM_COUNT:
                         result_type = ccqt_basic(cc_target(p)->size_type);
                         break;
+                    case CC_TYPE_LOC:
+                        result_type = p->builtin_src_loc;
+                        break;
                     case CC_TYPE_POINTEE:
                     case CC_TYPE_UNQUAL:
                     case CC_TYPE_RETURN_TYPE:
@@ -6726,6 +6729,7 @@ cc_expr_nvalues(CcExpr* e){
                     return 1;
                 case CC_TYPE_ALIGNOF:
                 case CC_TYPE_COUNT:
+                case CC_TYPE_LOC:
                 case CC_TYPE_ELEMENT_TYPE:
                 case CC_TYPE_ENUMERATORS:
                 case CC_TYPE_FIELDS:
@@ -12479,6 +12483,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("pointee"), CC_TYPE_POINTEE},
             {SVI("unqual"), CC_TYPE_UNQUAL},
             {SVI("count"), CC_TYPE_COUNT},
+            {SVI("loc"), CC_TYPE_LOC},
             {SVI("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
             {SVI("is_castable_to"), CC_TYPE_CASTABLE_TO},
             {SVI("make_any"), CC_TYPE_MAKE_ANY},
@@ -14176,6 +14181,9 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_COUNT:
                     if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     UINTRES(ccqt_as_array(qt)->length);
+                case CC_TYPE_LOC:
+                    err = CC_NOT_CONSTANT_ERROR;
+                    goto fini_introspection;
                 case CC_TYPE_IS_CALLABLE_WITH: {
                     CcExpr* arg;
                     err = cc_eval_expr(p, e->values[0], &arg);

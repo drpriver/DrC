@@ -174,6 +174,7 @@ enum CcTypeIntrospectionOp TYPED_ENUM(uint32_t) {
     CC_TYPE_POINTEE,
     CC_TYPE_UNQUAL,
     CC_TYPE_COUNT,
+    CC_TYPE_LOC,
     // Methods (with parens, lhs = _Type expr, values[0] = arg _Type expr)
     CC_TYPE_IS_CALLABLE_WITH,
     CC_TYPE_CASTABLE_TO,

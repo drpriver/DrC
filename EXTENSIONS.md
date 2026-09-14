@@ -677,6 +677,7 @@ _Type return_type;     // Return type (functions/function pointers)
 size_t param_count;    // Parameter count (functions/function pointers)
 _Type underlying_type; // Underlying integer type (enums only)
 size_t enumerators;    // Number of enumerators (enums only)
+_SrcLoc loc;           // Where this type was defined (tagged only).
 ```
 
 #### Methods
@@ -691,7 +692,9 @@ _Type param_type(size_t);
 __builtin_Enumerator enumerator(size_t i);
 
 // True if callable with argument type `T`.
-_Bool is_callable_with(_Type T);
+_Bool is_callable_with(constexpr _Type T...);
+// True if callable with these values
+_Bool is_callable_with(...);
 
 // True if explicitly castable to type `T`.
 _Bool is_castable_to(_Type T)
