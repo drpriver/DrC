@@ -313,6 +313,7 @@ typedef struct CiClosureData CiClosureData;
 struct CiClosureData {
     CiInterpreter* ci;
     CcFunc* func;
+    uint32_t ret_sz;
 };
 
 static
@@ -322,21 +323,16 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
     CiInterpreter* ci = cd->ci;
     CcFunc* func = cd->func;
     CcFunction* ftype = func->type;
-    uint32_t ret_sz = 0;
-    if(!(ccqt_is_basic(ftype->return_type) && ftype->return_type.basic.kind == CCBT_void)){
-        int err = cc_sizeof_as_uint(&ci->parser, ftype->return_type, func->loc, &ret_sz);
-        if(err) return;
-    }
+    uint32_t ret_sz = cd->ret_sz;
     void* result = ret_sz ? rvalue : ci_discard_buf;
     size_t size = ret_sz ? ret_sz : sizeof ci_discard_buf;
     ci_call_argv(ci, NULL, func, args, ftype->param_count, NULL, result, size, func->loc);
 }
 
-// Create a native closure for an interpreted function, storing the
-// resulting function pointer in func->native_func.
 static
 int
 ci_create_closure(CiInterpreter* ci, CcFunc* func){
+    int err;
     #ifdef NO_NATIVE_CALL
         // No native code can call this, so just use the CcFunc* itself as a
         // fake function pointer. The closure_map reverse lookup will catch it
@@ -349,8 +345,16 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         if(!cd) return CI_OOM_ERROR;
         cd->ci = ci;
         cd->func = func;
+        if(!(ccqt_bt_eq(func->type->return_type, CCBT_void))){
+            err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
+            // This should never happen, but who knows.
+            if(err){
+                Allocator_free(ci_allocator(ci), cd, sizeof *cd);
+                return err;
+            }
+        }
         NativeClosure* nc = NULL;
-        int err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
+        err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
         if(err){
             Allocator_free(ci_allocator(ci), cd, sizeof *cd);
             return err;
@@ -358,8 +362,8 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         func->native_func = native_closure_fn(nc);
         func->native_closure = nc;
     #endif
-    int e = BPM_put(&ci->closure_map, ci_allocator(ci), func, (void*)func->native_func);
-    if(e) return e == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
+    err = BPM_put(&ci->closure_map, ci_allocator(ci), func, (void*)func->native_func);
+    if(err) return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
     return 0;
 }
 
