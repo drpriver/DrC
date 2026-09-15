@@ -58,4 +58,4 @@ if __name__ == '__main__':
             break
     fixup_gcno_files(obj_dir)
     from gcovr.__main__ import main
-    main()
+    sys.exit(main())

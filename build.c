@@ -216,7 +216,7 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cov_cmd, "--drc", cc_cov);
                 b_arg(ctx, cov_cmd, "--covdir");
-                b_argf(ctx, cov_cmd, "%s/drc_test_coverage", ctx->build_dir->data);
+                b_argf(ctx, cov_cmd, "%s/drc_test_coverage", ctx->bin_dir->data);
             }
             b_arg(ctx, cov_cmd, "--multithreaded");
             b_add_dep(ctx, coverage_tests, cov_cmd);
@@ -230,13 +230,14 @@ int main(int argc, char** argv, char** envp){
             "--merge-mode-functions=merge-use-line-0",
             "--exclude", "Drp/", "--exclude", "Vendored/", "--exclude", ".*_test\\.c",
             "--exclude", "cc\\.c",
+            "--exclude", "ctags\\.c",
             "--exclude", "cpp\\.c",
             "--exclude", "cpp_args\\.h",
             "--exclude", "cc_repl_completion\\.h",
             "--markdown");
         b_argf(ctx, coverage, "--txt=%s/coverage/coverage.txt", ctx->build_dir->data);
         b_argf(ctx, coverage, "--html-details=%s/coverage/index.html", ctx->build_dir->data);
-        b_argf(ctx, coverage, "--object-directory=%s", ctx->build_dir->data);
+        b_argf(ctx, coverage, "--object-directory=%s", ctx->bin_dir->data);
     }
     {
         // TODO: there should be a helper in drbuild for custom compilers.
