@@ -15,6 +15,7 @@
 #include "Drp/file_cache.h"
 #include "Drp/file_util.h"
 #include "Drp/msb_atomize.h"
+#include "Drp/dre.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_tok.h"
@@ -57,18 +58,25 @@ enum CtSymbolKind {
 };
 typedef enum CtSymbolKind CtSymbolKind;
 enum {CT_COUNT=CT_ENUMERATORS+1};
+enum {CT_EXCLUDE_MAX = 32};
 typedef struct CtCtx CtCtx;
 struct CtCtx {
     Allocator allocator;
+    StringView (*any_exclude)[CT_EXCLUDE_MAX];
+    StringView (*specific_excludes)[CT_COUNT][CT_EXCLUDE_MAX];
     AtomMap(Atom) (*symbols)[CT_COUNT];
     Parray(Atom)* tags;
     AtomTable* at;
     FileCache* fc;
     LineCache* lc;
     MStringBuilder* sb;
+    _Bool debug_re;
+    Logger* logger;
 };
 static int ct_add_tag(CtCtx*, CtSymbolKind, Atom, SrcLoc);
 static int ct_build_tag(FileCache*, LineCache*, Atom, SrcLoc, MStringBuilder*);
+static int ct_generate_vim(CtCtx*, StringView prefix);
+static int ct_generate_tags(CtCtx*);
 static int atom_cmp(const void* a, const void* b){
     Atom l = *(const Atom*)a, r = *(const Atom*)b;
     return strcmp(l->data, r->data);
@@ -106,26 +114,74 @@ int main(int argc, char** argv, char** envp){
             .min_num = 1, .max_num = 1,
         },
     };
-    StringView output = {0}, output_vim = {0}, syntax_prefix = SV("c");
+    StringView output = {0},
+               output_vim = {0},
+               syntax_prefix = SV("c"),
+               exclude[CT_EXCLUDE_MAX] = {SVI("__"), SVI("_[hH]$"), SVI("^[a-z][a-z0-9]$")},
+               specific_excludes[CT_COUNT][CT_EXCLUDE_MAX] = {0};
+    _Bool debug_re = 0;
+    enum {EXCLUDE_IDX=3};
     ArgToParse kw_args[] = {
         {
             .name = SVI("-o"),
             .dest = ARGDEST(&output),
             .help = "Where to write the ctags file to",
-            .min_num = 0, .max_num = 1,
+            .min_num = 1, .max_num = 1,
         },
         {
             .name = SVI("--output-vim"),
             .dest = ARGDEST(&output_vim),
             .help = "Where to write a syntax .vim file to",
-            .min_num = 0, .max_num = 1,
+            .min_num = 1, .max_num = 1,
         },
         {
             .name = SVI("--syntax-prefix"),
             .dest = ARGDEST(&syntax_prefix),
             .help = "what to prefix the syntax groups with",
-            .min_num = 0, .max_num = 1,
+            .min_num = 1, .max_num = 1,
             .show_default = 1,
+        },
+        [EXCLUDE_IDX] = {
+            .name = SVI("--exclude"),
+            .dest = ARGDEST(exclude),
+            .help = "regex which if matches, the symbol of any kind is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+            .show_default = 3,
+        },
+        {
+            .name = SVI("--type-exclude"),
+            .dest = ARGDEST(&specific_excludes[CT_TYPE][0]),
+            .help = "regex which if matches, the type is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+        },
+        {
+            .name = SVI("--macro-exclude"),
+            .dest = ARGDEST(&specific_excludes[CT_MACRO][0]),
+            .help = "regex which if matches, the macro is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+        },
+        {
+            .name = SVI("--function-exclude"),
+            .dest = ARGDEST(&specific_excludes[CT_FUNCTION][0]),
+            .help = "regex which if matches, the function is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+        },
+        {
+            .name = SVI("--global-var-exclude"),
+            .dest = ARGDEST(&specific_excludes[CT_GLOBAL_VARIABLE][0]),
+            .help = "regex which if matches, the global var is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+        },
+        {
+            .name = SVI("--enumerator-exclude"),
+            .dest = ARGDEST(&specific_excludes[CT_ENUMERATORS][0]),
+            .help = "regex which if matches, the global var is excluded from syntax highlighting",
+            .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+        },
+        {
+            .name = SVI("--debug-re"),
+            .dest = ARGDEST(&debug_re),
+            .help = "Print out which symbols matched the regexes",
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -183,6 +239,10 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&argparser, parse_err);
         return 1;
     }
+    if(kw_args[EXCLUDE_IDX].num_parsed){
+        for(size_t i = kw_args[EXCLUDE_IDX].num_parsed; i < 3; i++)
+            exclude[i] = (StringView){0};
+    }
     parser.cpp.fc = fc;
     parser.cpp.logger = logger;
     parser.cpp.target = cc_target_funcs[cc_target_arg]();
@@ -232,13 +292,26 @@ int main(int argc, char** argv, char** envp){
     LineCache line_cache = {.allocator=MALLOCATORI};
     CtCtx ctx = {
         .allocator = MALLOCATORI,
+        .any_exclude = &exclude,
+        .specific_excludes = &specific_excludes,
         .tags = &ctags,
         .symbols = &symbols,
         .at = &at,
         .fc = fc,
         .lc = &line_cache,
         .sb = &sb,
+        .debug_re = debug_re,
+        .logger = logger,
     };
+    {
+        AtomMap16Items items = AM16_items(&g->typedefs);
+        MARRAY_FOR_EACH(AtomMap16Item, it, items){
+            if(!it->payload[0] && !it->payload[1]) continue;
+            CcTypedef* p = (CcTypedef*)it->payload;
+            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+    }
     {
         AtomMapItems items = AM_items(&g->structs);
         MARRAY_FOR_EACH(AtomMapItem, it, items){
@@ -290,56 +363,64 @@ int main(int argc, char** argv, char** envp){
             if(err > 0) goto stringify_error;
         }
     }
+    err = ct_generate_tags(&ctx);
+    if(err) goto stringify_error;
     {
-        AtomMap16Items items = AM16_items(&g->typedefs);
-        MARRAY_FOR_EACH(AtomMap16Item, it, items){
-            if(!it->payload[0] && !it->payload[1]) continue;
-            CcTypedef* p = (CcTypedef*)it->payload;
-            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
+        if(ctx.sb->errored){
+            err = _cc_oom_error;
+            goto stringify_error;
         }
-    }
-    err = 0;
-    qsort(ctags.data, ctags.count, sizeof(Atom), atom_cmp);
-    FILE* fp = stdout;
-    if(output.length){
-        fp = fopen(output.text, "wb");
-        if(!fp){
-            fprintf(stderr, "Unable to open '%s': %s\n", output.text, strerror(errno));
+        StringView contents = msb_borrow_sv(ctx.sb);
+        FileError fe = output.length?write_file(output.text, contents.text, contents.length):write_file_handle(FU_STDOUT, contents.text, contents.length);
+        if(fe.errored){
+            #ifdef _WIN32
+            log_error(logger, "Unable to write tags to '%s'\n", output.length?output.text:"stdout");
+            #else
+            log_error(logger, "Unable to write tags to '%s': %s\n", output.length?output.text:"stdout", strerror(fe.native_error));
+            #endif
             return 1;
         }
-    }
-    fprintf(fp, "!_TAG_FILE_FORMAT	1	/basic format; no extension fields/\n");
-    fprintf(fp, "!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/\n");
-    Atom prev = nil_atom;
-    for(size_t i = 0; i < ctags.count; i++){
-        Atom a = ctags.data[i];
-        if(a == prev) continue;
-        prev = a;
-        fprintf(fp, "%s\n", a->data);
-    }
-    _Bool write_failed = ferror(fp) != 0;
-    if(fflush(fp) == EOF)
-        write_failed = 1;
-    if(fp != stdout && fclose(fp) == EOF)
-        write_failed = 1;
-    if(write_failed){
-        fprintf(stderr, "Unable to write tags to '%s'\n", output.length?output.text:"stdout");
-        return 1;
     }
     if(output_vim.length){
-        fp = fopen(output_vim.text, "wb");
-        if(!fp){
-            fprintf(stderr, "Unable to open '%s': %s\n", output_vim.text, strerror(errno));
+        err = ct_generate_vim(&ctx, syntax_prefix);
+        if(err) goto stringify_error;
+        if(ctx.sb->errored){
+            err = _cc_oom_error;
+            goto stringify_error;
+        }
+        StringView contents = msb_borrow_sv(ctx.sb);
+        FileError fe = write_file(output_vim.text, contents.text, contents.length);
+        if(fe.errored){
+            #ifndef _WIN32
+            log_error(logger, "Unable to write '%s': %s\n", output_vim.text, strerror(fe.native_error));
+            #else
+            log_error(logger, "Unable to write '%s'\n", output_vim.text);
+            #endif
             return 1;
         }
-        fclose(fp);
     }
     return 0;
     stringify_error:;
     const char* error_name = cc_stringify_error(err);
-    fprintf(stderr, "Fail: %s\n", error_name);
+    log_error(logger, "Fail: %s\n", error_name);
     return 1;
+}
+
+static
+int
+ct_generate_tags(CtCtx* ctx){
+    qsort(ctx->tags->data, ctx->tags->count, sizeof(Atom), atom_cmp);
+    msb_reset(ctx->sb);
+    msb_sprintf(ctx->sb, "!_TAG_FILE_FORMAT	1	/basic format; no extension fields/\n");
+    msb_sprintf(ctx->sb, "!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/\n");
+    Atom prev = nil_atom;
+    for(size_t i = 0; i < ctx->tags->count; i++){
+        Atom a = ctx->tags->data[i];
+        if(a == prev) continue;
+        prev = a;
+        msb_sprintf(ctx->sb, "%s\n", a->data);
+    }
+    return 0;
 }
 
 static
@@ -430,12 +511,121 @@ ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder
     return sb->errored?_cc_oom_error:0;
 }
 
+
+static
+_Bool
+ct_vim_needs_escape_in_syntax(Atom name){
+    if(name->length > 80) return 1;
+    StringView n = {name->length, name->data};
+    static const StringView options[] = {
+        SVI("contained"), SVI("oneline"), SVI("keepend"), SVI("extend"), SVI("excludenl"),
+        SVI("transparent"), SVI("skipnl"), SVI("skipwhite"), SVI("skipempty"), SVI("grouphere"),
+        SVI("groupthere"), SVI("display"), SVI("fold"), SVI("conceal"), SVI("concealends"),
+        SVI("cchar"), SVI("contains"), SVI("containedin"), SVI("nextgroup"),
+    };
+    for(size_t i = 0; i < arrlen(options); i++)
+        if(sv_iequals(n, options[i])) return 1;
+    return 0;
+}
+
+static
+int
+ct_generate_vim(CtCtx* ctx, StringView prefix){
+    msb_reset(ctx->sb);
+    static const struct { const char* suffix; const char* link; } groups[CT_COUNT] = {
+        [CT_GLOBAL_VARIABLE] = {"GlobalVariable", "Identifier"},
+        [CT_TYPE] = {"Type", "Type"},
+        [CT_MACRO] = {"PreProc", "Macro"},
+        [CT_FUNCTION] = {"Function", "Function"},
+        [CT_ENUMERATORS] = {"Enum", "Constant"},
+    };
+    Parray(Atom) names = {0};
+    int err = 0;
+    msb_sprintf(ctx->sb, "syntax case match\n");
+    for(size_t kind = 0; kind < CT_COUNT; kind++){
+        names.count = 0;
+        AtomMapItems items = AM_items(&(*ctx->symbols)[kind]);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            err = pa_push(&names, ctx->allocator, (void*)(uintptr_t)it->atom);
+            if(err){ err = _cc_oom_error; goto finally; }
+        }
+        if(!names.count) continue;
+        qsort(names.data, names.count, sizeof(Atom), atom_cmp);
+        const char* suffix = groups[kind].suffix;
+        msb_sprintf(ctx->sb, "\nhighlight default link %.*s%s %s\n", (int)prefix.length, prefix.text, suffix, groups[kind].link);
+        size_t batch = 0;
+        for(size_t i = 0; i < names.count; i++){
+            Atom name = names.data[i];
+            if(!ct_vim_needs_escape_in_syntax(name)){
+                if(!batch)
+                    msb_sprintf(ctx->sb, "syntax keyword %.*s%s", (int)prefix.length, prefix.text, suffix);
+                msb_sprintf(ctx->sb, " %s", name->data);
+                if(++batch == 64){
+                    msb_write_char(ctx->sb, '\n');
+                    batch = 0;
+                }
+            }
+            else {
+                if(batch){ msb_write_char(ctx->sb, '\n'); batch = 0; }
+                msb_sprintf(ctx->sb, "syntax match %.*s%s /\\m\\C\\<\\V", (int)prefix.length, prefix.text, suffix);
+                for(size_t j = 0; j < name->length; j++){
+                    char c = name->data[j];
+                    if(c == '/' || c == '\\') msb_write_char(ctx->sb, '\\');
+                    msb_write_char(ctx->sb, c);
+                }
+                msb_sprintf(ctx->sb, "\\m\\>/\n");
+            }
+        }
+        if(batch) msb_write_char(ctx->sb, '\n');
+    }
+    finally:;
+    pa_cleanup(&names, ctx->allocator);
+    return err;
+}
+
 static
 int
 ct_add_tag(CtCtx* ctx, CtSymbolKind kind, Atom name, SrcLoc loc){
+    DreContext re_ctx = {0};
+    StringView n = {name->length, name->data};
+    StringView (*excludes)[CT_EXCLUDE_MAX] = ctx->any_exclude;
+    for(size_t i = 0; i < CT_EXCLUDE_MAX; i++){
+        StringView re = (*excludes)[i];
+        if(!re.text) break;
+        if(!re.length) continue;
+        size_t match;
+        if(dre_match_sv(&re_ctx, re, n, &match)){
+            if(ctx->debug_re) log_error(ctx->logger, "Excluding: '%.*s' due to '%.*s'\n", (int)n.length, n.text, (int)re.length, re.text);
+            goto skip_symbol;
+            return -1;
+        }
+    }
+    excludes = &(*ctx->specific_excludes)[kind];
+    for(size_t i = 0; i < CT_EXCLUDE_MAX; i++){
+        StringView re = (*excludes)[i];
+        if(!re.text) break;
+        if(!re.length) continue;
+        size_t match;
+        if(dre_match_sv(&re_ctx, re, n, &match)){
+            if(ctx->debug_re) log_error(ctx->logger, "Excluding: '%.*s' due to '%.*s'\n", (int)n.length, n.text, (int)re.length, re.text);
+            goto skip_symbol;
+            return -1;
+        }
+    }
     int err;
+    if(kind == CT_MACRO){
+        // prevent macros from shadowing other types' highlighting
+        for(size_t i = 0; i < CT_COUNT; i++){
+            AtomMap* am = &(*ctx->symbols)[i];
+            if(AM_get(am, name)){
+                goto skip_symbol;
+            }
+        }
+    }
     err = AM_put(&(*ctx->symbols)[kind], ctx->allocator, name, name);
     if(err) return _cc_oom_error;
+    skip_symbol:;
     msb_reset(ctx->sb);
     err = ct_build_tag(ctx->fc, ctx->lc, name, loc, ctx->sb);
     if(err) return err;
@@ -458,6 +648,7 @@ cc_stringify_error(int err){
 #endif
 #include "Drp/Allocators/allocator.c"
 #include "Drp/file_cache.c"
+#include "Drp/dre.c"
 #include "C/cpp_preprocessor.c"
 #include "C/cc_parser.c"
 

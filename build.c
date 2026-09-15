@@ -332,7 +332,7 @@ int main(int argc, char** argv, char** envp){
             b_aarg(ctx, repl, ctx->dash_dash_args.data[j]);
     }
     {
-        static BuildTarget* bins[2]; bins[0] = cpp; bins[1] = cc;
+        static BuildTarget* bins[3]; bins[0] = cpp; bins[1] = cc; bins[2] = ctags;
         BuildTarget* install = b_script_target(ctx, "install", do_install, bins);
         install->description = b_atomize(ctx, "Install the main binaries.");
         install->is_phony = 1;
@@ -389,7 +389,7 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
     if(BUILD_OS == OS_WINDOWS){
         err = b_mkdirs_if_not_exists(ctx, AT_to_LS(bindir));
         if(err) return err;
-        for(int i = 0; i < 2; i++){
+        for(int i = 0; i < 3; i++){
             BuildTarget* c = bins[i];
             Atom dst = b_atomize_f(ctx, "%s/%s", bindir->data, path_basename(AT_to_SV(c->name), BUILD_OS==OS_WINDOWS).text);
             err = b_copy_file(ctx, c->name->data, dst->data);
@@ -405,7 +405,7 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
         cmd_clear(&cmd);
         cmd_prog(&cmd, LS("install"));
         cmd_cargs(&cmd, "-m", "755");
-        for(int i = 0; i < 2; i++)
+        for(int i = 0; i < 3; i++)
             cmd_aarg(&cmd, bins[i]->name);
         cmd_aarg(&cmd, bindir);
         err = b_run_cmd_sync(ctx, &cmd);

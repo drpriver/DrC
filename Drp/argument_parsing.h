@@ -472,7 +472,7 @@ struct ArgToParse {
 
     //
     // Whether to show the default value in the help printout.
-    _Bool show_default; // maybe we'll want a bitflags field with options instead.
+    int show_default; // maybe we'll want a bitflags field with options instead.
 
     //
     // Whether to hide this flag from the help output.
@@ -904,7 +904,7 @@ ap_print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const 
     else{
         p->print(p->hout, " <%s%s%s>", style->pre_typename, typename.text, style->post_typename);
         if(arg->max_num > 1){
-            p->print(p->hout, " ... ");
+            p->print(p->hout, " ...");
         }
     }
 
@@ -918,75 +918,81 @@ ap_print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const 
             ap_print_enum_options(p, arg->dest.enum_pointer, style, columns);
         return;
     }
-    switch(type){
-        case ARG_INTEGER64:{
-            int64_t* data = arg->dest.pointer;
-            p->print(p->hout, " = %lld", (long long)*data);
-        }break;
-        case ARG_UINTEGER64:{
-            uint64_t* data = arg->dest.pointer;
-            p->print(p->hout, " = %llu", (unsigned long long)*data);
-        }break;
-        case ARG_INT:{
-            int* data = arg->dest.pointer;
-            p->print(p->hout, " = %d", *data);
-        }break;
-        #if PARSE_NUMBER_PARSE_FLOATS
-        case ARG_FLOAT32:{
-            float* data = arg->dest.pointer;
-            p->print(p->hout, " = %f", (double)*data);
-        }break;
-        case ARG_FLOAT64:{
-            double* data = arg->dest.pointer;
-            p->print(p->hout, " = %f", *data);
-        }break;
-        #endif
-        case ARG_BITFLAG:{
-        }break;
-        case ARG_FLAG:{
-        }break;
-        case ARG_CSTRING:{
-            const char* s = arg->dest.pointer;
-            p->print(p->hout, " = '%s'", s);
-        }break;
-        case ARG_STRING:{
-            StringView* s = arg->dest.pointer;
-            p->print(p->hout, " = '%.*s'", (int)s->length, s->text);
-        }break;
-        case ARG_USER_DEFINED:{
-            if(arg->dest.user_pointer->default_printer){
-                arg->dest.user_pointer->default_printer(p, arg->dest.pointer);
-            }
-        }break;
-        case ARG_ENUM:{
-            const ArgParseEnumType* enu = arg->dest.enum_pointer;
-            StringView enu_name = SV("???");
-            switch(enu->enum_size){
-                case 1:{
-                    uint8_t* def = arg->dest.pointer;
-                    if(*def <  enu->enum_count)
-                        enu_name = enu->enum_names[*def];
-                }break;
-                case 2:{
-                    uint16_t* def = arg->dest.pointer;
-                    if(*def <  enu->enum_count)
-                        enu_name = enu->enum_names[*def];
-                }break;
-                case 4:{
-                    uint32_t* def = arg->dest.pointer;
-                    if(*def <  enu->enum_count)
-                        enu_name = enu->enum_names[*def];
-                }break;
-                case 8:{
-                    uint64_t* def = arg->dest.pointer;
-                    if(*def <  enu->enum_count)
-                        enu_name = enu->enum_names[*def];
-                }break;
-            }
-            p->print(p->hout, " = %.*s", (int)enu_name.length, enu_name.text);
-            // ap_print_enum_options(p, enu, style);
-        }break;
-    }
+    p->print(p->hout, " =");
+    for(int i = 0; i < arg->show_default; i++)
+        switch(type){
+            case ARG_INTEGER64:{
+                int64_t* data = arg->dest.pointer;
+                p->print(p->hout, " %lld", (long long)*(data+i));
+            }break;
+            case ARG_UINTEGER64:{
+                uint64_t* data = arg->dest.pointer;
+                p->print(p->hout, " %llu", (unsigned long long)*(data+i));
+            }break;
+            case ARG_INT:{
+                int* data = arg->dest.pointer;
+                p->print(p->hout, " %d", *(data+i));
+            }break;
+            #if PARSE_NUMBER_PARSE_FLOATS
+            case ARG_FLOAT32:{
+                float* data = arg->dest.pointer;
+                p->print(p->hout, " %f", (double)*(data+i));
+            }break;
+            case ARG_FLOAT64:{
+                double* data = arg->dest.pointer;
+                p->print(p->hout, " %f", *(data+i));
+            }break;
+            #endif
+            case ARG_BITFLAG:{
+            }break;
+            case ARG_FLAG:{
+            }break;
+            case ARG_CSTRING:{
+                const char** s = arg->dest.pointer;
+                p->print(p->hout, " '%s'", *(s+i));
+            }break;
+            case ARG_STRING:{
+                StringView* s = arg->dest.pointer;
+                p->print(p->hout, " '%.*s'", (int)s[i].length, s[i].text);
+            }break;
+            case ARG_USER_DEFINED:{
+                if(arg->dest.user_pointer->default_printer){
+                    arg->dest.user_pointer->default_printer(p, arg->dest.pointer);
+                }
+            }break;
+            case ARG_ENUM:{
+                const ArgParseEnumType* enu = arg->dest.enum_pointer;
+                StringView enu_name = SV("???");
+                switch(enu->enum_size){
+                    case 1:{
+                        uint8_t* def = arg->dest.pointer;
+                        def += i;
+                        if(*def <  enu->enum_count)
+                            enu_name = enu->enum_names[*def];
+                    }break;
+                    case 2:{
+                        uint16_t* def = arg->dest.pointer;
+                        def += i;
+                        if(*def <  enu->enum_count)
+                            enu_name = enu->enum_names[*def];
+                    }break;
+                    case 4:{
+                        uint32_t* def = arg->dest.pointer;
+                        def += i;
+                        if(*def <  enu->enum_count)
+                            enu_name = enu->enum_names[*def];
+                    }break;
+                    case 8:{
+                        uint64_t* def = arg->dest.pointer;
+                        def += i;
+                        if(*def <  enu->enum_count)
+                            enu_name = enu->enum_names[*def];
+                    }break;
+                }
+                p->print(p->hout, " %.*s", (int)enu_name.length, enu_name.text);
+                // ap_print_enum_options(p, enu, style);
+            }break;
+        }
     p->print(p->hout, "%c", '\n');
     p->print(p->hout, "%s", style->pre_description);
     ap_print_wrapped_help(p, help, columns);

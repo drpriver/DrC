@@ -21,7 +21,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if(size > 10000) return 0;
     ArenaAllocator aa = {0};
     Allocator al = allocator_from_arena(&aa);
-    FileCache* fc = fc_create(al);
+    FileCache* fc = fc_create(al, FC_FLAGS_NONE);
     if(!fc) goto done;
     MStringBuilder log_sb = {.allocator=al};
     MsbLogger logger_ = {0};
