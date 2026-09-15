@@ -1592,6 +1592,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return err;
         if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
+        SrcLoc name_loc = tok.loc;
         if(ifndef){
             Atom a = AT_get_atom(cpp->at, name.text, name.length);
             if(a && AM_get(&cpp->macros, a)){
@@ -1627,6 +1628,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = 0;
             }
             if(err) return err;
+            ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
             // push it back so dispatch loop sees newline
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
@@ -1781,7 +1783,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 goto finish_func_macro;
             }
             if(err) goto finish_func_macro;
-            m->def_loc = tok.loc;
+            m->def_loc = name_loc;
             m->is_variadic = variadic;
             m->is_function_like = 1;
             Atom* params = cpp_cmacro_params(m);
@@ -1936,7 +1938,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = 0;
             }
             if(!err)
-                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = tok.loc;
+                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
             finish_obj_macro:;
             cpp_release_scratch(cpp, repl);
             return err;
@@ -1953,6 +1955,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return err;
         if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
+        SrcLoc name_loc = tok.loc;
         // Check for function-like macro: name(
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
@@ -2096,7 +2099,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
             else {
-                m->def_loc = tok.loc;
+                m->def_loc = name_loc;
                 m->is_variadic = variadic;
                 m->is_function_like = 1;
                 Atom* params = cpp_cmacro_params(m);
@@ -2130,6 +2133,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR)
                 goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
+            else
+                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
         }
         finish_defblock:;
         cpp_release_scratch(cpp, repl);

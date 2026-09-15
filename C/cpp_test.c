@@ -1570,15 +1570,15 @@ TestFunction(test_erroneous_condition){
         {"obj macro redef different", __LINE__,
             SV("#define X 1\n#define X 2\n"),
             SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
-               "(test):1:12: error: ... previously defined here\n")},
+               "(test):1:9: error: ... previously defined here\n")},
         {"func macro redef different body", __LINE__,
             SV("#define F(a) a\n#define F(a) a + 1\n"),
             SV("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:15: error: ... previously defined here\n")},
+               "(test):1:9: error: ... previously defined here\n")},
         {"func macro redef different params", __LINE__,
             SV("#define F(a, b) a\n#define F(a) a\n"),
             SV("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:18: error: ... previously defined here\n")},
+               "(test):1:9: error: ... previously defined here\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
