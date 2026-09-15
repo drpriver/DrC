@@ -86,6 +86,12 @@ int main(int argc, char** argv, char** envp){
     b_add_dep(ctx, all, cc);
     b_linkinp(ctx, cc, soft_float);
 
+    BuildTarget* ctags = b_exe_target(ctx, "drctags", "ctags.c", ctx->target.os, B_COMPILE_NO_FLAGS);
+    ctags->description = b_atomize(ctx, "C tagger.");
+    b_get_target(ctx, "drctags")->description = cc->description;
+    b_linkinp(ctx, ctags, soft_float);
+    b_add_dep(ctx, all, ctags);
+
     BuildTarget* native_tests = b_phony_target(ctx, "native-tests");
     native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
     BuildTarget* tests = b_phony_target(ctx, "tests");
@@ -290,13 +296,13 @@ int main(int argc, char** argv, char** envp){
     }
 
     {
-        BuildTarget* bins[] = {cpp, cc};
-        const char* names[] = {"drcpp", "drc"};
+        BuildTarget* bins[] = {cpp, cc, ctags};
+        const char* names[] = {"drcpp", "drc", "drctags"};
         for(size_t i = 0; i < sizeof bins / sizeof bins[0]; i++){
             BuildTarget* bin = bins[i];
             const char* name = names[i];
 
-            Atom run_name = b_atomize_f(ctx, "run_%s", name);
+            Atom run_name = b_atomize_f(ctx, "run-%s", name);
             BuildTarget* run = b_exec_target(ctx, run_name->data, bin);
             run->is_phony = 1;
             if(ffi_dll && bin == cc)
@@ -304,7 +310,7 @@ int main(int argc, char** argv, char** envp){
             for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                 b_aarg(ctx, run, ctx->dash_dash_args.data[j]);
 
-            Atom debug_name = b_atomize_f(ctx, "debug_%s", name);
+            Atom debug_name = b_atomize_f(ctx, "debug-%s", name);
             BuildTarget* debug = b_cmd_target(ctx, debug_name->data, "lldb");
             debug->should_exec = 1;
             debug->is_phony = 1;
