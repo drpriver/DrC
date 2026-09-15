@@ -170,12 +170,19 @@ cpp_kwargs(CppPreprocessor* cpp){
 
 static
 int
-cpp_cli_defines(CppPreprocessor* cpp){
-    int err = 0;
+cpp_cache_cli_defines(CppPreprocessor* cpp){
     if(cpp_cli_macros.cursor){
         fc_write_path(cpp->fc, "(command line)", sizeof "(command line)" -1);
-        err = fc_cache_file(cpp->fc, msb_borrow_sv(&cpp_cli_macros));
-        if(err) return err;
+        return fc_cache_file(cpp->fc, msb_borrow_sv(&cpp_cli_macros));
+    }
+    return 0;
+}
+
+static
+int
+cpp_apply_cli_defines(CppPreprocessor* cpp){
+    int err = 0;
+    if(cpp_cli_macros.cursor){
         err = cpp_include_file_via_file_cache(cpp, SV("(command line)"));
         if(err) return err;
         CppToken tok;
@@ -186,6 +193,14 @@ cpp_cli_defines(CppPreprocessor* cpp){
         }
     }
     return err;
+}
+
+static
+int
+cpp_cli_defines(CppPreprocessor* cpp){
+    int err = cpp_cache_cli_defines(cpp);
+    if(err) return err;
+    return cpp_apply_cli_defines(cpp);
 }
 
 #ifdef __clang__

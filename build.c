@@ -92,6 +92,11 @@ int main(int argc, char** argv, char** envp){
     b_linkinp(ctx, ctags, soft_float);
     b_add_dep(ctx, all, ctags);
 
+    BuildTarget* tags = b_cmd_target_prog(ctx, "tags", ctags);
+    tags->description = b_atomize(ctx, "Generate a vim-compatible tags file.");
+    tags->is_phony = 1;
+    b_args(ctx, tags, "-o", "tags", "--output-vim", ".syntax.vim", "build.c", "cpp.c", "cc.c", "ctags.c");
+
     BuildTarget* native_tests = b_phony_target(ctx, "native-tests");
     native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
     BuildTarget* tests = b_phony_target(ctx, "tests");
@@ -159,6 +164,7 @@ int main(int argc, char** argv, char** envp){
     {
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
             const char* file = test_files[i].file;
+            b_arg(ctx, tags, file);
             const char* name = test_files[i].name;
             const char* cmd_name = test_files[i].cmd_name;
             BuildTarget* bin = b_exe_target(ctx, name, file, ctx->target.os, B_COMPILE_DEBUG_INFO);
@@ -338,14 +344,6 @@ int main(int argc, char** argv, char** envp){
         install->is_phony = 1;
         b_add_dep(ctx, install, cpp);
         b_add_dep(ctx, install, cc);
-    }
-    {
-        BuildTarget* tags = b_cmd_target(ctx, "tags", BUILD_OS==OS_WINDOWS?"py":"python3");
-        tags->description = b_atomize(ctx, "Generate a vim-compatible tags file.");
-        tags->is_phony = 1;
-        b_arg(ctx, tags, "Tools/ct.py");
-        BuildTarget* compile_commands_json = b_get_target(ctx, "compile_commands.json");
-        b_add_dep(ctx, tags, compile_commands_json);
     }
     {
         BuildTarget* docs = b_phony_target(ctx, "docs");

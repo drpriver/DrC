@@ -97,33 +97,33 @@ int main(int argc, char** argv, char** envp){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    static CcParser parser = {
-        .cpp = {
-            .allocator = MALLOCATORI,
-            .at = &at,
-            .env = &env,
-        },
-        .current = &parser.global,
+    CppPreprocessor cpp = {
+        .allocator = MALLOCATORI,
+        .at = &at,
+        .env = &env,
     };
-    StringView filename = {0};
+    StringView filenames[128] = {0};
     ArgToParse pos_args[] = {
         {
             .name = SVI("file"),
-            .dest = ARGDEST(&filename),
-            .help = "The file to preprocess.",
-            .min_num = 1, .max_num = 1,
+            .dest = ARGDEST(filenames),
+            .help = "The files to process.",
+            .min_num = 1, .max_num = arrlen(filenames),
         },
     };
     StringView output = {0},
                output_vim = {0},
-               syntax_prefix = SV("c"),
+               syntax_prefix = SVI("c"),
                exclude[CT_EXCLUDE_MAX] = {SVI("__"), SVI("_[hH]$"), SVI("^[a-z][a-z0-9]$")},
-               specific_excludes[CT_COUNT][CT_EXCLUDE_MAX] = {0};
+               specific_excludes[CT_COUNT][CT_EXCLUDE_MAX] = {
+                   [CT_MACRO] = {SVI("^_Nonnull$"), SVI("^_Nullable$"), SVI("_Null_unspecified")},
+               };
     _Bool debug_re = 0;
-    enum {EXCLUDE_IDX=3};
+    enum {EXCLUDE_IDX=3, MACRO_IDX=5};
     ArgToParse kw_args[] = {
         {
             .name = SVI("-o"),
+            .altname1 = SVI("--output-tags"),
             .dest = ARGDEST(&output),
             .help = "Where to write the ctags file to",
             .min_num = 1, .max_num = 1,
@@ -154,11 +154,12 @@ int main(int argc, char** argv, char** envp){
             .help = "regex which if matches, the type is excluded from syntax highlighting",
             .min_num = 1, .max_num = CT_EXCLUDE_MAX,
         },
-        {
+        [MACRO_IDX] = {
             .name = SVI("--macro-exclude"),
             .dest = ARGDEST(&specific_excludes[CT_MACRO][0]),
             .help = "regex which if matches, the macro is excluded from syntax highlighting",
             .min_num = 1, .max_num = CT_EXCLUDE_MAX,
+            .show_default = 3,
         },
         {
             .name = SVI("--function-exclude"),
@@ -209,7 +210,7 @@ int main(int argc, char** argv, char** envp){
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
-        .keyword.next = cpp_kwargs(&parser.cpp),
+        .keyword.next = cpp_kwargs(&cpp),
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal(),
@@ -243,49 +244,22 @@ int main(int argc, char** argv, char** envp){
         for(size_t i = kw_args[EXCLUDE_IDX].num_parsed; i < 3; i++)
             exclude[i] = (StringView){0};
     }
-    parser.cpp.fc = fc;
-    parser.cpp.logger = logger;
-    parser.cpp.target = cc_target_funcs[cc_target_arg]();
-    err = cpp_define_builtin_macros(&parser.cpp);
-    if(err) goto stringify_error;
-    err = cc_define_builtin_types(&parser);
-    if(err) goto stringify_error;
-    {
-        CcQualType char_star, char_star_star;
-        err = cc_pointer_of(&parser, ccqt_basic(CCBT_char), &char_star);
-        if(err) goto stringify_error;
-        err = cc_pointer_of(&parser, char_star, &char_star_star);
-        if(err) goto stringify_error;
-        err = cc_register_extern_var(&parser, SV("_Argc"), ccqt_basic(CCBT_int));
-        if(err) goto stringify_error;
-        err = cc_register_extern_var(&parser, SV("_Argv"), char_star_star);
+    if(kw_args[MACRO_IDX].num_parsed){
+        for(size_t i = kw_args[MACRO_IDX].num_parsed; i < 3; i++)
+            specific_excludes[CT_MACRO][i] = (StringView){0};
     }
-    err = cc_register_pragmas(&parser);
-    if(err) goto stringify_error;
-    err = cpp_setup_builtin_headers(&parser.cpp);
+    // Virtual files belong to the shared cache, so register them only once.
+    cpp.fc = fc;
+    cpp.logger = logger;
+    cpp.target = cc_target_funcs[cc_target_arg]();
+    err = cpp_setup_builtin_headers(&cpp);
     if(err) goto stringify_error;
     if(!cpp_nostdinc){
-        err = cpp_setup_default_includes(&parser.cpp);
+        err = cpp_setup_default_includes(&cpp);
         if(err) goto stringify_error;
     }
-    if(!filename.length){
-        log_error(logger, "Must provide an input file");
-        err = _cc_io_error;
-        goto stringify_error;
-    }
-    err = cpp_cli_defines(&parser.cpp);
+    err = cpp_cache_cli_defines(&cpp);
     if(err) goto stringify_error;
-    fc->may_read_real_files = 1;
-    if(filename.length){
-        err = cpp_include_file_via_file_cache(&parser.cpp, (StringView){filename.length, filename.text});
-        if(err){
-            log_error(logger, "Unable to read '%s'", filename.text);
-            goto stringify_error;
-        }
-    }
-    err = cc_parse_all(&parser);
-    if(err) goto stringify_error;
-    CcScope* g = &parser.global;
     MStringBuilder sb = {.allocator=MALLOCATORI};
     AtomMap(Atom) symbols[CT_COUNT] = {0};
     Parray(Atom) ctags = {0};
@@ -303,64 +277,105 @@ int main(int argc, char** argv, char** envp){
         .debug_re = debug_re,
         .logger = logger,
     };
-    {
-        AtomMap16Items items = AM16_items(&g->typedefs);
-        MARRAY_FOR_EACH(AtomMap16Item, it, items){
-            if(!it->payload[0] && !it->payload[1]) continue;
-            CcTypedef* p = (CcTypedef*)it->payload;
-            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
+    for(size_t i = 0; i < pos_args[0].num_parsed; i++){
+        StringView filename = filenames[i];
+        if(!filename.length) continue;
+        CcParser parser = {
+            .cpp = {
+                .allocator = MALLOCATORI,
+                .at = &at,
+                .env = &env,
+            },
+            .current = &parser.global,
+        };
+        parser.cpp.fc = fc;
+        parser.cpp.logger = logger;
+        parser.cpp.target = cpp.target;
+        // Copy the arrays: source pragmas may append paths during parsing.
+        for(size_t j = 0; j < arrlen(cpp.include_paths); j++){
+            err = ma_extend(StringView)(&parser.cpp.include_paths[j], parser.cpp.allocator, cpp.include_paths[j].data, cpp.include_paths[j].count);
+            if(err) goto stringify_error;
         }
-    }
-    {
-        AtomMapItems items = AM_items(&g->structs);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcStruct* p = it->p;
-            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
+        err = ma_extend(StringView)(&parser.cpp.framework_paths, parser.cpp.allocator, cpp.framework_paths.data, cpp.framework_paths.count);
+        if(err) goto stringify_error;
+        err = cpp_define_builtin_macros(&parser.cpp);
+        if(err) goto stringify_error;
+        err = cc_define_builtin_types(&parser);
+        if(err) goto stringify_error;
+        err = cc_register_pragmas(&parser);
+        if(err) goto stringify_error;
+        err = cpp_apply_cli_defines(&parser.cpp);
+        if(err) goto stringify_error;
+        fc->may_read_real_files = 1;
+        if(filename.length){
+            err = cpp_include_file_via_file_cache(&parser.cpp, (StringView){filename.length, filename.text});
+            if(err){
+                log_error(logger, "Unable to read '%s'", filename.text);
+                goto stringify_error;
+            }
         }
-        items = AM_items(&g->unions);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcUnion* p = it->p;
-            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
+        err = cc_parse_all(&parser);
+        if(err) goto stringify_error;
+        CcScope* g = &parser.global;
+        {
+            AtomMap16Items items = AM16_items(&g->typedefs);
+            MARRAY_FOR_EACH(AtomMap16Item, it, items){
+                if(!it->payload[0] && !it->payload[1]) continue;
+                CcTypedef* p = (CcTypedef*)it->payload;
+                err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
         }
-        items = AM_items(&g->variables);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcVariable* p = it->p;
-            err = ct_add_tag(&ctx, CT_GLOBAL_VARIABLE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
-        }
-        items = AM_items(&g->functions);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcFunc* p = it->p;
-            err = ct_add_tag(&ctx, CT_FUNCTION, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
-        }
-        items = AM_items(&g->enums);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcEnum* p = it->p;
-            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
-        }
-        items = AM_items(&g->enumerators);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CcEnumerator* p = it->p;
-            err = ct_add_tag(&ctx, CT_ENUMERATORS, it->atom, p->loc);
-            if(err > 0) goto stringify_error;
-        }
-        items = AM_items(&parser.cpp.macros);
-        MARRAY_FOR_EACH(AtomMapItem, it, items){
-            if(!it->p) continue;
-            CppMacro* p = it->p;
-            err = ct_add_tag(&ctx, CT_MACRO, it->atom, p->def_loc);
-            if(err > 0) goto stringify_error;
+        {
+            AtomMapItems items = AM_items(&g->structs);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcStruct* p = it->p;
+                err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&g->unions);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcUnion* p = it->p;
+                err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&g->variables);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcVariable* p = it->p;
+                err = ct_add_tag(&ctx, CT_GLOBAL_VARIABLE, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&g->functions);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcFunc* p = it->p;
+                err = ct_add_tag(&ctx, CT_FUNCTION, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&g->enums);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcEnum* p = it->p;
+                err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&g->enumerators);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CcEnumerator* p = it->p;
+                err = ct_add_tag(&ctx, CT_ENUMERATORS, it->atom, p->loc);
+                if(err > 0) goto stringify_error;
+            }
+            items = AM_items(&parser.cpp.macros);
+            MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(!it->p) continue;
+                CppMacro* p = it->p;
+                err = ct_add_tag(&ctx, CT_MACRO, it->atom, p->def_loc);
+                if(err > 0) goto stringify_error;
+            }
         }
     }
     err = ct_generate_tags(&ctx);
@@ -628,7 +643,10 @@ ct_add_tag(CtCtx* ctx, CtSymbolKind kind, Atom name, SrcLoc loc){
     skip_symbol:;
     msb_reset(ctx->sb);
     err = ct_build_tag(ctx->fc, ctx->lc, name, loc, ctx->sb);
-    if(err) return err;
+    if(err){
+        if(0) log_error(ctx->logger, "Failed to build tag for '%s'\n", name->data);
+        return err;
+    }
     Atom a = msb_atomize(ctx->sb, ctx->at);
     if(!a) return _cc_oom_error;
     err = pa_push(ctx->tags, ctx->allocator, (void*)(uintptr_t)a);
