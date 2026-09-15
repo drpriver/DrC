@@ -15,7 +15,8 @@
 #include <stdint.h>
 #include "posixheader.h"
 #include "windowsheader.h"
-#if !defined(_WIN32) || defined(USE_C_STDIO)
+#if defined USE_C_STDIO
+#include <errno.h>
 #endif
 #include "long_string.h"
 #include "ByteBuffer.h"
@@ -227,19 +228,59 @@ finally:
 static inline
 warn_unused
 FileError
+read_file_handle(FILE* fp, Allocator a, LongString* outstr){
+    enum {CHUNK_SIZE = 65536};
+    size_t capacity = CHUNK_SIZE;
+    size_t length = 0;
+    char* buffer = Allocator_alloc(a, capacity);
+    if(!buffer)
+        return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+    for(;;){
+        if(length == capacity){
+            if(capacity > SIZE_MAX / 2){
+                Allocator_free(a, buffer, capacity);
+                return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+            }
+            size_t new_capacity = capacity * 2;
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            if(!new_buffer){
+                Allocator_free(a, buffer, capacity);
+                return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+            }
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
+        size_t nread = fread(buffer + length, 1, capacity - length, fp);
+        length += nread;
+        if(ferror(fp)){
+            int native = errno;
+            Allocator_free(a, buffer, capacity);
+            return (FileError){.errored=FILE_ERROR, .native_error=native};
+        }
+        if(feof(fp)) break;
+    }
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    if(!new_buffer){
+        Allocator_free(a, buffer, capacity);
+        return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+    }
+    new_buffer[length] = '\0';
+    *outstr = (LongString){length, new_buffer};
+    return (FileError){0};
+}
+
+static inline
+warn_unused
+FileError
 write_file(const char* filename, const void* data, size_t data_length){
     FILE* fp = fopen(filename, "wb");
     if(!fp)
         return (FileError){.errored=FILE_NOT_OPENED, .native_error=errno};
 
-    size_t nwrit = fwrite(data, 1, data_length, fp);
-    if(nwrit != data_length){
-        fclose(fp);
-        return (FileError){.errored=FILE_ERROR, .native_error=errno};
-    }
-    fflush(fp);
-    fclose(fp);
-    return (FileError){0};
+    FileError result = write_file_handle(fp, data, data_length);
+    if(fclose(fp) && !result.errored)
+        result = (FileError){.errored=FILE_ERROR, .native_error=errno};
+    return result;
 }
 
 static inline
@@ -250,7 +291,8 @@ write_file_handle(FILE* fp, const void* data, size_t data_length){
     if(nwrit != data_length){
         return (FileError){.errored=FILE_ERROR, .native_error=errno};
     }
-    fflush(fp);
+    if(fflush(fp))
+        return (FileError){.errored=FILE_ERROR, .native_error=errno};
     return (FileError){0};
 }
 
@@ -386,6 +428,14 @@ read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr){
             total_read += nread;
         }
 
+        if(total_read != nbytes){
+            char* new_text = Allocator_realloc(a, text, nbytes+1, total_read+1);
+            if(!new_text){
+                Allocator_free(a, text, nbytes+1);
+                return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+            }
+            text = new_text;
+        }
         text[total_read] = '\0';
         *outstr = (LongString){total_read, text};
         return result;
@@ -476,6 +526,24 @@ write_file_handle(int fd, const void* data, size_t data_length){
 static inline
 warn_unused
 FileError
+file_util_read_exact(HANDLE handle, void* data, size_t length){
+    size_t total_read = 0;
+    while(total_read < length){
+        size_t to_read = length - total_read;
+        if(to_read > (DWORD)-1) to_read = (DWORD)-1;
+        DWORD nread;
+        if(!ReadFile(handle, (char*)data + total_read, (DWORD)to_read, &nread, NULL))
+            return (FileError){.errored=FILE_ERROR, .native_error=GetLastError()};
+        if(!nread)
+            return (FileError){.errored=FILE_ERROR, .native_error=ERROR_HANDLE_EOF};
+        total_read += nread;
+    }
+    return (FileError){0};
+}
+
+static inline
+warn_unused
+FileError
 read_file(const char* filepath, Allocator a, LongString* outstr){
     FileError result = {0};
     HANDLE handle = CreateFileA(
@@ -505,15 +573,11 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
-    DWORD nread;
-    BOOL read_success = ReadFile(handle, text, (DWORD)nbytes, &nread, NULL);
-    if(!read_success){
+    result = file_util_read_exact(handle, text, nbytes);
+    if(result.errored){
         Allocator_free(a, text, nbytes+1);
-        result.errored = FILE_ERROR;
-        result.native_error = GetLastError();
         goto finally;
     }
-    assert(nread == nbytes);
     text[nbytes] = '\0';
     *outstr = (LongString){nbytes, text};
 finally:
@@ -555,14 +619,11 @@ read_file_w(const wchar_t* filepath, Allocator a, LongString* outstr){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
-    DWORD nread;
-    BOOL read_success = ReadFile(handle, text, (DWORD)nbytes, &nread, NULL);
-    if(!read_success){
+    result = file_util_read_exact(handle, text, nbytes);
+    if(result.errored){
         Allocator_free(a, text, nbytes+1);
-        result.errored = FILE_ERROR;
         goto finally;
     }
-    assert(nread == nbytes);
     text[nbytes] = '\0';
     *outstr = (LongString){nbytes, text};
 finally:
@@ -601,14 +662,11 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
-    DWORD nread;
-    BOOL read_success = ReadFile(handle, data, (DWORD)nbytes, &nread, NULL);
-    if(!read_success){
+    result = file_util_read_exact(handle, data, nbytes);
+    if(result.errored){
         Allocator_free(a, data, nbytes);
-        result.errored = FILE_ERROR;
         goto finally;
     }
-    assert(nread == nbytes);
     *outbuff = (ByteBuffer){nbytes, data};
 finally:
     CloseHandle(handle);
@@ -646,14 +704,11 @@ read_bin_file_w(const wchar_t* filepath, Allocator a, ByteBuffer* outbuff){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
-    DWORD nread;
-    BOOL read_success = ReadFile(handle, data, (DWORD)nbytes, &nread, NULL);
-    if(!read_success){
+    result = file_util_read_exact(handle, data, nbytes);
+    if(result.errored){
         Allocator_free(a, data, nbytes);
-        result.errored = FILE_ERROR;
         goto finally;
     }
-    assert(nread == nbytes);
     *outbuff = (ByteBuffer){nbytes, data};
 finally:
     CloseHandle(handle);
@@ -692,6 +747,14 @@ read_file_handle(FileUtilHandle handle, Allocator a, LongString* outstr){
             total_read += nread;
         }
 
+        if(total_read != nbytes){
+            char* new_text = Allocator_realloc(a, text, nbytes+1, total_read+1);
+            if(!new_text){
+                Allocator_free(a, text, nbytes+1);
+                return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
+            }
+            text = new_text;
+        }
         text[total_read] = '\0';
         *outstr = (LongString){total_read, text};
         return result;
@@ -767,20 +830,7 @@ write_file(const char* filename, const void* data, size_t data_length){
         result.native_error = GetLastError();
         return result;
     }
-    DWORD bytes_written;
-    BOOL write_success = WriteFile(
-            handle,
-            data,
-            (DWORD)data_length,
-            &bytes_written,
-            NULL);
-    if(!write_success){
-        result.errored = FILE_ERROR;
-        result.native_error = GetLastError();
-        goto finally;
-    }
-    assert(bytes_written == data_length);
-finally:
+    result = write_file_handle(handle, data, data_length);
     CloseHandle(handle);
     return result;
 }
@@ -804,20 +854,7 @@ write_file_w(const wchar_t* filename, const void* data, size_t data_length){
         result.native_error = GetLastError();
         return result;
     }
-    DWORD bytes_written;
-    BOOL write_success = WriteFile(
-            handle,
-            data,
-            (DWORD)data_length,
-            &bytes_written,
-            NULL);
-    if(!write_success){
-        result.errored = FILE_ERROR;
-        result.native_error = GetLastError();
-        goto finally;
-    }
-    assert(bytes_written == data_length);
-finally:
+    result = write_file_handle(handle, data, data_length);
     CloseHandle(handle);
     return result;
 }
@@ -826,21 +863,18 @@ static inline
 warn_unused
 FileError
 write_file_handle(HANDLE handle, const void* data, size_t data_length){
-    FileError result = {0};
-    DWORD bytes_written;
-    BOOL write_success = WriteFile(
-            handle,
-            data,
-            (DWORD)data_length,
-            &bytes_written,
-            NULL);
-    if(!write_success){
-        result.errored = FILE_ERROR;
-        result.native_error = GetLastError();
-        goto finally;
+    size_t total_written = 0;
+    while(total_written < data_length){
+        size_t to_write = data_length - total_written;
+        if(to_write > (DWORD)-1) to_write = (DWORD)-1;
+        DWORD bytes_written;
+        if(!WriteFile(handle, (const char*)data + total_written, (DWORD)to_write, &bytes_written, NULL))
+            return (FileError){.errored=FILE_ERROR, .native_error=GetLastError()};
+        if(!bytes_written)
+            return (FileError){.errored=FILE_ERROR, .native_error=ERROR_WRITE_FAULT};
+        total_written += bytes_written;
     }
-finally:
-    return result;
+    return (FileError){0};
 }
 
 #ifdef __clang__
