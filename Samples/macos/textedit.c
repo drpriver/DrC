@@ -6,8 +6,6 @@
 _Static_assert(0, "This only works on macos");
 __builtin_abort();
 #endif
-int _Argc;
-const char** _Argv;
 
 #include <CoreFoundation/CFCGTypes.h>
 #pragma framework "Cocoa"
