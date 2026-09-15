@@ -48,6 +48,26 @@ struct LineCache {
     Allocator allocator;
     Marray(StringViews) files;
 };
+enum CtSymbolKind {
+    CT_GLOBAL_VARIABLE,
+    CT_TYPE,
+    CT_MACRO,
+    CT_FUNCTION,
+    CT_ENUMERATORS,
+};
+typedef enum CtSymbolKind CtSymbolKind;
+enum {CT_COUNT=CT_ENUMERATORS+1};
+typedef struct CtCtx CtCtx;
+struct CtCtx {
+    Allocator allocator;
+    AtomMap(Atom) (*symbols)[CT_COUNT];
+    Parray(Atom)* tags;
+    AtomTable* at;
+    FileCache* fc;
+    LineCache* lc;
+    MStringBuilder* sb;
+};
+static int ct_add_tag(CtCtx*, CtSymbolKind, Atom, SrcLoc);
 static int ct_build_tag(FileCache*, LineCache*, Atom, SrcLoc, MStringBuilder*);
 static int atom_cmp(const void* a, const void* b){
     Atom l = *(const Atom*)a, r = *(const Atom*)b;
@@ -83,13 +103,26 @@ int main(int argc, char** argv, char** envp){
             .min_num = 1, .max_num = 1,
         },
     };
-    StringView output = {0};
+    StringView output = {0}, output_vim = {0}, syntax_prefix = SV("c");
     ArgToParse kw_args[] = {
         {
             .name = SV("-o"),
             .dest = ARGDEST(&output),
-            .help = "Where to write to",
+            .help = "Where to write the ctags file to",
             .min_num = 0, .max_num = 1,
+        },
+        {
+            .name = SV("--output-vim"),
+            .dest = ARGDEST(&output_vim),
+            .help = "Where to write a syntax .vim file to",
+            .min_num = 0, .max_num = 1,
+        },
+        {
+            .name = SV("--syntax-prefix"),
+            .dest = ARGDEST(&syntax_prefix),
+            .help = "what to prefix the syntax groups with",
+            .min_num = 0, .max_num = 1,
+            .show_default = 1,
         },
     };
     enum {HELP, HIDDEN_HELP, FISH};
@@ -191,26 +224,79 @@ int main(int argc, char** argv, char** envp){
     if(err) goto stringify_error;
     CcScope* g = &parser.global;
     MStringBuilder sb = {.allocator=MALLOCATOR};
+    AtomMap(Atom) symbols[CT_COUNT] = {0};
     Parray(Atom) ctags = {0};
     LineCache line_cache = {.allocator=MALLOCATOR};
+    CtCtx ctx = {
+        .allocator = MALLOCATOR,
+        .tags = &ctags,
+        .symbols = &symbols,
+        .at = &at,
+        .fc = fc,
+        .lc = &line_cache,
+        .sb = &sb,
+    };
     {
         AtomMapItems items = AM_items(&g->structs);
         MARRAY_FOR_EACH(AtomMapItem, it, items){
             if(!it->p) continue;
-            CcStruct* s = it->p;
-            msb_reset(&sb);
-            err = ct_build_tag(fc, &line_cache, it->atom, s->loc, &sb);
-            if(err < 0) continue;
-            if(err) goto stringify_error;
-            Atom a = msb_atomize(&sb, &at);
-            if(!a){
-                err = _cc_oom_error;
-                goto stringify_error;
-            }
-            err = pa_push(&ctags, MALLOCATOR, (void*)(uintptr_t)a);
-            if(err) goto stringify_error;
+            CcStruct* p = it->p;
+            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&g->unions);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CcUnion* p = it->p;
+            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&g->variables);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CcVariable* p = it->p;
+            err = ct_add_tag(&ctx, CT_GLOBAL_VARIABLE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&g->functions);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CcFunc* p = it->p;
+            err = ct_add_tag(&ctx, CT_FUNCTION, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&g->enums);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CcEnum* p = it->p;
+            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&g->enumerators);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CcEnumerator* p = it->p;
+            err = ct_add_tag(&ctx, CT_ENUMERATORS, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+        items = AM_items(&parser.cpp.macros);
+        MARRAY_FOR_EACH(AtomMapItem, it, items){
+            if(!it->p) continue;
+            CppMacro* p = it->p;
+            err = ct_add_tag(&ctx, CT_MACRO, it->atom, p->def_loc);
+            if(err > 0) goto stringify_error;
         }
     }
+    {
+        AtomMap16Items items = AM16_items(&g->typedefs);
+        MARRAY_FOR_EACH(AtomMap16Item, it, items){
+            if(!it->payload[1]) continue;
+            CcTypedef* p = (CcTypedef*)it->payload;
+            err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
+            if(err > 0) goto stringify_error;
+        }
+    }
+    err = 0;
     qsort(ctags.data, ctags.count, sizeof(Atom), atom_cmp);
     FILE* fp = stdout;
     if(output.length){
@@ -222,26 +308,31 @@ int main(int argc, char** argv, char** envp){
     }
     fprintf(fp, "!_TAG_FILE_FORMAT	1	/basic format; no extension fields/\n");
     fprintf(fp, "!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/\n");
+    Atom prev = nil_atom;
     for(size_t i = 0; i < ctags.count; i++){
         Atom a = ctags.data[i];
+        if(a == prev) continue;
+        prev = a;
         fprintf(fp, "%s\n", a->data);
     }
-    fflush(fp);
-    if(fp != stdout)
+    _Bool write_failed = ferror(fp) != 0;
+    if(fflush(fp) == EOF)
+        write_failed = 1;
+    if(fp != stdout && fclose(fp) == EOF)
+        write_failed = 1;
+    if(write_failed){
+        fprintf(stderr, "Unable to write tags to '%s'\n", output.length?output.text:"stdout");
+        return 1;
+    }
+    if(output_vim.length){
+        fp = fopen(output_vim.text, "wb");
+        if(!fp){
+            fprintf(stderr, "Unable to open '%s': %s\n", output_vim.text, strerror(errno));
+            return 1;
+        }
         fclose(fp);
-
-    #if 0
-    AtomMap16(CcTypedef) typedefs;
-    AtomMap(CcVariable) variables;
-    AtomMap(CcFunc) functions;
-    AtomMap(CcStruct) structs;
-    AtomMap(CcUnion) unions;
-    AtomMap(CcEnum) enums;
-    AtomMap(CcEnumerator) enumerators;
-    #endif
-
-
-    return err;
+    }
+    return 0;
     stringify_error:;
     const char* error_name = cc_stringify_error(err);
     fprintf(stderr, "Fail: %s\n", error_name);
@@ -282,6 +373,17 @@ get_cached_line(LineCache* lines, uint64_t file_id, uint64_t line, StringView fi
 }
 
 static
+void
+ct_write_pattern_text(MStringBuilder* sb, StringView text){
+    for(size_t i = 0; i < text.length; i++){
+        char c = text.text[i];
+        if(c == '/' || c == '\\' || c == '^' || c == '$')
+            msb_write_char(sb, '\\');
+        msb_write_char(sb, c);
+    }
+}
+
+static
 int
 ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder* sb){
     uint64_t line = 0, column = 0, file_id = 0;
@@ -301,6 +403,7 @@ ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder
     if(file_id >= fc->map.count) return -1;
     CachedFile* cf = &fc->map.data[file_id];
     LongString path = cf->path;
+    if(path.length && path.text[0] == '<') return -1;
     StringView file_text = {
         cf->data.n_bytes,
         cf->data.buff,
@@ -308,14 +411,36 @@ ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder
     StringView line_text;
     int err = get_cached_line(lines, file_id, line, file_text, &line_text);
     if(err) return err;
-    // FIXME: do we need to escape special characters?
+    // Locations must point inside the physical line, not at a removed newline.
+    if(!line || !column || column > line_text.length) return -1;
+    msb_sprintf(sb, "%s\t%s\t/", a->data, path.text);
     if(column > 1){
-        msb_sprintf(sb, "%s\t%s\t/\\(^%.*s\\)\\@<=%.*s$", a->data, path.text, (int)(column-1), line_text.text, (int)(line_text.length-column+1), line_text.text+column-1);
+        msb_write_literal(sb, "\\(^");
+        ct_write_pattern_text(sb, (StringView){column-1, line_text.text});
+        msb_write_literal(sb, "\\)\\@<=");
+        ct_write_pattern_text(sb, (StringView){line_text.length-column+1, line_text.text+column-1});
     }
     else{
-        msb_sprintf(sb, "%s\t%s\t/^%.*s$", a->data, path.text, (int)line_text.length, line_text.text);
+        msb_write_char(sb, '^');
+        ct_write_pattern_text(sb, line_text);
     }
-    return 0;
+    msb_write_literal(sb, "$/");
+    return sb->errored?_cc_oom_error:0;
+}
+
+static
+int
+ct_add_tag(CtCtx* ctx, CtSymbolKind kind, Atom name, SrcLoc loc){
+    int err;
+    err = AM_put(&(*ctx->symbols)[kind], ctx->allocator, name, name);
+    if(err) return _cc_oom_error;
+    msb_reset(ctx->sb);
+    err = ct_build_tag(ctx->fc, ctx->lc, name, loc, ctx->sb);
+    if(err) return err;
+    Atom a = msb_atomize(ctx->sb, ctx->at);
+    if(!a) return _cc_oom_error;
+    err = pa_push(ctx->tags, ctx->allocator, (void*)(uintptr_t)a);
+    return err?_cc_oom_error:0;
 }
 
 
