@@ -80,7 +80,10 @@ int main(int argc, char** argv, char** envp){
     if(!logger) return 1;
     static AtomTable at = {.allocator=MALLOCATORI};
     static Environment env = {.allocator=MALLOCATORI, .at=&at};
-    FileCache* fc = fc_create(MALLOCATOR);
+    unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
+    // This is incorrect, but is good enough for now
+    if(IS_WINDOWS || IS_APPLE) flags |= FC_IS_CASE_INSENSITIVE;
+    FileCache* fc = fc_create(MALLOCATOR, flags);
     int err = env_parse_posix(&env, envp);
     if(err){
         log_error(logger, "Unable to parse environment");
@@ -97,7 +100,7 @@ int main(int argc, char** argv, char** envp){
     StringView filename = {0};
     ArgToParse pos_args[] = {
         {
-            .name = SV("file"),
+            .name = SVI("file"),
             .dest = ARGDEST(&filename),
             .help = "The file to preprocess.",
             .min_num = 1, .max_num = 1,
@@ -106,19 +109,19 @@ int main(int argc, char** argv, char** envp){
     StringView output = {0}, output_vim = {0}, syntax_prefix = SV("c");
     ArgToParse kw_args[] = {
         {
-            .name = SV("-o"),
+            .name = SVI("-o"),
             .dest = ARGDEST(&output),
             .help = "Where to write the ctags file to",
             .min_num = 0, .max_num = 1,
         },
         {
-            .name = SV("--output-vim"),
+            .name = SVI("--output-vim"),
             .dest = ARGDEST(&output_vim),
             .help = "Where to write a syntax .vim file to",
             .min_num = 0, .max_num = 1,
         },
         {
-            .name = SV("--syntax-prefix"),
+            .name = SVI("--syntax-prefix"),
             .dest = ARGDEST(&syntax_prefix),
             .help = "what to prefix the syntax groups with",
             .min_num = 0, .max_num = 1,
@@ -128,17 +131,17 @@ int main(int argc, char** argv, char** envp){
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
         [HELP] = {
-            .name = SV("-h"),
-            .altname1 = SV("--help"),
+            .name = SVI("-h"),
+            .altname1 = SVI("--help"),
             .help = "Print this help and exit.",
         },
         [HIDDEN_HELP] = {
-            .name = SV("-H"),
-            .altname1 = SV("--hidden-help"),
+            .name = SVI("-H"),
+            .altname1 = SVI("--hidden-help"),
             .help = "Print out help for the hidden arguments and exit.",
         },
         [FISH] = {
-            .name = SV("--fish-completions"),
+            .name = SVI("--fish-completions"),
             .help = "Print out commands for fish shell completions.",
             .hidden = 1,
         },
@@ -223,12 +226,12 @@ int main(int argc, char** argv, char** envp){
     err = cc_parse_all(&parser);
     if(err) goto stringify_error;
     CcScope* g = &parser.global;
-    MStringBuilder sb = {.allocator=MALLOCATOR};
+    MStringBuilder sb = {.allocator=MALLOCATORI};
     AtomMap(Atom) symbols[CT_COUNT] = {0};
     Parray(Atom) ctags = {0};
-    LineCache line_cache = {.allocator=MALLOCATOR};
+    LineCache line_cache = {.allocator=MALLOCATORI};
     CtCtx ctx = {
-        .allocator = MALLOCATOR,
+        .allocator = MALLOCATORI,
         .tags = &ctags,
         .symbols = &symbols,
         .at = &at,
@@ -290,7 +293,7 @@ int main(int argc, char** argv, char** envp){
     {
         AtomMap16Items items = AM16_items(&g->typedefs);
         MARRAY_FOR_EACH(AtomMap16Item, it, items){
-            if(!it->payload[1]) continue;
+            if(!it->payload[0] && !it->payload[1]) continue;
             CcTypedef* p = (CcTypedef*)it->payload;
             err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
             if(err > 0) goto stringify_error;
@@ -341,7 +344,7 @@ int main(int argc, char** argv, char** envp){
 
 static
 int
-get_cached_line(LineCache* lines, uint64_t file_id, uint64_t line, StringView file_text, StringView* out){
+ct_get_cached_line(LineCache* lines, uint64_t file_id, uint64_t line, StringView file_text, StringView* out){
     int err = 0;
     while(file_id >= lines->files.count){
         StringViews* p;
@@ -409,9 +412,8 @@ ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder
         cf->data.buff,
     };
     StringView line_text;
-    int err = get_cached_line(lines, file_id, line, file_text, &line_text);
+    int err = ct_get_cached_line(lines, file_id, line, file_text, &line_text);
     if(err) return err;
-    // Locations must point inside the physical line, not at a removed newline.
     if(!line || !column || column > line_text.length) return -1;
     msb_sprintf(sb, "%s\t%s\t/", a->data, path.text);
     if(column > 1){

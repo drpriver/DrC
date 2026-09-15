@@ -4919,7 +4919,7 @@ TestFunction(test_parse_decls){
         }
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
@@ -6972,7 +6972,7 @@ TestFunction(test_parse_errors){
                "atomic_int x;\n"
                "int f(void){ return atomic_load_explicit(&x, memory_order_release); }\n"),
             SVI("<builtin>/__stdatomic_ops.h:7:42: error: atomic load memory order cannot be release or acq_rel\n"
-                "<builtin>/nmmintrin.h:3:21: ... expanded from here\n"),
+                "(test):3:21: ... expanded from here\n"),
             .builtin_headers = 1,
         },
         {
@@ -6981,7 +6981,7 @@ TestFunction(test_parse_errors){
                "atomic_int x;\n"
                "void f(void){ atomic_store_explicit(&x, 1, memory_order_acquire); }\n"),
             SVI("<builtin>/__stdatomic_ops.h:5:50: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"
-                "<builtin>/nmmintrin.h:3:15: ... expanded from here\n"),
+                "(test):3:15: ... expanded from here\n"),
             .builtin_headers = 1,
         },
         {
@@ -6990,7 +6990,7 @@ TestFunction(test_parse_errors){
                "atomic_int x;\n"
                "int f(void){ int e = 0; return atomic_compare_exchange_strong_explicit(&x, &e, 1, memory_order_seq_cst, memory_order_release); }\n"),
             SVI("<builtin>/__stdatomic_ops.h:11:79: error: atomic compare-exchange failure order cannot be release or acq_rel\n"
-                "<builtin>/nmmintrin.h:3:32: ... expanded from here\n"),
+                "(test):3:32: ... expanded from here\n"),
             .builtin_headers = 1,
         },
         {
@@ -6999,15 +6999,15 @@ TestFunction(test_parse_errors){
                "atomic_flag f = ATOMIC_FLAG_INIT;\n"
                "void g(void){ atomic_flag_clear_explicit(&f, memory_order_acquire); }\n"),
             SVI("<builtin>/__stdatomic_ops.h:29:48: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"
-                "<builtin>/nmmintrin.h:3:15: ... expanded from here\n"),
+                "(test):3:15: ... expanded from here\n"),
             .builtin_headers = 1,
         },
         {
             "stdatomic thread fence with non-constant memory order", __LINE__,
             SVI("#include <stdatomic.h>\n"
                "void g(memory_order order){ atomic_thread_fence(order); }\n"),
-            SVI("<builtin>/nmmintrin.h:2:49: error: memory order must be a constant expression\n"
-                "<builtin>/nmmintrin.h:2:29: ... expanded from here\n"),
+            SVI("(test):2:49: error: memory order must be a constant expression\n"
+                "(test):2:29: ... expanded from here\n"),
             .builtin_headers = 1,
         },
         {
@@ -7410,7 +7410,7 @@ TestFunction(test_parse_errors){
         }
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
@@ -7927,7 +7927,7 @@ TestFunction(test_struct_layout){
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
         msb_reset(&sb);
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
@@ -8197,7 +8197,7 @@ TestFunction(test_bitfield_abi){
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
         msb_reset(&sb);
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
@@ -8389,7 +8389,7 @@ TestFunction(test_pragma_pack){
         }
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);

@@ -2628,18 +2628,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
         // cpp_find_include left the resolved path in fc->path_builder.
         // Read the file (may be cached) and push a new frame.
         StringView file_txt;
-        err = fc_read_file(cpp->fc, &file_txt);
+        uint32_t file_id;
+        err = fc_read_file(cpp->fc, &file_txt, &file_id);
         if(err){
             err = cpp_error(cpp, directive_loc, "Could not read '%.*s'", (int)header_name.length, header_name.text);
             goto cleanup;
-        }
-        // Find the file_id by matching the data pointer returned by fc_read_file
-        uint32_t file_id = 0;
-        for(size_t i = 0; i < cpp->fc->map.count; i++){
-            if(cpp->fc->map.data[i].data_cached && cpp->fc->map.data[i].data.buff == file_txt.text){
-                file_id = (uint32_t)i;
-                break;
-            }
         }
         // Check pragma once - skip if already included with #pragma once
         if(cpp_is_pragma_once(cpp, file_id))
@@ -6621,10 +6614,11 @@ cpp_include_file_via_file_cache(CppPreprocessor* cpp, StringView path){
     int err;
     fc_write_path(cpp->fc, path.text, path.length);
     StringView txt;
-    err = fc_read_file(cpp->fc, &txt);
+    uint32_t file_id;
+    err = fc_read_file(cpp->fc, &txt, &file_id);
     if(err) return err;
     CppFrame init = {
-        .file_id = (uint32_t)cpp->fc->map.count-1,
+        .file_id = file_id,
         .txt = txt,
         .line = 1,
         .column = 1,

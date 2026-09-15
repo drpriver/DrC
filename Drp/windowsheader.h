@@ -42,6 +42,7 @@
 // #undef _mm_prefetch
 #undef ERROR
 enum {IS_WINDOWS=1};
+typedef HANDLE OsFileHandle;
 #else
 enum {IS_WINDOWS=0};
 #endif

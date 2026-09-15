@@ -238,7 +238,7 @@ TestFunction(test_concurrent_callbacks){
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
     err = 0;
-    FileCache* fc = fc_create(al);
+    FileCache* fc = fc_create(al, FC_FLAGS_NONE);
     if(!fc){ err = 1; TestReport("setup failure"); goto finally; }
     MStringBuilder log_sb = {.allocator=al};
     MsbLogger logger_ = {0};

@@ -817,7 +817,7 @@ TestFunction(test_interop){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -1025,7 +1025,7 @@ TestFunction(test_interp){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -1245,7 +1245,7 @@ TestFunction(test_interp_fail){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};

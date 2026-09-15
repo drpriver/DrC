@@ -35,7 +35,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
-    FileCache *fc = fc_create(a);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
@@ -114,7 +114,7 @@ cpp_expand_with_files(
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
-    FileCache *fc = fc_create(a);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
@@ -190,7 +190,7 @@ int
 cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
-    FileCache *fc = fc_create(a);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);

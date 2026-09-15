@@ -27,10 +27,17 @@ enum {
     FC_ERROR_ALREADY_CACHED = 13, // _cc_already_cached_error
 };
 
+enum {
+    FC_FLAGS_NONE = 0x0,
+    FC_IS_WINDOWS = 0x1,
+    // Fold ASCII case for cache keys; preserve other UTF-8 bytes.
+    FC_IS_CASE_INSENSITIVE = 0x2,
+};
+
 typedef struct FileCache FileCache;
 // Create a new file cache, allocated by the allocator.
 // The allocator is retained by the file cache for memory allocation.
-static FileCache*_Nullable fc_create(Allocator);
+static FileCache*_Nullable fc_create(Allocator, unsigned flags);
 // Deallocates the filecache and all resources referenced by the file cache.
 // This deallocs any read files!
 static void fc_destroy(FileCache*);
@@ -47,7 +54,8 @@ static int fc_is_file(FileCache*);
 // Attempts to read the file into data. Might be cached, might not be.
 // You might need to skip any BOM yourself. Not nul-terminated.
 // Returns FC_OK on success, FC_ERROR_* on failure.
-static int fc_read_file(FileCache*, StringView* data);
+// On success, file_id receives the index of the file in the cache.
+static int fc_read_file(FileCache*, StringView* data, uint32_t* file_id);
 // Attempts to obtain the file's size.
 // Might be cached and so there is a possible race condition, but usually that is ok.
 // Returns FC_OK on success, FC_ERROR_* on failure.
@@ -65,6 +73,7 @@ static int fc_intern_path(FileCache*, uint32_t* out_file_id);
 
 typedef struct CachedFile CachedFile;
 struct CachedFile {
+    // Normalized path, with filesystem casing
     LongString path;
     uint32_t hash;
 
@@ -83,7 +92,9 @@ struct CachedFile {
 };
 typedef struct FileCache FileCache;
 struct FileCache {
-    _Bool may_read_real_files: 1;
+    _Bool may_read_real_files: 1,
+          is_windows: 1,
+          case_insensitive: 1;
     Allocator allocator;
     MStringBuilder path_builder;
     struct {

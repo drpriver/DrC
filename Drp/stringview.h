@@ -49,18 +49,46 @@ sv_equals2(StringView a, const char* txt, size_t len){
 }
 
 static inline
+uint64_t
+_sv_ascii_fold8(uint64_t x) {
+    #define HI UINT64_C(0x8080808080808080)
+    #define ONES UINT64_C(0x0101010101010101)
+    uint64_t ge_A  = ((x | HI) - ONES * 'A')       & HI;
+    uint64_t ge_Z1 = ((x | HI) - ONES * ('Z' + 1)) & HI;
+    uint64_t upper = ge_A & ~ge_Z1 & ~x & HI;
+    #undef HI
+    #undef ONES
+    return x | (upper >> 2);
+}
+
+static inline
 _Bool
 sv_iequals(StringView a, StringView b){
-    if(a.length != b.length) return 0;
+    if(a.length != b.length)
+        return 0;
     size_t length = a.length;
-    const uint8_t* ap = (const uint8_t*)a.text;
-    const uint8_t* bp = (const uint8_t*)b.text;
-    for(size_t i = 0; i < length; i++){
-        uint8_t l = ap[i];
-        l |= 0x20u;
-        uint8_t r = bp[i];
-        r |= 0x20u;
-        if(l != r) return 0;
+    const uint8_t *ap = (const uint8_t *)a.text;
+    const uint8_t *bp = (const uint8_t *)b.text;
+    _Static_assert(sizeof(uint64_t)==8, "");
+    while(length >= 8){
+        uint64_t aw, bw;
+        memcpy(&aw, ap, 8);
+        memcpy(&bw, bp, 8);
+        if(_sv_ascii_fold8(aw) != _sv_ascii_fold8(bw))
+            return 0;
+        ap += 8;
+        bp += 8;
+        length -= 8;
+    }
+    while(length--){
+        uint8_t l = *ap++;
+        uint8_t r = *bp++;
+        if(l >= 'A' && l <= 'Z')
+            l |= 0x20;
+        if(r >= 'A' && r <= 'Z')
+            r |= 0x20;
+        if(l != r)
+            return 0;
     }
     return 1;
 }

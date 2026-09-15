@@ -8,16 +8,6 @@
 #define STB_SPRINTF_IMPLEMENTATION
 #include "Drp/compiler_warnings.h"
 #include "Drp/windowsheader.h"
-#ifdef __linux__
-enum {IS_LINUX = 1};
-#else
-enum {IS_LINUX = 0};
-#endif
-#ifdef __APPLE__
-enum {IS_APPLE = 1};
-#else
-enum {IS_APPLE = 0};
-#endif
 #include "Drp/testing.h"
 #include "Drp/cmd_builder.h"
 #include "Drp/cmd_run.h"

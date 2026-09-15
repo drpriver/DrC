@@ -13,6 +13,7 @@
 #include "msb_sprintf.h"
 #include "hash_func.h"
 #include "ByteBuffer.h"
+#include "path_util.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -23,11 +24,13 @@
 
 static
 FileCache*_Nullable
-fc_create(Allocator a){
+fc_create(Allocator a, unsigned flags){
     FileCache* fc = Allocator_zalloc(a, sizeof *fc);
     if(!fc) return fc;
     fc->allocator = a;
     fc->path_builder.allocator = a;
+    fc->is_windows = flags & FC_IS_WINDOWS;
+    fc->case_insensitive = flags & FC_IS_CASE_INSENSITIVE;
     return fc;
 }
 static void fc_destroy(FileCache* fc){
@@ -54,12 +57,91 @@ fc_path_builder(FileCache* fc){
 }
 
 static
+void
+fc_normalize_relative_path(FileCache* fc){
+    MStringBuilder* sb = &fc->path_builder;
+    if(sb->errored) return;
+    path_normalize_keep_relative(sb->data, &sb->cursor, fc->is_windows);
+}
+
+static
+_Bool
+fc_path_equals(FileCache* fc, StringView a, StringView b){
+    return fc->case_insensitive? sv_iequals(a, b) : sv_equals(a, b);
+}
+
+static
+uint32_t
+fc_hash_path(FileCache* fc, StringView path){
+    return fc->case_insensitive ? ascii_insensitive_hash(path.text, path.length) : hash_align1(path.text, path.length);
+}
+
+static
+void
+fc_apply_path_spelling(FileCache* fc, CachedFile* f, StringView actual){
+    char* path = (char*)(uintptr_t)f->path.text;
+    size_t end = f->path.length, actual_end = actual.length;
+    while(end && actual_end){
+        size_t start = end, actual_start = actual_end;
+        while(start && !path_is_sep(path[start-1], fc->is_windows)) start--;
+        while(actual_start && !path_is_sep(actual.text[actual_start-1], fc->is_windows)) actual_start--;
+        StringView component = {end-start, path+start};
+        StringView spelling = {actual_end-actual_start, actual.text+actual_start};
+        if(!fc_path_equals(fc, component, spelling)) break;
+        memcpy(path+start, spelling.text, component.length);
+        end = start ? start-1 : 0;
+        actual_end = actual_start ? actual_start-1 : 0;
+    }
+}
+
+static
+void
+fc_correct_path_spelling(FileCache* fc, CachedFile* f, OsFileHandle handle){
+    if(!fc->case_insensitive) return;
+    // On case insensitive file systems, the user might have used the wrong
+    // case in the #include (common in windows headers), which can lead to
+    // confusing results for tooling and makes #pragma once annoying.
+    //
+    // However, we don't want to strip/resolve symlinks if they used them to
+    // change the absolute or relative path.
+    //
+    // We're probably overthinking this, but this makes reported file paths
+    // nicer idk.
+    #ifdef _WIN32
+    DWORD capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
+    if(!capacity) return;
+    WCHAR* path = Allocator_alloc(fc->allocator, capacity * sizeof *path);
+    if(!path) return;
+    DWORD length = GetFinalPathNameByHandleW(handle, path, capacity, FILE_NAME_NORMALIZED);
+    if(length && length < capacity){
+        MStringBuilder name = {.allocator = fc->allocator};
+        msb_write_utf16(&name, (const uint16_t*)path, length);
+        if(!name.errored) fc_apply_path_spelling(fc, f, msb_borrow_sv(&name));
+        msb_destroy(&name);
+    }
+    Allocator_free(fc->allocator, path, (size_t)capacity * sizeof *path);
+    #elif defined F_GETPATH
+    char path[MAXPATHLEN];
+    if(fcntl(handle, F_GETPATH, path) == 0)
+        fc_apply_path_spelling(fc, f, (StringView){strlen(path), path});
+    #else
+    (void)f;
+    (void)handle;
+    #endif
+}
+
+static
 CachedFile *_Nullable
 fc_get_entry(FileCache* fc){
     if(!fc->map.count) return NULL;
+    fc_normalize_relative_path(fc);
+    if(fc->path_builder.errored){
+        msb_destroy(&fc->path_builder);
+        return NULL;
+    }
     StringView path = msb_borrow_sv(&fc->path_builder);
     uint32_t cap2 = (uint32_t)fc->map.cap*2;
-    uint32_t hash = hash_align1(path.text, path.length);
+    uint32_t hash = fc_hash_path(fc, path);
     uint32_t *idxes = (uint32_t*)(void*)(fc->map.data + fc->map.cap);
     uint32_t idx = fast_reduce32(hash, cap2);
     for(;;){
@@ -67,7 +149,7 @@ fc_get_entry(FileCache* fc){
         if(!i) return NULL;
         i--;
         CachedFile* f = &fc->map.data[i];
-        if(f->hash == hash && sv_equals(LS_to_SV(f->path), path))
+        if(f->hash == hash && fc_path_equals(fc, LS_to_SV(f->path), path))
             return f;
         idx++;
         if(idx >= cap2) idx = 0;
@@ -103,12 +185,13 @@ fc_create_entry(FileCache* fc){
         fc->map.data = data;
         fc->map.cap = new_cap;
     }
+    fc_normalize_relative_path(fc);
     if(fc->path_builder.errored){
         msb_destroy(&fc->path_builder);
         return NULL;
     }
     LongString path = msb_detach_ls(&fc->path_builder);
-    uint32_t hash = hash_align1(path.text, path.length);
+    uint32_t hash = fc_hash_path(fc, LS_to_SV(path));
     uint32_t cap2 = (uint32_t)fc->map.cap*2;
     uint32_t *idxes = (uint32_t*)(void*)(fc->map.data + fc->map.cap);
     uint32_t idx = fast_reduce32(hash, cap2);
@@ -183,7 +266,7 @@ fc_is_file(FileCache* fc){
 
 static
 int
-fc_read_file(FileCache* fc, StringView* outdata){
+fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
     int result = FC_ERROR_NOT_FOUND;
     #ifdef _WIN32
     HANDLE fh = INVALID_HANDLE_VALUE;
@@ -217,6 +300,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
         result = FC_ERROR_NOT_FOUND;
         goto finally;
     }
+    fc_correct_path_spelling(fc, f, fh);
     LARGE_INTEGER size;
     if(!GetFileSizeEx(fh, &size)){
         f->valid = 1;
@@ -270,6 +354,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
         goto finally;
     }
     struct stat s;
+    fc_correct_path_spelling(fc, f, fd);
     int err = fstat(fd, &s);
     if(err){
         f->valid = 1;
@@ -326,6 +411,7 @@ fc_read_file(FileCache* fc, StringView* outdata){
     result = FC_OK;
     #endif
     finally:
+    if(result == FC_OK) *file_id = (uint32_t)(f - fc->map.data);
     #ifdef _WIN32
     if(fh != INVALID_HANDLE_VALUE) CloseHandle(fh);
     #else
@@ -365,6 +451,7 @@ fc_get_size(FileCache* fc, size_t* sz){
             result = FC_ERROR_NOT_FOUND;
             goto finally;
         }
+        fc_correct_path_spelling(fc, f, fh);
         LARGE_INTEGER size;
         if(!GetFileSizeEx(fh, &size)){
             CloseHandle(fh);

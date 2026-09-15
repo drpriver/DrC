@@ -131,14 +131,14 @@ b_normalize_path(BuildCtx* ctx, StringView p, MStringBuilder* out){
     int ndots = 0;
     for(size_t i = 0; i < p.length; i++){
         char c = p.text[i];
-        if(is_sep(c, BUILD_OS==OS_WINDOWS)){
+        if(path_is_sep(c, BUILD_OS==OS_WINDOWS)){
             if(out->cursor && !slash_distance) continue;
             if(slash_distance == 1 && ndots == 1){
                 out->cursor -= 2;
             }
             if(slash_distance == 2 && ndots == 2){
                 out->cursor -= 3;
-                while(out->cursor && !is_sep(out->data[--out->cursor], BUILD_OS==OS_WINDOWS))
+                while(out->cursor && !path_is_sep(out->data[--out->cursor], BUILD_OS==OS_WINDOWS))
                     ;
             }
             msb_write_char(out, BUILD_OS==OS_WINDOWS?'\\':'/');
@@ -167,7 +167,7 @@ b_normalize_path(BuildCtx* ctx, StringView p, MStringBuilder* out){
             msb_write_literal(out, ".");
             return;
         }
-        if(is_sep(sv.text[ctx->cwd->length], BUILD_OS==OS_WINDOWS)){
+        if(path_is_sep(sv.text[ctx->cwd->length], BUILD_OS==OS_WINDOWS)){
             b_memremove(1, out->data, out->cursor, ctx->cwd->length-1);
             out->data[0] = '.';
             out->cursor -= ctx->cwd->length-1;
@@ -1185,7 +1185,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             msb16_destroy(&wsb);
         }
         if(!len) goto fail;
-        while(len && is_sep(sb.data[len-1], BUILD_OS==OS_WINDOWS))
+        while(len && path_is_sep(sb.data[len-1], BUILD_OS==OS_WINDOWS))
             len--;
         ctx->cwd = b_atomize2(ctx, sb.data, len);
         msb_destroy(&sb);
@@ -1646,13 +1646,6 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     if(ctx->target.os == OS_NATIVE)
         ctx->target.os = BUILD_OS;
     // TODO: sniff what native means
-#if 0
-    if(ctx->target.arch == AFAM_NATIVE)
-        ctx->target.arch = AFAM_x86;
-    if(ctx->target.bits == ABITS_NATIVE)
-        ctx->target.bits = ABITS_64;
-#endif
-
     b_phony_target(ctx, "clean")->description = b_atomize(ctx, "Delete the contents of the build directory.");
 
     {

@@ -24,7 +24,10 @@ int main(int argc, char** argv, char** envp){
     if(!logger) return 1;
     AtomTable at = {.allocator=MALLOCATOR};
     Environment env = {.allocator=MALLOCATOR, .at=&at};
-    FileCache* fc = fc_create(MALLOCATOR);
+    unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
+    // This is incorrect, but is good enough for now
+    if(IS_WINDOWS || IS_APPLE) flags |= FC_IS_CASE_INSENSITIVE;
+    FileCache* fc = fc_create(MALLOCATOR, flags);
 
     int err = env_parse_posix(&env, envp);
     if(err){
@@ -122,12 +125,7 @@ int main(int argc, char** argv, char** envp){
     }
     if(!filename){
         LongString txt;
-        #ifdef _WIN32
-        HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
-        #else
-        int handle = STDIN_FILENO;
-        #endif
-        FileError fe = read_file_handle(handle, MALLOCATOR, &txt);
+        FileError fe = read_file_handle(FU_STDIN, MALLOCATOR, &txt);
         if(fe.errored)
             return 1;
         filename = "(stdin)";

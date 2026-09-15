@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2025, David Priver <david@davidpriver.com>
+// Copyright © 2021-2026, David Priver <david@davidpriver.com>
 //
 #ifndef FILE_UTIL_H
 #define FILE_UTIL_H
@@ -108,20 +108,31 @@ write_file(const char* filename, const void* data, size_t data_length);
 
 #if defined(USE_C_STDIO)
 typedef FILE* FileUtilHandle;
-#elif defined(__linux__) || defined(__APPLE__)
-typedef int FileUtilHandle;
-#elif defined(_WIN32)
-typedef HANDLE FileUtilHandle;
+#define FU_STDIN stdin
+#define FU_STDERR stderr
+#define FU_STDOUT stdout
+#else
+typedef OsFileHandle FileUtilHandle;
+#ifdef _WIN32
+#define FU_STDIN GetStdHandle(STD_INPUT_HANDLE)
+#define FU_STDERR GetStdHandle(STD_ERROR_HANDLE)
+#define FU_STDOUT GetStdHandle(STD_OUTPUT_HANDLE)
+#else
+#define FU_STDIN STDIN_FILENO
+#define FU_STDERR STDERR_FILENO
+#define FU_STDOUT STDOUT_FILENO
+#endif
 #endif
 
-// Read from an open file handle (including stdin, pipes, etc).
-// Does NOT close the handle - caller owns the lifetime.
-// Handles both regular files and streams. Retries on EINTR.
-// For convenience, the result is nul-terminated.
 static inline
 warn_unused
 FileError
 read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr);
+
+static inline
+warn_unused
+FileError
+write_file_handle(FileUtilHandle fd, const void* data, size_t data_length);
 
 #ifdef USE_C_STDIO
 force_inline
@@ -231,7 +242,19 @@ write_file(const char* filename, const void* data, size_t data_length){
     return (FileError){0};
 }
 
-#elif defined(__linux__) || defined(__APPLE__)
+static inline
+warn_unused
+FileError
+write_file_handle(FILE* fp, const void* data, size_t data_length){
+    size_t nwrit = fwrite(data, 1, data_length, fp);
+    if(nwrit != data_length){
+        return (FileError){.errored=FILE_ERROR, .native_error=errno};
+    }
+    fflush(fp);
+    return (FileError){0};
+}
+
+#elif defined __linux__ || defined __APPLE__
 
 force_inline
 warn_unused
@@ -336,7 +359,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_handle(int fd, Allocator a, LongString* outstr){
+read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr){
     FileError result = {0};
 
     size_t nbytes;
@@ -429,6 +452,18 @@ write_file(const char* filename, const void* data, size_t data_length){
         return (FileError){.errored=FILE_ERROR, .native_error=native};
     }
     close(fd);
+    return (FileError){0};
+}
+
+static inline
+warn_unused
+FileError
+write_file_handle(int fd, const void* data, size_t data_length){
+    ssize_t nwrit = write(fd, data, data_length);
+    if((size_t)nwrit != data_length){
+        int native = errno;
+        return (FileError){.errored=FILE_ERROR, .native_error=native};
+    }
     return (FileError){0};
 }
 
@@ -628,7 +663,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_handle(HANDLE handle, Allocator a, LongString* outstr){
+read_file_handle(FileUtilHandle handle, Allocator a, LongString* outstr){
     FileError result = {0};
     LARGE_INTEGER size;
     BOOL size_success = GetFileType(handle) == FILE_TYPE_DISK && GetFileSizeEx(handle, &size);
@@ -784,6 +819,27 @@ write_file_w(const wchar_t* filename, const void* data, size_t data_length){
     assert(bytes_written == data_length);
 finally:
     CloseHandle(handle);
+    return result;
+}
+
+static inline
+warn_unused
+FileError
+write_file_handle(HANDLE handle, const void* data, size_t data_length){
+    FileError result = {0};
+    DWORD bytes_written;
+    BOOL write_success = WriteFile(
+            handle,
+            data,
+            (DWORD)data_length,
+            &bytes_written,
+            NULL);
+    if(!write_success){
+        result.errored = FILE_ERROR;
+        result.native_error = GetLastError();
+        goto finally;
+    }
+finally:
     return result;
 }
 

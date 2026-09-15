@@ -160,7 +160,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     ArenaAllocator arena = {0};
     arena.base = al;
     Allocator arena_al = allocator_from_arena(&arena);
-    FileCache* fc = fc_create(arena_al);
+    FileCache* fc = fc_create(arena_al, FC_FLAGS_NONE);
     if(!fc){ err = 1; goto done; }
     MStringBuilder log_sb = {.allocator=arena_al};
     MsbLogger logger_ = {0};

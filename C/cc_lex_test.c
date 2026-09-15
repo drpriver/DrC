@@ -37,7 +37,7 @@ cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, 
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
-    FileCache *fc = fc_create(a);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
@@ -110,7 +110,7 @@ int
 cc_lex_string_expect_error(StringView txt, StringView* err_out){
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
-    FileCache *fc = fc_create(a);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
@@ -1080,7 +1080,7 @@ TestFunction(test_long_double_macros){
         ArenaAllocator aa = {0};
         Allocator a = allocator_from_arena(&aa);
         AtomTable at = {.allocator = a};
-        FileCache* fc = fc_create(a);
+        FileCache* fc = fc_create(a, FC_FLAGS_NONE);
         CppPreprocessor cpp = {
             .allocator = a, .at = &at, .fc = fc,
             .target = cc_target_funcs[target](),

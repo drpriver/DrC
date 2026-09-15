@@ -9292,7 +9292,7 @@ TestFunction(test_interpreter){
         _Bool ok = 0;
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -9595,7 +9595,7 @@ TestFunction(test_interpreter_runtime_errors){
             continue;
         }
         err = 0;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -9976,7 +9976,7 @@ TestFunction(test_interpreter_builtin_headers){
         struct tc* tc = &testcases[i];
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -10697,7 +10697,7 @@ TestFunction(test_cross_target){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -10853,7 +10853,7 @@ TestFunction(test_ci_call_main){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
@@ -11050,7 +11050,7 @@ TestFunction(test_ci_call_by_name){
         }
         err = 0;
         TEST_stats.executed++;
-        FileCache* fc = fc_create(al);
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         if(!fc){err = 1; TestReport("setup failure"); goto finally;}
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
