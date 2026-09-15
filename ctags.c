@@ -74,7 +74,7 @@ struct CtCtx {
     Logger* logger;
 };
 static int ct_add_tag(CtCtx*, CtSymbolKind, Atom, SrcLoc);
-static int ct_build_tag(FileCache*, LineCache*, Atom, SrcLoc, MStringBuilder*);
+static int ct_build_tag(FileCache*, LineCache*, CtSymbolKind, Atom, SrcLoc, MStringBuilder*);
 static int ct_generate_vim(CtCtx*, StringView prefix);
 static int ct_generate_tags(CtCtx*);
 static int atom_cmp(const void* a, const void* b){
@@ -426,7 +426,7 @@ int
 ct_generate_tags(CtCtx* ctx){
     qsort(ctx->tags->data, ctx->tags->count, sizeof(Atom), atom_cmp);
     msb_reset(ctx->sb);
-    msb_sprintf(ctx->sb, "!_TAG_FILE_FORMAT	1	/basic format; no extension fields/\n");
+    msb_sprintf(ctx->sb, "!_TAG_FILE_FORMAT	2	/extended format/\n");
     msb_sprintf(ctx->sb, "!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/\n");
     Atom prev = nil_atom;
     for(size_t i = 0; i < ctx->tags->count; i++){
@@ -484,7 +484,14 @@ ct_write_pattern_text(MStringBuilder* sb, StringView text){
 
 static
 int
-ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder* sb){
+ct_build_tag(FileCache* fc, LineCache* lines, CtSymbolKind kind, Atom a, SrcLoc loc, MStringBuilder* sb){
+    static const char kinds[CT_COUNT] = {
+        [CT_GLOBAL_VARIABLE] = 'v',
+        [CT_TYPE] = 't',
+        [CT_MACRO] = 'd',
+        [CT_FUNCTION] = 'f',
+        [CT_ENUMERATORS] = 'e',
+    };
     uint64_t line = 0, column = 0, file_id = 0;
     if(loc.is_actually_a_pointer){
         SrcLocExp* e = (SrcLocExp*)(loc.bits & ~1);
@@ -522,7 +529,7 @@ ct_build_tag(FileCache* fc, LineCache* lines, Atom a, SrcLoc loc, MStringBuilder
         msb_write_char(sb, '^');
         ct_write_pattern_text(sb, line_text);
     }
-    msb_write_literal(sb, "$/");
+    msb_sprintf(sb, "$/;\"\t%c\tline:%llu", kinds[kind], (unsigned long long)line);
     return sb->errored?_cc_oom_error:0;
 }
 
@@ -642,7 +649,7 @@ ct_add_tag(CtCtx* ctx, CtSymbolKind kind, Atom name, SrcLoc loc){
     if(err) return _cc_oom_error;
     skip_symbol:;
     msb_reset(ctx->sb);
-    err = ct_build_tag(ctx->fc, ctx->lc, name, loc, ctx->sb);
+    err = ct_build_tag(ctx->fc, ctx->lc, kind, name, loc, ctx->sb);
     if(err){
         if(0) log_error(ctx->logger, "Failed to build tag for '%s'\n", name->data);
         return err;
