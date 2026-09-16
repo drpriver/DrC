@@ -123,7 +123,7 @@ ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
     }
 }
 static const CcTargetConfig* ci_target(const CiInterpreter*);
-static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
+static int ci_dlsym(CiInterpreter*, SrcLoc, Atom, const char* what, void*_Nullable*_Nonnull);
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
 static int ci_make_flat_call_frame(CiInterpreter*, CiInterpFrame*, CcFunc*, const CiOp*, CiInterpFrame*_Nullable*_Nonnull);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame*_Nullable caller, CcFunc*, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc);
@@ -133,7 +133,7 @@ static int ci_resolve_module(CiInterpreter*, CiModule*);
 static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
 static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
 static int ci_reflect_func_unlocked(CiInterpreter*, SrcLoc, CcFunc*, CiRtModuleMember*, _Bool);
-static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
+static int ci_try_dlsym(CiInterpreter*, Atom, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
@@ -2803,9 +2803,7 @@ ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModule
     if(define){
         if(!func->defined){
             if(!func->native_func){
-                LongString fsym = func->mangle
-                    ? (LongString){func->mangle->length, func->mangle->data}
-                    : (LongString){func->name->length, func->name->data};
+                Atom fsym = func->mangle?func->mangle:func->name;
                 int err = ci_try_dlsym(ci, fsym, &address);
                 if(err) return err;
                 if(address)
@@ -2846,9 +2844,7 @@ ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModu
     if(!var->automatic){
         if(var->extern_ && !var->initializer){
             if(!var->interp_val){
-                LongString vsym = var->mangle
-                    ? (LongString){var->mangle->length, var->mangle->data}
-                    : (LongString){var->name->length, var->name->data};
+                Atom vsym = var->mangle?var->mangle:var->name;
                 int err = ci_try_dlsym(ci, vsym, &address);
                 if(err) return err;
                 if(address)
@@ -3037,9 +3033,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                     goto done;
                 if(!func->defined){
                     if(!func->native_func){
-                        LongString fsym = func->mangle
-                            ? (LongString){func->mangle->length, func->mangle->data}
-                            : (LongString){func->name->length, func->name->data};
+                        Atom fsym = func->mangle?func->mangle:func->name;
                         void* addr = NULL;
                         int err = ci_try_dlsym(ci, fsym, &addr);
                         if(err){ ret = err; goto done; }
@@ -3068,9 +3062,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                     goto done;
                 if(var->extern_ && !var->initializer){
                     if(!var->interp_val){
-                        LongString vsym = var->mangle
-                            ? (LongString){var->mangle->length, var->mangle->data}
-                            : (LongString){var->name->length, var->name->data};
+                        Atom vsym = var->mangle?var->mangle:var->name;
                         void* addr = NULL;
                         int err = ci_try_dlsym(ci, vsym, &addr);
                         if(err){ ret = err; goto done; }
@@ -3161,9 +3153,7 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
         if(libc_only && !func->libc_builtin) continue;
         if(!func->defined){
             if(!func->native_func && func->name){
-                LongString sym = func->mangle
-                    ? (LongString){func->mangle->length, func->mangle->data}
-                    : (LongString){func->name->length, func->name->data};
+                Atom sym = func->mangle?func->mangle:func->name;
                 void* addr;
                 err = ci_dlsym(ci, func->loc, sym, "function", &addr);
                 if(err) return err;
@@ -3199,9 +3189,7 @@ ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
                 CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
                 if(var->interp_val) continue;
                 if(var->extern_ && !var->initializer){
-                    LongString sym = var->mangle
-                        ? (LongString){var->mangle->length, var->mangle->data}
-                        : (LongString){var->name->length, var->name->data};
+                    Atom sym = var->mangle?var->mangle:var->name;
                     void* addr;
                     err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
                     if(err) return err;
@@ -4140,9 +4128,7 @@ ci_pragma_resolve(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
             case CC_SYM_VAR:
                 if(sym.var->interp_val) break;
                 if(sym.var->extern_ && !sym.var->initializer){
-                    LongString s = sym.var->mangle
-                        ? (LongString){sym.var->mangle->length, sym.var->mangle->data}
-                        : (LongString){sym.var->name->length, sym.var->name->data};
+                    Atom s = sym.var->mangle?sym.var->mangle:sym.var->name;
                     void* addr;
                     err = ci_dlsym(ci, sym.var->loc, s, "extern variable", &addr);
                     if(err) return err;
@@ -4162,9 +4148,7 @@ ci_pragma_resolve(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
             case CC_SYM_FUNC:
                 if(!sym.func->defined){
                     if(!sym.func->native_func && sym.func->name){
-                        LongString s = sym.func->mangle
-                            ? (LongString){sym.func->mangle->length, sym.func->mangle->data}
-                            : (LongString){sym.func->name->length, sym.func->name->data};
+                        Atom s = sym.func->mangle?sym.func->mangle:sym.func->name;
                         void* addr;
                         err = ci_dlsym(ci, sym.func->loc, s, "function", &addr);
                         if(err) return err;
@@ -4203,17 +4187,17 @@ ci_target(const CiInterpreter* ci){
 }
 static
 int
-ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_Nullable*_Nonnull out){
+ci_dlsym(CiInterpreter* ci, SrcLoc loc, Atom sym, const char* what, void*_Nullable*_Nonnull out){
     void* p = NULL;
     int err = ci_try_dlsym(ci, sym, &p);
     if(err) return err;
     if(!p){
         if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
-            return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym.text);
+            return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym->data);
         #ifdef NO_NATIVE_CALL
-        return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym.text);
+        return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym->data);
         #elif defined _WIN32
-        ci_error(ci, loc, "%s '%s' not found", what, sym.text);
+        ci_error(ci, loc, "%s '%s' not found", what, sym->data);
         HMODULE modules[256];
         DWORD needed = 0;
         if(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &needed)){
@@ -4228,7 +4212,7 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
         }
         return CI_RUNTIME_ERROR;
         #else
-        return ci_error(ci, loc, "%s '%s' not found: %s", what, sym.text, dlerror());
+        return ci_error(ci, loc, "%s '%s' not found: %s", what, sym->data, dlerror());
         #endif
     }
     *out = p;
@@ -4237,15 +4221,13 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, LongString sym, const char* what, void*_
 
 static
 int
-ci_try_dlsym(CiInterpreter* ci, LongString sym, void*_Nullable*_Nonnull out){
+ci_try_dlsym(CiInterpreter* ci, Atom sym, void*_Nullable*_Nonnull out){
     *out = NULL;
-    // Try virtual libs first.
-    Atom a = AT_get_atom(ci->parser.cpp.at, sym.text, sym.length);
-    if(a){
+    {
         AtomMapItems vlibs = AM_items(&ci->virtual_libs);
         for(size_t i = 0; i < vlibs.count; i++){
             AtomMap(void*)* symbols = vlibs.data[i].p;
-            void* p = AM_get(symbols, a);
+            void* p = AM_get(symbols, sym);
             if(p){
                 *out = p;
                 return 0;
@@ -4268,15 +4250,15 @@ ci_try_dlsym(CiInterpreter* ci, LongString sym, void*_Nullable*_Nonnull out){
                 DWORD count = needed / sizeof(HMODULE);
                 if(count > 256) count = 256;
                 for(DWORD i = 0; i < count; i++){
-                    p = (void*)GetProcAddress(modules[i], sym.text);
+                    p = (void*)GetProcAddress(modules[i], sym->data);
                     if(p) break;
                 }
             }
         }
     #else
-        p = dlsym(RTLD_DEFAULT, sym.text);
-        if(!p && sym.text[0] == '_')
-            p = dlsym(RTLD_DEFAULT, sym.text+1);
+        p = dlsym(RTLD_DEFAULT, sym->data);
+        if(!p && sym->data[0] == '_')
+            p = dlsym(RTLD_DEFAULT, sym->data+1);
     #endif
     *out = p;
     return 0;

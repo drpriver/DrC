@@ -205,8 +205,8 @@ struct CcParser {
     CcStmtSink* _Null_unspecified stmt_sink;
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;
-    PointerMap used_funcs; // CcFunc* set (value = key)
-    PointerMap used_vars;  // CcVariable* set, non-automatic only (value = key)
+    PointerMap(CcFunc, CcFunc) used_funcs; // CcFunc* set
+    PointerMap(CcVariable, CcVariable) used_vars;  // CcVariable* set
 
     // common types
     CcQualType char_star,
