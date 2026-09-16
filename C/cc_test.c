@@ -4911,6 +4911,19 @@ TestFunction(test_parse_decls){
                 {SVI("x"), SVI("int"), SVI("a.@8[(long)0]")},
             },
         },
+        {
+            "_Self in body", __LINE__,
+            SVI("struct S { int x; int f(_Self* self) {\n"
+               "    _Self* s = self;\n"
+               "    return s.x;\n"
+               "}};\n"
+               "_Static_assert((struct S).has_method(\"f\"));\n"
+               "_Static_assert((struct S).method(\"f\").type == int(struct S*));\n"
+               ),
+            .tags = {
+                { SVI("S"), CC_STRUCT, 1, 1},
+            },
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){

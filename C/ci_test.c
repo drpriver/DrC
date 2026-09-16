@@ -9280,6 +9280,28 @@ TestFunction(test_interpreter){
             ),
             .exit_code = 1,
         },
+        {
+            "_Self in body", __LINE__,
+            SVI("struct S { int x; int f(_Self* self) {\n"
+               "    _Self* s = self;\n"
+               "    return s.x;\n"
+               "}};\n"
+               "struct S s = {3};\n"
+               "return s.f();\n"
+            ),
+            .exit_code = 3,
+        },
+        {
+            "_Self in nested function body", __LINE__,
+            SVI("struct S { int x; int f(_Self* self) {\n"
+               "    int bar(_Self* s){ return s.x-1;}\n"
+               "    return bar(self);\n"
+               "}};\n"
+               "struct S s = {3};\n"
+               "return s.f();\n"
+            ),
+            .exit_code = 2,
+        },
     };
     int err;
     static int idx = 0;

@@ -9227,6 +9227,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                                     if(err) goto struct_err;
                                 }
                             }
+                            func->_Self_type = p->current_tag_type;
                             func->tokens = body_tokens;
                             func->defined = 1;
                         }
@@ -11588,6 +11589,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             func->params.count = param_names.count;
             func->params.data = param_names.data;
             if(eager){
+                func->_Self_type = p->current_tag_type;
                 func->enclosing = p->current_func;
                 err = cc_parse_func_body_inner(p, func, 1);
                 if(err) return err;
@@ -11613,6 +11615,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                         if(err) return err;
                     }
                 }
+                func->_Self_type = p->current_tag_type;
                 func->tokens = body_tokens;
             }
             return 0;
@@ -12585,9 +12588,11 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     CcFunction* ftype = f->type;
     int err = 0;
     CcFunc* prev = p->current_func;
+    CcQualType prev__Self = p->current_tag_type;
     p->current_func = f;
+    p->current_tag_type = f->_Self_type;
     err = cc_push_scope(p);
-    if(err){ p->current_func = prev; return err; }
+    if(err){ p->current_func = prev; p->current_tag_type = prev__Self; return err; }
     // Register parameters as variables
     if(ftype->param_count){
         f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
@@ -12649,6 +12654,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     pa_cleanup(&f->label_ctx.gotos, cc_allocator(p));
     cc_pop_scope(p);
     p->current_func = prev;
+    p->current_tag_type = prev__Self;
     return err;
 }
 
