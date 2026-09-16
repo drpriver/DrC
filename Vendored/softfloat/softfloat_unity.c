@@ -1,8 +1,10 @@
 #ifndef SOFTFLOAT_UNITY_C
 #define SOFTFLOAT_UNITY_C
+#ifdef __DRC__
 #pragma include_path "-iquote" "SoftFloat-3e/source/include"
 #pragma include_path "-iquote" "."
 #pragma include_path "-iquote" "SoftFloat-3e/source/8086-SSE"
+#endif
 #include "platform.h"
 #include "primitives.h"
 #include "softfloat.h"
