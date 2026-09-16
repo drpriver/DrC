@@ -7309,7 +7309,7 @@ cc_pragma_pack(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, co
     while(toks < end && toks->type == CPP_WHITESPACE) toks++;
     while(toks < end && end[-1].type == CPP_WHITESPACE) end--;
     if(toks == end){ // pack()
-        p->pragma_pack = 8; // Apparently /Zp: can change this?
+        p->pragma_pack = 0; // default alignment
         goto finally;
     }
     const CppToken* number = NULL;
@@ -7322,7 +7322,10 @@ cc_pragma_pack(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, co
         toks++;
         while(toks < end && toks->type == CPP_WHITESPACE) toks++;
         if(sv_equals(word, SV("show"))){
-            cc_info(p, loc, "#pragma pack(show): %d", (int)p->pragma_pack);
+            if(p->pragma_pack)
+                cc_info(p, loc, "#pragma pack(show): %d", (int)p->pragma_pack);
+            else
+                cc_info(p, loc, "#pragma pack(show): default");
             if(toks != end) cc_warn(p, toks->loc, "Extra tokens after show");
             goto finally;
         }

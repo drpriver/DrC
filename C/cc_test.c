@@ -4856,6 +4856,14 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "pragma pack() restores natural int128 alignment", __LINE__,
+            SVI("#pragma pack(1)\n"
+                "#pragma pack()\n"
+                "struct S { char c; __uint128_t x; };\n"
+                "_Static_assert(_Alignof(struct S) == 16);\n"
+                "_Static_assert(sizeof(struct S) == 32);\n"),
+        },
+        {
             "alignas after pragma pack()", __LINE__,
             SVI("#pragma pack()\n"
                 "struct S {_Alignas(16) int x[5];} s = {1};\n"
@@ -8151,6 +8159,21 @@ TestFunction(test_bitfield_abi){
         struct FieldExpect fields[MAXFIELDS];
     } cases[] = {
         {
+            "sysv: pack reset restores int128 bitfield layout", __LINE__,
+            SVI("#pragma pack(1)\n"
+                "#pragma pack()\n"
+                "struct S { __uint128_t a:1, b:32, c:53, d:120, e:33; };\n"),
+            SVI("S"), CC_BITFIELD_SYSV,
+            .size = 48, .alignment = 16,
+            .fields = {
+                { SVI("a"), .offset = 0, .bitwidth = 1, .bitoffset = 0 },
+                { SVI("b"), .offset = 0, .bitwidth = 32, .bitoffset = 1 },
+                { SVI("c"), .offset = 0, .bitwidth = 53, .bitoffset = 33 },
+                { SVI("d"), .offset = 16, .bitwidth = 120, .bitoffset = 0 },
+                { SVI("e"), .offset = 32, .bitwidth = 33, .bitoffset = 0 },
+            },
+        },
+        {
             "sysv: same-size different types share", __LINE__,
             SVI("struct S { int a : 3; unsigned b : 5; };\n"),
             SVI("S"), CC_BITFIELD_SYSV,
@@ -8370,10 +8393,24 @@ TestFunction(test_pragma_pack){
         _Bool skip;
     } cases[] = {
         {
+            "default packing survives reset and push/pop", __LINE__,
+            SVI("#pragma pack(show)\n"
+                "#pragma pack(push, 1)\n"
+                "#pragma pack(show)\n"
+                "#pragma pack()\n"
+                "#pragma pack(show)\n"
+                "#pragma pack(pop)\n"
+                "#pragma pack(show)\n"),
+            SVI("(test):1:2: info: #pragma pack(show): default\n"
+                "(test):3:2: info: #pragma pack(show): 1\n"
+                "(test):5:2: info: #pragma pack(show): default\n"
+                "(test):7:2: info: #pragma pack(show): default\n"),
+        },
+        {
             "pragma show", __LINE__,
             SVI("#pragma pack(show)\n"
             ),
-            SVI("(test):1:2: info: #pragma pack(show): 0\n"
+            SVI("(test):1:2: info: #pragma pack(show): default\n"
             ),
         },
         {
@@ -8384,7 +8421,7 @@ TestFunction(test_pragma_pack){
                 "#pragma pack(show)\n"
             ),
             SVI("(test):2:2: info: #pragma pack(show): 1\n"
-                "(test):4:2: info: #pragma pack(show): 8\n"
+                "(test):4:2: info: #pragma pack(show): default\n"
             ),
         },
         {
@@ -8433,7 +8470,7 @@ TestFunction(test_pragma_pack){
                 "#pragma pack(pop, foo)\n"
                 "#pragma pack(show)\n"
             ),
-            SVI("(test):4:2: info: #pragma pack(show): 0\n"),
+            SVI("(test):4:2: info: #pragma pack(show): default\n"),
         },
         {
             "pop from empty stack warns", __LINE__,
