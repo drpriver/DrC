@@ -6801,6 +6801,60 @@ TestFunction(test_interpreter){
             .exit_code = 3,
         },
         {
+            "type introspection: has field and method", __LINE__,
+            SVI("struct S { int x; int get(void){return 7;} };\n"
+                "_Type t = struct S;\n"
+                "_Static_assert((struct S).has_field(\"x\") && !(struct S).has_field(\"get\"));\n"
+                "_Static_assert((struct S).has_method(\"get\") && !(struct S).has_method(\"x\"));\n"
+                "_Static_assert(!(struct S).has_field(\"missing\") && !(struct S).has_method(\"missing\"));\n"
+                "_Static_assert(!(struct S).has_field(\"\") && !(struct S).has_method(\"\"));\n"
+                "char name[] = {'g','e','t'};\n"
+                "const char field[:] = \"!x?\"[1:2];\n"
+                "return t.has_field(field) && t.has_method(name) && !t.has_field(name)\n"
+                "    && !t.has_method(field) && !t.has_field(\"missing\") && !t.has_method(\"missing\")\n"
+                "    && !t.has_field(\"\") && !t.has_method(\"ge\") && !t.has_method(\"get\\0\");\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: has member guards static if", __LINE__,
+            SVI("constexpr _Type T = struct S { int x; int get(void){return 7;} };\n"
+                "static if(T.has_field(\"x\") && T.field(\"x\").type == int){ int found = 1; }\n"
+                "static if(T.has_field(\"missing\") && T.field(\"missing\").type == int){ invalid tokens here }\n"
+                "static if(T.has_method(\"missing\") && T.method(\"missing\").type == int(void)){ invalid tokens here }\n"
+                "static if(T.has_method(\"get\") && T.method(\"get\").type == int(void)){ int method_found = 1; }\n"
+                "_Type t = T;\n"
+                "if(t.has_field(\"missing\") && t.field(\"missing\").type == int) return 0;\n"
+                "if(t.has_method(\"missing\") && t.method(\"missing\").address) return 0;\n"
+                "return found && method_found;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: has anonymous and union members", __LINE__,
+            SVI("struct S { union { int x; int get(void){return 1;} }; };\n"
+                "union U { int y; int get(void){return 2;} };\n"
+                "_Static_assert((struct S).has_field(\"x\") && (struct S).has_method(\"get\"));\n"
+                "_Static_assert((union U).has_field(\"y\") && (union U).has_method(\"get\"));\n"
+                "_Type s = struct S; _Type u = union U;\n"
+                "return s.has_field(\"x\") && s.has_method(\"get\") && !s.has_field(\"get\")\n"
+                "    && u.has_field(\"y\") && u.has_method(\"get\") && !u.has_method(\"y\");\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: has member on non aggregate", __LINE__,
+            SVI("_Static_assert(!(int).has_field(\"x\") && !(int).has_method(\"get\"));\n"
+                "_Type t = int; int n = 0;\n"
+                "return !t.has_field((n++, \"x\"[:1])) && !t.has_method(\"get\") && n == 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: has method does not resolve function", __LINE__,
+            SVI("struct S { int not_defined_anywhere(void); };\n"
+                "_Static_assert((struct S).has_method(\"not_defined_anywhere\"));\n"
+                "_Type t = struct S;\n"
+                "return t.has_method(\"not_defined_anywhere\");\n"),
+            .exit_code = 1,
+        },
+        {
             "constexpr reflection: field name slice", __LINE__,
             SVI("struct S { int hello; };\n"
                "constexpr struct __builtin_Field f = (struct S).field(0);\n"
@@ -6822,6 +6876,255 @@ TestFunction(test_interpreter){
             SVI("struct S { int x; int y; };\n"
                "struct __builtin_Field f = (struct S).field(0);\n"
                "return f.name[0] == 'x';\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: field lookup by slice", __LINE__,
+            SVI("struct S { int x; long hello; };\n"
+                "_Type t = struct S;\n"
+                "const char name[:] = \"!hello?\"[1:6];\n"
+                "struct __builtin_Field f = t.field(name);\n"
+                "return f.type == long && f.offset == t.field(1).offset && f.name.count == 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: union field lookup by name", __LINE__,
+            SVI("union U { int x; long y; };\n"
+                "_Type t = union U;\n"
+                "const char name[:] = \"y\"[:1];\n"
+                "struct __builtin_Field f = t.field(name);\n"
+                "return f.type == long && f.offset == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr reflection: field lookup by name", __LINE__,
+            SVI("struct S { int x; long hello; };\n"
+                "constexpr struct __builtin_Field indexed = (struct S).field(1);\n"
+                "constexpr struct __builtin_Field named = (struct S).field(indexed.name);\n"
+                "_Static_assert(named.type == long);\n"
+                "return named.offset == indexed.offset;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: bitfield lookup by name", __LINE__,
+            SVI("struct S { unsigned x:3; unsigned y:5; };\n"
+                "_Type t = struct S;\n"
+                "struct __builtin_Field f = t.field(\"y\"[:1]);\n"
+                "struct __builtin_Field indexed = t.field(1);\n"
+                "return f.is_bitfield && f.bitwidth == 5 && f.bitoffset == indexed.bitoffset;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: method lookup by name", __LINE__,
+            SVI("(struct S {int x;}).push_method(get_x, int(struct S* self){return self.x;});\n"
+                "_Type t = struct S;\n"
+                "struct __builtin_Method f = t.method(\"get_x\"[:5]);\n"
+                "constexpr struct __builtin_Method indexed = (struct S).method(0);\n"
+                "constexpr struct __builtin_Method named = (struct S).method(indexed.name);\n"
+                "_Static_assert(named.type == int(struct S*));\n"
+                "_Static_assert(named.offset == 0 && indexed.offset == 0);\n"
+                "struct S s = {42};\n"
+                "int (*fn)(struct S*) = (int(*)(struct S*))f.address;\n"
+                "return f.type == indexed.type && named.type == indexed.type && f.name.count == 5\n"
+                "    && f.offset == 0 && t.method(0).offset == 0\n"
+                "    && f.address == indexed.address && fn(&s) == 42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: nested method receiver offset", __LINE__,
+            SVI("struct Outer { long prefix; union { struct { long inner_prefix; struct { int value; int get(_Self* self){return self.value;} }; }; }; };\n"
+                "constexpr struct __builtin_Method m = (struct Outer).method(\"get\");\n"
+                "constexpr _Type Receiver = m.type.param_type(0).pointee;\n"
+                "_Static_assert(m.offset == __builtin_offsetof(struct Outer, value));\n"
+                "_Static_assert(m.offset > 0);\n"
+                "_Static_assert(Receiver.method(0).offset == 0);\n"
+                "_Type t = struct Outer;\n"
+                "struct __builtin_Method runtime = t.method(\"get\");\n"
+                "struct Outer o = {.prefix = 11, .inner_prefix = 22, .value = 42};\n"
+                "int (*fn)(Receiver*) = (int(*)(Receiver*))runtime.address;\n"
+                "int (*constant_fn)(Receiver*) = (int(*)(Receiver*))m.address;\n"
+                "return runtime.offset == m.offset && runtime.type == m.type\n"
+                "    && fn((Receiver*)((char*)&o + runtime.offset)) == 42\n"
+                "    && constant_fn((Receiver*)((char*)&o + m.offset)) == 42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "method call: nested anonymous pointer receiver", __LINE__,
+            SVI("struct Outer { long prefix; union { struct { long inner_prefix; struct { int value; int add(_Self* self, int n){return self.value += n;} }; }; }; };\n"
+                "struct Outer o = {.prefix = 11, .inner_prefix = 22, .value = 40};\n"
+                "struct Outer* p = &o; int calls = 0;\n"
+                "int a = o.add(1);\n"
+                "int b = (calls++, p)->add(1);\n"
+                "return a == 41 && b == 42 && o.value == 42 && calls == 1\n"
+                "    && o.prefix == 11 && o.inner_prefix == 22;\n"),
+            .exit_code = 1,
+        },
+        {
+            "method call: anonymous value receiver", __LINE__,
+            SVI("struct Outer { long prefix; struct { int value; int get(_Self self){return self.value;} }; };\n"
+                "struct Outer o = {.prefix = 11, .value = 42};\n"
+                "struct Outer* p = &o;\n"
+                "return o.get() == 42 && p->get() == 42\n"
+                "    && (struct Outer){.prefix = 7, .value = 43}.get() == 43;\n"),
+            .exit_code = 1,
+        },
+        {
+            "method call: Plan 9 embeds at nonzero offsets", __LINE__,
+            SVI("struct Base { int value; int add(_Self* self, int n){return self.value += n;} int get(_Self self){return self.value;} };\n"
+                "struct Middle { long middle_prefix; struct Base; };\n"
+                "struct Outer { long outer_prefix; struct Middle; };\n"
+                "_Static_assert((struct Middle).method(\"add\").offset > 0);\n"
+                "_Static_assert((struct Outer).method(\"add\").offset == (struct Outer).field(1).offset + (struct Middle).field(1).offset);\n"
+                "struct Middle middle = {.middle_prefix = 11, .value = 40};\n"
+                "if(middle.add(1) != 41 || middle.middle_prefix != 11) return 0;\n"
+                "struct Outer outer = {.outer_prefix = 22, .middle_prefix = 33, .value = 40};\n"
+                "struct Outer* p = &outer; int calls = 0;\n"
+                "int a = outer.add(1);\n"
+                "int b = (calls++, p)->add(1);\n"
+                "_Type t = struct Outer;\n"
+                "struct __builtin_Method m = t.method(\"add\");\n"
+                "int (*fn)(struct Base*, int) = (int(*)(struct Base*, int))m.address;\n"
+                "int c = fn((struct Base*)((char*)&outer + m.offset), 1);\n"
+                "return a == 41 && b == 42 && c == 43 && calls == 1\n"
+                "    && outer.get() == 43 && p->get() == 43\n"
+                "    && outer.outer_prefix == 22 && outer.middle_prefix == 33;\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 pointer conversion: nonzero offset", __LINE__,
+            SVI("struct Base { int value; };\n"
+                "struct Derived { long prefix; struct Base; };\n"
+                "int read(struct Base* p){return p->value;}\n"
+                "struct Base* convert(struct Derived* p){return p;}\n"
+                "struct Derived d = {.prefix = 11, .value = 42};\n"
+                "struct Derived* p = &d; int calls = 0;\n"
+                "struct Base* b = (calls++, p);\n"
+                "if(b != (struct Base*)((char*)p + __builtin_offsetof(struct Derived, value))) return 0;\n"
+                "if(read(p) != 42 || convert(p) != b || calls != 1) return 0;\n"
+                "b = p; b->value = 43;\n"
+                "return d.value == 43 && d.prefix == 11;\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 pointer conversion: nested and qualified", __LINE__,
+            SVI("struct Base { int value; };\n"
+                "struct Middle { long middle_prefix; struct Base; };\n"
+                "struct Outer { long outer_prefix; struct Middle; };\n"
+                "const struct Outer o = {.outer_prefix = 11, .middle_prefix = 22, .value = 42};\n"
+                "const struct Outer* p = &o;\n"
+                "const struct Base* b = p;\n"
+                "return b->value == 42 && (const char*)b == (const char*)p + __builtin_offsetof(struct Outer, value);\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 pointer conversion: address-of semantics and explicit cast", __LINE__,
+            SVI("struct Base { int value; };\n"
+                "struct Derived { long prefix; struct Base; };\n"
+                "struct Derived* p = nullptr; int calls = 0;\n"
+                "struct Base* b = (calls++, p);\n"
+                "struct Derived d = {.prefix = 11, .value = 42};\n"
+                "return (char*)b == (char*)&p->value && calls == 1\n"
+                "    && (void*)(struct Base*)&d == (void*)&d;\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 union embed: nonzero offset", __LINE__,
+            SVI("union Base { int value; long other; int add(_Self* self, int n){return self.value += n;} };\n"
+                "struct Derived { long prefix; union Base; };\n"
+                "int read(union Base* p){return p->value;}\n"
+                "union Base* convert(struct Derived* p){return p;}\n"
+                "struct Derived d = {.prefix = 11, .value = 40};\n"
+                "struct Derived* p = &d; int calls = 0;\n"
+                "union Base* b = (calls++, p);\n"
+                "if((char*)b != (char*)&d + __builtin_offsetof(struct Derived, value) || calls != 1) return 0;\n"
+                "if(read(p) != 40 || convert(p) != b || d.add(1) != 41 || p->add(1) != 42) return 0;\n"
+                "b = p; b->value = 43;\n"
+                "_Static_assert((struct Derived).method(\"add\").offset == __builtin_offsetof(struct Derived, value));\n"
+                "_Type t = struct Derived;\n"
+                "return d.value == 43 && d.prefix == 11 && t.has_field(\"value\")\n"
+                "    && t.has_method(\"add\") && t.method(\"add\").offset == (struct Derived).field(1).offset;\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 union container: struct and union embeds", __LINE__,
+            SVI("struct S { int x; }; union U { int y; };\n"
+                "union StructContainer { struct S; long other; };\n"
+                "union UnionContainer { union U; long other; };\n"
+                "union StructContainer s = {.x = 41}; union UnionContainer u = {.y = 42};\n"
+                "union StructContainer* sp = &s; union UnionContainer* up = &u;\n"
+                "struct S* ps = sp; union U* pu = up;\n"
+                "return ps->x == 41 && pu->y == 42 && (void*)ps == (void*)&s && (void*)pu == (void*)&u;\n"),
+            .exit_code = 1,
+        },
+        {
+            "Plan 9 pointer conversion: nested unions and qualifiers", __LINE__,
+            SVI("union Base { int value; };\n"
+                "struct Middle { long middle_prefix; union Base; };\n"
+                "union Wrap { struct Middle; };\n"
+                "struct Outer { long outer_prefix; union Wrap; };\n"
+                "const struct Outer o = {.outer_prefix = 11, .middle_prefix = 22, .value = 42};\n"
+                "const struct Outer* p = &o;\n"
+                "const union Base* b = p;\n"
+                "return b->value == 42 && (const char*)b == (const char*)p + __builtin_offsetof(struct Outer, value);\n"),
+            .exit_code = 1,
+        },
+        {
+            "method call: zero offset anonymous const receiver", __LINE__,
+            SVI("struct Outer { union { int other; struct { int value; int get(const _Self* self){return self.value;} }; }; };\n"
+                "const struct Outer o = {.value = 42};\n"
+                "const struct Outer* p = &o;\n"
+                "return o.get() == 42 && p->get() == 42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: separate fields and methods", __LINE__,
+            SVI("struct S { int x; int first(struct S* self){return self.x;} long y; int second(struct S* self){return self.y;} };\n"
+                "_Type t = struct S;\n"
+                "_Static_assert((struct S).fields == 2 && (struct S).methods == 2);\n"
+                "_Static_assert((struct S).field(1).type == long);\n"
+                "_Static_assert((struct S).method(1).name.count == 6);\n"
+                "char name[] = {'s','e','c','o','n','d'};\n"
+                "struct __builtin_Method m = t.method(name);\n"
+                "struct S s = {3, 7};\n"
+                "return t.fields == 2 && t.methods == 2 && t.field(1).name[0] == 'y'\n"
+                "    && t.method(1).address == m.address && ((int(*)(struct S*))m.address)(&s) == 7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: union methods and empty method count", __LINE__,
+            SVI("union U { int x; int get(union U* self){return self.x;} long y; };\n"
+                "_Type t = union U;\n"
+                "_Static_assert((union U).fields == 2 && (union U).methods == 1);\n"
+                "_Static_assert((struct Empty {}).methods == 0);\n"
+                "union U u = {.x = 9};\n"
+                "struct __builtin_Method m = t.method(\"get\");\n"
+                "return t.fields == 2 && t.methods == 1 && t.field(1).type == long\n"
+                "    && ((int(*)(union U*))m.address)(&u) == 9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: field lookup by array and literal", __LINE__,
+            SVI("struct S { int x; long hello; };\n"
+                "_Type t = struct S;\n"
+                "char name[5] = {'h', 'e', 'l', 'l', 'o'};\n"
+                "constexpr struct __builtin_Field f = (struct S).field(\"hello\");\n"
+                "_Static_assert(f.type == long);\n"
+                "return t.field(name).type == long && t.field(\"hello\").offset == f.offset;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: anonymous field lookup by name", __LINE__,
+            SVI("struct S { int pad; struct { int inner_pad; union { long value; unsigned bits:5; }; }; };\n"
+                "_Type t = struct S;\n"
+                "constexpr struct __builtin_Field f = (struct S).field(\"value\");\n"
+                "constexpr struct __builtin_Field b = (struct S).field(\"bits\");\n"
+                "_Static_assert(f.type == long);\n"
+                "_Static_assert(f.offset == __builtin_offsetof(struct S, value));\n"
+                "_Static_assert(b.is_bitfield && b.bitwidth == 5);\n"
+                "struct __builtin_Field runtime = t.field(\"value\");\n"
+                "struct __builtin_Field bits = t.field(\"bits\");\n"
+                "return runtime.type == f.type && runtime.offset == f.offset && runtime.name.count == 5\n"
+                "    && bits.offset == b.offset && bits.bitoffset == b.bitoffset && bits.bitwidth == 5 && bits.is_bitfield;\n"),
             .exit_code = 1,
         },
         {
@@ -9491,10 +9794,78 @@ TestFunction(test_interpreter_runtime_errors){
             SVI("(test):2:2: error: _Type.param_type: not a function type\n"),
         },
         {
+            "reflection: field validation before name", __LINE__,
+            SVI("_Type t = int;\n"
+                "t.field((__builtin_trap(), \"x\"[:1]));\n"),
+            SVI("(test):2:2: error: _Type.field: not a struct or union type\n"),
+        },
+        {
+            "reflection: missing field name", __LINE__,
+            SVI("struct S { int hello; }; _Type t = struct S;\n"
+                "const char name[:] = \"hello\"[:4];\n"
+                "t.field(name);\n"),
+            SVI("(test):3:2: error: _Type.field: no field with that name\n"),
+        },
+        {
+            "reflection: empty field name", __LINE__,
+            SVI("struct S { int x; }; _Type t = struct S;\n"
+                "const char name[:] = {};\n"
+                "t.field(name);\n"),
+            SVI("(test):3:2: error: _Type.field: no field with that name\n"),
+        },
+        {
             "reflection: discarded field bounds", __LINE__,
             SVI("struct S { int x; }; _Type t = struct S;\n"
                 "t.field(1);\n"),
             SVI("(test):2:2: error: _Type.field: index out of range\n"),
+        },
+        {
+            "reflection: field rejects method name", __LINE__,
+            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.field(\"get\");\n"),
+            SVI("(test):2:2: error: _Type.field: no field with that name\n"),
+        },
+        {
+            "reflection: field index excludes methods", __LINE__,
+            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.field(1);\n"),
+            SVI("(test):2:2: error: _Type.field: index out of range\n"),
+        },
+        {
+            "reflection: method rejects field name", __LINE__,
+            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.method(\"x\");\n"),
+            SVI("(test):2:2: error: _Type.method: no method with that name\n"),
+        },
+        {
+            "reflection: method index excludes fields", __LINE__,
+            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.method(1);\n"),
+            SVI("(test):2:2: error: _Type.method: index out of range\n"),
+        },
+        {
+            "reflection: empty method name", __LINE__,
+            SVI("struct S { int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.method(\"\");\n"),
+            SVI("(test):2:2: error: _Type.method: no method with that name\n"),
+        },
+        {
+            "reflection: negative method index", __LINE__,
+            SVI("struct S { int get(void){return 1;} }; _Type t = struct S;\n"
+                "t.method(-1);\n"),
+            SVI("(test):2:2: error: _Type.method: index out of range\n"),
+        },
+        {
+            "reflection: method validation before name", __LINE__,
+            SVI("_Type t = int;\n"
+                "t.method((__builtin_trap(), \"get\"));\n"),
+            SVI("(test):2:2: error: _Type.method: not a struct or union type\n"),
+        },
+        {
+            "reflection: methods requires aggregate", __LINE__,
+            SVI("_Type t = int;\n"
+                "return t.methods;\n"),
+            SVI("(test):2:9: error: _Type.methods: not a struct or union type\n"),
         },
         {
             "array store past end", __LINE__,

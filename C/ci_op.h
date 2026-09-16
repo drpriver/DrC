@@ -190,7 +190,8 @@ struct CiOp {
             // Call interpreter runtime support with already-lowered operands.
             CiOpKind kind: 8; // CI_OP_RT_CALL
             CiRuntimeOp op: 8;
-            uint32_t nargs: 8;
+            uint32_t nargs: 7;
+            uint32_t member_by_name: 1;
             uint32_t reflect_op: 8; // CcTypeIntrospectionOp, CcModuleOp, or CcSrcLocOp
             uint32_t slot, slot_size;
             uint32_t args[3]; // reflection: receiver, optional index/name, symbol expected type

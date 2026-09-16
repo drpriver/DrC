@@ -131,6 +131,7 @@ static int ci_compile_module(CiInterpreter*, const char*_Null_unspecified, const
 static int ci_resolve_module(CiInterpreter*, CiModule*);
 static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
 static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
+static int ci_reflect_func_unlocked(CiInterpreter*, SrcLoc, CcFunc*, CiRtModuleMember*, _Bool);
 static int ci_try_dlsym(CiInterpreter*, LongString, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
@@ -139,6 +140,7 @@ static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* ou
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
 static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
+static CcField*_Nullable cc_lookup_field(CcField*_Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcQualType*_Nullable out_owner);
 static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
@@ -372,6 +374,8 @@ int
 ci_type_reflect_validate(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt){
     if(op == CC_TYPE_FIELD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION)
         return ci_error(ci, loc, "_Type.field: not a struct or union type");
+    if(op == CC_TYPE_METHOD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION)
+        return ci_error(ci, loc, "_Type.method: not a struct or union type");
     if(op == CC_TYPE_ENUMERATOR && ccqt_kind(qt) != CC_ENUM)
         return ci_error(ci, loc, "_Type.enumerator: not an enum type");
     if(op == CC_TYPE_PARAM_TYPE){
@@ -384,7 +388,7 @@ ci_type_reflect_validate(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op
 
 static
 int
-ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt, uintptr_t arg, void* result){
+ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt, uintptr_t arg, const CiRtSlice*_Nullable name, void* result){
     int err;
     switch(op){
         case CC_TYPE_NONE:
@@ -620,38 +624,63 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             if(sz) memcpy(any->payload, (const void*)arg, sz);
             return 0;
         }
-        case CC_TYPE_FIELD:{
+        case CC_TYPE_FIELD:
+        case CC_TYPE_METHOD:
+        case CC_TYPE_HAS_FIELD:
+        case CC_TYPE_HAS_METHOD:{
+            _Bool has = op == CC_TYPE_HAS_FIELD || op == CC_TYPE_HAS_METHOD;
+            _Bool method = op == CC_TYPE_METHOD || op == CC_TYPE_HAS_METHOD;
+            const char* member = method ? "method" : "field";
             CcTypeKind k = ccqt_kind(qt);
-            if(k != CC_STRUCT && k != CC_UNION)
-                return ci_error(ci, loc, "_Type.field: not a struct or union type");
-            uintptr_t idx = arg;
-            CcField* f;
-            if(k == CC_STRUCT){
-                CcStruct* s = ccqt_as_struct(qt);
-                if(idx >= s->field_count)
-                    return ci_error(ci, loc, "_Type.field: index out of range");
-                f = &s->fields[idx];
+            if(k != CC_STRUCT && k != CC_UNION){
+                if(has){ *(_Bool*)result = 0; return 0; }
+                return ci_error(ci, loc, "_Type.%s: not a struct or union type", member);
+            }
+            CcStruct* s = ccqt_as_struct(qt);
+            CcField* f = NULL;
+            CcField named_field;
+            if(name){
+                if(name->count && name->data){
+                    AtomTable* at = ci_lock_atoms(ci);
+                    Atom atom = AT_atomize(at, name->data, name->count);
+                    ci_unlock_atoms(ci, at);
+                    if(!atom) return CI_OOM_ERROR;
+                    CcFieldLoc floc;
+                    CcQualType type;
+                    f = cc_lookup_field(s->fields, s->field_count, atom, &floc, &type, NULL);
+                    if(f && f->is_method != method) f = NULL;
+                    if(f){
+                        named_field = *f;
+                        named_field.offset = (uint32_t)floc.byte_offset;
+                        f = &named_field;
+                    }
+                }
+                if(has){ *(_Bool*)result = f != NULL; return 0; }
+                if(!f) return ci_error(ci, loc, "_Type.%s: no %s with that name", member, member);
             }
             else {
-                CcUnion* s = ccqt_as_union(qt);
-                if(idx >= s->field_count)
-                    return ci_error(ci, loc, "_Type.field: index out of range");
-                f = &s->fields[idx];
+                uintptr_t idx = arg;
+                for(uint32_t i = 0; i < s->field_count; i++){
+                    if(s->fields[i].is_method != method) continue;
+                    if(idx-- == 0){ f = &s->fields[i]; break; }
+                }
+                if(!f) return ci_error(ci, loc, "_Type.%s: index out of range", member);
             }
-            CiRtField* out = (CiRtField*)result;
-            if(f->is_method){
-                *out = (CiRtField){
-                    .type = f->type,
-                    .name.data = (void*)(uintptr_t)(f->method->name ? f->method->name->data : ""),
-                    .name.count = f->method->name ? f->method->name->length : 0,
-                    .offset = 0,
-                    .bitwidth = 0,
-                    .bitoffset = 0,
-                    .is_bitfield = 0,
+            if(method){
+                CiRtModuleMember info;
+                ci_lock_resolver(ci);
+                err = ci_reflect_func_unlocked(ci, loc, f->method, &info, 1);
+                ci_unlock_resolver(ci);
+                if(err) return err;
+                *(CiRtMethod*)result = (CiRtMethod){
+                    .type = info.type,
+                    .name = info.name,
+                    .offset = f->offset,
+                    .address = (uintptr_t)info.address,
                 };
             }
             else {
-                *out = (CiRtField){
+                *(CiRtField*)result = (CiRtField){
                     .type = f->type,
                     .name.data = (void*)(uintptr_t)(f->name ? f->name->data : ""),
                     .name.count = f->name ? f->name->length : 0,
@@ -734,12 +763,17 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(uintptr_t*)result = ccqt_as_enum(qt)->underlying.bits;
             return 0;
         }
-        case CC_TYPE_FIELDS:{
+        case CC_TYPE_FIELDS:
+        case CC_TYPE_METHODS:{
+            _Bool methods = op == CC_TYPE_METHODS;
             CcTypeKind k = ccqt_kind(qt);
             if(k != CC_STRUCT && k != CC_UNION)
-                return ci_error(ci, loc, "_Type.fields: not a struct or union type");
+                return ci_error(ci, loc, "_Type.%s: not a struct or union type", methods ? "methods" : "fields");
             CcStruct* s = ccqt_as_struct(qt);
-            *(size_t*)result = s->field_count;
+            size_t count = 0;
+            for(uint32_t i = 0; i < s->field_count; i++)
+                count += s->fields[i].is_method == methods;
+            *(size_t*)result = count;
             return 0;
         }
     }
@@ -875,7 +909,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     else if(op->rt_call.op == CI_RT_MODULE_VALIDATE)
                         err = ci_module_reflect_validate(ci, op->rt_call.loc, (CiModule*)receiver);
                     else if(op->rt_call.op == CI_RT_TYPE_REFLECT)
-                        err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, result);
+                        err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, op->rt_call.member_by_name ? (const CiRtSlice*)((char*)frame->slots + op->rt_call.args[1]) : NULL, result);
                     else
                         err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op, (CiModule*)receiver, arg, expected, result, op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
                     break;

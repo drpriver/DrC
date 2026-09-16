@@ -4654,7 +4654,7 @@ TestFunction(test_parse_decls){
             .vars = {
                 {SVI("f"), SVI("struct Foo"), SVI("{3}")},
                 {SVI("b"), SVI("struct Bar"), SVI("{@0 = 1, @4 = 2}")},
-                {SVI("pf"), SVI("struct Foo *"), SVI("(struct Foo *)&b")},
+                {SVI("pf"), SVI("struct Foo *"), SVI("&&b->@0")},
             },
         },
         {
@@ -7361,6 +7361,32 @@ TestFunction(test_parse_errors){
             SVI("const int x[] = {1,2,3}\n;"
                 "int s[:] = x[:];\n"),
             SVI("(test):2:14: error: cannot implicitly convert from 'const int[:]' to 'int[:]'\n"),
+        },
+        {
+            "has_field rejects integer index", __LINE__,
+            SVI("struct S { int x; };\n"
+                "_Bool b = (struct S).has_field(0);\n"),
+            SVI("(test):2:32: error: cannot implicitly convert from 'int' to 'const char[:]'\n"),
+        },
+        {
+            "Plan 9 pointer conversion preserves const", __LINE__,
+            SVI("struct B { int x; }; struct D { int prefix; struct B; };\n"
+                "const struct D* d;\n"
+                "struct B* b = d;\n"),
+            SVI("(test):3:15: error: cannot implicitly convert from 'const struct D *' to 'struct B *'\n"),
+        },
+        {
+            "Plan 9 union pointer conversion preserves const", __LINE__,
+            SVI("union B { int x; }; struct D { int prefix; union B; };\n"
+                "const struct D* d;\n"
+                "union B* b = d;\n"),
+            SVI("(test):3:14: error: cannot implicitly convert from 'const struct D *' to 'union B *'\n"),
+        },
+        {
+            "has_method rejects integer index", __LINE__,
+            SVI("struct S { int x; };\n"
+                "_Bool b = (struct S).has_method(0);\n"),
+            SVI("(test):2:33: error: cannot implicitly convert from 'int' to 'const char[:]'\n"),
         },
         {
             "array to slice drops const", __LINE__,

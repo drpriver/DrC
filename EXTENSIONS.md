@@ -688,6 +688,7 @@ _Type pointee;         // Pointed-to type (pointers only)
 _Type unqual;          // Type with qualifiers removed
 size_t count;          // Element count (arrays only)
 size_t fields;         // Number of fields (structs/unions)
+size_t methods;        // Number of methods (structs/unions)
 _Type element_type;    // Element type (arrays/slices only)
 _Type return_type;     // Return type (functions/function pointers)
 size_t param_count;    // Parameter count (functions/function pointers)
@@ -699,7 +700,20 @@ _SrcLoc loc;           // Where this type was defined (tagged only).
 #### Methods
 ```C
 // Returns field info for the `i`th field. See `__builtin_Field`.
-__bultin_Field field(size_t i);
+__builtin_Field field(size_t i);
+__builtin_Field field(const char name[:]);
+
+// Whethere a field by this name can be found, including in anonymous
+// structs and unions
+_Bool has_field(const char name[:]);
+
+// Returns method info for the `i`th member. See `__builtin_Method`.
+__builtin_Method method(size_t i);
+__builtin_Method method(const char name[:]);
+
+// Whethere a method by this name can be found, including in anonymous
+// structs and unions
+_Bool has_method(const char name[:]);
 
 // Returns the `i`th parameter type.
 _Type param_type(size_t);
@@ -734,6 +748,24 @@ struct __builtin_Field {
 };
 ```
 
+##### `__builtin_Method`
+
+The structure returned by `.method()`. It is laid out as follows on all supported targets:
+
+```C
+struct __builtin_Method {
+    _Type type;
+    const char name[:];
+    size_t offset; // how far to adjust the type's pointer.
+    void(*address)(void); // Cast to correct function type, or at least ABI compatible one.
+};
+```
+
+
+As a method can be found via looking up in an anonymous field,
+offset tells you how far to adjust the pointer to the receiver.
+This is also needed for plan9 embedded structs with methods.
+
 ##### `__builtin_Enumerator`
 
 The structure returned by `.enumerator()`. It is laid out as follows on all supported targets:
@@ -755,14 +787,7 @@ a struct or union type. It must be used at global scope. The syntax is:
 ```
 
 
-The first argument is the method name (an identifier). The second argument
-is a function --- typically a lambda. After the call, instances of the type
-can call the method with `.method_name()` syntax, just like
-methods defined inline in the struct body.
-
-
-This is primarily useful with `__mixin` and proc macros to
-generate methods for types after their definition.
+Example:
 
 ```C
 #include <stdio.h>
@@ -781,6 +806,10 @@ p.print(); // prints: (3, 4)
 
 Combined with proc macros and `__mixin`, this enables
 auto-generated methods via type introspection:
+
+
+This example kind of sucks, but thats because procmacros
+need more utility builtins, TODO.
 
 ```C
 const char* gen_print(_Type T){

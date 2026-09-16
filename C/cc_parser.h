@@ -218,6 +218,7 @@ struct CcParser {
                char_slice,
                const_char_slice,
                builtin_field,
+               builtin_method,
                builtin_enumerator,
                builtin_module_member,
                builtin_module,

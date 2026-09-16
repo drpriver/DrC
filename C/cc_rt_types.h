@@ -30,6 +30,13 @@ struct CiRtField {
              bitoffset,
              is_bitfield;
 };
+typedef struct CiRtMethod CiRtMethod;
+struct CiRtMethod {
+    CcQualType type;
+    CiRtSlice name;
+    size_t offset;
+    uintptr_t address;
+};
 
 
 typedef struct CiRtModuleMember CiRtModuleMember;

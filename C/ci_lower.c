@@ -2103,6 +2103,9 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         : (subop == CC_TYPE_IS_CALLABLE_WITH
         || subop == CC_TYPE_CASTABLE_TO
         || subop == CC_TYPE_FIELD
+        || subop == CC_TYPE_METHOD
+        || subop == CC_TYPE_HAS_FIELD
+        || subop == CC_TYPE_HAS_METHOD
         || subop == CC_TYPE_ENUMERATOR
         || subop == CC_TYPE_PARAM_TYPE
         || subop == CC_TYPE_MAKE_ANY)))
@@ -2121,15 +2124,19 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         .slot = dest,
         .slot_size = out ? out->size : 0,
         .reflect_op = subop,
+        .member_by_name = !module && !srcloc && (subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD
+            || subop == CC_TYPE_HAS_FIELD || subop == CC_TYPE_HAS_METHOD)
+            && ccqt_kind(e->values[0]->type) == CC_SLICE,
         .loc = e->loc,
     }};
     for(uint32_t i = 0; i < call.rt_call.nargs; i++){
-        err = ci_alloc_slot(ctx, 8, 8, &call.rt_call.args[i]);
+        uint32_t arg_size = i && call.rt_call.member_by_name ? sizeof(CiRtSlice) : 8;
+        err = ci_alloc_slot(ctx, arg_size, 8, &call.rt_call.args[i]);
         if(err) return err;
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, i ? e->values[0] : e->lhs, call.rt_call.args[i], &v);
         if(err) return err;
-        if(!srcloc && i == 0 && (module || subop == CC_TYPE_FIELD
+        if(!srcloc && i == 0 && (module || subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD
             || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE)){
             // Receiver errors must precede evaluation of the optional operand.
             CiOp* check;
