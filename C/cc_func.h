@@ -26,6 +26,12 @@ typedef struct CiFuncOps CiFuncOps;
 typedef struct CcVariable CcVariable;
 typedef struct CcScope CcScope;
 
+typedef struct CcFuncParam CcFuncParam;
+struct CcFuncParam {
+    Atom name;
+    uint32_t sz, offset; // set by lowering
+};
+
 typedef struct CcLabelCtx CcLabelCtx;
 struct CcLabelCtx {
     AtomMap(CcStmtNode) labels;
@@ -58,9 +64,8 @@ struct CcFunc {
     CiFuncOps*_Nullable interp_ops; // executable form; created and owned by ci_lower
     struct {
         size_t count;
-        Atom _Nullable*_Null_unspecified data;
+        CcFuncParam* _Null_unspecified data;
     } params;
-    CcVariable*_Nullable*_Null_unspecified param_vars; // set during body parsing, parallel to params
     CcScope*_Nullable param_scope; // declarations from the definition's parameter list
     CcLabelCtx label_ctx;
     CcFunc*_Nullable hotswap;

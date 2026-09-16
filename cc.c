@@ -899,8 +899,8 @@ repl_builtin_command(CcParser* parser, StringView input){
             for(uint32_t j = 0; j < ft->param_count; j++){
                 if(j) log_sprintf(l, ", ");
                 cc_print_type(&l->buff, ft->params[j]);
-                if(fn->params.data && j < fn->params.count && fn->params.data[j]){
-                    log_sprintf(l, " %s", fn->params.data[j]->data);
+                if(fn->params.data && j < fn->params.count && fn->params.data[j].name != nil_atom){
+                    log_sprintf(l, " %s", fn->params.data[j].name->data);
                 }
             }
             if(ft->is_variadic){
@@ -939,8 +939,8 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
     for(uint32_t j = 0; j < ft->param_count; j++){
         if(j) msb_sprintf(sb, ", ");
         cc_print_type(sb, ft->params[j]);
-        if(func->params.data && j < func->params.count && func->params.data[j]){
-            msb_sprintf(sb, " %s", func->params.data[j]->data);
+        if(func->params.data && j < func->params.count && func->params.data[j].name != nil_atom){
+            msb_sprintf(sb, " %s", func->params.data[j].name->data);
         }
     }
     if(ft->is_variadic){

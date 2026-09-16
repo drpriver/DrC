@@ -5515,8 +5515,15 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f){
         .ldbl_fmt = t->long_double_format,
     };
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
-    if(!err)
-        err = ci_lower_resolve_gotos(ci, &ctx);
+    if(err) goto finally;
+    for(size_t i = 0; i < f->params.count; i++){
+        CcVariable* var = f->body_tree->decls.data[i];
+        f->params.data[i].offset = (uint32_t)var->frame_offset;
+        err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &f->params.data[i].sz);
+        if(err) goto finally;
+    }
+    err = ci_lower_resolve_gotos(ci, &ctx);
+    finally:
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
     if(labels.data)
         Allocator_free(al, labels.data, AM_alloc_size(labels.cap));

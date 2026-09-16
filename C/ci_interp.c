@@ -2538,12 +2538,8 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, vo
     frame->return_size = size;
     // External entry points and native callbacks supply libffi-style argv.
     for(uint32_t i = 0; i < nfixed && i < nargs; i++){
-        CcVariable* var = func->param_vars[i];
-        if(!var) continue;
-        uint32_t param_sz;
-        err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
-        if(err){ ci_free_call_frame(ci, frame); return err; }
-        memcpy((char*)frame->slots + var->frame_offset, argv[i], param_sz);
+        CcFuncParam* param = &func->params.data[i];
+        memcpy((char*)frame->slots + param->offset, argv[i], param->sz);
     }
     if(varargs_size){
         char* va_buf = frame->varargs_buf;

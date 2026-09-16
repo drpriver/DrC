@@ -42,6 +42,14 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "named arguments retain prototype and definition names", __LINE__,
+            SVI("int f(int first, int second);\n"
+                "int x=f(.second=4,.first=3);\n"
+                "int f(int a,int b){return 10*a+b;}\n"
+                "return x+f(.b=6,.a=5);\n"),
+            .exit_code = 90,
+        },
+        {
             "call: flat mixed arguments and unnamed parameters", __LINE__,
             SVI("struct S {long a; char b;};\n"
                 "int f(char a, double, struct S s, short z){return a+s.a+s.b+z;}\n"
@@ -11703,6 +11711,13 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("add"),
             .args = {{CCBT_int, .i=3}, {CCBT_int, .i=4}},
             .expected_ret = 7,
+        },
+        {
+            "mixed argv layout with unnamed parameter", __LINE__,
+            SVI("int mixed(int a,double,int c){return 10*a+c;}\n"),
+            .func_name = SVI("mixed"),
+            .args = {{CCBT_int, .i=3}, {CCBT_double, .d=9.5}, {CCBT_int, .i=4}},
+            .expected_ret = 34,
         },
         {
             "subtract", __LINE__,

@@ -17,13 +17,20 @@
 #include "cpp_preprocessor.h"
 #include "cc_errors.h"
 #include "cc_printer.h"
+
+#ifndef MARRAY_T_CCFUNCPARAM
+#define MARRAY_T_CCFUNCPARAM
+#define MARRAY_T CcFuncParam
+#include "../Drp/Marray.h"
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
 typedef struct CcParsedParams CcParsedParams;
 struct CcParsedParams {
-    Marray(Atom) names;
+    Marray(CcFuncParam) names;
     CcScope* _Nullable scope;
 };
 
@@ -877,10 +884,10 @@ cc_parse_lambda_body(CcParser* p, CcValueClass vc, SrcLoc loc, CcQualType type, 
     int err;
     CcToken tok;
     err = cc_next_token(p, &tok); // consume '{'
-    if(err){ ma_cleanup(Atom)(&param_names->names, cc_allocator(p)); return err; }
+    if(err){ ma_cleanup(CcFuncParam)(&param_names->names, cc_allocator(p)); return err; }
     CcFunction* ftype = ccqt_as_function(type);
     CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-    if(!func){ ma_cleanup(Atom)(&param_names->names, cc_allocator(p)); return CC_OOM_ERROR; }
+    if(!func){ ma_cleanup(CcFuncParam)(&param_names->names, cc_allocator(p)); return CC_OOM_ERROR; }
     func->name = NULL;
     func->type = ftype;
     func->loc = loc;
@@ -918,9 +925,9 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
     CcParsedParams param_names = {0};
     Atom name = NULL;
     err = cc_parse_declarator(p, &head, &tail, &name, NULL, &param_names);
-    if(err){ ma_cleanup(Atom)(&param_names.names, cc_allocator(p)); return err; }
+    if(err){ ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p)); return err; }
     if(name){
-        ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+        ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         return cc_error(p, loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
     }
     *tail = base.type;
@@ -928,16 +935,16 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
     CcToken peek;
     err = cc_peek(p, &peek);
     if(err){
-        ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+        ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         return err;
     }
     if(ccqt_kind(type) != CC_FUNCTION){
-        ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+        ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace)
             return cc_error(p, loc, "Lambda requires a function type, got non-function type");
     }
     if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_lbrace){
-        ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+        ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         CcExpr* type_val = cc_value_expr(p, loc, ccqt_basic(CCBT__Type));
         if(!type_val) return CC_OOM_ERROR;
         type_val->uinteger = type.bits;
@@ -2161,10 +2168,10 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 CcQualType cast_type;
                 CcParsedParams param_names = {0};
                 err = cc_parse_type_name(p, &cast_type, &param_names);
-                if(err){ ma_cleanup(Atom)(&param_names.names, cc_allocator(p)); return err; }
+                if(err){ ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p)); return err; }
                 CcToken peek_after;
                 err = cc_peek(p, &peek_after);
-                if(err){ ma_cleanup(Atom)(&param_names.names, cc_allocator(p)); return err; }
+                if(err){ ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p)); return err; }
                 if(peek_after.type == CC_PUNCTUATOR && peek_after.punct.punct == CC_lbrace
                    && ccqt_kind(cast_type) == CC_FUNCTION){
                     CcExpr* lambda;
@@ -2174,7 +2181,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     if(err) return err;
                     return cc_parse_postfix(p, vc, lambda, out);
                 }
-                ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+                ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                 err = cc_expect_punct(p, CC_rparen);
                 if(err) return err;
                 CcToken peek2;
@@ -5017,7 +5024,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 if(ccqt_kind(ct) != CC_FUNCTION)
                     return cc_error(p, tok.loc, "Called object is not a function or function pointer");
                 CcFunction* ftype = ccqt_as_function(ct);
-                Atom*_Null_unspecified param_names = NULL;
+                CcFuncParam*_Null_unspecified param_names = NULL;
                 size_t param_names_count = 0;
                 if(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count){
                     param_names = operand->func->params.data;
@@ -5061,7 +5068,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         Atom name = name_tok.ident.ident;
                         uint32_t idx = UINT32_MAX;
                         for(size_t j = 0; j < param_names_count; j++){
-                            if(param_names[j] == name){ idx = (uint32_t)j; break; }
+                            if(param_names[j].name == name){ idx = (uint32_t)j; break; }
                         }
                         if(idx == UINT32_MAX){
                             err = cc_error(p, name_tok.loc, "no parameter named '%.*s'", name->length, name->data);
@@ -5170,7 +5177,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 if(has_named){
                     for(uint32_t i = 0; i < nargs && i < ftype->param_count; i++){
                         if(!args.data[i]){
-                            Atom pn = (param_names && i < param_names_count) ? param_names[i] : NULL;
+                            Atom pn = (param_names && i < param_names_count) ? param_names[i].name : NULL;
                             err = cc_error(p, tok.loc, "missing argument for parameter '%.*s'",
                                 pn ? (int)pn->length : 1, pn ? pn->data : "?");
                             goto call_cleanup;
@@ -8524,7 +8531,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     SrcLoc name_loc = {0};
                     err = cc_parse_declarator(p, &head, &tail, &member_name, &name_loc, &param_names);
                     if(err){
-                        ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+                        ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                         goto struct_err;
                     }
                     *tail = member_base.type;
@@ -8532,12 +8539,12 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                     // Method: member type is a function type (not pointer to function)
                     if(ccqt_kind(member_type) == CC_FUNCTION){
                         if(!member_name){
-                            ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+                            ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                             err = cc_error(p, tok.loc, "expected method name");
                             goto struct_err;
                         }
                         CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-                        if(!func){ ma_cleanup(Atom)(&param_names.names, cc_allocator(p)); err = CC_OOM_ERROR; goto struct_err; }
+                        if(!func){ ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p)); err = CC_OOM_ERROR; goto struct_err; }
                         func->name = member_name;
                         func->type = ccqt_as_function(member_type);
                         func->loc = name_loc;
@@ -8614,7 +8621,7 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         }
                         break; // fall through to ';' expect
                     }
-                    ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+                    ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
 
                     // Check for bitfield
                     err = cc_peek(p, &tok);
@@ -10666,8 +10673,8 @@ cc_parse_declarator_inner(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull
                 err = cc_scope_insert_var(cc_allocator(p), p->current, param_name, var);
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
                 if(out_param_names){
-                    Marray(Atom)* pn = &out_param_names->names;
-                    err = ma_push(Atom)(pn, cc_allocator(p), param_name);
+                    Marray(CcFuncParam)* pn = &out_param_names->names;
+                    err = ma_push(CcFuncParam)(pn, cc_allocator(p), (CcFuncParam){.name = param_name});
                     if(err){ err = CC_OOM_ERROR; goto param_err; }
                 }
 
@@ -10842,7 +10849,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             CcQualType* tail = &head;
             err = cc_parse_declarator(p, &head, &tail, &name, &name_loc, &param_names);
             if(err){
-                ma_cleanup(Atom)(&param_names.names, cc_allocator(p));
+                ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                 return err;
             }
             // tail != &head means the declarator itself built derived types.
@@ -12043,7 +12050,6 @@ cc_parse_local_methods(CcParser* p){
 static
 int
 cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
-    CcFunction* ftype = f->type;
     int err = 0;
     CcFunc* prev = p->current_func;
     CcQualType prev__Self = p->current_tag_type;
@@ -12066,18 +12072,6 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     }
     else err = cc_push_scope(p);
     if(err) goto restore_context;
-    // Preserve parameter identities; lowering assigns their frame offsets.
-    if(ftype->param_count){
-        f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
-        if(!f->param_vars){ err = CC_OOM_ERROR; goto end_scope; }
-    }
-    {
-        AtomMapItems items = CcAnonAM_items(&p->current->variables);
-        for(size_t i = 0; i < items.count; i++){
-            CcVariable* var = items.data[i].p;
-            f->param_vars[i] = var;
-        }
-    }
     err = cc_parse_local_methods(p);
     if(err) goto end_scope;
     {
