@@ -207,7 +207,7 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].needs_lffi)
                 link_libffi(ctx, cov_bin, ctx->target.os, ffi_lib);
             b_linkinp(ctx, cov_bin, soft_float);
-            Atom cov_cmd_name = b_atomize_f(ctx, "run_coverage_%s", name);
+            Atom cov_cmd_name = b_atomize_f(ctx, "run-coverage-%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
             cov_cmd->is_phony = 1;
             cov_cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
@@ -261,7 +261,7 @@ int main(int argc, char** argv, char** envp){
         b_add_dep(ctx, fuzz_phony, fuzz);
         Atom corpus_name = b_atomize_f(ctx, "%s/fuzz_corpus", ctx->build_dir->data);
         BuildTarget* corpus_dir = b_directory_target(ctx, corpus_name->data);
-        BuildTarget* run_fuzz = b_exec_target(ctx, "run_cc_fuzz", fuzz);
+        BuildTarget* run_fuzz = b_exec_target(ctx, "run-cc_fuzz", fuzz);
         run_fuzz->is_phony = 1;
         b_add_dep(ctx, run_fuzz, corpus_dir);
         b_aarg(ctx, run_fuzz, corpus_name);
@@ -353,7 +353,7 @@ int main(int argc, char** argv, char** envp){
             BuildTarget* out = b_targeta(ctx, md_name);
             out->is_generated = 1;
             out->user_bits |= EXCLUDE_FROM_MAKEFILE;
-            Atom cmd_name = b_atomize_f(ctx, "compile_%s", doc_files[i]);
+            Atom cmd_name = b_atomize_f(ctx, "compile-%s", doc_files[i]);
             BuildTarget* cmd = b_cmd_target(ctx, cmd_name->data, "dndc");
             cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
             Atom dnd_name = b_atomize_f(ctx, "%s.dnd", doc_files[i]);
