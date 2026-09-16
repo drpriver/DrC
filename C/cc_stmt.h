@@ -13,21 +13,21 @@ typedef struct CcVariable CcVariable;
 #pragma clang assume_nonnull begin
 #endif
 enum CcStmtKind TYPED_ENUM(uint32_t){
-    CC_STMT_NULL,       // ;
-    CC_STMT_EXPR,       // expr;
-    CC_STMT_COMPOUND,   // { ... } (tree form only, flattened away by lowering)
-    CC_STMT_IF,         // if (cond) then [else]
-    CC_STMT_WHILE,      // while (cond) body
-    CC_STMT_DOWHILE,    // do body while (cond);
-    CC_STMT_FOR,        // for (init; cond; inc) body
-    CC_STMT_SWITCH,     // switch (expr) { ... }
-    CC_STMT_CASE,       // case expr:
-    CC_STMT_DEFAULT,    // default:
-    CC_STMT_RETURN,     // return [expr];
-    CC_STMT_BREAK,      // break;
-    CC_STMT_CONTINUE,   // continue;
-    CC_STMT_GOTO,       // goto label;
-    CC_STMT_LABEL,      // label:
+    CC_STMT_NULL,
+    CC_STMT_EXPR,
+    CC_STMT_COMPOUND,
+    CC_STMT_IF,
+    CC_STMT_WHILE,
+    CC_STMT_DOWHILE,
+    CC_STMT_FOR,
+    CC_STMT_SWITCH,
+    CC_STMT_CASE,
+    CC_STMT_DEFAULT,
+    CC_STMT_RETURN,
+    CC_STMT_BREAK,
+    CC_STMT_CONTINUE,
+    CC_STMT_GOTO,
+    CC_STMT_LABEL,
 };
 TYPEDEF_ENUM(CcStmtKind, uint32_t);
 
@@ -38,24 +38,24 @@ struct CcStmtNode {
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
     Parray(CcVariable) decls; // variables scoped to this statement
-    // Interpreted based on kind:
-    // CC_STMT_NULL:     (nothing)
+    // CC_STMT_NULL:
     // CC_STMT_EXPR:     exprs[0] = expr
     // CC_STMT_COMPOUND: stmts[0..count) = children
     // CC_STMT_IF:       exprs[0] = cond, stmts[0] = then, stmts[1] = else (nullable)
     // CC_STMT_WHILE:    exprs[0] = cond, stmts[0] = body
     // CC_STMT_DOWHILE:  exprs[0] = cond, stmts[0] = body
-    // CC_STMT_FOR:      exprs[0] = cond, exprs[1] = inc (both nullable),
-    //                   stmts[0] = init (nullable), stmts[1] = body
+    // CC_STMT_FOR:      exprs[0] = cond, exprs[1] = inc,
+    //                   stmts[0] = init, stmts[1] = body
     // CC_STMT_SWITCH:   exprs[0] = expr, stmts[0] = body
     // CC_STMT_CASE:     case_value = folded constant, stmts[0] = stmt
     // CC_STMT_DEFAULT:  stmts[0] = stmt
-    // CC_STMT_RETURN:   exprs[0] = expr (nullable)
-    // CC_STMT_BREAK:    (nothing; lowering patches to a goto)
-    // CC_STMT_CONTINUE: (nothing; lowering patches to a goto)
-    // CC_STMT_GOTO:     label (unresolved; lowering emits it for cc_resolve_gotos)
+    // CC_STMT_RETURN:   exprs[0] = expr
+    // CC_STMT_BREAK:
+    // CC_STMT_CONTINUE:
+    // CC_STMT_GOTO:     label
     // CC_STMT_LABEL:    label, stmts[0] = stmt
     union {
+        CcExpr* expr; // CC_STMT_EXPR
         CcExpr* _Null_unspecified exprs[2];
         Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
         uint64_t case_value; // CC_STMT_CASE

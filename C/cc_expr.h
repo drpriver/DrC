@@ -220,7 +220,6 @@ enum CcSrcLocOp TYPED_ENUM(uint32_t) {
 };
 TYPEDEF_ENUM(CcSrcLocOp, uint32_t);
 
-typedef struct CcStatement CcStatement;
 typedef struct CcStmtNode CcStmtNode;
 typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
