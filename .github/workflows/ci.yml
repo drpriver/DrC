@@ -1,28 +1,20 @@
+permissions:
+  contents: read
 name: CI
 on:
   push:
   pull_request:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '17 3 * * *'
 jobs:
-  linux-x64:
+  linux:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm]
         cc: [gcc, clang]
-    steps:
-      - uses: actions/checkout@v6
-      - run: sudo apt-get install -y libffi-dev
-      - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
-      - run: ./build test -- --multithreaded --force-colors
-
-  linux-arm:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04-arm
-    strategy:
-      matrix:
-        cc: [gcc, clang]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - run: sudo apt-get install -y libffi-dev
@@ -31,13 +23,14 @@ jobs:
   windows-x64:
     if: github.event_name != 'schedule'
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025-vs2026]
+        os: [windows-2022, windows-2025]
         cc: [cl, clang, clang-cl]
         include:
           - os: windows-2022
             vcvars: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
-          - os: windows-2025-vs2026
+          - os: windows-2025
             vcvars: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
     runs-on: ${{ matrix.os }}
     defaults:
@@ -48,7 +41,11 @@ jobs:
       - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
   macos:
     if: github.event_name != 'schedule'
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - run: cc build.c -o build && ./build -b Bin
@@ -70,21 +67,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: sudo apt-get install -y libffi-dev
+      - run: clang build.c -o build && ./build -b Bin
       - name: Restore fuzz corpus
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: Bin/fuzz_corpus
-          key: fuzz-corpus-${{ github.sha }}
+          key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-
-      - run: clang build.c -o build && ./build -b Bin
-      - run: ./build run-cc_fuzz -- -max_total_time=1800
-        continue-on-error: true
+      - run: mkdir -p Bin/fuzz_corpus Bin/fuzz_artifacts
+      - name: Run fuzzer
+        run: ./build run-cc_fuzz -- Bin/fuzz_corpus -max_total_time=1800 -artifact_prefix=Bin/fuzz_artifacts/
+      - name: Save fuzz corpus
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: Bin/fuzz_corpus
+          key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: fuzz-crashes
-          path: |
-            crash-*
-            leak-*
-            timeout-*
+          path: Bin/fuzz_artifacts/
           if-no-files-found: ignore
