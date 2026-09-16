@@ -234,6 +234,8 @@ int main(int argc, char** argv, char** envp){
             "--exclude", "cpp\\.c",
             "--exclude", "cpp_args\\.h",
             "--exclude", "cc_repl_completion\\.h",
+            "--exclude", "C/ci_op_printer\\.h",
+            "--exclude", "C/cc_printer\\.[ch]",
             "--markdown");
         b_argf(ctx, coverage, "--txt=%s/coverage/coverage.txt", ctx->build_dir->data);
         b_argf(ctx, coverage, "--html-details=%s/coverage/index.html", ctx->build_dir->data);

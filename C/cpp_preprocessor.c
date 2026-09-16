@@ -4670,14 +4670,10 @@ cpp_add_default_includea(CppPreprocessor* cpp, Marray(StringView)* arr, Atom a){
 static
 int
 cpp_add_default_include(CppPreprocessor* cpp, Marray(StringView)* arr, const char* path){
-    if(!cpp_dir_exists(cpp, path))
-        return 0;
     size_t len = strlen(path);
     Atom a = AT_atomize(cpp->at, path, len);
     if(!a) return CPP_OOM_ERROR;
-    StringView sv = {a->length, a->data};
-    int err = ma_push(StringView)(arr, cpp->allocator, sv);
-    return err;
+    return cpp_add_default_includea(cpp, arr, a);
 }
 
 static

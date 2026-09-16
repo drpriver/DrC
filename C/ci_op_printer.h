@@ -15,6 +15,7 @@
 #include "cc_var.h"
 #include "cc_type.h"
 #include "cc_memory_order.h"
+#include "cc_printer.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin

@@ -51,6 +51,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         .logger = logger,
         .env = &env,
         .target = cc_target_test(),
+        .rng = {0x5f05085516fda9a8, 0xef1f011b1f63e07},
     };
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
@@ -237,6 +238,58 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     return result;
 }
 
+static
+int
+cpp_expand_string_expect_message(StringView txt, StringView* err_out){
+    ArenaAllocator aa = {0};
+    Allocator a = allocator_from_arena(&aa);
+    FileCache *fc = fc_create(a, FC_FLAGS_NONE);
+    MStringBuilder log_sb = {.allocator=a};
+    MsbLogger logger_ = {0};
+    Logger* logger = msb_logger(&logger_, &log_sb);
+    AtomTable at = {.allocator = a};
+    Environment env = {.allocator = a, .at=&at};
+    CppPreprocessor cpp = {
+        .allocator = a,
+        .fc = fc,
+        .at = &at,
+        .logger = logger,
+        .env = &env,
+        .target = cc_target_test(),
+    };
+    fc_write_path(fc, "(test)", 6);
+    int err = fc_cache_file(fc, txt);
+    if(err) goto finally;
+    err = cpp_define_builtin_macros(&cpp);
+    if(err) goto finally;
+    CppFrame frame = {
+        .file_id = (uint32_t)fc->map.count - 1,
+        .txt = txt,
+        .line = 1,
+        .column = 1,
+    };
+    err = ma_push(CppFrame)(&cpp.frames, cpp.allocator, frame);
+    if(err) goto finally;
+    CppToken tok;
+    for(;;){
+        err = cpp_next_pp_token(&cpp, &tok);
+        if(err) break;
+        if(tok.type == CPP_EOF) break;
+    }
+
+    finally:;
+    int result = err;
+    if(log_sb.cursor){
+        StringView sv = msb_borrow_sv(&log_sb);
+        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length)};
+    }
+    else
+        *err_out = (StringView){0};
+    ArenaAllocator_free_all(&aa);
+    ArenaAllocator_free_all(&cpp.synth_arena);
+    return result;
+}
+
 TestFunction(test_func_macros){
     TESTBEGIN();
     struct {
@@ -354,6 +407,9 @@ TestFunction(test_func_macros){
             "#define F(...) x ## __VA_OPT__(y)\n"
             "F(1)\n"
             "F()"), SV("\nxy\nx"), __LINE__},
+        // __RAND__
+        // deterministic seed, so this is ok.
+        {"__RAND__", SV("__RAND__"), SV("1364989054"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -850,6 +906,7 @@ TestFunction(test_builtin_macros){
         {"__CALC__", SV("__CALC__(1+1)"), SV("2"), __LINE__, 0},
         {"__CALC__", SV("__CALC__(defined __CALC__)"), SV("1"), __LINE__, 0},
         {"__calc", SV("__calc(3*4/3)"), SV("4"), __LINE__, 0},
+        {"__calc", SV("__calc(3-4)"), SV("-1"), __LINE__, 0},
         {"__calc int64min", SV("__calc(-9223372036854775807 - 1)"), SV("-9223372036854775808llu"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(\"3\")"), SV("3"), __LINE__, 0},
         {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
@@ -1074,13 +1131,15 @@ TestFunction(test_error_locations){
                "#define C(a,b) a##b\n"
                "C(F,F)(1,2)"),
             SV("(test):3:9: error: Too many arguments to function-like macro FF()\n")},
-        {"error from pasted macro name chained", __LINE__,
+        {
+            "error from pasted macro name chained", __LINE__,
             SV("#define FF(x) x\n"
                "#define C(a,b) a##b\n"
                "#define M C(F,F)(1,2)\n"
                "M"),
             SV("(test):3:19: error: Too many arguments to function-like macro FF()\n"
-               "(test):4:1: ... expanded from here\n")},
+               "(test):4:1: ... expanded from here\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1096,6 +1155,61 @@ TestFunction(test_error_locations){
     }
     TESTEND();
 }
+
+TestFunction(test_messages){
+    TESTBEGIN();
+    struct {
+        const char* name; int line; StringView inp, exp;
+    } test_cases[] = {
+        {
+            "#warning", __LINE__,
+            SV("#warning hello\n"),
+            SV("(test):1:2: warning: #warning hello\n"),
+        },
+        {
+            "__print", __LINE__,
+            SV("__print(hello)\n"),
+            SV("(test):1:1: hello\n"),
+        },
+        {
+            "__PRINT", __LINE__,
+            SV("__PRINT__(hello)\n"),
+            SV("(test):1:1: hello\n"),
+        },
+        {
+            "__where", __LINE__,
+            SV("#define FOO BAR\n"
+               "__where(FOO)\n"),
+            SV("(test):1:9: info: FOO defined\n"),
+        },
+        {
+            "__WHERE__", __LINE__,
+            SV("#define FOO BAR\n"
+               "__WHERE__(FOO)\n"),
+            SV("(test):1:9: info: FOO defined\n"),
+        },
+        {
+            "__where - missing", __LINE__,
+            SV("#define FOO BAR\n"
+               "__where(foo)\n"),
+            SV("(test):2:1: warning: __where__: 'foo' is not defined\n"),
+        },
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+        int line = test_cases[i].line;
+        StringView err_msg;
+        int err = cpp_expand_string_expect_message(test_cases[i].inp, &err_msg);
+        TestExpectFalse(int, err);
+        if(err) continue;
+        if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "msg", &TEST_stats, __FILE__, __func__, line)){
+            TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
+        }
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+    }
+    TESTEND();
+}
+
 TestFunction(test_condition){
     TESTBEGIN();
     struct {
@@ -1571,14 +1685,17 @@ TestFunction(test_erroneous_condition){
             SV("#define X 1\n#define X 2\n"),
             SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
                "(test):1:9: error: ... previously defined here\n")},
-        {"func macro redef different body", __LINE__,
+        {
+            "func macro redef different body", __LINE__,
             SV("#define F(a) a\n#define F(a) a + 1\n"),
             SV("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
                "(test):1:9: error: ... previously defined here\n")},
-        {"func macro redef different params", __LINE__,
+        {
+            "func macro redef different params", __LINE__,
             SV("#define F(a, b) a\n#define F(a) a\n"),
             SV("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:9: error: ... previously defined here\n")},
+               "(test):1:9: error: ... previously defined here\n"),
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -2098,19 +2215,16 @@ TestFunction(test_literal_boundaries){
     };
     for(size_t i = 0; i < arrlen(cases); i++){
         StringView result = {0};
-        int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0,
-                                       &result, __FILE__, __func__, __LINE__);
+        int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0, &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
         if(!err) test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
         if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
     }
     // Stringification must preserve the spelling of string/character literals.
     StringView result = {0};
-    int err = cpp_expand_string(SV("#define S(x) #x\nS(u\"\\x1234\" U'\\U0001f600')"),
-                                &result, __FILE__, __func__, __LINE__);
+    int err = cpp_expand_string(SV("#define S(x) #x\nS(u\"\\x1234\" U'\\U0001f600')"), &result, __FILE__, __func__, __LINE__);
     TestExpectFalse(int, err);
-    if(!err) test_expect_equals_sv(SV("\n\"u\\\"\\\\x1234\\\" U'\\\\U0001f600'\""), result,
-                                  "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
+    if(!err) test_expect_equals_sv(SV("\n\"u\\\"\\\\x1234\\\" U'\\\\U0001f600'\""), result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
     if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
     TESTEND();
 }
@@ -2129,6 +2243,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_torture, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_builtin_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_error_locations, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_messages, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_erroneous_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_if_eval, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

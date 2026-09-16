@@ -35,6 +35,7 @@
 #include "../Drp/msb_atomize.h"
 #include "../Drp/switch_macros.h"
 #include "../Drp/atomics.h"
+#include "cc_printer.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif

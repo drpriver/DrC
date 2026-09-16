@@ -26,15 +26,16 @@
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
 #include "C/ci_op_printer.h"
+#include "C/cc_printer.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
 
 static _Bool repl_builtin_command(CcParser* parser, StringView input);
-static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast);
 static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 static const char* cc_stringify_error(int err);
+static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast);
 
 
 int main(int argc, char** argv, char** envp){
