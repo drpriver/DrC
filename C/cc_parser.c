@@ -588,6 +588,33 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         cpp_msg_postamble(&p->cpp, e->loc, LOG_PRINT_ERROR);
         return CC_SYNTAX_ERROR;
     }
+    if(ccqt_kind(target) == CC_SLICE && ccqt_kind(e->type) == CC_ARRAY && e->kind == CC_EXPR_VALUE && e->text && e->str.length){
+        CcQualType pointer;
+        int err = cc_pointer_of(p, ccqt_as_slice(target)->pointee, &pointer);
+        if(err) return err;
+        CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof *il + 2 * sizeof(CcInitEntry));
+        if(!il) return CC_OOM_ERROR;
+        CcExpr* count = cc_uint64_expr(p, e->loc, ccqt_basic(cc_target(p)->size_type), e->str.length - 1);
+        CcExpr* data = cc_make_expr(p, CC_EXPR_CAST, e->loc, pointer, 0);
+        CcExpr* slice = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, target, 0);
+        if(!count || !data || !slice){
+            if(count) cc_release_expr(p, count);
+            if(data) _cc_release_expr(p, data, 0);
+            if(slice) _cc_release_expr(p, slice, 0);
+            Allocator_free(cc_allocator(p), il, sizeof *il + 2 * sizeof(CcInitEntry));
+            return CC_OOM_ERROR;
+        }
+        data->lhs = e;
+        il->loc = e->loc;
+        il->count = 2;
+        il->entries[0].field_loc.byte_offset = offsetof(CiRtSlice, count);
+        il->entries[0].value = count;
+        il->entries[1].field_loc.byte_offset = offsetof(CiRtSlice, data);
+        il->entries[1].value = data;
+        slice->init_list = il;
+        *out = slice;
+        return 0;
+    }
     if(e->kind == CC_EXPR_COMPOUND_LITERAL){
         int err = cc_desugar_compound_literal(p, e, &e);
         if(err) return err;

@@ -8243,7 +8243,7 @@ TestFunction(test_interpreter){
                "int first(const char (*s)[:]){ return (*s).data[0]; }\n"
                "const char s[:] = \"hello\";\n"
                "return s.size() + (&s).size() + s.first();\n"),
-            .exit_code = 116,
+            .exit_code = 114,
         },
         {
             "FUCS basic", __LINE__,
@@ -9019,7 +9019,34 @@ TestFunction(test_interpreter){
             "string literal converts to slice", __LINE__,
             SVI("const char s[:] = \"hello\";\n"
                 "return (int)s.count + s[0];\n"),
-            .exit_code = (int)sizeof "hello" + 'h',
+            .exit_code = (int)sizeof "hello" - 1 + 'h',
+        },
+        {
+            "string literal slice conversion contexts", __LINE__,
+            SVI("int count(const char s[:]){ return s.count; }\n"
+                "const char text(void)[:]{ return \"hello\"; }\n"
+                "const char s[:] = \"\";\n"
+                "if(s.count != 0 || count(\"\") != 0) return 0;\n"
+                "s = \"a\\0b\";\n"
+                "return s.count == 3 && s[1] == 0 && s[2] == 'b'\n"
+                "    && count(\"hello\") == 5 && text().count == 5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "literal slice conversion preserves array and explicit slice length", __LINE__,
+            SVI("char a[] = \"hello\";\n"
+                "const char s[:] = a;\n"
+                "const char full[:] = \"hello\"[:];\n"
+                "const char cast[:] = (const char[:])\"hello\";\n"
+                "return s.count == 6 && full.count == 6 && cast.count == 6 && sizeof(\"hello\") == 6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr literal slice conversion", __LINE__,
+            SVI("constexpr const char s[:] = \"hello\";\n"
+                "_Static_assert(s.count == 5);\n"
+                "return s[4] == 'o';\n"),
+            .exit_code = 1,
         },
         {
             "array converts to const slice", __LINE__,

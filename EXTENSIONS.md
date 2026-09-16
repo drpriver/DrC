@@ -537,6 +537,21 @@ int f[:] = x; // length 4
 ```
 
 
+As a special case, implicit conversion from string literals to arrays
+excludes the terminating nul. Explicit casts and explicit slicing retains
+the nul.  This is mostly for convenience when calling functions that take a
+char slice.
+
+```C
+const char x[:] = "hello";
+printf("%zu\n", x.count); // 5
+x = "hello"[:];
+printf("%zu\n", x.count); // 6
+x = (char[:])"hello";
+printf("%zu\n", x.count); // 6
+```
+
+
 Incomplete arrays and pointers must include the `hi` bound as they don't
 care length information by themself.
 
@@ -545,7 +560,8 @@ int* p = x;
 int e[:] = p[:3];  // ok, length 3
 int f[:] = p[:];   // error: slice of pointer requires upper bound
 
-const char hello[:] = "hello"; // length 6, includes the NUL
+const char hello[:] = "hello"; // length 5 excludes the NUL,
+                               // special case for string literals.
 ```
 
 

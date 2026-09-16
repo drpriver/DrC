@@ -392,6 +392,7 @@ C::md
     Slices are created either by implicit conversion from an array, explicit
     cast from an array or by slicing a pointer, array or another slice.
 
+
     ::pre.C
       int x[4] = {1, 2, 3, 4};
       // either bound is optional
@@ -404,6 +405,19 @@ C::md
       int e[:] = p[:2] // length 2
       int f[:] = x; // length 4
 
+    As a special case, implicit conversion from string literals to arrays
+    excludes the terminating nul. Explicit casts and explicit slicing retains
+    the nul.  This is mostly for convenience when calling functions that take a
+    char slice.
+
+    ::pre.C
+      const char x[:] = "hello";
+      printf("%zu\n", x.count); // 5
+      x = "hello"[:];
+      printf("%zu\n", x.count); // 6
+      x = (char[:])"hello";
+      printf("%zu\n", x.count); // 6
+
     Incomplete arrays and pointers must include the `hi` bound as they don't
     care length information by themself.
 
@@ -412,7 +426,8 @@ C::md
       int e[:] = p[:3];  // ok, length 3
       int f[:] = p[:];   // error: slice of pointer requires upper bound
 
-      const char hello[:] = "hello"; // length 6, includes the NUL
+      const char hello[:] = "hello"; // length 5 excludes the NUL,
+                                     // special case for string literals.
 
     Slices can be subscripted directly, like arrays. They cannot be derefenced
     with `*` and do not implicitly convert to pointers.
