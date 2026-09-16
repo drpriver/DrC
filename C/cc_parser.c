@@ -58,6 +58,7 @@ LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
 #define cc_unreachable(p, loc, msg) (cc_error(p, loc, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
+#define cc_ice(cc, loc, fmt, ...) (cc_error(p, loc, "ICE: " fmt " at %s:%d", __VA_ARGS__, __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
 static int cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e);
 static int cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result);
@@ -948,6 +949,7 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
 static
 int
 cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull out){
+    int err;
     CcQualType type = cl->type;
     SrcLoc loc = cl->loc;
     CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
@@ -958,9 +960,11 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         .type = type,
         .automatic = p->current_func != NULL,
     };
+    err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
+    if(err) return err;
     if(anon->automatic){
         uint32_t sz, align;
-        int err = cc_sizeof_as_uint(p, type, loc, &sz);
+        err = cc_sizeof_as_uint(p, type, loc, &sz);
         if(err) return err;
         err = cc_alignof_as_uint(p, type, loc, &align);
         if(err) return err;
@@ -969,7 +973,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         p->current_func->frame_size += sz;
     }
     else {
-        int err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
+        err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
         if(err) return CC_OOM_ERROR;
     }
     cl->kind = CC_EXPR_INIT_LIST; // demote to plain init list for the assignment RHS
@@ -995,6 +999,7 @@ int
 cc_wrap_to_desugared_compound_literal(CcParser* p, CcExpr* operand, CcExpr*_Nullable*_Nonnull out){
     CcQualType type = operand->type;
     SrcLoc loc = operand->loc;
+    int err;
     CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
     if(!anon) return CC_OOM_ERROR;
     *anon = (CcVariable){
@@ -1003,9 +1008,11 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcExpr* operand, CcExpr*_Null
         .type = type,
         .automatic = p->current_func != NULL,
     };
+    err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
+    if(err) return err;
     if(anon->automatic){
         uint32_t sz, align;
-        int err = cc_sizeof_as_uint(p, type, loc, &sz);
+        err = cc_sizeof_as_uint(p, type, loc, &sz);
         if(err) return err;
         err = cc_alignof_as_uint(p, type, loc, &align);
         if(err) return err;
@@ -1014,7 +1021,7 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcExpr* operand, CcExpr*_Null
         p->current_func->frame_size += sz;
     }
     else {
-        int err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
+        err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
         if(err) return CC_OOM_ERROR;
     }
     CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
@@ -1649,6 +1656,10 @@ cc_parse_assignment_expr(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnu
         if(cc_assign_lookup(tok.punct.punct, &kind)){
             if(vc > CC_RUNTIME_VALUE)
                 return cc_error(p, tok.loc, "assignment in constant expression");
+            if(left->kind == CC_EXPR_COMPOUND_LITERAL){
+                err = cc_desugar_compound_literal(p, left, &left);
+                if(err) return err;
+            }
             if(!left->is_lvalue)
                 return cc_error(p, tok.loc, "expression is not assignable");
             if(left->type.is_const)
@@ -10636,21 +10647,22 @@ cc_parse_declarator_inner(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull
                         err = cc_error(p, peek.loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
                         goto param_err;
                     }
-                    CcQualType param_type = cc_intern_qualtype(p, param_head);
-                    if(ccqt_kind(param_type) == CC_ARRAY && !ccqt_as_array(param_type)->is_vector){
-                        err = cc_pointer_of(p, ccqt_as_array(param_type)->element, &param_type);
-                        if(err) goto param_err;
-                    }
-                    else if(ccqt_kind(param_type) == CC_FUNCTION){
-                        err = cc_pointer_of(p, param_type, &param_type);
-                        if(err) goto param_err;
-                    }
-                    CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
-                    if(!var){ err = CC_OOM_ERROR; goto param_err; }
-                    *var = (CcVariable){.name = param_name, .loc = peek.loc, .type = param_type, .automatic = 1};
-                    err = cc_scope_insert_var(cc_allocator(p), p->current, param_name, var);
-                    if(err){ err = CC_OOM_ERROR; goto param_err; }
                 }
+                CcQualType param_type = cc_intern_qualtype(p, param_head);
+                if(ccqt_kind(param_type) == CC_ARRAY && !ccqt_as_array(param_type)->is_vector){
+                    err = cc_pointer_of(p, ccqt_as_array(param_type)->element, &param_type);
+                    if(err) goto param_err;
+                }
+                else if(ccqt_kind(param_type) == CC_FUNCTION){
+                    err = cc_pointer_of(p, param_type, &param_type);
+                    if(err) goto param_err;
+                }
+                CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+                if(!var){ err = CC_OOM_ERROR; goto param_err; }
+                if(!param_name) param_name = nil_atom;
+                *var = (CcVariable){.name = param_name, .loc = peek.loc, .type = param_type, .automatic = 1};
+                err = cc_scope_insert_var(cc_allocator(p), p->current, param_name, var);
+                if(err){ err = CC_OOM_ERROR; goto param_err; }
                 if(out_param_names){
                     Marray(Atom)* pn = &out_param_names->names;
                     err = ma_push(Atom)(pn, cc_allocator(p), param_name);
@@ -12070,19 +12082,20 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
         if(!f->param_vars){ err = CC_OOM_ERROR; goto end_scope; }
     }
     f->frame_size = 0;
-    for(uint32_t i = 0; i < ftype->param_count; i++){
-        Atom name = (i < f->params.count) ? f->params.data[i] : NULL;
-        uint32_t param_sz, param_align;
-        CcVariable* var = name ? cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK) : NULL;
-        if(name && !var){ err = cc_error(p, f->loc, "missing declaration for parameter '%s'", name->data); goto end_scope; }
-        err = cc_sizeof_as_uint(p, ftype->params[i], f->loc, &param_sz);
-        if(err) goto end_scope;
-        err = cc_alignof_as_uint(p, ftype->params[i], f->loc, &param_align);
-        if(err) goto end_scope;
-        f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
-        if(var) var->frame_offset = f->frame_size;
-        f->frame_size += param_sz;
-        f->param_vars[i] = var;
+    {
+        AtomMapItems items = CcAnonAM_items(&p->current->variables);
+        for(size_t i = 0; i < items.count; i++){
+            CcVariable* var = items.data[i].p;
+            uint32_t param_sz, param_align;
+            err = cc_sizeof_as_uint(p, ftype->params[i], f->loc, &param_sz);
+            if(err) goto end_scope;
+            err = cc_alignof_as_uint(p, ftype->params[i], f->loc, &param_align);
+            if(err) goto end_scope;
+            f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
+            if(var) var->frame_offset = f->frame_size;
+            f->frame_size += param_sz;
+            f->param_vars[i] = var;
+        }
     }
     err = cc_parse_local_methods(p);
     if(err) goto end_scope;

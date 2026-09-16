@@ -387,8 +387,7 @@ TestFunction(test_interpreter){
         },
         {
             "any: compound literal storage", __LINE__,
-            SVI(
-                "int f(void){\n"
+            SVI( "int f(void){\n"
                 " _Any a=&(struct S {int x,y;}){3,4};\n"
                 " int* p=((_Any){7}).payload;\n"
                 " _Any b=99;\n"
@@ -396,6 +395,19 @@ TestFunction(test_interpreter){
                 "} return f();\n"
             ),
             .exit_code = 1,
+        },
+        {
+            "compound literals are assignment targets", __LINE__,
+            SVI("int f(void){\n"
+                " (int){3}=4;\n"
+                " int n=0;\n"
+                " if(((int){++n}=4)!=4 || n!=1) return 91;\n"
+                " if((((int){3})+=4)!=7) return 92;\n"
+                " struct S {int x;};\n"
+                " if(((struct S){3}=(struct S){4}).x!=4) return 93;\n"
+                " return 7;\n"
+                "} return f();\n"),
+            .exit_code = 7,
         },
         {
             "any: constexpr representations", __LINE__,
@@ -3121,6 +3133,15 @@ TestFunction(test_interpreter){
             SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\", nullptr);\n"
                "if(!m) return 99;\n"
                "return m.func_count == 1 && m.var_count == 1 && m.type_count == 2 ? 7 : 98;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module reflection excludes compound literal backing variables", __LINE__,
+            SVI("_Module m = __compile(\"(int){3} = 4; int *p = &(int){3};\", nullptr);\n"
+                "if(!m) return 99;\n"
+                "if(m.var_count != 1) return 98;\n"
+                "_ModuleMember v = m.var(0);\n"
+                "return v.name.count == 1 && v.name[0] == 'p' ? 7 : 97;\n"),
             .exit_code = 7,
         },
         {

@@ -6,6 +6,7 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/atom_map16.h"
+#include "cc_anon_atom_map.h"
 #include "../Drp/parray.h"
 #include "../Drp/Allocators/allocator.h"
 #include "cc_type.h"
@@ -34,7 +35,7 @@ _Static_assert(sizeof(CcTypedef) == 2*sizeof(uint64_t), "");
 struct CcScope {
     CcScope* parent;
     AtomMap16(CcTypedef) typedefs;
-    AtomMap(CcVariable) variables;
+    CcAnonAtomMap(CcVariable) variables;
     AtomMap(CcFunc) functions;
     AtomMap(CcStruct) structs;
     AtomMap(CcUnion) unions;

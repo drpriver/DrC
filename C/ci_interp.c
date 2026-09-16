@@ -2745,7 +2745,7 @@ static
 int
 ci_resolve_module_unlocked(CiInterpreter* ci, CiModule* module){
     Allocator al = ci_allocator(ci);
-    AtomMapItems vars = AM_items(&module->scope.variables);
+    AtomMapItems vars = CcAnonAM_items(&module->scope.variables);
     for(size_t i = 0; i < vars.count; i++){
         CcVariable* var = vars.data[i].p;
         if(!var || var->automatic) continue;
@@ -2791,7 +2791,7 @@ size_t
 ci_count_atom_items(AtomMapItems items){
     size_t count = 0;
     for(size_t i = 0; i < items.count; i++)
-        count += items.data[i].p != NULL;
+        count += items.data[i].atom != nil_atom && items.data[i].p != NULL;
     return count;
 }
 
@@ -2968,7 +2968,7 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
             out->name.count = ci_count_atom_items(AM_items(&scope->functions));
             break;
         case CC_MODULE_VAR_COUNT:
-            out->name.count = ci_count_atom_items(AM_items(&scope->variables));
+            out->name.count = ci_count_atom_items(CcAnonAM_items(&scope->variables));
             break;
         case CC_MODULE_TYPE_COUNT:
             out->name.count =
@@ -2992,9 +2992,10 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
             break;
         }
         case CC_MODULE_VAR: {
-            AtomMapItems items = AM_items(&scope->variables);
+            AtomMapItems items = CcAnonAM_items(&scope->variables);
             CcVariable* var = NULL;
             for(size_t i = 0; i < items.count; i++){
+                if(items.data[i].atom == nil_atom) continue;
                 if(!items.data[i].p) continue;
                 if(idx--) continue;
                 var = items.data[i].p;

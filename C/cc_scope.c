@@ -12,7 +12,7 @@ static
 CcVariable* _Nullable
 cc_scope_lookup_var(CcScope* scope, Atom name, int walk){
     for(CcScope* s = scope; s; s = s->parent){
-        CcVariable* v = AM_get(&s->variables, name);
+        CcVariable* v = CcAnonAM_get(&s->variables, name);
         if(v) return v;
         if(walk == CC_SCOPE_NO_WALK) break;
     }
@@ -22,7 +22,7 @@ cc_scope_lookup_var(CcScope* scope, Atom name, int walk){
 static
 int
 cc_scope_insert_var(Allocator al, CcScope* scope, Atom name, CcVariable* var){
-    return AM_put(&scope->variables, al, name, var);
+    return CcAnonAM_put(&scope->variables, al, name, var);
 }
 
 static
@@ -151,7 +151,7 @@ cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
             out->type = td->type;
             return 1;
         }
-        CcVariable* v = AM_get(&s->variables, name);
+        CcVariable* v = CcAnonAM_get(&s->variables, name);
         if(v){
             out->kind = CC_SYM_VAR;
             out->var = v;
@@ -179,7 +179,7 @@ void
 cc_scope_clear(CcScope* scope){
     scope->deferred_methods.count = 0;
     AM16_clear(&scope->typedefs);
-    AM_clear(&scope->variables);
+    CcAnonAM_clear(&scope->variables);
     AM_clear(&scope->functions);
     AM_clear(&scope->structs);
     AM_clear(&scope->unions);

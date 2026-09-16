@@ -143,7 +143,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             AtomMapItems mi = AM_items(&parser->cpp.macros);
             max_candidates += mi.count;
             max_candidates += AM16_items(&parser->global.typedefs).count;
-            max_candidates += AM_items(&parser->global.variables).count;
+            max_candidates += CcAnonAM_items(&parser->global.variables).count;
             max_candidates += AM_items(&parser->global.functions).count;
             max_candidates += AM_items(&parser->global.enumerators).count;
             max_candidates += AM_items(&parser->global.structs).count;
@@ -175,7 +175,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
                     pairs[n++] = (struct CompletionPair){{a->length, a->data}, dist, idist, ip, iip};
                 }
             }
-            COLLECT_FROM_ATOMMAP(AM_items(&parser->global.variables));
+            COLLECT_FROM_ATOMMAP(CcAnonAM_items(&parser->global.variables));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.functions));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.enumerators));
             COLLECT_FROM_ATOMMAP(AM_items(&parser->global.structs));

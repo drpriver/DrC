@@ -863,7 +863,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         }
     }
     if(dump & DUMP_VARS){
-        AtomMapItems mi = AM_items(&scope->variables);
+        AtomMapItems mi = CcAnonAM_items(&scope->variables);
         log_sprintf(l, "Variables (%zu):\n", mi.count);
         for(size_t i = 0; i < mi.count; i++){
             Atom a = mi.data[i].atom;

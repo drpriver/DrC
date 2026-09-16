@@ -341,8 +341,9 @@ int main(int argc, char** argv, char** envp){
                 err = ct_add_tag(&ctx, CT_TYPE, it->atom, p->loc);
                 if(err > 0) goto stringify_error;
             }
-            items = AM_items(&g->variables);
+            items = CcAnonAM_items(&g->variables);
             MARRAY_FOR_EACH(AtomMapItem, it, items){
+                if(it->atom == nil_atom) continue;
                 if(!it->p) continue;
                 CcVariable* p = it->p;
                 err = ct_add_tag(&ctx, CT_GLOBAL_VARIABLE, it->atom, p->loc);
