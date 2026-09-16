@@ -963,17 +963,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     };
     err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
     if(err) return err;
-    if(anon->automatic){
-        uint32_t sz, align;
-        err = cc_sizeof_as_uint(p, type, loc, &sz);
-        if(err) return err;
-        err = cc_alignof_as_uint(p, type, loc, &align);
-        if(err) return err;
-        p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
-        anon->frame_offset = p->current_func->frame_size;
-        p->current_func->frame_size += sz;
-    }
-    else {
+    if(!anon->automatic){
         err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
         if(err) return CC_OOM_ERROR;
     }
@@ -1011,17 +1001,7 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcExpr* operand, CcExpr*_Null
     };
     err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
     if(err) return err;
-    if(anon->automatic){
-        uint32_t sz, align;
-        err = cc_sizeof_as_uint(p, type, loc, &sz);
-        if(err) return err;
-        err = cc_alignof_as_uint(p, type, loc, &align);
-        if(err) return err;
-        p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
-        anon->frame_offset = p->current_func->frame_size;
-        p->current_func->frame_size += sz;
-    }
-    else {
+    if(!anon->automatic){
         err = PM_put(&p->used_vars, cc_allocator(p), anon, anon);
         if(err) return CC_OOM_ERROR;
     }
@@ -11323,18 +11303,6 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                         if(err) return err;
                     }
                 }
-                if(var->automatic && p->current_func){
-                    uint32_t sz, align;
-                    err = cc_sizeof_as_uint(p, type, tok.loc, &sz);
-                    if(err) return err;
-                    err = cc_alignof_as_uint(p, type, tok.loc, &align);
-                    if(err) return err;
-                    if(var->alignment && var->alignment > align)
-                        align = var->alignment;
-                    p->current_func->frame_size = (p->current_func->frame_size + align - 1) & ~(align - 1);
-                    var->frame_offset = p->current_func->frame_size;
-                    p->current_func->frame_size += sz;
-                }
             }
             if(initializer){
                 if(var && !var->automatic){
@@ -12098,25 +12066,15 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     }
     else err = cc_push_scope(p);
     if(err) goto restore_context;
-    // FIXME: Trying to delete this layout code from the parser.
-    // Lay out the variables already bound by the definition's declarator.
+    // Preserve parameter identities; lowering assigns their frame offsets.
     if(ftype->param_count){
         f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
         if(!f->param_vars){ err = CC_OOM_ERROR; goto end_scope; }
     }
-    f->frame_size = 0;
     {
         AtomMapItems items = CcAnonAM_items(&p->current->variables);
         for(size_t i = 0; i < items.count; i++){
             CcVariable* var = items.data[i].p;
-            uint32_t param_sz, param_align;
-            err = cc_sizeof_as_uint(p, ftype->params[i], f->loc, &param_sz);
-            if(err) goto end_scope;
-            err = cc_alignof_as_uint(p, ftype->params[i], f->loc, &param_align);
-            if(err) goto end_scope;
-            f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
-            if(var) var->frame_offset = f->frame_size;
-            f->frame_size += param_sz;
             f->param_vars[i] = var;
         }
     }

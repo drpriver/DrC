@@ -59,9 +59,9 @@ struct CiLowerCtx {
     Marray(CiOp)* out;
     AtomMap(uintptr_t)* labels; // label -> op index + 1
     CiLowerSwitch* _Nullable sw; // innermost switch being lowered
-    uint32_t temp; // top of the temp slot stack; statements save/restore
+    uint32_t temp; // top of the local + temp slot stack; statements save/restore
                    // this around their children so siblings recycle slots
-    uint32_t* frame_size; // high-water mark of temp usage: &func->frame_size,
+    uint32_t* frame_size; // high-water mark of slot usage: &func->frame_size,
                           // or the toplevel/module slot size
     Marray(CiBackpatchTarget) backpatches;
     uint32_t size_size, ptr_size; // cached common sizes
@@ -162,10 +162,29 @@ enum {CI_ASSUMED_VARARG_ALIGN=8};
 
 static
 int
+ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
+    for(uint32_t i = 0; i < n->decls.count; i++){
+        CcVariable* var = n->decls.data[i];
+        uint32_t size, align, slot;
+        int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &size);
+        if(err) return err;
+        err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &align);
+        if(err) return err;
+        if(var->alignment > align) align = var->alignment;
+        err = ci_alloc_slot(ctx, size, align, &slot);
+        if(err) return err;
+        var->frame_offset = slot;
+    }
+    return 0;
+}
+
+static
+int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
     if(!n) return 0;
     uint32_t temp = ctx->temp;
-    int err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
+    int err = ci_layout_decls(ci, ctx, (CcStmtNode*_Nonnull)n);
+    if(!err) err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
     ctx->temp = temp;
     return err;
 }
@@ -1907,6 +1926,13 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         }
         case CC_EXPR_STATEMENT_EXPRESSION:{
             CcStmtNode* body = e->stmt_body;
+            // The result must outlive the statement expression's locals.
+            err = ci_lower_dest(ctx, &dest, size);
+            if(err) return err;
+            out->slot = dest;
+            uint32_t temp = ctx->temp;
+            err = ci_layout_decls(ci, ctx, body);
+            if(err){ ctx->temp = temp; return err; }
             uint32_t count = body->count;
             CcExpr*_Nullable value = NULL;
             if(count && body->stmts[count-1]->kind == CC_STMT_EXPR
@@ -1916,14 +1942,12 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             for(uint32_t i = 0; i < count; i++){
                 err = ci_lower_stmt(ci, ctx, body->stmts[i]);
-                if(err) return err;
+                if(err) break;
             }
-            if(value)
-                return ci_lower_expr(ci, ctx, (CcExpr*_Nonnull)value, dest, out);
-            err = ci_lower_dest(ctx, &dest, size);
-            if(err) return err;
-            out->slot = dest;
-            return 0;
+            if(!err && value)
+                err = ci_lower_expr(ci, ctx, (CcExpr*_Nonnull)value, dest, out);
+            ctx->temp = temp;
+            return err;
         }
         case CC_EXPR_ATOMIC:
             return ci_lower_atomic_builtin(ci, ctx, e, dest, out);
@@ -5477,13 +5501,13 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f){
     Allocator al = ci_allocator(ci);
     CiFuncOps* ops = Allocator_zalloc(al, sizeof *ops);
     if(!ops) return CI_OOM_ERROR;
+    f->frame_size = 0;
     AtomMap(uintptr_t) labels = {0};
     const CcTargetConfig* t = ci_target(ci);
     CiLowerCtx ctx = {
         .a = al,
         .out = &ops->code,
         .labels = &labels,
-        .temp = f->frame_size, // temps stack above params + locals
         .frame_size = &f->frame_size,
         .size_size = t->sizeof_[t->size_type],
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
@@ -5519,7 +5543,6 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .a = ci_allocator(ci),
         .out = ops,
         .labels = labels,
-        .temp = 0, // toplevel/module slots hold only temps; each batch recycles them
         .frame_size = slot_size,
         .size_size = t->sizeof_[t->size_type],
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
