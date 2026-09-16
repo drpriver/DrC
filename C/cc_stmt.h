@@ -6,7 +6,9 @@
 #include <stdint.h>
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
-#include "cc_expr.h"
+#include "../Drp/parray.h"
+typedef struct CcExpr CcExpr;
+typedef struct CcVariable CcVariable;
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -35,6 +37,7 @@ struct CcStmtNode {
     CcStmtKind kind;
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
+    Parray(CcVariable) decls; // variables scoped to this statement
     // Interpreted based on kind:
     // CC_STMT_NULL:     (nothing)
     // CC_STMT_EXPR:     exprs[0] = expr

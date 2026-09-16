@@ -105,6 +105,7 @@ static int cc_desugar_compound_literal(CcParser* p, CcExpr* compound_lit, CcExpr
 static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_assert(CcParser*);
 static CcStmtNode*_Nullable cc_stmt_node(CcParser*, CcStmtKind, SrcLoc, uint32_t count);
+static int cc_stmt_scope_vars(CcParser*, CcStmtNode*);
 static void cc_free_stmt_tree(CcParser*, CcStmtNode*_Nullable);
 static CcStmtSink*_Nullable cc_push_stmt_sink(CcParser*);
 static void cc_pop_stmt_sink(CcParser*, CcStmtSink*);
@@ -3766,16 +3767,16 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                         err = cc_parse_one(p);
                         if(err) goto end_block;
                     }
-                    end_block:
+                    end_block:;
+                    CcStmtNode* node = NULL;
+                    if(!err) err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 1, &node);
+                    if(!err) err = cc_stmt_scope_vars(p, node);
                     cc_pop_scope(p);
+                    cc_pop_stmt_sink(p, sink);
                     if(err){
-                        cc_pop_stmt_sink(p, sink);
+                        cc_free_stmt_tree(p, node);
                         return err;
                     }
-                    CcStmtNode* node = NULL;
-                    err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 1, &node);
-                    cc_pop_stmt_sink(p, sink);
-                    if(err) return CC_OOM_ERROR;
                     err = cc_expect_punct(p, CC_rparen);
                     if(err){
                         cc_free_stmt_tree(p, node);
@@ -9608,6 +9609,7 @@ cc_free_stmt_tree(CcParser* p, CcStmtNode*_Nullable n){
     }
     for(uint32_t i = 0; i < n->count; i++)
         cc_free_stmt_tree(p, n->stmts[i]);
+    pa_cleanup(&n->decls, cc_allocator(p));
     Allocator_free(cc_allocator(p), n, sizeof(CcStmtNode) + n->count * sizeof(CcStmtNode*));
 }
 
@@ -9630,6 +9632,19 @@ cc_pop_stmt_sink(CcParser* p, CcStmtSink* sink){
     for(size_t i = 0; i < sink->stmts.count; i++)
         cc_free_stmt_tree(p, sink->stmts.data[i]);
     fl_push(&p->scratch_stmt_sinks, sink);
+}
+
+static
+int
+cc_stmt_scope_vars(CcParser* p, CcStmtNode* stmt){
+    AtomMapItems items = CcAnonAM_items(&p->current->variables);
+    for(size_t i = 0; i < items.count; i++){
+        CcVariable* var = items.data[i].p;
+        if(!var || !var->automatic) continue;
+        int err = pa_push(&stmt->decls, cc_allocator(p), var);
+        if(err) return CC_OOM_ERROR;
+    }
+    return 0;
 }
 
 static
@@ -9826,6 +9841,11 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     {
                         CcStmtNode* node = cc_stmt_node(p, CC_STMT_FOR, tok.loc, 2);
                         if(!node){ err = CC_OOM_ERROR; goto for_end; }
+                        err = cc_stmt_scope_vars(p, node);
+                        if(err){
+                            cc_free_stmt_tree(p, node);
+                            goto for_end;
+                        }
                         node->exprs[0] = cond_expr;
                         node->exprs[1] = inc_expr;
                         node->stmts[0] = init;
@@ -10276,12 +10296,14 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     if(err) goto end_block;
                 }
                 end_block:
-                cc_pop_scope(p);
                 if(!err){
-                    CcStmtNode*_Nullable node = NULL;
+                    CcStmtNode* node = NULL;
                     err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 1, &node);
+                    if(!err) err = cc_stmt_scope_vars(p, node);
                     if(!err) *out = node;
+                    else cc_free_stmt_tree(p, node);
                 }
+                cc_pop_scope(p);
                 cc_pop_stmt_sink(p, sink);
                 return err;
             }
@@ -12076,6 +12098,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     }
     else err = cc_push_scope(p);
     if(err) goto restore_context;
+    // FIXME: Trying to delete this layout code from the parser.
     // Lay out the variables already bound by the definition's declarator.
     if(ftype->param_count){
         f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
@@ -12121,6 +12144,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
         }
         if(!err)
             err = cc_finalize_stmt_list(p, f->loc, &sink->stmts, 1, &f->body_tree);
+        if(!err) err = cc_stmt_scope_vars(p, (CcStmtNode*)f->body_tree);
         cc_pop_stmt_sink(p, sink);
         if(err) goto end_scope;
     }
