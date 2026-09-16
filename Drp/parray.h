@@ -26,7 +26,7 @@
 
 typedef struct Parray Parray;
 struct Parray {
-    size_t count, capacity;
+    uint32_t count, capacity;
     void*_Null_unspecified*_Null_unspecified data;
 };
 #define Parray(x) Parray
@@ -34,12 +34,12 @@ struct Parray {
 static
 warn_unused
 int
-pa_ensure_additional(Parray* pa, Allocator a, size_t n_additional){
+pa_ensure_additional(Parray* pa, Allocator a, uint32_t n_additional){
     if(!n_additional) return 0;
-    size_t required_capacity = pa->count + n_additional;
+    uint32_t required_capacity = pa->count + n_additional;
     if(pa->capacity >= required_capacity)
         return 0;
-    size_t new_capacity;
+    uint32_t new_capacity;
     if(required_capacity < 8)
         new_capacity = 8;
     else {
@@ -47,8 +47,8 @@ pa_ensure_additional(Parray* pa, Allocator a, size_t n_additional){
         while(new_capacity < required_capacity)
             new_capacity *= 2;
     }
-    size_t old_size = pa->capacity*sizeof *pa->data;
-    size_t new_size = new_capacity*sizeof *pa->data;
+    uint32_t old_size = pa->capacity*sizeof *pa->data;
+    uint32_t new_size = new_capacity*sizeof *pa->data;
     void* p = Allocator_realloc(a, pa->data, old_size, new_size);
     if(!p)
         return 1;
@@ -80,7 +80,7 @@ pa_push(Parray* pa, Allocator a, void*_Null_unspecified value){
 static
 warn_unused
 int
-pa_extend(Parray* pa, Allocator a, size_t count, void*_Null_unspecified*_Null_unspecified values){
+pa_extend(Parray* pa, Allocator a, uint32_t count, void*_Null_unspecified*_Null_unspecified values){
     if(!count) return 0;
     int err = pa_ensure_additional(pa, a, count);
     if(err) return err;
@@ -91,7 +91,7 @@ pa_extend(Parray* pa, Allocator a, size_t count, void*_Null_unspecified*_Null_un
 static
 warn_unused
 int
-pa_zextend(Parray* pa, Allocator a, size_t count){
+pa_zextend(Parray* pa, Allocator a, uint32_t count){
     if(!count) return 0;
     int err = pa_ensure_additional(pa, a, count);
     if(err) return err;

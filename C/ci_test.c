@@ -9795,6 +9795,88 @@ TestFunction(test_interpreter){
             .exit_code = 2,
         },
         {
+            "local nested struct method calls later outer struct method", __LINE__,
+            SVI("int run(void) {\n"
+                "struct Outer {\n"
+                "    struct Inner {\n"
+                "        int call(_Self* self, struct Outer* outer) {\n"
+                "            return outer.answer();\n"
+                "        }\n"
+                "    } inner;\n"
+                "    int answer(_Self* self) { return 42; }\n"
+                "};\n"
+                "struct Outer outer = {};\n"
+                "return outer.inner.call(&outer);\n"
+                "}\n"
+                "return run();\n"),
+            .exit_code = 42,
+        },
+        {
+            "local struct method calls enclosing function helper", __LINE__,
+            SVI("int outer(void) {\n"
+                "    int helper(void) { return 42; }\n"
+                "    struct S {\n"
+                "        int method(_Self* s) {\n"
+                "            return helper();\n"
+                "        }\n"
+                "    };\n"
+                "    struct S s = {};\n"
+                "    return s.method();\n"
+                "}\n"
+                "return outer();\n"),
+            .exit_code = 42,
+        },
+        {
+            "local typedef method uses completed declaration", __LINE__,
+            SVI("int run(void) {\n"
+                "    typedef struct {\n"
+                "        int value;\n"
+                "        int get(_Self* self) { Local* p = self; return p.value; }\n"
+                "    } Local;\n"
+                "    Local s = {42};\n"
+                "    return s.get();\n"
+                "}\nreturn run();\n"),
+            .exit_code = 42,
+        },
+        {
+            "block local union methods retain helper and later method", __LINE__,
+            SVI("int helper(void) { return 1; }\n"
+                "int run(void) {\n"
+                "    {\n"
+                "        int helper(void) { return 42; }\n"
+                "        union U {\n"
+                "            int first(_Self* self) { return self.second(); }\n"
+                "            int second(_Self* self) { return helper(); }\n"
+                "        } u;\n"
+                "        return u.first();\n"
+                "    }\n"
+                "}\nreturn run();\n"),
+            .exit_code = 42,
+        },
+        {
+            "local methods preserve enclosing loop and switch", __LINE__,
+            SVI("int run(void) {\n"
+                "    int helper(void) { return 21; }\n"
+                "    int result = 0;\n"
+                "    for(int i = 0; i < 2; i++) {\n"
+                "        switch(i) {\n"
+                "        case 0:\n"
+                "            { struct S { int get(_Self* self) {\n"
+                "                int n = 0;\n"
+                "                for(int j = 0; j < 2; j++) {\n"
+                "                    switch(j) { case 0: continue; default: n += helper(); break; }\n"
+                "                }\n"
+                "                return n;\n"
+                "            } } s; result += s.get(); }\n"
+                "            break;\n"
+                "        default: result += helper(); break;\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\nreturn run();\n"),
+            .exit_code = 42,
+        },
+        {
             "nested torture test", __LINE__,
             SVI("int foo( struct S { int x; int p(_Self* s, struct S {int x; int p(_Self* s){ return s.x; } } t){ return s.x+t.p(); } } s){\n"
                 "    int inner(struct S s){ return s.p({s.x+1}); }\n"

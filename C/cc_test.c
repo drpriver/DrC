@@ -5139,6 +5139,24 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "local method cannot break enclosing loop", __LINE__,
+            SVI("void f(void) { while(1) {\n"
+                "struct S { void method(_Self* self) {\n"
+                "break;\n"
+                "} };\n"
+                "} }\n"),
+            SVI("(test):3:1: error: 'break' statement not in loop or switch statement\n"),
+        },
+        {
+            "local method cannot use enclosing switch", __LINE__,
+            SVI("void f(void) { switch(0) {\n"
+                "struct S { void method(_Self* self) {\n"
+                "case 1: return;\n"
+                "} };\n"
+                "} }\n"),
+            SVI("(test):3:1: error: 'case' label not within a switch statement\n"),
+        },
+        {
             "any constexpr rejects different scalar type", __LINE__,
             SVI("constexpr _Any a=1.f;\n"
                 "_Static_assert(a.as(unsigned)==0x3f800000);\n"),

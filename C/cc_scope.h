@@ -6,6 +6,7 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/atom_map16.h"
+#include "../Drp/parray.h"
 #include "../Drp/Allocators/allocator.h"
 #include "cc_type.h"
 #include "srcloc.h"
@@ -39,6 +40,7 @@ struct CcScope {
     AtomMap(CcUnion) unions;
     AtomMap(CcEnum) enums;
     AtomMap(CcEnumerator) enumerators;
+    Parray(CcFunc) deferred_methods;
 };
 
 static inline void cc_scope_clear(CcScope* scope);

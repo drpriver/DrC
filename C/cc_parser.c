@@ -73,6 +73,7 @@ static int cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_No
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
+static int cc_parse_local_methods(CcParser* p);
 static CcLabelCtx* cc_label_ctx(CcParser* p);
 static int cc_check_gotos(CcParser* p, CcLabelCtx* ctx);
 static int cc_parse_type_name(CcParser* p, CcQualType* out, CcParsedParams* _Nullable param_names);
@@ -222,6 +223,7 @@ static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
 static int cc_parse_decls(CcParser* p, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
+static int cc_parse_one_inner(CcParser* p);
 static int cc_skip_braced_block(CcParser* p);
 
 static
@@ -5365,6 +5367,14 @@ cc_parse_static_if(CcParser* p, SrcLoc loc){
 static
 int
 cc_parse_one(CcParser* p){
+    int err = cc_parse_one_inner(p);
+    if(err) return err;
+    return cc_parse_local_methods(p);
+}
+
+static
+int
+cc_parse_one_inner(CcParser* p){
     int err;
     CcToken tok;
     err = cc_peek(p, &tok);
@@ -5466,7 +5476,7 @@ cc_parse_all(CcParser* p){
     int err = 0;
     CcToken tok;
     CcLabelCtx* lctx = cc_label_ctx(p);
-    size_t goto_mark = lctx->gotos.count;
+    uint32_t goto_mark = lctx->gotos.count;
     CcStmtSink* sink = cc_push_stmt_sink(p);
     if(!sink) return CC_OOM_ERROR;
     CcScope* saved_file_scope = p->file_scope;
@@ -8578,6 +8588,11 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                             func->_Self_type = p->current_tag_type;
                             func->tokens = body_tokens;
                             func->defined = 1;
+                            if(p->current_func){
+                                func->enclosing = p->current_func;
+                                err = pa_push(&p->current->deferred_methods, cc_allocator(p), func);
+                                if(err){ err = CC_OOM_ERROR; goto struct_err; }
+                            }
                         }
                         // Parse optional attributes after method
                         err = cc_parse_attributes(p, &member_attrs);
@@ -9791,6 +9806,8 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         if(err) goto for_end;
                     }
                     // Parse body
+                    err = cc_parse_local_methods(p);
+                    if(err) goto for_end;
                     p->loop_depth++;
                     err = cc_parse_statement(p, &body);
                     p->loop_depth--;
@@ -11002,6 +11019,11 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         // There is no function body to inherit this prototype scope.
         CcScope* prototype_scope = param_names.scope;
         if(prototype_scope){
+            CcScope* saved_scope = p->current;
+            p->current = prototype_scope;
+            err = cc_parse_local_methods(p);
+            p->current = saved_scope;
+            if(err) return err;
             fl_push(&p->scratch_scopes, prototype_scope);
             param_names.scope = NULL;
         }
@@ -11312,7 +11334,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         }
         if(stop) break;
     }
-    return err;
+    return cc_parse_local_methods(p);
 }
 static
 const CcTargetConfig*
@@ -12002,6 +12024,20 @@ cc_define_builtin_types(CcParser* p){
     }
     return 0;
 }
+
+static
+int
+cc_parse_local_methods(CcParser* p){
+    if(!p->current_func) return 0;
+    CcScope* scope = p->current;
+    while(scope->deferred_methods.count){
+        CcFunc* f = scope->deferred_methods.data[--scope->deferred_methods.count];
+        int err = cc_parse_func_body(p, f);
+        if(err) return err;
+    }
+    return 0;
+}
+
 static
 int
 cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
@@ -12009,6 +12045,14 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     int err = 0;
     CcFunc* prev = p->current_func;
     CcQualType prev__Self = p->current_tag_type;
+    uint32_t prev_loop_depth = p->loop_depth;
+    uint32_t prev_switch_depth = p->switch_depth;
+    CcSwitchCtx* prev_switch_ctx = p->switch_ctx;
+    CcAttributes prev_attributes = p->attributes;
+    p->loop_depth = 0;
+    p->switch_depth = 0;
+    p->switch_ctx = NULL;
+    cc_clear_attributes(&p->attributes);
     p->current_func = f;
     p->current_tag_type = f->_Self_type;
     CcScope* param_scope = f->param_scope;
@@ -12019,7 +12063,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
         err = 0;
     }
     else err = cc_push_scope(p);
-    if(err){ p->current_func = prev; p->current_tag_type = prev__Self; return err; }
+    if(err) goto restore_context;
     // Lay out the variables already bound by the definition's declarator.
     if(ftype->param_count){
         f->param_vars = Allocator_zalloc(cc_allocator(p), ftype->param_count * sizeof *f->param_vars);
@@ -12040,6 +12084,8 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
         f->frame_size += param_sz;
         f->param_vars[i] = var;
     }
+    err = cc_parse_local_methods(p);
+    if(err) goto end_scope;
     {
         CcStmtSink* sink = cc_push_stmt_sink(p);
         if(!sink){ err = CC_OOM_ERROR; goto end_scope; }
@@ -12071,8 +12117,13 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     end_scope:
     pa_cleanup(&f->label_ctx.gotos, cc_allocator(p));
     cc_pop_scope(p);
+    restore_context:
     p->current_func = prev;
     p->current_tag_type = prev__Self;
+    p->loop_depth = prev_loop_depth;
+    p->switch_depth = prev_switch_depth;
+    p->switch_ctx = prev_switch_ctx;
+    p->attributes = prev_attributes;
     return err;
 }
 

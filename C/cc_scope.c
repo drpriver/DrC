@@ -177,6 +177,7 @@ cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
 static inline
 void
 cc_scope_clear(CcScope* scope){
+    scope->deferred_methods.count = 0;
     AM16_clear(&scope->typedefs);
     AM_clear(&scope->variables);
     AM_clear(&scope->functions);
