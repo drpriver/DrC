@@ -1580,7 +1580,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         }
-        // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     if(sv_equals(tok.txt, SV("define")) || sv_equals(tok.txt, SV("defifndef"))){
@@ -1596,12 +1595,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(ifndef){
             Atom a = AT_get_atom(cpp->at, name.text, name.length);
             if(a && AM_get(&cpp->macros, a)){
-                // would redef, but we're in defifndef, so skip to end of line.
                 for(;;){
                     err = cpp_next_raw_token(cpp, &tok);
                     if(err) return err;
                     if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                        // push it back so dispatch loop sees newline
                         err = cpp_push_tok(cpp, &cpp->pending, tok);
                         if(err) return err;
                         return 0;
@@ -1612,7 +1609,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-            // #define foo
             err = cpp_define_obj_macro(cpp, name, NULL, 0);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
                 return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
@@ -1629,7 +1625,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
             if(err) return err;
             ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
-            // push it back so dispatch loop sees newline
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
         else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
@@ -1672,7 +1667,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = cpp_error(cpp, tok.loc, "expected macro param name");
                     goto finish_func_macro;
                 }
-                // GCC extension: name... (named variadic parameter)
+                // GCC extension: name... (named varargs)
                 {
                     CppToken peek;
                     err = cpp_next_raw_token(cpp, &peek);
@@ -1719,7 +1714,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) goto finish_func_macro;
             }
-            // push it back so dispatch loop sees newline
             err = cpp_push_tok(cpp, &cpp->pending, tok);
             if(err) goto finish_func_macro;
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
@@ -1801,17 +1795,14 @@ cpp_handle_directive(CppPreprocessor* cpp){
             MARRAY_FOR_EACH(CppToken, t, *repl){
                 if(t->type != CPP_IDENTIFIER)
                     continue;
-                // Tag __VA_ARGS__ in variadic macros
                 if(variadic && sv_equals(t->txt, SV("__VA_ARGS__"))){
                     t->param_idx = m->nparams + 1;
                     continue;
                 }
-                // Tag named variadic parameter (GCC extension: name...)
                 if(named_variadic.length && sv_equals(t->txt, named_variadic)){
                     t->param_idx = m->nparams + 1;
                     continue;
                 }
-                // Tag __VA_COUNT__ in variadic macros
                 if(variadic && sv_equals(t->txt, SV("__VA_COUNT__"))){
                     t->param_idx = m->nparams + 2;
                     continue;
@@ -1825,7 +1816,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     }
                 }
             }
-            // Check ## not at start/end of replacement list (C23 6.10.4.3)
             if(repl->count){
                 size_t first = 0;
                 while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
@@ -1862,7 +1852,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) goto finish_obj_macro;
                 if(tok.type == CPP_EOF || tok.type == CPP_NEWLINE){
-                    // push it back so dispatch loop sees newline
                     err = cpp_push_tok(cpp, &cpp->pending, tok);
                     if(err) goto finish_obj_macro;
                     break;
@@ -1883,7 +1872,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
             while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
-            // Check ## not at start/end of replacement list (C23 6.10.4.3)
             if(repl->count){
                 size_t first = 0;
                 while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
@@ -1934,7 +1922,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                         goto finish_obj_macro;
                     }
                 }
-                // Duplicate macro definition, ok
                 err = 0;
             }
             if(!err)
@@ -1956,7 +1943,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         SrcLoc name_loc = tok.loc;
-        // Check for function-like macro: name(
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         _Bool is_func = (tok.type == CPP_PUNCTUATOR && tok.punct == '(');
@@ -1967,7 +1953,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         _Bool variadic = 0;
         StringView named_variadic = {0};
         if(is_func){
-            // Parse params (same as #define)
             for(;;){
                 do {
                     err = cpp_next_raw_token(cpp, &tok);
@@ -2025,13 +2010,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(err) goto finish_defblock;
             }
         }
-        // Skip to end of the #defblock line
         while(tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_defblock;
         }
-        // Collect body tokens until #endblock
-        _Bool at_bol = 1; // at beginning of line
+        _Bool at_beginning_of_line = 1;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_defblock;
@@ -2040,8 +2023,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 goto finish_defblock;
             }
             if(tok.type == CPP_NEWLINE){
-                at_bol = 1;
-                // Convert newlines to whitespace in the macro body
+                at_beginning_of_line = 1;
                 if(repl->count && ma_tail(*repl).type != CPP_WHITESPACE){
                     CppToken ws = {.type = CPP_WHITESPACE, .txt = SV(" "), .loc = tok.loc};
                     err = cpp_push_tok(cpp, repl, ws);
@@ -2049,17 +2031,15 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 continue;
             }
-            if(tok.type == CPP_WHITESPACE && at_bol)
+            if(tok.type == CPP_WHITESPACE && at_beginning_of_line)
                 continue;
-            if(at_bol && tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
-                // Peek for "endblock"
+            if(at_beginning_of_line && tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
                 CppToken dir;
                 do {
                     err = cpp_next_raw_token(cpp, &dir);
                     if(err) goto finish_defblock;
                 } while(dir.type == CPP_WHITESPACE);
                 if(dir.type == CPP_IDENTIFIER && sv_equals(dir.txt, SV("endblock"))){
-                    // Consume rest of line
                     do {
                         err = cpp_next_raw_token(cpp, &tok);
                         if(err) goto finish_defblock;
@@ -2068,18 +2048,14 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     if(err) goto finish_defblock;
                     break;
                 }
-                // Not endblock — push back and treat # as part of body
                 err = cpp_push_tok(cpp, &cpp->pending, dir);
                 if(err) goto finish_defblock;
             }
-            at_bol = 0;
-            // Coalesce whitespace
+            at_beginning_of_line = 0;
             if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 continue;
-            // Elide whitespace after ## and #
             if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#'))
                 continue;
-            // Elide whitespace before ##
             if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
             err = cpp_push_tok(cpp, repl, tok);
@@ -2087,7 +2063,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
         while(repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
             repl->count--;
-        // Define the macro
         if(is_func){
             CppMacro* m;
             err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
@@ -2108,7 +2083,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     if(!a){ err = CPP_OOM_ERROR; goto finish_defblock; }
                     params[i] = a;
                 }
-                // Tag replacement tokens with param indices
                 MARRAY_FOR_EACH(CppToken, t, *repl){
                     if(t->type != CPP_IDENTIFIER) continue;
                     if(variadic && sv_equals(t->txt, SV("__VA_ARGS__"))){ t->param_idx = m->nparams + 1; continue; }
@@ -2154,7 +2128,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2167,12 +2140,9 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
     }
     else if(sv_equals(tok.txt, SV("if"))){
-        CppPoundIf s = {
-            .start = tok.loc,
-        };
+        CppPoundIf s = { .start = tok.loc };
         CppTokens *toks = cpp_get_scratch(cpp);
         if(!toks) return CPP_OOM_ERROR;
-        // just scan to eol for now
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_if;
@@ -2181,7 +2151,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             err = cpp_push_tok(cpp, toks, tok);
             if(err) goto finish_if;
         }
-        // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
         if(err) goto finish_if;
         {
@@ -2199,9 +2168,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return CPP_OOM_ERROR;
     }
     else if(sv_equals(tok.txt, SV("ifdef"))){
-        CppPoundIf s = {
-            .start = tok.loc,
-        };
+        CppPoundIf s = { .start = tok.loc };
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
@@ -2214,7 +2181,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2227,9 +2193,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return CPP_OOM_ERROR;
     }
     else if(sv_equals(tok.txt, SV("ifndef"))){
-        CppPoundIf s = {
-            .start = tok.loc,
-        };
+        CppPoundIf s = { .start = tok.loc };
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
@@ -2242,7 +2206,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2261,12 +2224,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elif after #else");
-        // just scan to eol for now
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         }while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-        // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
         if(err) return CPP_OOM_ERROR;
         s->is_active = 0;
@@ -2283,7 +2244,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2311,7 +2271,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2338,7 +2297,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2355,7 +2313,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2377,7 +2334,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
     else if(sv_equals(tok.txt, SV("error")) || sv_equals(tok.txt, SV("warning"))){
         _Bool is_error = tok.txt.text[0] == 'e';
         SrcLoc directive_loc = tok.loc;
-        // Collect the rest of the line as the message text
         MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
         _Bool leading = 1;
         for(;;){
@@ -2404,35 +2360,29 @@ cpp_handle_directive(CppPreprocessor* cpp){
     }
     else if(sv_equals(tok.txt, SV("pragma"))){
         SrcLoc pragma_loc = tok.loc;
-        // Skip whitespace
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         } while(tok.type == CPP_WHITESPACE);
-        if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-            // bare #pragma - just ignore
+        if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){ // bare #pragma
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
         if(tok.type != CPP_IDENTIFIER){
-            // skip rest of line
             do {
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) return err;
             } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
-        // Look up registered pragma
         Atom prag_name = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
         CppPragma* prag = prag_name ? AM_get(&cpp->pragmas, prag_name) : NULL;
-        if(!prag){
-            // Unknown pragma - skip rest of line
+        if(!prag){ // Unknown pragma
             do {
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) return err;
             } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
-        // Collect remaining tokens on the line for the pragma handler
         CppTokens* prag_toks = cpp_get_scratch(cpp);
         if(!prag_toks) return CPP_OOM_ERROR;
         for(;;){
@@ -2444,11 +2394,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 break;
             }
             if(tok.type == CPP_WHITESPACE && !prag_toks->count)
-                continue; // skip leading whitespace
+                continue;
             err = cpp_push_tok(cpp, prag_toks, tok);
             if(err) goto finish_pragma;
         }
-        // Strip trailing whitespace
         while(prag_toks->count && ma_tail(*prag_toks).type == CPP_WHITESPACE)
             prag_toks->count--;
         err = prag->fn(prag->ctx, cpp, pragma_loc, prag_toks->data, prag_toks->count);
@@ -2461,7 +2410,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         _Bool is_import = sv_equals(tok.txt, SV("import"));
         _Bool is_optional = sv_equals(tok.txt, SV("try_include"));
         SrcLoc directive_loc = tok.loc;
-        // Skip whitespace after directive name
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
@@ -2475,8 +2423,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             return err;
         }
         CppIncludePosition inc_pos = {0};
-        // Try each header candidate on the line. For plain #include this is
-        // typically one, but multiple are allowed (#include_oneof semantics).
+        // EXTENSION: try each header candidate on the line, picking the first one.
         for(;;){
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
@@ -2484,12 +2431,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 break;
             }
             if(tok.type == CPP_STRING){
-                // "header.h" form - strip quotes
                 quote = 1;
                 header_name = (StringView){tok.txt.length - 2, tok.txt.text + 1};
             }
             else if(tok.type == CPP_PUNCTUATOR && tok.punct == '<'){
-                // <header.h> form - collect raw tokens until >
                 quote = 0;
                 msb_reset(&header_sb);
                 for(;;){
@@ -2506,13 +2451,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 header_name = msb_borrow_sv(&header_sb);
             }
             else {
-                // Not a recognized header form - try macro expansion
                 break;
             }
             if(header_name.length){
                 int find_err = cpp_find_include(cpp, quote, is_next, header_name, &inc_pos);
                 if(find_err == 0){
-                    // Found - consume rest of line and proceed to include.
                     for(;;){
                         err = cpp_next_raw_token(cpp, &tok);
                         if(err) goto cleanup;
@@ -2525,16 +2468,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     goto include_found;
                 }
             }
-            // Not found - skip whitespace and try next candidate
             do {
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) goto cleanup;
             } while(tok.type == CPP_WHITESPACE);
         }
-        // No direct header candidate was found (or none existed).
         // If the first token wasn't a header form, try macro expansion.
         if(!header_name.length && tok.type != CPP_NEWLINE && tok.type != CPP_EOF){
-            // Macro-expanded include: collect remaining tokens, expand, then parse
             CppTokens* line_toks = cpp_get_scratch(cpp);
             if(!line_toks){ err = CPP_OOM_ERROR; goto cleanup;}
             if(0){
@@ -2542,7 +2482,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 cpp_release_scratch(cpp, line_toks);
                 goto cleanup;
             }
-            // Push back current token
             err = cpp_push_tok(cpp, line_toks, tok);
             if(err) goto cleanup2;
             for(;;){
@@ -2553,10 +2492,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = cpp_push_tok(cpp, line_toks, tok);
                 if(err) goto cleanup2;
             }
-            // Push back the newline/eof
             err = cpp_push_tok(cpp, &cpp->pending, tok);
             if(err) goto cleanup2;
-            // Macro-expand the collected tokens
             CppTokens* expanded = cpp_get_scratch(cpp);
             if(!expanded){ err = CPP_OOM_ERROR; goto cleanup2; }
             if(0){
@@ -2567,7 +2504,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
             err = cpp_expand_argument(cpp, line_toks->data, line_toks->count, expanded);
             cpp_release_scratch(cpp, line_toks);
             if(err) goto cleanup3;
-            // Find the first non-whitespace expanded token
             size_t ei = 0;
             while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
             if(ei >= expanded->count){
@@ -2626,7 +2562,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
         include_found:;
         // cpp_find_include left the resolved path in fc->path_builder.
-        // Read the file (may be cached) and push a new frame.
         StringView file_txt;
         uint32_t file_id;
         err = fc_read_file(cpp->fc, &file_txt, &file_id);
@@ -2634,15 +2569,12 @@ cpp_handle_directive(CppPreprocessor* cpp){
             err = cpp_error(cpp, directive_loc, "Could not read '%.*s'", (int)header_name.length, header_name.text);
             goto cleanup;
         }
-        // Check pragma once - skip if already included with #pragma once
         if(cpp_is_pragma_once(cpp, file_id))
             goto cleanup;
-        // #import implies #pragma once
         if(is_import){
             err = cpp_add_pragma_once(cpp, file_id);
             if(err) goto cleanup;
         }
-        // Check include guard - skip if guard macro is still defined
         {
             Atom guard = cpp_get_include_guard(cpp, file_id);
             if(guard && AM_get(&cpp->macros, guard)){
@@ -2707,7 +2639,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                             if(err) return err;
                         }
                         while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-                        // push it back so dispatch loop sees newline
                         return cpp_push_tok(cpp, &cpp->pending, tok);
                     }
                 }
@@ -2727,17 +2658,14 @@ cpp_handle_directive(CppPreprocessor* cpp){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-        // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     else {
         cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
-        // unknown or unhandled directive
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-        // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     return 0;
@@ -2757,7 +2685,6 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         }
-        // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     else if(sv_equals(tok.txt, SV("if")) || sv_equals(tok.txt, SV("ifdef")) || sv_equals(tok.txt, SV("ifndef"))){
@@ -2766,20 +2693,17 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         } while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-        // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
         if(err) return err;
         return cpp_push_if(cpp, s);
     }
     else if(sv_equals(tok.txt, SV("endif"))){
         if(!cpp->if_stack.count) return CPP_UNREACHABLE_ERROR;
-            // return cpp_error(cpp, tok.loc, "#endif outside of #if (or similar construct)");
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2801,13 +2725,11 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
     }
     if(!cpp->if_stack.count) return CPP_UNREACHABLE_ERROR;
     if(ma_tail(cpp->if_stack).is_dummy) {
-        // unknown or unhandled directive
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         }
         while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-        // push it back so dispatch loop sees newline
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     if(sv_equals(tok.txt, SV("elif"))){
@@ -2825,7 +2747,6 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             err = cpp_push_tok(cpp, toks, tok);
             if(err) goto finish_elif;
         }
-        // push it back so dispatch loop sees newline
         err = cpp_push_tok(cpp, &cpp->pending, tok);
         if(err) goto finish_elif;
         s->is_active = 0;
@@ -2851,7 +2772,6 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2879,7 +2799,6 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2910,7 +2829,6 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
             if(err) return err;
             if(tok.type == CPP_WHITESPACE) continue;
             if(tok.type == CPP_NEWLINE || tok.type == CPP_EOF){
-                // push it back so dispatch loop sees newline
                 err = cpp_push_tok(cpp, &cpp->pending, tok);
                 if(err) return err;
                 break;
@@ -2924,13 +2842,11 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
         }
         return 0;
     }
-    // unknown or unhandled directive
     do {
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
     }
     while(tok.type != CPP_EOF && tok.type != CPP_NEWLINE);
-    // push it back so dispatch loop sees newline
     return cpp_push_tok(cpp, &cpp->pending, tok);
 }
 static
@@ -2946,52 +2862,38 @@ cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc
     CppToken reenable = {.type = CPP_REENABLE, .data1 = macro};
     int err = cpp_push_tok(cpp, dst, reenable);
     if(err) return err;
-
     SrcLocExp* parent = cpp_srcloc_to_exp(cpp, expansion_loc);
     if(!parent) return CPP_OOM_ERROR;
-
     CppToken* repl = cpp_cmacro_replacement(macro);
-
-    // Check if replacement list contains ## (needs paste processing)
-    _Bool has_paste = 0;
     for(size_t i = 0; i < macro->nreplace; i++){
         if(repl[i].type == CPP_PUNCTUATOR && repl[i].punct == '##'){
-            has_paste = 1;
-            break;
-        }
-    }
-
-    if(has_paste){
-        // Process ## pasting via cpp_substitute_and_paste.
-        // Object-like macros have no params, so args/expanded_args are unused.
-        CppTokens empty_args = {0};
-        Marray(size_t) empty_seps = {0};
-        CppTokens *result = cpp_get_scratch(cpp);
-        if(!result) return CPP_OOM_ERROR;
-        err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0, parent);
-        if(err) goto finally_obj;
-        for(size_t i = result->count; i-- > 0;){
-            CppToken tok = result->data[i];
-            if(tok.type == CPP_PLACEMARKER) continue;
-            if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
-            if(tok.type == CPP_IDENTIFIER && !tok.disabled){
-                Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
-                if(a){
-                    CppMacro* m = AM_get(&cpp->macros, a);
-                    if(m && m->is_disabled)
-                        tok.disabled = 1;
-                }
-            }
-            err = cpp_push_tok(cpp, dst, tok);
+            CppTokens empty_args = {0};
+            Marray(size_t) empty_seps = {0};
+            CppTokens *result = cpp_get_scratch(cpp);
+            if(!result) return CPP_OOM_ERROR;
+            err = cpp_substitute_and_paste(cpp, repl, macro->nreplace, macro, &empty_args, &empty_seps, NULL, result, 0, parent);
             if(err) goto finally_obj;
+            for(size_t j = result->count; j--;){
+                CppToken tok = result->data[j];
+                if(tok.type == CPP_PLACEMARKER) continue;
+                if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
+                if(tok.type == CPP_IDENTIFIER && !tok.disabled){
+                    Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+                    if(a){
+                        CppMacro* m = AM_get(&cpp->macros, a);
+                        if(m && m->is_disabled)
+                            tok.disabled = 1;
+                    }
+                }
+                err = cpp_push_tok(cpp, dst, tok);
+                if(err) goto finally_obj;
+            }
+            finally_obj:
+            cpp_release_scratch(cpp, result);
+            return err;
         }
-    finally_obj:
-        cpp_release_scratch(cpp, result);
-        return err;
     }
-
-    // Fast path: no ## processing needed
-    for(size_t i = macro->nreplace; i-- > 0;){
+    for(size_t i = macro->nreplace; i--;){
         CppToken tok = repl[i];
         if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
         if(tok.type == CPP_IDENTIFIER && !tok.disabled){
@@ -3008,9 +2910,6 @@ cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc
     return 0;
 }
 
-// Helper: Get argument N from args array using arg_seps indices
-// arg_seps[i] points to the comma token in args; arg0 = args[0..arg_seps[0]),
-// arg1 = args[arg_seps[0]+1..arg_seps[1]), etc. (skip the comma)
 static
 void
 cpp_get_argument(const CppTokens *args, const Marray(size_t) *arg_seps, size_t arg_idx, CppToken*_Nullable*_Nonnull out_start, size_t *out_count){
@@ -3020,16 +2919,13 @@ cpp_get_argument(const CppTokens *args, const Marray(size_t) *arg_seps, size_t a
         end = arg_seps->count > 0 ? arg_seps->data[0] : args->count;
     }
     else if(arg_idx <= arg_seps->count){
-        // Start after the comma token
         start = arg_seps->data[arg_idx - 1] + 1;
         end = (arg_idx < arg_seps->count) ? arg_seps->data[arg_idx] : args->count;
     }
     else {
-        // Beyond available arguments (for variadic)
         start = args->count;
         end = args->count;
     }
-    // Skip leading/trailing whitespace
     while(start < end && (args->data[start].type == CPP_WHITESPACE || args->data[start].type == CPP_NEWLINE))
         start++;
     while(end > start && (args->data[end-1].type == CPP_WHITESPACE || args->data[end-1].type == CPP_NEWLINE))
@@ -3038,26 +2934,19 @@ cpp_get_argument(const CppTokens *args, const Marray(size_t) *arg_seps, size_t a
     *out_count = end - start;
 }
 
-// Helper: Get variadic arguments (all args from nparams onward, comma-separated)
 static
 void
 cpp_get_va_args(const CppTokens *args, const Marray(size_t) *arg_seps, size_t nparams, CppToken*_Nullable*_Nonnull out_start, size_t *out_count){
     size_t start;
-    if(nparams == 0){
+    if(nparams == 0)
         start = 0;
-    }
-    else if(nparams <= arg_seps->count){
-        // Start after the comma token
+    else if(nparams <= arg_seps->count)
         start = arg_seps->data[nparams - 1] + 1;
-    }
-    else {
+    else
         start = args->count;
-    }
-    // Skip leading whitespace
     while(start < args->count && (args->data[start].type == CPP_WHITESPACE || args->data[start].type == CPP_NEWLINE))
         start++;
     size_t end = args->count;
-    // Skip trailing whitespace
     while(end > start && (args->data[end-1].type == CPP_WHITESPACE || args->data[end-1].type == CPP_NEWLINE))
         end--;
     *out_start = (start < args->count) ? &args->data[start] : NULL;
@@ -3065,8 +2954,6 @@ cpp_get_va_args(const CppTokens *args, const Marray(size_t) *arg_seps, size_t np
 }
 
 
-// Helper: Check if VA_ARGS is non-empty after expansion (C23 6.10.4.1).
-// Uses the expanded_args cache so the expansion is done at most once.
 static
 _Bool
 cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *_Nullable*_Null_unspecified expanded_args){
@@ -3074,11 +2961,10 @@ cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppToken
     size_t count;
     cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
     if(!count) return 0;
-
-    size_t va_idx = macro->nparams; // VA_ARGS slot in expanded_args
+    size_t va_idx = macro->nparams;
     if(!expanded_args[va_idx]){
         CppTokens *ea = cpp_get_scratch(cpp);
-        if(!ea) return 0; // conservative: treat as empty on OOM
+        if(!ea) return 0;
         int err = cpp_expand_argument(cpp, start, count, ea);
         if(err){
             cpp_release_scratch(cpp, ea);
@@ -3096,13 +2982,11 @@ cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppToken
     return 0;
 }
 
-// Helper: Stringify argument tokens (C23 6.10.4.2)
 static
 CppToken
 cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t count, SrcLoc loc){
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     msb_write_char(&sb, '"');
-    // Skip leading whitespace
     size_t start = 0;
     while(start < count && (toks[start].type == CPP_WHITESPACE || toks[start].type == CPP_NEWLINE))
         start++;
@@ -3113,7 +2997,6 @@ cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t cou
                 msb_write_char(&sb, ' ');
             continue;
         }
-        // For string/char literals, escape " and backslash
         if(t.type == CPP_STRING || t.type == CPP_CHAR){
             for(size_t j = 0; j < t.txt.length; j++){
                 char c = t.txt.text[j];
@@ -3125,7 +3008,6 @@ cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t cou
         else
             msb_write_str(&sb, t.txt.text, t.txt.length);
     }
-    // Remove trailing space if any
     if(msb_peek(&sb) == ' ')
         sb.cursor--;
     msb_write_char(&sb, '"');
@@ -3138,11 +3020,9 @@ cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t cou
 
 static int cpp_tokenize_from_frame(CppPreprocessor *cpp, CppFrame *f, CppToken *tok);
 
-// Helper: Paste two tokens (C23 6.10.4.3)
 static
 int
 cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *result, SrcLoc loc, SrcLocExp* expansion_parent){
-    // Handle placemarker tokens
     if(left.type == CPP_PLACEMARKER){
         *result = right;
         return 0;
@@ -3151,13 +3031,10 @@ cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *
         *result = left;
         return 0;
     }
-    // Concatenate texts
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     msb_write_str(&sb, left.txt.text, left.txt.length);
     msb_write_str(&sb, right.txt.text, right.txt.length);
     StringView pasted = msb_detach_sv(&sb);
-
-    // Tokenize directly from a local frame (don't touch cpp->frames or pending)
     CppFrame temp_frame = {
         .txt = pasted,
         .cursor = 0,
@@ -3165,23 +3042,18 @@ cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *
         .column = loc.column,
         .file_id = loc.file_id
     };
-
     CppToken tok;
     int err = cpp_tokenize_from_frame(cpp, &temp_frame, &tok);
     if(err) return err;
-
-    // Check if we consumed the entire pasted string and got exactly one token
     if(temp_frame.cursor != pasted.length || tok.type == CPP_WHITESPACE || tok.type == CPP_EOF){
         SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
         return cpp_error(cpp, eloc, "pasting \"%.*s\" and \"%.*s\" does not give a valid preprocessing token", sv_p(left.txt), sv_p(right.txt));
     }
-
     tok.loc = loc;
     *result = tok;
     return 0;
 }
 
-// Expands macros in a slice of tokens. Assumes the tokens doesn't have directives, like for a function-like macro's arguments
 static
 int
 cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out){
@@ -3241,7 +3113,6 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
                 break;
         }
         if(next.type != CPP_PUNCTUATOR || next.punct != '('){
-            // not function invocation
             if(next.type != CPP_EOF){
                 err = cpp_push_tok(cpp, pending, next);
                 if(err) goto finally;
@@ -3318,8 +3189,6 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
     return err;
 }
 
-// Helper: Get raw argument tokens for a parameter index, dispatching
-// between variadic and regular arguments.
 static inline
 void
 cpp_get_param_arg(const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, size_t pidx, CppToken*_Nullable*_Nonnull out_start, size_t *out_count){
@@ -3329,9 +3198,6 @@ cpp_get_param_arg(const CppMacro *macro, const CppTokens *args, const Marray(siz
         cpp_get_argument(args, arg_seps, pidx, out_start, out_count);
 }
 
-// Helper: Parse __VA_OPT__(content) starting after the __VA_OPT__ identifier.
-// Sets *out_content_start to the first token after '(' and *out_close_paren
-// to the index of the matching ')'.
 static
 int
 cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren, SrcLocExp* expansion_parent){
@@ -3359,10 +3225,6 @@ cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nrep
     return 0;
 }
 
-// Helper: Parse __VA_ARG__(expr), evaluate the index, and retrieve the raw
-// variadic argument tokens. `after` is the position after the __VA_ARG__ ident.
-// On success, *out_start/*out_count point to the raw arg tokens and
-// *out_cparen is the index of the closing ')'.
 static
 int
 cpp_resolve_va_arg(
@@ -3423,13 +3285,6 @@ cpp_resolve_va_arg(
     return 0;
 }
 
-// Single-pass helper: substitute parameters and resolve ## pasting.
-// Walks repl[0..nreplace) left-to-right, handling:
-//   - # stringification (param and __VA_OPT__)
-//   - __VA_OPT__ (recursive)
-//   - ## token pasting
-//   - parameter substitution (expanded vs raw based on local ## adjacency)
-// If raw_only is set, all params use raw (unexpanded) tokens (for # __VA_OPT__).
 static
 int
 cpp_substitute_and_paste(
@@ -6323,8 +6178,8 @@ cpp_builtin_pragma_message(void* _Null_unspecified ctx, CppPreprocessor* cpp, Sr
     return 0;
 }
 
-static 
-int 
+static
+int
 cpp_add_search_path_from_pragma(CppPreprocessor* cpp, CppToken tok, size_t include_path_idx){
     int err = 0;
     MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
