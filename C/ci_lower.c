@@ -2942,7 +2942,6 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 2 * sizeof d->arg_sizes[0]);
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
-    else d->func_type = ftype;
     d->nargs = nargs;
     d->arg_offsets = d->arg_sizes + nargs;
     uint32_t buffer_align = 16;

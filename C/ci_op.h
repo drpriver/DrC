@@ -56,8 +56,6 @@ enum CiFaluOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiFaluOp, uint32_t);
 
-// The hardware read-modify-write set; everything else (mod, shifts, floats,
-// 128-bit arithmetic) is a CAS loop in the lowered code.
 enum CiAtomicRmwOp TYPED_ENUM(uint32_t){
     CI_ARMW_XCHG,
     CI_ARMW_ADD,
@@ -68,7 +66,6 @@ enum CiAtomicRmwOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiAtomicRmwOp, uint32_t);
 
-// The checked-arithmetic ops for __builtin_{add,sub,mul}_overflow.
 enum CiCheckedOp TYPED_ENUM(uint32_t){
     CI_CHK_ADD,
     CI_CHK_SUB,
@@ -76,7 +73,6 @@ enum CiCheckedOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 
-// The bit-counting ops for __builtin_popcount/clz/ctz (and l/ll variants).
 enum CiBitCountOp TYPED_ENUM(uint32_t){
     CI_BITCNT_POPCOUNT,
     CI_BITCNT_CLZ,
@@ -161,10 +157,7 @@ TYPEDEF_ENUM(CiOpKind, uint32_t);
 
 typedef struct CiCallDescriptor CiCallDescriptor;
 struct CiCallDescriptor {
-    union {
-        CcFunction*_Nonnull func_type;
-        CcFunc* _Nonnull func;
-    };
+    CcFunc* _Nonnull func;
     CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
     uint32_t nargs;
     uint32_t fixed_size, varargs_offset, args_size;
@@ -189,7 +182,6 @@ struct CiOp {
             SrcLoc loc;
         };
         struct {
-            // Call interpreter runtime support with already-lowered operands.
             CiOpKind kind: 8; // CI_OP_RT_CALL
             CiRuntimeOp op: 8;
             uint32_t nargs: 7;
@@ -200,17 +192,15 @@ struct CiOp {
             SrcLoc loc;
         } rt_call;
         struct {
-            // slots[slot:slot+immsize] = immediate
             CiOpKind kind: 8; // CI_OP_CONST
-            uint32_t bt_kind: 7; // for pretty printing, we can remove if we need the bits
-            uint32_t is_anon_array: 1; // for pretty printing, we can remove if we need the bits
+            uint32_t bt_kind: 7; // for pretty printing
+            uint32_t is_anon_array: 1; // for pretty printing
             uint32_t immsize: 16;
             uint32_t slot;
             uint64_t immediate[2];
             SrcLoc loc;
         } constant;
         struct {
-            // slots[slot:slot+slot_size] = slots[src:src+slot_size]
             CiOpKind kind: 8; // CI_OP_COPY
             uint32_t _bitpad: 24;
             uint32_t _pad;
@@ -219,7 +209,6 @@ struct CiOp {
             SrcLoc loc;
         } copy;
         struct {
-            // slots[slot] = slots[src] op immediate, using the opcode width.
             CiOpKind kind: 8; // CI_OP_ALU_IMM32, CI_OP_ALU_IMM64
             CiAluOp op: 8;
             uint32_t is_unsigned: 1, _bitpad: 15;
@@ -228,14 +217,12 @@ struct CiOp {
             SrcLoc loc;
         } alu_imm;
         struct {
-            // Pointer-width modular arithmetic: base + extend(index) * scale.
             CiOpKind kind: 8; // CI_OP_INDEX
             uint32_t ptr_size: 4, index_size: 4, index_unsigned: 1, _bitpad: 15;
             uint32_t slot, base, index, scale, _pad;
             SrcLoc loc;
         } index;
         struct {
-            // slots[slot:slot+(implict size)] = slots[src] op slots[src2] as integers
             CiOpKind kind: 8; // CI_OP_ALU8, CI_OP_ALU16, CI_OP_ALU32, CI_OP_ALU64, CI_OP_ALU128
             CiAluOp op: 8;
             uint32_t is_unsigned: 1,
@@ -247,21 +234,18 @@ struct CiOp {
             SrcLoc loc;
         } alu;
         struct {
-            // slots[slot:slot+slot_size] = (int)(slots[src] cmp slots[src2])
             CiOpKind kind: 8; // CI_OP_CMP32, CI_OP_CMP64, CI_OP_CMP128
             CiCmpOp op: 8;
             uint32_t is_unsigned: 1,
                      _bitpad: 15;
             uint32_t slot,
-                     slot_size, // always sizeof(int), but that is target specific and can't be implied by the kind.
+                     slot_size,
                      src,
                      src2;
             uint32_t pad;
             SrcLoc loc;
         } cmp;
         struct {
-            // Same operand layout as cmp; jump overlays jump_false.jump so
-            // ordinary branch backpatching also handles fused comparisons.
             CiOpKind kind: 8; // CI_OP_CMP_JUMP32, CI_OP_CMP_JUMP64
             CiCmpOp op: 8;
             uint32_t is_unsigned: 1, when_true: 1, _bitpad: 14;
@@ -269,7 +253,6 @@ struct CiOp {
             SrcLoc loc;
         } cmp_jump;
         struct {
-            // slots[slot] = slots[src] op slots[src2]
             CiOpKind kind: 8; // CI_OP_FALU32, CI_OP_FALU64
             CiFaluOp op: 8;
             uint32_t _bitpad: 16;
@@ -281,7 +264,6 @@ struct CiOp {
             SrcLoc loc;
         } falu32, falu64;
         struct {
-            // slots[slot:slot+slot_size] = (int)(slots[src] cmp slots[src2])
             CiOpKind kind: 8; // CI_OP_FCMP32, CI_OP_FCMP64
             CiCmpOp op: 8;
             uint32_t _bitpad: 16;
@@ -331,7 +313,6 @@ struct CiOp {
             SrcLoc loc;
         } convert, itof, ftoi, ftof;
         struct {
-            // slots[slot] = &slots[src]
             CiOpKind kind: 8; // CI_OP_SLOT_ADDR
             uint32_t _bitpad: 24;
             uint32_t slot, slot_size, src;
@@ -339,9 +320,6 @@ struct CiOp {
             SrcLoc loc;
         } slot_addr;
         struct {
-            // slots[slot] = var's resolved storage address; a GOT load, read
-            // at execution because lowering can run before the variable
-            // resolves
             CiOpKind kind: 8; // CI_OP_VAR_ADDR
             uint32_t _bitpad: 24;
             uint32_t pad;
@@ -350,9 +328,6 @@ struct CiOp {
             SrcLoc loc;
         } var_addr;
         struct {
-            // slots[slot] = func's resolved function pointer; a GOT load, read
-            // at execution because lowering can run before the closure or
-            // native symbol resolves
             CiOpKind kind: 8; // CI_OP_FUNC_ADDR
             uint32_t _bitpad: 24;
             uint32_t pad;
@@ -361,9 +336,6 @@ struct CiOp {
             SrcLoc loc;
         } func_addr;
         struct {
-            // trap unless the 8-byte unsigned index in slots[src] is in range
-            // of the 8-byte length in slots[src2]; inclusive permits
-            // index == length (address-of one-past-the-end)
             CiOpKind kind: 8; // CI_OP_BOUNDS
             uint32_t inclusive: 1,
                      index_signed: 1,
@@ -374,7 +346,6 @@ struct CiOp {
             SrcLoc loc;
         } bounds;
         struct {
-            // ptr[offset:] = slots[src:src+src_size], ptr read from slots[slot]
             CiOpKind kind: 8; // CI_OP_STORE
             uint32_t _bitpad: 24;
             uint32_t pad;
@@ -385,7 +356,6 @@ struct CiOp {
             SrcLoc loc;
         } store;
         struct {
-            // ptr[offset:] = immediate bytes; ptr read from slots[slot].
             CiOpKind kind: 8; // CI_OP_STORE_IMM
             uint32_t size: 8, _bitpad: 16;
             uint32_t slot, offset, _pad;
@@ -393,7 +363,6 @@ struct CiOp {
             SrcLoc loc;
         } store_imm;
         struct {
-            // slots[slot:slot+slot_size] = ptr[offset:], ptr read from slots[src]
             CiOpKind kind: 8; // CI_OP_LOAD
             uint32_t _bitpad: 24;
             uint32_t pad;
@@ -404,9 +373,6 @@ struct CiOp {
             SrcLoc loc;
         } load;
         struct {
-            // dst[offset : offset+size] = src[src_offset : src_offset+size],
-            // dst read from slots[slot], src read from slots[src]; the
-            // regions may overlap exactly (self assignment)
             CiOpKind kind: 8; // CI_OP_MEMCOPY
             uint32_t _bitpad: 24;
             uint32_t size;
@@ -425,9 +391,6 @@ struct CiOp {
             SrcLoc loc;
         } zero;
         struct {
-            // like store, but a read-modify-write: insert the low bit_width
-            // bits of slots[src:src+src_size] at bit_offset of the
-            // src_size-byte storage unit at ptr[offset:]
             CiOpKind kind: 8; // CI_OP_STORE_BITFIELD
             uint32_t bit_offset: 8,
                      bit_width: 8,
@@ -441,9 +404,6 @@ struct CiOp {
             SrcLoc loc;
         } store_bf;
         struct {
-            // like load, but the slot_size bytes at ptr[offset:] are a
-            // bitfield storage unit: extract bit_width bits at bit_offset,
-            // extend per is_signed
             CiOpKind kind: 8; // CI_OP_LOAD_BITFIELD
             uint32_t bit_offset: 8,
                      bit_width: 8,
@@ -456,8 +416,6 @@ struct CiOp {
             SrcLoc loc;
         } load_bf;
         struct {
-            // slots[slot:slot+slot_size] = atomic load of ptr[offset:], ptr
-            // read from slots[src]; slot_size is a power of two <= 16
             CiOpKind kind: 8; // CI_OP_ATOMIC_LOAD
             CcMemoryOrder memorder: 4;
             uint32_t _bitpad: 20;
@@ -468,8 +426,6 @@ struct CiOp {
             SrcLoc loc;
         } atomic_load;
         struct {
-            // atomic store of slots[src:src+src_size] to ptr[offset:], ptr
-            // read from slots[slot]; src_size is a power of two <= 16
             CiOpKind kind: 8; // CI_OP_ATOMIC_STORE
             CcMemoryOrder memorder: 4;
             uint32_t _bitpad: 20;
@@ -481,11 +437,6 @@ struct CiOp {
             SrcLoc loc;
         } atomic_store;
         struct {
-            // atomically: old = ptr[offset:]; ptr[offset:] = old <op>
-            // slots[src2]; slots[slot:slot+slot_size] = old. ptr read from
-            // slots[src]. slot_size is also the operand size: a power of two
-            // <= 8, or 16 for xchg only. slot is always a valid slot;
-            // discard means the old value is unused
             CiOpKind kind: 8; // CI_OP_ATOMIC_RMW
             CiAtomicRmwOp op: 8;
             CcMemoryOrder memorder: 4;
@@ -498,11 +449,6 @@ struct CiOp {
             SrcLoc loc;
         } atomic_rmw;
         struct {
-            // atomically: old = ptr[offset:]; if old == slots[expected]:
-            // ptr[offset:] = slots[desired]. slots[expected:expected+size] =
-            // old (a no-op when the exchange happened); slots[slot] = 1-byte
-            // canonical bool of success. ptr read from slots[src]; weak
-            // permits spurious failure; size is a power of two <= 16
             CiOpKind kind: 8; // CI_OP_ATOMIC_CAS
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4;
@@ -517,7 +463,6 @@ struct CiOp {
             SrcLoc loc;
         } atomic_cas;
         struct {
-            // memory fence; is_signal: compiler barrier only, no instruction
             CiOpKind kind: 8; // CI_OP_FENCE
             CcMemoryOrder memorder: 4;
             uint32_t is_signal: 1,
@@ -536,9 +481,6 @@ struct CiOp {
             SrcLoc loc;
         } call;
         struct {
-            // slots[slot] = slot_size-byte 0/1 of truthy(slots[src:src+src_size]);
-            // float_width = resolved format width (16/32/64/80/128), else 0;
-            // negate computes !truthy instead
             CiOpKind kind: 8; // CI_OP_ISTRUE
             uint32_t float_width: 16,
                      negate: 1,
@@ -549,7 +491,6 @@ struct CiOp {
             SrcLoc loc;
         } istrue;
         struct {
-            // pc = jump
             CiOpKind kind: 8; // CI_OP_JUMP
             uint32_t _bitpad: 24;
             uint32_t jump;
@@ -557,8 +498,6 @@ struct CiOp {
             SrcLoc loc;
         } jump;
         struct {
-            // if !slots[slot] (jump_false) or slots[slot] (jump_true):
-            // pc = jump; slot is an integer tested for zero
             CiOpKind kind: 8; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
             uint32_t _bitpad: 24;
             uint32_t jump;
@@ -567,7 +506,6 @@ struct CiOp {
             SrcLoc loc;
         } jump_false, jump_true;
         struct {
-            // return with no value; pc = end
             CiOpKind kind: 8; // CI_OP_RETURN
             uint32_t _bitpad: 24;
             uint32_t _pad;
@@ -575,7 +513,6 @@ struct CiOp {
             SrcLoc loc;
         } return_;
         struct {
-            // copy slots[src:src+src_size] into return_buf; pc = end
             CiOpKind kind: 8; // CI_OP_RETURN_SLOT
             uint32_t _bitpad: 24;
             uint32_t _pad;
@@ -584,9 +521,6 @@ struct CiOp {
             SrcLoc loc;
         } return_slot;
         struct {
-            // multi-way conditional jump on slots[slot]; binary search table,
-            // no match: pc = jump (default/exit); is_unsigned: the value is
-            // unsigned
             CiOpKind kind: 8; // CI_OP_SWITCH
             uint32_t is_unsigned: 1,
                      _bitpad: 23;
@@ -596,7 +530,6 @@ struct CiOp {
             SrcLoc loc;
         } switch_;
         struct {
-            // evaluate expr into slots[slot:slot+slot_size]
             CiOpKind kind: 8; // CI_OP_ALLOCA
             uint32_t _bitpad: 24;
             uint32_t _pad;
@@ -605,7 +538,6 @@ struct CiOp {
             SrcLoc loc;
         } alloca;
         struct {
-            // evaluate bswap into slots[slot:slot+slot_size]
             CiOpKind kind: 8; // CI_OP_BSWAP
             uint32_t _bitpad: 24;
             uint32_t size;
