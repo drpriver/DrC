@@ -2101,6 +2101,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         || subop == CC_MODULE_SYMBOL
         || subop == CC_MODULE_PARSE_TYPE)
         : (subop == CC_TYPE_IS_CALLABLE_WITH
+        || subop == CC_TYPE_IS_CALLABLE_THROUGH
         || subop == CC_TYPE_CASTABLE_TO
         || subop == CC_TYPE_FIELD
         || subop == CC_TYPE_METHOD

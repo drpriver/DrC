@@ -7210,6 +7210,38 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "type introspection: is_callable_through runtime types", __LINE__,
+            SVI("_Type t = void(int*); _Type through = void(void*);\n"
+                "return t.is_callable_through(through)\n"
+                " && (void(*)(int*)).is_callable_through(void(const void*))\n"
+                " && !t.is_callable_through(void(int))\n"
+                " && !t.is_callable_through(void(*)(void*));\n"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: is_callable_through constants", __LINE__,
+            SVI("struct S { int x; }; struct U { int x; };\n"
+                "enum E : unsigned { E0 };\n"
+                "_Static_assert((void(int*)).is_callable_through(void(int*)));\n"
+                "_Static_assert((int(int*)).is_callable_through(unsigned(void*)));\n"
+                "_Static_assert((void(enum E)).is_callable_through(void(unsigned)));\n"
+                "_Static_assert((struct S(struct S)).is_callable_through(struct S(struct S)));\n"
+                "_Static_assert(!(void(struct S)).is_callable_through(void(struct U)));\n"
+                "_Static_assert(!(void(int)).is_callable_through(void(float)));\n"
+                "_Static_assert(!(void(float)).is_callable_through(void(double)));\n"
+                "_Static_assert(!(void(short)).is_callable_through(void(int)));\n"
+                "_Static_assert(!(void(signed char)).is_callable_through(void(unsigned char)));\n"
+                "_Static_assert(!(void(_Bool)).is_callable_through(void(unsigned char)));\n"
+                "_Static_assert(!(void(int)).is_callable_through(void(int, int)));\n"
+                "_Static_assert(!(void(int,...)).is_callable_through(void(int)));\n"
+                "_Static_assert((void(int*,...)).is_callable_through(void(void*,...)));\n"
+                "_Static_assert(!(void(void)).is_callable_through(int(void)));\n"
+                "_Static_assert(!(int).is_callable_through(void(void)));\n"
+                "_Static_assert(!(void(void)).is_callable_through(int));\n"
+                "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
             "type introspection: is_callable_with", __LINE__,
             SVI("typedef int fn_t(int);\n"
                "_Bool r = (fn_t).is_callable_with(int);\n"

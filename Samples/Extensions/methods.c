@@ -116,6 +116,7 @@ fo.dump(); // locked: false, x: 3, y: 4
 printf("%d\n", fo.add()); // 7
 
 // Methods can be introspected like fields.
+// statically
 static if(FatObject.has_method("lock") && FatObject.has_method("unlock")){
     fo.lock();
     fo._x++;
@@ -126,17 +127,17 @@ static if(FatObject.has_method("lock") && FatObject.has_method("unlock")){
 // or at runtime
 _Any obj = &fo;
 if(obj.type.is_pointer){
-    _Type T= obj.type.pointee;
+    _Type T = obj.type.pointee;
     if(T.has_method("mutate")){
         __builtin_Method m = T.method("mutate");
-        if(m.type.param_count == 1 && m.type.param_type(0).is_pointer && m.type.return_type == void){
+        if(m.type.is_callable_through(void(void*))){
             void* receiver = obj.as(char*) + m.offset;
             ((void(*)(void*))m.address)(receiver);
         }
     }
     if(T.has_method("dump")){
         __builtin_Method m = T.method("dump");
-        if(m.type.param_count == 1 && m.type.param_type(0).is_pointer && m.type.return_type == void){
+        if(m.type.is_callable_through(void(void*))){
             void* receiver = obj.as(char*) + m.offset;
             ((void(*)(void*))m.address)(receiver); // locked: false, x: 5, y: 6
         }

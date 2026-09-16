@@ -142,6 +142,7 @@ static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
 static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
 static CcField*_Nullable cc_lookup_field(CcField*_Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcQualType*_Nullable out_owner);
 static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
+static _Bool cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
@@ -602,10 +603,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(_Bool*)result = v;
             return 0;
         }
+        case CC_TYPE_IS_CALLABLE_THROUGH:
         case CC_TYPE_CASTABLE_TO: {
             uintptr_t arg_bits = arg;
             CcQualType target = {.bits = arg_bits};
-            *(_Bool*)result = cc_explicit_castable(&ci->parser, qt, target);
+            *(_Bool*)result = op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(&ci->parser, qt, target) : cc_explicit_castable(&ci->parser, qt, target);
             return 0;
         }
         case CC_TYPE_MAKE_ANY:{

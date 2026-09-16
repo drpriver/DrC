@@ -31,6 +31,31 @@
 #endif
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
+static _Bool cc_call_abi_type_equal(const CcTargetConfig*, CcQualType, CcQualType);
+
+TestFunction(test_call_abi_types){
+    TESTBEGIN();
+    static int idx = 0;
+    for(int i = test_atomic_increment(&idx); i < CC_TARGET_COUNT; i = test_atomic_increment(&idx)){
+        CcTargetConfig target = cc_target_funcs[i]();
+        CcPointer ip = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_int)};
+        CcPointer vp = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_void)};
+        TestExpectTrue(_Bool, cc_call_abi_type_equal(&target, (CcQualType){.bits = (uintptr_t)&ip},
+            (CcQualType){.bits = (uintptr_t)&vp}));
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long), ccqt_basic(CCBT_int)),
+            target.sizeof_[CCBT_long] == target.sizeof_[CCBT_int]);
+        TestExpectTrue(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_unsigned)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_signed_char), ccqt_basic(CCBT_unsigned_char)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_bool), ccqt_basic(CCBT_unsigned_char)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_float)));
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_double)),
+            target.long_double_format == CC_LONG_DOUBLE_BINARY64);
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_float128)),
+            target.long_double_format == CC_LONG_DOUBLE_BINARY128);
+    }
+    TESTEND();
+}
+
 TestFunction(test_parse_decls){
     TESTBEGIN();
     enum {N=8}; // can increase if we need to
@@ -8474,6 +8499,7 @@ int main(int argc, char** argv){
     testing_allocator_init();
 #endif
     RegisterTestFlags(test_parse_decls, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_call_abi_types, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_bitfield_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

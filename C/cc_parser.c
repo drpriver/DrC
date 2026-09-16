@@ -554,6 +554,61 @@ cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to){
     return cc_check_cast(0, from, to, (SrcLoc){0}) == 0;
 }
 
+// Compare ABI representations, not C assignment compatibility. In particular,
+// do not infer aggregate register classification from size and alignment alone.
+static
+_Bool
+cc_call_abi_type_equal(const CcTargetConfig* target, CcQualType a, CcQualType b){
+    while(ccqt_kind(a) == CC_ENUM) a = ccqt_as_enum(a)->underlying;
+    while(ccqt_kind(b) == CC_ENUM) b = ccqt_as_enum(b)->underlying;
+    if(a.unqual == b.unqual) return 1;
+    // All supported targets use the same representation for pointer types.
+    if(ccqt_kind(a) == CC_POINTER) a = ccqt_basic(CCBT_nullptr_t);
+    if(ccqt_kind(b) == CC_POINTER) b = ccqt_basic(CCBT_nullptr_t);
+    if(a.unqual == b.unqual) return 1;
+    if(!ccqt_is_basic(a) || !ccqt_is_basic(b)) return 0;
+    CcBasicTypeKind ak = a.basic.kind, bk = b.basic.kind;
+    if(ak == CCBT_bool || bk == CCBT_bool) return 0;
+    if((ccbt_is_integer(ak) || ak == CCBT_nullptr_t)
+        && (ccbt_is_integer(bk) || bk == CCBT_nullptr_t)){
+        unsigned size = target->sizeof_[ak];
+        if(size != target->sizeof_[bk]) return 0;
+        // Narrow arguments/returns can require sign or zero extension.
+        return size >= target->sizeof_[CCBT_int]
+            || ccbt_is_unsigned(ak, !target->char_is_signed)
+                == ccbt_is_unsigned(bk, !target->char_is_signed);
+    }
+    // Long double is an alias for double on some targets, binary128 on others.
+    if(target->long_double_format == CC_LONG_DOUBLE_BINARY64){
+        if(ak == CCBT_long_double) ak = CCBT_double;
+        if(bk == CCBT_long_double) bk = CCBT_double;
+        if(ak == CCBT_long_double_complex) ak = CCBT_double_complex;
+        if(bk == CCBT_long_double_complex) bk = CCBT_double_complex;
+    }
+    else if(target->long_double_format == CC_LONG_DOUBLE_BINARY128){
+        if(ak == CCBT_long_double) ak = CCBT_float128;
+        if(bk == CCBT_long_double) bk = CCBT_float128;
+    }
+    return ak == bk;
+}
+
+static
+_Bool
+cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through){
+    if(ccqt_kind(from) == CC_POINTER) from = ccqt_as_ptr(from)->pointee;
+    if(ccqt_kind(from) != CC_FUNCTION || ccqt_kind(through) != CC_FUNCTION) return 0;
+    CcFunction* f = ccqt_as_function(from);
+    CcFunction* t = ccqt_as_function(through);
+    if(f == t) return 1;
+    if(f->no_prototype || t->no_prototype
+        || f->is_variadic != t->is_variadic || f->param_count != t->param_count) return 0;
+    const CcTargetConfig* target = cc_target(p);
+    if(!cc_call_abi_type_equal(target, f->return_type, t->return_type)) return 0;
+    for(uint32_t i = 0; i < f->param_count; i++)
+        if(!cc_call_abi_type_equal(target, f->params[i], t->params[i])) return 0;
+    return 1;
+}
+
 static
 int
 cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
@@ -4671,6 +4726,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                         is_method = 1;
                         break;
                     case CC_TYPE_IS_CALLABLE_WITH:
+                    case CC_TYPE_IS_CALLABLE_THROUGH:
                     case CC_TYPE_CASTABLE_TO:
                         result_type = ccqt_basic(CCBT_bool);
                         is_method = 1;
@@ -4706,6 +4762,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             err = cc_implicit_cast(p, arg_expr, p->const_void_star, &arg_expr);
                             if(err) return err;
                             arg_val = arg_expr;
+                        }
+                        else if(ti_op == CC_TYPE_IS_CALLABLE_THROUGH){
+                            err = cc_parse_assignment_expr(p, vc, &arg_val, CCQT_NONE);
+                            if(err) return err;
+                            if(!ccqt_bt_eq(arg_val->type, CCBT__Type)){
+                                cc_release_expr(p, arg_val);
+                                return cc_error(p, tok.loc, "is_callable_through requires a function type");
+                            }
                         }
                         else {
                             CcQualType arg_type;
@@ -6814,6 +6878,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_TYPE_INTROSPECTION:
             switch(e->type_introspection.op){
                 case CC_TYPE_IS_CALLABLE_WITH:
+                case CC_TYPE_IS_CALLABLE_THROUGH:
                 case CC_TYPE_CASTABLE_TO:
                 case CC_TYPE_MAKE_ANY:
                 case CC_TYPE_FIELD:
@@ -12624,6 +12689,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("count"), CC_TYPE_COUNT},
             {SVI("loc"), CC_TYPE_LOC},
             {SVI("is_callable_with"), CC_TYPE_IS_CALLABLE_WITH},
+            {SVI("is_callable_through"), CC_TYPE_IS_CALLABLE_THROUGH},
             {SVI("is_castable_to"), CC_TYPE_CASTABLE_TO},
             {SVI("make_any"), CC_TYPE_MAKE_ANY},
             {SVI("field"), CC_TYPE_FIELD}, // field name or index;
@@ -14364,6 +14430,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     cc_release_expr(p, arg);
                     INTRES(v);
                 }
+                case CC_TYPE_IS_CALLABLE_THROUGH:
                 case CC_TYPE_CASTABLE_TO: {
                     CcExpr* arg;
                     err = cc_eval_expr(p, e->values[0], &arg);
@@ -14373,7 +14440,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         err = CC_NOT_CONSTANT_ERROR;
                         goto fini_introspection;
                     }
-                    _Bool castable = cc_explicit_castable(p, qt, arg->type_value);
+                    _Bool castable = e->type_introspection.op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(p, qt, arg->type_value) : cc_explicit_castable(p, qt, arg->type_value);
                     cc_release_expr(p, arg);
                     INTRES(castable);
                 }

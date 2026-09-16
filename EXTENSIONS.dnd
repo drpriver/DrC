@@ -572,10 +572,23 @@ C::md
         // Returns the `i`th enumerator. See `__builtin_Enumerator`.
         __builtin_Enumerator enumerator(size_t i);
 
-        // True if callable with argument type `T`.
+        // True if callable with argument type `T`, considering type conversions
+        // and implicit conversions. This is only useful if you are calling
+        // through the actual function type, if you want to cast
+        // a function pointer, see `is_callable_with()` below.
         _Bool is_callable_with(constexpr _Type T...);
         // True if callable with these values
         _Bool is_callable_with(...);
+
+        // True if a function or function pointer can be called through function
+        // type T with a compatible target ABI representation.
+        // This is implemented for scalars and pointers. Aggregate types
+        // conservatively return false if not exactly the same.
+        // Note this only checks the signature and mismatched pointers
+        // can still lead to UB in the function body.
+        // The main intention is that void(int*) is callable through void(void*)
+        // when doing runtime type introspection.
+        _Bool is_callable_through(_Type T);
 
         // True if explicitly castable to type `T`.
         _Bool is_castable_to(_Type T)
