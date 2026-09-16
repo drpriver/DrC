@@ -70,13 +70,9 @@ CSV_to_SV(CStringView csv){
 static inline
 _Bool
 CSV_equals(const CStringView a, const CStringView b){
-    if (a.length != b.length)
-        return 0;
-    if(a.text == b.text)
-        return 1;
-    // assert(a.text);
-    // assert(b.text);
-    return a.text && b.text && !memcmp(a.text, b.text, a.length);
+    if (a.length != b.length) return 0;
+    if(!a.length || a.text == b.text) return 1;
+    return !memcmp(a.text, b.text, a.length);
 }
 
 #ifdef CSV
@@ -93,55 +89,28 @@ CSV_equals(const CStringView a, const CStringView b){
 static inline
 _Bool
 SV_utf16_equals(const StringViewUtf16 a, const StringViewUtf16 b){
-    if(a.length != b.length)
-        return 0;
-    if(a.text == b.text)
-        return 1;
-    // assert(a.text);
-    // assert(b.text);
-    return a.text && b.text && memcmp(a.text, b.text, a.length*sizeof(uint16_t)) == 0;
+    if(a.length != b.length) return 0;
+    if(!a.length || a.text == b.text) return 1;
+    return !memcmp(a.text, b.text, a.length*sizeof(uint16_t));
 }
 
 static inline
 _Bool
 CSV_SV_equals(const CStringView csv, const StringView sv){
-    if(csv.length != sv.length)
-        return 0;
-    if(csv.text == sv.text)
-        return 1;
-    // assert(csv.text);
-    // assert(sv.text);
-    return csv.text && sv.text && memcmp(csv.text, sv.text, sv.length)==0;
+    if(csv.length != sv.length) return 0;
+    if(!csv.length || csv.text == sv.text) return 1;
+    return !memcmp(csv.text, sv.text, sv.length);
 }
 
-// Maybe it's UB (idk) but this works for CStringViews as well.
-// Although maybe I should just use strcmp for those.
-force_inline
+static
 int
 StringView_cmp(const void* a, const void* b){
-    // TODO: There's probably a cleaner way to implement this.
-    const StringView* lhs = (const StringView*)a;
-    const StringView* rhs = (const StringView*)b;
-    size_t l1 = lhs->length;
-    size_t l2 = rhs->length;
-    if(l1 == l2){
-        if(!l1)
-            return 0;
-        if(lhs->text == rhs->text)
-            return 0;
-        return memcmp(lhs->text, rhs->text, l1);
-    }
-    if(!lhs->length)
-        return -(int)(unsigned char)rhs->text[0];
-    if(!rhs->length)
-        return (int)(unsigned char)lhs->text[0];
-    int prefix_cmp = memcmp(lhs->text, rhs->text, lhs->length > rhs->length?rhs->length:lhs->length);
-    if(prefix_cmp)
-        return prefix_cmp;
-    if(lhs->length > rhs->length){
-        return (int)(unsigned char)lhs->text[rhs->length];
-    }
-    return -(int)(unsigned char)rhs->text[lhs->length];
+     const StringView *lhs = (const StringView*)a,
+                      *rhs = (const StringView*)b;
+    size_t len = lhs->length < rhs->length ? lhs->length : rhs->length;
+    int cmp = len ? memcmp(lhs->text, rhs->text, len) : 0;
+    if (cmp != 0) return cmp;
+    return (lhs->length > rhs->length) - (lhs->length < rhs->length);
 }
 
 #ifdef __clang__

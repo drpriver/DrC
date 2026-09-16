@@ -38,6 +38,7 @@ force_inline
 _Bool
 sv_equals(StringView a, StringView b){
     if(a.length != b.length) return 0;
+    if(!a.length || a.text==b.text) return 1;
     return memcmp(a.text, b.text, a.length) == 0;
 }
 
@@ -45,6 +46,7 @@ force_inline
 _Bool
 sv_equals2(StringView a, const char* txt, size_t len){
     if(a.length != len) return 0;
+    if(!a.length || a.text == txt) return 1;
     return memcmp(a.text, txt, len) == 0;
 }
 
@@ -64,8 +66,8 @@ _sv_ascii_fold8(uint64_t x) {
 static inline
 _Bool
 sv_iequals(StringView a, StringView b){
-    if(a.length != b.length)
-        return 0;
+    if(a.length != b.length) return 0;
+    if(!a.length || a.text == b.text) return 1;
     size_t length = a.length;
     const uint8_t *ap = (const uint8_t *)a.text;
     const uint8_t *bp = (const uint8_t *)b.text;
