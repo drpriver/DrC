@@ -3678,9 +3678,9 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
             switch(sym.kind){
                 case CC_SYM_VAR:{
                     if(vc == CC_CONSTEXPR_VALUE && !sym.var->constexpr_)
-                        return cc_error(p, tok.loc, "expression is not a constant expression");
+                        return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     if(vc == CC_LINKTIME_VALUE && sym.var->automatic)
-                        return cc_error(p, tok.loc, "expression is not a constant expression");
+                        return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, sym.var->type, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->is_lvalue = 1;

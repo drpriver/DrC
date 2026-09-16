@@ -5359,7 +5359,7 @@ TestFunction(test_parse_errors){
             SVI("_Type t=int;\n"
                 "_Any a=3;\n"
                 "a.as(t);"),
-            SVI("(test):3:6: error: expression is not a constant expression\n"),
+            SVI("(test):3:6: error: expression 't' is not a constant expression\n"),
         },
         {
             "any rejects nontype view", __LINE__,
@@ -5436,10 +5436,17 @@ TestFunction(test_parse_errors){
             SVI("(test):1:1: error: static assertion failed: (4 == (unsigned long)8): \"int is not 8\"\n"),
         },
         {
+            "constexpr reflection on runtime instance names receiver", __LINE__,
+            SVI("struct Baz { int get_x(_Self* self){return 3;} };\n"
+                "struct Baz b;\n"
+                "constexpr m = b.method(\"get_x\");\n"),
+            SVI("(test):3:15: error: expression 'b' is not a constant expression\n"),
+        },
+        {
             "constexpr with non-constant init", __LINE__,
             SVI("int y;\n"
                "constexpr int x = y;\n"),
-            SVI("(test):2:19: error: expression is not a constant expression\n"),
+            SVI("(test):2:19: error: expression 'y' is not a constant expression\n"),
         },
         {
             "FAM in middle of struct", __LINE__,
@@ -5863,7 +5870,7 @@ TestFunction(test_parse_errors){
             "static if: non-constant condition", __LINE__,
             SVI("int x;\n"
                "static if(x) { int y; }"),
-            SVI("(test):2:11: error: expression is not a constant expression\n"),
+            SVI("(test):2:11: error: expression 'x' is not a constant expression\n"),
         },
         {
             "address of bitfield", __LINE__,
@@ -6224,7 +6231,7 @@ TestFunction(test_parse_errors){
             "case label: variable not constexpr", __LINE__,
             SVI("int n = 3;\n"
                "int f(int x) { switch(x) { case n: return 1; default: return 0; } }\n"),
-            SVI("(test):2:33: error: expression is not a constant expression\n"),
+            SVI("(test):2:33: error: expression 'n' is not a constant expression\n"),
         },
         {
             "case label: function call", __LINE__,
@@ -6236,25 +6243,25 @@ TestFunction(test_parse_errors){
             "enum value: variable", __LINE__,
             SVI("int x = 5;\n"
                "enum E { A = x };\n"),
-            SVI("(test):2:14: error: expression is not a constant expression\n"),
+            SVI("(test):2:14: error: expression 'x' is not a constant expression\n"),
         },
         {
             "bitfield width: variable", __LINE__,
             SVI("int w = 3;\n"
                "struct S { int x : w; };\n"),
-            SVI("(test):2:20: error: expression is not a constant expression\n"),
+            SVI("(test):2:20: error: expression 'w' is not a constant expression\n"),
         },
         {
             "static_assert: variable", __LINE__,
             SVI("int x = 1;\n"
                "static_assert(x);\n"),
-            SVI("(test):2:15: error: expression is not a constant expression\n"),
+            SVI("(test):2:15: error: expression 'x' is not a constant expression\n"),
         },
         {
             "constexpr init: variable", __LINE__,
             SVI("int y = 5;\n"
                "constexpr int x = y;\n"),
-            SVI("(test):2:19: error: expression is not a constant expression\n"),
+            SVI("(test):2:19: error: expression 'y' is not a constant expression\n"),
         },
         {
             "constexpr init: function call", __LINE__,
@@ -6265,13 +6272,13 @@ TestFunction(test_parse_errors){
         {
             "static local init: variable", __LINE__,
             SVI("void f(int y) { static int x = y; }\n"),
-            SVI("(test):1:32: error: expression is not a constant expression\n"),
+            SVI("(test):1:32: error: expression 'y' is not a constant expression\n"),
         },
         {
             "case label: assignment", __LINE__,
             SVI("int x;\n"
                "int f(int v) { switch(v) { case (x=1): return 1; default: return 0; } }\n"),
-            SVI("(test):2:34: error: expression is not a constant expression\n"),
+            SVI("(test):2:34: error: expression 'x' is not a constant expression\n"),
         },
         {
             "case label: pre-increment", __LINE__,
@@ -6296,7 +6303,7 @@ TestFunction(test_parse_errors){
             "array dim: non-constexpr variable", __LINE__,
             SVI("int n = 10;\n"
                "int arr[n];\n"),
-            SVI("(test):2:9: error: expression is not a constant expression\n"),
+            SVI("(test):2:9: error: expression 'n' is not a constant expression\n"),
         },
         {
             "array dim: function call", __LINE__,
@@ -6308,7 +6315,7 @@ TestFunction(test_parse_errors){
             "constexpr: post-increment", __LINE__,
             SVI("int x;\n"
                "constexpr int y = x++;\n"),
-            SVI("(test):2:19: error: expression is not a constant expression\n"),
+            SVI("(test):2:19: error: expression 'x' is not a constant expression\n"),
         },
         {
             "constexpr: address-of", __LINE__,
@@ -6319,7 +6326,7 @@ TestFunction(test_parse_errors){
         {
             "static local: automatic variable", __LINE__,
             SVI("void f(int y) { static int x = y; }\n"),
-            SVI("(test):1:32: error: expression is not a constant expression\n"),
+            SVI("(test):1:32: error: expression 'y' is not a constant expression\n"),
         },
         {
             "static local: function call", __LINE__,
@@ -6330,31 +6337,31 @@ TestFunction(test_parse_errors){
         {
             "static local: parameter in expr", __LINE__,
             SVI("void f(int a, int b) { static int x = a + b; }\n"),
-            SVI("(test):1:39: error: expression is not a constant expression\n"),
+            SVI("(test):1:39: error: expression 'a' is not a constant expression\n"),
         },
         {
             "case label: post-decrement", __LINE__,
             SVI("int x;\n"
                "int f(int v) { switch(v) { case x--: return 1; default: return 0; } }\n"),
-            SVI("(test):2:33: error: expression is not a constant expression\n"),
+            SVI("(test):2:33: error: expression 'x' is not a constant expression\n"),
         },
         {
             "enum value: assignment", __LINE__,
             SVI("int x;\n"
                "enum E { A = (x = 5) };\n"),
-            SVI("(test):2:15: error: expression is not a constant expression\n"),
+            SVI("(test):2:15: error: expression 'x' is not a constant expression\n"),
         },
         {
             "constexpr: compound assignment", __LINE__,
             SVI("int x = 1;\n"
                "constexpr int y = (x += 1);\n"),
-            SVI("(test):2:20: error: expression is not a constant expression\n"),
+            SVI("(test):2:20: error: expression 'x' is not a constant expression\n"),
         },
         {
             "_Alignas: non-constexpr", __LINE__,
             SVI("int n = 16;\n"
                "_Alignas(n) int x;\n"),
-            SVI("(test):2:10: error: expression is not a constant expression\n"),
+            SVI("(test):2:10: error: expression 'n' is not a constant expression\n"),
         },
         {
             "wide inexact float conversion", __LINE__,
