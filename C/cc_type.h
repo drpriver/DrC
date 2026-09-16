@@ -176,10 +176,10 @@ struct CcField {
     };
     uint32_t offset;
     uint32_t bitwidth:  7,
-             bitoffset: 6, // bit offset within storage unit
+             bitoffset: 7, // bit offset within storage unit
              is_method: 1,
              is_bitfield: 1,
-             alignment: 17; // from _Alignas, 0 means default
+             alignment: 16; // from _Alignas, 0 means default
     SrcLoc loc;
 };
 

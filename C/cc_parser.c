@@ -7071,15 +7071,15 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
         // An explicit _Alignas/aligned on the field overrides packing.
         if(f->alignment > field_align)
             field_align = f->alignment;
+        enum {char_bit=8};
         if(f->is_bitfield){
             uint32_t bw = f->bitwidth;
-            uint32_t storage_bits = field_size * 8;
+            uint32_t storage_bits = field_size * char_bit;
             if(bw == 0){
                 if(bitfield_offset > 0){
                     offset = bitfield_storage_end;
                     bitfield_offset = 0;
                     bitfield_storage_end = 0;
-
                     bitfield_type = (CcQualType){0};
                 }
                 f->offset = offset;
@@ -7099,10 +7099,10 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                 fits = 0;
             }
             else {
-                uint32_t abs_bit = bitfield_storage_start * 8 + bitfield_offset;
-                uint32_t su_start = ((abs_bit / 8) / field_align) * field_align;
-                uint32_t bit_in_su = abs_bit - su_start * 8;
-                fits = bit_in_su + bw <= field_size * 8;
+                uint32_t abs_bit = bitfield_storage_start * char_bit + bitfield_offset;
+                uint32_t su_start = ((abs_bit / char_bit) / field_align) * field_align;
+                uint32_t bit_in_su = abs_bit - su_start * char_bit;
+                fits = bit_in_su + bw <= field_size * char_bit;
                 f_offset = su_start;
                 f_bitoffset = bit_in_su;
             }
@@ -8503,10 +8503,6 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
                         goto struct_err;
                     }
-                    if(ccqt_is_basic(member_type) && (member_type.basic.kind == CCBT_int128 || member_type.basic.kind == CCBT_unsigned_int128)){
-                        err = cc_error(p, tok.loc, "__int128 is not supported for bitfields");
-                        goto struct_err;
-                    }
                     uint32_t type_size;
                     err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
                     if(err) goto struct_err;
@@ -8640,10 +8636,6 @@ cc_parse_struct_or_union(CcParser* p, SrcLoc loc, _Bool is_union, CcQualType* ba
                         if(!(ccqt_is_basic(member_type) && ccbt_is_integer(member_type.basic.kind))
                            && ccqt_kind(member_type) != CC_ENUM){
                             err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
-                            goto struct_err;
-                        }
-                        if(ccqt_is_basic(member_type) && (member_type.basic.kind == CCBT_int128 || member_type.basic.kind == CCBT_unsigned_int128)){
-                            err = cc_error(p, tok.loc, "__int128 is not supported for bitfields");
                             goto struct_err;
                         }
                         uint32_t type_size;

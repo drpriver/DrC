@@ -192,6 +192,23 @@ static struct CharSlice char_slice_rstrip(struct CharSlice s){
     }
     return s;
 }
+#ifdef __SIZEOF_INT128__
+struct Bf128 {
+    CiUint128 a: 1,
+              b: 32,
+              c: 53,
+              d: 120,
+              e: 33;
+};
+struct Bf128 inc_bf128(struct Bf128 b){
+    b.a++;
+    b.b++;
+    b.c++;
+    b.d++;
+    b.e++;
+    return b;
+}
+#endif
 
 TestFunction(test_interop){
     TESTBEGIN();
@@ -820,8 +837,33 @@ TestFunction(test_interop){
                 "char s[:] = \"hello \\r\\n\\0\";\n"
                 "s = rstrip(s);\n"
                 "return (int)s.count;\n"),
-            {{SV("rstrip"), (void*)char_slice_rstrip}},
+            {{SVI("rstrip"), (void*)char_slice_rstrip}},
             .exit_code = 5,
+        },
+        {
+            "128 bit bitfields", __LINE__,
+            SVI("struct Bf128 {\n"
+                "    __uint128_t a: 1,\n"
+                "              b: 32,\n"
+                "              c: 53,\n"
+                "              d: 120,\n"
+                "              e: 33;\n"
+                "};\n"
+                "struct Bf128 inc(struct Bf128);\n"
+                "struct Bf128 b = {0, 12, -1, 44, 17};\n"
+                "b = inc(b);\n"
+                "if(b.a != 1) return __LINE__;\n"
+                "if(b.b != 13) return __LINE__;\n"
+                "if(b.c != 0) return __LINE__;\n"
+                "if(b.d != 45) return __LINE__;\n"
+                "if(b.e != 18) return __LINE__;\n"
+                "return 0;\n"),
+            #ifdef __SIZEOF_INT128__
+            {{SVI("inc"), (void*)inc_bf128}},
+            #else
+            .skip = 1,
+            #endif
+            .exit_code = 0,
         },
     };
     int err;

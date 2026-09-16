@@ -509,8 +509,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
                     uint64_t prev_end = prev_start + prev_size;
                     if(prev->field_loc.bit_width){
                         prev_start += prev->field_loc.bit_offset / 8;
-                        prev_end = prev->field_loc.byte_offset
-                            + (prev->field_loc.bit_offset + prev->field_loc.bit_width + 7) / 8;
+                        prev_end = prev->field_loc.byte_offset + (prev->field_loc.bit_offset + prev->field_loc.bit_width + 7) / 8;
                     }
                     if(prev_start < end && start < prev_end){
                         overwritten = 1;
@@ -2276,7 +2275,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     uint32_t vslot;
     if(ci_frame_lvalue(lhs, &vslot)){
         if(out && !is_pre){
-            // the post forms yield the old value, captured before modifying
             err = ci_lower_dest(ctx, &dest, size);
             if(err) return err;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -2385,7 +2383,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         err = ci_alloc_slot(ctx, size, size, &sslot);
         if(err) return err;
         CiLowerAddr a;
-        err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a);
         if(err) return err;
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
@@ -2399,13 +2397,8 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                 .loc = e->loc,
             }
         };
-        // result holds the expression's value: the new value for pre forms,
-        // the loaded old value for post forms.
         uint32_t result;
         if(is_float || size > 8){
-            // No hardware atomic FADD, and rmw tops out at 8 bytes, so
-            // compare-exchange loop: load, recompute the new value (as a float
-            // or 128-bit int), then cas; a failed cas reloads old and retries.
             uint32_t newv, ok;
             err = ci_alloc_slot(ctx, size, size, &newv);
             if(err) return err;
@@ -2484,8 +2477,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             result = is_pre? newv : old;
         }
         else {
-            // one atomic fetch-add/sub; pre forms recompute the new value from
-            // the returned old one
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
@@ -2542,23 +2533,15 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         };
         return 0;
     }
-    // Memory path: load-modify-store through a computed address, evaluated
-    // once. old holds the loaded value, new the incremented value.
-    uint32_t save = ctx->temp;
     uint32_t old;
     err = ci_alloc_slot(ctx, size, size, &old);
     if(err) return err;
     CiLowerAddr a;
-    _Bool is_bf = (lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW)
-        && lhs->field_loc.bit_width;
-    if(is_bf && size > 8){
-        ctx->temp = save;
-        return ci_unimplemented(ci, e->loc, "incdec on a 128-bit bitfield");
-    }
+    _Bool is_bf = (lhs->kind == CC_EXPR_DOT || lhs->kind == CC_EXPR_ARROW) && lhs->field_loc.bit_width;
     if(is_bf)
         err = ci_lower_bitfield_addr(ci, ctx, lhs, &a);
     else
-        err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a);
     if(err) return err;
     if(is_bf){
         err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size);
@@ -4754,7 +4737,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
     if(ci_frame_lvalue(lv, &frame_off)){
         // a local (or a member chain of one) lives in a slot
         uint32_t aslot;
-        err = ci_alloc_slot(ctx, 8, 8, &aslot);
+        err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
         if(err) return err;
         CiOp* op;
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -4763,7 +4746,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             .slot_addr = {
                 .kind = CI_OP_SLOT_ADDR,
                 .slot = aslot,
-                .slot_size = 8,
+                .slot_size = ctx->ptr_size,
                 .src = frame_off,
                 .loc = lv->loc,
             }
@@ -4777,7 +4760,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             if(ccqt_kind(lv->type) != CC_ARRAY)
                 break; // not an lvalue; materialized below
             uint32_t aslot;
-            err = ci_alloc_slot(ctx, 8, 8, &aslot);
+            err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
             if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -4788,7 +4771,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                     .kind = CI_OP_CONST,
                     .bt_kind = (uint32_t)(ccqt_is_basic(arr->element)?arr->element.basic.kind:CCBT_nullptr_t),
                     .is_anon_array = 1,
-                    .immsize = 8,
+                    .immsize = ctx->ptr_size,
                     .slot = aslot,
                     .immediate = {
                         (uint64_t)lv->text,
@@ -4807,7 +4790,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                 // atomic locals miss the frame fast path above, but their
                 // storage is a slot all the same
                 uint32_t aslot;
-                err = ci_alloc_slot(ctx, 8, 8, &aslot);
+                err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
                 if(err) return err;
                 CiOp* op;
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -4816,7 +4799,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                     .slot_addr = {
                         .kind = CI_OP_SLOT_ADDR,
                         .slot = aslot,
-                        .slot_size = 8,
+                        .slot_size = ctx->ptr_size,
                         .src = (uint32_t)var->frame_offset,
                         .loc = lv->loc,
                     }
@@ -4826,7 +4809,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                 return 0;
             }
             uint32_t aslot;
-            err = ci_alloc_slot(ctx, 8, 8, &aslot);
+            err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
             if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -4835,7 +4818,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
                 .var_addr = {
                     .kind = CI_OP_VAR_ADDR,
                     .slot = aslot,
-                    .slot_size = 8,
+                    .slot_size = ctx->ptr_size,
                     .var = var,
                     .loc = lv->loc,
                 }
@@ -5081,7 +5064,7 @@ ci_lower_materialize_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLower
     int err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
     if(err) return err;
     uint32_t aslot;
-    err = ci_alloc_slot(ctx, 8, 8, &aslot);
+    err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
     if(err) return err;
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -5090,7 +5073,7 @@ ci_lower_materialize_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLower
         .slot_addr = {
             .kind = CI_OP_SLOT_ADDR,
             .slot = aslot,
-            .slot_size = 8,
+            .slot_size = ctx->ptr_size,
             .src = v.slot,
             .loc = e->loc,
         }

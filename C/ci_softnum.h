@@ -24,6 +24,7 @@ static inline CiUint128 ci_uint128_or(CiUint128 a, CiUint128 b){ return a | b; }
 static inline CiUint128 ci_uint128_xor(CiUint128 a, CiUint128 b){ return a ^ b; }
 static inline CiUint128 ci_uint128_shl(CiUint128 a, uint64_t b){ return a << b; }
 static inline CiUint128 ci_uint128_shr(CiUint128 a, uint64_t b){ return a >> b; }
+static inline CiUint128 ci_uint128_not(CiUint128 a){ return ~a; }
 static inline _Bool ci_uint128_eq(CiUint128 a, CiUint128 b){ return a == b; }
 static inline _Bool ci_uint128_ne(CiUint128 a, CiUint128 b){ return a != b; }
 static inline _Bool ci_uint128_lt(CiUint128 a, CiUint128 b){ return a < b; }
@@ -91,6 +92,7 @@ static inline CiUint128 ci_uint128_shr(CiUint128 a, uint64_t b){
     if(b == 0) return a;
     return (CiUint128){(a.lo >> b) | (a.hi << (64 - b)), a.hi >> b};
 }
+static inline CiUint128 ci_uint128_not(CiUint128 a){ return (CiUint128){~a.lo, ~a.hi}; }
 static inline _Bool ci_uint128_eq(CiUint128 a, CiUint128 b){ return a.lo == b.lo && a.hi == b.hi; }
 static inline _Bool ci_uint128_ne(CiUint128 a, CiUint128 b){ return a.lo != b.lo || a.hi != b.hi; }
 static inline _Bool ci_uint128_lt(CiUint128 a, CiUint128 b){ return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }

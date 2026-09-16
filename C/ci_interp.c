@@ -287,6 +287,16 @@ ci_bitfield_read(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, ui
     return (storage >> bit_offset) & mask;
 }
 
+static inline
+CiUint128
+ci_bitfield_read128(void* storage_addr, uint8_t bit_offset, uint8_t bit_width){
+    CiUint128 storage = {0};
+    memcpy(&storage, storage_addr, sizeof storage);
+    if(bit_width == 128) return storage;
+    CiUint128 mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
+    return ci_uint128_and(ci_uint128_shr(storage, bit_offset), mask);
+}
+
 // Sign-extend a bitfield value if it is a signed type.
 static inline
 uint64_t
@@ -302,6 +312,19 @@ ci_bitfield_extend(uint64_t val, uint8_t bit_width, _Bool is_signed){
 }
 
 static inline
+CiUint128
+ci_bitfield_extend128(CiUint128 val, uint8_t bit_width, _Bool is_signed){
+    CiUint128 mask = bit_width == 128 ? ci_uint128_from_int64(-1) : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
+    val = ci_uint128_and(val, mask);
+    if(is_signed){
+        CiUint128 sign_bit = ci_uint128_shl(ci_uint128_from_uint64(1), bit_width-1);
+        if(ci_uint128_nonzero(ci_uint128_and(val, sign_bit)))
+            val = ci_uint128_or(val, ci_uint128_not(mask));
+    }
+    return val;
+}
+
+static inline
 void
 ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width, uint64_t val){
     uint64_t mask = bit_width >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bit_width) - 1;
@@ -310,6 +333,24 @@ ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, u
     storage &= ~(mask << bit_offset);
     storage |= (val & mask) << bit_offset;
     memcpy(storage_addr, &storage, storage_sz);
+}
+
+static inline
+void
+ci_bitfield_write_128(void* storage_addr, uint8_t bit_offset, uint8_t bit_width, CiUint128 val){
+    CiUint128 mask;
+    if(bit_width == 128)
+        mask = ci_uint128_from_int64(-1);
+    else {
+        mask = ci_uint128_from_uint64(1);
+        mask = ci_uint128_shl(mask, bit_width);
+        mask = ci_uint128_sub(mask, ci_uint128_from_uint64(1));
+    }
+    CiUint128 storage = {0};
+    memcpy(&storage, storage_addr, sizeof storage);
+    storage = ci_uint128_and(storage, ci_uint128_not(ci_uint128_shl(mask, bit_offset)));
+    storage = ci_uint128_or(storage, ci_uint128_shl(ci_uint128_and(val, mask), bit_offset));
+    memcpy(storage_addr, &storage, sizeof storage);
 }
 
 // Userdata for interpreted function closures.
@@ -1804,9 +1845,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         case CI_OP_LOAD_BITFIELD: {
             char* ptr;
             CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
-            uint64_t val = ci_bitfield_read(ptr + op->load_bf.offset, op->load_bf.slot_size, op->load_bf.bit_offset, op->load_bf.bit_width);
-            val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
-            memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
+            if(op->load_bf.slot_size == 16){
+                CiUint128 val = ci_bitfield_read128(ptr+op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width);
+                val = ci_bitfield_extend128(val, op->load_bf.bit_width, op->load_bf.is_signed);
+                CI_INLINE_MEMCPY((char*)frame->slots + op->load_bf.slot, &val, sizeof val);
+            }
+            else {
+                uint64_t val = ci_bitfield_read(ptr + op->load_bf.offset, op->load_bf.slot_size, op->load_bf.bit_offset, op->load_bf.bit_width);
+                val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
+                memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
+            }
             frame->pc++;
             return 0;
         }
@@ -1843,9 +1891,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         case CI_OP_STORE_BITFIELD: {
             char* ptr;
             CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
-            uint64_t val = 0;
-            memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
-            ci_bitfield_write(ptr + op->store_bf.offset, op->store_bf.src_size, op->store_bf.bit_offset, op->store_bf.bit_width, val);
+            if(op->store_bf.src_size == 16){
+                CiUint128 val = {0};
+                CI_INLINE_MEMCPY(&val, (char*)frame->slots + op->store_bf.src, sizeof val);
+                ci_bitfield_write_128(ptr+op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, val);
+            }
+            else {
+                uint64_t val = 0;
+                memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
+                ci_bitfield_write(ptr + op->store_bf.offset, op->store_bf.src_size, op->store_bf.bit_offset, op->store_bf.bit_width, val);
+            }
             frame->pc++;
             return 0;
         }

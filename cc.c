@@ -748,7 +748,6 @@ repl_builtin_command(CcParser* parser, StringView input){
     if(dump & DUMP_STRUCTS){
         AtomMapItems mi = AM_items(&scope->structs);
         if(mi.count){
-            _Bool detailed = dump == DUMP_STRUCTS;
             log_sprintf(l, "Structs (%zu):\n", mi.count);
             for(size_t i = 0; i < mi.count; i++){
                 Atom a = mi.data[i].atom;
@@ -761,14 +760,26 @@ repl_builtin_command(CcParser* parser, StringView input){
                 }
                 log_sprintf(l, "  struct %.*s (%u bytes, align %u, %u fields)\n",
                     (int)a->length, a->data, s->size, s->alignment, s->field_count);
-                if(detailed){
+                {
                     for(uint32_t j = 0; j < s->field_count; j++){
                         CcField* f = &s->fields[j];
+                        log_sprintf(l, "    ");
+                        cc_print_type(&l->buff, f->type);
                         if(f->name)
-                            log_sprintf(l, "    .%.*s (offset %u)\n",
-                                (int)f->name->length, f->name->data, f->offset);
+                            log_sprintf(l, " %.*s", (int)f->name->length, f->name->data);
                         else
-                            log_sprintf(l, "    <anonymous> (offset %u)\n", f->offset);
+                            log_sprintf(l, " <anonymous>");
+                        if(f->is_method)
+                            log_sprintf(l, "(method)");
+                        else {
+                            log_sprintf(l, ", offset=%u", f->offset);
+                            if(f->alignment)
+                                log_sprintf(l, ", override align=%u", f->alignment);
+                            if(f->is_bitfield){
+                                log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
+                            }
+                        }
+                        log_sprintf(l, "\n");
                     }
                 }
             }
@@ -777,7 +788,6 @@ repl_builtin_command(CcParser* parser, StringView input){
     if(dump & DUMP_UNIONS){
         AtomMapItems mi = AM_items(&scope->unions);
         if(mi.count){
-            _Bool detailed = dump == DUMP_UNIONS;
             log_sprintf(l, "Unions (%zu):\n", mi.count);
             for(size_t i = 0; i < mi.count; i++){
                 Atom a = mi.data[i].atom;
@@ -790,13 +800,26 @@ repl_builtin_command(CcParser* parser, StringView input){
                 }
                 log_sprintf(l, "  union %.*s (%u bytes, align %u, %u fields)\n",
                     (int)a->length, a->data, u->size, u->alignment, u->field_count);
-                if(detailed){
+                {
                     for(uint32_t j = 0; j < u->field_count; j++){
                         CcField* f = &u->fields[j];
+                        log_sprintf(l, "    ");
+                        cc_print_type(&l->buff, f->type);
                         if(f->name)
-                            log_sprintf(l, "    .%.*s\n", (int)f->name->length, f->name->data);
+                            log_sprintf(l, " %.*s", (int)f->name->length, f->name->data);
                         else
-                            log_sprintf(l, "    <anonymous>\n");
+                            log_sprintf(l, " <anonymous>");
+                        if(f->is_method)
+                            log_sprintf(l, "(method)");
+                        else {
+                            log_sprintf(l, ", offset=%u", f->offset);
+                            if(f->alignment)
+                                log_sprintf(l, ", override align=%u", f->alignment);
+                            if(f->is_bitfield){
+                                log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
+                            }
+                        }
+                        log_sprintf(l, "\n");
                     }
                 }
             }

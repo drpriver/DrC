@@ -4584,7 +4584,6 @@ TestFunction(test_parse_decls){
             .vars = {
                 { SVI("s"), SVI("struct S") },
             },
-            .skip = 0,
         },
         {
             "struct with method", __LINE__,
