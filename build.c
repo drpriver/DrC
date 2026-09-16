@@ -343,8 +343,7 @@ int main(int argc, char** argv, char** envp){
         BuildTarget* install = b_script_target(ctx, "install", do_install, bins);
         install->description = b_atomize(ctx, "Install the main binaries.");
         install->is_phony = 1;
-        b_add_dep(ctx, install, cpp);
-        b_add_dep(ctx, install, cc);
+        b_add_deps(ctx, install, cpp, cc, ctags);
     }
     {
         BuildTarget* docs = b_phony_target(ctx, "docs");
