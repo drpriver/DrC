@@ -1928,7 +1928,7 @@ b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
     const char* end = path.text + path.length;
     const char* p = path.text;
     for(;p < end;){
-        const char* sep = memsep(p, end - p, BUILD_OS == OS_WINDOWS);
+        const char* sep = path_memsep(p, end - p, BUILD_OS == OS_WINDOWS);
         if(!sep) break;
         msb_write_str(&sb, p, sep-p);
         LongString d = msb_borrow_ls(&sb);

@@ -40,9 +40,9 @@ path_is_sep(char c, _Bool windows){
 // Helper to find the next slash in a string, but also finding backslashes
 // on Windows.
 force_inline
-void*_Nullable
-memsep(const char* str, size_t length, _Bool windows){
-    char* slash = memchr(str, '/', length);
+const void*_Nullable
+path_memsep(const char* str, size_t length, _Bool windows){
+    const char* slash = memchr(str, '/', length);
     if(windows && !slash)
         slash = memchr(str, '\\', length);
     return slash;
@@ -82,7 +82,7 @@ path_basename(StringView path, _Bool windows){
     // probably more efficient way of doing these.
     // Wish there was a reverse memchr
     for(;basename != end;){
-        const char* slash = memsep(basename, end-basename, windows);
+        const char* slash = path_memsep(basename, end-basename, windows);
         if(!slash)
             break;
         basename = slash+1;
@@ -110,7 +110,7 @@ path_dirname(StringView path, _Bool windows){
     const char* basename = path.text;
     const char* end = path.text + path.length;
     for(;basename != end;){
-        const char* slash = memsep(basename, end-basename, windows);
+        const char* slash = path_memsep(basename, end-basename, windows);
         if(!slash)
             break;
         basename = slash+1;
