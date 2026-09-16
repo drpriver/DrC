@@ -125,7 +125,7 @@ ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, LongString, const char* what, void*_Nullable*_Nonnull);
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
-static int ci_make_call_frame(CiInterpreter*, CiInterpFrame*_Nullable, CcFunc*, void*_Nonnull*_Null_unspecified, uint32_t, const uint32_t*_Nullable, void*, size_t, SrcLoc, CiInterpFrame*_Nullable*_Nonnull);
+static int ci_make_flat_call_frame(CiInterpreter*, CiInterpFrame*, CcFunc*, const CiOp*, CiInterpFrame*_Nullable*_Nonnull);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame*_Nullable caller, CcFunc*, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc);
 static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
 static int ci_compile_module(CiInterpreter*, const char*_Null_unspecified, const char* _Null_unspecified, CiModule*_Nullable*_Nonnull);
@@ -1748,23 +1748,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_CALL: {
             CiCallDescriptor* d = op->call.descrip;
+            char* args = (char*)frame->slots + op->call.args_slot;
+            void* result = op->call.ret_size ? (char*)frame->slots + op->call.ret_slot : ci_discard_buf;
             if(op->call.is_indirect){
-                void* result;
-                size_t rsize;
-                if(op->call.ret_size){
-                    result = (char*)frame->slots + op->call.ret_slot;
-                    rsize = op->call.ret_size;
-                }
-                else {
-                    result = ci_discard_buf;
-                    rsize = sizeof ci_discard_buf;
-                }
                 void (*fn)(void);
-                CI_INLINE_MEMCPY(&fn, (char*)frame->slots + op->call.argv_slot, sizeof fn);
-                void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot + 8);
+                CI_INLINE_MEMCPY(&fn, args - 8, sizeof fn);
                 CcFunc* interp_func = BPM_rget(&ci->closure_map, (void*)fn);
                 if(interp_func){
-                    int err = ci_make_call_frame(ci, frame, interp_func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
+                    int err = ci_make_flat_call_frame(ci, frame, interp_func, op, child);
                     return err ? err : CI_STEP_ENTER_FRAME;
                 }
                 NativeCallCache* cache;
@@ -1774,25 +1765,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     cache = PM_get(&ci->ffi_cache, d->func_type);
                 if(!cache)
                     return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
+                void** argv = (void**)(args + ((d->args_size + 7) & ~7u));
+                for(uint32_t i = 0; i < d->nargs; i++) argv[i] = args + d->arg_offsets[i];
                 native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
             }
             else {
                 CcFunc* func = d->func;
-                void* result;
-                size_t rsize;
-                if(op->call.ret_size){
-                    result = (char*)frame->slots + op->call.ret_slot;
-                    rsize = op->call.ret_size;
-                }
-                else {
-                    result = ci_discard_buf;
-                    rsize = sizeof ci_discard_buf;
-                }
-                void** argv = (void**)((uintptr_t)frame->slots + op->call.argv_slot);
                 if(func->defined){
-                    int err = ci_make_call_frame(ci, frame, func, argv, d->nargs, d->arg_sizes, result, rsize, op->loc, child);
+                    int err = ci_make_flat_call_frame(ci, frame, func, op, child);
                     return err ? err : CI_STEP_ENTER_FRAME;
                 }
                 void (*fn)(void) = func->native_func;
@@ -1805,6 +1787,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     cache = PM_get(&ci->ffi_cache, func->type);
                 if(!cache)
                     return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
+                void** argv = (void**)(args + ((d->args_size + 7) & ~7u));
+                for(uint32_t i = 0; i < d->nargs; i++) argv[i] = args + d->arg_offsets[i];
                 native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
@@ -2393,29 +2377,11 @@ ci_hotswap_target(CcFunc* func){
 
 static
 int
-ci_make_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, void*_Nonnull*_Null_unspecified argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc, CiInterpFrame*_Nullable*_Nonnull out){
-    int err;
-    CcFunc* target = ci_hotswap_target(func);
-    if(!target)
-        return ci_error(ci, loc, "hotswap cycle detected");
-    func = target;
+ci_alloc_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, size_t varargs_size, CiInterpFrame*_Nullable*_Nonnull out){
     if(!func->parsed)
         return ci_ice(ci, func->loc, "function '%s' not parsed before execution", func->name->data);
     if(!func->interp_ops)
         return ci_ice(ci, func->loc, "function '%s' not lowered before execution", func->name->data);
-    CcFunction* ftype = func->type;
-    uint32_t nfixed = ftype->param_count;
-    size_t varargs_size = 0;
-    if(ftype->is_variadic && nargs > nfixed){
-        if(!arg_sizes)
-            return ci_ice(ci, loc, "variadic call of %s staged without argument sizes", func->name->data);
-        for(uint32_t i = nfixed; i < nargs; i++){
-            uint32_t arg_sz = arg_sizes[i];
-            if(arg_sz < 8) arg_sz = 8;
-            arg_sz = (arg_sz + 7) & ~7u;
-            varargs_size += arg_sz;
-        }
-    }
     size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size + varargs_size;
     CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
     if(!frame) return CI_OOM_ERROR;
@@ -2425,27 +2391,28 @@ ci_make_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* fu
         .ops = func->interp_ops->code.data,
         .op_count = func->interp_ops->code.count,
         .slots = frame + 1,
-        .return_buf = result,
-        .return_size = size,
         .data_length = func->frame_size + varargs_size,
-        .varargs_buf = ftype->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL,
+        .varargs_buf = func->type->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL,
     };
-    for(uint32_t i = 0; i < nfixed && i < nargs; i++){
-        CcVariable* var = func->param_vars[i];
-        if(!var) continue;
-        uint32_t param_sz;
-        err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
-        if(err){ Allocator_free(ci_allocator(ci), frame, alloc_size); return err; }
-        memcpy((char*)frame->slots + var->frame_offset, argv[i], param_sz);
-    }
-    if(varargs_size){
-        char* va_buf = frame->varargs_buf;
-        for(uint32_t i = nfixed; i < nargs; i++){
-            uint32_t arg_sz = arg_sizes[i];
-            memcpy(va_buf, argv[i], arg_sz);
-            va_buf += arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
-        }
-    }
+    *out = frame;
+    return 0;
+}
+
+static
+int
+ci_make_flat_call_frame(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, const CiOp* op, CiInterpFrame*_Nullable*_Nonnull out){
+    CcFunc* target = ci_hotswap_target(func);
+    if(!target) return ci_error(ci, op->loc, "hotswap cycle detected");
+    func = target;
+    const CiCallDescriptor* layout = op->call.descrip;
+    CiInterpFrame* frame = NULL;
+    int err = ci_alloc_call_frame(ci, caller, func, 0, &frame);
+    if(err) return err;
+    char* args = (char*)caller->slots + op->call.args_slot;
+    if(layout->fixed_size) memcpy(frame->slots, args, layout->fixed_size);
+    if(func->type->is_variadic) frame->varargs_buf = args + layout->varargs_offset;
+    frame->return_buf = op->call.ret_size ? (char*)caller->slots + op->call.ret_slot : ci_discard_buf;
+    frame->return_size = op->call.ret_size ? op->call.ret_size : sizeof ci_discard_buf;
     *out = frame;
     return 0;
 }
@@ -2495,9 +2462,42 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
 static
 int
 ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc){
+    CcFunc* target = ci_hotswap_target(func);
+    if(!target) return ci_error(ci, loc, "hotswap cycle detected");
+    func = target;
+    CcFunction* ftype = func->type;
+    uint32_t nfixed = ftype->param_count;
+    size_t varargs_size = 0;
+    if(ftype->is_variadic && nargs > nfixed){
+        if(!arg_sizes)
+            return ci_ice(ci, loc, "variadic call of %s staged without argument sizes", func->name->data);
+        for(uint32_t i = nfixed; i < nargs; i++){
+            uint32_t arg_sz = arg_sizes[i];
+            varargs_size += arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
+        }
+    }
     CiInterpFrame* frame = NULL;
-    int err = ci_make_call_frame(ci, caller, func, argv, nargs, arg_sizes, result, size, loc, &frame);
+    int err = ci_alloc_call_frame(ci, caller, func, varargs_size, &frame);
     if(err) return err;
+    frame->return_buf = result;
+    frame->return_size = size;
+    // External entry points and native callbacks supply libffi-style argv.
+    for(uint32_t i = 0; i < nfixed && i < nargs; i++){
+        CcVariable* var = func->param_vars[i];
+        if(!var) continue;
+        uint32_t param_sz;
+        err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
+        if(err){ ci_free_call_frame(ci, frame); return err; }
+        memcpy((char*)frame->slots + var->frame_offset, argv[i], param_sz);
+    }
+    if(varargs_size){
+        char* va_buf = frame->varargs_buf;
+        for(uint32_t i = nfixed; i < nargs; i++){
+            uint32_t arg_sz = arg_sizes[i];
+            memcpy(va_buf, argv[i], arg_sz);
+            va_buf += arg_sz < 8 ? 8 : (arg_sz + 7) & ~7u;
+        }
+    }
     err = ci_interp_run(ci, frame);
     ci_free_call_frame(ci, frame);
     return err;

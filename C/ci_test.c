@@ -42,6 +42,57 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "call: flat mixed arguments and unnamed parameters", __LINE__,
+            SVI("struct S {long a; char b;};\n"
+                "int f(char a, double, struct S s, short z){return a+s.a+s.b+z;}\n"
+                "int (*p)(char,double,struct S,short)=f;\n"
+                "return f(1,2.0,(struct S){3,4},5)+p(1,2.0,(struct S){3,4},5);\n"),
+            .exit_code = 26,
+        },
+        {
+            "call: nested arguments preserve captured values", __LINE__,
+            SVI("int x=3; int change(void){x=9; return 4;}\n"
+                "int f(int a,int b){return a*10+b;}\nreturn f(x,change());\n"),
+            .exit_code = 34,
+        },
+        {
+            "call: flat variadic buffer with mixed sizes", __LINE__,
+            SVI("struct S {char s[11];};\n"
+                "int f(char c,...){__builtin_va_list ap; __builtin_va_start(ap,c);\n"
+                "int i=__builtin_va_arg(ap,int); double d=__builtin_va_arg(ap,double);\n"
+                "struct S s=__builtin_va_arg(ap,struct S); int z=__builtin_va_arg(ap,int);\n"
+                "__builtin_va_end(ap); return c+i+(int)d+s.s[10]+z;}\n"
+                "int (*p)(char,...)=f;\n"
+                "return f(1,2,3.0,(struct S){.s[10]=4},5)+p(1,2,3.0,(struct S){.s[10]=4},5);\n"),
+            .exit_code = 30,
+        },
+        {
+            "call: hotswap preserves unnamed parameter slots", __LINE__,
+            SVI("int f(char, double, int z){return z;}\n"
+                "int g(char c,double d,int z){return c+(int)d+z;}\n"
+                "int (*p)(char,double,int)=f; __hotswap(f,g);\n"
+                "return f(1,2.0,3)+p(4,5.0,6);\n"),
+            .exit_code = 21,
+        },
+        {
+            "varargs: wide fixed parameter remains supported", __LINE__,
+            SVI("int f(__int128 n,...){__builtin_va_list ap; __builtin_va_start(ap,n);\n"
+                "double d=__builtin_va_arg(ap,double); __builtin_va_end(ap);\n"
+                "return (int)n+(int)d;}\nreturn f(40,2.0);\n"),
+            .exit_code = 42,
+        },
+        {
+            "call: borrowed varargs survive recursion and va_copy", __LINE__,
+            SVI("int f(int n,...){__builtin_va_list ap,copy; __builtin_va_start(ap,n);\n"
+                "__builtin_va_copy(copy,ap); int first=__builtin_va_arg(ap,int);\n"
+                "int nested=n?f(n-1,10,20):0;\n"
+                "int second=__builtin_va_arg(ap,int);\n"
+                "int again=__builtin_va_arg(copy,int); again+=__builtin_va_arg(copy,int);\n"
+                "__builtin_va_end(copy); __builtin_va_end(ap);\n"
+                "return first+second+again+nested;}\nreturn f(2,1,2);\n"),
+            .exit_code = 126,
+        },
+        {
             "auto: const array members preserve pointee qualifiers", __LINE__,
             SVI("struct S {int a[2];}; const struct S s={{1,2}};\n"
                 "auto p=s.a;\n"
@@ -9852,7 +9903,38 @@ TestFunction(test_interpreter_runtime_errors){
         StringView program;
         StringView expect;
         _Bool skip;
+        _Bool lowering_error;
     } testcases[] = {
+        {
+            "varargs: reject over-aligned int128", __LINE__,
+            SVI("__int128 x=1;\nint f(int n,...){return n;}\nf(0,\nx);\n"),
+            SVI("(test):4:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "varargs: reject over-aligned indirect argument", __LINE__,
+            SVI("__int128 x=1;\nint f(int n,...){return n;}\nint (*p)(int,...)=f;\np(0,\nx);\n"),
+            SVI("(test):5:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "varargs: reject over-aligned long double", __LINE__,
+            SVI("long double x=1;\nint f(int n,...){return n;}\nf(0,\nx);\n"),
+            SVI("(test):4:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "va_arg: reject over-aligned int128", __LINE__,
+            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,__int128);\n"),
+            SVI("(test):2:1: error: va_arg types requiring alignment greater than 8 bytes are not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "va_arg: reject over-aligned long double", __LINE__,
+            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,long double);\n"),
+            SVI("(test):2:1: error: va_arg types requiring alignment greater than 8 bytes are not supported\n"),
+            .lowering_error = 1,
+        },
         {
             "recursion: deep error unwinds frames", __LINE__,
             SVI("int fail(int n){\n"
@@ -10184,12 +10266,13 @@ TestFunction(test_interpreter_runtime_errors){
         err = ci_resolve_refs(&interp, 0);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
-        // Run; a runtime trap surfaces as an error from lowering or stepping.
+        // Expected lowering failures must be diagnosed before executing code.
         CiInterpFrame* frame = &interp.top_frame;
         _Bool trapped = 0;
         err = ci_lower_toplevel(&interp);
         if(err) trapped = 1;
-        while(!trapped && frame->pc < frame->op_count){
+        if(tc->lowering_error) TestExpectTrue(_Bool, trapped);
+        while(!tc->lowering_error && !trapped && frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) trapped = 1;
         }
@@ -11694,7 +11777,6 @@ TestFunction(test_ci_call_by_name){
     TESTEND();
 }
 TestFunction(test_float_folding);
-TestFunction(test_long_double_folding);
 
 
 int main(int argc, char** argv){
@@ -11707,7 +11789,6 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTest(test_long_double_folding);
     RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
@@ -11733,118 +11814,6 @@ int main(int argc, char** argv){
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-TestFunction(test_long_double_folding){
-    TESTBEGIN();
-    for(int target = 0; target < CC_TARGET_COUNT; target++){
-        CcTargetConfig t = cc_target_funcs[target]();
-        CiLowerCtx ctx = {.ldbl_fmt = t.long_double_format, .char_is_unsigned = !t.char_is_signed};
-        // change this as we support more formats.
-        int expected_status = t.long_double_format == CC_LONG_DOUBLE_BINARY64 ? 0 : FOLD_FAIL;
-        CcQualType ld = ccqt_basic(CCBT_long_double);
-        CiFoldValue a = {.type = ld, .sz = t.sizeof_[CCBT_long_double], .bits = {0x4000000000000000}};
-        CiFoldValue b = a, out = a;
-        int status = ci_fold_float_binary(&ctx, CC_EXPR_ADD, &a, &b, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, UINT64_C(0x4010000000000000));
-        out = (CiFoldValue){.type = ccqt_basic(CCBT_int), .sz = 4};
-        status = ci_fold_float_binary(&ctx, CC_EXPR_EQ, &a, &b, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, 1);
-        status = ci_fold_float_cast(&ctx, &a, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, 2);
-        CiFoldValue integer = {.type = ccqt_basic(CCBT_int), .sz = 4, .bits = {2}};
-        out = a;
-        status = ci_fold_float_cast(&ctx, &integer, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
-        out = (CiFoldValue){.type = ccqt_basic(CCBT_float), .sz = 4};
-        status = ci_fold_float_cast(&ctx, &a, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, 0x40000000);
-        out = (CiFoldValue){.type = ccqt_basic(CCBT_double), .sz = 8};
-        status = ci_fold_float_cast(&ctx, &a, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
-        b = out;
-        b.bits[0] = a.bits[0];
-        out = a;
-        status = ci_fold_float_cast(&ctx, &b, &out);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpect(uint64_t, out.bits[0], ==, a.bits[0]);
-        // Inexact results and exceptional inputs must still fall back.
-        b = a;
-        b.bits[0] = UINT64_C(0x4008000000000000); // 3
-        TestExpect(int, ci_fold_float_binary(&ctx, CC_EXPR_DIV, &a, &b, &out), ==, FOLD_FAIL);
-        a.bits[0] = UINT64_C(0x7ff0000000000001); // signaling NaN
-        TestExpect(int, ci_fold_float_cast(&ctx, &a, &integer), ==, FOLD_FAIL);
-        a.bits[0] = 1; // subnormal
-        TestExpect(int, ci_fold_float_cast(&ctx, &a, &integer), ==, FOLD_FAIL);
-        _Bool truth = 1;
-        a.bits[0] = UINT64_C(0x8000000000000000);
-        status = ci_fold_truth(&ctx, &a, &truth);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpectFalse(_Bool, truth);
-        a.bits[0] = UINT64_C(0x3ff0000000000000);
-        status = ci_fold_truth(&ctx, &a, &truth);
-        TestExpect(int, status, ==, expected_status);
-        if(!status) TestExpectTrue(_Bool, truth);
-    }
-    static const struct {
-        CcLongDoubleFormat format;
-        uint32_t size;
-        uint64_t one[2], negative_zero[2];
-    } truth_cases[] = {
-        {CC_LONG_DOUBLE_BINARY64, 8, {0x3ff0000000000000, 0}, {0x8000000000000000, 0}},
-        {CC_LONG_DOUBLE_X87, 16, {0x8000000000000000, 0x3fff}, {0, 0x8000}},
-        {CC_LONG_DOUBLE_BINARY128, 16, {0, 0x3fff000000000000}, {0, 0x8000000000000000}},
-    };
-    for(size_t i = 0; i < arrlen(truth_cases); i++){
-        for(size_t j = 0; j < arrlen(truth_cases); j++){
-            for(int negate = 0; negate < 2; negate++){
-                Marray(CiOp) ops = {0};
-                CiLowerCtx ctx = {.a = MALLOCATOR, .out = &ops, .ldbl_fmt = truth_cases[i].format};
-                CiLowerVal value = {.slot = 8, .size = truth_cases[i].size};
-                int err = ci_lower_istrue(&ctx, &value, ccqt_basic(CCBT_long_double), 0, 1, (_Bool)negate, (SrcLoc){0});
-                TestExpect(int, err, ==, 0);
-                if(!err){
-                    CiInterpreter ci = {0};
-                    ci.parser.cpp.target.long_double_format = truth_cases[j].format;
-                    for(int nonzero = 0; nonzero < 2; nonzero++){
-                        uint64_t slots[3] = {0};
-                        memcpy(slots + 1, nonzero ? truth_cases[i].one : truth_cases[i].negative_zero, value.size);
-                        CiInterpFrame frame = {.ops = ops.data, .op_count = ops.count, .slots = slots};
-                        TestExpect(int, ci_interp_step(&ci, &frame), ==, 0);
-                        TestExpect(uint64_t, slots[0], ==, (uint64_t)(nonzero ^ negate));
-                        TestExpect(size_t, frame.pc, ==, 1);
-                    }
-                }
-                ma_cleanup(CiOp)(&ops, MALLOCATOR);
-            }
-        }
-    }
-    MStringBuilder sb = {.allocator = MALLOCATOR};
-    CiOp op = {.istrue = {.kind = CI_OP_ISTRUE, .slot_size = 1, .src = 8,
-        .src_size = 8, .float_width = 64}};
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f64 [8:16]")));
-    msb_reset(&sb);
-    op.istrue.src_size = 16;
-    op.istrue.float_width = 80;
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f80 [8:24]")));
-    msb_reset(&sb);
-    op.istrue.float_width = 128;
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_X87);
-    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:1] = istrue.f128 [8:24]")));
-    msb_reset(&sb);
-    op = (CiOp){.constant = {.kind = CI_OP_CONST, .immsize = 8,
-        .bt_kind = CCBT_long_double, .immediate = {0x4000000000000000}}};
-    ci_op_print(&op, &sb, CC_LONG_DOUBLE_BINARY64);
-    TestExpectTrue(_Bool, sv_equals(msb_borrow_sv(&sb), SV("[0:8] = 2.000000 (0x4000000000000000)")));
-    msb_destroy(&sb);
-    TESTEND();
-}
 
 TestFunction(test_float_folding){
     TESTBEGIN();

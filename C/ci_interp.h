@@ -39,8 +39,8 @@ struct CiInterpFrame {
                                   // interpreter-owned buffer for the top frame
     void* return_buf;
     size_t return_size;
-    size_t data_length; // after this is the data, but we can't use a FLA and also embed in CcInterpreter
-    void*_Null_unspecified varargs_buf; // points into trailing data, past frame_size
+    size_t data_length;
+    void*_Null_unspecified varargs_buf; // either borrowed buffer or trailing data.
     CiAllocaBlock*_Null_unspecified alloca_list;
 };
 _Static_assert(_Alignof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");

@@ -158,6 +158,7 @@ enum {FOLD_FAIL=-1};
 static int ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded);
 static uint64_t ci_fold_offset(CiLowerCtx* ctx, const CiFoldValue* index, uint32_t elem_sz);
 static int ci_fold_condition(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* truth);
+enum {CI_ASSUMED_VARARG_ALIGN=8};
 
 static
 int
@@ -2931,50 +2932,68 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         ret_size = out->size;
     }
     uint32_t temp = ctx->temp;
-    // The argv region; an indirect call's function pointer is its first cell.
-    uint32_t argv_cells = nargs + (func? 0 : 1);
-    uint32_t argv_slot = 0;
-    if(argv_cells){
-        err = ci_alloc_slot(ctx, argv_cells * 8, 8, &argv_slot);
-        if(err) return err;
-    }
-    uint32_t argv_cell = argv_slot;
-    if(!func){
-        CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, callee, argv_cell, &v);
-        if(err) return err;
-        argv_cell += 8;
-    }
-    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * sizeof d->arg_sizes[0]);
+    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 2 * sizeof d->arg_sizes[0]);
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
     else d->func_type = ftype;
     d->nargs = nargs;
     d->expr = e;
+    d->arg_offsets = d->arg_sizes + nargs;
+    uint32_t buffer_align = 16;
     for(uint32_t i = 0; i < nargs; i++){
-        uint32_t asz;
+        uint32_t asz, align;
         err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &asz);
         if(err) return err;
         d->arg_sizes[i] = asz;
-        uint32_t slot_sz = asz < 8 ? 8 : asz;
-        uint32_t slot;
-        err = ci_alloc_slot(ctx, slot_sz, slot_sz > 8 ? 16 : 8, &slot);
-        if(err) return err;
+        if(i < ftype->param_count){
+            err = cc_alignof_as_uint(p, ftype->params[i], e->loc, &align);
+            if(err) return err;
+        }
+        else {
+            err = cc_alignof_as_uint(p, e->values[i]->type, e->values[i]->loc, &align);
+            if(err) return err;
+            if(align > CI_ASSUMED_VARARG_ALIGN)
+                return ci_error(ci, e->values[i]->loc, "variadic arguments requiring alignment greater than 8 bytes are not supported");
+            align = CI_ASSUMED_VARARG_ALIGN; // Variadic values occupy whole 8-byte slots.
+        }
+        if(align > buffer_align) buffer_align = align;
+        d->args_size += align -1;
+        d->args_size &= ~(align - 1);
+        d->arg_offsets[i] = d->args_size;
+        if(i == ftype->param_count) d->varargs_offset = d->args_size;
+        uint32_t storage_size = i >= ftype->param_count && asz < 8 ? 8 : asz;
+        d->args_size += storage_size;
+        if(i < ftype->param_count) d->fixed_size = d->args_size;
+        else {
+            d->args_size += (unsigned)(CI_ASSUMED_VARARG_ALIGN-1);
+            d->args_size &= ~(unsigned)(CI_ASSUMED_VARARG_ALIGN-1);
+        }
+    }
+    if(nargs <= ftype->param_count)
+        d->varargs_offset = d->args_size;
+    uint32_t prefix = func ? 0 : buffer_align;
+    uint32_t buffer_size = d->args_size + ctx->ptr_size-1;
+    buffer_size &= ~(unsigned)(ctx->ptr_size-1);
+    // TODO: Native calls need a buffer for libffi calls (which takes an array
+    //       of pointers to the args).
+    //       Allocate it on our frame for now, when we write our own ffi
+    //       backend we can generate a thunk or something instead.
+    if(!func || !func->defined)
+        buffer_size += nargs * ctx->ptr_size;
+    buffer_size += prefix;
+    uint32_t args_slot;
+    err = ci_alloc_slot(ctx, buffer_size, buffer_align, &args_slot);
+    if(err) return err;
+    if(!func){
         CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, e->values[i], slot, &v);
+        err = ci_lower_expr(ci, ctx, callee, args_slot + prefix - 8, &v);
         if(err) return err;
-        CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        args_slot += prefix;
+    }
+    for(uint32_t i = 0; i < nargs; i++){
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, e->values[i], args_slot + d->arg_offsets[i], &v);
         if(err) return err;
-        *op = (CiOp){
-            .slot_addr = {
-                .kind = CI_OP_SLOT_ADDR,
-                .slot = argv_cell + i * 8,
-                .slot_size = 8,
-                .src = slot,
-                .loc = e->values[i]->loc,
-            }
-        };
     }
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -2986,7 +3005,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             .is_variadic = ftype->is_variadic && nargs != ftype->param_count,
             .ret_slot = out? dest : 0,
             .ret_size = ret_size,
-            .argv_slot = argv_slot,
+            .args_slot = args_slot,
             .descrip = d,
             .loc = e->loc,
         }
@@ -4290,7 +4309,11 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         return 0;
     case CC_VA_ARG:{
         CcParser* p = &ci->parser;
-        uint32_t size;
+        uint32_t size, align;
+        err = cc_alignof_as_uint(p, e->type, e->loc, &align);
+        if(err) return err;
+        if(align > CI_ASSUMED_VARARG_ALIGN)
+            return ci_error(ci, e->loc, "va_arg types requiring alignment greater than %d bytes are not supported", CI_ASSUMED_VARARG_ALIGN);
         err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
         if(err) return err;
         err = ci_lower_dest(ctx, &dest, size);

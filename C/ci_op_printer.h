@@ -526,10 +526,10 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                     ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
                     msb_write_literal(out, " = ");
                 }
-                msb_sprintf(out, "call *[%u](", op->call.argv_slot);
+                msb_sprintf(out, "call *[%u](", op->call.args_slot - 8);
                 for(uint32_t i = 0; i < d->nargs; i++){
                     if(i) msb_write_literal(out, ", ");
-                    msb_sprintf(out, "*[%u]", op->call.argv_slot + 8 + i * 8);
+                    ci_op_print_range(out, op->call.args_slot + d->arg_offsets[i], d->arg_sizes[i]);
                 }
                 msb_write_char(out, ')');
             }else {
@@ -542,7 +542,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 msb_sprintf(out, "call %s(", s);
                 for(uint32_t i = 0; i < d->nargs; i++){
                     if(i) msb_write_literal(out, ", ");
-                    msb_sprintf(out, "*[%u]", op->call.argv_slot + i * 8);
+                    ci_op_print_range(out, op->call.args_slot + d->arg_offsets[i], d->arg_sizes[i]);
                 }
                 msb_write_char(out, ')');
             }

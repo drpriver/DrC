@@ -167,6 +167,8 @@ struct CiCallDescriptor {
     };
     CcExpr*_Nonnull expr;
     uint32_t nargs;
+    uint32_t fixed_size, varargs_offset, args_size;
+    uint32_t* _Nonnull arg_offsets;
     uint32_t arg_sizes[];
 };
 
@@ -529,7 +531,7 @@ struct CiOp {
             uint32_t is_indirect: 1, is_variadic:1, _pad:22;
             uint32_t ret_slot,
                      ret_size,
-                     argv_slot;
+                     args_slot;
             CiCallDescriptor *_Nonnull descrip;
             SrcLoc loc;
         } call;

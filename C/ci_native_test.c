@@ -205,6 +205,14 @@ TestFunction(test_interop){
         _Bool skip;
     } testcases[] = {
         {
+            "varargs: long double with 8-byte alignment", __LINE__,
+            SV("int f(int n,...){__builtin_va_list ap; __builtin_va_start(ap,n);\n"
+               "long double x=__builtin_va_arg(ap,long double); __builtin_va_end(ap);\n"
+               "return n+(int)x;}\nreturn f(40,2.0L);\n"),
+            .exit_code = 42,
+            .skip = cc_target_funcs[CC_TARGET_NATIVE]().alignof_[CCBT_long_double] > 8,
+        },
+        {
             "any: native argument and return", __LINE__,
             SV("_Any identity(_Any);\n"
                "_Any a=identity(42);\n"
@@ -278,6 +286,15 @@ TestFunction(test_interop){
             .exit_code = 7,
         },
         // ---- Floating point ----
+        {
+            "flat buffer: indirect native and interpreted targets", __LINE__,
+            SV("int mixed_widths(char,long long,short);\n"
+               "int local(char a,long long b,short c){return a+b+c;}\n"
+               "int run(int (*p)(char,long long,short)){return p(1,2LL,4);}\n"
+               "return run(mixed_widths)+run(local);\n"),
+            {{SV("mixed_widths"), (void*)test_mixed_widths}},
+            .exit_code = 14,
+        },
         {
             "double add", __LINE__,
             SV("double dadd(double, double);\n"

@@ -12033,16 +12033,15 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     f->frame_size = 0;
     for(uint32_t i = 0; i < ftype->param_count; i++){
         Atom name = (i < f->params.count) ? f->params.data[i] : NULL;
-        if(!name) continue;
         uint32_t param_sz, param_align;
-        CcVariable* var = cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK);
-        if(!var){ err = cc_error(p, f->loc, "missing declaration for parameter '%s'", name->data); goto end_scope; }
-        err = cc_sizeof_as_uint(p, var->type, var->loc, &param_sz);
+        CcVariable* var = name ? cc_scope_lookup_var(p->current, name, CC_SCOPE_NO_WALK) : NULL;
+        if(name && !var){ err = cc_error(p, f->loc, "missing declaration for parameter '%s'", name->data); goto end_scope; }
+        err = cc_sizeof_as_uint(p, ftype->params[i], f->loc, &param_sz);
         if(err) goto end_scope;
-        err = cc_alignof_as_uint(p, var->type, var->loc, &param_align);
+        err = cc_alignof_as_uint(p, ftype->params[i], f->loc, &param_align);
         if(err) goto end_scope;
         f->frame_size = (f->frame_size + param_align - 1) & ~(param_align - 1);
-        var->frame_offset = f->frame_size;
+        if(var) var->frame_offset = f->frame_size;
         f->frame_size += param_sz;
         f->param_vars[i] = var;
     }
