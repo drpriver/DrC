@@ -528,6 +528,11 @@ warn_unused
 int
 ma_shrink_to_size(MARRAY_T)(MARRAY* marray, Allocator a){
     if(marray->count == marray->capacity) return 0;
+    if(!marray->count){
+        if(!marray->capacity) return 0;
+        ma_cleanup(MARRAY_T)(marray, a);
+        return 0;
+    }
     void* p = Allocator_realloc(a, marray->data, marray->capacity * sizeof *marray->data, marray->count * sizeof *marray->data);
     if(!p) return 1;
     marray->data = p;

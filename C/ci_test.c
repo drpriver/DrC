@@ -9082,6 +9082,62 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "prototype enumerator scope does not leak", __LINE__,
+            SVI("enum { VALUE = 3 };\n"
+                "void foo(enum Kind { VALUE = 7 } x, int (*a)[VALUE]);\n"
+                "return VALUE;\n"),
+            .exit_code = 3,
+        },
+        {
+            "function definition parameter tag scope", __LINE__,
+            SVI("int foo(enum Kind { VALUE = 7 } x) { enum Kind y = x; return y + VALUE; }\n"
+                "return foo(7);\n"),
+            .exit_code = 14,
+        },
+        {
+            "lambda parameter tag scope", __LINE__,
+            SVI("return (int(enum Kind { VALUE = 7 } x) { return x + VALUE; })(7);\n"),
+            .exit_code = 14,
+        },
+        {
+            "prototype parameter scope", __LINE__,
+            SVI("void foo(int x, int y[sizeof x]);\n"
+                "int get(int x, int y[sizeof x]) { return y[0] + x; }\n"
+                "int a[4] = {7};\n"
+                "return get(3, a);\n"),
+            .exit_code = 10,
+        },
+        {
+            "prototype parameter shadowing and scope restoration", __LINE__,
+            SVI("typedef char x;\n"
+                "void foo(int x, int (*y)[sizeof x]);\n"
+                "void foo(int x, int (*y)[sizeof(int)]);\n"
+                "x value = 7;\n"
+                "return sizeof value;\n"),
+            .exit_code = 1,
+        },
+        {
+            "prototype adjusted parameter types", __LINE__,
+            SVI("void foo(int a[3], int (*b)[sizeof a], int f(void), int (*c)[sizeof f]);\n"
+                "void foo(int *a, int (*b)[sizeof(int*)], int (*f)(void), int (*c)[sizeof(int (*)(void))]);\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "nested prototype parameter scope", __LINE__,
+            SVI("void foo(char x, void (*f)(int x, int (*y)[sizeof x]), int (*z)[sizeof x]);\n"
+                "void foo(char x, void (*f)(int x, int (*y)[sizeof(int)]), int (*z)[sizeof(char)]);\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "prototype scope extends to end of declarator", __LINE__,
+            SVI("int (*foo(int x))[sizeof x];\n"
+                "int (*foo(int x))[sizeof(int)];\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
             "sizeof vla", __LINE__,
             SVI("int x = 3;\n"
             "return (int)sizeof(int[x]);\n"),
@@ -9686,6 +9742,15 @@ TestFunction(test_interpreter){
                "return s.f();\n"
             ),
             .exit_code = 2,
+        },
+        {
+            "nested torture test", __LINE__,
+            SVI("int foo( struct S { int x; int p(_Self* s, struct S {int x; int p(_Self* s){ return s.x; } } t){ return s.x+t.p(); } } s){\n"
+                "    int inner(struct S s){ return s.p({s.x+1}); }\n"
+                "    return inner(s);\n"
+                "}\n"
+                "return foo({1});\n"),
+            .exit_code = 3,
         },
     };
     int err;

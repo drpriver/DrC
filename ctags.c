@@ -116,7 +116,7 @@ int main(int argc, char** argv, char** envp){
                syntax_prefix = SVI("c"),
                exclude[CT_EXCLUDE_MAX] = {SVI("^__"), SVI("_[hH]$"), SVI("^[a-z][a-z0-9]$")},
                specific_excludes[CT_COUNT][CT_EXCLUDE_MAX] = {
-                   [CT_MACRO] = {SVI("^_Nonnull$"), SVI("^_Nullable$"), SVI("_Null_unspecified")},
+                   [CT_MACRO] = {SVI("^_Nonnull$"), SVI("^_Nullable$"), SVI("_Null_unspecified"), SVI("^bool$"), SVI("^true$"), SVI("^false$")},
                };
     _Bool debug_re = 0;
     enum {EXCLUDE_IDX=3, MACRO_IDX=5};
@@ -159,7 +159,7 @@ int main(int argc, char** argv, char** envp){
             .dest = ARGDEST(&specific_excludes[CT_MACRO][0]),
             .help = "regex which if matches, the macro is excluded from syntax highlighting",
             .min_num = 1, .max_num = CT_EXCLUDE_MAX,
-            .show_default = 3,
+            .show_default = 6,
         },
         {
             .name = SVI("--function-exclude"),
@@ -176,7 +176,7 @@ int main(int argc, char** argv, char** envp){
         {
             .name = SVI("--enumerator-exclude"),
             .dest = ARGDEST(&specific_excludes[CT_ENUMERATORS][0]),
-            .help = "regex which if matches, the global var is excluded from syntax highlighting",
+            .help = "regex which if matches, the enumerator is excluded from syntax highlighting",
             .min_num = 1, .max_num = CT_EXCLUDE_MAX,
         },
         {
@@ -245,7 +245,7 @@ int main(int argc, char** argv, char** envp){
             exclude[i] = (StringView){0};
     }
     if(kw_args[MACRO_IDX].num_parsed){
-        for(size_t i = kw_args[MACRO_IDX].num_parsed; i < 3; i++)
+        for(size_t i = kw_args[MACRO_IDX].num_parsed; i < 6; i++)
             specific_excludes[CT_MACRO][i] = (StringView){0};
     }
     // Virtual files belong to the shared cache, so register them only once.

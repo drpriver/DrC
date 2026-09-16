@@ -6187,6 +6187,11 @@ TestFunction(test_parse_errors){
             SVI("(test):1:10: error: parameter cannot have void type\n"),
         },
         {
+            "duplicate nested prototype parameter name", __LINE__,
+            SVI("void (*f)(int x, int x);\n"),
+            SVI("(test):1:18: error: duplicate parameter name 'x'\n"),
+        },
+        {
             "duplicate param name", __LINE__,
             SVI("void f(int x, int x);\n"),
             SVI("(test):1:15: error: duplicate parameter name 'x'\n"),

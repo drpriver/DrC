@@ -69,7 +69,7 @@ _BASIC_NAMES = [
     'long long', 'unsigned long long', '__int128', 'unsigned __int128',
     '_Float16', 'float', 'double', 'long double', '_Float128',
     'float _Complex', 'double _Complex', 'long double _Complex',
-    'nullptr_t', '_Type',
+    'nullptr_t', '_Type', '_Any',
 ]
 _CCBT_COUNT = len(_BASIC_NAMES)
 

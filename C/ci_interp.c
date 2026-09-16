@@ -3816,7 +3816,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     err = ma_push(CcToken)(scratch, al, rparen);
     if(err) goto restore;
     size_t idx = scratch->count;
-    {
+    if(args->count){
         const CppToken* arg_toks = args->data;
         const CppToken* end = args->data + args->count;
         while(arg_toks < end){

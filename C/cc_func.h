@@ -24,6 +24,7 @@
 
 typedef struct CiFuncOps CiFuncOps;
 typedef struct CcVariable CcVariable;
+typedef struct CcScope CcScope;
 
 typedef struct CcLabelCtx CcLabelCtx;
 struct CcLabelCtx {
@@ -60,6 +61,7 @@ struct CcFunc {
         Atom _Nullable*_Null_unspecified data;
     } params;
     CcVariable*_Nullable*_Null_unspecified param_vars; // set during body parsing, parallel to params
+    CcScope*_Nullable param_scope; // declarations from the definition's parameter list
     CcLabelCtx label_ctx;
     CcFunc*_Nullable hotswap;
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.
