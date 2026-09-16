@@ -2944,7 +2944,6 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     if(func) d->func = func;
     else d->func_type = ftype;
     d->nargs = nargs;
-    d->expr = e;
     d->arg_offsets = d->arg_sizes + nargs;
     uint32_t buffer_align = 16;
     for(uint32_t i = 0; i < nargs; i++){
@@ -2978,6 +2977,17 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     }
     if(nargs <= ftype->param_count)
         d->varargs_offset = d->args_size;
+    d->call_type = ftype;
+    if(ftype->is_variadic && nargs > ftype->param_count){
+        CcQualType* types = Allocator_alloc(ctx->a, nargs * sizeof *types);
+        if(!types) return CI_OOM_ERROR;
+        for(uint32_t i = 0; i < nargs; i++)
+            types[i] = i < ftype->param_count ? ftype->params[i] : e->values[i]->type;
+        CcFunction* call_type = cc_intern_function(&p->type_cache, ctx->a, ftype->return_type, types, nargs, ftype->param_count, 1, 0);
+        Allocator_free(ctx->a, types, nargs * sizeof *types);
+        if(!call_type) return CI_OOM_ERROR;
+        d->call_type = call_type;
+    }
     uint32_t prefix = func ? 0 : buffer_align;
     uint32_t buffer_size = d->args_size + ctx->ptr_size-1;
     buffer_size &= ~(unsigned)(ctx->ptr_size-1);
@@ -3009,7 +3019,6 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         .call = {
             .kind = CI_OP_CALL,
             .is_indirect = func?0:1,
-            .is_variadic = ftype->is_variadic && nargs != ftype->param_count,
             .ret_slot = out? dest : 0,
             .ret_size = ret_size,
             .args_slot = args_slot,
@@ -5438,58 +5447,7 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
 }
 
 
-// Execute a standalone expression without changing the caller's opcode stream.
-static
-int
-ci_eval_lowered_expr(CiInterpreter* ci, CiInterpFrame*_Nullable parent, CcExpr* expr, void* result, size_t size){
-    Allocator al = ci_allocator(ci);
-    Marray(CiOp) ops = {0};
-    AtomMap(uintptr_t) labels = {0};
-    uint32_t frame_size = 0;
-    const CcTargetConfig* t = ci_target(ci);
-    CiLowerCtx ctx = {
-        .a = al,
-        .out = &ops,
-        .labels = &labels,
-        .frame_size = &frame_size,
-        .size_size = t->sizeof_[t->size_type],
-        .ptr_size = t->sizeof_[CCBT_nullptr_t],
-        .char_is_unsigned = !t->char_is_signed,
-        .ldbl_fmt = t->long_double_format,
-    };
-    CiInterpFrame frame = {.parent = parent, .return_buf = result, .return_size = size};
-    CiLowerVal value = {0};
-    _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
-    int err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
-    if(err) goto cleanup;
-    err = ci_lower_resolve_gotos(ci, &ctx);
-    if(err) goto cleanup;
-    if(!is_void && value.size > size){
-        err = CI_RESULT_TOO_SMALL(ci, expr->loc, value.size, size);
-        goto cleanup;
-    }
-    if(frame_size){
-        frame.slots = Allocator_zalloc(al, frame_size);
-        if(!frame.slots){ err = CI_OOM_ERROR; goto cleanup; }
-    }
-    frame.ops = ops.data;
-    frame.op_count = ops.count;
-    err = ci_interp_run(ci, &frame);
-    if(!err && !is_void && value.size)
-        memcpy(result, (char*)frame.slots + value.slot, value.size);
-    cleanup:
-    ci_free_alloca_list(al, frame.alloca_list);
-    if(frame.slots) Allocator_free(al, frame.slots, frame_size);
-    ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
-    if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
-    for(size_t i = 0; i < ops.count; i++){
-        CiOp* op = &ops.data[i];
-        if(op->kind == CI_OP_SWITCH && op->switch_.table)
-            Allocator_free(al, op->switch_.table, sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry));
-    }
-    ma_cleanup(CiOp)(&ops, al);
-    return err;
-}
+
 
 static
 int

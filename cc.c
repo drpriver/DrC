@@ -500,7 +500,7 @@ int main(int argc, char** argv, char** envp){
         // Execute any statements from the initial file before entering REPL.
         if(!syntax_only){
             CiInterpFrame* frame = &interp.top_frame;
-            err = ci_lower_toplevel(&interp);
+            err = ci_prepare_toplevel(&interp);
             if(err) goto stringify_error;
             while(frame->pc < frame->op_count){
                 err = ci_interp_step(&interp, frame);
@@ -555,7 +555,7 @@ int main(int argc, char** argv, char** envp){
                     // Execute new statements
                     {
                         CiInterpFrame* frame = &interp.top_frame;
-                        err = ci_lower_toplevel(&interp);
+                        err = ci_prepare_toplevel(&interp);
                         if(err) break;
                         while(frame->pc < frame->op_count){
                             err = ci_interp_step(&interp, frame);
@@ -584,7 +584,7 @@ int main(int argc, char** argv, char** envp){
         if(!syntax_only){
             interp.exit_code = EXIT_CODE_SENTINEL;
             CiInterpFrame* frame = &interp.top_frame;
-            err = ci_lower_toplevel(&interp);
+            err = ci_prepare_toplevel(&interp);
             if(err) goto stringify_error;
             while(frame->pc < frame->op_count){
                 err = ci_interp_step(&interp, frame);

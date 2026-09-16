@@ -15,7 +15,6 @@ typedef struct NativeCallCache NativeCallCache;
 static
 int
 native_call_cache_create(Allocator al, CcFunction* func_type,
-    uint32_t nvarargs, const CcQualType*_Nullable vararg_types,
     NativeCallCache*_Nullable*_Nonnull out);
 // ---------------------------------
 // Create a CIF cache for a function call signature.
@@ -26,14 +25,8 @@ native_call_cache_create(Allocator al, CcFunction* func_type,
 //    Allocator for the cache.
 //
 // func_type:
-//    The base function type.
-//
-// nvarargs:
-//    Number of variadic arguments (0 for non-variadic calls).
-//
-// vararg_types:
-//    Types of the variadic arguments (nvarargs elements).
-//    NULL for non-variadic calls.
+//    The effective function type, including promoted variadic arguments
+//    and the fixed_param_count boundary.
 //
 // out:
 //    On success, receives the created cache.

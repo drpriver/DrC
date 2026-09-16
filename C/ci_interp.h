@@ -81,8 +81,7 @@ struct CiInterpreter {
     LOCK_T error_lock,
            atom_lock,
            resolve_lock;
-    size_t resolved_variadic,
-           resolved_libc,
+    size_t resolved_libc,
            resolved_funcs,
            resolved_vars,
            next_module_id;
@@ -99,6 +98,8 @@ static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_run(CiInterpreter*, CiInterpFrame*);
 static int ci_lower_func(CiInterpreter*, CcFunc*);
 static int ci_lower_toplevel(CiInterpreter*);
+static int ci_prepare_toplevel(CiInterpreter*);
+static int ci_link_ops(CiInterpreter*, const CiOp*, size_t);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_preload_system_libs(CiInterpreter*);

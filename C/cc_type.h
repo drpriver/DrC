@@ -149,15 +149,17 @@ struct CC_ALIGN(8) CcArray {
 };
 _Static_assert(_Alignof(CcArray)==8, "");
 
+enum {CC_MAX_PARAMS=0xffff};
 typedef struct CcFunction CcFunction;
 struct CC_ALIGN(8) CcFunction {
     union {
         uint32_t _bits;
         struct {
             CcTypeKind kind:       4;
-            uint32_t is_variadic:  1;
-            uint32_t no_prototype: 1;
-            uint32_t _padding:     26;
+            uint32_t is_variadic:  1,
+                     no_prototype: 1,
+                     _padding:     10,
+                    fixed_param_count: 16; // params before the variadic boundary
         };
     };
     CcQualType return_type;

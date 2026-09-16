@@ -380,26 +380,22 @@ struct NativeCallCache {
 
 static
 int
-native_call_cache_create(Allocator a, CcFunction* func_type, uint32_t nvarargs, const CcQualType*_Nullable vararg_types, NativeCallCache*_Nullable*_Nonnull out){
+native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nullable*_Nonnull out){
     *out = NULL;
-    uint32_t fixed = func_type->param_count;
-    uint32_t total = fixed + nvarargs;
+    uint32_t fixed = func_type->fixed_param_count;
+    uint32_t total = func_type->param_count;
     NativeCallCache* c = Allocator_zalloc(a, sizeof *c + total * sizeof *c->arg_types);
     if(!c) return NC_OOM_ERROR;
     c->nparams = total;
     ffi_type* rtype;
     int err = cctype_to_ffi_type(a, func_type->return_type, &rtype);
     if(err) goto fail;
-    for(uint32_t i = 0; i < fixed; i++){
+    for(uint32_t i = 0; i < total; i++){
         err = cctype_to_ffi_type(a, func_type->params[i], &c->arg_types[i]);
         if(err) goto fail;
     }
-    for(uint32_t i = 0; i < nvarargs; i++){
-        err = cctype_to_ffi_type(a, vararg_types[i], &c->arg_types[fixed + i]);
-        if(err) goto fail;
-    }
     ffi_status s;
-    if(nvarargs)
+    if(total > fixed)
         s = ffi_prep_cif_var(&c->cif, FFI_DEFAULT_ABI, fixed, total, rtype, c->arg_types);
     else
         s = ffi_prep_cif(&c->cif, FFI_DEFAULT_ABI, total, rtype, c->arg_types);
@@ -504,11 +500,9 @@ native_closure_destroy(Allocator a, NativeClosure* closure){
 
 static
 int
-native_call_cache_create(Allocator a, CcFunction* func_type, uint32_t nvarargs, const CcQualType*_Nullable vararg_types, NativeCallCache*_Nullable*_Nonnull out){
+native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nullable*_Nonnull out){
     (void)a;
     (void)func_type;
-    (void)nvarargs;
-    (void)vararg_types;
     (void)out;
     return NC_UNIMPLEMENTED_ERROR;
 }

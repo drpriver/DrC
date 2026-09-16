@@ -165,7 +165,7 @@ struct CiCallDescriptor {
         CcFunction*_Nonnull func_type;
         CcFunc* _Nonnull func;
     };
-    CcExpr*_Nonnull expr;
+    CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
     uint32_t nargs;
     uint32_t fixed_size, varargs_offset, args_size;
     uint32_t* _Nonnull arg_offsets;
@@ -528,7 +528,7 @@ struct CiOp {
         } fence;
         struct {
             CiOpKind kind: 8; // CI_OP_CALL
-            uint32_t is_indirect: 1, is_variadic:1, _pad:22;
+            uint32_t is_indirect: 1, _pad:23;
             uint32_t ret_slot,
                      ret_size,
                      args_slot;

@@ -207,8 +207,6 @@ struct CcParser {
     AtomMap(uintptr_t) type_intro;
     PointerMap used_funcs; // CcFunc* set (value = key)
     PointerMap used_vars;  // CcVariable* set, non-automatic only (value = key)
-    PointerMap used_call_types; // CcFunction* set, function types used in indirect calls (value = key)
-    PointerMap used_var_calls;  // CcExpr* set, variadic call expressions (value = key)
 
     // common types
     CcQualType char_star,

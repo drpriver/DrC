@@ -1214,8 +1214,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
                 if(err){ err = CC_OOM_ERROR; break; }
             }
             if(!err){
-                CcFunction* f = cc_intern_function(&p->type_cache, cc_allocator(p), ret,
-                    params.data, proto->param_count, proto->is_variadic, proto->no_prototype);
+                CcFunction* f = cc_intern_function(&p->type_cache, cc_allocator(p), ret, params.data, proto->param_count, proto->param_count, proto->is_variadic, proto->no_prototype);
                 if(!f) err = CC_OOM_ERROR;
                 else *out = (CcQualType){.bits = (uintptr_t)f | new_.quals};
             }
@@ -5003,10 +5002,6 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             return cc_error(p, tok.loc, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
                         return cc_error(p, tok.loc, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
                     }
-                    if(operand->kind != CC_EXPR_FUNCTION){
-                        err = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
-                        if(err) return CC_OOM_ERROR;
-                    }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->lhs = operand;
@@ -5234,19 +5229,11 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     err = cc_check_printf_format(p, operand->func, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
                     if(err) goto call_cleanup;
                 }
-                if(operand->kind != CC_EXPR_FUNCTION){
-                    err = PM_put(&p->used_call_types, cc_allocator(p), ftype, ftype);
-                    if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
-                }
                 CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, nargs);
                 if(!node){ err = CC_OOM_ERROR; goto call_cleanup; }
                 node->call.nargs = nargs;
                 node->lhs = operand;
                 memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
-                if(ftype->is_variadic && nargs > ftype->param_count){
-                    err = PM_put(&p->used_var_calls, cc_allocator(p), node, node);
-                    if(err){ err = CC_OOM_ERROR; goto call_cleanup; }
-                }
                 operand = node;
                 err = 0;
                 call_cleanup:
@@ -10794,7 +10781,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
                 old->params[i] = cc_intern_qualtype(p, pt);
             }
             CcQualType ret = cc_intern_qualtype(p, old->return_type);
-            CcFunction* func = cc_intern_function(&p->type_cache, cc_allocator(p), ret, old->params, old->param_count, old->is_variadic, old->no_prototype);
+            CcFunction* func = cc_intern_function(&p->type_cache, cc_allocator(p), ret, old->params, old->param_count, old->param_count, old->is_variadic, old->no_prototype);
             if(!func) return t;
             return (CcQualType){.bits = (uintptr_t)func | quals};
         }
@@ -12012,7 +11999,7 @@ cc_define_builtin_types(CcParser* p){
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];
-            CcFunction* ftype = cc_intern_function(&p->type_cache, al, b->ret, b->params, b->nargs, b->variadic, 0);
+            CcFunction* ftype = cc_intern_function(&p->type_cache, al, b->ret, b->params, b->nargs, b->nargs, b->variadic, 0);
             if(!ftype) return CC_OOM_ERROR;
             CcFunc* func = Allocator_zalloc(al, sizeof *func);
             if(!func) return CC_OOM_ERROR;

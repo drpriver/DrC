@@ -9978,7 +9978,7 @@ TestFunction(test_interpreter){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        err = ci_lower_toplevel(&interp);
+        err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
@@ -10380,7 +10380,7 @@ TestFunction(test_interpreter_runtime_errors){
         // Expected lowering failures must be diagnosed before executing code.
         CiInterpFrame* frame = &interp.top_frame;
         _Bool trapped = 0;
-        err = ci_lower_toplevel(&interp);
+        err = ci_prepare_toplevel(&interp);
         if(err) trapped = 1;
         if(tc->lowering_error) TestExpectTrue(_Bool, trapped);
         while(!tc->lowering_error && !trapped && frame->pc < frame->op_count){
@@ -10764,7 +10764,7 @@ TestFunction(test_interpreter_builtin_headers){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        err = ci_lower_toplevel(&interp);
+        err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
@@ -11483,7 +11483,7 @@ TestFunction(test_cross_target){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        err = ci_lower_toplevel(&interp);
+        err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);

@@ -294,7 +294,7 @@ TestFunction(test_concurrent_callbacks){
     if(err){ TestReport("failed to link"); goto finally; }
 
     CiInterpFrame* frame = &interp.top_frame;
-    err = ci_lower_toplevel(&interp);
+    err = ci_prepare_toplevel(&interp);
     if(err) goto finally;
     while(frame->pc < frame->op_count){
         err = ci_interp_step(&interp, frame);
