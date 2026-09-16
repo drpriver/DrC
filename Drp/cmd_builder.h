@@ -4,15 +4,15 @@
 #include <stdio.h>
 #include <stddef.h>
 #include "stringview.h"
-#include "long_string.h"
+#include "cstring_view.h"
 #include "MStringBuilder.h"
 #include "env.h"
 #include "which.h"
 #include "atom.h"
 
-#ifndef MARRAY_T_LongString
-#define MARRAY_T_LongString
-#define MARRAY_T LongString
+#ifndef MARRAY_T_CStringView
+#define MARRAY_T_CStringView
+#define MARRAY_T CStringView
 #include "Marray.h"
 #endif
 
@@ -27,7 +27,7 @@
 typedef struct CmdBuilder CmdBuilder;
 struct CmdBuilder {
     MStringBuilder prog;
-    Marray(LongString) args;
+    Marray(CStringView) args;
     union {
         MStringBuilder cmd_line;
         struct {
@@ -43,28 +43,28 @@ struct CmdBuilder {
 
 static
 void
-cmd_prog(CmdBuilder* cmd, LongString prog){
+cmd_prog(CmdBuilder* cmd, CStringView prog){
     if(cmd->errored) return;
     if(cmd->args.count != 0)
         cmd->errored = 1;
     if(cmd->errored) return;
-    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, prog);
+    cmd->errored = ma_push(CStringView)(&cmd->args, cmd->allocator, prog);
     if(cmd->errored) return;
     cmd->prog.allocator = cmd->allocator;
 }
 
 static
 void
-cmd_arg(CmdBuilder* cmd, LongString arg){
+cmd_arg(CmdBuilder* cmd, CStringView arg){
     if(!cmd->args.count) cmd->errored = 1;
     if(cmd->errored) return;
-    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, arg);
+    cmd->errored = ma_push(CStringView)(&cmd->args, cmd->allocator, arg);
 }
 
 static
 void
 cmd_carg(CmdBuilder* cmd, const char* arg){
-    cmd_arg(cmd, (LongString){strlen(arg), arg});
+    cmd_arg(cmd, (CStringView){strlen(arg), arg});
 }
 
 static
@@ -72,14 +72,14 @@ void
 cmd_aarg(CmdBuilder* cmd, Atom arg){
     if(!cmd->args.count) cmd->errored = 1;
     if(cmd->errored) return;
-    LongString a = {arg->length, arg->data};
-    cmd->errored = ma_push(LongString)(&cmd->args, cmd->allocator, a);
+    CStringView a = {arg->length, arg->data};
+    cmd->errored = ma_push(CStringView)(&cmd->args, cmd->allocator, a);
 }
 
 
 static
 void
-cmd_args_(CmdBuilder* cmd, size_t count, LongString* args){
+cmd_args_(CmdBuilder* cmd, size_t count, CStringView* args){
     for(size_t i = 0; i < count; i++)
         cmd_arg(cmd, args[i]);
 }
@@ -91,7 +91,7 @@ cmd_cargs_(CmdBuilder* cmd, size_t count, const char*_Nonnull*_Nonnull args){
         cmd_carg(cmd, args[i]);
 }
 
-#define cmd_args(cmd, ...) cmd_args_(cmd, sizeof (LongString[]){__VA_ARGS__} / sizeof(LongString), (LongString[]){__VA_ARGS__})
+#define cmd_args(cmd, ...) cmd_args_(cmd, sizeof (CStringView[]){__VA_ARGS__} / sizeof(CStringView), (CStringView[]){__VA_ARGS__})
 #define cmd_cargs(cmd, ...) cmd_cargs_(cmd, sizeof (const char*[]){__VA_ARGS__} / sizeof(const char*), (const char*[]){__VA_ARGS__})
 
 static
@@ -108,7 +108,7 @@ void
 cmd_destroy(CmdBuilder* cmd){
     msb_destroy(&cmd->prog);
     msb_destroy(&cmd->cmd_line);
-    ma_cleanup(LongString)(&cmd->args, cmd->allocator);
+    ma_cleanup(CStringView)(&cmd->args, cmd->allocator);
     cmd->errored = 0;
 }
 
@@ -117,7 +117,7 @@ void
 cmd_resolve_prog_path(CmdBuilder* cmd, Environment* env, exist_func* file_exists, void*_Null_unspecified exists_ctx){
     if(cmd->errored) return;
     msb_reset(&cmd->prog);
-    cmd->errored = env_resolve_prog_path(env, LS_to_SV(cmd->args.data[0]), &cmd->prog, file_exists, exists_ctx);
+    cmd->errored = env_resolve_prog_path(env, CSV_to_SV(cmd->args.data[0]), &cmd->prog, file_exists, exists_ctx);
 }
 
 #ifdef __clang__

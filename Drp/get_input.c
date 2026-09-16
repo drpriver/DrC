@@ -628,16 +628,16 @@ get_line_internal_loop(GetInputCtx* ctx){
                 DBG("c = %s\n", c);
                 size_t len = strlen(c);
                 if(len)len--;
-                memmove(ls.buff+ls.curr_pos+len, ls.buff+ls.curr_pos, ls.length-ls.curr_pos);
-                memcpy(ls.buff+ls.curr_pos, c, len);
-                ls.curr_pos += len;
-                ls.length += len;
+                memmove(cs.buff+cs.curr_pos+len, cs.buff+cs.curr_pos, cs.length-cs.curr_pos);
+                memcpy(cs.buff+cs.curr_pos, c, len);
+                cs.curr_pos += len;
+                cs.length += len;
                 for(;;){
-                    char* newline = memchr(ls.buff, '\n', ls.length);
+                    char* newline = memchr(cs.buff, '\n', cs.length);
                     if(!newline) break;
                     *newline = ' ';
                 }
-                redisplay(&ls);
+                redisplay(&cs);
                 [s release];
                 [data release];
                 [pb release];
@@ -759,7 +759,7 @@ gi_add_line_to_history_len(GetInputCtx* ctx, const char* text, size_t length){
     if(!length)
         return; // no empties
     if(ctx->_hst_count){
-        LongString* last = &ctx->_history[ctx->_hst_count-1];
+        CStringView* last = &ctx->_history[ctx->_hst_count-1];
         if(length == last->length && memcmp(text, last->text, length) == 0)
             return; // Don't allow duplicates
     }
@@ -769,13 +769,13 @@ gi_add_line_to_history_len(GetInputCtx* ctx, const char* text, size_t length){
     if(ctx->_hst_count == GI_LINE_HISTORY_MAX){
         free_const_char_pointer(ctx->_history[0].text);
         memmove(ctx->_history, ctx->_history+1, (GI_LINE_HISTORY_MAX-1)*sizeof(ctx->_history[0]));
-        ctx->_history[GI_LINE_HISTORY_MAX-1] = (LongString){
+        ctx->_history[GI_LINE_HISTORY_MAX-1] = (CStringView){
             .length = length,
             .text = copy,
         };
     }
     else {
-        ctx->_history[ctx->_hst_count++] = (LongString){.length=length, .text=copy};
+        ctx->_history[ctx->_hst_count++] = (CStringView){.length=length, .text=copy};
     }
 }
 
@@ -784,7 +784,7 @@ void
 gi_remove_last_line_from_history(GetInputCtx* ctx){
     if(!ctx->_hst_count)
         return;
-    LongString* last = &ctx->_history[--ctx->_hst_count];
+    CStringView* last = &ctx->_history[--ctx->_hst_count];
     free_const_char_pointer(last->text);
     return;
 }
@@ -814,7 +814,7 @@ change_history(GetInputCtx*ctx, int magnitude){
     }
     if(ctx->_hst_cursor < 0)
         return;
-    LongString old = ctx->_history[ctx->_hst_cursor];
+    CStringView old = ctx->_history[ctx->_hst_cursor];
     size_t length = old.length < GI_BUFF_SIZE? old.length : GI_BUFF_SIZE;
     if(length)
         memcpy(ctx->buff, old.text, length);
@@ -950,7 +950,7 @@ gi_load_history(GetInputCtx* ctx, const char* prefix, const char *filename){
         if(!length)
             continue;
         char* copy = memdup(buff, length+1);
-        LongString* h = &ctx->_history[ctx->_hst_count++];
+        CStringView* h = &ctx->_history[ctx->_hst_count++];
         h->text = copy;
         h->length = length;
     }

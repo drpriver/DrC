@@ -124,13 +124,13 @@ int main(int argc, char** argv, char** envp){
         if(err) return err;
     }
     if(!filename){
-        LongString txt;
+        CStringView txt;
         FileError fe = read_file_handle(FU_STDIN, MALLOCATOR, &txt);
         if(fe.errored)
             return 1;
         filename = "(stdin)";
         fc_write_path(fc, filename, strlen(filename));
-        err = fc_cache_file(fc, LS_to_SV(txt));
+        err = fc_cache_file(fc, CSV_to_SV(txt));
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) return err;
     }

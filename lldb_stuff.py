@@ -37,8 +37,8 @@ def string_view_summary(valobj, internal_dict):
     tn = valobj.GetTypeName()
     if '*' in tn:
         return hex(valobj.GetValueAsUnsigned())
-    if 'Long' in tn:
-        pre = 'LS'
+    if 'CS' in tn:
+        pre = 'CSV'
     else:
         pre = 'SV'
     length = valobj.GetChildMemberWithName('length').GetValueAsUnsigned(0)
@@ -218,7 +218,7 @@ def __lldb_init_module(debugger, internal_dict):
     modname = os.path.splitext(os.path.basename(__file__))[0]
     debugger.HandleCommand(f'type summary add Atom -F {modname}.atom_summary')
     debugger.HandleCommand(f'type summary add StringView -F {modname}.string_view_summary')
-    debugger.HandleCommand(f'type summary add LongString -F {modname}.string_view_summary')
+    debugger.HandleCommand(f'type summary add CStringView -F {modname}.string_view_summary')
     debugger.HandleCommand(f'type summary add CcQualType -F {modname}.ccqualtype_summary')
     debugger.HandleCommand(f'type synthetic add -x "^ma__" --python-class {modname}.MaSynth')
     debugger.HandleCommand(f'type summary add -x "^ma__" --expand --summary-string "${{var.count}}/${{var.capacity}} items"')

@@ -2,7 +2,7 @@
 #define DRP_TYPEINFO_JSON_DESER_H
 #include "typeinfo.h"
 #include "drjson.h"
-#include "long_string.h"
+#include "cstring_view.h"
 #include "bitfields.h"
 #include "atom_map.h"
 #include "atom_set.h"
@@ -448,7 +448,7 @@ fixed_array_from_json(void* dst, const TypeInfoFixedArray* ti, DrJsonContext* js
 
 static
 int
-struct_from_config_txt(void* dst, const TypeInfoStruct* ti, LongString txt, AtomTable* at, Allocator tmp, Allocator al){
+struct_from_config_txt(void* dst, const TypeInfoStruct* ti, CStringView txt, AtomTable* at, Allocator tmp, Allocator al){
     DrJsonContext* jsctx = NULL;
     int result = 1;
     jsctx = drjson_create_ctx(tmp, at);
@@ -463,7 +463,7 @@ struct_from_config_txt(void* dst, const TypeInfoStruct* ti, LongString txt, Atom
 
 static
 int
-any_from_json_txt(void* dst, const TypeInfo* ti, LongString txt, AtomTable* at, Allocator tmp, Allocator al){
+any_from_json_txt(void* dst, const TypeInfo* ti, CStringView txt, AtomTable* at, Allocator tmp, Allocator al){
     DrJsonContext* jsctx = NULL;
     int result = 1;
     jsctx = drjson_create_ctx(tmp, at);

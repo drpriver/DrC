@@ -5,7 +5,7 @@
 //
 #include <stdint.h>
 #include "srcloc.h"
-#include "../Drp/long_string.h"
+#include "../Drp/cstring_view.h"
 #include "../Drp/typed_enum.h"
 
 #ifdef __clang__

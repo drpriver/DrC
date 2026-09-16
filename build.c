@@ -387,7 +387,7 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
         bindir = b_atomize_f(ctx, "%s%s", destdir->data, bindir->data);
     int err;
     if(BUILD_OS == OS_WINDOWS){
-        err = b_mkdirs_if_not_exists(ctx, AT_to_LS(bindir));
+        err = b_mkdirs_if_not_exists(ctx, AT_to_CSV(bindir));
         if(err) return err;
         for(int i = 0; i < 3; i++){
             BuildTarget* c = bins[i];
@@ -398,12 +398,12 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
     }
     else {
         CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
-        cmd_prog(&cmd, LS("install"));
+        cmd_prog(&cmd, CSV("install"));
         cmd_cargs(&cmd, "-d", bindir->data);
         err = b_run_cmd_sync(ctx, &cmd);
         if(err) return err;
         cmd_clear(&cmd);
-        cmd_prog(&cmd, LS("install"));
+        cmd_prog(&cmd, CSV("install"));
         cmd_cargs(&cmd, "-m", "755");
         for(int i = 0; i < 3; i++)
             cmd_aarg(&cmd, bins[i]->name);
@@ -438,7 +438,7 @@ fetch_libffi(BuildCtx* ctx, BuildTarget* tgt){
     }
     {
         cmd_clear(cmd);
-        cmd_prog(cmd, LS("curl"));
+        cmd_prog(cmd, CSV("curl"));
         cmd_cargs(cmd, "-L", LIBFFI_RELEASE_URL, "-f", "-s", "-o", "Fetched/libffi.zip");
         int err = b_run_cmd_async(ctx, tgt, cmd);
         if(err) return BERROR;
@@ -446,7 +446,7 @@ fetch_libffi(BuildCtx* ctx, BuildTarget* tgt){
     }
     {
         cmd_clear(cmd);
-        cmd_prog(cmd, LS("tar"));
+        cmd_prog(cmd, CSV("tar"));
         cmd_cargs(cmd, "-xf", "Fetched/libffi.zip", "-C", "Fetched/libffi");
         int err = b_run_cmd_async(ctx, tgt, cmd);
         if(err) return BERROR;

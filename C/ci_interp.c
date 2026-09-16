@@ -976,7 +976,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         ci_lock_resolver(ci);
                         FileCache* fc = ci->parser.cpp.fc;
                         if(loc.bits && file_id < fc->map.count){
-                            LongString path = fc->map.data[file_id].path;
+                            CStringView path = fc->map.data[file_id].path;
                             file = (CiRtSlice){.count = path.length, .data = (void*)(uintptr_t)path.text};
                         }
                         ci_unlock_resolver(ci);
@@ -3310,7 +3310,7 @@ ci_register_macros(CiInterpreter* ci){
 
 static
 int
-ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
+ci_try_load_library(CiInterpreter* ci, CStringView lib, _Bool* success){
     if(!ci->can_dlopen) return CI_RUNTIME_ERROR;
     #ifdef NO_NATIVE_CALL
         (void)ci; (void)lib;
@@ -3329,7 +3329,7 @@ ci_try_load_library(CiInterpreter* ci, LongString lib, _Bool* success){
             msb16_destroy(&sb);
             return CI_OOM_ERROR;
         }
-        LongStringUtf16 wlib = msb16_borrow_ls(&sb);
+        CStringViewUtf16 wlib = msb16_borrow_csv(&sb);
         handle = LoadLibraryW((const wchar_t*)wlib.text);
         msb16_destroy(&sb);
         if(!handle) {*success = 0; return 0;}
@@ -3388,7 +3388,7 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             msb_write_str(&sb, suffixes[s].text, suffixes[s].length);
             msb_nul_terminate(&sb);
             if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
             if(err) goto finally;
             if(success) goto finally;
         }
@@ -3401,7 +3401,7 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             msb_write_str(&sb, sv.text, sv.length);
             msb_nul_terminate(&sb);
             if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
             if(err) goto finally;
             if(success) goto finally;
         }
@@ -3417,7 +3417,7 @@ ci_load_library(CiInterpreter* ci, StringView sv){
             msb_write_str(&sb, sv.text, sv.length);
             msb_nul_terminate(&sb);
             if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-            err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+            err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
             if(err) goto finally;
             if(success) goto finally;
         }
@@ -3429,7 +3429,7 @@ ci_load_library(CiInterpreter* ci, StringView sv){
         msb_write_str(&sb, suffixes[s].text, suffixes[s].length);
         msb_nul_terminate(&sb);
         if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
         if(err) goto finally;
         if(success) goto finally;
     }
@@ -3438,7 +3438,7 @@ ci_load_library(CiInterpreter* ci, StringView sv){
         msb_write_str(&sb, sv.text, sv.length);
         msb_nul_terminate(&sb);
         if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
         if(err) goto finally;
         if(success) goto finally;
     }
@@ -3466,7 +3466,7 @@ ci_load_framework(CiInterpreter* ci, StringView sv){
         msb_write_str(&sb, sv.text, sv.length);
         msb_nul_terminate(&sb);
         if(sb.errored){ err = CI_OOM_ERROR; goto finally; }
-        err = ci_try_load_library(ci, msb_borrow_ls(&sb), &success);
+        err = ci_try_load_library(ci, msb_borrow_csv(&sb), &success);
         if(err) goto finally;
         if(success) goto finally;
     }
@@ -3633,7 +3633,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     CppTokens* expanded = cpp_get_scratch(cpp);
     if(!expanded) return CI_OOM_ERROR;
     int err = 0;
-    LongString output = {0};
+    CStringView output = {0};
     Allocator scratch = ci_scratch_allocator(ci);
     err = cpp_expand_argument(cpp, toks, ntoks, expanded);
     if(err) goto finally;
@@ -3666,7 +3666,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     {
         StringView pkg_name = {toks->txt.length-2, toks->txt.text+1};
         CmdBuilder cmd = {.allocator = scratch};
-        cmd_prog(&cmd, LS("pkg-config"));
+        cmd_prog(&cmd, CSV("pkg-config"));
         cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
         if(cmd.errored){
             if(optional){
@@ -4270,7 +4270,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     int err = 0;
     CiInterpreter* ci = ctx;
     Allocator scratch = ci_scratch_allocator(ci);
-    LongString output = {0};
+    CStringView output = {0};
     if(!cpp->env){
         return cpp_error(cpp, loc, "__SHELL__: no environment available");
     }
@@ -4298,7 +4298,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         msb_destroy(&decoded);
         if(!a){ cmd_destroy(&cmd); return CI_OOM_ERROR; }
         if(!cmd.args.count){
-            cmd_prog(&cmd, (LongString){a->length, a->data});
+            cmd_prog(&cmd, (CStringView){a->length, a->data});
             cmd_resolve_prog_path(&cmd, cpp->env, ci_file_exists, NULL);
             if(cmd.errored){
                 err = cpp_error(cpp, loc, "__SHELL__: '%s' not found in PATH", a->data);
@@ -4330,7 +4330,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     size_t output_alloc_size = output.length + 1;
     while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
         output.length--;
-    Atom v = cpp_quote_string(cpp, LS_to_SV(output));
+    Atom v = cpp_quote_string(cpp, CSV_to_SV(output));
     Allocator_free(scratch, output.text, output_alloc_size);
     if(!v) return CI_OOM_ERROR;
     CppToken result = {

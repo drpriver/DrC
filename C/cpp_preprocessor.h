@@ -8,7 +8,7 @@
 #include "../Drp/atom_map.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
-#include "../Drp/long_string.h"
+#include "../Drp/cstring_view.h"
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/atom_table.h"

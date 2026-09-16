@@ -173,7 +173,7 @@ prep_targets(BuildCtx* ctx){
 #include "env.h"
 #include "Allocators/arena_allocator.h"
 #include "stringview.h"
-#include "long_string.h"
+#include "cstring_view.h"
 #include "cmd_builder.h"
 #include "MStringBuilder.h"
 #include "msb_sprintf.h"
@@ -196,7 +196,7 @@ prep_targets(BuildCtx* ctx){
 #pragma clang assume_nonnull begin
 #endif
 
-static inline LongString AT_to_LS(Atom a){ return (LongString){a->length, a->data}; }
+static inline CStringView AT_to_CSV(Atom a){ return (CStringView){a->length, a->data}; }
 static inline StringView AT_to_SV(Atom a){ return (StringView){a->length, a->data}; }
 
 //
@@ -603,7 +603,7 @@ b_mkdir_if_not_exists(BuildCtx* ctx, const char* path);
 
 static
 int
-b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path);
+b_mkdirs_if_not_exists(BuildCtx* ctx, CStringView path);
 
 static
 int

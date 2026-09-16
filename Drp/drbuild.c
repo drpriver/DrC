@@ -565,9 +565,9 @@ static TypeInfoMarray TI_MA_Atom = {
     .kind = TIK_MARRAY,
     .type = &TI_Atom.type_info,
 };
-static TypeInfoMarray TI_MA_LS = {
-    .size = sizeof(Marray(LongString)),
-    .align = _Alignof(Marray(LongString)),
+static TypeInfoMarray TI_MA_CSV = {
+    .size = sizeof(Marray(CStringView)),
+    .align = _Alignof(Marray(CStringView)),
     .kind = TIK_MARRAY,
     .type = &TI_SV.type_info,
 };
@@ -634,7 +634,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         int err = register_type_atoms(&ctx->at);
         if(err) goto fail;
         TI_MA_Atom.name = b_atomize(ctx, "Marray(Atom)");
-        TI_MA_LS.name = b_atomize(ctx, "Marray(LongString)");
+        TI_MA_CSV.name = b_atomize(ctx, "Marray(CStringView)");
         TI_AM_BuildTarget.name = b_atomize(ctx, "AtomMap(BuildTarget)");
         TI_AM_MA_Atom.name = b_atomize(ctx, "AtomMap(Marray(Atom))");
         TI_OS = (struct OSInfo){
@@ -1049,7 +1049,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                 },
                 {
                     .name = b_atomize(ctx, "cmd.args"),
-                    .type = &TI_MA_LS.type_info,
+                    .type = &TI_MA_CSV.type_info,
                     .offset = offsetof(BuildTarget, cmd.args),
                 },
             },
@@ -1114,7 +1114,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             }
         }
         if(sb.cursor != 0){
-            LongString p = msb_borrow_ls(&sb);
+            CStringView p = msb_borrow_csv(&sb);
             progname = p.text;
             len = p.length;
         }
@@ -1131,8 +1131,8 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             msb_write_literal(&sb, ".cache.json");
             msb_nul_terminate(&sb);
             if(sb.errored) goto fail;
-            LongString path;
-            path = msb_borrow_ls(&sb);
+            CStringView path;
+            path = msb_borrow_csv(&sb);
             ctx->cache_path = b_atomize2(ctx, path.text, path.length);
             msb_destroy(&sb);
         }
@@ -1289,7 +1289,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         int*: ARGDEST((int*)x), \
         _Bool*: ARGDEST((_Bool*)x), \
         StringView*: ARGDEST((StringView*)x), \
-        LongString*: ARGDEST((LongString*)x), \
+        CStringView*: ARGDEST((CStringView*)x), \
         Atom*: ArgAtomDest((Atom*)x, &ctx->at))
 
     enum {HCC_IDX=2, HCC_FLAVOR_IDX=3, BCC_IDX=0, BCC_FLAVOR_IDX=1, JOBS_IDX=19};
@@ -1634,12 +1634,12 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         }
     }
     if(has_clean) b_rm_directory(ctx, ctx->build_dir->data);
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->build_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->gen_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->bin_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->lib_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->obj_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_LS(ctx->deps_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->build_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->gen_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->bin_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->lib_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->obj_dir));
+    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->deps_dir));
     write_to_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
     if(ctx->njobs == 0) ctx->njobs = 1;
     if(ctx->njobs < 0) ctx->njobs = b_num_cpus();
@@ -1733,7 +1733,7 @@ typedef struct CompileCommand CompileCommand;
 struct CompileCommand {
     Atom directory;
     Atom file;
-    Marray(LongString) arguments;
+    Marray(CStringView) arguments;
     Atom output;
 };
 
@@ -1773,7 +1773,7 @@ compile_commands(BuildCtx* ctx, BuildTarget* t){
             {
                 .name = b_atomize(ctx, "arguments"),
                 .offset = offsetof(CompileCommand, arguments),
-                .type = &TI_MA_LS.type_info,
+                .type = &TI_MA_CSV.type_info,
             },
             {
                 .name = b_atomize(ctx, "output"),
@@ -1921,7 +1921,7 @@ b_printfv(BuildCtx* ctx, const char* fmt, va_list vap){
 
 static
 int
-b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
+b_mkdirs_if_not_exists(BuildCtx* ctx, CStringView path){
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
     MStringBuilder sb = {.allocator=tmp};
     int ret = 0;
@@ -1931,7 +1931,7 @@ b_mkdirs_if_not_exists(BuildCtx* ctx, LongString path){
         const char* sep = path_memsep(p, end - p, BUILD_OS == OS_WINDOWS);
         if(!sep) break;
         msb_write_str(&sb, p, sep-p);
-        LongString d = msb_borrow_ls(&sb);
+        CStringView d = msb_borrow_csv(&sb);
         int err = b_mkdir_if_not_exists(ctx, d.text);
         if(err){
             ret = err;
@@ -2143,7 +2143,7 @@ b_copy_directory(BuildCtx* ctx, const char* from, const char* to){
         int err = 0;
         #if defined __linux__
         CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
-        cmd_prog(&cmd, LS("cp"));
+        cmd_prog(&cmd, CSV("cp"));
         cmd_cargs(&cmd, "-r", from, to);
         err = b_run_cmd_sync(ctx, &cmd);
         cmd_destroy(&cmd);
@@ -2185,7 +2185,7 @@ static
 int
 b_rm_directory(BuildCtx* ctx, const char* path){
     CmdBuilder cmd = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
-    cmd_prog(&cmd, LS("rm"));
+    cmd_prog(&cmd, CSV("rm"));
     cmd_cargs(&cmd, "-rf", path);
     int err = b_run_cmd_sync(ctx, &cmd);
     cmd_destroy(&cmd);
@@ -2200,14 +2200,14 @@ b_print_command(BuildCtx* ctx, CmdBuilder* cmd){
         msb_nul_terminate(&cmd->prog);
         b_log(ctx, "%s: ", cmd->prog.data);
     }
-    MARRAY_FOR_EACH(LongString, ls, cmd->args)
-        b_log(ctx, "%s ", ls->text);
+    MARRAY_FOR_EACH(CStringView, cs, cmd->args)
+        b_log(ctx, "%s ", cs->text);
     b_log(ctx, "\n");
 }
 
 static
 void
-parse_vs_json_text(BuildCtx* ctx, LongString text, BuildTarget* target){
+parse_vs_json_text(BuildCtx* ctx, CStringView text, BuildTarget* target){
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
     DrJsonContext* jsctx = drjson_create_ctx(tmp, &ctx->at);
     unsigned flags = 0;
@@ -2242,7 +2242,7 @@ parse_vs_json_text(BuildCtx* ctx, LongString text, BuildTarget* target){
 
 static
 void
-parse_makefile_text(BuildCtx* ctx, LongString text){
+parse_makefile_text(BuildCtx* ctx, CStringView text){
     Allocator tmp = allocator_from_arena(&ctx->tmp_aa);
     MStringBuilder target = {.allocator=tmp};
     MStringBuilder prereq = {.allocator=tmp};
@@ -2297,14 +2297,14 @@ parse_makefile_text(BuildCtx* ctx, LongString text){
                             if(!skip && sv_contains(s, SV("Fetched")))
                                 skip = 1;
                             if(!skip){
-                                if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%s'\n", __LINE__, msb_borrow_ls(current).text);
+                                if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%s'\n", __LINE__, msb_borrow_csv(current).text);
                                 Atom a = b_atomize2(ctx, s.text, s.length);
                                 if(0)b_loglvl(BLOG_DEBUG, ctx, "%d: '%s' depends on '%s'\n", __LINE__, current_target->name->data, a->data);
                                 b_add_src_depa(ctx, current_target, a);
                             }
                         }
                         else {
-                            b_loglvl(BLOG_DEBUG, ctx, "%d: No target for '%s'\n", __LINE__, msb_borrow_ls(current).text);
+                            b_loglvl(BLOG_DEBUG, ctx, "%d: No target for '%s'\n", __LINE__, msb_borrow_csv(current).text);
                         }
                         msb_reset(current);
                     }
@@ -2366,7 +2366,7 @@ parse_depfile(BuildCtx* ctx, const char* filename){
     MStringBuilder sb = {.allocator=allocator_from_arena(&ctx->tmp_aa)};
     e = b_read_file(ctx, filename, &sb);
     if(e) goto finally;
-    LongString text = msb_borrow_ls(&sb);
+    CStringView text = msb_borrow_csv(&sb);
     StringView fn = {strlen(filename), filename};
     if(sv_endswith(fn, SV(".deps.json"))){
         StringView base = path_basename(fn, BUILD_OS == OS_WINDOWS);
@@ -2392,7 +2392,7 @@ b_parse_depfiles(BuildCtx* ctx){
         MStringBuilder pattern = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
         msb_write_str(&pattern, ctx->deps_dir->data, ctx->deps_dir->length);
         msb_write_literal(&pattern, "/*.{d,dep,deps,json}");
-        LongString pat = msb_borrow_ls(&pattern);
+        CStringView pat = msb_borrow_csv(&pattern);
         char** paths = NULL;
         size_t path_c = 0;
         int err = 0;
@@ -2431,10 +2431,10 @@ b_parse_depfiles(BuildCtx* ctx){
             StringViewUtf16 ext = exts[i];
             pattern.cursor = ctx->deps_dir->length+1;
             msb16_write_str(&pattern, ext.text, ext.length);
-            LongStringUtf16 ls = msb16_borrow_ls(&pattern);
+            CStringViewUtf16 cs = msb16_borrow_csv(&pattern);
             #ifdef _WIN32
             WIN32_FIND_DATAW fd = {0};
-            HANDLE h = FindFirstFileW(ls.text, &fd);
+            HANDLE h = FindFirstFileW(cs.text, &fd);
             if(h == INVALID_HANDLE_VALUE)
                 continue;
             do {
@@ -2442,14 +2442,14 @@ b_parse_depfiles(BuildCtx* ctx){
                     continue;
                 pattern.cursor = ctx->deps_dir->length+1;
                 msb16_write_str(&pattern, fd.cFileName, wcslen(fd.cFileName));
-                ls = msb16_borrow_ls(&pattern);
+                cs = msb16_borrow_csv(&pattern);
                 msb_reset(&path);
-                msb_write_utf16(&path, ls.text, ls.length);
-                parse_depfile(ctx, msb_borrow_ls(&path).text);
+                msb_write_utf16(&path, cs.text, cs.length);
+                parse_depfile(ctx, msb_borrow_csv(&path).text);
             } while(FindNextFileW(h, &fd));
             FindClose(h);
             #else
-            (void)ls;
+            (void)cs;
             #endif
         }
         msb_destroy(&path);
@@ -2585,13 +2585,13 @@ b_execute_targets(BuildCtx* ctx){
                     if(old->count != tgt->cmd.args.count)
                         goto do_command;
                     for(size_t j = 0; j < old->count; j++){
-                        LongString arg = tgt->cmd.args.data[j];
+                        CStringView arg = tgt->cmd.args.data[j];
                         Atom o = old->data[j];
                         if(0){
                             b_loglvl(BLOG_DEBUG, ctx, "%s->cmd[%zu] = '%s'\n", tgt->name->data, j, arg.text);
                             b_loglvl(BLOG_DEBUG, ctx, "old->data[%zu] = '%s'\n", j, o->data);
                         }
-                        if(!LS_equals(arg, AT_to_LS(o)))
+                        if(!CSV_equals(arg, AT_to_CSV(o)))
                             goto do_command;
                     }
                 }
@@ -2687,7 +2687,7 @@ b_execute_targets(BuildCtx* ctx){
                                 if(err) goto finally;
                             }
                             cached->count = 0;
-                            MARRAY_FOR_EACH_VALUE(LongString, arg, tgt->cmd.args){
+                            MARRAY_FOR_EACH_VALUE(CStringView, arg, tgt->cmd.args){
                                 Atom a = b_atomize2(ctx, arg.text, arg.length);
                                 err = ma_push(Atom)(cached, allocator_from_arena(&ctx->perm_aa), a);
                                 if(err) goto finally;
@@ -2829,7 +2829,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
         build->is_cmd = 1;
         CmdBuilder* cmd = &build->cmd;
         cmd->allocator = allocator_from_arena(&ctx->perm_aa);
-        cmd_prog(cmd, AT_to_LS(ctx->build_cc));
+        cmd_prog(cmd, AT_to_CSV(ctx->build_cc));
         b_src_inp(ctx, build, src->data);
         switch(ctx->build_compiler_flavor){
             case COMPILER__MAX:
@@ -2913,7 +2913,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
     CmdBuilder cmd = {
         .allocator = allocator_from_arena(&ctx->tmp_aa),
     };
-    cmd_prog(&cmd, AT_to_LS(ctx->exe_path));
+    cmd_prog(&cmd, AT_to_CSV(ctx->exe_path));
     for(int i = 1; i < argc; i++)
         cmd_carg(&cmd, argv[i]);
     cmd_resolve_prog_path(&cmd, &ctx->env, b_file_exists, ctx);
@@ -2938,7 +2938,7 @@ b_get_git_hash(BuildCtx* ctx){
         txt = sv_slice(txt, 5, txt.length);
         msb_write_literal(&pathsb, ".git/");
         msb_write_str(&pathsb, txt.text, txt.length);
-        LongString path = msb_borrow_ls(&pathsb);
+        CStringView path = msb_borrow_csv(&pathsb);
         err = b_read_file(ctx, path.text, &refsb);
         if(err){
             b_loglvl(BLOG_WARN, ctx, "Unable to read '%s'\n", path.text);
@@ -3132,7 +3132,7 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
     target->compiler_flavor = flavor;
     CmdBuilder* cmd = &target->cmd;
     cmd->allocator = allocator_from_arena(&ctx->perm_aa);
-    cmd_prog(cmd, AT_to_LS(cc));
+    cmd_prog(cmd, AT_to_CSV(cc));
     if(kind == B_COMPILE_OBJ) b_arg(ctx, target, flavor == COMPILER_CL || flavor == COMPILER_CLANG_CL ? "/c" : "-c");
     switch(flavor){
         case COMPILER_GCC_MINGW:
@@ -3243,7 +3243,7 @@ BuildTarget*
 b_cmd_target(BuildCtx* ctx, const char* name, const char* prog){
     BuildTarget* target = b_target(ctx, name);
     target->is_cmd = 1;
-    cmd_prog(&target->cmd, (LongString){strlen(prog), prog});
+    cmd_prog(&target->cmd, (CStringView){strlen(prog), prog});
     return target;
 }
 
@@ -3279,7 +3279,7 @@ static
 int
 b_mkdir_script(BuildCtx* ctx, BuildTarget* tgt){
     b_log(ctx, "mkdir -p '%s'\n", tgt->name->data);
-    return b_mkdirs_if_not_exists(ctx, (LongString){tgt->name->length, tgt->name->data});
+    return b_mkdirs_if_not_exists(ctx, (CStringView){tgt->name->length, tgt->name->data});
 }
 
 static inline
@@ -3305,7 +3305,7 @@ b_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     if(!prog->is_binary) b_debug_break(ctx, "prog is not a binary");
     b_add_dep(ctx, tgt, prog);
-    cmd_prog(&tgt->cmd, (LongString){prog->name->length, prog->name->data});
+    cmd_prog(&tgt->cmd, (CStringView){prog->name->length, prog->name->data});
 }
 
 static
@@ -3328,7 +3328,7 @@ b_src_inp(BuildCtx* ctx, BuildTarget* tgt, const char* inp_){
     BuildTarget* inp = b_src_file(ctx, inp_);
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     b_add_dep(ctx, tgt, inp);
-    cmd_arg(&tgt->cmd, (LongString){inp->name->length, inp->name->data});
+    cmd_arg(&tgt->cmd, (CStringView){inp->name->length, inp->name->data});
 }
 static
 void
@@ -3340,7 +3340,7 @@ static
 void
 b_arg(BuildCtx* ctx, BuildTarget* tgt, const char* arg){
     (void)ctx;
-    cmd_arg(&tgt->cmd, (LongString){strlen(arg), arg});
+    cmd_arg(&tgt->cmd, (CStringView){strlen(arg), arg});
 }
 
 static
@@ -3371,7 +3371,7 @@ b_out(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* out){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     if(!out->is_generated) b_debug_break(ctx, "out is is not generated");
     b_add_dep(ctx, out, tgt);
-    cmd_arg(&tgt->cmd, (LongString){out->name->length, out->name->data});
+    cmd_arg(&tgt->cmd, (CStringView){out->name->length, out->name->data});
     b_add_out(ctx, tgt, out);
 }
 
@@ -3512,7 +3512,7 @@ write_to_json_file(BuildCtx* ctx, const void* src, const TypeInfo* ti, Atom path
             msb_write_literal(&tmp_path, ".tmp");
             msb_nul_terminate(&tmp_path);
             if(!tmp_path.errored){
-                LongString t = msb_borrow_ls(&tmp_path);
+                CStringView t = msb_borrow_csv(&tmp_path);
                 enum {printflags = DRJSON_PRINT_PRETTY | DRJSON_PRINT_APPEND_NEWLINE};
                 if(BUILD_OS == OS_WINDOWS){
                     MStringBuilder16 sb = {.allocator=allocator_from_arena(&ctx->tmp_aa)};
@@ -3581,7 +3581,7 @@ read_from_json_file(BuildCtx* ctx, void* dst, const TypeInfo* ti, Atom path){
         err = 0;
         goto finally;
     }
-    LongString text = msb_borrow_ls(&sb);
+    CStringView text = msb_borrow_csv(&sb);
     err = any_from_json_txt(dst, ti, text, &ctx->at, tmp, allocator_from_arena(&ctx->perm_aa));
     if(err) b_loglvl(BLOG_ERROR, ctx, "Error parsing %s\n", path->data);
     finally:

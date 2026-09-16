@@ -1,8 +1,8 @@
 //
-// Copyright © 2021-2025, David Priver <david@davidpriver.com>
+// Copyright © 2021-2026, David Priver <david@davidpriver.com>
 //
-#ifndef LONG_STRING_H
-#define LONG_STRING_H
+#ifndef C_STRING_VIEW_H
+#define C_STRING_VIEW_H
 // size_t
 #include <stddef.h>
 // strlen, memcmp
@@ -30,19 +30,10 @@
 #endif
 #endif
 
-// It is very likely you want to put the LongString and/or StringView
-// into your public API, but this header contains lots of convenience functions
-// that depend on the macros header and particular coding style that would
-// be inappropriate for a public header.
-//
-// Setting this macro means there is already a typedef for LongString,
-// StringView and StringViewUtf16, which allows you to expose the structs
-// without the rest of this file.
+#ifndef CSTRINGVIEW_DEFINED
 
-#ifndef LONGSTRING_DEFINED
-
-typedef struct LongString LongString;
-struct LongString {
+typedef struct CStringView CStringView;
+struct CStringView {
     size_t length; // excludes the terminating NUL
     const char*_Null_unspecified text; // utf-8 encoded text
 };
@@ -54,8 +45,8 @@ struct StringViewUtf16 {
     // utf-16 encoded code points, native endianness
     const unsigned short*_Null_unspecified text;
 };
-typedef struct LongStringUtf16 LongStringUtf16;
-struct LongStringUtf16 {
+typedef struct CStringViewUtf16 CStringViewUtf16;
+struct CStringViewUtf16 {
     size_t length; // in code units
     // utf-16 encoded code points, native endianness
     const unsigned short*_Null_unspecified text;
@@ -71,14 +62,14 @@ struct StringView2 {
 
 force_inline
 StringView
-LS_to_SV(LongString ls){
-    return (StringView){.length=ls.length, .text=ls.text};
+CSV_to_SV(CStringView csv){
+    return (StringView){.length=csv.length, .text=csv.text};
 }
 
 
 static inline
 _Bool
-LS_equals(const LongString a, const LongString b){
+CSV_equals(const CStringView a, const CStringView b){
     if (a.length != b.length)
         return 0;
     if(a.text == b.text)
@@ -88,15 +79,15 @@ LS_equals(const LongString a, const LongString b){
     return a.text && b.text && !memcmp(a.text, b.text, a.length);
 }
 
-#ifdef LS
-#error "LS defined"
+#ifdef CSV
+#error "CSV defined"
 #endif
 
-#define LS(literal) ((LongString){.length=sizeof("" literal)-1, .text="" literal})
+#define CSV(literal) ((CStringView){.length=sizeof("" literal)-1, .text="" literal})
 #define SV16(literal) ((StringViewUtf16){.length = sizeof(u"" literal)/2-1, .text=u"" literal})
 // MSCV is garbage and doesn't like compound literals for static initializers
 // So use this macro instead.
-#define LSI(literal) {sizeof "" literal -1, "" literal}
+#define CSVI(literal) {sizeof "" literal -1, "" literal}
 #define SV16I(literal) {sizeof u"" literal /2-1, u"" literal}
 
 static inline
@@ -113,17 +104,17 @@ SV_utf16_equals(const StringViewUtf16 a, const StringViewUtf16 b){
 
 static inline
 _Bool
-LS_SV_equals(const LongString ls, const StringView sv){
-    if(ls.length != sv.length)
+CSV_SV_equals(const CStringView csv, const StringView sv){
+    if(csv.length != sv.length)
         return 0;
-    if(ls.text == sv.text)
+    if(csv.text == sv.text)
         return 1;
-    // assert(ls.text);
+    // assert(csv.text);
     // assert(sv.text);
-    return ls.text && sv.text && memcmp(ls.text, sv.text, sv.length)==0;
+    return csv.text && sv.text && memcmp(csv.text, sv.text, sv.length)==0;
 }
 
-// Maybe it's UB (idk) but this works for LongStrings as well.
+// Maybe it's UB (idk) but this works for CStringViews as well.
 // Although maybe I should just use strcmp for those.
 force_inline
 int

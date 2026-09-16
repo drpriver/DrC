@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "stringview.h"
-#include "long_string.h"
+#include "cstring_view.h"
 
 #ifdef _WIN32
 // allow user to suppress this def
@@ -66,7 +66,7 @@ struct GetInputCtx {
     int _hst_cursor;
     int _cols;
     int _history_index;
-    LongString _history[GI_LINE_HISTORY_MAX];
+    CStringView _history[GI_LINE_HISTORY_MAX];
     char buff[GI_BUFF_SIZE];
     size_t buff_cursor;
     size_t buff_count; // number of used characters.

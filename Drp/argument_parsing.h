@@ -14,7 +14,7 @@
 #include <assert.h>
 #include <string.h>
 #include "stringview.h"
-#include "long_string.h"
+#include "cstring_view.h"
 #include "parse_numbers.h"
 
 #ifndef arrlen
@@ -261,7 +261,7 @@ static const StringView ArgTypeNames[] = {
         const char**: ARG_CSTRING, \
         char**: ARG_CSTRING, \
         StringView*: ARG_STRING, \
-        LongString*: ARG_STRING)
+        CStringView*: ARG_STRING)
 #else
 #define ARGTYPE(_x) _Generic(_x, \
         int64_t*: ARG_INTEGER64, \
@@ -271,7 +271,7 @@ static const StringView ArgTypeNames[] = {
         const char**: ARG_CSTRING, \
         char**: ARG_CSTRING, \
         StringView*: ARG_STRING, \
-        LongString*: ARG_STRING)
+        CStringView*: ARG_STRING)
 #endif
 //
 // A structure for allowing the parsing of user defined types.

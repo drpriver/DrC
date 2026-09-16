@@ -1,5 +1,5 @@
 //
-// Copyright © 2021-2025, David Priver <david@davidpriver.com>
+// Copyright © 2021-2026, David Priver <david@davidpriver.com>
 //
 #ifndef MSTRING_BUILDER16_H
 #define MSTRING_BUILDER16_H
@@ -7,7 +7,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdint.h>
-#include "long_string.h"
+#include "cstring_view.h"
 #include "stringview.h"
 #include "Allocators/allocator.h"
 
@@ -57,7 +57,7 @@ struct MStringBuilder16 {
 
 //
 // Dealloc the data and zeros out the builder.
-// Unneeded if you called `msb16_detach_ls` or `msb16_detach_sv`.
+// Unneeded if you called `msb16_detach_csv` or `msb16_detach_sv`.
 static inline
 void
 msb16_destroy(MStringBuilder16* msb16){
@@ -106,8 +106,8 @@ msb16_ensure_additional(MStringBuilder16* msb16, size_t additional_capacity){
 // Ensures nul-termination.
 // Builder can be reused afterwards; its fields are zeroed.
 static inline
-LongStringUtf16
-msb16_detach_ls(MStringBuilder16* msb16){
+CStringViewUtf16
+msb16_detach_csv(MStringBuilder16* msb16){
 #ifdef DEBUGGING_H
     if(msb16->errored) bt();
     if(!msb16->data) bt();
@@ -118,7 +118,7 @@ msb16_detach_ls(MStringBuilder16* msb16){
     int err = _msb16_resize(msb16, msb16->cursor+1);
     (void)err;
     assert(!err);
-    LongStringUtf16 result = {0};
+    CStringViewUtf16 result = {0};
     result.text = msb16->data;
     result.length = msb16->cursor;
     msb16->data = NULL;
@@ -166,15 +166,15 @@ msb16_borrow_sv(MStringBuilder16* msb16){
 
 // "Borrows" a nul-terminated string
 static inline
-LongStringUtf16
-msb16_borrow_ls(MStringBuilder16* msb16){
+CStringViewUtf16
+msb16_borrow_csv(MStringBuilder16* msb16){
     msb16_nul_terminate(msb16);
 #ifdef DEBUGGING_H
     if(msb16->errored) bt();
 #endif
     assert(!msb16->errored);
     assert(msb16->data);
-    return (LongStringUtf16) {
+    return (CStringViewUtf16) {
         .text = msb16->data,
         .length = msb16->cursor,
     };

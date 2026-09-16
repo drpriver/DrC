@@ -149,7 +149,7 @@ fc_get_entry(FileCache* fc){
         if(!i) return NULL;
         i--;
         CachedFile* f = &fc->map.data[i];
-        if(f->hash == hash && fc_path_equals(fc, LS_to_SV(f->path), path))
+        if(f->hash == hash && fc_path_equals(fc, CSV_to_SV(f->path), path))
             return f;
         idx++;
         if(idx >= cap2) idx = 0;
@@ -190,8 +190,8 @@ fc_create_entry(FileCache* fc){
         msb_destroy(&fc->path_builder);
         return NULL;
     }
-    LongString path = msb_detach_ls(&fc->path_builder);
-    uint32_t hash = fc_hash_path(fc, LS_to_SV(path));
+    CStringView path = msb_detach_csv(&fc->path_builder);
+    uint32_t hash = fc_hash_path(fc, CSV_to_SV(path));
     uint32_t cap2 = (uint32_t)fc->map.cap*2;
     uint32_t *idxes = (uint32_t*)(void*)(fc->map.data + fc->map.cap);
     uint32_t idx = fast_reduce32(hash, cap2);

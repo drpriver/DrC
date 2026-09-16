@@ -329,8 +329,8 @@ cpp_find_include(CppPreprocessor* cpp, _Bool quote, _Bool is_next, StringView he
     if(quote && !is_next){
         CppFrame* frame = &ma_tail(cpp->frames);
         if(frame->file_id < cpp->fc->map.count){
-            LongString file_path = cpp->fc->map.data[frame->file_id].path;
-            StringView dir = path_dirname(LS_to_SV(file_path), 0);
+            CStringView file_path = cpp->fc->map.data[frame->file_id].path;
+            StringView dir = path_dirname(CSV_to_SV(file_path), 0);
             msb_reset(sb);
             if(dir.length){
                 msb_write_str(sb, dir.text, dir.length);
@@ -1498,7 +1498,7 @@ cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix){
         column = loc.column;
         file_id = loc.file_id;
     }
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     log_sprintf(cpp->logger, "%s:%d:%d: %s: ", path.text, (int)line, (int)column, prefix);
 }
 
@@ -1512,7 +1512,7 @@ cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level){
             uint64_t line = e->line;
             uint64_t column = e->column;
             uint64_t file_id = e->file_id;
-            LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+            CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
             log_logf(cpp->logger, level, "%s:%d:%d: ... expanded from here", path.text, (int)line, (int)column);
         }
     }
@@ -1524,7 +1524,7 @@ cpp_include_backtrace(CppPreprocessor* cpp, LogLevel level){
     if(cpp->frames.count < 2) return;
     for(size_t i = 0; i < cpp->frames.count - 1; i++){
         CppFrame* f = &cpp->frames.data[i];
-        LongString path = f->file_id < cpp->fc->map.count?cpp->fc->map.data[f->file_id].path:LS("???");
+        CStringView path = f->file_id < cpp->fc->map.count?cpp->fc->map.data[f->file_id].path:CSV("???");
         log_logf(cpp->logger, level, "In file included from %s:%d:", path.text, (int)(f->line - 1));
     }
 }
@@ -5060,14 +5060,14 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
             if(sdk){
                 msb_sprintf(&sb, "%s/usr/include", sdk);
                 if(!sb.errored){
-                    LongString path = msb_borrow_ls(&sb);
+                    CStringView path = msb_borrow_csv(&sb);
                     err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, path.text);
                     if(err) goto finally;
                 }
                 msb_reset(&sb);
                 msb_sprintf(&sb, "%s/System/Library/Frameworks", sdk);
                 if(!sb.errored){
-                    LongString path = msb_borrow_ls(&sb);
+                    CStringView path = msb_borrow_csv(&sb);
                     err = cpp_add_default_include(cpp, &cpp->framework_paths, path.text);
                     if(err) goto finally;
                 }
@@ -5104,7 +5104,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
                         msb_reset(&sb);
                         msb_write_str(&sb, s, part);
                         if(!sb.errored){
-                            LongString path = msb_borrow_ls(&sb);
+                            CStringView path = msb_borrow_csv(&sb);
                             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, path.text);
                             if(err) goto finally;
                         }
@@ -5222,8 +5222,8 @@ cpp_builtin_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
     else {
         file_id = loc.file_id;
     }
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
-    Atom a = cpp_quote_string(cpp, LS_to_SV(path));
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
+    Atom a = cpp_quote_string(cpp, CSV_to_SV(path));
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5248,12 +5248,12 @@ cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     else {
         file_id = loc.file_id;
     }
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     _Bool windows = 0;
     #ifdef _WIN32
     windows = 1;
     #endif
-    StringView basename = path_basename(LS_to_SV(path), windows);
+    StringView basename = path_basename(CSV_to_SV(path), windows);
     Atom a = cpp_quote_string(cpp, basename);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
@@ -5279,12 +5279,12 @@ cpp_builtin_dir(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     else {
         file_id = loc.file_id;
     }
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     _Bool windows = 0;
     #ifdef _WIN32
     windows = 1;
     #endif
-    StringView dir = path_dirname(LS_to_SV(path), windows);
+    StringView dir = path_dirname(CSV_to_SV(path), windows);
     if(!dir.length) dir = SV(".");
     Atom a = cpp_quote_string(cpp, dir);
     if(!a) return CPP_OOM_ERROR;
@@ -5402,8 +5402,8 @@ cpp_builtin_base_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc 
     uint64_t file_id = 0;
     if(cpp->frames.count)
         file_id = cpp->frames.data[0].file_id;
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
-    Atom a = cpp_quote_string(cpp, LS_to_SV(path));
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
+    Atom a = cpp_quote_string(cpp, CSV_to_SV(path));
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -5682,7 +5682,7 @@ cpp_builtin_print(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
         column = loc.column;
         file_id = loc.file_id;
     }
-    LongString path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:LS("???");
+    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     msb_sprintf(sb, "%s:%d:%d: ", path.text, (int)line, (int)column);
     for(size_t i = 0; i < args->count; i++){
         CppToken tok = args->data[i];
@@ -6191,8 +6191,8 @@ cpp_add_search_path_from_pragma(CppPreprocessor* cpp, CppToken tok, size_t inclu
     if(!path_is_abspath(path, IS_WINDOWS)){
         CppFrame* frame = &ma_tail(cpp->frames);
         if(frame->file_id < cpp->fc->map.count){
-            LongString file_path = cpp->fc->map.data[frame->file_id].path;
-            StringView dir = path_dirname(LS_to_SV(file_path), 0);
+            CStringView file_path = cpp->fc->map.data[frame->file_id].path;
+            StringView dir = path_dirname(CSV_to_SV(file_path), 0);
             if(sv_equals(path, SV("."))){
                 msb_reset(&decoded);
                 msb_write_str(&decoded, dir.text, dir.length);

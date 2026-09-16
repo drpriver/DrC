@@ -160,7 +160,7 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
         msb_reset(&cmd->cmd_line);
         for(size_t i = 0; i < cmd->args.count; i++){
             if(i != 0) msb_write_char(&cmd->cmd_line, ' ');
-            StringView sv = LS_to_SV(cmd->args.data[i]);
+            StringView sv = CSV_to_SV(cmd->args.data[i]);
             if(arg_needs_escape_win32(sv)){
                 msb_write_char(&cmd->cmd_line, '"');
                 for(size_t j = 0; j < sv.length; j++){
@@ -258,7 +258,7 @@ cmd_exec(CmdBuilder* cmd, void* envp){
 
 static
 int
-cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, LongString* out){
+cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* out){
     if(cmd->errored) return 1;
     if(!cmd->prog.cursor) return 1;
     intptr_t hProc = -1;
@@ -273,7 +273,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, LongString* o
         msb_reset(&cmd->cmd_line);
         for(size_t i = 0; i < cmd->args.count; i++){
             if(i != 0) msb_write_char(&cmd->cmd_line, ' ');
-            StringView sv = LS_to_SV(cmd->args.data[i]);
+            StringView sv = CSV_to_SV(cmd->args.data[i]);
             if(arg_needs_escape_win32(sv)){
                 msb_write_char(&cmd->cmd_line, '"');
                 for(size_t j = 0; j < sv.length; j++){

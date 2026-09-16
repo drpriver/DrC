@@ -14236,7 +14236,7 @@ cc_eval_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     FileCache* fc = p->cpp.fc;
                     if(file_id >= fc->map.count)
                         return CC_NOT_CONSTANT_ERROR;
-                    LongString path = fc->map.data[file_id].path;
+                    CStringView path = fc->map.data[file_id].path;
                     Atom a = AT_atomize(p->cpp.at, path.text, path.length);
                     if(!a) return CC_OOM_ERROR;
                     node = cc_constexpr_string_slice_expr(p, e->loc, a, 0);

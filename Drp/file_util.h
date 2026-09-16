@@ -19,7 +19,7 @@
 #if defined USE_C_STDIO
 #include <errno.h>
 #endif
-#include "long_string.h"
+#include "cstring_view.h"
 #include "ByteBuffer.h"
 #include "Allocators/allocator.h"
 
@@ -109,7 +109,7 @@ struct FileError {
 static inline
 warn_unused
 FileError
-read_file(const char* filepath, Allocator a, LongString* outstr);
+read_file(const char* filepath, Allocator a, CStringView* outstr);
 
 // Read an entire file into a byte buffer. Not guranteed nul-terminated.
 static inline
@@ -131,7 +131,7 @@ write_file(const char* filename, const void* data, size_t data_length);
 static inline
 warn_unused
 FileError
-read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr);
+read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr);
 
 // Like read_file_handle, but doesn't nul-terminate.
 static inline
@@ -254,7 +254,7 @@ file_size_from_handle(FILE* fp, size_t* size){
 static inline
 warn_unused
 FileError
-read_file(const char* filepath, Allocator a, LongString* outstr){
+read_file(const char* filepath, Allocator a, CStringView* outstr){
     FileError result = {0};
     FILE* fp = fopen(filepath, "rb");
     if(!fp)
@@ -278,7 +278,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
         goto finally;
     }
     text[nbytes] = '\0';
-    *outstr = (LongString){nbytes, text};
+    *outstr = (CStringView){nbytes, text};
 finally:
     fclose(fp);
     return result;
@@ -321,7 +321,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_handle(FILE* fp, Allocator a, LongString* outstr){
+read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
     FileError result = {0};
     enum {CHUNK_SIZE = 65536};
     size_t capacity = CHUNK_SIZE;
@@ -358,7 +358,7 @@ read_file_handle(FILE* fp, Allocator a, LongString* outstr){
         goto fail;
     }
     new_buffer[length] = '\0';
-    *outstr = (LongString){length, new_buffer};
+    *outstr = (CStringView){length, new_buffer};
     return result;
     fail:
     Allocator_free(a, buffer, capacity);
@@ -415,7 +415,7 @@ file_size_from_handle(int fd, size_t* length){
 static inline
 warn_unused
 FileError
-read_file(const char* filepath, Allocator a, LongString* outstr){
+read_file(const char* filepath, Allocator a, CStringView* outstr){
     FileError result = {0};
     // O_NONBLOCK prevents blocking on a FIFO without a writer
     // We'll reject in file_size_from_handle() anyway.
@@ -445,7 +445,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
     }
     assert((size_t)read_result == nbytes);
     text[nbytes] = '\0';
-    *outstr = (LongString){nbytes, text};
+    *outstr = (CStringView){nbytes, text};
 finally:
     close(fd);
     return result;
@@ -493,7 +493,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr){
+read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
     FileError result = {0};
     size_t nbytes;
     FileError size_e = file_size_from_handle(fd, &nbytes);
@@ -526,7 +526,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr){
             text = new_text;
         }
         text[total_read] = '\0';
-        *outstr = (LongString){total_read, text};
+        *outstr = (CStringView){total_read, text};
         return result;
     }
     enum {CHUNK_SIZE = 65536};
@@ -568,7 +568,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, LongString* outstr){
         return result;
     }
     new_buffer[length] = 0;
-    *outstr = (LongString){length, new_buffer};
+    *outstr = (CStringView){length, new_buffer};
     return result;
 }
 
@@ -635,7 +635,7 @@ file_util_read_exact(HANDLE handle, void* data, size_t length){
 static inline
 warn_unused
 FileError
-read_file(const char* filepath, Allocator a, LongString* outstr){
+read_file(const char* filepath, Allocator a, CStringView* outstr){
     FileError result = {0};
     HANDLE handle = CreateFileA(
             filepath,
@@ -670,7 +670,7 @@ read_file(const char* filepath, Allocator a, LongString* outstr){
         goto finally;
     }
     text[nbytes] = '\0';
-    *outstr = (LongString){nbytes, text};
+    *outstr = (CStringView){nbytes, text};
 finally:
     CloseHandle(handle);
     return result;
@@ -679,7 +679,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_w(const wchar_t* filepath, Allocator a, LongString* outstr){
+read_file_w(const wchar_t* filepath, Allocator a, CStringView* outstr){
     FileError result = {0};
     HANDLE handle = CreateFileW(
             filepath,
@@ -713,7 +713,7 @@ read_file_w(const wchar_t* filepath, Allocator a, LongString* outstr){
         goto finally;
     }
     text[nbytes] = '\0';
-    *outstr = (LongString){nbytes, text};
+    *outstr = (CStringView){nbytes, text};
 finally:
     CloseHandle(handle);
     return result;
@@ -806,7 +806,7 @@ finally:
 static inline
 warn_unused
 FileError
-read_file_handle(FileUtilHandle handle, Allocator a, LongString* outstr){
+read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
     FileError result = {0};
     LARGE_INTEGER size;
     BOOL size_success = GetFileType(handle) == FILE_TYPE_DISK && GetFileSizeEx(handle, &size);
@@ -842,7 +842,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, LongString* outstr){
             text = new_text;
         }
         text[total_read] = '\0';
-        *outstr = (LongString){total_read, text};
+        *outstr = (CStringView){total_read, text};
         return result;
     }
     enum {CHUNK_SIZE = 65536}; // 64KB chunks
@@ -888,7 +888,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, LongString* outstr){
         return result;
     }
     new_buffer[length] = 0;
-    *outstr = (LongString){length, new_buffer};
+    *outstr = (CStringView){length, new_buffer};
     return result;
 }
 
@@ -966,7 +966,7 @@ write_file_handle(HANDLE handle, const void* data, size_t data_length){
 static inline
 warn_unused
 FileError
-read_file(const char* filepath, Allocator a, LongString* outstr){
+read_file(const char* filepath, Allocator a, CStringView* outstr){
     (void)a;
     (void)filepath;
     FileError result = {.errored=FILE_ERROR};

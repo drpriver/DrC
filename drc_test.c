@@ -14,7 +14,7 @@
 #include "Drp/Allocators/mallocator.h"
 #include "Drp/Allocators/arena_allocator.h"
 #include "Drp/msb_sprintf.h"
-LongString DRC_PATH;
+CStringView DRC_PATH;
 StringView COVDIR;
 char** ENVP;
 
@@ -35,15 +35,15 @@ TestFunction(test_snippets){
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         const char* name; int line;
-        LongString program;
+        CStringView program;
         StringView expected_output;
-        LongString args[4];
+        CStringView args[4];
         _Bool skip;
     } testcases[] = {
         {
             // atexit callbacks require the interpreter to stay alive after main returns.
             "atexit cb", __LINE__,
-            .program = LSI(
+            .program = CSVI(
                 "#include <stdio.h>\n"
                 "#include <stdlib.h>\n"
                 "atexit(void(void){\n"
@@ -69,7 +69,7 @@ TestFunction(test_snippets){
         {
             // ditto, but via main()
             "atexit cb (main)", __LINE__,
-            .program = LSI(
+            .program = CSVI(
                 "#include <stdio.h>\n"
                 "#include <stdlib.h>\n"
                 "void cb(void){\n"
@@ -84,7 +84,7 @@ TestFunction(test_snippets){
         },
         {
             "_Argc/_Argv/argc/argv", __LINE__,
-            .program = LSI(
+            .program = CSVI(
                 "#include <stdio.h>\n"
                 "for(int i = 1; i < _Argc; i++) puts(_Argv[i]);\n"
                 "puts(\"---\");\n"
@@ -92,7 +92,7 @@ TestFunction(test_snippets){
                 "   for(int i = 1; i < argc; i++) puts(argv[i]);\n"
                 "}\n"
             ),
-            .args = {LSI("hello"), LSI("world")},
+            .args = {CSVI("hello"), CSVI("world")},
             .expected_output=SVI(
                 "hello" EOL
                 "world" EOL
@@ -103,7 +103,7 @@ TestFunction(test_snippets){
         },
         {
             "_Argc/_Argv/argc/argv", __LINE__,
-            .program = LSI(
+            .program = CSVI(
                 "#include <stdio.h>\n"
                 "for(int i = 1; i < _Argc; i++) puts(_Argv[i]);\n"
                 "puts(\"---\");\n"
@@ -117,7 +117,7 @@ TestFunction(test_snippets){
         },
         {
             "switch _Type", __LINE__,
-            .program = LSI(
+            .program = CSVI(
                 "#include <stdio.h>\n"
                 "const char* name(_Type T){\n"
                 "    switch(T){\n"
@@ -147,13 +147,13 @@ TestFunction(test_snippets){
         cmd_clear(&cmd);
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
-        cmd_arg(&cmd, LS("-e"));
+        cmd_arg(&cmd, CSV("-e"));
         cmd_arg(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
             if(!c->args[a].text) break;
             cmd_arg(&cmd, c->args[a]);
         }
-        LongString output = {0};
+        CStringView output = {0};
         if(COVDIR.length){
             msb_reset(&prefix);
             msb_sprintf(&prefix, "%s/snippet_%zu", COVDIR.text, i);
@@ -185,7 +185,7 @@ TestFunction(test_snippets){
             TEST_stats.failures++;
             continue;
         }
-        test_expect_equals_sv(c->expected_output, LS_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
+        test_expect_equals_sv(c->expected_output, CSV_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
         if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
         if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }
@@ -204,44 +204,44 @@ TestFunction(test_samples){
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
     static const struct Case {
         int line;
-        LongString program;
+        CStringView program;
         StringView expected_output;
-        LongString args[4];
+        CStringView args[4];
         _Bool syntax_only;
         _Bool skip;
     } testcases[] = {
         {
-            __LINE__, LSI("Samples/hello.c"),
+            __LINE__, CSVI("Samples/hello.c"),
             SVI("Hello world" EOL),
         },
         {
-            __LINE__, LSI("Samples/main.c"),
+            __LINE__, CSVI("Samples/main.c"),
             SVI(
                 "Hello from main!" EOL
                 "0) Samples/main.c" EOL
             ),
         },
         {
-            __LINE__, LSI("Samples/script.c"),
+            __LINE__, CSVI("Samples/script.c"),
             SVI( "Hello world from 'Samples/script.c'" EOL),
         },
         {
-            __LINE__, LSI("Samples/Simple/calc.c"),
+            __LINE__, CSVI("Samples/Simple/calc.c"),
             SVI( "12" EOL),
-            {LSI("3 3 3 * +")},
+            {CSVI("3 3 3 * +")},
         },
-        { __LINE__, LSI("Samples/Simple/mandelbrot.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/Simple/primes.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/CLI/bf.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/CLI/hexdump.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/CLI/minigrep.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/CLI/sort.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/CLI/wc.c"), .syntax_only = 1, },
-        { __LINE__, LSI("Samples/TUI/life.c"), .syntax_only = 1},
-        { __LINE__, LSI("Samples/TUI/mines.c"), .syntax_only = 1, .skip=IS_WINDOWS}, // uses termios
-        { __LINE__, LSI("Samples/TUI/rule110.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Simple/mandelbrot.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/Simple/primes.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/CLI/bf.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/CLI/hexdump.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/CLI/minigrep.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/CLI/sort.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/CLI/wc.c"), .syntax_only = 1, },
+        { __LINE__, CSVI("Samples/TUI/life.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/TUI/mines.c"), .syntax_only = 1, .skip=IS_WINDOWS}, // uses termios
+        { __LINE__, CSVI("Samples/TUI/rule110.c"), .syntax_only = 1},
         {
-            __LINE__, LSI("Samples/Simple/vfprintf.c"),
+            __LINE__, CSVI("Samples/Simple/vfprintf.c"),
             SVI(
                 "Samples/Simple/vfprintf.c:14: Hello world" EOL
                 "Samples/Simple/vfprintf.c:15: Hello world" EOL
@@ -255,34 +255,34 @@ TestFunction(test_samples){
                 "Samples/Simple/vfprintf.c:15: hello" EOL
             )
         },
-        { __LINE__, LSI("Samples/Extensions/moremacros.c"), .syntax_only = 1, .skip=1},
-        { __LINE__, LSI("Samples/Extensions/__get.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/__mixin.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/_Type.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/defblock.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/enum_strings.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/fucs.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/json_parse.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/methods.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/moremacros.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/procmacro-if.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/procmacro.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, LSI("Samples/Extensions/static-if.c"), .syntax_only = 1, .skip = 1 },
+        { __LINE__, CSVI("Samples/Extensions/moremacros.c"), .syntax_only = 1, .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/__get.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/__mixin.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/_Type.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/defblock.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/enum_strings.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/fucs.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/json_parse.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/methods.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/moremacros.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/procmacro-if.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/procmacro.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/static-if.c"), .syntax_only = 1, .skip = 1 },
         {
-            __LINE__, LSI("Samples/Extensions/argv.c"),
+            __LINE__, CSVI("Samples/Extensions/argv.c"),
             SVI(
                 "argc: 1" EOL
                 "0) Samples/Extensions/argv.c" EOL
             ),
         },
         {
-            __LINE__, LSI("Samples/Extensions/autotypedef.c"),
+            __LINE__, CSVI("Samples/Extensions/autotypedef.c"),
             SVI(""),
         },
         {
-            __LINE__, LSI("Samples/POSIX/atomics.c"),
+            __LINE__, CSVI("Samples/POSIX/atomics.c"),
             SVI(
                 "fetch_add counter: 400000 (expected 400000)" EOL
                 "fetch_sub counter: 0 (expected 0)" EOL
@@ -293,19 +293,19 @@ TestFunction(test_samples){
             .skip = !IS_POSIX,
         },
         {
-            __LINE__, LSI("Samples/POSIX/locking.c"),
+            __LINE__, CSVI("Samples/POSIX/locking.c"),
             SVI(
                 "Mode: mutex" EOL
                 "Counter: 400000 (expected 400000)" EOL
             ),
             .skip = IS_WINDOWS,
         },
-        { __LINE__, LSI("Samples/POSIX/dirwatch.c"), .syntax_only = 1, .skip = !IS_APPLE}, // TODO: is this supposed to work on linux?
-        { __LINE__, LSI("Samples/POSIX/http_get.c"), .syntax_only = 1, .skip = !IS_POSIX},
-        { __LINE__, LSI("Samples/POSIX/http_server.c"), .syntax_only = 1, .skip = !IS_POSIX},
-        { __LINE__, LSI("Samples/POSIX/ls.c"), .syntax_only = 1, .skip = !IS_POSIX},
-        { __LINE__, LSI("Samples/POSIX/mandelbrot_multithreaded.c"), .syntax_only = 1, .skip = !IS_POSIX},
-        { __LINE__, LSI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, CSVI("Samples/POSIX/dirwatch.c"), .syntax_only = 1, .skip = !IS_APPLE}, // TODO: is this supposed to work on linux?
+        { __LINE__, CSVI("Samples/POSIX/http_get.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, CSVI("Samples/POSIX/http_server.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, CSVI("Samples/POSIX/ls.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, CSVI("Samples/POSIX/mandelbrot_multithreaded.c"), .syntax_only = 1, .skip = !IS_POSIX},
+        { __LINE__, CSVI("Samples/POSIX/pipe.c"), .syntax_only = 1, .skip = !IS_POSIX},
     };
     static int idx = 0;
     int err = 0;
@@ -316,13 +316,13 @@ TestFunction(test_samples){
         cmd_prog(&cmd, DRC_PATH);
         msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
         if(c->syntax_only)
-            cmd_arg(&cmd, LS("--syntax-only"));
+            cmd_arg(&cmd, CSV("--syntax-only"));
         cmd_arg(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
             if(!c->args[a].text) break;
             cmd_arg(&cmd, c->args[a]);
         }
-        LongString output = {0};
+        CStringView output = {0};
         if(COVDIR.length){
             msb_reset(&prefix);
             msb_sprintf(&prefix, "%s/snippet_%zu", COVDIR.text, i);
@@ -354,7 +354,7 @@ TestFunction(test_samples){
             TEST_stats.failures++;
             continue;
         }
-        test_expect_equals_sv(c->expected_output, LS_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
+        test_expect_equals_sv(c->expected_output, CSV_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
         if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
         if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }

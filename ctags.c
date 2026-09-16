@@ -509,7 +509,7 @@ ct_build_tag(FileCache* fc, LineCache* lines, CtSymbolKind kind, Atom a, SrcLoc 
     if(!file_id) return -1;
     if(file_id >= fc->map.count) return -1;
     CachedFile* cf = &fc->map.data[file_id];
-    LongString path = cf->path;
+    CStringView path = cf->path;
     if(path.length && path.text[0] == '<') return -1;
     StringView file_text = {
         cf->data.n_bytes,

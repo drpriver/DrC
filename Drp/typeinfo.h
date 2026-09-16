@@ -386,7 +386,7 @@ static const TypeInfo* _Null_unspecified const basic_type_infos[] = {
     Atom*: TIK_ATOM, \
     _Bool*: TIK_BOOL, \
     StringView*: TIK_SV, \
-    LongString*: TIK_SV, \
+    CStringView*: TIK_SV, \
     float* : TIK_FLOAT32, \
     double*: TIK_FLOAT64)
 #define BasicType_to_TypeInfo(T) basic_type_infos[BasicType_to_TypeInfoKind(T)]
@@ -403,7 +403,7 @@ static const TypeInfo* _Null_unspecified const basic_type_infos[] = {
     Atom*: TIK_ATOM, \
     _Bool*: TIK_BOOL, \
     StringView*: TIK_SV, \
-    LongString*: TIK_SV, \
+    CStringView*: TIK_SV, \
     float* : TIK_FLOAT32, \
     double*: TIK_FLOAT64)
 #define BasicVal_to_TypeInfo(x) basic_type_infos[BasicVal_to_TypeInfoKind(x)]

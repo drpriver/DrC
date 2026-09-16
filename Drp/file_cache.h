@@ -4,7 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stddef.h>
-#include "long_string.h"
+#include "cstring_view.h"
 #include "MStringBuilder.h"
 #include "Allocators/allocator.h"
 #ifdef __clang__
@@ -74,7 +74,7 @@ static int fc_intern_path(FileCache*, uint32_t* out_file_id);
 typedef struct CachedFile CachedFile;
 struct CachedFile {
     // Normalized path, with filesystem casing
-    LongString path;
+    CStringView path;
     uint32_t hash;
 
     uint32_t valid:       1;

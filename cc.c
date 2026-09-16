@@ -364,7 +364,7 @@ int main(int argc, char** argv, char** envp){
         if(err) goto stringify_error;
     }
     else if(!filename.length && !repl){
-        LongString txt;
+        CStringView txt;
         FileError fe = read_file_handle(FU_STDIN, MALLOCATOR, &txt);
         if(fe.errored){
             err = _cc_file_not_found_error;
@@ -372,7 +372,7 @@ int main(int argc, char** argv, char** envp){
         }
         filename = SV("(stdin)");
         fc_write_path(fc, filename.text, filename.length);
-        err = fc_cache_file(fc, LS_to_SV(txt));
+        err = fc_cache_file(fc, CSV_to_SV(txt));
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) goto stringify_error;
     }
@@ -486,7 +486,7 @@ int main(int argc, char** argv, char** envp){
                         column = loc.column;
                         file_id = loc.file_id;
                     }
-                    LongString path = file_id < interp.parser.cpp.fc->map.count?interp.parser.cpp.fc->map.data[file_id].path:LS("???");
+                    CStringView path = file_id < interp.parser.cpp.fc->map.count?interp.parser.cpp.fc->map.data[file_id].path:CSV("???");
                     msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
                 }
             }
@@ -694,7 +694,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         MStringBuilder path = {.allocator = MALLOCATOR};
         for(size_t i = 0; i < parser->cpp.fc->map.count; i++){
             CachedFile* f = &parser->cpp.fc->map.data[i];
-            if(sv_startswith(LS_to_SV(f->path), SV("(repl"))){
+            if(sv_startswith(CSV_to_SV(f->path), SV("(repl"))){
                 msb_sprintf(&sb, "// %s\n", f->path.text);
                 msb_write_str(&sb, f->data.buff, f->data.n_bytes);
                 if(msb_peek(&sb) != '\n')
@@ -980,7 +980,7 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
                     column = loc.column;
                     file_id = loc.file_id;
                 }
-                LongString path = file_id < p->cpp.fc->map.count?p->cpp.fc->map.data[file_id].path:LS("???");
+                CStringView path = file_id < p->cpp.fc->map.count?p->cpp.fc->map.data[file_id].path:CSV("???");
                 msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
             }
         }

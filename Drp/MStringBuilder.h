@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <assert.h>
-#include "long_string.h"
+#include "cstring_view.h"
 #include "stringview.h"
 #include "Allocators/allocator.h"
 
@@ -56,7 +56,7 @@ struct MStringBuilder {
 
 //
 // Dealloc the data and zeros out the builder.
-// Unneeded if you called `msb_detach_ls` or `msb_detach_sv`.
+// Unneeded if you called `msb_detach_csv` or `msb_detach_sv`.
 static inline
 void
 msb_destroy(MStringBuilder* msb){
@@ -105,8 +105,8 @@ msb_ensure_additional(MStringBuilder* msb, size_t additional_capacity){
 // Ensures nul-termination.
 // Builder can be reused afterwards; its fields are zeroed.
 static inline
-LongString
-msb_detach_ls(MStringBuilder* msb){
+CStringView
+msb_detach_csv(MStringBuilder* msb){
 #ifdef DEBUGGING_H
     if(msb->errored) bt();
     if(!msb->data) bt();
@@ -117,7 +117,7 @@ msb_detach_ls(MStringBuilder* msb){
     int err = _msb_resize(msb, msb->cursor+1);
     (void)err;
     assert(!err);
-    LongString result = {0};
+    CStringView result = {0};
     result.text = msb->data;
     result.length = msb->cursor;
     msb->data = NULL;
@@ -165,15 +165,15 @@ msb_borrow_sv(MStringBuilder* msb){
 
 // "Borrows" a nul-terminated string
 static inline
-LongString
-msb_borrow_ls(MStringBuilder* msb){
+CStringView
+msb_borrow_csv(MStringBuilder* msb){
     msb_nul_terminate(msb);
 #ifdef DEBUGGING_H
     if(msb->errored) bt();
 #endif
     assert(!msb->errored);
     assert(msb->data);
-    return (LongString) {
+    return (CStringView) {
         .text = msb->data,
         .length = msb->cursor,
     };
