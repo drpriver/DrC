@@ -2769,6 +2769,10 @@ ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModule
             if(err) return CI_OOM_ERROR;
             err = ci_resolve_refs(ci, 0);
             if(err) return err;
+            if(!func->native_func){
+                err = ci_create_closure(ci, func);
+                if(err) return err;
+            }
             address = (void*)func->native_func;
         }
     }

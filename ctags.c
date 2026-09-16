@@ -114,7 +114,7 @@ int main(int argc, char** argv, char** envp){
     StringView output = {0},
                output_vim = {0},
                syntax_prefix = SVI("c"),
-               exclude[CT_EXCLUDE_MAX] = {SVI("__"), SVI("_[hH]$"), SVI("^[a-z][a-z0-9]$")},
+               exclude[CT_EXCLUDE_MAX] = {SVI("^__"), SVI("_[hH]$"), SVI("^[a-z][a-z0-9]$")},
                specific_excludes[CT_COUNT][CT_EXCLUDE_MAX] = {
                    [CT_MACRO] = {SVI("^_Nonnull$"), SVI("^_Nullable$"), SVI("_Null_unspecified")},
                };

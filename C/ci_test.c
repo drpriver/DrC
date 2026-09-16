@@ -6931,6 +6931,29 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "method reflection: address after direct calls through Plan 9 embed", __LINE__,
+            SVI("struct Lock { int locked; void lock(_Self* self){self.locked = 1;} void unlock(_Self* self){self.locked = 0;} };\n"
+                "struct Object { long prefix; struct Lock; void use(_Self* self){self.lock(); self.unlock();} };\n"
+                "struct Object o = {.prefix = 42};\n"
+                "o.use();\n"
+                "static if((struct Object).has_method(\"lock\") && (struct Object).has_method(\"unlock\")){\n"
+                "    struct __builtin_Method l = (struct Object).method(\"lock\");\n"
+                "    _Type t = struct Object;\n"
+                "    struct __builtin_Method u = t.method(\"unlock\");\n"
+                "    if(!l.address || !u.address) return 0;\n"
+                "    ((void(*)(struct Lock*))l.address)((struct Lock*)((char*)&o + l.offset));\n"
+                "    if(!o.locked) return 0;\n"
+                "    ((void(*)(struct Lock*))u.address)((struct Lock*)((char*)&o + u.offset));\n"
+                "    if(o.locked || o.prefix != 42) return 0;\n"
+                "    struct __builtin_Method direct = t.method(0);\n"
+                "    if(!direct.address || direct.offset) return 0;\n"
+                "    ((void(*)(struct Object*))direct.address)(&o);\n"
+                "    return t.method(\"lock\").address == l.address;\n"
+                "}\n"
+                "return 0;\n"),
+            .exit_code = 1,
+        },
+        {
             "type introspection: nested method receiver offset", __LINE__,
             SVI("struct Outer { long prefix; union { struct { long inner_prefix; struct { int value; int get(_Self* self){return self.value;} }; }; }; };\n"
                 "constexpr struct __builtin_Method m = (struct Outer).method(\"get\");\n"
