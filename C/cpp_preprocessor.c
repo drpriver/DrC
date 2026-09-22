@@ -5915,11 +5915,19 @@ cpp_builtin_for(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
             return cpp_error(cpp, macro_toks[i].loc, "Expected macro name as third argument to __for");
         }
         macro_ident = macro_toks[i];
+        for(i++; i < macro_count && (macro_toks[i].type == CPP_WHITESPACE || macro_toks[i].type == CPP_NEWLINE); i++){
+        }
+        if(i != macro_count)
+            return cpp_error(cpp, macro_toks[i].loc, "Extra tokens after identifier in __for");
         found = 1;
         break;
     }
     if(!found) return cpp_error(cpp, loc, "Missing macro name argument to __for");
-    // For each value in [start, end), emit MACRO(value) tokens
+    int64_t range;
+    if(sub_overflow(end_val, start_val, &range))
+        return cpp_error(cpp, loc, "__for would cause integer wraparound");
+    if(range > 0xffff)
+        return cpp_error(cpp, loc, "__for iterations limited to %d iterations, would've done %lld iterations", 0xffff, (long long)range);
     for(int64_t i = start_val; i < end_val; i++){
         Atom num = cpp_atomizef(cpp, "%lld", (long long)i);
         if(!num) return CPP_OOM_ERROR;
