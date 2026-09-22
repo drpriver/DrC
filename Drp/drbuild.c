@@ -611,7 +611,6 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         return NULL;
     }
     Allocator perm = allocator_from_arena(&ctx->perm_aa);
-    ctx->at.allocator = perm;
     ctx->env.allocator = perm;
     ctx->env.at = &ctx->at;
     ctx->env.windows = BUILD_OS == OS_WINDOWS;

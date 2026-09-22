@@ -81,9 +81,8 @@ struct CiModule {
     AtomMap(uintptr_t) labels; // label -> op index + 1
     size_t lowered; // count of nodes already lowered into ops
     uint32_t slot_size; // bytes of slot storage the ops need
-    StringView source;
 };
-static int ci_lower_module(CiInterpreter*, CiModule*);
+static int ci_lower_module(CiInterpreter*, CiModule*, CiLowerDeps*);
 
 static char ci_discard_buf[8192];
 
@@ -141,7 +140,7 @@ static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* ou
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
 static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
-static CcField*_Nullable cc_lookup_field(CcField*_Nullable fields, uint32_t field_count, Atom name, CcFieldLoc* out_loc, CcQualType* out_type, CcQualType*_Nullable out_owner);
+static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
 static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
 static _Bool cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
@@ -378,15 +377,17 @@ static
 int
 ci_create_closure(CiInterpreter* ci, CcFunc* func){
     int err;
+    Allocator al = ci_allocator(ci);
+    void (*entry)(void);
     #ifdef NO_NATIVE_CALL
         // No native code can call this, so just use the CcFunc* itself as a
         // fake function pointer. The closure_map reverse lookup will catch it
         // at interpreted call sites.
-        func->native_func = (void(*)(void))(uintptr_t)func;
+        entry = (void(*)(void))(uintptr_t)func;
     #else
         if(func->type->is_variadic)
             return ci_error(ci, func->loc, "cannot take address of variadic interpreted function");
-        CiClosureData* cd = Allocator_zalloc(ci_allocator(ci), sizeof *cd);
+        CiClosureData* cd = Allocator_zalloc(al, sizeof *cd);
         if(!cd) return CI_OOM_ERROR;
         cd->ci = ci;
         cd->func = func;
@@ -394,21 +395,31 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
             err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
             // This should never happen, but who knows.
             if(err){
-                Allocator_free(ci_allocator(ci), cd, sizeof *cd);
+                Allocator_free(al, cd, sizeof *cd);
                 return err;
             }
         }
         NativeClosure* nc = NULL;
-        err = native_closure_create(ci_allocator(ci), func->type, ci_closure_callback, cd, &nc);
+        err = native_closure_create(al, func->type, ci_closure_callback, cd, &nc);
         if(err){
-            Allocator_free(ci_allocator(ci), cd, sizeof *cd);
+            Allocator_free(al, cd, sizeof *cd);
             return err;
         }
-        func->native_func = native_closure_fn(nc);
-        func->native_closure = nc;
+        entry = native_closure_fn(nc);
     #endif
-    err = BPM_put(&ci->closure_map, ci_allocator(ci), func, (void*)func->native_func);
-    if(err) return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
+    err = BPM_put(&ci->closure_map, al, func, (void*)entry);
+    if(err){
+        #ifndef NO_NATIVE_CALL
+        native_closure_destroy(al, nc);
+        Allocator_free(al, cd, sizeof *cd);
+        #endif
+        return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
+    }
+    // Publish only after registration succeeds, so preparation can be retried.
+    func->native_func = entry;
+    #ifndef NO_NATIVE_CALL
+    func->native_closure = nc;
+    #endif
     return 0;
 }
 
@@ -689,13 +700,14 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                     Atom atom = AT_atomize(at, name->data, name->count);
                     ci_unlock_atoms(ci, at);
                     if(!atom) return CI_OOM_ERROR;
-                    CcFieldLoc floc;
+                    uint64_t offset;
                     CcQualType type;
-                    f = cc_lookup_field(s->fields, s->field_count, atom, &floc, &type, NULL);
+                    err = cc_lookup_field_offset(&ci->parser, qt, atom, &offset, &type, &f);
+                    if(err) return err;
                     if(f && f->is_method != method) f = NULL;
                     if(f){
                         named_field = *f;
-                        named_field.offset = (uint32_t)floc.byte_offset;
+                        named_field.offset = (uint32_t)offset;
                         f = &named_field;
                     }
                 }
@@ -758,6 +770,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                 .name.data = (void*)(uintptr_t)(enumerator->name ? enumerator->name->data : ""),
                 .name.count = enumerator->name?enumerator->name->length:0,
                 .value = enumerator->value,
+                .type = enumerator->type,
             };
             return 0;
         }
@@ -861,9 +874,8 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             return 0;
         }
         case CC_MODULE_RUN:{
+            if(!module) return ci_error(ci, loc, "run() cannot be called on null module");
             err = ci_resolve_module(ci, module);
-            if(err) return err;
-            err = ci_lower_module(ci, module);
             if(err) return err;
             err = ci_link_ops(ci, module->ops.data, module->ops.count);
             if(err) return err;
@@ -933,9 +945,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
     const CiOp* op = &frame->ops[frame->pc];
     switch(op->kind){
         case CI_OP_RT_CALL: {
-            void* result = op->rt_call.slot_size
-                ? (char*)frame->slots + op->rt_call.slot
-                : ci_discard_buf;
+            void* result = op->rt_call.slot_size ? (char*)frame->slots + op->rt_call.slot : ci_discard_buf;
             int err = 0;
             switch(op->rt_call.op){
                 case CI_RT_TYPE_VALIDATE:
@@ -1624,12 +1634,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             if(op->itof.src_size > 8){
                 CiUint128 v;
                 ci_uint128_read(&v, src, op->itof.src_size);
-                double d = ci_uint128_to_double(v, op->itof.is_unsigned);
                 if(op->itof.slot_size == 4){
-                    float f = (float)d;
+                    float f = ci_uint128_to_float(v, op->itof.is_unsigned);
                     CI_INLINE_MEMCPY(dest, &f, sizeof f);
                 }
                 else {
+                    double d = ci_uint128_to_double(v, op->itof.is_unsigned);
                     CI_INLINE_MEMCPY(dest, &d, sizeof d);
                 }
             }
@@ -2643,10 +2653,10 @@ ci_add_root(CiInterpreter* ci, StringView name){
     int err = 0;
     switch(sym.kind){
         case CC_SYM_VAR:
-            err = PM_put(&ci->parser.used_vars, ci_allocator(ci), sym.var, sym.var);
+            err = ci_deps_add_var(&ci->deps, ci_allocator(ci), sym.var, CI_VAR_DEP_USED);
             break;
         case CC_SYM_FUNC:
-            err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), sym.func, sym.func);
+            err = ci_deps_add_func(&ci->deps, ci_allocator(ci), sym.func, CC_FUNC_DEP_USED);
             break;
         case CC_SYM_TYPEDEF:
         case CC_SYM_ENUMERATOR:
@@ -2660,7 +2670,7 @@ int
 ci_resolve_root(CiInterpreter* ci, StringView name){
     int err = ci_add_root(ci, name);
     if(err) return err;
-    return ci_resolve_refs(ci, 0);
+    return ci_resolve_deps(ci, &ci->deps);
 }
 
 static
@@ -2691,7 +2701,7 @@ ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const 
             goto done;
         }
     }
-    module->source = (StringView){source_len, source_copy};
+    StringView src = (StringView){source_len, source_copy};
     p->toplevel_nodes = module->nodes;
     p->current = &module->scope;
     cc_parser_discard_input(p);
@@ -2703,7 +2713,7 @@ ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const 
     if(err) goto done;
     CppFrame frame = {
         .file_id = file_id,
-        .txt = module->source,
+        .txt = src,
         .line = 1,
         .column = 1,
     };
@@ -2735,25 +2745,13 @@ ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const 
 
 static
 int
-ci_resolve_module_unlocked(CiInterpreter* ci, CiModule* module){
-    Allocator al = ci_allocator(ci);
-    AtomMapItems vars = CcAnonAM_items(&module->scope.variables);
-    for(size_t i = 0; i < vars.count; i++){
-        CcVariable* var = vars.data[i].p;
-        if(!var || var->automatic) continue;
-        if(var->extern_ && !var->initializer) continue;
-        int err = PM_put(&ci->parser.used_vars, al, var, var);
-        if(err) return CI_OOM_ERROR;
-    }
-    // XXX: why do we only iterate over vars?
-    return ci_resolve_refs(ci, 0);
-}
-
-static
-int
 ci_resolve_module(CiInterpreter* ci, CiModule* module){
+    int err = 0;
     ci_lock_resolver(ci);
-    int err = ci_resolve_module_unlocked(ci, module);
+    err = ci_lower_module(ci, module, &ci->deps);
+    if(err) goto finally;
+    err = ci_resolve_deps(ci, &ci->deps);
+    finally:
     ci_unlock_resolver(ci);
     return err;
 }
@@ -2768,8 +2766,6 @@ ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, c
     ci_lock_resolver(ci);
     err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, (StringView){strlen(source), source}, out);
     if(err && err != CI_OOM_ERROR){
-        // Like __compile, report parse diagnostics without stopping execution.
-        // Parsing may have filled out a type before rejecting trailing tokens.
         *out = (CcQualType){0};
         err = 0;
     }
@@ -2812,10 +2808,9 @@ ci_reflect_func_unlocked(CiInterpreter* ci, SrcLoc loc, CcFunc* func, CiRtModule
             address = (void*)func->native_func;
         }
         else {
-            func->addr_taken = 1;
-            int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
+            int err = ci_deps_add_func(&ci->deps, ci_allocator(ci), func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
             if(err) return CI_OOM_ERROR;
-            err = ci_resolve_refs(ci, 0);
+            err = ci_resolve_deps(ci, &ci->deps);
             if(err) return err;
             if(!func->native_func){
                 err = ci_create_closure(ci, func);
@@ -2853,9 +2848,9 @@ ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModu
             address = var->interp_val;
         }
         else {
-            int err = PM_put(&ci->parser.used_vars, ci_allocator(ci), var, var);
+            int err = ci_deps_add_var(&ci->deps, ci_allocator(ci), var, CI_VAR_DEP_USED);
             if(err) return CI_OOM_ERROR;
-            err = ci_resolve_refs(ci, 0);
+            err = ci_resolve_deps(ci, &ci->deps);
             if(err) return err;
             address = var->interp_val;
         }
@@ -3043,11 +3038,9 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                     *out = (void*)func->native_func;
                     goto done;
                 }
-                if(func->defined)
-                    func->addr_taken = 1;
-                int err = PM_put(&ci->parser.used_funcs, ci_allocator(ci), func, func);
+                int err = ci_deps_add_func(&ci->deps, ci_allocator(ci), func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
                 if(err){ ret = CI_OOM_ERROR; goto done; }
-                err = ci_resolve_refs(ci, 0);
+                err = ci_resolve_deps(ci, &ci->deps);
                 if(err){ ret = err; goto done; }
                 if(!func->native_func)
                     { ret = ci_error(ci, loc, "_Module.symbol: function '%s' has no address", name); goto done; }
@@ -3072,9 +3065,9 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                     *out = var->interp_val;
                     goto done;
                 }
-                int err = PM_put(&ci->parser.used_vars, ci_allocator(ci), var, var);
+                int err = ci_deps_add_var(&ci->deps, ci_allocator(ci), var, CI_VAR_DEP_USED);
                 if(err){ ret = CI_OOM_ERROR; goto done; }
-                err = ci_resolve_refs(ci, 0);
+                err = ci_resolve_deps(ci, &ci->deps);
                 if(err){ ret = err; goto done; }
                 if(!var->interp_val)
                     { ret = ci_error(ci, loc, "_Module.symbol: variable '%s' has no storage", name); goto done; }
@@ -3089,6 +3082,23 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
 done:
     ci_unlock_resolver(ci);
     return ret;
+}
+
+static
+void
+ci_apply_static_relocs(unsigned char* bytes, const CiStaticReloc* relocs, size_t count){
+    for(size_t i = 0; i < count; i++){
+        const CiStaticReloc* r = &relocs[i];
+        uint64_t address = 0;
+        switch(r->kind){
+            case CI_STATIC_RELOC_ABSOLUTE: break;
+            case CI_STATIC_RELOC_VAR: address = (uintptr_t)r->var->interp_val; break;
+            case CI_STATIC_RELOC_FUNC: address = (uintptr_t)r->func->native_func; break;
+            case CI_STATIC_RELOC_LITERAL: address = (uintptr_t)r->literal; break;
+        }
+        address += r->addend;
+        memcpy(bytes + r->offset, &address, r->size);
+    }
 }
 
 static
@@ -3122,118 +3132,135 @@ ci_link_ops(CiInterpreter* ci, const CiOp* ops, size_t count){
 static
 int
 ci_prepare_toplevel(CiInterpreter* ci){
-    int err = ci_lower_toplevel(ci);
+    int err = ci_lower_toplevel(ci, &ci->deps);
+    if(err) return err;
+    err = ci_resolve_deps(ci, &ci->deps);
     if(err) return err;
     return ci_link_ops(ci, ci->toplevel_ops.data, ci->toplevel_ops.count);
 }
 
 static
+void
+ci_relocate_static_data(CiStaticData* data){
+    memcpy(data->var->interp_val, data->blob->data, data->size);
+    ci_apply_static_relocs(data->var->interp_val, data->relocs.data, data->relocs.count);
+    data->var->interp_initialized = 1;
+}
+
+static
 int
-ci_resolve_refs(CiInterpreter* ci, _Bool libc_only){
-    int err;
-    CcParser* p = &ci->parser;
+ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
+    int err = 0;
     Allocator al = ci_allocator(ci);
-    if(!libc_only){
-        // Add main() as a root if it exists.
-        {
-            AtomTable* at = ci_lock_atoms(ci);
-            Atom main_atom = AT_atomize(at, "main", 4);
-            ci_unlock_atoms(ci, at);
-            if(!main_atom) return CI_OOM_ERROR;
-            CcFunc* main_func = cc_scope_lookup_func(&p->global, main_atom, CC_SCOPE_NO_WALK);
-            if(main_func && main_func->defined){
-                err = PM_put(&p->used_funcs, al, main_func, main_func);
-                if(err) return CI_OOM_ERROR;
+    Marray(CiStaticData) initializers = {0};
+    size_t fi = 0, vi = 0;
+    while(fi < deps->funcs.count || vi < deps->vars.count){
+        size_t init_count = initializers.count;
+        while(fi < deps->funcs.count){
+            CcFunc* func = (CcFunc*)(uintptr_t)PM_items(&deps->funcs).data[fi++].key;
+            if(!func->defined){
+                if(!func->native_func && func->name){
+                    Atom sym = func->mangle ? func->mangle : func->name;
+                    void* addr;
+                    err = ci_dlsym(ci, func->loc, sym, "function", &addr);
+                    if(err) goto cleanup;
+                    func->native_func = (void(*)(void))addr;
+                }
+                continue;
             }
-        }
-    }
-    for(size_t i = libc_only ? ci->resolved_libc : ci->resolved_funcs; i < p->used_funcs.count; i++){
-        PointerMapItems items = PM_items(&p->used_funcs);
-        CcFunc* func = (CcFunc*)(uintptr_t)items.data[i].key;
-        if(libc_only && !func->libc_builtin) continue;
-        if(!func->defined){
-            if(!func->native_func && func->name){
-                Atom sym = func->mangle?func->mangle:func->name;
-                void* addr;
-                err = ci_dlsym(ci, func->loc, sym, "function", &addr);
-                if(err) return err;
-                func->native_func = (void(*)(void))addr;
-            }
-            continue;
-        }
-        if(!libc_only){
-            if(func->parse_failed) continue;
+            if(func->parse_failed){ err = CI_SYNTAX_ERROR; goto cleanup; }
             if(!func->parsed){
-                err = cc_parse_func_body(p, func);
-                if(err) return err;
+                err = cc_parse_func_body(&ci->parser, func);
+                if(err) goto cleanup;
             }
-            if(!func->interp_ops){
-                err = ci_lower_func(ci, func);
-                if(err) return err;
-            }
-            if(!func->native_func && func->addr_taken){
-                err = ci_create_closure(ci, func);
-                if(err) return err;
-            }
+            err = ci_lower_func(ci, func, deps);
+            if(err) goto cleanup;
         }
-    }
-    if(libc_only)
-        ci->resolved_libc = p->used_funcs.count;
-    else
-        ci->resolved_funcs = p->used_funcs.count;
-    // Resolve non-automatic variable storage.
-    if(!libc_only){
-        {
-            PointerMapItems items = PM_items(&p->used_vars);
-            for(size_t i = ci->resolved_vars; i < items.count; i++){
-                CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
-                if(var->interp_val) continue;
+        while(vi < deps->vars.count){
+            PointerMapItem item = PM_items(&deps->vars).data[vi++];
+            CcVariable* var = (CcVariable*)(uintptr_t)item.key;
+            if(!var->interp_val){
                 if(var->extern_ && !var->initializer){
-                    Atom sym = var->mangle?var->mangle:var->name;
+                    Atom sym = var->mangle ? var->mangle : var->name;
                     void* addr;
                     err = ci_dlsym(ci, var->loc, sym, "extern variable", &addr);
-                    if(err) return err;
+                    if(err) goto cleanup;
                     var->interp_val = addr;
                 }
                 else {
                     uint32_t sz;
-                    err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
-                    if(err) return err;
-                    void* storage = Allocator_zalloc(al, sz);
-                    if(!storage) return CI_OOM_ERROR;
-                    var->interp_val = storage;
+                    err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
+                    if(err) goto cleanup;
+                    var->interp_val = Allocator_zalloc(al, sz);
+                    if(!var->interp_val){ err = CI_OOM_ERROR; goto cleanup; }
                 }
             }
-            ci->resolved_vars = p->used_vars.count;
+            if(!(var->interp_preinit || ((uintptr_t)item.value & CI_VAR_DEP_INITIALIZE))
+                || !var->initializer || var->interp_initialized) continue;
+            _Bool queued = 0;
+            for(size_t i = 0; i < initializers.count; i++)
+                if(initializers.data[i].var == var){ queued = 1; break; }
+            if(queued) continue;
+            CiStaticData* init;
+            err = ma_alloc(CiStaticData)(&initializers, al, &init);
+            if(err){ err = CI_OOM_ERROR; goto cleanup; }
+            *init = (CiStaticData){.var = var};
+            err = ci_build_static_data(ci, init, deps);
+            if(err) goto cleanup;
         }
-        // Evaluate initializers for non-automatic variables.
-        {
-            PointerMapItems items = PM_items(&p->used_vars);
-            for(size_t i = 0; i < items.count; i++){
-                CcVariable* var = (CcVariable*)(uintptr_t)items.data[i].key;
-                if(!var->interp_preinit) continue;
-                if(!var->initializer) continue;
-                if(!var->interp_val) continue;
-                if(var->interp_initialized) continue;
-                uint32_t sz;
-                err = cc_sizeof_as_uint(p, var->type, var->loc, &sz);
-                if(err) return err;
-                err = ci_eval_lowered_expr(ci, NULL, var->initializer, var->interp_val, sz);
-                if(err) return err;
-                var->interp_initialized = 1;
+        // Building one initializer can upgrade an already visited dependency.
+        if(initializers.count != init_count) vi = 0;
+    }
+    for(size_t i = 0; i < deps->funcs.count; i++){
+        PointerMapItem item = PM_items(&deps->funcs).data[i];
+        CcFunc* func = (CcFunc*)(uintptr_t)item.key;
+        if(func->interp_ops){
+            if(!func->native_func && ((uintptr_t)item.value & CC_FUNC_DEP_ADDR_TAKEN)){
+                err = ci_create_closure(ci, func);
+                if(err) goto cleanup;
             }
         }
     }
-    PointerMapItems funcs = PM_items(&p->used_funcs);
-    for(size_t i = 0; i < funcs.count; i++){
-        CcFunc* func = (CcFunc*)(uintptr_t)funcs.data[i].key;
-        if(!func->interp_ops) continue;
-        err = ci_link_ops(ci, func->interp_ops->code.data, func->interp_ops->code.count);
-        if(err) return err;
+    for(size_t i = 0; i < deps->funcs.count; i++){
+        CcFunc* func = (CcFunc*)(uintptr_t)PM_items(&deps->funcs).data[i].key;
+        if(func->interp_ops){
+            err = ci_link_ops(ci, func->interp_ops->code.data, func->interp_ops->code.count);
+            if(err) goto cleanup;
+        }
     }
-    return 0;
+    PointerMapItems templates = PM_items(&deps->templates);
+    for(size_t i = 0; i < templates.count; i++){
+        CiInitTemplate* source = (CiInitTemplate*)(uintptr_t)templates.data[i].key;
+        if(!source->linked){
+            ci_apply_static_relocs(source->bytes, source->relocs, source->reloc_count);
+            source->linked = 1;
+        }
+    }
+    for(size_t i = 0; i < initializers.count; i++)
+        ci_relocate_static_data(&initializers.data[i]);
+    cleanup:
+    for(size_t i = 0; i < initializers.count; i++)
+        ci_static_data_cleanup(&initializers.data[i], al);
+    ma_cleanup(CiStaticData)(&initializers, al);
+    return err;
 }
 
+static
+int
+ci_resolve_refs(CiInterpreter* ci){
+    int err = ci_lower_toplevel(ci, &ci->deps);
+    if(err) return err;
+    AtomTable* at = ci_lock_atoms(ci);
+    Atom main_atom = AT_atomize(at, "main", 4);
+    ci_unlock_atoms(ci, at);
+    if(!main_atom) return CI_OOM_ERROR;
+    CcFunc* main_func = cc_scope_lookup_func(&ci->parser.global, main_atom, CC_SCOPE_NO_WALK);
+    if(main_func && main_func->defined){
+        err = ci_deps_add_func(&ci->deps, ci_allocator(ci), main_func, CC_FUNC_DEP_USED);
+        if(err) return err;
+    }
+    return ci_resolve_deps(ci, &ci->deps);
+}
 static
 Allocator
 ci_allocator(CiInterpreter* ci){
@@ -3273,7 +3300,7 @@ ci_preload_system_libs(CiInterpreter* ci){
     return 0;
 }
 
-static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro, ci_pragma_comment, ci_pragma_resolve;
+static CppPragmaFn ci_pragma_lib, ci_pragma_lib_path, ci_pragma_framework, ci_pragma_pkg_config, ci_pragma_procmacro, ci_pragma_comment;
 static
 int
 ci_register_pragmas(CiInterpreter*ci){
@@ -3290,8 +3317,6 @@ ci_register_pragmas(CiInterpreter*ci){
     if(err) return err;
     if(ci->procedural_macros){
         err = cpp_register_pragma(&ci->parser.cpp, SV("procmacro"), ci_pragma_procmacro, ci);
-        if(err) return err;
-        err = cpp_register_pragma(&ci->parser.cpp, SV("resolve"), ci_pragma_resolve, ci);
         if(err) return err;
     }
     return 0;
@@ -4089,97 +4114,11 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return cpp_error(cpp, loc, "#pragma procmacro: function '%.*s' not defined", (int)name.length, name.text);
-    if(!func->parsed){
-        err = cc_parse_func_body(&ci->parser, func);
-        if(err) return err;
-    }
-    if(!func->interp_ops){
-        err = ci_lower_func(ci, func);
-        if(err) return err;
-    }
-    err = ci_resolve_refs(ci, 1);
-    if(err) return err;
-    err = ci_link_ops(ci, func->interp_ops->code.data, func->interp_ops->code.count);
+    err = ci_deps_add_func(&ci->deps, ci_allocator(ci), func, CC_FUNC_DEP_USED);
+    if(!err) err = ci_resolve_deps(ci, &ci->deps);
     if(err) return err;
     return cpp_define_builtin_func_macro(cpp, macro_name, ci_procmacro_expand, func, func->type->param_count, 0, 0);
 }
-
-static
-int
-ci_pragma_resolve(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks){
-    int err;
-    CiInterpreter* ci = ctx;
-    while(ntoks){
-    // Skip whitespace.
-        while(ntoks && toks->type == CPP_WHITESPACE){ toks++; ntoks--; }
-        if(!ntoks) return 0;
-        if(toks->type != CPP_IDENTIFIER)
-            return cpp_error(cpp, loc, "#pragma resolve: expected symbol name");
-        StringView name = toks->txt;
-        // Look up the function.
-        Atom atom = AT_get_atom(cpp->at, name.text, name.length);
-        if(!atom)
-            return cpp_error(cpp, loc, "#pragma resolve: unknown symbol '%.*s'", (int)name.length, name.text);
-        CcSymbol sym;
-        _Bool found = cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym);
-        if(!found)
-            return cpp_error(cpp, loc, "#pragma resolve: unknown symbol '%.*s'", (int)name.length, name.text);
-        switch(sym.kind){
-            case CC_SYM_VAR:
-                if(sym.var->interp_val) break;
-                if(sym.var->extern_ && !sym.var->initializer){
-                    Atom s = sym.var->mangle?sym.var->mangle:sym.var->name;
-                    void* addr;
-                    err = ci_dlsym(ci, sym.var->loc, s, "extern variable", &addr);
-                    if(err) return err;
-                    sym.var->interp_val = addr;
-                    break;
-                }
-                else {
-                    uint32_t sz;
-                    err = cc_sizeof_as_uint(&ci->parser, sym.var->type, sym.var->loc, &sz);
-                    if(err) return err;
-                    Allocator al = ci_allocator(ci);
-                    void* storage = Allocator_zalloc(al, sz);
-                    if(!storage) return CI_OOM_ERROR;
-                    sym.var->interp_val = storage;
-                    break;
-                }
-            case CC_SYM_FUNC:
-                if(!sym.func->defined){
-                    if(!sym.func->native_func && sym.func->name){
-                        Atom s = sym.func->mangle?sym.func->mangle:sym.func->name;
-                        void* addr;
-                        err = ci_dlsym(ci, sym.func->loc, s, "function", &addr);
-                        if(err) return err;
-                        sym.func->native_func = (void(*)(void))addr;
-                    }
-                    break;
-                }
-                if(!sym.func->parsed){
-                    err = cc_parse_func_body(&ci->parser, sym.func);
-                    if(err) return err;
-                }
-                if(!sym.func->interp_ops){
-                    err = ci_lower_func(ci, sym.func);
-                    if(err) return err;
-                }
-                err = ci_link_ops(ci, sym.func->interp_ops->code.data, sym.func->interp_ops->code.count);
-                if(err) return err;
-                if(!sym.func->native_func && sym.func->addr_taken){
-                    err = ci_create_closure(ci, sym.func);
-                    if(err) return err;
-                }
-                break;
-            case CC_SYM_TYPEDEF:
-            case CC_SYM_ENUMERATOR:
-                break;
-        }
-        toks++; ntoks--;
-    }
-    return 0;
-}
-
 static
 const CcTargetConfig*
 ci_target(const CiInterpreter* ci){
@@ -4405,58 +4344,38 @@ ci_unlock_resolver(CiInterpreter* ci){
 #endif
 #include "ci_lower.c"
 
-// Execute a standalone expression without changing the caller's opcode stream.
-// FIXME: this doesn't have a good spot to go, as it mixes the interpreter layer and the lowering layer.
+// Execute prepared code only after its dependencies have been resolved.
+static
+int
+ci_run_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, const CiLoweredExpr*_Nonnull code, SrcLoc loc, void*_Nonnull result, size_t size){
+    if(code->value_size > size)
+        return CI_RESULT_TOO_SMALL(ci, loc, code->value_size, size);
+    Allocator al = ci_allocator(ci);
+    CiInterpFrame frame = {
+        .parent = parent, .return_buf = result, .return_size = size,
+        .ops = code->ops.data, .op_count = code->ops.count,
+    };
+    int err = ci_link_ops(ci, code->ops.data, code->ops.count);
+    if(err) return err;
+    if(code->frame_size){
+        frame.slots = Allocator_zalloc(al, code->frame_size);
+        if(!frame.slots) return CI_OOM_ERROR;
+    }
+    err = ci_interp_run(ci, &frame);
+    if(!err && code->value_size)
+        memcpy(result, (char*)frame.slots + code->value_slot, code->value_size);
+    ci_free_alloca_list(al, frame.alloca_list);
+    if(frame.slots) Allocator_free(al, frame.slots, code->frame_size);
+    return err;
+}
+
 static
 int
 ci_eval_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, CcExpr*_Nonnull expr, void*_Nonnull result, size_t size){
-    Allocator al = ci_allocator(ci);
-    Marray(CiOp) ops = {0};
-    AtomMap(uintptr_t) labels = {0};
-    uint32_t frame_size = 0;
-    const CcTargetConfig* t = ci_target(ci);
-    CiLowerCtx ctx = {
-        .a = al,
-        .out = &ops,
-        .labels = &labels,
-        .frame_size = &frame_size,
-        .size_size = t->sizeof_[t->size_type],
-        .ptr_size = t->sizeof_[CCBT_nullptr_t],
-        .char_is_unsigned = !t->char_is_signed,
-        .ldbl_fmt = t->long_double_format,
-    };
-    CiInterpFrame frame = {.parent = parent, .return_buf = result, .return_size = size};
-    CiLowerVal value = {0};
-    _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
-    int err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
-    if(err) goto cleanup;
-    err = ci_lower_resolve_gotos(ci, &ctx);
-    if(err) goto cleanup;
-    if(!is_void && value.size > size){
-        err = CI_RESULT_TOO_SMALL(ci, expr->loc, value.size, size);
-        goto cleanup;
-    }
-    if(frame_size){
-        frame.slots = Allocator_zalloc(al, frame_size);
-        if(!frame.slots){ err = CI_OOM_ERROR; goto cleanup; }
-    }
-    frame.ops = ops.data;
-    frame.op_count = ops.count;
-    err = ci_link_ops(ci, ops.data, ops.count);
-    if(err) goto cleanup;
-    err = ci_interp_run(ci, &frame);
-    if(!err && !is_void && value.size)
-        memcpy(result, (char*)frame.slots + value.slot, value.size);
-    cleanup:
-    ci_free_alloca_list(al, frame.alloca_list);
-    if(frame.slots) Allocator_free(al, frame.slots, frame_size);
-    ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
-    if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
-    for(size_t i = 0; i < ops.count; i++){
-        CiOp* op = &ops.data[i];
-        if(op->kind == CI_OP_SWITCH && op->switch_.table)
-            Allocator_free(al, op->switch_.table, sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry));
-    }
-    ma_cleanup(CiOp)(&ops, al);
+    CiLoweredExpr code = {0};
+    int err = ci_lower_standalone_expr(ci, expr, &code, &ci->deps);
+    if(!err) err = ci_resolve_deps(ci, &ci->deps);
+    if(!err) err = ci_run_lowered_expr(ci, parent, &code, expr->loc, result, size);
+    ci_lowered_expr_cleanup(&code, ci_allocator(ci));
     return err;
 }

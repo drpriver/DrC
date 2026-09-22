@@ -5,7 +5,7 @@
 #define DRP_ATOM_TABLE_H 1
 #include <stddef.h>
 #include <string.h>
-#include "Allocators/allocator.h"
+#include "Allocators/arena_allocator.h"
 #include "atom.h"
 #include "hash_func.h"
 #ifndef __builtin_trap
@@ -25,7 +25,7 @@
 
 typedef struct AtomTable AtomTable;
 struct AtomTable {
-    Allocator allocator;
+    ArenaAllocator arena;
     void* data;
     size_t count;
     size_t cap;
@@ -71,7 +71,7 @@ Atom _Nullable
 AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
     if(len + 1 > UINT32_MAX/2) return NULL;
-    Atom_* atom = Allocator_alloc(at->allocator, 1+len+sizeof *atom);
+    Atom_* atom = ArenaAllocator_alloc(&at->arena, 1+len+sizeof *atom);
     if(!atom) return NULL;
     atom->flags = ATOM_ALLOCATED;
     atom->length = (uint32_t)len;
@@ -91,7 +91,7 @@ AT_atomize(AtomTable* at, const char* txt, size_t len){
     int err = AT_store_atom(at, atom);
     if(err){
         if(err == 2) __builtin_trap();
-        Allocator_free(at->allocator, atom, 1+atom->length+sizeof *atom);
+        ArenaAllocator_free(&at->arena, atom, 1+atom->length+sizeof *atom);
         return NULL;
     }
     return atom;
@@ -105,7 +105,7 @@ AT_grow_table(AtomTable* at){
     size_t new_cap = old_cap?old_cap*2:64;
     size_t new_size = sizeof(uint32_t)*new_cap*2+new_cap*sizeof(Atom);
     size_t old_size = sizeof(uint32_t)*old_cap*2+old_cap*sizeof(Atom);
-    void* new_data = Allocator_realloc(at->allocator, at->data, old_size, new_size);
+    void* new_data = ArenaAllocator_realloc(&at->arena, at->data, old_size, new_size);
     if(!new_data) return 1;
     Atom* atoms = new_data;
     uint32_t* idxes = (uint32_t*)(void*)(sizeof(Atom)*new_cap+(char*)new_data);

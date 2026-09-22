@@ -13,6 +13,7 @@
 #include "cc_type.h"
 #include "cc_type_cache.h"
 #include "cc_expr.h"
+#include "cc_layout.h"
 #include "cc_stmt.h"
 #include "cc_func.h"
 #include "cc_var.h"
@@ -205,8 +206,6 @@ struct CcParser {
     CcStmtSink* _Null_unspecified stmt_sink;
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;
-    PointerMap(CcFunc, CcFunc) used_funcs; // CcFunc* set
-    PointerMap(CcVariable, CcVariable) used_vars;  // CcVariable* set
 
     // common types
     CcQualType char_star,
@@ -236,6 +235,22 @@ static int cc_register_extern_var(CcParser*, StringView name, CcQualType type);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
 static int cc_parse_type_string(CcParser*, CcScope*, SrcLoc loc, StringView source, CcQualType*);
+static _Bool cc_eval_pointer_binary_expr(CcExpr*);
+static int cc_eval_symbolic_binary(CcParser*, CcExpr*, _Bool allow_const, int64_t*);
+static int cc_eval_linktime_scalar(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
+static int cc_eval_linktime_expr(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
+// A borrowed object and an owned path. The caller supplies storage for a
+// synthesized variable/literal expression and releases path after reading.
+typedef struct CcEvalObjectView CcEvalObjectView;
+struct CcEvalObjectView {
+    CcExpr* object;
+    CcExpr* storage;
+    CcFieldPath path;
+    uint64_t byte_offset;
+    unsigned depth;
+    _Bool representation;
+};
+static int cc_eval_linktime_object_view(CcParser*, CcExpr*, CcEvalObjectView*);
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

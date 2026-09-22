@@ -195,6 +195,24 @@ cc_print_type(MStringBuilder* sb, CcQualType t){
     cc_print_type_post(sb, t);
 }
 
+static void
+cc_print_runtime_integer(MStringBuilder* sb, CiUint128 bits, uint32_t width, _Bool signed_){
+    if(signed_ && ci_uint128_nonzero(ci_uint128_shr(bits, width-1))){
+        CiUint128 mask = width == 128 ? ci_uint128_from_int64(-1)
+            : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
+        bits = ci_uint128_and(ci_uint128_sub(ci_uint128_from_uint64(0), bits), mask);
+        msb_write_char(sb, '-');
+    }
+    char digits[40];
+    size_t count = 0;
+    CiUint128 ten = ci_uint128_from_uint64(10);
+    do {
+        digits[count++] = (char)('0' + ci_uint128_lo(ci_uint128_mod(bits, ten)));
+        bits = ci_uint128_div(bits, ten);
+    } while(ci_uint128_nonzero(bits));
+    while(count) msb_write_char(sb, digits[--count]);
+}
+
 static
 void
 cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBuilder* sb, int indent){
@@ -257,15 +275,19 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                     msb_sprintf(sb, "%llu", (unsigned long long)v);
                     return;
                 }
+                case CCBT_int128: case CCBT_unsigned_int128: {
+                    CiUint128 bits;
+                    ci_uint128_read(&bits, data, 16);
+                    cc_print_runtime_integer(sb, bits, 128, k == CCBT_int128);
+                    return;
+                }
                 case CCBT_COUNT:
                 case CCBT_INVALID:
                 case CCBT_double_complex:
                 case CCBT_float128:
                 case CCBT_float16:
                 case CCBT_float_complex:
-                case CCBT_int128:
                 case CCBT_long_double_complex:
-                case CCBT_unsigned_int128:
                     msb_write_literal(sb, "<unknown basic>");
                     return;
                 DRP_CASES_EXHAUSTED;
@@ -286,18 +308,22 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
         }
         case CC_ENUM: {
             CcEnum* e = ccqt_as_enum(type);
-            int64_t v = 0;
             uint32_t sz = tgt->sizeof_[e->underlying.basic.kind];
-            memcpy(&v, data, sz);
-            if(sz < 8 && (v & ((int64_t)1 << (sz*8-1))))
-                v |= ~(((int64_t)1 << (sz*8)) - 1);
+            if(!sz || sz > 16){ msb_write_literal(sb, "<invalid enum>"); return; }
+            CiUint128 bits;
+            ci_uint128_read(&bits, data, sz);
+            CiUint128 mask = sz == 16 ? ci_uint128_from_int64(-1)
+                : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), sz*8), ci_uint128_from_uint64(1));
+            _Bool signed_ = !ccqt_is_unsigned(e->underlying, !tgt->char_is_signed);
             for(size_t i = 0; i < e->enumerator_count; i++){
-                if(e->enumerators[i]->value == v){
-                    msb_sprintf(sb, "%.*s (%lld)", (int)e->enumerators[i]->name->length, e->enumerators[i]->name->data, (long long)v);
+                if(ci_uint128_eq(ci_uint128_and(e->enumerators[i]->value, mask), bits)){
+                    msb_sprintf(sb, "%.*s (", (int)e->enumerators[i]->name->length, e->enumerators[i]->name->data);
+                    cc_print_runtime_integer(sb, bits, sz*8, signed_);
+                    msb_write_char(sb, ')');
                     return;
                 }
             }
-            msb_sprintf(sb, "%lld", (long long)v);
+            cc_print_runtime_integer(sb, bits, sz*8, signed_);
             return;
         }
         case CC_ARRAY: {
@@ -327,12 +353,23 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 else
                     msb_write_literal(sb, "<anon> = ");
                 if(f->is_bitfield){
-                    uint32_t storage_sz = cc_type_sizeof_assume_complete(cc_target(p), f->type);
-                    uint64_t storage = 0;
-                    memcpy(&storage, (const char*)data + f->offset, storage_sz);
-                    uint64_t mask = f->bitwidth >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << f->bitwidth) - 1;
-                    uint64_t val = (storage >> f->bitoffset) & mask;
-                    msb_sprintf(sb, "%llu", (unsigned long long)val);
+                    uint32_t storage_sz;
+                    if(cc_type_sizeof_complete(cc_target(p), f->type, &storage_sz)){
+                        msb_write_literal(sb, "<invalid layout>,\n");
+                        continue;
+                    }
+                    if(!f->bitwidth || storage_sz > 16 || f->bitoffset >= storage_sz*8
+                        || f->bitwidth > storage_sz*8-f->bitoffset){
+                        msb_write_literal(sb, "<invalid bitfield>,\n");
+                        continue;
+                    }
+                    CiUint128 storage;
+                    ci_uint128_read(&storage, (const char*)data + f->offset, storage_sz);
+                    CiUint128 mask = f->bitwidth == 128 ? ci_uint128_from_int64(-1)
+                        : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), f->bitwidth), ci_uint128_from_uint64(1));
+                    CiUint128 val = ci_uint128_and(ci_uint128_shr(storage, f->bitoffset), mask);
+                    cc_print_runtime_integer(sb, val, f->bitwidth,
+                        !ccqt_is_unsigned(f->type, !tgt->char_is_signed));
                 }
                 else {
                     cc_print_runtime_value(p, f->type, (const char*)data + f->offset, sb, indent + 1);
@@ -360,6 +397,51 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             msb_write_literal(sb, "<function>");
             return;
     }
+}
+
+static
+_Bool
+cc_print_initializer_path(MStringBuilder* sb, CcQualType type, CcFieldPath path, CcQualType value_type, const char* separator, _Bool access){
+    _Bool printed = 0;
+    for(uint32_t i = 0, count = cc_field_path_count(path); i < count; i++){
+        uint32_t index = cc_field_path_component(path, i);
+        CcTypeKind kind = ccqt_kind(type);
+        if(kind == CC_ARRAY){
+            CcArray* array = ccqt_as_array(type);
+            // Vector initializers use positional elements, not designators.
+            if(!array->is_vector){
+                msb_sprintf(sb, "[%u]", index);
+                printed = 1;
+            }
+            type = array->element;
+        }
+        else if(kind == CC_STRUCT || kind == CC_UNION){
+            CcField* fields = kind == CC_STRUCT ? ccqt_as_struct(type)->fields : ccqt_as_union(type)->fields;
+            CcField* field = &fields[index];
+            if(field->name){
+                msb_sprintf(sb, "%s%.*s", printed ? "." : separator, (int)field->name->length, field->name->data);
+                printed = 1;
+            }
+            // Anonymous members promote their named children into the owner.
+            type = field->type;
+        }
+        else if(kind == CC_SLICE){
+            msb_sprintf(sb, "%s%s", printed ? "." : separator, index ? "data" : "count");
+            type = value_type;
+            printed = 1;
+        }
+        else if(ccqt_bt_eq(type, CCBT__Any)){
+            if(index && access && !ccqt_bt_eq(value_type, CCBT_void)){
+                msb_sprintf(sb, "%sas(", printed ? "." : separator);
+                cc_print_type(sb, value_type);
+                msb_write_char(sb, ')');
+            }
+            else msb_sprintf(sb, "%s%s", printed ? "." : separator, index ? "payload" : "type");
+            type = index ? value_type : ccqt_basic(CCBT__Type);
+            printed = 1;
+        }
+    }
+    return printed;
 }
 
 static
@@ -568,6 +650,9 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             cc_print_type(sb, e->type);
             msb_write_char(sb, ')');
             goto print_init_list;
+        case CC_EXPR_OBJECT_VIEW:
+            cc_print_expr(sb, e->lhs);
+            return;
         case CC_EXPR_INIT_LIST:
         print_init_list: {
             CcInitList* il = e->init_list;
@@ -575,11 +660,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             for(uint32_t i = 0; i < il->count; i++){
                 if(i) msb_write_literal(sb, ", ");
                 CcInitEntry* ent = &il->entries[i];
-                _Bool show_offset = ent->field_loc.byte_offset || ent->field_loc.bit_width || il->count > 1;
-                if(show_offset){
-                    msb_sprintf(sb, "@%llu", (unsigned long long)ent->field_loc.byte_offset);
-                    if(ent->field_loc.bit_width)
-                        msb_sprintf(sb, ":%llu:%llu", (unsigned long long)ent->field_loc.bit_offset, (unsigned long long)ent->field_loc.bit_width);
+                if(cc_print_initializer_path(sb, e->type, ent->path, ent->value ? ent->value->type : CCQT_NONE, ".", 0)){
                     msb_write_literal(sb, " = ");
                 }
                 if(ent->value)
@@ -678,13 +759,33 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             cc_print_expr(sb, e->lhs);
             return;
         case CC_EXPR_DOT:
+        case CC_EXPR_ARROW: {
+            CcQualType owner = cc_expr_field_owner(e);
+            CcField* field = cc_field_path_field(owner, e->field_path);
+            if(field && !field->name){
+                // C has no member designator for a whole anonymous subobject.
+                // Express its address adjustment and type explicitly instead.
+                uint64_t offset = 0;
+                CcQualType type = owner;
+                for(uint32_t i = 0; i < cc_field_path_count(e->field_path); i++){
+                    CcStruct* aggregate = ccqt_as_struct(type);
+                    CcField* step = &aggregate->fields[cc_field_path_component(e->field_path, i)];
+                    offset += step->offset;
+                    type = step->type;
+                }
+                msb_write_literal(sb, "*(");
+                cc_print_type(sb, e->type);
+                msb_write_literal(sb, " *)((char *)");
+                if(e->kind == CC_EXPR_DOT) msb_write_char(sb, '&');
+                msb_write_char(sb, '(');
+                cc_print_expr(sb, e->values[0]);
+                msb_sprintf(sb, ") + %llu)", (unsigned long long)offset);
+                return;
+            }
             cc_print_expr(sb, e->values[0]);
-            msb_sprintf(sb, ".@%llu", (unsigned long long)e->field_loc.byte_offset);
+            cc_print_initializer_path(sb, owner, e->field_path, e->type, e->kind == CC_EXPR_ARROW ? "->" : ".", 1);
             return;
-        case CC_EXPR_ARROW:
-            cc_print_expr(sb, e->values[0]);
-            msb_sprintf(sb, "->@%llu", (unsigned long long)e->field_loc.byte_offset);
-            return;
+        }
         case CC_EXPR_CALL:
             cc_print_expr(sb, e->lhs);
             msb_write_char(sb, '(');

@@ -50,7 +50,8 @@ struct CiRtModuleMember {
 typedef struct CiRtEnumerator CiRtEnumerator;
 struct CiRtEnumerator {
     CiRtSlice name;
-    int64_t value;
+    CiUint128 value;
+    CcQualType type;
 };
 
 typedef struct CiRtAny CiRtAny;

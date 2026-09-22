@@ -7,6 +7,7 @@
 #include "cc_stmt.h"
 #include "cc_expr.h"
 #include "ci_op.h"
+#include "ci_lower.h"
 #include "cc_parser.h"
 #include "cc_type.h"
 #include "../Drp/stringview.h"
@@ -15,6 +16,7 @@
 #include "../Drp/pointer_map.h"
 #include "../Drp/bidi_pointer_map.h"
 #include "../Drp/thread_utils.h"
+#include "../Drp/blob_table.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -81,10 +83,11 @@ struct CiInterpreter {
     LOCK_T error_lock,
            atom_lock,
            resolve_lock;
-    size_t resolved_libc,
-           resolved_funcs,
-           resolved_vars,
-           next_module_id;
+    // Shared worklist: a cached lowered function's dependencies stay here,
+    // including pending work if preparation fails and is retried.
+    CiLowerDeps deps;
+    size_t next_module_id;
+    BlobTable bt;
 };
 
 typedef struct CiArg CiArg;
@@ -96,8 +99,6 @@ struct CiArg {
 
 static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_run(CiInterpreter*, CiInterpFrame*);
-static int ci_lower_func(CiInterpreter*, CcFunc*);
-static int ci_lower_toplevel(CiInterpreter*);
 static int ci_prepare_toplevel(CiInterpreter*);
 static int ci_link_ops(CiInterpreter*, const CiOp*, size_t);
 static int ci_append_lib_path(CiInterpreter*, StringView);
@@ -108,7 +109,8 @@ static int ci_load_library(CiInterpreter*, StringView);
 static int ci_load_framework(CiInterpreter*, StringView);
 static int ci_call_by_name(CiInterpreter*, StringView name, const CiArg* _Nullable args, uint32_t nargs, void* result, size_t size);
 static int ci_call_main(CiInterpreter*, int argc, char*_Null_unspecified*_Null_unspecified argv, char*_Null_unspecified*_Null_unspecified envp, int* out_ret);
-static int ci_resolve_refs(CiInterpreter*, _Bool libc_only);
+static int ci_resolve_refs(CiInterpreter*);
+static int ci_resolve_deps(CiInterpreter*, CiLowerDeps*);
 static int ci_add_root(CiInterpreter*, StringView name);
 static int ci_resolve_root(CiInterpreter*, StringView name);
 static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);

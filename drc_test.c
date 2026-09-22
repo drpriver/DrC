@@ -29,7 +29,7 @@ TestFunction(test_snippets){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
-    AtomTable at = {.allocator=allocator_from_arena(&arena)};
+    AtomTable at = {0};
     Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
     env_parse_posix(&env, ENVP);
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
@@ -189,6 +189,7 @@ TestFunction(test_snippets){
         if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
         if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&arena);
     TESTEND();
 }
@@ -198,7 +199,7 @@ TestFunction(test_samples){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     CmdBuilder cmd = {.prog.allocator=allocator_from_arena(&arena), .allocator=allocator_from_arena(&arena)};
-    AtomTable at = {.allocator=allocator_from_arena(&arena)};
+    AtomTable at = {0};
     Environment env = {.allocator=allocator_from_arena(&arena), .at = &at, .windows=IS_WINDOWS};
     env_parse_posix(&env, ENVP);
     MStringBuilder prefix = {.allocator=allocator_from_arena(&arena)};
@@ -358,6 +359,7 @@ TestFunction(test_samples){
         if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
         if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
     }
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&arena);
     TESTEND();
 }

@@ -86,7 +86,7 @@ static int atom_cmp(const void* a, const void* b){
 int main(int argc, char** argv, char** envp){
     Logger* logger = std_logger();
     if(!logger) return 1;
-    static AtomTable at = {.allocator=MALLOCATORI};
+    static AtomTable at = {0};
     static Environment env = {.allocator=MALLOCATORI, .at=&at};
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
     // This is incorrect, but is good enough for now

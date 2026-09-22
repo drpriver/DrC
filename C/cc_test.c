@@ -31,7 +31,161 @@
 #endif
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
+static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int);
+static int cc_sizeof_as_uint(CcParser*, CcQualType, SrcLoc, uint32_t*);
+static int test_eval_initializer(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
+static int test_eval_bytes(CcParser*, CcExpr*, CcExpr*);
+static void cc_release_expr(CcParser*, CcExpr*);
 static _Bool cc_call_abi_type_equal(const CcTargetConfig*, CcQualType, CcQualType);
+
+static void test_print_init_paths(MStringBuilder* sb, CcExpr* e){
+    if(e->kind == CC_EXPR_OBJECT_VIEW){
+        msb_write_str(sb, "view;", 5);
+        return;
+    }
+    if(e->kind != CC_EXPR_INIT_LIST && e->kind != CC_EXPR_COMPOUND_LITERAL) return;
+    for(uint32_t i = 0; i < e->init_list->count; i++){
+        CcInitEntry* entry = &e->init_list->entries[i];
+        msb_write_char(sb, '[');
+        for(uint32_t j = 0; j < cc_field_path_count(entry->path); j++){
+            if(j) msb_write_char(sb, ',');
+            msb_sprintf(sb, "%u", cc_field_path_component(entry->path, j));
+        }
+        msb_write_char(sb, ']');
+        if(entry->value && entry->value->kind == CC_EXPR_INIT_LIST){
+            msb_write_char(sb, '{');
+            test_print_init_paths(sb, entry->value);
+            msb_write_char(sb, '}');
+        }
+        msb_write_char(sb, ';');
+    }
+}
+
+static _Bool test_init_path_layouts(CcParser* p, CcExpr* e){
+    if(e->kind != CC_EXPR_INIT_LIST && e->kind != CC_EXPR_COMPOUND_LITERAL) return 1;
+    for(uint32_t i = 0; i < e->init_list->count; i++){
+        CcInitEntry* entry = &e->init_list->entries[i];
+        uint64_t offset;
+        if(cc_field_path_resolve(&p->cpp.target, e->type, entry->path, &offset)) return 0;
+        uint32_t size;
+        if(cc_sizeof_as_uint(p, e->type, e->loc, &size) || offset > size) return 0;
+        if(entry->value && !test_init_path_layouts(p, entry->value)) return 0;
+    }
+    return 1;
+}
+
+TestFunction(test_field_paths){
+    TESTBEGIN();
+    Allocator al = MALLOCATOR;
+    CcFieldPath literal = {.n_components=1, .idx0=0};
+    TestExpectFalse(_Bool, literal.is_extended);
+    TestExpectEquals(uint64_t, literal._bits, 2);
+    uint32_t components[] = {0, 1, 1023, 3, 4, 5, UINT32_MAX};
+    for(uint32_t n = 0; n <= 7; n++){
+        CcFieldPath path = {0};
+        int err = cc_field_path_make(al, components, n, &path);
+        TestExpectEquals(int, err, 0);
+        if(err) continue;
+        TestExpectEquals(size_t, sizeof path, 8);
+        TestExpectEquals(uint32_t, cc_field_path_count(path), n);
+        TestExpectEquals(_Bool, path.is_extended, n > 6);
+        for(uint32_t i = 0; i < n; i++)
+            TestExpectEquals(uint32_t, cc_field_path_component(path, i), components[i]);
+        cc_field_path_free(al, path);
+    }
+    uint32_t large[] = {1024};
+    CcFieldPath path = {0};
+    int err = cc_field_path_make(al, large, 1, &path);
+    TestExpectEquals(int, err, 0);
+    if(!err){
+        TestExpectFalse(_Bool, path.is_extended);
+        TestExpectEquals(uint32_t, path.n_components, 7);
+        TestExpectEquals(uint32_t, cc_field_path_count(path), 1);
+        TestExpectEquals(uint32_t, cc_field_path_component(path, 0), 1024);
+        cc_field_path_free(al, path);
+    }
+    uint32_t single_indices[] = {0, 1023, 1024, UINT32_MAX};
+    Allocator no_alloc = {.type=ALLOCATOR_NULL};
+    for(uint32_t i = 0; i < 4; i++){
+        uint32_t index = single_indices[i];
+        err = cc_field_path_make(no_alloc, &index, 1, &path);
+        TestExpectEquals(int, err, 0);
+        if(err) continue;
+        TestExpectFalse(_Bool, path.is_extended);
+        TestExpectEquals(uint32_t, path.n_components, index > 1023 ? 7 : 1);
+        TestExpectEquals(uint32_t, cc_field_path_count(path), 1);
+        TestExpectEquals(uint32_t, cc_field_path_component(path, 0), index);
+        CcFieldPath copy = {0};
+        err = cc_field_path_concat(no_alloc, (CcFieldPath){0}, path, &copy);
+        TestExpectEquals(int, err, 0);
+        if(!err){
+            TestExpectEquals(uint64_t, path._bits, copy._bits);
+            TestExpectTrue(_Bool, cc_field_path_equal(path, copy));
+        }
+        uint32_t pair[] = {index, 1};
+        CcFieldPath child = {0};
+        err = cc_field_path_make(al, pair, 2, &child);
+        TestExpectEquals(int, err, 0);
+        if(!err){
+            TestExpectEquals(_Bool, child.is_extended, index > 1023);
+            TestExpectTrue(_Bool, cc_field_path_is_prefix(path, child));
+            TestExpectFalse(_Bool, cc_field_path_equal(path, child));
+            CcFieldPath joined = {0};
+            CcFieldPath next = {.n_components=1, .idx0=1};
+            err = cc_field_path_concat(al, path, next, &joined);
+            TestExpectEquals(int, err, 0);
+            if(!err){
+                TestExpectTrue(_Bool, cc_field_path_equal(child, joined));
+                cc_field_path_free(al, joined);
+            }
+            cc_field_path_free(al, child);
+        }
+        cc_field_path_free(no_alloc, path);
+        cc_field_path_free(no_alloc, copy);
+    }
+    CcFieldPath prefix = {.n_components=3, .idx0=0, .idx1=1, .idx2=2};
+    CcFieldPath suffix = {.n_components=4, .idx0=3, .idx1=4, .idx2=5, .idx3=6};
+    TestExpectTrue(_Bool, cc_field_path_is_prefix((CcFieldPath){0}, prefix));
+    TestExpectFalse(_Bool, cc_field_path_equal(prefix, suffix));
+    err = cc_field_path_concat(al, prefix, suffix, &path);
+    TestExpectEquals(int, err, 0);
+    if(!err){
+        TestExpectTrue(_Bool, path.is_extended);
+        TestExpectTrue(_Bool, cc_field_path_is_prefix(prefix, path));
+        TestExpectFalse(_Bool, cc_field_path_is_prefix(suffix, path));
+        for(uint32_t i = 0; i < 7; i++) TestExpectEquals(uint32_t, cc_field_path_component(path, i), i);
+        CcFieldPath copy = {0};
+        err = cc_field_path_concat(al, (CcFieldPath){0}, path, &copy);
+        TestExpectEquals(int, err, 0);
+        if(!err) TestExpectTrue(_Bool, cc_field_path_equal(path, copy));
+        cc_field_path_free(al, path);
+        if(!err){
+            TestExpectEquals(uint32_t, cc_field_path_component(copy, 6), 6);
+            CcFieldPath tail = {0};
+            TestExpectEquals(int, cc_field_path_drop(al, copy, 3, &tail), 0);
+            TestExpectTrue(_Bool, cc_field_path_equal(tail, suffix));
+            cc_field_path_free(al, tail);
+            cc_field_path_free(al, copy);
+        }
+    }
+    CcField fields[2] = {{.type=ccqt_basic(CCBT_int)}, {.type=ccqt_basic(CCBT_int)}};
+    CcStruct st = {.kind=CC_STRUCT, .fields=fields, .field_count=2};
+    CcUnion un = {.kind=CC_UNION, .fields=fields, .field_count=2};
+    CcFieldPath left = {.n_components=1, .idx0=0}, right = {.n_components=1, .idx0=1};
+    TestExpectFalse(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&st >> 3}, left, right));
+    TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&un >> 3}, left, right));
+    TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.bits=(uintptr_t)&st}, (CcFieldPath){0}, left));
+    CcTargetConfig target = cc_target_funcs[CC_TARGET_TEST]();
+    CcArray row = {.kind=CC_ARRAY, .element=ccqt_basic(CCBT_int), .length=1073741824};
+    CcArray matrix = {.kind=CC_ARRAY, .element={.bits=(uintptr_t)&row}, .length=2};
+    uint64_t offset;
+    TestExpectEquals(int, cc_field_path_resolve(&target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset),
+        _cc_overflow_error);
+    row.length = 1073741823;
+    TestExpectEquals(int, cc_field_path_resolve(&target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset), 0);
+    TestExpectEquals(uint64_t, offset, UINT64_C(4294967292));
+    TESTEND();
+}
 
 TestFunction(test_call_abi_types){
     TESTBEGIN();
@@ -56,6 +210,44 @@ TestFunction(test_call_abi_types){
     TESTEND();
 }
 
+TestFunction(test_runtime_bitfields){
+    TESTBEGIN();
+    static const struct {
+        CcBasicTypeKind type;
+        uint32_t width, shift;
+        StringView expected;
+    } cases[] = {
+        {CCBT_unsigned_int128, 4, 80, SVI("{\n  <anon> = 15,\n}")},
+        {CCBT_unsigned_int128, 80, 0, SVI("{\n  <anon> = 1208925819614629174706175,\n}")},
+        {CCBT_unsigned_int128, 128, 0, SVI("{\n  <anon> = 340282366920938463463374607431768211455,\n}")},
+        {CCBT_int128, 4, 80, SVI("{\n  <anon> = -1,\n}")},
+        {CCBT_int128, 128, 0, SVI("{\n  <anon> = -1,\n}")},
+        {CCBT_int, 4, 0, SVI("{\n  <anon> = -1,\n}")},
+    };
+    CcParser parser = {.cpp.target=cc_target_test()};
+    unsigned char bytes[16];
+    memset(bytes, 0xff, sizeof bytes);
+    for(size_t i = 0; i < arrlen(cases); i++){
+        CcField field = {.type=ccqt_basic(cases[i].type), .is_bitfield=1,
+            .bitwidth=cases[i].width, .bitoffset=cases[i].shift};
+        CcStruct st = {.kind=CC_STRUCT, .fields=&field, .field_count=1, .size=16, .alignment=16};
+        MStringBuilder sb = {.allocator=MALLOCATOR};
+        cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&st}, bytes, &sb, 0);
+        TestExpectEqualsSv(msb_borrow_sv(&sb), cases[i].expected);
+        msb_destroy(&sb);
+    }
+    CcEnum en = {.kind=CC_ENUM, .underlying=ccqt_basic(CCBT_unsigned_int128)};
+    MStringBuilder sb = {.allocator=MALLOCATOR};
+    cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&en}, bytes, &sb, 0);
+    TestExpectEqualsSv(msb_borrow_sv(&sb), SV("340282366920938463463374607431768211455"));
+    msb_reset(&sb);
+    en.underlying = ccqt_basic(CCBT_int128);
+    cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&en}, bytes, &sb, 0);
+    TestExpectEqualsSv(msb_borrow_sv(&sb), SV("-1"));
+    msb_destroy(&sb);
+    TESTEND();
+}
+
 TestFunction(test_parse_decls){
     TESTBEGIN();
     enum {N=8}; // can increase if we need to
@@ -68,6 +260,13 @@ TestFunction(test_parse_decls){
             StringView init; // expected cc_print_expr output, empty = no check
             StringView mangle; // expected asm label, empty = no check
             unsigned loc_line, loc_col;
+            StringView paths;
+            StringView member_path;
+            StringView eval_paths;
+            _Bool eval;
+            _Bool eval_bytes;
+            int eval_status;
+            StringView eval_repr;
         } vars[N];
         struct {
             StringView name;
@@ -87,6 +286,631 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "assignment and increment results discard object qualifiers", __LINE__,
+            SVI("volatile int v; _Atomic int a;\n"
+                "_Static_assert(typeof(v=1)==int&&typeof(v+=1)==int);\n"
+                "_Static_assert(typeof(++v)==int&&typeof(v++)==int);\n"
+                "_Static_assert(typeof(--v)==int&&typeof(v--)==int);\n"
+                "_Static_assert(typeof(a=1)==int&&typeof(a+=1)==int);\n"
+                "_Static_assert(typeof(++a)==int&&typeof(a++)==int);\n"
+                "_Static_assert(typeof(--a)==int&&typeof(a--)==int);\n"
+                "const int* volatile p; const int* q;\n"
+                "_Static_assert(typeof(p=q)==const int*&&typeof(p+=1)==const int*);\n"
+                "_Static_assert(typeof(++p)==const int*&&typeof(p++)==const int*);\n"
+                "struct S {int x;}; volatile struct S s; struct S t;\n"
+                "_Static_assert(typeof(s=t)==struct S);\n"),
+        },
+        {
+            "pointer arithmetic result discards outer qualifiers", __LINE__,
+            SVI("int* volatile p; _Atomic(int*) a; const int* volatile q;\n"
+                "_Static_assert(typeof(p+1)==int*&&typeof(1+p)==int*&&typeof(p-1)==int*);\n"
+                "_Static_assert(typeof(a+1)==int*&&typeof(a-1)==int*);\n"
+                "_Static_assert(typeof(q+1)==const int*&&typeof(q-1)==const int*);\n"),
+        },
+        {
+            "pointer arithmetic accepts complete elements of incomplete-bound arrays", __LINE__,
+            SVI("extern int a[]; int* p=a+1; int* q=&a[1];\n"
+                "const int part[:]=a[0:2]; int a[2];\n"
+                "enum E:unsigned __int128; enum E* e; typeof(e+1) next;\n"),
+        },
+        {
+            "constexpr qualifies the declared object rather than its base type", __LINE__,
+            SVI("static int n; constexpr int* p=&n; typedef int* IP;\n"
+                "_Static_assert(typeof(p)==const IP&&typeof(*p)==int);\n"
+                "int f(void); typedef int (*FP)(void); constexpr int (*fn)(void)=f;\n"
+                "_Static_assert(typeof(fn)==const FP);\n"
+                "constexpr int data[2]={}; _Static_assert(typeof(data[0])==const int);\n"),
+        },
+        {
+            "constexpr qualifiers apply to inferred and typedef object types", __LINE__,
+            SVI("static int n; typedef int* IP; constexpr auto p=&n;\n"
+                "_Static_assert(typeof(p)==const IP&&typeof(*p)==int);\n"
+                "typedef int V __attribute__((vector_size(16))); constexpr V v={};\n"
+                "_Static_assert(typeof(v).is_const);\n"
+                "typedef int A[2]; constexpr A a={}; _Static_assert(typeof(a[0])==const int);\n"),
+        },
+        {
+            "function decay accepts compatible parameter qualifiers and prototypes", __LINE__,
+            SVI("int f(const int); int h();\n"
+                "int (*p)(int)=f; int (*q)()=f; int (*r)(const int)=p;\n"
+                "int (*s)(int)=h;\n"),
+        },
+        {
+            "compatible function pointer comparisons", __LINE__,
+            SVI("int (*p)(const int); int (*q)(int); int (*r)();\n"
+                "int eq=p==q, ne=q!=r;\n"),
+        },
+        {
+            "conditional compatible pointers retain the composite prototype and bounds", __LINE__,
+            SVI("int (*old)(); int (*proto)(int);\n"
+                "_Static_assert(typeof(1?old:proto)==typeof(proto));\n"
+                "_Static_assert(typeof(1?proto:old)==typeof(proto));\n"
+                "extern int a[]; int (*incomplete)[]=&a; int (*complete)[2];\n"
+                "_Static_assert(typeof(1?incomplete:complete)==typeof(complete));\n"),
+        },
+        {
+            "conditional results discard outer qualifiers", __LINE__,
+            SVI("int* volatile p; int* q;\n"
+                "_Static_assert(typeof(1?p:q)==int*&&typeof(1?q:p)==int*);\n"
+                "_Static_assert(typeof(1?p:0)==int*&&typeof(1?0:p)==int*);\n"
+                "struct S {int x;}; const struct S a={1}; struct S b;\n"
+                "_Static_assert(typeof(1?a:b)==struct S&&typeof(1?b:a)==struct S);\n"),
+        },
+        {
+            "conditional arrays and functions decay with a null operand", __LINE__,
+            SVI("int a[2]; int f(void);\n"
+                "_Static_assert(typeof(1?nullptr:nullptr)==typeof(nullptr));\n"
+                "int* p; _Static_assert(typeof(1?p:nullptr)==int*&&typeof(1?nullptr:p)==int*);\n"
+                "_Static_assert(typeof(1?a:0)==int*&&typeof(1?0:a)==int*);\n"
+                "_Static_assert(typeof(1?a:nullptr)==int*&&typeof(1?nullptr:a)==int*);\n"
+                "_Static_assert(typeof(1?f:0)==int(*)(void)&&typeof(1?0:f)==int(*)(void));\n"
+                "const int b[2]={}; _Static_assert(typeof(1?b:0)==const int*);\n"),
+        },
+        {
+            "variadic array decay retains element qualification", __LINE__,
+            SVI("struct S {char text[2];}; void f(int,...);\n"
+                "void g(const struct S* p){const char text[]=\"ab\"; f(0,text,\"cd\",p->text);}\n"),
+        },
+        {
+            "constexpr unsigned bitfields promote according to their width", __LINE__,
+            SVI("constexpr struct B {unsigned small:3,full:32;} b={1,4294967295u};\n"
+                "_Static_assert(!(b.small < -1)&&-b.small<0&&~b.small==-2);\n"
+                "_Static_assert(typeof(+b.small)==int&&typeof(b.small<<0)==int);\n"
+                "_Static_assert(typeof(1?b.small:0)==int);\n"
+                "_Static_assert(typeof(+b.full)==unsigned&&b.full==4294967295u);\n"
+                "constexpr unsigned u=1; constexpr float f=1;\n"
+                "_Static_assert(typeof(+u)==unsigned&&typeof(u+u)==unsigned);\n"
+                "_Static_assert(typeof(+f)==float&&typeof(f+f)==float);\n"
+                "constexpr _Any boxed=+b.small; _Static_assert(boxed.type==int&&boxed.as(int)==1);\n"),
+        },
+        {
+            "constexpr enum fields retain their type through bitwise complement", __LINE__,
+            SVI("enum E:unsigned {ONE=1};\n"
+                "constexpr struct B {enum E plain; enum E bits:3;} b={ONE,ONE};\n"
+                "_Static_assert(~b.plain==4294967294u);\n"
+                "_Static_assert(~b.bits==-2&&typeof(+b.bits)==int&&!(b.bits < -1));\n"),
+        },
+        {
+            "fixed enum declarations remain complete before their body", __LINE__,
+            SVI("enum E:unsigned __int128;\n"
+                "_Static_assert(sizeof(enum E)==16&&!(enum E).is_incomplete);\n"
+                "struct S {enum E value; int tail;};\n"
+                "enum E:const unsigned __int128;\n"
+                "enum E {HIGH=(unsigned __int128)1<<100};\n"
+                "_Static_assert(sizeof(enum E)==16&&typeof(HIGH)==enum E);\n"
+                "_Static_assert(sizeof(struct S)==32);\n"),
+        },
+        {
+            "unfixed enum forward declarations can acquire a fixed type", __LINE__,
+            SVI("enum E; enum E:unsigned char {MAX=255};\n"
+                "_Static_assert(sizeof(enum E)==1&&MAX==255);\n"),
+        },
+        {
+            "fixed enum values retain all 128 bits", __LINE__,
+            SVI("enum U:unsigned __int128 {HIGH=(unsigned __int128)1<<100,NEXT,MAX=~(unsigned __int128)0};\n"
+                "enum S:__int128 {LOW=-((__int128)1<<100),AFTER,TOP=(((__int128)1<<126)-1)*2+1};\n"
+                "_Static_assert(HIGH==((unsigned __int128)1<<100)&&NEXT==HIGH+1);\n"
+                "_Static_assert(MAX==~(unsigned __int128)0&&AFTER==LOW+1);\n"
+                "_Static_assert(TOP==(((__int128)1<<126)-1)*2+1);\n"
+                "_Static_assert(typeof(HIGH)==enum U&&typeof(LOW)==enum S);\n"),
+        },
+        {
+            "fixed unsigned enum crosses the signed maximum", __LINE__,
+            SVI("enum U:unsigned long long {A=9223372036854775807ull,B,C=18446744073709551615ull,RESET=0,D};\n"
+                "_Static_assert(B==9223372036854775808ull&&C==18446744073709551615ull&&D==1);\n"),
+        },
+        {
+            "unfixed enum finalizes types while preserving body expressions", __LINE__,
+            SVI("enum E {A=2147483647,B,BODY_A=sizeof(A),BODY_B=sizeof(B)};\n"
+                "_Static_assert(B==2147483648ll&&BODY_A==sizeof(int)&&BODY_B==sizeof(long long));\n"
+                "_Static_assert(typeof(A)==enum E&&typeof(B)==enum E);\n"
+                "enum U {X=18446744073709551615ull,Y};\n"
+                "_Static_assert(X==18446744073709551615ull&&Y==((unsigned __int128)1<<64)&&sizeof(enum U)==16);\n"
+                "enum I {SMALL=7u}; _Static_assert(typeof(SMALL)==int);\n"),
+        },
+        {
+            "unfixed enums widen signed successors and mixed ranges", __LINE__,
+            SVI("enum E {TOP=9223372036854775807ll,NEXT,BODY_SIZE=sizeof(NEXT)};\n"
+                "_Static_assert(NEXT==((__int128)1<<63)&&BODY_SIZE==16&&sizeof(enum E)==8);\n"
+                "enum M {NEG=-1,POS=18446744073709551615ull};\n"
+                "_Static_assert(sizeof(enum M)==16&&NEG==-1&&POS==18446744073709551615ull);\n"
+                "enum S:__int128 {MIN=(__int128)((unsigned __int128)1<<127),AFTER};\n"
+                "_Static_assert(MIN<0&&AFTER==MIN+1);\n"),
+        },
+        {
+            "packed enums choose storage independently of member types", __LINE__,
+            SVI("enum __attribute__((packed)) P {ZERO,LAST=255,BODY_SIZE=sizeof(LAST)};\n"
+                "_Static_assert(sizeof(enum P)==1&&typeof(LAST)==int&&BODY_SIZE==sizeof(int));\n"
+                "enum N {MIN=-129,MAX=127} __attribute__((packed));\n"
+                "_Static_assert(sizeof(enum N)==2&&typeof(MIN)==int);\n"
+                "enum __attribute__((packed)) W {BIG=4294967295u};\n"
+                "_Static_assert(sizeof(enum W)==4&&typeof(BIG)==enum W);\n"
+                "enum __attribute__((packed)) F:unsigned long long {F_ZERO};\n"
+                "_Static_assert(sizeof(enum F)==8&&typeof(F_ZERO)==enum F);\n"),
+        },
+        {
+            "wide bounds retain valid values and explicit narrowing", __LINE__,
+            SVI("constexpr int a[(unsigned __int128)3]={[((unsigned __int128)2)]=7};\n"
+                "_Static_assert(sizeof(a)==3*sizeof(int)&&a[2]==7);\n"
+                "constexpr int b[(unsigned long long)(((unsigned __int128)1<<64)+3)]="
+                    "{[(int)(((unsigned __int128)1<<64)+1)]=9};\n"
+                "_Static_assert(sizeof(b)==3*sizeof(int)&&b[1]==9);\n"
+                "enum E:unsigned long long {MAX=18446744073709551615ull};\n"
+                "_Static_assert(MAX==18446744073709551615ull);\n"
+                "enum S:__int128 {NEG=-1}; _Static_assert(NEG==-1);\n"),
+        },
+        {
+            "layout accepts maximum size and large bitfield offsets", __LINE__,
+            SVI("_Static_assert(sizeof(char[4294967295])==4294967295ul);\n"
+                "_Static_assert(sizeof(char[3][1431655765])==4294967295ul);\n"
+                "_Static_assert(sizeof(struct {char a[4294967295];})==4294967295ul);\n"
+                "_Static_assert(sizeof(union {char a[4294967295];})==4294967295ul);\n"
+                "_Static_assert(sizeof(struct {char a[536870912]; unsigned b:1,c:1;})==536870916ul);\n"),
+        },
+        {
+            "constexpr flexible member aggregate views", __LINE__,
+            SVI("struct I {int n; int tail[];};\n"
+                "constexpr union U {int n; struct I i;} u={.n=7};\n"
+                "constexpr struct I x=u.i; _Static_assert(x.n==7);\n"),
+        },
+        {
+            "constexpr full-width 128-bit bitfield", __LINE__,
+            SVI("struct B {unsigned __int128 x:128;};\n"
+                "_Static_assert(sizeof(struct B)==16);\n"
+                "constexpr struct B b={.x=~(unsigned __int128)0};\n"
+                "_Static_assert(b.x==~(unsigned __int128)0);\n"),
+        },
+        {
+            "constexpr pointer member through arrow retains symbolic value", __LINE__,
+            SVI("static int target[3]; constexpr struct S {int* p;} s={&target[1]};\n"
+                "_Static_assert((&s)->p==&target[1]);\n"
+                "_Static_assert((&s)->p-target==1&&!!((&s)->p));\n"),
+        },
+        {
+            "constexpr pointer dereference retains symbolic value", __LINE__,
+            SVI("static int target[3]; constexpr int* p=&target[2];\n"
+                "_Static_assert(*(&p)==&target[2]);\n"
+                "_Static_assert(*(&p)-target==2&&!!(*(&p)));\n"),
+        },
+        {
+            "constexpr pointer through indirect subscript retains symbolic value", __LINE__,
+            SVI("static int target[3]; constexpr int* a[2]={target,&target[2]};\n"
+                "constexpr int* const* p=a;\n"
+                "_Static_assert(p[1]==&target[2]&&p[1]-p[0]==2);\n"),
+        },
+        {
+            "constexpr valid adjusted object addresses are nonnull", __LINE__,
+            SVI("static int a[3];\n"
+                "_Static_assert(&a[1]!=nullptr&&a+3!=nullptr&&!!(a+2));\n"
+                "_Static_assert(!(a+1==nullptr));\n"),
+        },
+        {
+            "constexpr incomplete object address needs no storage range", __LINE__,
+            SVI("struct S; extern struct S s;\n_Static_assert(&s!=nullptr);\n"),
+        },
+        {
+            "inferred array accepts last representable element", __LINE__,
+            SVI("constexpr char a[]={[4294967294]=1};\n"
+                "_Static_assert(sizeof(a)==4294967295ul&&a[4294967294]==1&&a[0]==0);\n"),
+        },
+        {
+            "constexpr union view skips flexible member storage", __LINE__,
+            SVI("struct I {int n; int tail[];}; struct J {int n;};\n"
+                "constexpr union U {struct I i; struct J j;} u={.i={7}};\n"
+                "constexpr struct J x=u.j; _Static_assert(x.n==7);\n"),
+        },
+        {
+            "constexpr union view retains flexible member tail padding", __LINE__,
+            SVI("struct I {double n; char c; char tail[];}; struct J {double n; char c;};\n"
+                "constexpr union U {struct I i; struct J j;} u={.i={3,7}};\n"
+                "constexpr struct J x=u.j; _Static_assert(x.n==3&&x.c==7);\n"),
+        },
+        {
+            "constexpr wide enum representation", __LINE__,
+            SVI("enum E:unsigned __int128 {ZERO};\n"
+                "constexpr enum E x=(enum E)((unsigned __int128)1<<100);\n"
+                "_Static_assert((unsigned __int128)x==((unsigned __int128)1<<100));\n"
+                "constexpr union U {enum E e; unsigned __int128 bits;} u={.e=x};\n"
+                "_Static_assert(u.bits==((unsigned __int128)1<<100));\n"),
+        },
+        {
+            "constexpr enum casts narrow before later conversion", __LINE__,
+            SVI("enum E:unsigned char {ZERO};\n"
+                "constexpr enum E x=(enum E)256;\n"
+                "_Static_assert((unsigned)x==0&&x==ZERO);\n"
+                "enum S:signed char {S_ZERO}; constexpr enum S y=(enum S)255;\n"
+                "_Static_assert((int)y==-1);\n"),
+        },
+        {
+            "constexpr wide enum enumerator is sign extended", __LINE__,
+            SVI("enum E:__int128 {NEG=-1};\n"
+                "constexpr union U {enum E e; __int128 bits;} u={.e=NEG};\n"
+                "_Static_assert(u.bits==-1);\n"),
+        },
+        {
+            "constexpr braced enums are scalar values", __LINE__,
+            SVI("enum E {ONE=1}; constexpr enum E x={ONE};\n"
+                "_Static_assert(x==ONE&&(int)x==1);\n"
+                "enum W:__int128 {NEG=-1}; constexpr enum W y={NEG};\n"
+                "_Static_assert(y==NEG&&(__int128)y==-1);\n"),
+        },
+        {
+            "constexpr braced pointers retain their values", __LINE__,
+            SVI("constexpr int* zero={nullptr}; constexpr int* numeric={(int*)6};\n"
+                "_Static_assert(!zero&&zero==nullptr&&numeric==(int*)6);\n"
+                "static int target; constexpr int* symbol={&target};\n"
+                "_Static_assert(symbol==&target&&!!symbol);\n"),
+        },
+        {
+            "constexpr pointer logical negation", __LINE__,
+            SVI("static int target; _Static_assert(!(int*)0&&!((int*)6)==0);\n"
+                "_Static_assert(!(&target)==0);\n"),
+        },
+        {
+            "constexpr empty unions preserve numeric and pointer defaults", __LINE__,
+            SVI("constexpr union U {unsigned bit:1; void* p; unsigned long n;} u={};\n"
+                "_Static_assert(u.n==0);\n"
+                "constexpr union P {void* p; int* q;} p={}; _Static_assert(p.q==nullptr);\n"
+                "constexpr union B {void (^p)(void); struct BP {void (^p)(void);} b;} b={};\n"
+                "constexpr struct BP copy=b.b;\n"),
+        },
+        {
+            "constexpr shifts retain independently promoted counts", __LINE__,
+            SVI("_Static_assert((1U<<31ULL)==0x80000000U);\n"
+                "_Static_assert((0x80000000U>>(unsigned __int128)31)==1);\n"
+                "_Static_assert((1ULL<<63U)==0x8000000000000000ULL);\n"
+                "_Static_assert(((unsigned __int128)1<<127ULL)>>127U);\n"),
+        },
+        {
+            "constexpr byte swaps retain their computed values", __LINE__,
+            SVI("constexpr unsigned short a=__builtin_bswap16(0x1234);\n"
+                "constexpr unsigned b=__builtin_bswap32(0x12345678U);\n"
+                "constexpr unsigned long long c=__builtin_bswap64(0x0102030405060708ULL);\n"
+                "_Static_assert(a==0x3412&&b==0x78563412U&&c==0x0807060504030201ULL);\n"
+                "constexpr int values[3]={[__builtin_bswap16(0x0100)]=7};\n"
+                "_Static_assert(values[0]==0&&values[1]==7&&values[2]==0);\n"),
+        },
+        {
+            "constexpr bool casts normalize integer values", __LINE__,
+            SVI("constexpr _Bool a=256,b=2,c=-2;\n"
+                "_Static_assert(!((_Bool)2)==0);\n"
+                "_Static_assert(a==1&&b==1&&c==1);\n"),
+        },
+        {
+            "constexpr bool casts compare floating values with zero", __LINE__,
+            SVI("constexpr _Bool a=0.5,b=-0.5,c=-0.0;\n"
+                "_Static_assert(a==1&&b==1&&c==0);\n"
+                "_Static_assert((_Bool)(0.0/0.0)&&(_Bool)(1.0/0.0));\n"),
+        },
+        {
+            "constexpr bool representation views retain valid values and packed bits", __LINE__,
+            SVI("constexpr union U {unsigned char byte; _Bool flag;} zero={.byte=0},one={.byte=1};\n"
+                "_Static_assert(zero.flag==0&&one.flag==1);\n"
+                "constexpr union V {unsigned char byte; struct B {unsigned char pad:7; _Bool flag:1;} b;} bits={.byte=128};\n"
+                "_Static_assert(bits.b.flag==1);\n"),
+        },
+        {
+            "constexpr bool casts normalize absolute and symbolic pointers", __LINE__,
+            SVI("static int target; constexpr _Bool a=(_Bool)(int*)2,b=(_Bool)&target,c=(_Bool)nullptr;\n"
+                "_Static_assert(a==1&&b==1&&c==0);\n"),
+        },
+        {
+            "constexpr casts normalize enums with bool storage", __LINE__,
+            SVI("enum E:_Bool {ZERO}; constexpr enum E x=(enum E)2;\n"
+                "_Static_assert((int)x==1&&!x==0);\n"),
+        },
+        {
+            "constexpr enumerators at the signed limit", __LINE__,
+            SVI("enum E:long long {MAX=9223372036854775807LL};\n"
+                "_Static_assert(MAX==9223372036854775807LL);\n"
+                "enum F:long long {TOP=9223372036854775807LL,RESET=0,NEXT};\n"
+                "_Static_assert(RESET==0&&NEXT==1);\n"),
+        },
+        {
+            "constexpr comma expressions can discard unresolved addresses", __LINE__,
+            SVI("static int target;\n"
+                "_Static_assert((&target,7)+1==8);\n"
+                "_Static_assert(((long)&target,7)+1==8);\n"),
+        },
+        {
+            "constexpr Any casts retain the original tag and payload", __LINE__,
+            SVI("constexpr _Any a=7; constexpr _Any b=(_Any)a;\n"
+                "_Static_assert(b.type==int&&b.as(int)==7);\n"),
+        },
+        {
+            "constexpr nested union numeric defaults use the initialized member", __LINE__,
+            SVI("constexpr union O {struct S {union U {void* p; struct B {unsigned low, high;} b;} u;} s; unsigned long bits;} v={.s.u.b.low=7};\n"
+                "_Static_assert(v.bits==7);\n"),
+        },
+        {
+            "constexpr array union defaults preserve each initialized member", __LINE__,
+            SVI("constexpr struct S {union U {void* p; struct B {unsigned low, high;} b;} u[2];} s={.u[0].b.low=3,.u[1].b.low=7};\n"
+                "_Static_assert(((const unsigned long*)&s)[0]==3&&((const unsigned long*)&s)[1]==7);\n"),
+        },
+        {
+            "constexpr later numeric writes replace nested union pointer defaults", __LINE__,
+            SVI("constexpr struct S {union U {unsigned long n[2]; struct P {unsigned long n; void* p;} p;} u;} s={.u.p.n=7,.u.n[1]=9};\n"
+                "_Static_assert(((const unsigned long*)&s)[0]==7&&((const unsigned long*)&s)[1]==9);\n"),
+        },
+        {
+            "constexpr padding reads skip flexible members", __LINE__,
+            SVI("constexpr struct I {double n; char c; char tail[];} s={3,7};\n"
+                "constexpr unsigned char byte=((const unsigned char*)&s)[15];\n"
+                "_Static_assert(sizeof(s)==16&&byte==0);\n"),
+        },
+        {
+            "constant slices: evaluated data retains nested array provenance", __LINE__,
+            SVI("constexpr int a[2][2]={{1,2},{3,4}}; constexpr const int part[:]=a[1][:];\n"
+                "_Static_assert(part.count==2&&part.data==&a[1][0]&&part[1]==4);\n"),
+            .vars = {{.name=SVI("part"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constant slices: general evaluation retains literal storage", __LINE__,
+            SVI("constexpr const char part[:]=\"abcd\"[1:3];\n"
+                "_Static_assert(part.count==2&&part[0]=='b'&&part[1]=='c');\n"),
+            .vars = {{.name=SVI("part"), .repr=SVI("const const char[:]"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constant slices: qualification casts retain the slice type", __LINE__,
+            SVI("constexpr int part[:]=((int*)16)[1:3]; constexpr const int qualified[:]=part;\n"
+                "_Static_assert(qualified.count==2&&qualified.data==(const int*)20);\n"),
+            .vars = {{.name=SVI("qualified"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constant slices: general evaluation produces count and data paths", __LINE__,
+            SVI("constexpr int a[4]={3,5,7,9}; constexpr const int part[:]=a[1:3];\n"
+                "constexpr const int tail[:]=part[1:]; constexpr const int whole[:]=a[:];\n"
+                "constexpr const int head[:]=a[:2]; constexpr const int empty[:]=a[4:4];\n"
+                "_Static_assert(part.count==2&&part.data==a+1&&tail.count==1&&tail[0]==7);\n"
+                "_Static_assert(whole.count==4&&head.count==2&&empty.count==0&&empty.data==a+4);\n"),
+            .vars = {
+                {.name=SVI("part"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")},
+                {.name=SVI("tail"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")},
+                {.name=SVI("whole"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")},
+                {.name=SVI("head"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")},
+                {.name=SVI("empty"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")},
+            },
+        },
+        {
+            "constant slices: array casts evaluate as aggregates", __LINE__,
+            SVI("constexpr int a[3]={1,2,3}; constexpr const int part[:]=a;\n"
+                "_Static_assert(part.count==3&&part.data==a&&part[2]==3);\n"),
+            .vars = {{.name=SVI("part"), .repr=SVI("const const int[:]"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constant slices: numeric pointers remain concrete", __LINE__,
+            SVI("constexpr int part[:]=((int*)16)[1:3];\n"
+                "_Static_assert(part.count==2&&part.data==(int*)20);\n"),
+            .vars = {{.name=SVI("part"), .repr=SVI("const int[:]"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constant object views: pointer and slice reads resolve their storage", __LINE__,
+            SVI("constexpr int a[4]={3,5,7,9}; constexpr const int* p=a+2;\n"
+                "constexpr const int part[:]=a[1:3]; constexpr int x=p[-1]+part[1]+*p;\n"
+                "_Static_assert(x==19);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const int"), .eval=1}},
+        },
+        {
+            "constant object views: pointer comma and conditional preserve storage", __LINE__,
+            SVI("constexpr int a[3]={1,2,3}; constexpr const int* p=a+1;\n"
+                "_Static_assert((0,p)[1]==3&&(1?p:a)[-1]==1);\n"),
+        },
+        {
+            "constant object views: indirect union views retain their source", __LINE__,
+            SVI("static int target; struct I {int* p;};\n"
+                "constexpr union U {int* raw; struct I i;} u={.raw=&target};\n"
+                "constexpr const struct I* p=&u.i; constexpr struct I copy=*p;\n"
+                "_Static_assert(copy.p==&target);\n"),
+            .vars = {{.name=SVI("copy"), .repr=SVI("const struct I"), .eval_paths=SVI("view;")}},
+        },
+        {
+            "constant object views: arrow and aggregate pointer subscript", __LINE__,
+            SVI("static int target; struct I {_Type t; int* p; int n;};\n"
+                "constexpr struct I a[2]={{int,&target,3},{long,&target,7}};\n"
+                "constexpr const struct I* p=a+1; constexpr struct I copy=p[0];\n"
+                "_Static_assert(p->n==7&&copy.t==long&&copy.p==&target);\n"),
+            .vars = {{.name=SVI("copy"), .repr=SVI("const struct I"), .eval_paths=SVI("[0];[1];[2];")}},
+        },
+        {
+            "constexpr object views: union aggregate retains its representation", __LINE__,
+            SVI("constexpr union U {int raw; struct I {int a;} i;} u={.raw=3};\n"
+                "constexpr struct I x=u.i; _Static_assert(x.a==3);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("view;"), .eval_repr=SVI("u.i")}},
+        },
+        {
+            "constexpr object views: comma selects an aggregate by identity", __LINE__,
+            SVI("struct I {int a,b;}; struct S {struct I i;};\n"
+                "constexpr struct S s={1,2}; constexpr struct I x=(0,s).i;\n"
+                "_Static_assert(x.a==1&&x.b==2);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constexpr object views: union aggregate retains symbolic storage", __LINE__,
+            SVI("static int target; struct I {int* p;};\n"
+                "constexpr union U {int* raw; struct I i;} u={.raw=&target};\n"
+                "constexpr struct I x=u.i; _Static_assert(x.p==&target);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("view;")}},
+        },
+        {
+            "constexpr object views: aggregate evaluation preserves padding", __LINE__,
+            SVI("constexpr union U {unsigned char raw[8]; struct I {unsigned char c; int n;} i;}\n"
+                "u={.raw={1,2,3,4,5,6,7,8}}; constexpr struct I x=u.i;\n"
+                "_Static_assert(x.c==1);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("view;"), .eval_bytes=1}},
+        },
+        {
+            "constexpr object views: runtime aggregate calls remain nonconstant", __LINE__,
+            SVI("struct I {int n;}; struct S {struct I i;}; struct S f(void);\n"
+                "struct I x=f().i;\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("struct I"), .eval_status=_cc_not_constant_error}},
+        },
+        {
+            "constexpr object views: metadata and symbolic pointers through comma", __LINE__,
+            SVI("static int target; constexpr struct S {_Type t; int* p;} s={int,&target};\n"
+                "constexpr _Type t=(0,s).t; constexpr int* p=(0,s).p;\n"
+                "_Static_assert(t==int && p==&target);\n"),
+            .vars = {{.name=SVI("t"), .repr=SVI("const _Type"), .eval=1}},
+        },
+        {
+            "member printer: whole anonymous base retains its address adjustment", __LINE__,
+            SVI("struct L {int x;}; struct S {int pad; struct L;}; struct S s; struct L* p=&s;\n"),
+            .vars = {{.name=SVI("p"), .repr=SVI("struct L *"), .init=SVI("&*(struct L *)((char *)(&s) + 4)")}},
+        },
+        {
+            "member printer: typed Any views retain their type", __LINE__,
+            SVI("_Any a=3; int x=a.as(int); void* p=a.payload; _Type t=a.type;\n"),
+            .vars = {
+                {.name=SVI("x"), .repr=SVI("int"), .init=SVI("a.as(int)")},
+                {.name=SVI("p"), .repr=SVI("void *"), .init=SVI("&a.payload")},
+                {.name=SVI("t"), .repr=SVI("_Type"), .init=SVI("a.type")},
+            },
+        },
+        {
+            "constexpr paths: brace-elided aggregate selection retains all children", __LINE__,
+            SVI("struct I {int a,b;}; struct S {struct I x; int z;};\n"
+                "constexpr struct S s={1,2,3}; constexpr struct I x=s.x;\n"
+                "_Static_assert(x.a==1&&x.b==2);\n"),
+            .vars = {{.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "constexpr paths: aggregate selection applies descendant writes and resets", __LINE__,
+            SVI("struct I {int a,b;}; struct S {struct I x; int z;};\n"
+                "constexpr struct S s={.x={1,2},.x.b=7,.z=9}; constexpr struct I x=s.x;\n"
+                "_Static_assert(x.a==1&&x.b==7);\n"
+                "constexpr struct S t={.x.b=8,.x={},.x.a=4}; constexpr struct I y=t.x;\n"
+                "_Static_assert(y.a==4&&y.b==0);\n"),
+            .vars = {
+                {.name=SVI("x"), .repr=SVI("const struct I"), .eval_paths=SVI("[]{[0];[1];};[1];")},
+                {.name=SVI("y"), .repr=SVI("const struct I"), .eval_paths=SVI("[]{};[0];")},
+            },
+        },
+        {
+            "constexpr paths: large scalar members retain their value", __LINE__,
+            SVI("constexpr struct S {long double x;} s={1.25L};\n"
+                "_Static_assert(s.x==1.25L);\n"),
+        },
+        {
+            "constexpr paths: aggregate views trim extended array paths", __LINE__,
+            SVI("struct I {int a,b;}; struct S {struct I x[1025];};\n"
+                "constexpr struct S s={.x[1024].a=3,.x[1024].b=4};\n"
+                "constexpr struct I y=s.x[1024]; _Static_assert(y.a==3&&y.b==4);\n"),
+            .vars = {{.name=SVI("y"), .repr=SVI("const struct I"), .eval_paths=SVI("[0];[1];")}},
+        },
+        {
+            "field paths: integer values do not own member paths", __LINE__,
+            SVI("struct B {unsigned a:3; unsigned b:5;}; constexpr struct B b={5,19}; _Static_assert(b.a==5 && b.b==19);\n"),
+        },
+        {
+            "field paths: anonymous union members keep their identity", __LINE__,
+            SVI("struct S {int pad; union {int a; struct {int b;};};}; struct S s;\n"
+                "int *a=&s.a; int *b=&s.b;\n"),
+            .vars = {
+                {.name=SVI("a"), .repr=SVI("int *"), .init=SVI("&s.a"), .member_path=SVI("[1,0]")},
+                {.name=SVI("b"), .repr=SVI("int *"), .init=SVI("&s.b"), .member_path=SVI("[1,1,0]")},
+            },
+        },
+        {
+            "field paths: extended anonymous member access", __LINE__,
+            SVI("struct S {int pad; struct {struct {struct {struct {struct {struct {int x;};};};};};};};\n"
+                "struct S s; int *p=&s.x;\n"
+                "constexpr struct S c={.x=7}; _Static_assert(c.x==7);\n"),
+            .vars = {{.name=SVI("p"), .repr=SVI("int *"), .init=SVI("&s.x"), .member_path=SVI("[1,0,0,0,0,0,0]")}},
+        },
+        {
+            "field paths: large field-table index", __LINE__,
+            SVI("#define P int:0;\n#define P2 P P\n#define P4 P2 P2\n#define P8 P4 P4\n"
+                "#define P16 P8 P8\n#define P32 P16 P16\n#define P64 P32 P32\n"
+                "#define P128 P64 P64\n#define P256 P128 P128\n#define P512 P256 P256\n#define P1024 P512 P512\n"
+                "struct S {P1024 int value;}; struct S s; int *p=&s.value;\n"),
+            .vars = {{.name=SVI("p"), .repr=SVI("int *"), .init=SVI("&s.value"), .member_path=SVI("[1024]")}},
+        },
+        {
+            "initializer printer: named fields, arrays and braced boundaries", __LINE__,
+            SVI("struct S {int a[2]; int b;}; struct S s={{1,2},3}; struct S t={1,2,3};\n"),
+            .vars = {
+                {SVI("s"), SVI("struct S"), SVI("{.a = {[0] = 1, [1] = 2}, .b = 3}")},
+                {SVI("t"), SVI("struct S"), SVI("{.a[0] = 1, .a[1] = 2, .b = 3}")},
+            },
+        },
+        {
+            "initializer printer: anonymous members and union designators", __LINE__,
+            SVI("struct S {int pad; union {int a; struct {int b;} nested;};}; struct S s={.a=1,.nested.b=2};\n"),
+            .vars = {{SVI("s"), SVI("struct S"), SVI("{.a = 1, .nested.b = 2}")}},
+        },
+        {
+            "initializer printer: field indices skip methods and unnamed bitfields", __LINE__,
+            SVI("struct S {void method(struct S* self){} int a:3; int:2; int b:3;}; struct S s={1,2};\n"),
+            .vars = {{SVI("s"), SVI("struct S"), SVI("{.a = 1, .b = 2}")}},
+        },
+        {
+            "initializer printer: large and extended array paths", __LINE__,
+            SVI("int a[1025]={[1024]=1}; int b[1][1][1][1][1][1][1]={[0][0][0][0][0][0][0]=2};\n"),
+            .vars = {
+                {SVI("a"), SVI("int[1025]"), SVI("{[1024] = 1}")},
+                {SVI("b"), SVI("int[1][1][1][1][1][1][1]"), SVI("{[0][0][0][0][0][0][0] = 2}")},
+            },
+        },
+        {
+            "initializer paths retain empty whole-subobject replacement", __LINE__,
+            SVI("struct S {struct I {int a,b;} x;}; struct S s={.x.b=7,.x={}};\n"),
+            .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[0,1];[0]{};")}},
+        },
+        {
+            "initializer paths use field-table indices for methods and bitfields", __LINE__,
+            SVI("struct S {void method(struct S* self){} int a:3; int:2; int b:3;}; struct S s={1,2};\n"),
+            .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[1];[3];")}},
+        },
+        {
+            "initializer paths include generated slice members and whole strings", __LINE__,
+            SVI("struct S {const char s[:]; char a[4];}; struct S s={\"hi\",\"ok\"}; int scalar={1};\n"),
+            .vars = {
+                {.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[0]{[0];[1];};[1]{[];};")},
+                {.name=SVI("scalar"), .repr=SVI("int"), .paths=SVI("[];")},
+            },
+        },
+        {
+            "initializer paths retain anonymous members and union identity", __LINE__,
+            SVI("struct S {int pad; union {int a; struct {int b;} nested;};};\n"
+                "struct S s={.a=1,.nested.b=2};\n"),
+            .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[1,0];[1,1,0];")}},
+        },
+        {
+            "initializer paths preserve braces and brace elision", __LINE__,
+            SVI("struct S {int a[2]; int b;}; struct S s={{1,2},3}; struct S t={1,2,3};\n"),
+            .vars = {
+                {.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[0]{[0];[1];};[1];")},
+                {.name=SVI("t"), .repr=SVI("struct S"), .paths=SVI("[0,0];[0,1];[1];")},
+            },
+        },
+        {
+            "initializer paths encode large single indices and spill deep designators", __LINE__,
+            SVI("int a[1025]={[1024]=1}; int b[1][1][1][1][1][1][1]={[0][0][0][0][0][0][0]=2};\n"),
+            .vars = {
+                {.name=SVI("a"), .repr=SVI("int[1025]"), .paths=SVI("[1024];")},
+                {.name=SVI("b"), .repr=SVI("int[1][1][1][1][1][1][1]"), .paths=SVI("[0,0,0,0,0,0,0];")},
+            },
+        },
         {
             "typedef source locations retain the alias declaration", __LINE__,
             SVI("typedef int A, (*F)(int param);\n"
@@ -176,12 +1000,15 @@ TestFunction(test_parse_decls){
         },
 
         {
-            "reflection: enumerator value uses target int64_t", __LINE__,
+            "reflection: enumerator bits preserve value and type", __LINE__,
             SVI("enum E { NEGATIVE = -17 };\n"
-                "_Static_assert(typeof((enum E).enumerator(0).value) == __INT64_TYPE__);\n"
+                "_Static_assert(typeof((enum E).enumerator(0).value) == unsigned __int128);\n"
                 "constexpr struct __builtin_Enumerator e = (enum E).enumerator(0);\n"
-                "_Static_assert(typeof(e.value).unqual == __INT64_TYPE__);\n"
-                "_Static_assert(e.value == -17);\n"),
+                "_Static_assert(typeof(e.value).unqual == unsigned __int128);\n"
+                "_Static_assert(e.value == (unsigned __int128)-17&&e.type==int);\n"
+                "enum W:unsigned __int128 {HIGH=(unsigned __int128)1<<100};\n"
+                "constexpr struct __builtin_Enumerator w=(enum W).enumerator(0);\n"
+                "_Static_assert(w.value==((unsigned __int128)1<<100)&&w.type==enum W);\n"),
         },
         {
             "any constexpr: matching qualified types and selected views", __LINE__,
@@ -1305,6 +2132,21 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "null pointer constants include evaluated integer zero", __LINE__,
+            SVI("enum E {ZERO=0}; constexpr int zero=0;\n"
+                "int *a=1-1,*b=(int)0,*c=ZERO,*d=zero;\n"
+                "int* p; int* q=1?p:(2-2); int* r=1?(3-3):p;\n"
+                "int equal=p==(4-4); int* wide=0ui128;\n"),
+        },
+        {
+            "function designators implicitly convert to bool", __LINE__,
+            SVI("int f(void); _Bool b=f;\n"),
+        },
+        {
+            "function designators are valid scalar conditions", __LINE__,
+            SVI("int f(void); if(f){} int n=f?1:0; int yes=f&&1, no=!f;\n"),
+        },
+        {
             "nullptr to pointer", __LINE__,
             SVI("int *p = nullptr;\n"),
             .vars = {
@@ -1760,7 +2602,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; };\n"
                "struct S s = {1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a = 1, .b = 2}") },
             },
         },
         {
@@ -1768,28 +2610,28 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; };\n"
                "struct S s = {.b = 2, .a = 1};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@4 = 2, @0 = 1}") },
+                { SVI("s"), SVI("struct S"), SVI("{.b = 2, .a = 1}") },
             },
         },
         {
             "array init", __LINE__,
             SVI("int arr[3] = {1, 2, 3};\n"),
             .vars = {
-                { SVI("arr"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("arr"), SVI("int[3]"), SVI("{[0] = 1, [1] = 2, [2] = 3}") },
             },
         },
         {
             "array designated init", __LINE__,
             SVI("int arr[5] = {[2] = 10, [4] = 20};\n"),
             .vars = {
-                { SVI("arr"), SVI("int[5]"), SVI("{@8 = 10, @16 = 20}") },
+                { SVI("arr"), SVI("int[5]"), SVI("{[2] = 10, [4] = 20}") },
             },
         },
         {
             "incomplete array sizing", __LINE__,
             SVI("int arr[] = {1, 2, 3};\n"),
             .vars = {
-                { SVI("arr"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("arr"), SVI("int[3]"), SVI("{[0] = 1, [1] = 2, [2] = 3}") },
             },
         },
         {
@@ -1797,7 +2639,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a[2]; int b; };\n"
                "struct S s = {{1, 2}, 3};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a = {[0] = 1, [1] = 2}, .b = 3}") },
             },
         },
         {
@@ -1805,7 +2647,7 @@ TestFunction(test_parse_decls){
             SVI("union U { int i; float f; };\n"
                "union U u = {.f = 1.5f};\n"),
             .vars = {
-                { SVI("u"), SVI("union U"), SVI("{1.5f}") },
+                { SVI("u"), SVI("union U"), SVI("{.f = 1.5f}") },
             },
         },
         {
@@ -1813,7 +2655,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; int c; };\n"
                "struct S s = {.b = 2, 3};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@4 = 2, @8 = 3}") },
+                { SVI("s"), SVI("struct S"), SVI("{.b = 2, .c = 3}") },
             },
         },
         {
@@ -1837,7 +2679,7 @@ TestFunction(test_parse_decls){
                "struct Outer { struct Inner p; };\n"
                "struct Outer s = {.p.x = 1, .p.y = 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct Outer"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("s"), SVI("struct Outer"), SVI("{.p.x = 1, .p.y = 2}") },
             },
         },
         {
@@ -1845,7 +2687,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { float f; };\n"
                "struct S s = {42};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{(float)42}") },
+                { SVI("s"), SVI("struct S"), SVI("{.f = (float)42}") },
             },
         },
         {
@@ -1853,14 +2695,14 @@ TestFunction(test_parse_decls){
             SVI("struct S { int x; };\n"
                "struct S foo[] = {1, {2}, 3};\n"),
             .vars = {
-                { SVI("foo"), SVI("struct S[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("foo"), SVI("struct S[3]"), SVI("{[0].x = 1, [1] = {.x = 2}, [2].x = 3}") },
             },
         },
         {
             "extra nested braces on scalar", __LINE__,
             SVI("int x[2] = {1, {{2}}};\n"),
             .vars = {
-                { SVI("x"), SVI("int[2]"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("x"), SVI("int[2]"), SVI("{[0] = 1, [1] = 2}") },
             },
         },
         {
@@ -1868,7 +2710,7 @@ TestFunction(test_parse_decls){
             SVI("struct P { int a; int b; };\n"
                "struct P arr[] = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct P[2]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("arr"), SVI("struct P[2]"), SVI("{[0].a = 1, [0].b = 2, [1].a = 3, [1].b = 4}") },
             },
         },
         {
@@ -1877,7 +2719,7 @@ TestFunction(test_parse_decls){
                "struct Outer { struct Inner s; int c; };\n"
                "struct Outer o = {1, 2, 3};\n"),
             .vars = {
-                { SVI("o"), SVI("struct Outer"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.s.a = 1, .s.b = 2, .c = 3}") },
             },
         },
         // --- Torture tests ---
@@ -1885,7 +2727,7 @@ TestFunction(test_parse_decls){
             "trailing comma in init list", __LINE__,
             SVI("int arr[3] = {1, 2, 3,};\n"),
             .vars = {
-                { SVI("arr"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("arr"), SVI("int[3]"), SVI("{[0] = 1, [1] = 2, [2] = 3}") },
             },
         },
         {
@@ -1914,42 +2756,42 @@ TestFunction(test_parse_decls){
             "array of arrays", __LINE__,
             SVI("int a[2][3] = {{1, 2, 3}, {4, 5, 6}};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("a"), SVI("int[2][3]"), SVI("{[0] = {[0] = 1, [1] = 2, [2] = 3}, [1] = {[0] = 4, [1] = 5, [2] = 6}}") },
             },
         },
         {
             "array of arrays: brace elision", __LINE__,
             SVI("int a[2][3] = {1, 2, 3, 4, 5, 6};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("a"), SVI("int[2][3]"), SVI("{[0][0] = 1, [0][1] = 2, [0][2] = 3, [1][0] = 4, [1][1] = 5, [1][2] = 6}") },
             },
         },
         {
             "array of arrays: incomplete outer", __LINE__,
             SVI("int a[][3] = {{1, 2, 3}, {4, 5, 6}};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("a"), SVI("int[2][3]"), SVI("{[0] = {[0] = 1, [1] = 2, [2] = 3}, [1] = {[0] = 4, [1] = 5, [2] = 6}}") },
             },
         },
         {
             "array of arrays: incomplete outer + brace elision", __LINE__,
             SVI("int a[][3] = {1, 2, 3, 4, 5, 6};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("a"), SVI("int[2][3]"), SVI("{[0][0] = 1, [0][1] = 2, [0][2] = 3, [1][0] = 4, [1][1] = 5, [1][2] = 6}") },
             },
         },
         {
             "designator then positional in array", __LINE__,
             SVI("int a[5] = {[3] = 30, 40};\n"),
             .vars = {
-                { SVI("a"), SVI("int[5]"), SVI("{@12 = 30, @16 = 40}") },
+                { SVI("a"), SVI("int[5]"), SVI("{[3] = 30, [4] = 40}") },
             },
         },
         {
             "last-write-wins in array", __LINE__,
             SVI("int a[3] = {1, 2, 3, [0] = 10};\n"),
             .vars = {
-                { SVI("a"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @0 = 10}") },
+                { SVI("a"), SVI("int[3]"), SVI("{[0] = 1, [1] = 2, [2] = 3, [0] = 10}") },
             },
         },
         {
@@ -1957,7 +2799,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; };\n"
                "struct S s = {1, 2, .a = 99};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2, @0 = 99}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a = 1, .b = 2, .a = 99}") },
             },
         },
         {
@@ -1965,7 +2807,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a[3]; int b; };\n"
                "struct S s = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a[0] = 1, .a[1] = 2, .a[2] = 3, .b = 4}") },
             },
         },
         {
@@ -1973,7 +2815,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a[3]; int b; };\n"
                "struct S s = {{1, 2, 3}, 4};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a = {[0] = 1, [1] = 2, [2] = 3}, .b = 4}") },
             },
         },
         {
@@ -1982,7 +2824,7 @@ TestFunction(test_parse_decls){
                "struct Line { struct P start; struct P end; };\n"
                "struct Line l = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("l"), SVI("struct Line"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("l"), SVI("struct Line"), SVI("{.start.x = 1, .start.y = 2, .end.x = 3, .end.y = 4}") },
             },
         },
         {
@@ -1990,7 +2832,7 @@ TestFunction(test_parse_decls){
             SVI("struct P { int x; int y; };\n"
                "struct P arr[3] = {[1] = {10, 20}, {30, 40}};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct P[3]"), SVI("{@8 = 10, @12 = 20, @16 = 30, @20 = 40}") },
+                { SVI("arr"), SVI("struct P[3]"), SVI("{[1] = {.x = 10, .y = 20}, [2] = {.x = 30, .y = 40}}") },
             },
         },
         {
@@ -1998,7 +2840,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; int c; int d; };\n"
                "struct S s = {.d = 4, .b = 2, .c = 3, .a = 1};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@12 = 4, @4 = 2, @8 = 3, @0 = 1}") },
+                { SVI("s"), SVI("struct S"), SVI("{.d = 4, .b = 2, .c = 3, .a = 1}") },
             },
         },
         {
@@ -2006,7 +2848,7 @@ TestFunction(test_parse_decls){
             SVI("union U { int i; float f; double d; };\n"
                "union U u = {.d = 3.14};\n"),
             .vars = {
-                { SVI("u"), SVI("union U"), SVI("{3.14}") },
+                { SVI("u"), SVI("union U"), SVI("{.d = 3.14}") },
             },
         },
         {
@@ -2014,7 +2856,7 @@ TestFunction(test_parse_decls){
             SVI("union U { int i; float f; };\n"
                "union U u = {42};\n"),
             .vars = {
-                { SVI("u"), SVI("union U"), SVI("{42}") },
+                { SVI("u"), SVI("union U"), SVI("{.i = 42}") },
             },
         },
         {
@@ -2022,7 +2864,7 @@ TestFunction(test_parse_decls){
             SVI("struct P { int x; int y; };\n"
                "struct P arr[] = {1, 2, 3, 4, 5, 6};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct P[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("arr"), SVI("struct P[3]"), SVI("{[0].x = 1, [0].y = 2, [1].x = 3, [1].y = 4, [2].x = 5, [2].y = 6}") },
             },
         },
         {
@@ -2030,7 +2872,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a[3]; };\n"
                "struct S s = {.a[1] = 42};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@4 = 42}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a[1] = 42}") },
             },
         },
         {
@@ -2038,7 +2880,7 @@ TestFunction(test_parse_decls){
             SVI("struct P { int x; int y; };\n"
                "struct P arr[2] = {[0].y = 5, [1].x = 10};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct P[2]"), SVI("{@4 = 5, @8 = 10}") },
+                { SVI("arr"), SVI("struct P[2]"), SVI("{[0].y = 5, [1].x = 10}") },
             },
         },
         {
@@ -2048,7 +2890,7 @@ TestFunction(test_parse_decls){
                "struct C { struct B b; };\n"
                "struct C c = {.b.a.v = 99};\n"),
             .vars = {
-                { SVI("c"), SVI("struct C"), SVI("{99}") },
+                { SVI("c"), SVI("struct C"), SVI("{.b.a.v = 99}") },
             },
         },
         {
@@ -2056,14 +2898,14 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; int c; int d; };\n"
                "struct S s = {1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("s"), SVI("struct S"), SVI("{.a = 1, .b = 2}") },
             },
         },
         {
             "partial array init: fewer inits than size", __LINE__,
             SVI("int a[10] = {1};\n"),
             .vars = {
-                { SVI("a"), SVI("int[10]"), SVI("{1}") },
+                { SVI("a"), SVI("int[10]"), SVI("{[0] = 1}") },
             },
         },
         {
@@ -2071,21 +2913,21 @@ TestFunction(test_parse_decls){
             SVI("struct S { int a; int b; int c; int d; };\n"
                "struct S s = {.c = 30, 40, .a = 10};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@8 = 30, @12 = 40, @0 = 10}") },
+                { SVI("s"), SVI("struct S"), SVI("{.c = 30, .d = 40, .a = 10}") },
             },
         },
         {
             "single element incomplete array", __LINE__,
             SVI("int a[] = {42};\n"),
             .vars = {
-                { SVI("a"), SVI("int[1]"), SVI("{42}") },
+                { SVI("a"), SVI("int[1]"), SVI("{[0] = 42}") },
             },
         },
         {
             "array of arrays: partial inner", __LINE__,
             SVI("int a[2][3] = {{1}, {4, 5}};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][3]"), SVI("{@0 = 1, @12 = 4, @16 = 5}") },
+                { SVI("a"), SVI("int[2][3]"), SVI("{[0] = {[0] = 1}, [1] = {[0] = 4, [1] = 5}}") },
             },
         },
         {
@@ -2094,7 +2936,7 @@ TestFunction(test_parse_decls){
                "struct Outer { struct Inner p; int z; };\n"
                "struct Outer o = {.p = {.y = 2, .x = 1}, .z = 3};\n"),
             .vars = {
-                { SVI("o"), SVI("struct Outer"), SVI("{@4 = 2, @0 = 1, @8 = 3}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.p = {.y = 2, .x = 1}, .z = 3}") },
             },
         },
         {
@@ -2103,7 +2945,7 @@ TestFunction(test_parse_decls){
                "struct S { union U u; int x; };\n"
                "struct S s = {{42}, 7};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 42, @4 = 7}") },
+                { SVI("s"), SVI("struct S"), SVI("{.u = {.i = 42}, .x = 7}") },
             },
         },
         {
@@ -2112,7 +2954,7 @@ TestFunction(test_parse_decls){
                "struct S { union U u; int x; };\n"
                "struct S s = {.u = {.f = 1.5f}, .x = 7};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1.5f, @4 = 7}") },
+                { SVI("s"), SVI("struct S"), SVI("{.u = {.f = 1.5f}, .x = 7}") },
             },
         },
         {
@@ -2121,42 +2963,42 @@ TestFunction(test_parse_decls){
                "struct S { union U u; int x; };\n"
                "struct S s = {42, 7};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 42, @4 = 7}") },
+                { SVI("s"), SVI("struct S"), SVI("{.u.i = 42, .x = 7}") },
             },
         },
         {
             "array: designator at end", __LINE__,
             SVI("int a[5] = {1, 2, [4] = 5};\n"),
             .vars = {
-                { SVI("a"), SVI("int[5]"), SVI("{@0 = 1, @4 = 2, @16 = 5}") },
+                { SVI("a"), SVI("int[5]"), SVI("{[0] = 1, [1] = 2, [4] = 5}") },
             },
         },
         {
             "array: designator jump backwards", __LINE__,
             SVI("int a[5] = {[4] = 50, [1] = 10};\n"),
             .vars = {
-                { SVI("a"), SVI("int[5]"), SVI("{@16 = 50, @4 = 10}") },
+                { SVI("a"), SVI("int[5]"), SVI("{[4] = 50, [1] = 10}") },
             },
         },
         {
             "incomplete array: designated max index", __LINE__,
             SVI("int a[] = {[9] = 99};\n"),
             .vars = {
-                { SVI("a"), SVI("int[10]"), SVI("{@36 = 99}") },
+                { SVI("a"), SVI("int[10]"), SVI("{[9] = 99}") },
             },
         },
         {
             "3d array", __LINE__,
             SVI("int a[2][2][2] = {{{1,2},{3,4}},{{5,6},{7,8}}};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][2][2]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6, @24 = 7, @28 = 8}") },
+                { SVI("a"), SVI("int[2][2][2]"), SVI("{[0] = {[0] = {[0] = 1, [1] = 2}, [1] = {[0] = 3, [1] = 4}}, [1] = {[0] = {[0] = 5, [1] = 6}, [1] = {[0] = 7, [1] = 8}}}") },
             },
         },
         {
             "3d array: brace elision", __LINE__,
             SVI("int a[2][2][2] = {1,2,3,4,5,6,7,8};\n"),
             .vars = {
-                { SVI("a"), SVI("int[2][2][2]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6, @24 = 7, @28 = 8}") },
+                { SVI("a"), SVI("int[2][2][2]"), SVI("{[0][0][0] = 1, [0][0][1] = 2, [0][1][0] = 3, [0][1][1] = 4, [1][0][0] = 5, [1][0][1] = 6, [1][1][0] = 7, [1][1][1] = 8}") },
             },
         },
         {
@@ -2164,7 +3006,7 @@ TestFunction(test_parse_decls){
             SVI("struct P { int x; int y; };\n"
                "struct P arr[] = {{1, 2}, 3, 4, {5, 6}};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct P[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4, @16 = 5, @20 = 6}") },
+                { SVI("arr"), SVI("struct P[3]"), SVI("{[0] = {.x = 1, .y = 2}, [1].x = 3, [1].y = 4, [2] = {.x = 5, .y = 6}}") },
             },
         },
         {
@@ -2172,7 +3014,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { int n; char name[4]; };\n"
                "struct S s = {42, {'a', 'b', 'c', 0}};\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 42, @4 = (char)97, @5 = (char)98, @6 = (char)99, @7 = (char)0}") },
+                { SVI("s"), SVI("struct S"), SVI("{.n = 42, .name = {[0] = (char)97, [1] = (char)98, [2] = (char)99, [3] = (char)0}}") },
             },
         },
         // --- C standard examples (6.7.9 / 6.7.10) ---
@@ -2181,7 +3023,7 @@ TestFunction(test_parse_decls){
             "std ex2: incomplete array", __LINE__,
             SVI("int x[] = { 1, 3, 5 };\n"),
             .vars = {
-                { SVI("x"), SVI("int[3]"), SVI("{@0 = 1, @4 = 3, @8 = 5}") },
+                { SVI("x"), SVI("int[3]"), SVI("{[0] = 1, [1] = 3, [2] = 5}") },
             },
         },
         // EXAMPLE 3: 2D array, braced and flat forms
@@ -2193,7 +3035,7 @@ TestFunction(test_parse_decls){
                "  { 3, 5, 7 },\n"
                "};\n"),
             .vars = {
-                { SVI("y"), SVI("int[4][3]"), SVI("{@0 = 1, @4 = 3, @8 = 5, @12 = 2, @16 = 4, @20 = 6, @24 = 3, @28 = 5, @32 = 7}") },
+                { SVI("y"), SVI("int[4][3]"), SVI("{[0] = {[0] = 1, [1] = 3, [2] = 5}, [1] = {[0] = 2, [1] = 4, [2] = 6}, [2] = {[0] = 3, [1] = 5, [2] = 7}}") },
             },
         },
         {
@@ -2202,7 +3044,7 @@ TestFunction(test_parse_decls){
                "  1, 3, 5, 2, 4, 6, 3, 5, 7\n"
                "};\n"),
             .vars = {
-                { SVI("y"), SVI("int[4][3]"), SVI("{@0 = 1, @4 = 3, @8 = 5, @12 = 2, @16 = 4, @20 = 6, @24 = 3, @28 = 5, @32 = 7}") },
+                { SVI("y"), SVI("int[4][3]"), SVI("{[0][0] = 1, [0][1] = 3, [0][2] = 5, [1][0] = 2, [1][1] = 4, [1][2] = 6, [2][0] = 3, [2][1] = 5, [2][2] = 7}") },
             },
         },
         // EXAMPLE 4: partial inner init
@@ -2212,7 +3054,7 @@ TestFunction(test_parse_decls){
                "  { 1 }, { 2 }, { 3 }, { 4 }\n"
                "};\n"),
             .vars = {
-                { SVI("z"), SVI("int[4][3]"), SVI("{@0 = 1, @12 = 2, @24 = 3, @36 = 4}") },
+                { SVI("z"), SVI("int[4][3]"), SVI("{[0] = {[0] = 1}, [1] = {[0] = 2}, [2] = {[0] = 3}, [3] = {[0] = 4}}") },
             },
         },
         // EXAMPLE 5: struct with array member, brace elision across elements
@@ -2221,7 +3063,7 @@ TestFunction(test_parse_decls){
             SVI("struct W { int a[3]; int b; };\n"
                "struct W w[] = { { 1 }, 2 };\n"),
             .vars = {
-                { SVI("w"), SVI("struct W[2]"), SVI("{@0 = 1, @16 = 2}") },
+                { SVI("w"), SVI("struct W[2]"), SVI("{[0] = {.a[0] = 1}, [1].a[0] = 2}") },
             },
         },
         // EXAMPLE 6: 3D array, three equivalent forms
@@ -2233,7 +3075,7 @@ TestFunction(test_parse_decls){
                "  { 4, 5, 6 }\n"
                "};\n"),
             .vars = {
-                { SVI("q"), SVI("int[4][3][2]"), SVI("{@0 = 1, @24 = 2, @28 = 3, @48 = 4, @52 = 5, @56 = 6}") },
+                { SVI("q"), SVI("int[4][3][2]"), SVI("{[0] = {[0][0] = 1}, [1] = {[0][0] = 2, [0][1] = 3}, [2] = {[0][0] = 4, [0][1] = 5, [1][0] = 6}}") },
             },
         },
         {
@@ -2244,7 +3086,7 @@ TestFunction(test_parse_decls){
                "  4, 5, 6\n"
                "};\n"),
             .vars = {
-                { SVI("q"), SVI("int[4][3][2]"), SVI("{@0 = 1, @4 = 0, @8 = 0, @12 = 0, @16 = 0, @20 = 0, @24 = 2, @28 = 3, @32 = 0, @36 = 0, @40 = 0, @44 = 0, @48 = 4, @52 = 5, @56 = 6}") },
+                { SVI("q"), SVI("int[4][3][2]"), SVI("{[0][0][0] = 1, [0][0][1] = 0, [0][1][0] = 0, [0][1][1] = 0, [0][2][0] = 0, [0][2][1] = 0, [1][0][0] = 2, [1][0][1] = 3, [1][1][0] = 0, [1][1][1] = 0, [1][2][0] = 0, [1][2][1] = 0, [2][0][0] = 4, [2][0][1] = 5, [2][1][0] = 6}") },
             },
         },
         {
@@ -2262,7 +3104,7 @@ TestFunction(test_parse_decls){
                "  }\n"
                "};\n"),
             .vars = {
-                { SVI("q"), SVI("int[4][3][2]"), SVI("{@0 = 1, @24 = 2, @28 = 3, @48 = 4, @52 = 5, @56 = 6}") },
+                { SVI("q"), SVI("int[4][3][2]"), SVI("{[0] = {[0] = {[0] = 1}}, [1] = {[0] = {[0] = 2, [1] = 3}}, [2] = {[0] = {[0] = 4, [1] = 5}, [1] = {[0] = 6}}}") },
             },
         },
         // EXAMPLE 9: enum constants as designator indices
@@ -2274,7 +3116,7 @@ TestFunction(test_parse_decls){
                "  [member_one] = 10,\n"
                "};\n"),
             .vars = {
-                { SVI("nm"), SVI("int[2]"), SVI("{@4 = 20, @0 = 10}") },
+                { SVI("nm"), SVI("int[2]"), SVI("{[1] = 20, [0] = 10}") },
             },
         },
         // EXAMPLE 10: designated struct init (like div_t)
@@ -2283,7 +3125,7 @@ TestFunction(test_parse_decls){
             SVI("struct DT { int quot; int rem; };\n"
                "struct DT answer = {.quot = 2, .rem = -1};\n"),
             .vars = {
-                { SVI("answer"), SVI("struct DT"), SVI("{@0 = 2, @4 = -1}") },
+                { SVI("answer"), SVI("struct DT"), SVI("{.quot = 2, .rem = -1}") },
             },
         },
         // EXAMPLE 11: chained array+field designators
@@ -2292,7 +3134,7 @@ TestFunction(test_parse_decls){
             SVI("struct W { int a[3]; int b; };\n"
                "struct W w[] = { [0].a = {1}, [1].a[0] = 2 };\n"),
             .vars = {
-                { SVI("w"), SVI("struct W[2]"), SVI("{@0 = 1, @16 = 2}") },
+                { SVI("w"), SVI("struct W[2]"), SVI("{[0].a = {[0] = 1}, [1].a[0] = 2}") },
             },
         },
         // EXAMPLE 13: designator in middle of positional sequence
@@ -2302,7 +3144,7 @@ TestFunction(test_parse_decls){
                "  1, 3, 5, 7, 9, [5] = 8, 6, 4, 2, 0\n"
                "};\n"),
             .vars = {
-                { SVI("a"), SVI("int[10]"), SVI("{@0 = 1, @4 = 3, @8 = 5, @12 = 7, @16 = 9, @20 = 8, @24 = 6, @28 = 4, @32 = 2, @36 = 0}") },
+                { SVI("a"), SVI("int[10]"), SVI("{[0] = 1, [1] = 3, [2] = 5, [3] = 7, [4] = 9, [5] = 8, [6] = 6, [7] = 4, [8] = 2, [9] = 0}") },
             },
         },
         // EXAMPLE 15: bitfields
@@ -2315,7 +3157,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct BF s = {1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:10 = 1, @8 = (long)2}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = 1, .b = (long)2}") },
             },
         },
         {
@@ -2323,7 +3165,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int a:10; int b:6; long c; };\n"
                "struct BF s = {.b = 3, .a = 1};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:10:6 = 3, @0:0:10 = 1}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.b = 3, .a = 1}") },
             },
         },
         {
@@ -2331,7 +3173,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int a:3; int b:5; int c:8; int d:16; };\n"
                "struct BF s = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:3 = 1, @0:3:5 = 2, @0:8:8 = 3, @0:16:16 = 4}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = 1, .b = 2, .c = 3, .d = 4}") },
             },
         },
         {
@@ -2339,7 +3181,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int a:20; int b:20; };\n"
                "struct BF s = {1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:20 = 1, @4:0:20 = 2}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = 1, .b = 2}") },
             },
         },
         {
@@ -2347,7 +3189,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int x; int a:3; int b:5; int y; };\n"
                "struct BF s = {10, 1, 2, 20};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0 = 10, @4:0:3 = 1, @4:3:5 = 2, @8 = 20}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.x = 10, .a = 1, .b = 2, .y = 20}") },
             },
         },
         {
@@ -2355,7 +3197,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int a:4; int :4; int b:8; };\n"
                "struct BF s = {3, 7};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:4 = 3, @0:8:8 = 7}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = 3, .b = 7}") },
             },
         },
         {
@@ -2363,7 +3205,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int a:4; int :0; int b:4; };\n"
                "struct BF s = {1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:4 = 1, @4:0:4 = 2}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = 1, .b = 2}") },
             },
         },
         {
@@ -2372,7 +3214,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int a; struct Inner b; int c; };\n"
                "struct Outer s = {1, {2, 3}, 4};\n"),
             .vars = {
-                { SVI("s"), SVI("struct Outer"), SVI("{@0 = 1, @4:0:3 = 2, @4:3:5 = 3, @8 = 4}") },
+                { SVI("s"), SVI("struct Outer"), SVI("{.a = 1, .b = {.x = 2, .y = 3}, .c = 4}") },
             },
         },
         {
@@ -2381,7 +3223,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int a; struct Inner b; };\n"
                "struct Outer s = {.b.y = 7};\n"),
             .vars = {
-                { SVI("s"), SVI("struct Outer"), SVI("{@4:3:5 = 7}") },
+                { SVI("s"), SVI("struct Outer"), SVI("{.b.y = 7}") },
             },
         },
         {
@@ -2389,7 +3231,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { int flag:1; int value:31; };\n"
                "struct BF s = {1, 100};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:1 = 1, @0:1:31 = 100}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.flag = 1, .value = 100}") },
             },
         },
         {
@@ -2397,7 +3239,7 @@ TestFunction(test_parse_decls){
             SVI("struct BF { unsigned a:4; unsigned b:4; };\n"
                "struct BF s = {15, 10};\n"),
             .vars = {
-                { SVI("s"), SVI("struct BF"), SVI("{@0:0:4 = (unsigned int)15, @0:4:4 = (unsigned int)10}") },
+                { SVI("s"), SVI("struct BF"), SVI("{.a = (unsigned int)15, .b = (unsigned int)10}") },
             },
         },
         // EXAMPLE 16: anonymous union in struct (braced form)
@@ -2413,7 +3255,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct AU s = {{.b = 1}, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct AU"), SVI("{@0 = 1, @8 = (char)2}") },
+                { SVI("s"), SVI("struct AU"), SVI("{{.b = 1}, .c = (char)2}") },
             },
         },
         // EXAMPLE 16: anonymous union in struct (designated form)
@@ -2429,7 +3271,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct AU s = {.b = 1, 2};\n"),
             .vars = {
-                { SVI("s"), SVI("struct AU"), SVI("{@0 = 1, @8 = (char)2}") },
+                { SVI("s"), SVI("struct AU"), SVI("{.b = 1, .c = (char)2}") },
             },
         },
         // EXAMPLE 7: typedef incomplete array + multiple declarators
@@ -2438,16 +3280,16 @@ TestFunction(test_parse_decls){
             SVI("typedef int A[];\n"
                "A a = { 1, 2 }, b = { 3, 4, 5 };\n"),
             .vars = {
-                { SVI("a"), SVI("int[2]"), SVI("{@0 = 1, @4 = 2}") },
-                { SVI("b"), SVI("int[3]"), SVI("{@0 = 3, @4 = 4, @8 = 5}") },
+                { SVI("a"), SVI("int[2]"), SVI("{[0] = 1, [1] = 2}") },
+                { SVI("b"), SVI("int[3]"), SVI("{[0] = 3, [1] = 4, [2] = 5}") },
             },
         },
         {
             "std ex7: multiple incomplete array decls", __LINE__,
             SVI("int a[] = { 1, 2 }, b[] = { 3, 4, 5 };\n"),
             .vars = {
-                { SVI("a"), SVI("int[2]"), SVI("{@0 = 1, @4 = 2}") },
-                { SVI("b"), SVI("int[3]"), SVI("{@0 = 3, @4 = 4, @8 = 5}") },
+                { SVI("a"), SVI("int[2]"), SVI("{[0] = 1, [1] = 2}") },
+                { SVI("b"), SVI("int[3]"), SVI("{[0] = 3, [1] = 4, [2] = 5}") },
             },
         },
         // EXAMPLE 8: char array init (non-string-literal forms)
@@ -2456,8 +3298,8 @@ TestFunction(test_parse_decls){
             SVI("char s[] = { 'a', 'b', 'c', '\\0' },\n"
                "     t[] = { 'a', 'b', 'c' };\n"),
             .vars = {
-                { SVI("s"), SVI("char[4]"), SVI("{@0 = (char)97, @1 = (char)98, @2 = (char)99, @3 = (char)0}") },
-                { SVI("t"), SVI("char[3]"), SVI("{@0 = (char)97, @1 = (char)98, @2 = (char)99}") },
+                { SVI("s"), SVI("char[4]"), SVI("{[0] = (char)97, [1] = (char)98, [2] = (char)99, [3] = (char)0}") },
+                { SVI("t"), SVI("char[3]"), SVI("{[0] = (char)97, [1] = (char)98, [2] = (char)99}") },
             },
         },
         {
@@ -2494,7 +3336,7 @@ TestFunction(test_parse_decls){
             SVI("struct S { short temp; char pair[201]; };\n"
                "struct S s = { 0, \"abc\" };\n"),
             .vars = {
-                { SVI("s"), SVI("struct S"), SVI("{@0 = (short)0, @2 = {\"abc\"}}") },
+                { SVI("s"), SVI("struct S"), SVI("{.temp = (short)0, .pair = {\"abc\"}}") },
             },
         },
         {
@@ -2504,8 +3346,8 @@ TestFunction(test_parse_decls){
                "struct T v = {10, 20};\n"
                "struct S s = { 1, v };\n"),
             .vars = {
-                { SVI("v"), SVI("struct T"), SVI("{@0 = 10, @4 = 20}") },
-                { SVI("s"), SVI("struct S"), SVI("{@0 = 1, @4 = v}") },
+                { SVI("v"), SVI("struct T"), SVI("{.a = 10, .b = 20}") },
+                { SVI("s"), SVI("struct S"), SVI("{.x = 1, .t = v}") },
             },
         },
         {
@@ -2530,7 +3372,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer o = { 1, (struct Inner){2, 3} };\n"),
             .vars = {
-                { SVI("o"), SVI("struct Outer"), SVI("{@0 = 1, @4 = {@0 = 2, @4 = 3}}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.x = 1, .inner = {.a = 2, .b = 3}}") },
             },
         },
         {
@@ -2540,8 +3382,8 @@ TestFunction(test_parse_decls){
                "struct Inner v = {10, 20};\n"
                "struct Outer o = { v, 3 };\n"),
             .vars = {
-                { SVI("v"), SVI("struct Inner"), SVI("{@0 = 10, @4 = 20}") },
-                { SVI("o"), SVI("struct Outer"), SVI("{@0 = v, @8 = 3}") },
+                { SVI("v"), SVI("struct Inner"), SVI("{.a = 10, .b = 20}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.inner = v, .c = 3}") },
             },
         },
         {
@@ -2551,7 +3393,7 @@ TestFunction(test_parse_decls){
                "struct C { struct B b; int z; };\n"
                "struct C c = { 1, 2, 3 };\n"),
             .vars = {
-                { SVI("c"), SVI("struct C"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("c"), SVI("struct C"), SVI("{.b.a.x = 1, .b.y = 2, .z = 3}") },
             },
         },
         {
@@ -2560,7 +3402,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer o = { 1, 2, 3 };\n"),
             .vars = {
-                { SVI("o"), SVI("struct Outer"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.x = 1, .inner.a = 2, .inner.b = 3}") },
             },
         },
         {
@@ -2569,7 +3411,7 @@ TestFunction(test_parse_decls){
                "struct Outer { int x; struct Inner inner; };\n"
                "struct Outer o = { 1, {2, 3} };\n"),
             .vars = {
-                { SVI("o"), SVI("struct Outer"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("o"), SVI("struct Outer"), SVI("{.x = 1, .inner = {.a = 2, .b = 3}}") },
             },
         },
         // EXAMPLE 12: variable reference in initializer + last-write-wins
@@ -2578,7 +3420,7 @@ TestFunction(test_parse_decls){
             SVI("struct T { int k; int l; };\n"
                "struct T x = {.l = 43, .k = 42};\n"),
             .vars = {
-                { SVI("x"), SVI("struct T"), SVI("{@4 = 43, @0 = 42}") },
+                { SVI("x"), SVI("struct T"), SVI("{.l = 43, .k = 42}") },
             },
         },
         {
@@ -2588,8 +3430,8 @@ TestFunction(test_parse_decls){
                "struct T x = {.l = 43, .k = 42};\n"
                "struct S l = { 1, .t = x, .t.l = 41};\n"),
             .vars = {
-                { SVI("x"), SVI("struct T"), SVI("{@4 = 43, @0 = 42}") },
-                { SVI("l"), SVI("struct S"), SVI("{@0 = 1, @4 = x, @8 = 41}") },
+                { SVI("x"), SVI("struct T"), SVI("{.l = 43, .k = 42}") },
+                { SVI("l"), SVI("struct S"), SVI("{.i = 1, .t = x, .t.l = 41}") },
             },
         },
         // EXAMPLE 14: union designated init
@@ -2598,7 +3440,7 @@ TestFunction(test_parse_decls){
             SVI("union U { int x; float y; };\n"
                "union U u = {.x = 42};\n"),
             .vars = {
-                { SVI("u"), SVI("union U"), SVI("{42}") },
+                { SVI("u"), SVI("union U"), SVI("{.x = 42}") },
             },
         },
         {
@@ -2610,7 +3452,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct Foo f = {1, 2};\n"),
             .vars = {
-                { SVI("f"), SVI("struct Foo"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("f"), SVI("struct Foo"), SVI("{.x = 1, .y = 2}") },
             },
         },
         {
@@ -2622,7 +3464,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct Foo f = {.y = 10, .x = 20};\n"),
             .vars = {
-                { SVI("f"), SVI("struct Foo"), SVI("{@4 = 10, @0 = 20}") },
+                { SVI("f"), SVI("struct Foo"), SVI("{.y = 10, .x = 20}") },
             },
         },
         {
@@ -2634,7 +3476,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct Foo arr[] = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct Foo[2]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("arr"), SVI("struct Foo[2]"), SVI("{[0].x = 1, [0].y = 2, [1].x = 3, [1].y = 4}") },
             },
         },
         {
@@ -2647,7 +3489,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "struct Bar b = {10, 20};\n"),
             .vars = {
-                { SVI("b"), SVI("struct Bar"), SVI("{@0 = 10, @4 = 20}") },
+                { SVI("b"), SVI("struct Bar"), SVI("{.a = 10, .b = 20}") },
             },
         },
         {
@@ -2656,7 +3498,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int z; };\n"
                "struct Derived d = {{1, 2}, 3};\n"),
             .vars = {
-                { SVI("d"), SVI("struct Derived"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("d"), SVI("struct Derived"), SVI("{{.x = 1, .y = 2}, .z = 3}") },
             },
         },
         {
@@ -2665,7 +3507,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int z; };\n"
                "struct Derived d = {1, 2, 3};\n"),
             .vars = {
-                { SVI("d"), SVI("struct Derived"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("d"), SVI("struct Derived"), SVI("{.x = 1, .y = 2, .z = 3}") },
             },
         },
         {
@@ -2674,7 +3516,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int z; };\n"
                "struct Derived d = {.x = 1, .y = 2, .z = 3};\n"),
             .vars = {
-                { SVI("d"), SVI("struct Derived"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("d"), SVI("struct Derived"), SVI("{.x = 1, .y = 2, .z = 3}") },
             },
         },
         {
@@ -2683,7 +3525,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int z; };\n"
                "struct Derived d = {{.y = 9, .x = 8}, 7};\n"),
             .vars = {
-                { SVI("d"), SVI("struct Derived"), SVI("{@4 = 9, @0 = 8, @8 = 7}") },
+                { SVI("d"), SVI("struct Derived"), SVI("{{.y = 9, .x = 8}, .z = 7}") },
             },
         },
         {
@@ -2692,7 +3534,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int y; };\n"
                "struct Derived arr[] = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("arr"), SVI("struct Derived[2]"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("arr"), SVI("struct Derived[2]"), SVI("{[0].x = 1, [0].y = 2, [1].x = 3, [1].y = 4}") },
             },
         },
         {
@@ -2702,7 +3544,7 @@ TestFunction(test_parse_decls){
                "struct C { struct B; int c; };\n"
                "struct C val = {1, 2, 3};\n"),
             .vars = {
-                { SVI("val"), SVI("struct C"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("val"), SVI("struct C"), SVI("{.a = 1, .b = 2, .c = 3}") },
             },
         },
         {
@@ -2712,7 +3554,7 @@ TestFunction(test_parse_decls){
                "struct C { struct B; int c; };\n"
                "struct C val = {.a = 1, .b = 2, .c = 3};\n"),
             .vars = {
-                { SVI("val"), SVI("struct C"), SVI("{@0 = 1, @4 = 2, @8 = 3}") },
+                { SVI("val"), SVI("struct C"), SVI("{.a = 1, .b = 2, .c = 3}") },
             },
         },
         {
@@ -2724,7 +3566,7 @@ TestFunction(test_parse_decls){
                "struct Derived { struct Base; int y; };\n"
                "struct Derived d = {1, 2};\n"),
             .vars = {
-                { SVI("d"), SVI("struct Derived"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("d"), SVI("struct Derived"), SVI("{.x = 1, .y = 2}") },
             },
         },
         // EXAMPLE 15 union: anonymous bitfield padding in union
@@ -2736,7 +3578,7 @@ TestFunction(test_parse_decls){
                "};\n"
                "union UB u = {3};\n"),
             .vars = {
-                { SVI("u"), SVI("union UB"), SVI("{(char)3}") },
+                { SVI("u"), SVI("union UB"), SVI("{.c = (char)3}") },
             },
         },
         {
@@ -2744,7 +3586,7 @@ TestFunction(test_parse_decls){
             SVI("typedef int v4si __attribute__((vector_size(16)));\n"
                "v4si v = {1, 2, 3, 4};\n"),
             .vars = {
-                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{@0 = 1, @4 = 2, @8 = 3, @12 = 4}") },
+                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{1, 2, 3, 4}") },
             },
         },
         {
@@ -2752,7 +3594,7 @@ TestFunction(test_parse_decls){
             SVI("typedef int v4si __attribute__((vector_size(16)));\n"
                "v4si v = {1, 2};\n"),
             .vars = {
-                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{@0 = 1, @4 = 2}") },
+                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{1, 2}") },
             },
         },
         {
@@ -2768,21 +3610,21 @@ TestFunction(test_parse_decls){
             SVI("typedef float v2f __attribute__((vector_size(8)));\n"
                "v2f v = {1.0f, 2.0f};\n"),
             .vars = {
-                { SVI("v"), SVI("float __attribute__((vector_size(8)))"), SVI("{@0 = 1f, @4 = 2f}") },
+                { SVI("v"), SVI("float __attribute__((vector_size(8)))"), SVI("{1f, 2f}") },
             },
         },
         {
             "vector: attribute in specifier position", __LINE__,
             SVI("__attribute__((vector_size(16))) int v = {10, 20, 30, 40};\n"),
             .vars = {
-                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{@0 = 10, @4 = 20, @8 = 30, @12 = 40}") },
+                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{10, 20, 30, 40}") },
             },
         },
         {
             "vector: trailing attribute position", __LINE__,
             SVI("int v __attribute__((vector_size(16))) = {10, 20, 30, 40};\n"),
             .vars = {
-                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{@0 = 10, @4 = 20, @8 = 30, @12 = 40}") },
+                { SVI("v"), SVI("int __attribute__((vector_size(16)))"), SVI("{10, 20, 30, 40}") },
             },
         },
         {
@@ -3198,8 +4040,8 @@ TestFunction(test_parse_decls){
                "constexpr int x = foo.x;\n"
                "_Static_assert(x);\n"),
             .vars = {
-                {SVI("foo"), SVI("const struct foo"), SVI("{1}")},
-                {SVI("x"), SVI("const int"), SVI("(int)foo.@0")},
+                {SVI("foo"), SVI("const struct foo"), SVI("{.x = 1}")},
+                {SVI("x"), SVI("const int"), SVI("(int)foo.x")},
             },
         },
         {
@@ -3208,8 +4050,8 @@ TestFunction(test_parse_decls){
                "constexpr int x = foo.x;\n"
                "_Static_assert(x);\n"),
             .vars = {
-                {SVI("foo"), SVI("const struct foo"), SVI("{1}")},
-                {SVI("x"), SVI("const int"), SVI("(int)foo.@0")},
+                {SVI("foo"), SVI("const struct foo"), SVI("{.x = 1}")},
+                {SVI("x"), SVI("const int"), SVI("(int)foo.x")},
             },
         },
         {
@@ -3218,7 +4060,7 @@ TestFunction(test_parse_decls){
                "constexpr struct foo b = foo;\n"
                "_Static_assert(b.x);\n"),
             .vars = {
-                {SVI("foo"), SVI("const struct foo"), SVI("{1}")},
+                {SVI("foo"), SVI("const struct foo"), SVI("{.x = 1}")},
                 {SVI("b"), SVI("const struct foo"), SVI("(struct foo)foo")},
             },
         },
@@ -3228,7 +4070,7 @@ TestFunction(test_parse_decls){
                "constexpr int x = arr[0];\n"
                "_Static_assert(x);\n"),
             .vars = {
-                {SVI("arr"), SVI("const int[1]"), SVI("{1}")},
+                {SVI("arr"), SVI("const int[1]"), SVI("{[0] = 1}")},
                 {SVI("x"), SVI("const int"), SVI("(int)arr[(long)0]")},
             },
         },
@@ -3261,8 +4103,8 @@ TestFunction(test_parse_decls){
                "_Static_assert(c == 8);\n"),
             .vars = {
                 {SVI("a"), SVI("const int"), SVI("2")},
-                {SVI("b"), SVI("const int"), SVI("(int)(a * (const int)3)")},
-                {SVI("c"), SVI("const int"), SVI("(int)(a + b)")},
+                {SVI("b"), SVI("const int"), SVI("((int)a * 3)")},
+                {SVI("c"), SVI("const int"), SVI("((int)a + (int)b)")},
             },
         },
         {
@@ -4647,8 +5489,8 @@ TestFunction(test_parse_decls){
                 "Foo f = {0};\n"
                 "Foo f2 = {&f};\n"),
             .vars = {
-                {SVI("f"), SVI("struct Foo"), SVI("{(struct Foo *)0}")},
-                {SVI("f2"), SVI("struct Foo"), SVI("{&f}")},
+                {SVI("f"), SVI("struct Foo"), SVI("{.next = (struct Foo *)0}")},
+                {SVI("f2"), SVI("struct Foo"), SVI("{.next = &f}")},
             },
             .typedefs = {
                 {SVI("Foo"), SVI("struct Foo")},
@@ -4676,9 +5518,9 @@ TestFunction(test_parse_decls){
                 "struct Bar b = {1, 2};\n"
                 "struct Foo* pf = &b;\n"),
             .vars = {
-                {SVI("f"), SVI("struct Foo"), SVI("{3}")},
-                {SVI("b"), SVI("struct Bar"), SVI("{@0 = 1, @4 = 2}")},
-                {SVI("pf"), SVI("struct Foo *"), SVI("&&b->@0")},
+                {SVI("f"), SVI("struct Foo"), SVI("{.x = 3}")},
+                {SVI("b"), SVI("struct Bar"), SVI("{.x = 1, .y = 2}")},
+                {SVI("pf"), SVI("struct Foo *"), SVI("&*(struct Foo *)((char *)(&b) + 0)")},
             },
         },
         {
@@ -4688,8 +5530,8 @@ TestFunction(test_parse_decls){
                 "union U {int x;};\n"
                 "union U u = (union U)(union U){1};\n"),
             .vars = {
-                {SVI("f"), SVI("struct Foo"), SVI("(struct Foo)(struct Foo){1}")},
-                {SVI("u"), SVI("union U"), SVI("(union U)(union U){1}")},
+                {SVI("f"), SVI("struct Foo"), SVI("(struct Foo)(struct Foo){.x = 1}")},
+                {SVI("u"), SVI("union U"), SVI("(union U)(union U){.x = 1}")},
             },
         },
         {
@@ -4721,9 +5563,9 @@ TestFunction(test_parse_decls){
                 "constexpr int z[3] = {4,5,6};\n"
                 "constexpr int a[3] = z;\n"),
             .vars = {
-                {SVI("x"), SVI("int[3]"), SVI("{@0 = 1, @4 = 2, @8 = 3}")},
+                {SVI("x"), SVI("int[3]"), SVI("{[0] = 1, [1] = 2, [2] = 3}")},
                 {SVI("y"), SVI("int[3]"), SVI("x")},
-                {SVI("z"), SVI("const int[3]"), SVI("{@0 = 4, @4 = 5, @8 = 6}")},
+                {SVI("z"), SVI("const int[3]"), SVI("{[0] = 4, [1] = 5, [2] = 6}")},
                 {SVI("a"), SVI("const int[3]"), SVI("z")},
             },
         },
@@ -4852,7 +5694,7 @@ TestFunction(test_parse_decls){
             SVI("struct S {_Alignas(16) int x[5];} s = {1};\n"
                 "_Static_assert(sizeof(struct S)==32, \"\");\n"),
             .vars = {
-                {SVI("s"), SVI("struct S"), SVI("{1}")},
+                {SVI("s"), SVI("struct S"), SVI("{.x[0] = 1}")},
             },
         },
         {
@@ -4869,7 +5711,7 @@ TestFunction(test_parse_decls){
                 "struct S {_Alignas(16) int x[5];} s = {1};\n"
                 "_Static_assert(sizeof(struct S)==32, \"\");\n"),
             .vars = {
-                {SVI("s"), SVI("struct S"), SVI("{1}")},
+                {SVI("s"), SVI("struct S"), SVI("{.x[0] = 1}")},
             },
         },
         {
@@ -4940,7 +5782,7 @@ TestFunction(test_parse_decls){
                 "int x = a.as(int2)[0];\n"),
             .vars = {
                 {SVI("a"), SVI("_Any"), SVI("(_Any)3")},
-                {SVI("x"), SVI("int"), SVI("a.@8[(long)0]")},
+                {SVI("x"), SVI("int"), SVI("a.as(int __attribute__((vector_size(8))))[(long)0]")},
             },
         },
         {
@@ -4968,7 +5810,7 @@ TestFunction(test_parse_decls){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         int err;
         MStringBuilder sb = {.allocator=al};
@@ -5029,6 +5871,49 @@ TestFunction(test_parse_decls){
             if(c->vars[n].loc_line){
                 TestExpectEquals(unsigned, var->loc.line, c->vars[n].loc_line);
                 TestExpectEquals(unsigned, var->loc.column, c->vars[n].loc_col);
+            }
+            if(c->vars[n].paths.length){
+                TestExpectTrue(void*, var->initializer);
+                if(var->initializer){
+                    msb_reset(&sb);
+                    test_print_init_paths(&sb, var->initializer);
+                    TestExpectTrue(_Bool, test_init_path_layouts(&cc, var->initializer));
+                    test_expect_equals_sv(c->vars[n].paths, msb_borrow_sv(&sb), "expected paths", "actual paths", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
+            if(c->vars[n].member_path.length){
+                CcExpr* member = var->initializer;
+                while(member && (member->kind == CC_EXPR_ADDR || member->kind == CC_EXPR_CAST)) member = member->lhs;
+                TestExpectTrue(_Bool, member && (member->kind == CC_EXPR_DOT || member->kind == CC_EXPR_ARROW));
+                if(member && (member->kind == CC_EXPR_DOT || member->kind == CC_EXPR_ARROW)){
+                    msb_reset(&sb);
+                    msb_write_char(&sb, '[');
+                    for(uint32_t j = 0; j < cc_field_path_count(member->field_path); j++){
+                        if(j) msb_write_char(&sb, ',');
+                        msb_sprintf(&sb, "%u", cc_field_path_component(member->field_path, j));
+                    }
+                    msb_write_char(&sb, ']');
+                    test_expect_equals_sv(c->vars[n].member_path, msb_borrow_sv(&sb), "expected member path", "actual member path", &TEST_stats, __FILE__, __func__, c->line);
+                }
+            }
+            if(c->vars[n].eval || c->vars[n].eval_paths.length || c->vars[n].eval_status || c->vars[n].eval_repr.length){
+                CcExpr* value = NULL;
+                int eval_err = test_eval_initializer(&cc, var->initializer, &value);
+                TestExpectEquals(int, eval_err, c->vars[n].eval_status);
+                if(!eval_err && value){
+                    TestExpectEquals(uintptr_t, value->type.unqual, var->type.unqual);
+                    if(c->vars[n].eval_bytes)
+                        TestExpectEquals(int, test_eval_bytes(&cc, var->initializer, value), 0);
+                    msb_reset(&sb);
+                    test_print_init_paths(&sb, value);
+                    test_expect_equals_sv(c->vars[n].eval_paths, msb_borrow_sv(&sb), "expected evaluated paths", "actual evaluated paths", &TEST_stats, __FILE__, __func__, c->line);
+                    if(c->vars[n].eval_repr.length){
+                        msb_reset(&sb);
+                        cc_print_expr(&sb, value);
+                        test_expect_equals_sv(c->vars[n].eval_repr, msb_borrow_sv(&sb), "expected evaluated expression", "actual evaluated expression", &TEST_stats, __FILE__, __func__, c->line);
+                    }
+                    cc_release_expr(&cc, value);
+                }
             }
             if(c->vars[n].mangle.length){
                 TestExpectTrue(const void*, var->mangle);
@@ -5122,6 +6007,7 @@ TestFunction(test_parse_decls){
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
         TestExpectFalse(int, err);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -5138,6 +6024,224 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        {
+            "sizeof rejects array product overflow", __LINE__,
+            SVI("unsigned long n=sizeof(int[1073741824]);"),
+            SVI("(test):1:17: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "Alignas rejects metadata narrowing", __LINE__,
+            SVI("_Alignas(65536) static int x=1;"),
+            SVI("(test):1:1: error: alignment too large\n"),
+        },
+        {
+            "Alignas rejects layout narrowing", __LINE__,
+            SVI("_Alignas(4294967296) static int x=1;"),
+            SVI("(test):1:1: error: alignment too large\n"),
+        },
+        {
+            "inferred array rejects designator count wrap", __LINE__,
+            SVI("char a[]={[4294967295]=1};"),
+            SVI("(test):1:11: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "inferred array rejects designator size overflow", __LINE__,
+            SVI("int a[]={[1073741824]=1};"),
+            SVI("(test):1:10: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "inferred array rejects positional count wrap", __LINE__,
+            SVI("char a[]={[4294967294]=1,2};"),
+            SVI("(test):1:26: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "initializer rejects oversized declared array", __LINE__,
+            SVI("char a[4294967296]={};"),
+            SVI("(test):1:20: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "numeric reinterpretation rejects nested initialized union pointer defaults", __LINE__,
+            SVI("constexpr struct S {union U {unsigned long n[2]; struct P {unsigned long n; void* p;} p;} u;} s={.u.p.n=7};\n"
+                "static unsigned long n=((const unsigned long*)&s)[1];\n"),
+            SVI("(test):2:50: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation checks each array union's pointer defaults", __LINE__,
+            SVI("constexpr struct S {union U {unsigned long n[2]; struct P {unsigned long n; void* p;} p;} u[2];} s={.u[0].n[0]=3,.u[1].p.n=7};\n"
+                "static unsigned long n=((const unsigned long*)&s)[3];\n"),
+            SVI("(test):2:50: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation rejects nested initialized union metadata defaults", __LINE__,
+            SVI("constexpr struct S {union U {unsigned long n[2]; struct P {unsigned long n; _Type t;} p;} u;} s={.u.p.n=7};\n"
+                "static unsigned long n=((const unsigned long*)&s)[1];\n"),
+            SVI("(test):2:50: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation rejects nested initialized union block defaults", __LINE__,
+            SVI("constexpr struct S {union U {unsigned long n[2]; struct P {unsigned long n; void (^p)(void);} p;} u;} s={.u.p.n=7};\n"
+                "static unsigned long n=((const unsigned long*)&s)[1];\n"),
+            SVI("(test):2:50: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "initializer calls reject out of range positional arguments", __LINE__,
+            SVI("int f(int x);\nint n=f([1]=3);\n"),
+            SVI("(test):2:9: error: positional designator value out of range\n"),
+        },
+        {
+            "initializer calls reject huge positional arguments", __LINE__,
+            SVI("int f(int x);\nint n=f([4294967295]=3);\n"),
+            SVI("(test):2:9: error: positional designator value out of range\n"),
+        },
+        {
+            "initializer calls reject positional arguments without formal parameters", __LINE__,
+            SVI("int f(void);\nint n=f([0]=3);\n"),
+            SVI("(test):2:9: error: positional designator value out of range\n"),
+        },
+        {
+            "initializer variadic calls reject positional designators beyond formal parameters", __LINE__,
+            SVI("int f(int x,...);\nint n=f([1]=3);\n"),
+            SVI("(test):2:9: error: positional designator value out of range\n"),
+        },
+        {
+            "numeric reinterpretation rejects omitted block pointers", __LINE__,
+            SVI("constexpr union U {void (^p)(void); unsigned long bits;} u={};\n"
+                "static unsigned long n=u.bits;\n"),
+            SVI("(test):2:25: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation rejects omitted union pointer", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={};\n"
+                "static unsigned long n=u.bits;\n"),
+            SVI("(test):2:25: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation rejects omitted nested union metadata", __LINE__,
+            SVI("constexpr struct S {union U {_Type t; unsigned long bits;} u;} s={};\n"
+                "static unsigned long n=s.u.bits;\n"),
+            SVI("(test):2:27: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "numeric reinterpretation rejects braced null block pointers", __LINE__,
+            SVI("constexpr union U {void (^p)(void); unsigned long bits;} u={.p={}};\n"
+                "static unsigned long n=u.bits;\n"),
+            SVI("(test):2:25: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "sizeof rejects array length narrowing", __LINE__,
+            SVI("unsigned long n=sizeof(char[4294967296]);"),
+            SVI("(test):1:17: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "sizeof rejects nested array overflow", __LINE__,
+            SVI("unsigned long n=sizeof(char[2][2147483648]);"),
+            SVI("(test):1:17: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "sizeof rejects 64-bit product overflow", __LINE__,
+            SVI("unsigned long n=sizeof(long long[4611686018427387904]);"),
+            SVI("(test):1:17: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "struct rejects oversized array member", __LINE__,
+            SVI("struct S {\nint a[1073741824];\n};"),
+            SVI("(test):2:18: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "struct rejects member addition overflow", __LINE__,
+            SVI("struct S {\nchar a[4294967292];\nint b;\n};"),
+            SVI("(test):3:6: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "struct rejects member alignment overflow", __LINE__,
+            SVI("struct S {\nchar a[4294967295];\nint b;\n};"),
+            SVI("(test):3:6: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "union rejects tail padding overflow", __LINE__,
+            SVI("union U {char a[4294967295]; int b;};"),
+            SVI("(test):1:1: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "struct rejects tail padding overflow", __LINE__,
+            SVI("struct S {int b; char a[4294967291];};"),
+            SVI("(test):1:1: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "packed struct rejects bitfield storage overflow", __LINE__,
+            SVI("struct __attribute__((packed)) S {\nchar a[4294967295];\nunsigned b:1;\n};"),
+            SVI("(test):3:11: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "static initializer rejects mutable object reads", __LINE__,
+            SVI("int source=7;\nstatic int value=source;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects external const reads without a value", __LINE__,
+            SVI("extern const int source;\nstatic int value=source;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects volatile const reads", __LINE__,
+            SVI("const volatile int source=7;\nstatic int value=source;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects const values initialized at runtime", __LINE__,
+            SVI("int f(void){return 7;} const int source=f();\nstatic int value=source;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects mutable aggregate member reads", __LINE__,
+            SVI("struct S {const char* p;} s={\"abc\"};\nstatic const char* p=s.p;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects runtime slice bounds", __LINE__,
+            SVI("int n=1; static int a[3];\nstatic int s[:]=a[:n];\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static initializer rejects out-of-range float conversion", __LINE__,
+            SVI("static signed char x=(signed char)-129.0;\n"),
+            SVI("(test):1:22: error: static initializer conversion is out of range\n"),
+        },
+        {
+            "static initializer checks conversions of known const values", __LINE__,
+            SVI("const double d=-129.0;\nstatic signed char x=(signed char)(d-1);\n"),
+            SVI("(test):2:22: error: static initializer conversion is out of range\n"),
+        },
+        {
+            "static initializer rejects cyclic const values", __LINE__,
+            SVI("static const int x=x;\n"),
+            SVI("(test):1:20: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static object views reject cyclic scalar member reads", __LINE__,
+            SVI("const struct S {int n;} s={s.n};\nstatic int n=s.n;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "string initializer rejects incompatible integer array", __LINE__,
+            SVI("int a[]=\"a\";\n"),
+            SVI("(test):1:9: error: string literal has incompatible array element type\n"),
+        },
+        {
+            "truncated string initializer rejects incompatible integer array", __LINE__,
+            SVI("int a[1]=\"a\";\n"),
+            SVI("(test):1:10: error: string literal has incompatible array element type\n"),
+        },
+        {
+            "string initializer rejects incompatible encoding", __LINE__,
+            SVI("char a[]=u\"a\";\n"),
+            SVI("(test):1:10: error: string literal has incompatible array element type\n"),
+        },
+        {
+            "nested string initializer rejects incompatible encoding", __LINE__,
+            SVI("struct S {unsigned short a[1];};\nstruct S s={\"a\"};\n"),
+            SVI("(test):2:13: error: string literal has incompatible array element type\n"),
+        },
         {
             "local method cannot break enclosing loop", __LINE__,
             SVI("void f(void) { while(1) {\n"
@@ -5199,6 +6303,36 @@ TestFunction(test_parse_errors){
             "constexpr rejects null pointer subscript", __LINE__,
             SVI("constexpr int* p=nullptr;\n"
                 "_Static_assert(p[0]==0);"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr object views reject one-past pointer reads", __LINE__,
+            SVI("constexpr int a[2]={1,2}; constexpr const int* p=a+2;\n"
+                "_Static_assert(p[0]==0);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr object views reject crossing a scalar member bound", __LINE__,
+            SVI("constexpr struct S {int a,b;} s={1,2}; constexpr const int* p=&s.a;\n"
+                "_Static_assert(p[1]==2);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr object views reject crossing a nested array bound", __LINE__,
+            SVI("constexpr int a[2][2]={{1,2},{3,4}}; constexpr const int* p=&a[0][1];\n"
+                "_Static_assert(p[1]==3);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr object views enforce the slice bound", __LINE__,
+            SVI("constexpr int a[2]={1,2}; constexpr const int s[:]=a[:1];\n"
+                "_Static_assert(s[1]==2);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr object views reject reads from mutable storage", __LINE__,
+            SVI("static int a[2]={1,2}; constexpr const int* p=a;\n"
+                "_Static_assert(p[0]==1);\n"),
             SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
         },
         {
@@ -5433,6 +6567,61 @@ TestFunction(test_parse_errors){
             SVI("_Any a=3;\n"
                 "a++;"),
             SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "array decay rejects unrelated element types", __LINE__,
+            SVI("int a[2];\ndouble* p=a;\n"),
+            SVI("(test):2:11: error: cannot implicitly convert from 'int[2]' to 'double *'\n"),
+        },
+        {
+            "array decay rejects incompatible nested bounds", __LINE__,
+            SVI("int a[2][3];\nint (*p)[4]=a;\n"),
+            SVI("(test):2:13: error: cannot implicitly convert from 'int[2][3]' to 'int (*)[4]'\n"),
+        },
+        {
+            "function decay rejects incompatible prototypes", __LINE__,
+            SVI("int f(int);\nint (*p)(double)=f;\n"),
+            SVI("(test):2:18: error: cannot implicitly convert from 'int(int)' to 'int (*)(double)'\n"),
+        },
+        {
+            "function decay rejects prototypes changed by default promotions", __LINE__,
+            SVI("int f(float);\nint (*p)()=f;\n"),
+            SVI("(test):2:12: error: cannot implicitly convert from 'int(float)' to 'int (*)()'\n"),
+        },
+        {
+            "function decay retains nested parameter qualifiers", __LINE__,
+            SVI("int f(const int*);\nint (*p)(int*)=f;\n"),
+            SVI("(test):2:16: error: cannot implicitly convert from 'int(const int *)' to 'int (*)(int *)'\n"),
+        },
+        {
+            "function decay rejects object pointer destination", __LINE__,
+            SVI("int f(int);\nint* p=f;\n"),
+            SVI("(test):2:8: error: cannot implicitly convert from 'int(int)' to 'int *'\n"),
+        },
+        {
+            "constexpr pointer object cannot be assigned", __LINE__,
+            SVI("static int n; constexpr int* p=&n;\np=nullptr;\n"),
+            SVI("(test):2:2: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "nullptr is not a pointer arithmetic operand", __LINE__,
+            SVI("nullptr + 1;\n"),
+            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t\n"),
+        },
+        {
+            "nullptr subtraction rejects both null operands", __LINE__,
+            SVI("nullptr - nullptr;\n"),
+            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t\n"),
+        },
+        {
+            "pointer subtraction rejects nullptr rhs", __LINE__,
+            SVI("int* p; p - nullptr;\n"),
+            SVI("(test):1:11: error: pointer arithmetic does not accept nullptr_t\n"),
+        },
+        {
+            "pointer subtraction rejects nullptr lhs", __LINE__,
+            SVI("int* p; nullptr - p;\n"),
+            SVI("(test):1:17: error: pointer arithmetic does not accept nullptr_t\n"),
         },
         {
             "any rejects condition", __LINE__,
@@ -5730,6 +6919,53 @@ TestFunction(test_parse_errors){
             SVI("(test):1:15: error: array designator value out of range\n"),
         },
         {
+            "wide array designator cannot discard high bits", __LINE__,
+            SVI("int arr[3] = {[((unsigned __int128)1<<64)+1] = 1};"),
+            SVI("(test):1:15: error: array designator must be a constant integer expression\n"),
+        },
+        {
+            "wide negative array designator cannot become positive", __LINE__,
+            SVI("int arr[3] = {[-((__int128)1<<64)+1] = 1};"),
+            SVI("(test):1:15: error: array designator must be a constant integer expression\n"),
+        },
+        {
+            "wide chained designator cannot discard high bits", __LINE__,
+            SVI("struct S { int arr[3]; };\n"
+                "struct S s = {.arr[((unsigned __int128)1<<64)+1] = 1};"),
+            SVI("(test):2:19: error: array designator must be a constant integer expression\n"),
+        },
+        {
+            "wide array bound cannot discard high bits", __LINE__,
+            SVI("int arr[((unsigned __int128)1<<64)+2];"),
+            SVI("(test):1:8: error: array dimension must be a constant integer expression\n"),
+        },
+        {
+            "long double array designator is not integral", __LINE__,
+            SVI("int arr[3] = {[1.5L] = 1};"),
+            SVI("(test):1:15: error: array designator must be a constant integer expression\n"),
+        },
+        {
+            "quad array designator is not integral", __LINE__,
+            SVI("int arr[3] = {[(_Float128)1.5] = 1};"),
+            SVI("(test):1:15: error: array designator must be a constant integer expression\n"),
+        },
+        {
+            "wide alignment cannot discard high bits", __LINE__,
+            SVI("struct __attribute__((aligned(((unsigned __int128)1<<64)+8))) S { int x; };"),
+            SVI("(test):1:23: error: aligned attribute requires a constant integral expression\n"),
+        },
+        {
+            "wide vector size cannot discard high bits", __LINE__,
+            SVI("typedef int v __attribute__((vector_size(((unsigned __int128)1<<64)+8)));"),
+            SVI("(test):1:30: error: vector_size attribute requires a constant integral expression\n"),
+        },
+        {
+            "wide positional designator cannot discard high bits", __LINE__,
+            SVI("int f(int x);\n"
+                "int g(void) { return f([((unsigned __int128)1<<64)]=3); }"),
+            SVI("(test):2:24: error: positional designator must be a constant integer expression\n"),
+        },
+        {
             "negative chained array designator", __LINE__,
             SVI("struct S { int arr[3]; };\n"
                "struct S s = {.arr[-1] = 1};"),
@@ -5861,6 +7097,106 @@ TestFunction(test_parse_errors){
             SVI("(test):1:10: error: cannot implicitly convert from 'int' to 'int *'\n"),
         },
         {
+            "wide nonzero literal is not a null pointer constant", __LINE__,
+            SVI("int *p = 18446744073709551616ui128;\n"),
+            SVI("(test):1:10: error: cannot implicitly convert from 'unsigned __int128' to 'int *'\n"),
+        },
+        {
+            "nullptr does not implicitly convert to integer", __LINE__,
+            SVI("int x = nullptr;\n"),
+            SVI("(test):1:9: error: cannot implicitly convert from 'nullptr_t' to 'int'\n"),
+        },
+        {
+            "nullptr does not implicitly convert to aggregate", __LINE__,
+            SVI("struct S {int x;};\nstruct S s = nullptr;\n"),
+            SVI("(test):2:14: error: cannot implicitly convert from 'nullptr_t' to 'struct S'\n"),
+        },
+        {
+            "nullptr does not implicitly convert to floating", __LINE__,
+            SVI("double d = nullptr;\n"),
+            SVI("(test):1:12: error: cannot implicitly convert from 'nullptr_t' to 'double'\n"),
+        },
+        {
+            "void call is not an if condition", __LINE__,
+            SVI("void f(void);\nif(f()){}\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+        },
+        {
+            "vector is not an if condition", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(32))); V v={};\nif(v){}\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+        },
+        {
+            "type metadata is not an if condition", __LINE__,
+            SVI("_Type t=int;\nif(t){}\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+        },
+        {
+            "type metadata is not a logical not operand", __LINE__,
+            SVI("constexpr _Type t=int;\n!t;\n"),
+            SVI("(test):2:1: error: '!' requires scalar type\n"),
+        },
+        {
+            "type metadata is not a logical and operand", __LINE__,
+            SVI("_Type t=int;\nt&&1;\n"),
+            SVI("(test):2:2: error: '&&' requires scalar type\n"),
+        },
+        {
+            "type metadata is not a logical or operand", __LINE__,
+            SVI("_Type t=int;\n1||t;\n"),
+            SVI("(test):2:2: error: '||' requires scalar type\n"),
+        },
+        {
+            "type metadata is not a conditional condition", __LINE__,
+            SVI("_Type t=int;\nt?1:0;\n"),
+            SVI("(test):2:2: error: '?:' requires scalar type\n"),
+        },
+        {
+            "vector is not a logical operand", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16))); V v={};\nv && 1;\n"),
+            SVI("(test):2:3: error: '&&' requires scalar type\n"),
+        },
+        {
+            "vector is not a logical not operand", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(32))); V v={};\n!v;\n"),
+            SVI("(test):2:1: error: '!' requires scalar type\n"),
+        },
+        {
+            "vector is not a conditional condition", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(8))); V v={};\nv?1:0;\n"),
+            SVI("(test):2:2: error: '?:' requires scalar type\n"),
+        },
+        {
+            "vector cannot implicitly convert to bool", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(32))); V v={};\n_Bool b=v;\n"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'int __attribute__((vector_size(32)))' to '_Bool'\n"),
+        },
+        {
+            "constexpr out-of-range adjusted address is not assumed nonnull", __LINE__,
+            SVI("static int a[3];\n_Static_assert(!!(a+4));\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constexpr negative adjusted address is not assumed nonnull", __LINE__,
+            SVI("static int a[3];\n_Static_assert(a-1!=nullptr);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "void call is not a logical operand", __LINE__,
+            SVI("void f(void);\nf() && 1;\n"),
+            SVI("(test):2:5: error: '&&' requires scalar type\n"),
+        },
+        {
+            "void call is not a logical not operand", __LINE__,
+            SVI("void f(void);\n!f();\n"),
+            SVI("(test):2:1: error: '!' requires scalar type\n"),
+        },
+        {
+            "void call is not a conditional condition", __LINE__,
+            SVI("void f(void);\nf()?1:0;\n"),
+            SVI("(test):2:4: error: '?:' requires scalar type\n"),
+        },
+        {
             "assign pointer to int", __LINE__,
             SVI("int *p;\n"
                "int x = p;"),
@@ -5902,6 +7238,13 @@ TestFunction(test_parse_errors){
             SVI("struct S { int a : 3; int b : 5; };\n"
                "struct S s;\n"
                "int* p = &s.a;"),
+            SVI("(test):3:10: error: cannot take address of bitfield\n"),
+        },
+        {
+            "address of comma bitfield", __LINE__,
+            SVI("struct S { int a : 3; };\n"
+               "struct S s;\n"
+               "int* p = &(0, s.a);"),
             SVI("(test):3:10: error: cannot take address of bitfield\n"),
         },
 
@@ -6025,6 +7368,26 @@ TestFunction(test_parse_errors){
             SVI("(test):1:27: error: duplicate case value '1'\n"),
         },
         {
+            "switch duplicate cases are checked after unsigned conversion", __LINE__,
+            SVI("switch(1u){case -1: break; case 4294967295u: break;}\n"),
+            SVI("(test):1:28: error: duplicate case value '4294967295'\n"),
+        },
+        {
+            "switch duplicate cases are checked after signed conversion", __LINE__,
+            SVI("switch(1){case -1: break; case 4294967295u: break;}\n"),
+            SVI("(test):1:27: error: duplicate case value '-1'\n"),
+        },
+        {
+            "switch duplicate wide cases are checked after narrowing", __LINE__,
+            SVI("switch(1){case 1: break; case ((unsigned __int128)1<<100)+1: break;}\n"),
+            SVI("(test):1:26: error: duplicate case value '1'\n"),
+        },
+        {
+            "switch floating case remains nonintegral before conversion", __LINE__,
+            SVI("switch(1){case 1.5L: break;}\n"),
+            SVI("(test):1:11: error: case label must be a constant integer expression\n"),
+        },
+        {
             "if struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; if(s){}\n"),
             SVI("(test):1:31: error: 'if' condition requires scalar type\n"),
@@ -6068,6 +7431,56 @@ TestFunction(test_parse_errors){
             "inc struct", __LINE__,
             SVI("struct S{int x;}; struct S s; struct S t = s++;\n"),
             SVI("(test):1:45: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "increment rejects metadata values", __LINE__,
+            SVI("_Type t=int;\nt++;\n"),
+            SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "prefix decrement rejects nullptr values", __LINE__,
+            SVI("typeof(nullptr) n=nullptr;\n--n;\n"),
+            SVI("(test):2:1: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "pointer addition requires completeness at the expression", __LINE__,
+            SVI("struct S; struct S* p;\np+1;\nstruct S {int x;};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer subtraction requires completeness at the expression", __LINE__,
+            SVI("struct S; struct S* p;\np-p;\nstruct S {int x;};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer compound assignment requires completeness", __LINE__,
+            SVI("enum E; enum E* p;\np+=1;\nenum E {A=1};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer increment requires completeness", __LINE__,
+            SVI("union U; union U* p;\n++p;\nunion U {int x;};\n"),
+            SVI("(test):2:1: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer postfix decrement requires completeness", __LINE__,
+            SVI("int (*p)[];\np--;\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer subscript requires complete elements", __LINE__,
+            SVI("struct S; struct S* p;\np[1];\nstruct S {int x;};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "pointer slices require complete elements", __LINE__,
+            SVI("struct S; struct S* p;\np[0:1];\nstruct S {int x;};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+        },
+        {
+            "prefixless pointer slices require complete elements", __LINE__,
+            SVI("struct S; struct S* p;\np[:1];\nstruct S {int x;};\n"),
+            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
         },
         {
             "dec struct", __LINE__,
@@ -6189,6 +7602,21 @@ TestFunction(test_parse_errors){
             "ptr mulassign", __LINE__,
             SVI("int *p; p *= 0;\n"),
             SVI("(test):1:11: error: compound assignment requires arithmetic operands\n"),
+        },
+        {
+            "compound modulo rejects floating rhs", __LINE__,
+            SVI("int x; x %= 0.5;\n"),
+            SVI("(test):1:10: error: operator requires integer operands\n"),
+        },
+        {
+            "compound bitwise rejects floating rhs", __LINE__,
+            SVI("int x; x &= 0.5;\n"),
+            SVI("(test):1:10: error: operator requires integer operands\n"),
+        },
+        {
+            "compound shift rejects floating rhs", __LINE__,
+            SVI("int x; x <<= 0.5;\n"),
+            SVI("(test):1:10: error: operator requires integer operands\n"),
         },
         {
             "ptr divassign", __LINE__,
@@ -6348,10 +7776,10 @@ TestFunction(test_parse_errors){
             SVI("(test):2:19: error: expression 'x' is not a constant expression\n"),
         },
         {
-            "constexpr: address-of", __LINE__,
-            SVI("int x;\n"
-               "constexpr int* p = &x;\n"),
-            SVI("(test):2:20: error: address-of in constant expression\n"),
+            "constexpr: address of automatic storage", __LINE__,
+            SVI("void f(void){int x;\n"
+               "constexpr int* p = &x;}\n"),
+            SVI("(test):2:20: error: address of automatic variable in constant expression\n"),
         },
         {
             "static local: automatic variable", __LINE__,
@@ -6431,6 +7859,193 @@ TestFunction(test_parse_errors){
         {
             "wide shift overflow", __LINE__,
             SVI("_Static_assert((unsigned __int128)1<<128);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constant left shift rejects a count exceeding 32 bits", __LINE__,
+            SVI("_Static_assert(1 << 0x100000000ULL);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "static shift rejects an oversized count before lowering", __LINE__,
+            SVI("static unsigned n=1U<<0x100000000ULL;\n"),
+            SVI("(test):1:21: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects zero divisors before lowering", __LINE__,
+            SVI("static int n=1/0;\n"),
+            SVI("(test):1:15: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "constexpr bool views reject invalid numeric representations", __LINE__,
+            SVI("constexpr union U {unsigned char byte; _Bool flag;} u={.byte=2};\n"
+                "_Static_assert(!u.flag);\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "static bool views reject invalid numeric representations", __LINE__,
+            SVI("constexpr unsigned char byte=255;\n"
+                "static _Bool flag=*(const _Bool*)&byte;\n"),
+            SVI("(test):2:19: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "implicit enumerators reject signed counter overflow", __LINE__,
+            SVI("enum E:long long {MAX=9223372036854775807LL,NEXT};\n"),
+            SVI("(test):1:45: error: implicit enumerator value exceeds underlying type range\n"),
+        },
+        {
+            "fixed unsigned enum rejects successor after its maximum", __LINE__,
+            SVI("enum E:unsigned long long {MAX=18446744073709551615ull,NEXT};\n"),
+            SVI("(test):1:56: error: implicit enumerator value exceeds underlying type range\n"),
+        },
+        {
+            "fixed byte enum rejects oversized value", __LINE__,
+            SVI("enum E:unsigned char {A=256};\n"),
+            SVI("(test):1:23: error: enumerator value is out of range for underlying type\n"),
+        },
+        {
+            "bool bitfield width cannot exceed its value width", __LINE__,
+            SVI("struct B {_Bool flag:2;};\n"),
+            SVI("(test):1:21: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+        },
+        {
+            "bool enum bitfield width cannot exceed its value width", __LINE__,
+            SVI("enum E:_Bool {ZERO}; struct B {enum E flag:2;};\n"),
+            SVI("(test):1:43: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+        },
+        {
+            "fixed enum redeclarations reject different underlying types", __LINE__,
+            SVI("enum E:unsigned char;\n"
+                "enum E:unsigned long long;\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types\n"),
+        },
+        {
+            "defined fixed enum redeclarations reject different underlying types", __LINE__,
+            SVI("enum E:unsigned char {A};\n"
+                "enum E:unsigned long long;\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types\n"),
+        },
+        {
+            "incomplete enum cannot contribute a provisional struct layout", __LINE__,
+            SVI("enum E;\n"
+                "struct S {enum E value; int tail;};\n"
+                "enum E {HIGH=(unsigned __int128)1<<100};\n"),
+            SVI("(test):2:23: error: sizeof applied to incomplete enum type\n"),
+        },
+        {
+            "unfixed enum body cannot query its provisional size", __LINE__,
+            SVI("enum E {SIZE=sizeof(enum E),HIGH=(unsigned __int128)1<<100};\n"),
+            SVI("(test):1:14: error: sizeof applied to incomplete enum type\n"),
+        },
+        {
+            "incomplete enum has no alignment", __LINE__,
+            SVI("enum E;\n"
+                "_Static_assert(alignof(enum E));\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete enum type\n"),
+        },
+        {
+            "fixed unsigned enum rejects negative value", __LINE__,
+            SVI("enum E:unsigned {A=-1};\n"),
+            SVI("(test):1:18: error: enumerator value is out of range for underlying type\n"),
+        },
+        {
+            "fixed signed byte enum rejects positive overflow", __LINE__,
+            SVI("enum E:signed char {A=128};\n"),
+            SVI("(test):1:21: error: enumerator value is out of range for underlying type\n"),
+        },
+        {
+            "fixed signed byte enum rejects negative overflow", __LINE__,
+            SVI("enum E:signed char {A=-129};\n"),
+            SVI("(test):1:21: error: enumerator value is out of range for underlying type\n"),
+        },
+        {
+            "fixed signed wide enum rejects unsigned positive overflow", __LINE__,
+            SVI("enum E:__int128 {A=(unsigned __int128)1<<127};\n"),
+            SVI("(test):1:18: error: enumerator value is out of range for underlying type\n"),
+        },
+        {
+            "unfixed enum rejects an unrepresentable combined range", __LINE__,
+            SVI("enum E {NEG=-1,MAX=~(unsigned __int128)0};\n"),
+            SVI("(test):1:1: error: no integer type can represent all enumerator values\n"),
+        },
+        {
+            "fixed byte enum rejects implicit wraparound", __LINE__,
+            SVI("enum E:unsigned char {A=255,B};\n"),
+            SVI("(test):1:29: error: implicit enumerator value exceeds underlying type range\n"),
+        },
+        {
+            "fixed wide unsigned enum rejects implicit wraparound", __LINE__,
+            SVI("enum E:unsigned __int128 {A=~(unsigned __int128)0,B};\n"),
+            SVI("(test):1:51: error: implicit enumerator value exceeds underlying type range\n"),
+        },
+        {
+            "bool enumerators reject invalid representations", __LINE__,
+            SVI("enum E:_Bool {BAD=2};\n"),
+            SVI("(test):1:15: error: enumerator value is out of range for bool underlying type\n"),
+        },
+        {
+            "constexpr arithmetic rejects signed multiplication overflow", __LINE__,
+            SVI("constexpr int n=2147483647*2;\n"),
+            SVI("(test):1:27: error: constexpr initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects signed addition overflow", __LINE__,
+            SVI("static int n=2147483647+1;\n"),
+            SVI("(test):1:24: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects zero remainders before lowering", __LINE__,
+            SVI("static unsigned n=7U%0;\n"),
+            SVI("(test):1:21: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects signed negation overflow", __LINE__,
+            SVI("static int n=-(-2147483647-1);\n"),
+            SVI("(test):1:14: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects negated relocations", __LINE__,
+            SVI("static int target; static long n=-(long)&target;\n"),
+            SVI("(test):1:34: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects sums of symbol addresses", __LINE__,
+            SVI("static int a,b;\nstatic long n=(long)&a+(long)&b;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects a numeric value minus a symbol", __LINE__,
+            SVI("static int target;\nstatic long n=7-(long)&target;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static arithmetic rejects shifting unresolved symbols", __LINE__,
+            SVI("static int target;\nstatic long n=(long)&target<<1;\n"),
+            SVI("(test):2:28: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static casts reject truncated symbol addresses", __LINE__,
+            SVI("static int target;\nstatic short n=(short)&target;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "static casts reject symbol addresses wider than relocation storage", __LINE__,
+            SVI("static int target;\nstatic __int128 n=(__int128)&target;\n"),
+            SVI("(test):2:19: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "constant right shift rejects a count exceeding 32 bits", __LINE__,
+            SVI("_Static_assert(64U >> 0x100000000ULL);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constant shift rejects negative counts before narrowing", __LINE__,
+            SVI("_Static_assert(1U << -4294967296LL);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constant shift rejects 128 bit counts before narrowing", __LINE__,
+            SVI("_Static_assert(1ULL << ((unsigned __int128)1<<64));\n"),
             SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
         },
         {
@@ -7349,6 +8964,26 @@ TestFunction(test_parse_errors){
             SVI("(test):2:14: error: conflicting return type for 'f'\n"),
         },
         {
+            "unprototyped declaration does not hide conflicting return", __LINE__,
+            SVI("int f();\nfloat f(void);\n"),
+            SVI("(test):2:14: error: conflicting return type for 'f'\n"),
+        },
+        {
+            "unprototyped redeclaration does not hide conflicting return", __LINE__,
+            SVI("int f(void);\nfloat f();\n"),
+            SVI("(test):2:10: error: conflicting return type for 'f'\n"),
+        },
+        {
+            "unprototyped definition does not hide conflicting return", __LINE__,
+            SVI("int f(void);\nfloat f(){return 1;}\n"),
+            SVI("(test):2:10: error: conflicting return type for 'f'\n"),
+        },
+        {
+            "definition after unprototyped declaration checks return", __LINE__,
+            SVI("int f();\nvoid f(void){}\n"),
+            SVI("(test):2:13: error: conflicting return type for 'f'\n"),
+        },
+        {
             "static variable redecl without storage class", __LINE__,
             SVI("static int x;\n"
                 "int x;\n"),
@@ -7377,6 +9012,36 @@ TestFunction(test_parse_errors){
             SVI("int f(int);\n"
                 "int f(int, ...);\n"),
             SVI("(test):2:16: error: conflicting variadic specifier for 'f'\n"),
+        },
+        {
+            "unprototyped declaration conflicts with variadic prototype", __LINE__,
+            SVI("int f();\nint f(int, ...);\n"),
+            SVI("(test):2:16: error: conflicting variadic specifier for 'f'\n"),
+        },
+        {
+            "unprototyped redeclaration conflicts with variadic prototype", __LINE__,
+            SVI("int f(int, ...);\nint f();\n"),
+            SVI("(test):2:8: error: conflicting variadic specifier for 'f'\n"),
+        },
+        {
+            "unprototyped declaration conflicts with float parameter", __LINE__,
+            SVI("int f();\nint f(float);\n"),
+            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'\n"),
+        },
+        {
+            "unprototyped redeclaration conflicts with narrow parameter", __LINE__,
+            SVI("int f(unsigned char);\nint f();\n"),
+            SVI("(test):2:8: error: conflicting type for parameter 1 of 'f'\n"),
+        },
+        {
+            "empty-list definition conflicts with nonempty prototype", __LINE__,
+            SVI("int f(int);\nint f(){return 7;}\n"),
+            SVI("(test):2:8: error: conflicting number of parameters for 'f'\n"),
+        },
+        {
+            "nonempty prototype conflicts with empty-list definition", __LINE__,
+            SVI("int f(){return 7;}\nint f(int);\n"),
+            SVI("(test):2:11: error: conflicting number of parameters for 'f'\n"),
         },
         {
             "redecl diff arity", __LINE__,
@@ -7515,7 +9180,7 @@ TestFunction(test_parse_errors){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CcParser cc = {
             .cpp = {
@@ -7553,6 +9218,7 @@ TestFunction(test_parse_errors){
             test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
         }
         fin:
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -7587,6 +9253,17 @@ TestFunction(test_struct_layout){
             .fields = {
                 { SVI("x"), .offset = 0 },
                 { SVI("y"), .offset = 4 },
+            },
+        },
+        {
+            "bitfield positioning beyond 32-bit bit offset", __LINE__,
+            SVI("struct S {char a[536870912]; unsigned b:1,c:1;};"),
+            SVI("S"), 0,
+            .size = 536870916, .alignment = 4,
+            .fields = {
+                { SVI("a"), .offset = 0 },
+                { SVI("b"), .offset = 536870912, .bitwidth = 1, .bitoffset = 0 },
+                { SVI("c"), .offset = 536870912, .bitwidth = 1, .bitoffset = 1 },
             },
         },
         {
@@ -8032,7 +9709,7 @@ TestFunction(test_struct_layout){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         int err = 0;
         CcParser cc = {
@@ -8151,6 +9828,7 @@ TestFunction(test_struct_layout){
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
         TestExpectFalse(int, err);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -8317,7 +9995,7 @@ TestFunction(test_bitfield_abi){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         int err = 0;
         CcTargetConfig tgt = cc_target_test();
@@ -8396,6 +10074,7 @@ TestFunction(test_bitfield_abi){
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
         TestExpectFalse(int, err);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -8523,7 +10202,7 @@ TestFunction(test_pragma_pack){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CcParser cc = {
             .cpp = {
@@ -8553,6 +10232,7 @@ TestFunction(test_pragma_pack){
         StringView log = msb_borrow_sv(&log_sb);
         test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
         fin:
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&cc.cpp.synth_arena);
         ArenaAllocator_free_all(&cc.scratch_arena);
@@ -8565,7 +10245,9 @@ int main(int argc, char** argv){
     testing_allocator_init();
 #endif
     RegisterTestFlags(test_parse_decls, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_field_paths, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_call_abi_types, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_runtime_bitfields, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_bitfield_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
@@ -8589,6 +10271,38 @@ int main(int argc, char** argv){
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
+static int test_eval_initializer(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull out){
+    CcEvalCtx ctx = {.parser=p};
+    int err = cc_eval_expr(&ctx, e, out);
+    if(err || ccqt_kind(e->type) != CC_SLICE) return err;
+    CcExpr* value = *out;
+    if(!value) return CC_UNREACHABLE_ERROR;
+    uint64_t original_count = 0, evaluated_count = 0;
+    CcEvalAddress original = {0}, evaluated = {0};
+    err = cc_eval_slice(&ctx, e, 0, &original_count, &original);
+    if(!err) err = cc_eval_slice(&ctx, value, 0, &evaluated_count, &evaluated);
+    if(!err && (original_count != evaluated_count || original.kind != evaluated.kind
+        || original.symbol != evaluated.symbol || original.offset != evaluated.offset
+        || original.has_range != evaluated.has_range
+        || (original.has_range && (original.range_start != evaluated.range_start
+            || original.range_size != evaluated.range_size)))) err = CC_UNREACHABLE_ERROR;
+    CcExpr* again = NULL;
+    if(!err) err = cc_eval_expr(&ctx, value, &again);
+    cc_release_expr(p, value);
+    *out = again;
+    return err;
+}
+static int test_eval_bytes(CcParser* p, CcExpr* source, CcExpr* value){
+    uint32_t size;
+    int err = cc_sizeof_as_uint(p, source->type, source->loc, &size);
+    unsigned char original[64], evaluated[64];
+    if(err) return err;
+    if(size > sizeof original) return CC_NOT_CONSTANT_ERROR;
+    CcEvalCtx ctx = {.parser=p};
+    err = cc_eval_object_bytes(&ctx, source, 0, size, original, NULL);
+    if(!err) err = cc_eval_object_bytes(&ctx, value, 0, size, evaluated, NULL);
+    return err ? err : memcmp(original, evaluated, size);
+}
 
 #ifdef __DRC__
 #include "../Vendored/softfloat/softfloat_unity.c"

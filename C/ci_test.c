@@ -40,7 +40,1428 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
+        _Bool expect_template;
+        uint32_t expect_runtime_stores;
     } testcases[] = {
+        {
+            "integer relocations preserve nested addends and scalar initializer storage", __LINE__,
+            SVI("static int target; static const long base={(long)&target};\n"
+                "constexpr struct S {long address;} s={(long)&target};\n"
+                "static long braced=base+4; static long field=s.address+4;\n"
+                "static long nested=3+(2+((long)&target-1));\n"
+                "static long text=(long)\"ab\"+1;\n"
+                "static short absolute=(short)(int*)0xffff; static unsigned __int128 wide=(unsigned __int128)(void*)6;\n"
+                "return braced==(long)&target+4&&field==braced&&nested==braced&&*(const char*)text=='b'&&absolute==-1&&wide==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr bool conversions agree with static storage", __LINE__,
+            SVI("constexpr _Bool a=256,b=0.5,c=-0.5,d=-0.0;\n"
+                "static _Bool x=a,y=b,z=c,w=d; static int target;\n"
+                "constexpr _Bool pointer=(_Bool)&target; static _Bool p=pointer;\n"
+                "constexpr union U {unsigned char byte; struct B {unsigned char pad:7; _Bool flag:1;} b;} bits={.byte=128};\n"
+                "static _Bool packed=bits.b.flag;\n"
+                "return x==1&&y==1&&z==1&&w==0&&p==1&&packed==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr enums with bool storage agree with static casts", __LINE__,
+            SVI("enum E:_Bool {ZERO,ONE}; constexpr enum E x=(enum E)2;\n"
+                "static enum E copy=x; static enum E direct=(enum E)256;\n"
+                "return (int)copy==1&&(int)direct==1&&!copy==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "runtime casts to enums with bool storage normalize their values", __LINE__,
+            SVI("enum E:_Bool {ZERO,ONE}; enum E convert(int n){return (enum E)n;}\n"
+                "return convert(2)==ONE&&convert(256)==ONE&&convert(0)==ZERO;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static enum storage preserves signed maximum and explicit resets", __LINE__,
+            SVI("enum E:long long {MAX=9223372036854775807LL,RESET=0,NEXT};\n"
+                "static enum E value=MAX; static enum E reset=RESET;\n"
+                "return value==9223372036854775807LL&&reset==0&&NEXT==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static arithmetic preserves wrapping, skipped branches and address addends", __LINE__,
+            SVI("static int target; static long address=(long)&target+4;\n"
+                "static long reversed=4+(long)&target; static long before=(long)&target-4;\n"
+                "static int a=1?7:(1/0); static int b=0&&(1/0);\n"
+                "static unsigned wrapped=~0U*2U;\n"
+                "static __int128 wide=((__int128)1<<100)*2;\n"
+                "return address==(long)&target+4&&reversed==address&&before==(long)&target-4\n"
+                "&&a==7&&b==0&&wrapped==~1U&&wide==((__int128)1<<101);\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant byte swaps agree with static storage and initializer paths", __LINE__,
+            SVI("constexpr unsigned short a=__builtin_bswap16(0x1234);\n"
+                "constexpr unsigned b=__builtin_bswap32(0x12345678U);\n"
+                "constexpr unsigned long long c=__builtin_bswap64(0x0102030405060708ULL);\n"
+                "static unsigned short x=a; static unsigned y=b; static unsigned long long z=c;\n"
+                "static int values[3]={[__builtin_bswap16(0x0100)]=7};\n"
+                "return x==0x3412&&y==0x78563412U&&z==0x0807060504030201ULL&&values[0]==0&&values[1]==7&&values[2]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant bit counts use builtin parameter widths", __LINE__,
+            SVI("constexpr int a=__builtin_clz((unsigned char)1);\n"
+                "constexpr int b=__builtin_clzll(1); constexpr int c=__builtin_clzl(1);\n"
+                "constexpr int d=__builtin_popcount(-1); constexpr int e=__builtin_clz(-1);\n"
+                "static int values[]={a,b,c,d,e};\n"
+                "return values[0]==sizeof(unsigned)*8-1&&values[1]==sizeof(unsigned long long)*8-1\n"
+                "&&values[2]==sizeof(unsigned long)*8-1&&values[3]==sizeof(unsigned)*8&&values[4]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "runtime bit counts convert arguments before counting", __LINE__,
+            SVI("int f(unsigned char c,long long x,signed char n){\n"
+                "return __builtin_clzll(c)==sizeof(unsigned long long)*8-1\n"
+                "&&__builtin_popcount(x)==1&&__builtin_ctz(x)==0\n"
+                "&&__builtin_popcountll(n)==sizeof(unsigned long long)*8;}\n"
+                "return f(1,0x100000001LL,-1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "bit counts accept enum and wide integer conversions", __LINE__,
+            SVI("enum E:unsigned __int128 {BITS=((unsigned __int128)1<<100)|7};\n"
+                "constexpr int n=__builtin_popcount(BITS);\n"
+                "constexpr int z=__builtin_clzll((unsigned __int128)1<<32);\n"
+                "int f(unsigned __int128 x){return __builtin_popcountll(x)==3&&__builtin_ctzll(x)==0;}\n"
+                "return n==3&&z==sizeof(unsigned long long)*8-33&&f(BITS);\n"),
+            .exit_code = 1,
+        },
+        {
+            "bit counts apply ordinary floating argument conversion", __LINE__,
+            SVI("constexpr int n=__builtin_popcount(7.75);\n"
+                "int f(double x){return __builtin_clzll(x);} return n==3&&f(1.5)==sizeof(unsigned long long)*8-1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static shifts validate full counts and skip unselected branches", __LINE__,
+            SVI("static unsigned a=1U<<31ULL;\n"
+                "static unsigned b=0x80000000U>>(unsigned __int128)31;\n"
+                "static unsigned long long c=1ULL<<63U;\n"
+                "static unsigned __int128 d=(unsigned __int128)1<<127ULL;\n"
+                "static unsigned e=1?7:(1U<<0x100000000ULL);\n"
+                "static int f=0&&(1U<<0x100000000ULL);\n"
+                "return a==0x80000000U&&b==1&&c==0x8000000000000000ULL&&(d>>127U)==1&&e==7&&f==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested union defaults retain numeric storage in static copies", __LINE__,
+            SVI("constexpr union O {struct S {union U {void* p; struct B {unsigned low, high;} b;} u;} s; unsigned long bits;} v={.s.u.b.low=7};\n"
+                "static unsigned long bits=v.bits; static struct S copy=v.s;\n"
+                "return bits==7&&copy.u.b.low==7&&copy.u.b.high==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant enum casts preserve width and sign in static storage", __LINE__,
+            SVI("enum E:unsigned char {ZERO}; constexpr enum E x={(enum E)256};\n"
+                "enum S:signed char {S_ZERO}; constexpr enum S y={(enum S)255};\n"
+                "static unsigned a=x; static int b=y;\n"
+                "enum W:__int128 {NEG=-1}; constexpr enum W w={NEG};\n"
+                "static __int128 c=w; return a==0&&b==-1&&c==-1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant pointer negation and braced symbolic addresses", __LINE__,
+            SVI("static int target=7; constexpr int* zero={nullptr};\n"
+                "constexpr int* symbol={&target}; static int a=!zero;\n"
+                "static int b=!symbol; static const int* copy=symbol;\n"
+                "return a==1&&b==0&&copy==&target&&*copy==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant flexible member views copy only actual storage", __LINE__,
+            SVI("struct I {double n; char c; char tail[];}; struct J {double n; char c;};\n"
+                "constexpr union U {struct I i; struct J j;} u={.i={3,7}};\n"
+                "constexpr struct J x=u.j; static struct J copy=x;\n"
+                "static unsigned char padding=((const unsigned char*)&u.i)[15];\n"
+                "return copy.n==3&&copy.c==7&&padding==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "wide bitfields retain all static and constexpr bits", __LINE__,
+            SVI("struct B {unsigned __int128 x:128;};\n"
+                "constexpr struct B b={.x=~(unsigned __int128)0};\n"
+                "static struct B copy=b; static unsigned __int128 value=b.x;\n"
+                "struct B local={.x=value}; local.x=copy.x;\n"
+                "return sizeof(copy)==16&&copy.x==value&&local.x==value;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric reinterpretation: typed copies retain omitted opaque values", __LINE__,
+            SVI("constexpr union U {struct P {void* p; _Type t;} p; struct B {void* p; _Type t;} b;} u={.p={}};\n"
+                "constexpr struct B value=u.b; static struct B copy=value;\n"
+                "_Static_assert(value.p==nullptr&&value.t.is_invalid);\n"
+                "return copy.p==nullptr&&copy.t.is_invalid;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric reinterpretation: overwritten metadata no longer supplies bytes", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits; struct B {unsigned low;} b;}\n"
+                "u={.t=int,.b.low=7}; static struct B copy=u.b;\n"
+                "_Static_assert(u.b.low==7); constexpr union U whole={.t=int,.bits=9};\n"
+                "_Static_assert(whole.bits==9); return copy.low==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric reinterpretation: overwritten bits do not read opaque metadata", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned bit:1;} u={.t=int,.bit=1};\n"
+                "_Static_assert(u.bit==1); static unsigned bit=u.bit; return bit==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric reinterpretation: Any views preserve typed metadata and numeric payloads", __LINE__,
+            SVI("constexpr union U {_Any a; struct B {_Type tag; int value;} b;} u={.a=7};\n"
+                "_Static_assert(u.b.tag==int&&u.b.value==7); static struct B copy=u.b;\n"
+                "return copy.tag==int&&copy.value==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "numeric reinterpretation: typed copies retain absolute pointer values", __LINE__,
+            SVI("constexpr union U {int* p; struct B {int* p;} b;} u={.p=(int*)7};\n"
+                "constexpr struct B value=u.b; static struct B copy=value;\n"
+                "_Static_assert(value.p==(int*)7); return copy.p==(int*)7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant slices: evaluated aggregates lower count and relocated data", __LINE__,
+            SVI("static int a[4]={3,5,7,9}; constexpr const int part[:]=a[1:4];\n"
+                "static const int tail[:]=part[1:]; static const int head[:]=part[:1];\n"
+                "static const int empty[:]=a[4:4]; static const int whole[:]=a;\n"
+                "return tail.count==2&&tail.data==a+2&&tail[1]==9&&head[0]==5\n"
+                "&&empty.count==0&&empty.data==a+4&&whole.count==4&&whole.data==a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant slices: runtime bounds retain their effects", __LINE__,
+            SVI("int calls; int low(void){calls++;return 1;} static int a[4]={3,5,7,9};\n"
+                "struct S {int part[:]; int marker;} s={a[low():3],7};\n"
+                "return calls==1&&s.part.count==2&&s.part.data==a+1&&s.marker==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant slices: runtime numeric bases retain their effects", __LINE__,
+            SVI("int calls; int* base(void){calls++;return (int*)16;}\n"
+                "struct S {int part[:]; int marker;} s={base()[1:3],7};\n"
+                "return calls==1&&s.part.count==2&&s.part.data==(int*)20&&s.marker==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static subobject ranges: overwritten arithmetic is not evaluated", __LINE__,
+            SVI("if(0){struct I {int a,b;}; const struct S {struct I i; int unrelated;}\n"
+                "s={{1/0,2},1/0,.i.a=9}; static struct I copy=s.i;\n"
+                "if(copy.a!=9||copy.b!=2) return 0;} return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static subobject ranges: partially overwritten numeric storage", __LINE__,
+            SVI("constexpr union U {unsigned long raw; struct B {unsigned a:3; unsigned b:5;} b;}\n"
+                "u={.raw=255,.b.a=2}; static unsigned long copy=u.raw;\n"
+                "return copy==250;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static subobject ranges: Any payload retains symbols and metadata", __LINE__,
+            SVI("static int target; struct P {int* p;}; struct M {_Type t;};\n"
+                "constexpr _Any pointer=(struct P){&target}, metadata=(struct M){long};\n"
+                "static struct P copy=pointer.as(struct P); static struct M tag=metadata.as(struct M);\n"
+                "return tag.t==long&&copy.p==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static subobject ranges: unrelated arithmetic is not evaluated", __LINE__,
+            SVI("if(0){const struct S {int value; int unrelated;} s={7,1/0};\n"
+                "static int copy=s.value; if(copy!=7) return 0;} return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static subobject ranges: sparse array selection retains relocations", __LINE__,
+            SVI("static int target; struct I {int n; int* p;};\n"
+                "constexpr struct I a[16385]={[16384]={9,&target}};\n"
+                "static struct I copy=a[16384]; return copy.n==9&&copy.p==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: bitfield reads preserve static float rounding", __LINE__,
+            SVI("struct B {unsigned n:25;};\n"
+                "static const struct B bits={(unsigned)((16777216.f+1.f)-16777216.f)};\n"
+                "static int direct=bits.n; static int indirect=(&bits)->n;\n"
+                "return bits.n==0&&direct==0&&indirect==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: direct and indirect bitfield reads agree", __LINE__,
+            SVI("struct B {unsigned a:3; int b:5;}; constexpr struct B bits[2]={{1,2},{5,-3}};\n"
+                "constexpr const struct B* p=bits+1;\n"
+                "static int direct=bits[1].b; static int indirect=p->b;\n"
+                "static int sum=bits[1].b+p->b;\n"
+                "return direct==-3&&indirect==-3&&sum==-6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: repeated representation copies retain padding", __LINE__,
+            SVI("struct I {unsigned char c; int n;};\n"
+                "constexpr union U {unsigned char bytes[8]; struct I i;} u={.bytes={1,2,3,4,5,6,7,8}};\n"
+                "constexpr struct I first=u.i; constexpr struct I copies[2]={first,first};\n"
+                "constexpr const struct I* p=copies+1; constexpr struct I second=*p;\n"
+                "static union U result={.i=second};\n"
+                "return result.bytes[0]==1&&result.bytes[1]==2&&result.bytes[3]==4&&result.bytes[7]==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: recovered paths retain large and deep indices", __LINE__,
+            SVI("struct I {int a,b;}; constexpr struct I a[1025]={[1024]={3,4}};\n"
+                "constexpr const struct I* p=a+1024; constexpr struct I copy=p[0];\n"
+                "constexpr int deep[1][1][1][1][1][1][2]={{{{{{{5,6}}}}}}};\n"
+                "constexpr const int* q=&deep[0][0][0][0][0][0][1];\n"
+                "_Static_assert(p->b==4&&copy.a==3&&q[-1]==5);\n"
+                "static struct I stored=copy; static int x=q[0]; return stored.b==4&&x==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: pointer arrays preserve symbolic elements", __LINE__,
+            SVI("static int target; constexpr int* a[1025]={[1024]=&target};\n"
+                "constexpr int* const* p=a+1024; _Static_assert(p[0]==&target);\n"
+                "static const int* q=p[0]; return q==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: arrow bitfields retain width and sign", __LINE__,
+            SVI("struct B {unsigned a:3; int b:5;}; constexpr struct B bits={5,-3};\n"
+                "constexpr const struct B* p=&bits; _Static_assert(p->a==5&&p->b==-3);\n"
+                "static int b=p->b; static unsigned a=p->a; return a==5&&b==-3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: pointer casts read numeric representation", __LINE__,
+            SVI("constexpr unsigned x=0x04030201; constexpr const unsigned char* p=(const unsigned char*)&x;\n"
+                "_Static_assert(p[0]==1&&p[3]==4); static unsigned char b=p[2]; return b==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: pointer and slice reads agree with runtime", __LINE__,
+            SVI("constexpr int a[4]={3,5,7,9}; constexpr const int* p=a+2;\n"
+                "constexpr const int part[:]=a[1:3]; constexpr int x=p[-1]+part[1]+*p;\n"
+                "_Static_assert(x==19); static int copy=x; return copy==19&&part[0]==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: pointer selected aggregates preserve metadata and relocations", __LINE__,
+            SVI("static int target; struct I {_Type t; int* p; int n;};\n"
+                "constexpr struct I a[2]={{int,&target,3},{long,&target,7}};\n"
+                "constexpr const struct I* p=a+1; constexpr struct I copy=p[0];\n"
+                "_Static_assert(p->n==7&&copy.t==long&&copy.p==&target);\n"
+                "static struct I stored=copy; return stored.n==7&&stored.t==long&&stored.p==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: reflection names survive union views", __LINE__,
+            SVI("struct S {int hello;};\n"
+                "constexpr union U {struct __builtin_Field a,b;} u={.a=(struct S).field(0)};\n"
+                "constexpr struct __builtin_Field f=(struct S).field(u.b.name);\n"
+                "_Static_assert(f.type==int); return f.name.count==5&&f.offset==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: union padding survives static and runtime copies", __LINE__,
+            SVI("constexpr union U {unsigned char bytes[8]; struct I {unsigned char c; int n;} i;}\n"
+                "u={.bytes={1,2,3,4,5,6,7,8}}; constexpr struct I x=u.i;\n"
+                "constexpr union U alias={.i=x}; static union U copy=alias; union U local={.i=x};\n"
+                "_Static_assert(alias.bytes[1]==2&&alias.bytes[2]==3&&alias.bytes[3]==4);\n"
+                "return copy.bytes[7]==8&&local.bytes[1]==2&&local.bytes[2]==3&&local.bytes[3]==4&&local.bytes[7]==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constant object views: comma preserves metadata and symbolic siblings", __LINE__,
+            SVI("static int target; struct I {_Type t; int* p;};\n"
+                "constexpr union U {struct I a,b;} u={.a={int,&target}};\n"
+                "constexpr struct I x=(0,u).b; static struct I copy=x;\n"
+                "_Static_assert(x.t==int&&x.p==&target); return copy.t==int&&copy.p==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer paths: partial templates preserve adjacent bitfield bytes", __LINE__,
+            SVI("struct S {unsigned a:3,b:5; int c,d,e,f,x;};\n"
+                "int test(unsigned n){struct S s={.a=5,.b=n,.c=1,.d=2,.e=3,.f=4,.x=n};\n"
+                "return s.a==5&&s.b==n&&s.c==1&&s.d==2&&s.e==3&&s.f==4&&s.x==n;}\n"
+                "return test(7)&&test(17);\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer paths: selected aggregate preserves updates and symbolic siblings", __LINE__,
+            SVI("static int target; struct I {int a,b; int* p;}; struct S {struct I x; int z;};\n"
+                "constexpr struct S s={1,2,&target,3,.x.b=7}; constexpr struct I x=s.x;\n"
+                "_Static_assert(x.a==1&&x.b==7&&x.p==&target); static struct I copy=x;\n"
+                "return copy.a==1&&copy.b==7&&copy.p==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "field paths: extended members, base conversions and method receivers", __LINE__,
+            SVI("struct L {int value; int bump(_Self* s){return ++s.value;}};\n"
+                "struct S {int pad; struct {int pad2; struct {struct {struct {struct {struct {struct L;};};};};};};};\n"
+                "static struct S global={.value=7}; static int *p=&global.value;\n"
+                "int read(struct L* l){return l.value;} struct S local={.value=4};\n"
+                "int r=local.bump(); return r==5&&read(&local)==5&&*p==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "field paths: nested bitfield layout in constexpr and runtime storage", __LINE__,
+            SVI("struct S {int pad; union {unsigned raw; struct {unsigned a:3; signed b:5;};};};\n"
+                "constexpr struct S c={.a=5,.b=-3}; _Static_assert(c.a==5&&c.b==-3);\n"
+                "static struct S copy=c; struct S s={.a=2,.b=-4}; s.a+=3; ++s.b;\n"
+                "return copy.a==5&&copy.b==-3&&s.a==5&&s.b==-3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer paths: whole-subobject boundaries survive evaluation and lowering", __LINE__,
+            SVI("struct S {struct I {int a,b;} x; int z;};\n"
+                "constexpr struct S s={.x.b=7,.x={.a=1},.z=9};\n"
+                "_Static_assert(s.x.a==1&&s.x.b==0&&s.z==9); static struct S copy=s;\n"
+                "int f(int n){struct S r={.x={.a=n},.x.b=n+1,.x={},.z=n}; return r.x.a==0&&r.x.b==0&&r.z==n;}\n"
+                "return copy.x.a==1&&copy.x.b==0&&copy.z==9&&f(3);\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer paths: extended residual path survives partial template", __LINE__,
+            SVI("int f(int x){int a[1025]={[0]=1,[1]=2,[2]=3,[3]=4,[1024]=x}; return a[0]+a[1]+a[2]+a[3]+a[1024];}\nreturn f(7)==17;\n"),
+            .exit_code = 1, .expect_template = 1, .expect_runtime_stores = 1,
+        },
+        {
+            "initializer paths: nested template composes extended paths", __LINE__,
+            SVI("int f(int x){int a[1][1][1][1][1][1][5]={{{{{{{1,2,x,4,5}}}}}}}; return a[0][0][0][0][0][0][2];}\nreturn f(7)==7;\n"),
+            .exit_code = 1, .expect_template = 1, .expect_runtime_stores = 1,
+        },
+        {
+            "constexpr union: slice element addresses retain array identity", __LINE__,
+            SVI("static int a[4]; constexpr union U {int s[:];} u={.s=a[1:3]};\n"
+                "_Static_assert(&u.s[1]==&a[2]&&&u.s[2]-&u.s[0]==2);\n"
+                "static const int* p=&u.s[1]; return p==&a[2];\n"),
+            .exit_code = 1,
+        },
+        {
+            "static reflection: aggregate results and resliced names", __LINE__,
+            SVI("struct S {int x;}; constexpr _Type T=struct S;\n"
+                "static const char name[:]=T.name; static const char tail[:]=T.name[1:];\n"
+                "static struct __builtin_Field field=T.field(0);\n"
+                "return name.count==8&&tail.count==7&&field.name.count==1&&field.name[0]=='x'&&field.type==int;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: reflection slice retains literal identity", __LINE__,
+            SVI("constexpr union U {const char name[:]; struct V {unsigned long count; const char* p;} v;} u={.name=int.name};\n"
+                "_Static_assert(u.v.count==3&&u.v.p==u.name.data);\n"
+                "static const char* p=u.v.p; return p[0]=='i'&&p[1]=='n'&&p[2]=='t';\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: slice counts and pointers have constant views", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:]; struct V {unsigned long count; int* p;} v;} u={.s=a[1:3]};\n"
+                "_Static_assert(u.v.count==2&&u.v.p==&a[1]);\n"
+                "static unsigned long count=u.v.count; static int* p=u.v.p; return count==2&&p==&a[1];\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr slices: count and data survive reslicing", __LINE__,
+            SVI("static int a[4]; constexpr int s[:]=(a[:])[1:3];\n"
+                "_Static_assert(s.count==2&&s.data==&a[1]);\n"
+                "constexpr int t[:]=s[1:]; _Static_assert(t.count==1&&t.data==&a[2]);\n"
+                "static unsigned long count=s.count; static const int* p=s.data; return count==2&&p==&a[1];\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr slices: absolute pointer and array cast fields", __LINE__,
+            SVI("static int a[3]; constexpr int s[:]=(int[:])a;\n"
+                "_Static_assert(s.count==3&&s.data==a);\n"
+                "constexpr int n[:]=((int*)6)[:2]; _Static_assert(n.count==2&&n.data==(int*)6);\n"
+                "static const int* p=n.data; return p==(int*)6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: complete overwrite replaces a slice pointer", __LINE__,
+            SVI("constexpr union U {int s[:]; struct V {unsigned long count; int* p;} v;} u={.s=((int*)6)[:2],.v.p=(int*)7};\n"
+                "static struct V v=u.v; return v.count==2&&v.p==(int*)7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: complete slice representation remains copyable", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:]; struct V {unsigned long count; int* p;} v;} u={.s=a[1:3]};\n"
+                "static struct V v=u.v; return v.count==2&&v.p==&a[1];\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: large view accepts complete relocations", __LINE__,
+            SVI("static int a,b; constexpr union U {struct A {int* p; unsigned long x; int* q;} a; struct B {int* p; unsigned x[2]; int* q;} b;} u={.a={&a,7,&b}};\n"
+                "static struct B copy=u.b; return copy.p==&a&&copy.x[0]==7&&copy.x[1]==0&&copy.q==&b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: later writes make a clipped relocation concrete", __LINE__,
+            SVI("static int a; constexpr union U {struct A {unsigned long x; int* p;} a; struct B {unsigned x[3];} b;} u={.a={7,&a},.b.x[2]=9};\n"
+                "static struct B copy=u.b; return copy.x[0]==7&&copy.x[1]==0&&copy.x[2]==9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: containing overwrite replaces an earlier relocation", __LINE__,
+            SVI("static int a; union U {struct A {unsigned long x; int* p;} a; struct B {unsigned x[3];} b;};\n"
+                "constexpr struct H {union U u;} h={.u={.a={7,&a}},.u={.b={{3,4,5}}}};\n"
+                "static struct B copy=h.u.b; return copy.x[0]==3&&copy.x[1]==4&&copy.x[2]==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: packed aggregate preserves an unaligned relocation", __LINE__,
+            SVI("static int a; struct __attribute__((packed)) A {char x; int* p;};\n"
+                "constexpr union U {struct A a; char bytes[9];} u={.a={7,&a}};\n"
+                "static struct A copy=u.a; return copy.x==7&&copy.p==&a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: selecting a bitfield does not copy its aggregate", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct B {unsigned pad:3; int x:5;} b;} u={.p=&a,.b.x=-3,.b.pad=5};\n"
+                "static int x=(0,u.b).x; static unsigned pad=(1?u.b:u.b).pad;\n"
+                "return x==-3&&pad==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: small numeric aggregate view remains copyable", __LINE__,
+            SVI("constexpr union U {unsigned long raw; struct B {unsigned low;} b;} u={.raw=7};\n"
+                "static struct B b=u.b; constexpr struct B c=u.b;\n"
+                "_Static_assert(c.low==7); return b.low==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: complete relocation survives aggregate views", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct B {int* p;} b;} u={.p=&a};\n"
+                "static struct B b=u.b; constexpr struct B c=u.b;\n"
+                "_Static_assert(c.p==&a); return b.p==&a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: high numeric pointer agrees with direct cast", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.bits=~0ul};\n"
+                "_Static_assert(u.p==(void*)~0ul); _Static_assert((void*)~0ul!=(void*)0);\n"
+                "_Static_assert((void*)~0ul==(void*)(unsigned __int128)~0ul);\n"
+                "static int same=u.p==(void*)~0ul; return same;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: masked reads preserve remaining numeric bits", __LINE__,
+            SVI("constexpr union U {unsigned long raw; struct B {unsigned a:3,b:5;} bits;} u={.raw=255,.bits.a=2};\n"
+                "_Static_assert(u.bits.a==2&&u.bits.b==31); static unsigned b=u.bits.b;\n"
+                "volatile unsigned v=255; union U local={.raw=v,.bits.a=2};\n"
+                "return b==31&&local.bits.a==2&&local.bits.b==31;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static union: floating views reinterpret numeric storage", __LINE__,
+            SVI("constexpr union U {unsigned long bits; double d;} u={.bits=0x3ff0000000000000ul};\n"
+                "static const double d=u.d; static union U copy={.d=d}; return d==1.0&&copy.bits==u.bits;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: bit masks survive nesting and Any views", __LINE__,
+            SVI("static int a; union U {int* p; struct B {unsigned pad:3; int x:5;} b;};\n"
+                "constexpr struct H {union U u[2];} h={.u[1]={.p=&a,.b.x=-3,.b.pad=5}};\n"
+                "_Static_assert(h.u[1].b.x==-3&&h.u[1].b.pad==5);\n"
+                "constexpr _Any boxed=h.u[1]; _Static_assert(boxed.as(union U).b.x==-3);\n"
+                "static int x=boxed.as(union U).b.x; static unsigned pad=h.u[1].b.pad;\n"
+                "return x==-3&&pad==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: overwritten bitfield does not read older relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned bit:1;} u={.p=&a,.bit=1};\n"
+                "_Static_assert(u.bit==1); static unsigned bit=u.bit; return bit==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: partial numeric overwrite forms a pointer", __LINE__,
+            SVI("constexpr union U {int* p; unsigned long bits; unsigned bit:1;} u={.bits=6,.bit=1};\n"
+                "_Static_assert(u.p==(int*)7); static int* p=u.p; return p==(int*)7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: positional value followed by designator", __LINE__,
+            SVI("constexpr union U {int x; long y;} u={3,.y=7};\n"
+                "_Static_assert(u.y==7); static union U s={3,.y=9};\n"
+                "union U local={3,.y=11}; return u.y==7&&s.y==9&&local.y==11;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: nested designators retain adjacent fields", __LINE__,
+            SVI("constexpr union U {struct S {int x,y;} s; long bits;} u={.s.x=3,.s.y=7,.s.x=5};\n"
+                "_Static_assert(u.s.x==5&&u.s.y==7); static union U copy=u;\n"
+                "union U local={.s.x=3,.s.y=7,.s.x=5}; return copy.s.x==5&&copy.s.y==7&&local.s.y==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: final pointer replaces earlier relocation", __LINE__,
+            SVI("static int a,b; constexpr union U {int* p; int* q;} u={.p=&a,.q=&b};\n"
+                "_Static_assert(u.p==&b); static union U copy=u; static int* p=u.p;\n"
+                "return copy.p==&b&&p==&b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: genuine type metadata survives aggregate views", __LINE__,
+            SVI("struct S {int a,b;}; constexpr union U {_Type t; unsigned long bits;} u={.t=struct S};\n"
+                "_Static_assert(u.t.sizeof_==sizeof(struct S)); static _Type t=u.t;\n"
+                "constexpr struct H {_Type types[2];} h={{int,struct S}};\n"
+                "_Static_assert(h.types[1].sizeof_==sizeof(struct S));\n"
+                "constexpr _Any boxed=u.t; _Static_assert(boxed.type==_Type);\n"
+                "_Static_assert(boxed.as(_Type).sizeof_==sizeof(struct S)); return t==struct S;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: zero metadata and final type overwrite", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} zero={.bits=0};\n"
+                "_Static_assert(zero.t.is_invalid); static _Type none=zero.t;\n"
+                "constexpr union U u={.bits=4096,.t=int}; _Static_assert(u.t==int);\n"
+                "constexpr union U v={.t=int,.bits=0}; _Static_assert(v.t.is_invalid);\n"
+                "constexpr _Any empty={}; _Static_assert(empty.type.is_invalid);\n"
+                "return none.is_invalid&&u.t==int;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: absolute pointer casts preserve pointer width", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.bits=~0ul};\n"
+                "_Static_assert((unsigned long)u.p==~0ul);\n"
+                "_Static_assert((unsigned __int128)u.p==(unsigned __int128)~0ul);\n"
+                "_Static_assert((unsigned long)(void*)-1==~0ul); return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: explicit pointer conversion uses the requested unsigned type", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.bits=(unsigned long)(void*)-1};\n"
+                "_Static_assert(u.bits>1ul); _Static_assert(u.bits==~0ul);\n"
+                "static unsigned long bits=u.bits; return bits>1ul;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: signed and full width bitfields", __LINE__,
+            SVI("constexpr union S {__int128 bits:100; unsigned __int128 raw;} s={.bits=(1ui128<<99)|7};\n"
+                "_Static_assert(s.bits==-((1i128<<99)-7));\n"
+                "constexpr union U {unsigned __int128 bits:128; unsigned __int128 raw;} u={.bits=~0ui128};\n"
+                "_Static_assert(u.bits==~0ui128&&u.raw==~0ui128);\n"
+                "static __int128 n=s.bits; return n==s.bits;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: bitfield crossing the 64 bit boundary", __LINE__,
+            SVI("constexpr union U {struct B {unsigned __int128 a:65,b:63;} b; unsigned __int128 raw;} u={.b={1ui128<<64,7}};\n"
+                "_Static_assert(u.b.a==(1ui128<<64)&&u.b.b==7);\n"
+                "_Static_assert(u.raw==((7ui128<<65)|(1ui128<<64))); static unsigned __int128 n=u.b.b; return n==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: explicit numeric conversion produces numeric storage", __LINE__,
+            SVI("constexpr union U {int* p; unsigned long bits;} u={.bits=(unsigned long)(int*)7};\n"
+                "_Static_assert(u.bits==7); static unsigned long bits=u.bits; return bits==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: integer bytes form an absolute pointer", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.bits=7};\n"
+                "_Static_assert(u.p==(void*)7); static void* p=u.p; return p==(void*)7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: float punning agrees with static reads", __LINE__,
+            SVI("constexpr union U {float f; unsigned bits;} u={.f=1.0f};\n"
+                "_Static_assert(u.bits==0x3f800000u); static unsigned bits=u.bits;\n"
+                "constexpr union U v={.bits=0x3f800000u}; _Static_assert(v.f==1.0f); return bits==v.bits;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: nested aggregate views agree with static reads", __LINE__,
+            SVI("constexpr union U {struct A {int x,y;} a; struct B {unsigned x,y;} b;} u={.a={3,4}};\n"
+                "_Static_assert(u.b.x==3&&u.b.y==4); static struct B b=u.b;\n"
+                "constexpr _Any boxed=u.b; _Static_assert(boxed.as(struct B).y==4); return b.x==3&&b.y==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr union: wide bitfield retains upper bits", __LINE__,
+            SVI("constexpr union U {unsigned __int128 bits:100; unsigned __int128 raw;} u={.bits=(1ui128<<120)|(1ui128<<90)|7};\n"
+                "_Static_assert(u.bits==((1ui128<<90)|7)); _Static_assert(u.raw==((1ui128<<90)|7));\n"
+                "static unsigned __int128 bits=u.bits; return bits==u.raw;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: overwritten bitfields preserve adjacent fields", __LINE__,
+            SVI("constexpr struct B {unsigned x:3,y:5;} b={.x=1,.y=17,.x=5};\n"
+                "_Static_assert(b.x==5&&b.y==17); constexpr _Any boxed=b;\n"
+                "_Static_assert(boxed.as(struct B).x==5&&boxed.as(struct B).y==17);\n"
+                "static unsigned n=boxed.as(struct B).x+boxed.as(struct B).y; return n;\n"),
+            .exit_code = 22,
+        },
+        {
+            "static Any: later aggregate zeroes earlier bytes", __LINE__,
+            SVI("constexpr struct S {struct P {int x,y;} p;} s={.p={3,4},.p={7}};\n"
+                "_Static_assert(s.p.x==7&&s.p.y==0); constexpr _Any boxed=s.p;\n"
+                "_Static_assert(boxed.as(struct P).x==7&&boxed.as(struct P).y==0);\n"
+                "static struct P p=boxed.as(struct P); return p.x==7&&p.y==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: overwritten symbolic union payload agrees with constexpr", __LINE__,
+            SVI("static int a; constexpr struct S {union U {int* p; unsigned long bits;} u;} s={.u={.p=&a},.u={.bits=0}};\n"
+                "_Static_assert(s.u.bits==0); constexpr _Any boxed=s.u;\n"
+                "_Static_assert(boxed.as(union U).bits==0);\n"
+                "static unsigned long n=boxed.as(union U).bits; return n==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: overwritten boxed pointer becomes scalar bytes", __LINE__,
+            SVI("static int a; constexpr struct S {_Any x;} s={.x=&a,.x=7};\n"
+                "_Static_assert(s.x.as(int)==7); static int n=s.x.as(int); return n==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: overwritten pointer becomes null", __LINE__,
+            SVI("static int a; constexpr struct S {int* p;} s={.p=&a,.p=nullptr};\n"
+                "_Static_assert(s.p==nullptr); constexpr _Any boxed=s;\n"
+                "_Static_assert(boxed.as(struct S).p==nullptr); return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: scalar compound literal payload agrees with constexpr", __LINE__,
+            SVI("struct P {int x,y;}; constexpr _Any boxed=(struct P){3,4};\n"
+                "_Static_assert(boxed.as(struct P).x==3&&boxed.as(struct P).y==4);\n"
+                "static struct P p=boxed.as(struct P); return p.x==3&&p.y==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: qualifiers and unselected views", __LINE__,
+            SVI("const _Any boxed=7; static int x=boxed.as(const int);\n"
+                "static long y=1?7:boxed.as(long); return x==7&&y==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: tag reflection folds into static scalars", __LINE__,
+            SVI("const _Any boxed=7; static _Type tag=boxed.type;\n"
+                "static unsigned long size=boxed.type.sizeof_; static int integer=boxed.type.is_integer;\n"
+                "return tag==int&&size==sizeof(int)&&integer;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: payload addresses preserve storage identity", __LINE__,
+            SVI("constexpr _Any boxed=7; static const void* p=boxed.payload;\n"
+                "constexpr const void* q=boxed.payload;\n"
+                "_Static_assert((const char*)q-(const char*)&boxed==8);\n"
+                "return p==q&&*(const int*)p==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: scalar null enum and type payloads", __LINE__,
+            SVI("enum E {e=42}; static _Any i=7,f=1.5f,n=nullptr,t=int,v=(enum E)e,empty={};\n"
+                "return i.type==int&&i.as(int)==7&&f.type==float&&f.as(float)==1.5f\n"
+                "&&n.type==typeof(nullptr)&&n.as(typeof(nullptr))==nullptr\n"
+                "&&t.type==_Type&&t.as(_Type)==int&&v.type==enum E&&v.as(enum E)==e&&empty.type.is_invalid;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: pointer string and function relocations", __LINE__,
+            SVI("static int a[2]={3,4}; int f(void){return 7;}\n"
+                "static _Any p=&a[1],text=\"hello\"+1,fn=f;\n"
+                "return p.type==int*&&p.as(int*)==&a[1]&&*p.as(int*)==4\n"
+                "&&text.as(char*)[0]=='e'&&fn.as(int(*)(void))()==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: const copies nested arrays and overwritten relocations", __LINE__,
+            SVI("static int a[2]={3,4}; const _Any boxed=&a[1];\n"
+                "static _Any copy=boxed; static struct S {_Any x[3];} s={.x={boxed,7,\"hi\"},.x[0]={}};\n"
+                "return copy.as(int*)==&a[1]&&s.x[0].type.is_invalid&&s.x[1].as(int)==7&&s.x[2].as(char*)[1]=='i';\n"),
+            .exit_code = 1,
+        },
+        {
+            "static Any: aggregate payload and constant view extraction", __LINE__,
+            SVI("struct P {int* p;}; static int a[2]; constexpr _Any boxed=(struct P){&a[1]};\n"
+                "static _Any copy=boxed; static int* p=boxed.as(struct P).p;\n"
+                "constexpr long d=boxed.as(struct P).p-&a[0];\n"
+                "return copy.type==struct P&&copy.as(struct P).p==p&&p==a+1&&d==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: qualified member addresses require no reads", __LINE__,
+            SVI("struct V {volatile int a,b;} v; struct A {_Atomic(int) a,b;} a;\n"
+                "constexpr long vd=&v.b-&v.a, ad=&a.b-&a.a;\n"
+                "_Static_assert(vd==1&&ad==1);\n"
+                "static volatile int* vp=&v.b; static _Atomic(int)* ap=&a.b;\n"
+                "return vp==&v.b&&ap==&a.b&&vd==ad;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: Any payload retains address identity", __LINE__,
+            SVI("static int a[4]; constexpr _Any box=&a[3];\n"
+                "constexpr long d=box.as(int*)-&a[0]; _Static_assert(d==3);\n"
+                "static int* p=box.as(int*); return p==a+3&&d==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: unsigned integer addresses retain all bits", __LINE__,
+            SVI("static void* p=(void*)0xffffffffffffffffull;\n"
+                "constexpr void* q=(void*)0xffffffffffffffffull;\n"
+                "_Static_assert(q==(void*)-1); return p==q;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: wide integer addresses truncate to pointer bits", __LINE__,
+            SVI("static void* p=(void*)((1ui128<<100)|0xffffffffffffffffui128);\n"
+                "constexpr void* q=(void*)((1ui128<<100)|0xffffffffffffffffui128);\n"
+                "_Static_assert(q==(void*)-1); return p==q;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: runtime template retains high address bits", __LINE__,
+            SVI("int f(void){struct S {void* p; int a,b,c,d;} s={(void*)0xffffffffffffffffull,1,2,3,4};\n"
+                "return s.p==(void*)-1&&s.a==1&&s.d==4;} return f();\n"),
+            .exit_code = 1, .expect_template = 1,
+        },
+        {
+            "symbolic pointers: nullptr aggregate members and array elements", __LINE__,
+            SVI("constexpr struct S {typeof(nullptr) n;} s={nullptr};\n"
+                "constexpr typeof(nullptr) a[2]={nullptr,nullptr};\n"
+                "_Static_assert(s.n==nullptr); _Static_assert(a[1]==nullptr); return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: unselected branches need no relocation", __LINE__,
+            SVI("static int a,b;\n"
+                "static long d=1?0:&b-&a;\n"
+                "static int no=0&&(&a==&b); static int yes=1||(&b-&a);\n"
+                "static int same=0?(&a==&b):1; return !d&&!no&&yes&&same;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: nested overwritten and zero aggregate members", __LINE__,
+            SVI("static int a[4];\n"
+                "constexpr struct P {struct {int* p;} v[2]; int* zero;} s={.v[0].p=&a[0],.v[1].p=&a[1],.v[1].p=&a[3]};\n"
+                "constexpr long d=s.v[1].p-s.v[0].p; _Static_assert(d==3);\n"
+                "_Static_assert(s.zero==nullptr); return d;\n"),
+            .exit_code = 3,
+        },
+        {
+            "symbolic pointers: numeric address ordering uses unsigned pointer bits", __LINE__,
+            SVI("_Static_assert((void*)-1>(void*)0);\n"
+                "_Static_assert(!((void*)-1<(void*)0));\n"
+                "_Static_assert((void*)-1>=(void*)0);\n"
+                "_Static_assert(!((void*)-1<=(void*)0));\n"
+                "static int greater=(void*)-1>(void*)0; return greater;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: aggregate pointer members retain their symbols", __LINE__,
+            SVI("struct S {int a,b;} s;\n"
+                "constexpr struct P {int* p; int* q;} aliases={&s.a,&s.b};\n"
+                "constexpr long d=aliases.q-aliases.p; _Static_assert(d==1);\n"
+                "static int ordered=aliases.p<aliases.q; return ordered && d==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: pointer array elements retain their symbols", __LINE__,
+            SVI("static int a[4]; constexpr int* aliases[2]={a,a+3};\n"
+                "constexpr long d=aliases[1]-aliases[0]; _Static_assert(d==3);\n"
+                "static long n=aliases[1]-aliases[0]; return n;\n"),
+            .exit_code = 3,
+        },
+        {
+            "symbolic pointers: all comparisons at equal offsets", __LINE__,
+            SVI("union U {int a,b;} u;\n"
+                "_Static_assert(&u.a==&u.b); _Static_assert(!(&u.a!=&u.b));\n"
+                "_Static_assert(!(&u.a<&u.b)); _Static_assert(&u.a<=&u.b);\n"
+                "_Static_assert(!(&u.a>&u.b)); _Static_assert(&u.a>=&u.b);\n"
+                "static int flags[6]={&u.a==&u.b,&u.a!=&u.b,&u.a<&u.b,\n"
+                "&u.a<=&u.b,&u.a>&u.b,&u.a>=&u.b};\n"
+                "return flags[0] && !flags[1] && !flags[2] && flags[3] && !flags[4] && flags[5];\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: all comparisons at increasing offsets", __LINE__,
+            SVI("extern struct S {int a,b;} s;\n"
+                "_Static_assert(!(&s.a==&s.b)); _Static_assert(&s.a!=&s.b);\n"
+                "_Static_assert(&s.a<&s.b); _Static_assert(&s.a<=&s.b);\n"
+                "_Static_assert(!(&s.a>&s.b)); _Static_assert(!(&s.a>=&s.b));\n"
+                "static int flags[6]={&s.a==&s.b,&s.a!=&s.b,&s.a<&s.b,\n"
+                "&s.a<=&s.b,&s.a>&s.b,&s.a>=&s.b};\n"
+                "return !flags[0] && flags[1] && flags[2] && flags[3] && !flags[4] && !flags[5];\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: all comparisons at decreasing offsets", __LINE__,
+            SVI("extern struct S {int a,b;} s;\n"
+                "_Static_assert(!(&s.b==&s.a)); _Static_assert(&s.b!=&s.a);\n"
+                "_Static_assert(!(&s.b<&s.a)); _Static_assert(!(&s.b<=&s.a));\n"
+                "_Static_assert(&s.b>&s.a); _Static_assert(&s.b>=&s.a);\n"
+                "static int flags[6]={&s.b==&s.a,&s.b!=&s.a,&s.b<&s.a,\n"
+                "&s.b<=&s.a,&s.b>&s.a,&s.b>=&s.a};\n"
+                "return !flags[0] && flags[1] && !flags[2] && !flags[3] && flags[4] && flags[5];\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: const aliases arrow dereference and reversed addition", __LINE__,
+            SVI("extern struct S {int a[4];} s;\n"
+                "static struct S* const p=&s; static int* const q=&s.a[0];\n"
+                "static long d=&p->a[3]-(2+q); static long zero=&*q-q;\n"
+                "return d==1 && zero==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: string alias subtraction and comparisons", __LINE__,
+            SVI("constexpr const char* p=\"hello\";\n"
+                "constexpr long n=(p+5)-(p+1); _Static_assert(n==4);\n"
+                "_Static_assert(p+5>p); static int same=p==p; return same && n==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: function alias equality", __LINE__,
+            SVI("int target(void){return 7;} constexpr int (*p)(void)=target;\n"
+                "_Static_assert(p==p); _Static_assert(!(p!=p));\n"
+                "static int same=target==target; return same;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: nullptr and numeric pointer equality", __LINE__,
+            SVI("_Static_assert((int*)nullptr==(int*)0);\n"
+                "_Static_assert((int*)17==(int*)17); _Static_assert((int*)17!=(int*)18);\n"
+                "static int same=(int*)nullptr==(int*)0; return same;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: known object and function addresses differ from null", __LINE__,
+            SVI("extern int a; int target(void);\n"
+                "_Static_assert(&a!=nullptr); _Static_assert(nullptr!=&a);\n"
+                "_Static_assert(!(&a==nullptr)); _Static_assert(!(nullptr==&a));\n"
+                "_Static_assert(target!=nullptr); _Static_assert(!(nullptr==target));\n"
+                "static int object=&a!=nullptr; static int function=target!=nullptr;\n"
+                "return object && function;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: ternary selects the evaluable address", __LINE__,
+            SVI("extern int a[4]; extern int* unknown;\n"
+                "constexpr long n=(1 ? &a[3] : &a[0])-&a[0];\n"
+                "static long d=(0 ? unknown : a+2)-a; return n==3 && d==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: mutable alias reads keep runtime changes", __LINE__,
+            SVI("int a[4]; int* p=a; p=a+3; return p-a;\n"),
+            .exit_code = 3,
+        },
+        {
+            "symbolic pointers: volatile alias reads keep runtime changes", __LINE__,
+            SVI("int a[4]; int* volatile p=a; p=a+2; return p-a;\n"),
+            .exit_code = 2,
+        },
+        {
+            "symbolic pointers: atomic alias reads keep runtime changes", __LINE__,
+            SVI("int a[4]; _Atomic(int*) p=a; p=a+1; return p-a;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: static differences and comparisons", __LINE__,
+            SVI("struct S {int a,b; int x[4];}; static struct S s;\n"
+                "static long d=&s.b-&s.a; static long reverse=&s.a-&s.b;\n"
+                "static long span=(s.x+4)-(s.x+1);\n"
+                "static int equal=&s.a==&s.a; static int ordered=&s.a<&s.b;\n"
+                "return d==1 && reverse==-1 && span==3 && equal && ordered;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolic pointers: constexpr differences compose with arithmetic", __LINE__,
+            SVI("struct S {int a,b;}; extern struct S s;\n"
+                "constexpr long d=&s.b-&s.a; static long n=2*d+1;\n"
+                "_Static_assert(d==1); _Static_assert((&s.a==&s.a) && (&s.a!=&s.b));\n"
+                "return n;\n"),
+            .exit_code = 3,
+        },
+        {
+            "symbolic pointers: constexpr pointer aliases and nested members", __LINE__,
+            SVI("struct S {int a[2][3];}; static struct S s;\n"
+                "constexpr int* p=&s.a[1][2]; constexpr int* q=&s.a[0][1];\n"
+                "constexpr long d=p-q; _Static_assert(d==4);\n"
+                "static long n=(1 ? p : q)-(q+1); return n;\n"),
+            .exit_code = 3,
+        },
+        {
+            "symbolic pointers: casts change subtraction scale", __LINE__,
+            SVI("struct S {int a,b;}; extern struct S s;\n"
+                "constexpr long bytes=(char*)&s.b-(char*)&s.a;\n"
+                "_Static_assert(bytes==sizeof(int));\n"
+                "static long n=(&s.b+2)-(&s.a+1); return n;\n"),
+            .exit_code = 2,
+        },
+        {
+            "symbolic pointers: unknown runtime pointers still execute", __LINE__,
+            SVI("int f(int* p,int* q){return p-q;} int a[4];\n"
+                "return f(a+3,a)==3 && f(a,a+3)==-3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: ordinary const scalar initializes a static object", __LINE__,
+            SVI("const int source=7;\nstatic int value=source;\nreturn value;\n"),
+            .exit_code = 7,
+        },
+        {
+            "static data: parser-accepted const objects fold during lowering", __LINE__,
+            SVI("static const int n=7; static const double d=1.5;\n"
+                "static const int a[3]={2,4,6};\n"
+                "static const struct S {int x;unsigned b:4;} s={9,11};\n"
+                "static const int* const p=&a[1];\n"
+                "static int x=n+2; static double y=d*2;\n"
+                "static int z=a[2]+s.x+s.b; static const int* q=p;\n"
+                "return x==9 && y==3 && z==26 && q==&a[1] && *q==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: braced string initializes an entire character array", __LINE__,
+            SVI("char a[4]={\"abc\"}; signed char b[]={\"xy\",};\n"
+                "static unsigned short c[3]={u\"ab\"};\n"
+                "return a[0]=='a' && a[2]=='c' && a[3]==0 && sizeof(b)==3\n"
+                " && b[0]=='x' && b[1]=='y' && b[2]==0 && c[0]=='a' && c[1]=='b' && c[2]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: string-based scalar expressions remain array elements", __LINE__,
+            SVI("char a[1]={\"xyz\"[1]}; int b[1]={\"xyz\"[2]};\n"
+                "struct S {char c[1];} s={\"xyz\"[0]};\n"
+                "return a[0]=='y' && b[0]=='z' && s.c[0]=='x';\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static nullptr comparisons", __LINE__,
+            SVI("static int equal=(nullptr==nullptr); static int different=(nullptr!=nullptr);\n"
+                "static int converted=((void*)nullptr==(void*)0);\n"
+                "static int nonzero=((void*)1!=(void*)0);\n"
+                "return equal && !different && converted && nonzero;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: address comma expression nested in static arithmetic", __LINE__,
+            SVI("static int g; static int a=(&g,7); static int b=(&g,7)+1; return a==7 && b==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: constexpr bool bitfield retains canonical value", __LINE__,
+            SVI("constexpr struct S {_Bool b:1;} s={1}; static int n=s.b; return n==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: symbolic ternary nested in static arithmetic", __LINE__,
+            SVI("static int g; static int x=(&g ? 7 : 9)+1; return x==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static signed conversion checks the truncated value", __LINE__,
+            SVI("static signed char x=(signed char)-128.5;\n"
+                "static short y=(short)-32768.5f;\n"
+                "static int z=(int)-2147483648.75;\n"
+                "static signed char minimum=(signed char)-128.0;\n"
+                "return x==-128 && y==-32768 && z==(-2147483647-1) && minimum==-128;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: uint128 to float avoids double rounding", __LINE__,
+            SVI("static float x=(float)((1ui128<<100)+(1ui128<<76)+1); return x>0x1p100f;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: runtime uint128 to float avoids double rounding", __LINE__,
+            SVI("volatile unsigned __int128 n=(1ui128<<100)+(1ui128<<76)+1;\n"
+                "float x=(float)n; return x>0x1p100f;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: symbolic pointer under logical operators", __LINE__,
+            SVI("static int g; static int x=!!&g; static int y=(&g && 1); return x && y;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: invalid runtime slice in an unexecuted aggregate", __LINE__,
+            SVI("static int a[3]; struct S {int s[:]; int pad[4];};\n"
+                "int f(int n){if(n){struct S s={a[2:1],{1,2,3,4}};return s.pad[0];}return 7;}\n"
+                "return f(0)==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static rounded arithmetic under unary minus", __LINE__,
+            SVI("static double x=-(0.1+0.2); return x < -0.29 && x > -0.31;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static rounded arithmetic under logical not", __LINE__,
+            SVI("static int x=!(0.1+0.2); return x==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: constexpr bitfield static read", __LINE__,
+            SVI("constexpr struct S {unsigned n:3;} s={5}; static int x=s.n; return x==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static pointer read through arrow", __LINE__,
+            SVI("static int target[3]={3,5,7}; constexpr struct S {int* p;} s={&target[1]};\n"
+                "static int* p=(&s)->p; return p==&target[1]&&*p==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static pointer read through dereference", __LINE__,
+            SVI("static int target[3]={3,5,7}; constexpr int* p=&target[2];\n"
+                "static int* q=*(&p); return q==&target[2]&&*q==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static pointer read through indirect subscript", __LINE__,
+            SVI("static int target[3]={3,5,7}; constexpr int* a[2]={target,&target[2]};\n"
+                "constexpr int* const* p=a; static int* q=p[1];\n"
+                "return q==&target[2]&&*q==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static boolean and difference from indirect pointer reads", __LINE__,
+            SVI("static int target[3]; constexpr struct S {int* p;} s={&target[1]};\n"
+                "constexpr int* p=&target[2]; static _Bool b=(&s)->p;\n"
+                "static long d=*(&p)-(&s)->p; return b&&d==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static indirect function and null pointer reads", __LINE__,
+            SVI("int f(void){return 7;} constexpr struct S {int (*f)(void); int* p;} s={f,nullptr};\n"
+                "_Static_assert((&s)->f==f&&*(&s.p)==nullptr);\n"
+                "static _Bool b=(&s)->f; static int (*g)(void)=(&s)->f;\n"
+                "static int* p=*(&s.p); return b&&g()==7&&p==nullptr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "type metadata explicit predicates work in scalar contexts", __LINE__,
+            SVI("constexpr _Type t=int; constexpr int valid=!t.is_invalid;\n"
+                "_Static_assert(valid&&t.is_valid&&t==int);\n"
+                "_Type empty={}; _Type runtime=long; if(empty.is_valid) return 0;\n"
+                "if(!runtime.is_invalid&&runtime==long) return valid; return 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "unprototyped declaration accepts matching return definition", __LINE__,
+            SVI("int f(); int f(void){return 7;} return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "unprototyped redeclaration preserves defined prototype", __LINE__,
+            SVI("int f(int x){return x+1;} int f(); return f(6);\n"),
+            .exit_code = 7,
+        },
+        {
+            "unprototyped redeclaration preserves prototype before definition", __LINE__,
+            SVI("long f(long); long f(); _Static_assert(typeof(f).param_count==1);\n"
+                "long g(void){return f(7);} long f(long x){return x;} return g();\n"),
+            .exit_code = 7,
+        },
+        {
+            "empty-list definition agrees with empty prototype", __LINE__,
+            SVI("int f(void); int f(){return 7;} int f(void); return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "function redeclaration accepts callback parameter qualifiers", __LINE__,
+            SVI("int f(int (*cb)(const int));\n"
+                "int f(int (*cb)(int)){return cb(6);}\n"
+                "int g(int x){return x+1;} return f(g);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function redeclaration accepts compatible array pointer parameters", __LINE__,
+            SVI("int f(int (*p)[]);\n"
+                "int f(int (*p)[3]){return (*p)[2];}\n"
+                "int a[3]={3,5,7}; return f(&a);\n"),
+            .exit_code = 7,
+        },
+        {
+            "function redeclaration accepts compatible array pointer returns", __LINE__,
+            SVI("int (*f(void))[];\n"
+                "int (*f(void))[3]{static int a[3]={3,5,7}; return &a;}\n"
+                "return (*f())[2];\n"),
+            .exit_code = 7,
+        },
+        {
+            "function redeclaration preserves complete return array bounds", __LINE__,
+            SVI("int (*f(void))[3]{static int a[3]={3,5,7}; return &a;}\n"
+                "int (*f(void))[]; _Static_assert(sizeof(*f())==3*sizeof(int));\n"
+                "return (*f())[2];\n"),
+            .exit_code = 7,
+        },
+        {
+            "function definition preserves earlier complete return array bounds", __LINE__,
+            SVI("int (*f(void))[3];\n"
+                "int (*f(void))[]{static int a[3]={3,5,7}; return &a;}\n"
+                "_Static_assert(sizeof(*f())==3*sizeof(int)); return (*f())[2];\n"),
+            .exit_code = 7,
+        },
+        {
+            "function redeclaration preserves nested callback prototypes", __LINE__,
+            SVI("int f(int (*cb)(int)); int f(int (*cb)());\n"
+                "_Static_assert(typeof(f).param_type(0).pointee.param_count==1);\n"
+                "int f(int (*cb)(int)){return cb(6);} int g(int x){return x+1;} return f(g);\n"),
+            .exit_code = 7,
+        },
+        {
+            "unprototyped redeclaration completes return without erasing prototype", __LINE__,
+            SVI("int (*f(void))[]; int (*f())[3];\n"
+                "_Static_assert(sizeof(*f())==3*sizeof(int));\n"
+                "int (*f(void))[3]{static int a[3]={3,5,7}; return &a;} return (*f())[2];\n"),
+            .exit_code = 7,
+        },
+        {
+            "composite function type retains definition parameter qualifiers", __LINE__,
+            SVI("int f(int); int f(const int x){return x+1;}\n"
+                "_Static_assert(typeof(f).param_type(0).is_const); return f(6);\n"),
+            .exit_code = 7,
+        },
+        {
+            "review: pointer constant converted to bool", __LINE__,
+            SVI("static int g; static _Bool x=&g; return x;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static constexpr any unboxing", __LINE__,
+            SVI("constexpr _Any a=7; static int x=a.as(int); return x==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: template fallback preserves compound literal metadata", __LINE__,
+            SVI("int n=7; struct S {int* p; int x[4];};\n"
+                "struct S s={(int[]){n},{1,2,3,n}};\n"
+                "return s.p[0]==7 && s.x[3]==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "review: static float128 integer conversion", __LINE__,
+            SVI("static _Float128 x=1; return x==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: signed bitfields and fields spanning bytes", __LINE__,
+            SVI("constexpr struct S {unsigned pad:3; signed int n:6; unsigned tail:9;} s={1,-7,301};\n"
+                "static int n=s.n; static unsigned tail=s.tail;\n"
+                "return n==-7 && tail==301;\n"),
+            .exit_code = 1,
+        },
+        {
+            "local aggregate: runtime compound literal is reset each evaluation", __LINE__,
+            SVI("struct S {int* p; int x[4];}; int total=0;\n"
+                "for(int i=0;i<2;i++){struct S s={(int[]){7},{1,2,3,4}};\n"
+                "total+=s.p[0]; s.p[0]=99;} return total==14;\n"),
+            .exit_code = 1,
+        },
+        {
+            "local aggregate: partial template leaves one runtime initializer", __LINE__,
+            SVI("struct S {int a,b,c,d,e,f,g,h,i,j,k;};\n"
+                "int f(int x){struct S s={1,2,x,4,5,6,7,8,9,10,11};\n"
+                "return s.b==2 && s.c==x && s.k==11;} return f(3) && f(17);\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+            .expect_runtime_stores = 1,
+        },
+        {
+            "local aggregate: partial template preserves nested side effects and relocations", __LINE__,
+            SVI("static int g=9; int next(void){static int n;return ++n;}\n"
+                "struct S {int* p;int a[6];};\n"
+                "int f(void){struct S s={&g,{1,next(),3,next(),5,6}};\n"
+                "return *s.p+s.a[0]+s.a[1]+s.a[2]+s.a[3]+s.a[4]+s.a[5];}\n"
+                "return f()==27 && f()==31;\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+        },
+        {
+            "local aggregate: overlapping dynamic initializers preserve final writes", __LINE__,
+            SVI("int f(int x){int a[6]={[0]=x,1,2,3,4,5,[0]=7};\n"
+                "return a[0]==7 && a[1]==1 && a[5]==5;} return f(19);\n"),
+            .exit_code = 1,
+        },
+        {
+            "local aggregate: constant template is copied each invocation", __LINE__,
+            SVI("struct S {int a[8]; int tail;};\n"
+                "int f(int n){struct S s={{1,2,3,4,5,6,7,8},9};\n"
+                " s.a[0]=n; return s.a[0]+s.a[7]+s.tail;}\n"
+                "return f(10)==27 && f(20)==37;\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+        },
+        {
+            "local aggregate: template handles bitfields and overwritten designators", __LINE__,
+            SVI("struct S {unsigned a:3; unsigned b:5; int x[4];};\n"
+                "int f(void){struct S s={.a=1,.b=17,.x={2,4,6,8},.a=5};\n"
+                " return s.a==5 && s.b==17 && s.x[0]==2 && s.x[3]==8;}\n"
+                "return f() && f();\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+        },
+        {
+            "local aggregate: template includes symbol relocations", __LINE__,
+            SVI("static int g[2]={7,8}; int target(void){return 11;}\n"
+                "struct S {int* p; int (*fn)(void); const char* text; int x[4];};\n"
+                "int f(void){struct S s={&g[1],target,\"hello\"+1,{1,2,3,4}};\n"
+                " return *s.p==8 && s.fn()==11 && s.text[0]=='e' && s.x[3]==4;}\n"
+                "return f() && f();\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+        },
+        {
+            "local aggregate: overwritten relocations are omitted", __LINE__,
+            SVI("int missing(void);\n"
+                "struct S {int (*fn)(void); void* address; int x[4];};\n"
+                "int f(void){struct S s={.fn=missing,.fn=nullptr,.address=(void*)17,\n"
+                " .x={1,2,3,4}}; return s.fn==nullptr && (unsigned long)s.address==17\n"
+                " && s.x[0]==1 && s.x[3]==4;}\n"
+                "return f();\n"),
+            .exit_code = 1,
+            .expect_template = 1,
+        },
+        {
+            "local aggregate: dynamic call falls back to field stores", __LINE__,
+            SVI("int next(void){static int n; return ++n;}\n"
+                "int f(void){int a[5]={1,2,next(),4,5}; return a[2];}\n"
+                "return f()==1 && f()==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "local aggregate: bitfield read falls back to field stores", __LINE__,
+            SVI("struct Bits {unsigned n:3;};\n"
+                "int f(int x){struct Bits b={x}; int a[5]={b.n,2,3,4,5}; return a[0];}\n"
+                "return f(3)==3 && f(6)==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "local aggregate: const local is evaluated at runtime", __LINE__,
+            SVI("int f(int n){const int x=n; int a[5]={x,x+1,x+2,x+3,x+4};\n"
+                " return a[0]+a[4];}\n"
+                "return f(2)==8 && f(7)==18;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: interpreter constant expressions", __LINE__,
+            SVI("static int a[4]={1,2,3,4};\n"
+                "static int i=(1+2)*3; static unsigned u=(unsigned)(1<<12);\n"
+                "static double d=1.25*2; static int choice=(0 ? 99 : 7);\n"
+                "static const char text[4]=\"abc\";\n"
+                "static int* p=&a[1+1];\n"
+                "return i==9 && u==4096 && d==2.5 && choice==7\n"
+                " && text[2]=='c' && *p==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: rounded floating constant conversion", __LINE__,
+            SVI("static float f=1.1; static int i=(int)1.5;\n"
+                "static float sum=0.1f+0.2f;\n"
+                "static long double ld=1.25L*2;\n"
+                "static int equal=(1.25L*2==2.5L);\n"
+                "static int selected=(1.0L ? 2:3)+1;\n"
+                "static float rounded=(float)((1ull<<63)+(1ull<<39)+1);\n"
+                "return f>1.09f && f<1.11f && sum>0.29f && sum<0.31f\n"
+                " && i==1 && ld==2.5L && equal && selected==3\n"
+                " && rounded==(float)(1ull<<63)+(float)(1ull<<40);\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: slices retain counts and relocated addresses", __LINE__,
+            SVI("static int a[3]={2,4,6}; static int all[:]=a[:];\n"
+                "static int lo[:]=a[1:]; static int hi[:]=a[:2];\n"
+                "static int mid[:]=a[1:2]; static int empty[:]=a[3:3];\n"
+                "static int cast[:]=(int[:])a; static int ptr[:]=(&a[1])[:2];\n"
+                "return all.count==3 && all[1]==4 && lo.count==2 && lo[0]==4\n"
+                " && hi.count==2 && hi[1]==4 && mid.count==1 && mid[0]==4\n"
+                " && empty.count==0 && empty.data==a+3 && cast.data==a\n"
+                " && ptr.count==2 && ptr[1]==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: slices of constant slices", __LINE__,
+            SVI("static int a[3]={2,4,6};\n"
+                "static const int part[:]=(a[:])[1:];\n"
+                "return part.count==2 && part.data==a+1 && part[1]==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: pointer from constexpr aggregate", __LINE__,
+            SVI("constexpr struct S {const char* p;} s={\"abc\"};\n"
+                "static const char* p=s.p; return p[1]=='b';\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: constexpr subobjects preserve relocations", __LINE__,
+            SVI("constexpr struct S {const char* p[2];} s={{\"ab\",\"cd\"}};\n"
+                "static const char* p=s.p[1]+1;\n"
+                "static struct S copy=s;\n"
+                "return *p=='d' && copy.p[1][0]=='c';\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: commuted pointer offsets and integer casts", __LINE__,
+            SVI("static const char* text=2+\"abcd\";\n"
+                "static void* address=(void*)(unsigned char)257;\n"
+                "return text[0]=='c' && (unsigned long)address==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: file-scope compound literal addresses", __LINE__,
+            SVI("struct S {int n;};\n"
+                "static int* p=(int[]){3,4};\n"
+                "static struct S* s=&(struct S){7};\n"
+                "return p[0]==3 && p[1]==4 && s->n==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: aggregate constants and address relocations", __LINE__,
+            SVI("struct S {unsigned a:3; unsigned b:5; int values[3]; const char* text;};\n"
+                "static struct S s={5,17,{2,4,6},\"hello\"+1};\n"
+                "static int* p=&s.values[1]; static int* end=s.values+3;\n"
+                "static double d=1.25*2; static unsigned __int128 big=(unsigned __int128)1<<100;\n"
+                "return s.a==5 && s.b==17 && *p==4 && end-p==2 && s.text[0]=='e' && d==2.5 && (big>>100)==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: cyclic address relocations", __LINE__,
+            SVI("struct Node {struct Node* next; int value;};\n"
+                "static struct Node a; static struct Node b={&a,2}; static struct Node a={&b,1};\n"
+                "return a.next==&b && b.next==&a && a.next->value==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: overwritten relocations", __LINE__,
+            SVI("int missing_static_dep(void); struct S {int (*p)(void); int n;};\n"
+                "static struct S s={.p=missing_static_dep,.p=nullptr,.n=7};\n"
+                "return s.p==nullptr && s.n==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: bitfield overwrites a relocation", __LINE__,
+            SVI("int missing_static_dep(void); union U {int (*p)(void); unsigned bits:3;};\n"
+                "struct S {union U u;}; static struct S s={.u.p=missing_static_dep,.u.bits=5};\n"
+                "return s.u.bits==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "lower deps: unevaluated undefined externs", __LINE__,
+            SVI("extern int missing_var; int missing_func(void);\n"
+                "return sizeof(missing_var) + sizeof(missing_func());\n"),
+            .exit_code = 8,
+        },
+        {
+            "lower deps: discarded branch does not resolve externs", __LINE__,
+            SVI("extern int missing_var; int missing_func(void);\n"
+                "return 0 ? missing_func()+missing_var : 7;\n"),
+            .exit_code = 7,
+        },
+        {
+            "lower deps: static initializer discovers function and storage", __LINE__,
+            SVI("int g; int target(void){return ++g;}\n"
+                "int run(void){static int (*p)(void)=target; return p();}\n"
+                "return run()+run();\n"),
+            .exit_code = 3,
+        },
         {
             "named arguments retain prototype and definition names", __LINE__,
             SVI("int f(int first, int second);\n"
@@ -1321,6 +2742,205 @@ TestFunction(test_interpreter){
                "  default: return 3;\n"
                "}\n"),
             .exit_code = 2,
+        },
+        {
+            "switch: negative case converts to unsigned controlling type", __LINE__,
+            SVI("unsigned x=4294967295u;\n"
+                "switch(x){case -1: return 1; default: return 0;}\n"),
+            .exit_code = 1,
+        },
+        {
+            "switch: unsigned case converts to signed controlling type", __LINE__,
+            SVI("int x=-1;\n"
+                "switch(x){case 4294967295u: return 1; default: return 0;}\n"),
+            .exit_code = 1,
+        },
+        {
+            "switch: wide enum case converts to controlling width", __LINE__,
+            SVI("enum W:unsigned __int128 {HIGH=((unsigned __int128)1<<100)+7};\n"
+                "int x=7; switch(x){case HIGH: return 1; default: return 0;}\n"),
+            .exit_code = 1,
+        },
+        {
+            "switch: packed enum is promoted before converting cases", __LINE__,
+            SVI("enum __attribute__((packed)) P {LAST=255}; enum P x=LAST;\n"
+                "switch(x){case -1: return 0; case 511: return 0; case 255: return 1;}\n"
+                "return 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield arithmetic uses the promoted value width", __LINE__,
+            SVI("enum E:unsigned {ONE=1};\n"
+                "struct B {unsigned small:3,full:32; enum E bits:3;} b={1,4294967295u,ONE};\n"
+                "static constexpr struct B c={1,4294967295u,ONE};\n"
+                "static int complement=~c.bits, comparison=c.small < -1;\n"
+                "_Any boxed=+b.small;\n"
+                "return !(b.small < -1)&&-b.small<0&&~b.small==-2&&~b.bits==-2"
+                    "&&b.full==4294967295u&&complement==-2&&comparison==0"
+                    "&&boxed.type==int&&boxed.as(int)==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "compound assignments compute before converting to the object type", __LINE__,
+            SVI("int x=3; x*=0.5; if(x!=1) return 0;\n"
+                "unsigned char n=200; n/=300; if(n!=0) return 0;\n"
+                "int y=100000; y/=4294967297ll; if(y!=0) return 0;\n"
+                "_Bool b=1; b+=1; if(*(unsigned char*)&b!=1) return 0;\n"
+                "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield compound assignments use promoted arithmetic", __LINE__,
+            SVI("struct S {unsigned n:3; signed s:3;} a={1,-1};\n"
+                "unsigned r=(a.n/=-1); if(r!=7||a.n!=7) return 0;\n"
+                "a.n=5; a.n%= -2; if(a.n!=1) return 0;\n"
+                "a.n=3; a.n*=0.5; if(a.n!=1) return 0;\n"
+                "a.s/=2u; if(a.s!=-1) return 0; return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "compound assignments evaluate the destination once", __LINE__,
+            SVI("struct S {unsigned n:3;} a[2]={{3},{5}}; int i=0,j=0;\n"
+                "unsigned r=(a[i++].n*= (j++,0.5));\n"
+                "return i==1&&j==1&&r==1&&a[0].n==1&&a[1].n==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic compound assignments convert after computing", __LINE__,
+            SVI("_Atomic int x=3; x*=0.5; if(x!=1) return 0;\n"
+                "_Atomic unsigned char n=200; n/=300; if(n!=0) return 0;\n"
+                "_Atomic _Bool b=1; b+=1; return b;\n"),
+            .exit_code = 1,
+        },
+        {
+            "compound conversions preserve wide integers and enum storage", __LINE__,
+            SVI("enum __attribute__((packed)) E {LAST=255}; enum E e=LAST; e/=300;\n"
+                "unsigned __int128 wide=(unsigned __int128)1<<100; int n=100; n/=wide;\n"
+                "float f=3; f*=0.5; double d=4; d/=2;\n"
+                "return e==0&&n==0&&f==1.5&&d==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bool increments store canonical values and preserve pre/post results", __LINE__,
+            SVI("_Bool b=1; int old=b++; if(old!=1||*(unsigned char*)&b!=1) return 0;\n"
+                "if(++b!=1||*(unsigned char*)&b!=1) return 0;\n"
+                "b=0; if(b--!=0||*(unsigned char*)&b!=1) return 0;\n"
+                "if(--b!=0||b!=0) return 0;\n"
+                "_Bool* p=&b; ++*p; ++*p; if(*(unsigned char*)p!=1) return 0;\n"
+                "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bool bitfield increments convert before truncating", __LINE__,
+            SVI("struct S {_Bool b:1; unsigned neighbor:2;} a[2]={{1,3},{0,2}}; int i=0;\n"
+                "if(a[i++].b++!=1||i!=1||a[0].b!=1||a[0].neighbor!=3) return 0;\n"
+                "if(++a[0].b!=1||a[0].b!=1) return 0;\n"
+                "if(a[1].b--!=0||a[1].b!=1||a[1].neighbor!=2) return 0;\n"
+                "return --a[1].b==0&&a[1].b==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic bool increments store canonical values", __LINE__,
+            SVI("_Atomic _Bool b=1; if(b++!=1||b!=1||++b!=1||b!=1) return 0;\n"
+                "b=0; if(b--!=0||b!=1||--b!=0||b!=0) return 0;\n"
+                "++b; ++b; return b==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bool enum increments use boolean storage semantics", __LINE__,
+            SVI("enum E:_Bool {ZERO=0,ONE=1}; enum E e=ONE;\n"
+                "if(e++!=ONE||*(unsigned char*)&e!=1) return 0;\n"
+                "e=ZERO; if(--e!=ONE||*(unsigned char*)&e!=1) return 0;\n"
+                "struct S {enum E e:1;} s={ONE};\n"
+                "return ++s.e==ONE&&s.e==ONE;\n"),
+            .exit_code = 1,
+        },
+        {
+            "unqualified update results preserve atomic and volatile accesses", __LINE__,
+            SVI("_Atomic int a=0; volatile int v=0;\n"
+                "int x=(a=3),y=++a,z=a++; if(x!=3||y!=4||z!=4||a!=5) return 0;\n"
+                "x=(a+=2); y=--a; z=a--; if(x!=7||y!=6||z!=6||a!=5) return 0;\n"
+                "x=(v=3); y=++v; z=v++; if(x!=3||y!=4||z!=4||v!=5) return 0;\n"
+                "x=(v+=2); y=--v; z=v--; return x==7&&y==6&&z==6&&v==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "conditional array and function decay with null operands", __LINE__,
+            SVI("int f(void){return 7;} int choose(int n){\n"
+                "const int a[2]={3,4}; const int* p=n?a:0; const int* q=n?nullptr:a;\n"
+                "int (*g)(void)=n?f:0; int (*h)(void)=n?0:f;\n"
+                "return n?(p[1]==4&&q==nullptr&&g()==7&&h==nullptr)"
+                ":(p==nullptr&&q[0]==3&&g==nullptr&&h()==7);}\n"
+                "return choose(0)&&choose(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "array decay to embedded base adjusts the address", __LINE__,
+            SVI("struct B {int value;}; struct D {int pad; struct B;};\n"
+                "struct D a[2]={{11,{7}},{12,{8}}}; struct B* b=a;\n"
+                "if((void*)b!=(void*)&a[0].value||b->value!=7) return 0;\n"
+                "static struct D data[1]={{13,{9}}}; static struct B* stored=data;\n"
+                "return (void*)stored==(void*)&data[0].value&&stored->value==9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static pointer casts preserve symbolic subobject values", __LINE__,
+            SVI("static int target; constexpr struct P {int* p;} s={&target};\n"
+                "static const int* qualified=s.p; static void* opaque=s.p;\n"
+                "constexpr int* a[1]={&target}; static const int* element=a[0];\n"
+                "return qualified==&target&&opaque==&target&&element==&target;\n"),
+            .exit_code = 1,
+        },
+        {
+            "compatible function pointer conversions and conditional calls", __LINE__,
+            SVI("int f(const int x){return x+1;} int (*p)(int)=f; int (*old)()=f;\n"
+                "int (*qualified)(const int)=p; int (*converted)(int)=old;\n"
+                "int n=0; int a=(n?old:p)(6); n=1; int b=(n?old:p)(7);\n"
+                "return p==qualified&&p==old&&qualified(4)==5&&converted(5)==6&&a==7&&b==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "evaluated zero initializes and compares null pointers", __LINE__,
+            SVI("enum E {ZERO=0}; constexpr int zero=0; static int* a=1-1;\n"
+                "static int* b=(int)0; static int* c=ZERO; static int* d=zero;\n"
+                "int value=7; int* p=&value; int choose=1;\n"
+                "int* q=choose?p:(2-2); int* r=choose?(3-3):p;\n"
+                "_Bool flag=nullptr; _Any boxed=nullptr; int* wide=0ui128;\n"
+                "return a==0&&b==0&&c==0&&d==0&&q==p&&r==(4-4)&&!flag"
+                "&&boxed.type==typeof(nullptr)&&wide==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer arithmetic retains qualified accesses and scales complete types", __LINE__,
+            SVI("int a[3]={3,5,7}; int* volatile p=a; _Atomic(int*) q=a;\n"
+                "int* x=p+1; int* y=1+p; int* z=q+2;\n"
+                "if(*x!=5||y!=x||*z!=7||p!=a||q!=a) return 0;\n"
+                "enum E:unsigned __int128; enum E wide[2]={1,2};\n"
+                "enum E* e=wide; ++e; e-=1; e++;\n"
+                "return e==wide+1&&*e==2&&e-wide==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "function designator boolean conversions and conditions use its address", __LINE__,
+            SVI("int f(void){return 7;} _Bool b=f; static _Bool stored=f;\n"
+                "if(!f||!b||!stored) return 0; int n=f?3:0;\n"
+                "if(!(f&&1)||!(0||f)||n!=3) return 0;\n"
+                "int (*p)(void)=f; if(!(*p)||!(_Bool)*p) return 0; return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "function-valued comma and statement expressions preserve side effects", __LINE__,
+            SVI("int f(void){return 7;} int i=0; int (*p)(void)=f;\n"
+                "_Bool a=(i++,f); _Bool b=(i++,*p);\n"
+                "_Bool c=({i++; *p;}); return a&&b&&c&&i==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "calls through function-valued expressions preserve side effects", __LINE__,
+            SVI("int f(int x){return x+1;} int i=0; int (*p)(int)=f;\n"
+                "int a=(i++,f)(4); int b=({i++; f;})(5); int c=(i++,*p)(6);\n"
+                "return a==5&&b==6&&c==7&&i==3;\n"),
+            .exit_code = 1,
         },
         // Goto
         {
@@ -4805,7 +6425,103 @@ TestFunction(test_interpreter){
                "return x;\n"),
             .exit_code = 6,
         },
+        {
+            "array truth tests use the decayed address", __LINE__,
+            SVI("int a[1]={0}; static int b[8]={0};\n"
+                "int yes=0; if(a) yes++; if(b) yes++;\n"
+                "return yes==2&&!(!a)&&!(!b)&&(a&&b)&&(0||a)&&(1&&b);\n"),
+            .exit_code = 1,
+        },
+        {
+            "array loop conditions use the decayed address", __LINE__,
+            SVI("int a[1]={0}; int n=0;\n"
+                "while(a){n++; break;} for(;a;){n++; break;}\n"
+                "do {n++; if(n==4) break;} while(a);\n"
+                "return n==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "array truth tests preserve side effects and short circuit", __LINE__,
+            SVI("struct S {int a[8];} s={}; int i=0,j=0;\n"
+                "int a=!((i++,s.a)); int b=((i++,s.a)&&(j++,1));\n"
+                "int c=((i++,s.a)||(j++,0)); if((i++,s.a)) i++;\n"
+                "return a==0&&b==1&&c==1&&i==5&&j==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "array of returned aggregate decays in truth tests", __LINE__,
+            SVI("struct S {int a[2];}; int n=0;\n"
+                "struct S f(void){n++; return (struct S){{0,0}};}\n"
+                "int a=!f().a; int b=f().a&&1; if(f().a) n++;\n"
+                "return a==0&&b==1&&n==4;\n"),
+            .exit_code = 1,
+        },
         // Bitfields
+        {
+            "bitfield: 128-bit compound arithmetic", __LINE__,
+            SVI("struct S {unsigned pad:7; unsigned __int128 n:100; unsigned tail:3;} s={5,3,6};\n"
+                "unsigned __int128 high=(unsigned __int128)1<<80;\n"
+                "unsigned __int128 r=(s.n+=high); s.n*=3; s.n/=3; s.n%=high; s.n-=2;\n"
+                "return r==high+3&&s.n==1&&s.pad==5&&s.tail==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: 128-bit compound bitwise and shifts", __LINE__,
+            SVI("struct S {unsigned pad:7; unsigned __int128 n:100; unsigned tail:3;} s={5,3,6};\n"
+                "s.n<<=80; s.n|=7; s.n^=2; s.n&=~(unsigned __int128)4; s.n>>=80;\n"
+                "return s.n==3&&s.pad==5&&s.tail==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: 128-bit compound truncation and side effects", __LINE__,
+            SVI("struct S {unsigned pad:7; unsigned __int128 n:100; unsigned tail:3;} s={5,0,6};\n"
+                "s.n=((unsigned __int128)1<<100)-1; int i=0,j=0;\n"
+                "unsigned __int128 r=((i++,s.n)+=(j++,1));\n"
+                "return r==0&&s.n==0&&s.pad==5&&s.tail==6&&i==1&&j==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: signed 128-bit compound arithmetic", __LINE__,
+            SVI("struct S {unsigned pad:7; __int128 n:100; unsigned tail:3;} s={5,-30,6};\n"
+                "s.n/=3; s.n%=7; s.n>>=1; __int128 r=(s.n+=1);\n"
+                "return r==-1&&s.n==-1&&s.pad==5&&s.tail==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: full-width 128-bit compound wraparound", __LINE__,
+            SVI("struct S {unsigned __int128 n:128;} s={~(unsigned __int128)0};\n"
+                "unsigned __int128 r=(s.n+=1); s.n-=1;\n"
+                "return r==0&&s.n==~(unsigned __int128)0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: comma preserves promotions", __LINE__,
+            SVI("struct S {unsigned a:3;} s={1}; int i=0;\n"
+                "_Any boxed=+(i++,s.a);\n"
+                "return !((i++,s.a)<-1)&&boxed.type==int&&boxed.as(int)==1&&i==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: comma assignment preserves adjacent fields", __LINE__,
+            SVI("struct S {unsigned pad:3; unsigned a:3; unsigned tail:3;} s={5,1,6};\n"
+                "int i=0; int r=((i++,(i++,s.a))=10);\n"
+                "return r==2&&s.a==2&&s.pad==5&&s.tail==6&&i==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: comma compound assignment", __LINE__,
+            SVI("struct S {unsigned pad:3; unsigned a:3;} s={5,3}; int i=0,j=0;\n"
+                "int r=((i++,s.a)+=(j++,2)); int q=((i++,s.a)*=0.5);\n"
+                "return r==5&&q==2&&s.a==2&&s.pad==5&&i==2&&j==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield: comma increment through arrow", __LINE__,
+            SVI("struct S {unsigned pad:3; signed a:3;} s={5,1}; struct S* p=&s; int i=0;\n"
+                "int old=(i++,p->a)++; int next=++(i++,p->a);\n"
+                "return old==1&&next==3&&s.a==3&&s.pad==5&&i==2;\n"),
+            .exit_code = 1,
+        },
         {
             "bitfield: read", __LINE__,
             SVI("struct S { int a : 3; int b : 5; };\n"
@@ -7249,6 +8965,43 @@ TestFunction(test_interpreter){
                "struct __builtin_Enumerator e = (enum E).enumerator(1);\n"
                "return (int)e.value;\n"),
             .exit_code = 20,
+        },
+        {
+            "wide enum values survive static initialization and reflection", __LINE__,
+            SVI("enum U:unsigned __int128 {HIGH=(unsigned __int128)1<<100,NEXT,MAX=~(unsigned __int128)0};\n"
+                "enum S:__int128 {LOW=-((__int128)1<<100),AFTER};\n"
+                "static enum U values[3]={HIGH,NEXT,MAX}; static enum S neg=AFTER;\n"
+                "struct __builtin_Enumerator runtime=(enum U).enumerator(2);\n"
+                "static struct __builtin_Enumerator folded=(enum S).enumerator(0);\n"
+                "return values[0]==HIGH&&values[1]==HIGH+1&&values[2]==~(unsigned __int128)0"
+                    "&&neg==LOW+1&&runtime.value==MAX&&runtime.type==enum U"
+                    "&&folded.value==(unsigned __int128)LOW&&folded.type==enum S;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fixed enum storage before its body retains its layout", __LINE__,
+            SVI("enum E:unsigned __int128;\n"
+                "struct S {enum E value; int tail;};\n"
+                "static struct S s={(enum E)((unsigned __int128)1<<100),7};\n"
+                "enum E {HIGH=(unsigned __int128)1<<100};\n"
+                "return sizeof(s)==32&&s.value==HIGH&&s.tail==7&&!(enum E).is_incomplete;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fixed enum declarations in an inner scope create a new tag", __LINE__,
+            SVI("enum E:unsigned char {OUTER=255};\n"
+                "{enum E:unsigned __int128; enum E {INNER=(unsigned __int128)1<<100};\n"
+                " if(sizeof(enum E)!=16||INNER!=((unsigned __int128)1<<100)) return 0;}\n"
+                "return sizeof(enum E)==1&&OUTER==255;\n"),
+            .exit_code = 1,
+        },
+        {
+            "packed enum arrays use finalized storage widths", __LINE__,
+            SVI("enum __attribute__((packed)) P {A=255};\n"
+                "enum N {NEG=-129,POS=127} __attribute__((packed));\n"
+                "static enum P p[2]={A,A}; static enum N n[2]={NEG,POS};\n"
+                "return sizeof(p)==2&&sizeof(n)==4&&p[1]==255&&n[0]==-129&&n[1]==127;\n"),
+            .exit_code = 1,
         },
         {
             "type introspection: enumerator name", __LINE__,
@@ -9931,7 +11684,7 @@ TestFunction(test_interpreter){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -9974,12 +11727,32 @@ TestFunction(test_interpreter){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
-        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp);
+        if(err){TestPrintf("%s:%d: failed to link: %s\n", __FILE__, tc->line, _cc_error_names[err]); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
+        if(tc->expect_template){
+            size_t zero_count = 0;
+            size_t copy_count = 0;
+            size_t store_count = 0;
+            PointerMapItems funcs = PM_items(&interp.deps.funcs);
+            for(size_t j = 0; j < funcs.count; j++){
+                CcFunc* func = (CcFunc*)(uintptr_t)funcs.data[j].key;
+                if(!func->interp_ops) continue;
+                for(size_t k = 0; k < func->interp_ops->code.count; k++){
+                    zero_count += func->interp_ops->code.data[k].kind == CI_OP_ZERO;
+                    copy_count += func->interp_ops->code.data[k].kind == CI_OP_MEMCOPY;
+                    store_count += func->interp_ops->code.data[k].kind == CI_OP_STORE
+                        || func->interp_ops->code.data[k].kind == CI_OP_STORE_BITFIELD;
+                }
+            }
+            TestExpect(size_t, zero_count, ==, 0);
+            TestExpect(size_t, copy_count, >, 0);
+            if(tc->expect_runtime_stores)
+                TestExpect(size_t, store_count, ==, tc->expect_runtime_stores);
+        }
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
@@ -9998,6 +11771,8 @@ TestFunction(test_interpreter){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -10015,7 +11790,441 @@ TestFunction(test_interpreter_runtime_errors){
         StringView expect;
         _Bool skip;
         _Bool lowering_error;
+        _Bool parser_error;
     } testcases[] = {
+        {
+            "symbolic pointers: reject subtraction of different symbols", __LINE__,
+            SVI("static int a,b;\nstatic long d=&b-&a; return d;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr metadata logical not rejects before evaluation", __LINE__,
+            SVI("constexpr _Type t=int;\n_Static_assert(!t); return 0;\n"),
+            SVI("(test):2:16: error: '!' requires scalar type\n"),
+            .parser_error = 1,
+        },
+        {
+            "return type conflict cannot change an earlier call's ABI", __LINE__,
+            SVI("int f(); int g(void){return f();}\n"
+                "struct S {int a[4];};\n"
+                "struct S f(void){return (struct S){{1,2,3,4}};} return g();\n"),
+            SVI("(test):3:17: error: conflicting return type for 'f'\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: symbolic pointer is not absolute integer bits", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bits;} u={.p=&a};\n_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: unresolved floating point arithmetic is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic double d=u.d+1.0; return d==0;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: narrow floating view cannot split relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; float f;} u={.p=&a};\nstatic float f=u.f; return f==0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: partially overwritten floating relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic double d=u.d; return d==0;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: unresolved floating point narrowing is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic float f=u.d; return f==0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: unresolved floating point to integer cast is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic long n=(long)u.d; return n==0;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: partial overwrite loses symbolic pointer identity", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned bit:1;} u={.p=&a,.bit=1};\n_Static_assert(u.p==&a); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: bitfield cannot read unresolved address bits", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bit:1;} u={.p=&a};\n_Static_assert(u.bit==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: bitfield cannot retain a pointer relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bit:1;} u={.p=&a};\nstatic unsigned long bit=u.bit; return bit;\n"),
+            SVI("(test):2:27: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: partial symbolic pointer view is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic int* p=u.p; return p==&a;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: partial relocation is not an integer constant", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bits; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic unsigned long bits=u.bits; return bits;\n"),
+            SVI("(test):2:28: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: integer bits cannot fabricate type metadata", __LINE__,
+            SVI("constexpr union U {unsigned long bits; _Type t;} u={.bits=4096};\n_Static_assert(u.t.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: type metadata cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t=int};\n"
+                "_Static_assert(u.bits==u.bits); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: invalid metadata is still opaque storage", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t={}};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: omitted pointer members remain opaque", __LINE__,
+            SVI("constexpr union U {struct P {void* p;} p; unsigned long bits;} u={.p={}};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: omitted opaque members cannot become numeric aggregate fields", __LINE__,
+            SVI("constexpr union U {struct P {void* p;} p; struct B {unsigned long bits;} b;} u={.p={}};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: omitted Any tags remain opaque", __LINE__,
+            SVI("constexpr union U {_Any a; unsigned char bytes[sizeof(_Any)];} u={.a={}};\n"
+                "_Static_assert(u.bytes[0]==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: absolute pointers cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {int* p; unsigned long bits;} u={.p=(int*)7};\n"
+                "_Static_assert(u.bits==7); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: null pointers are opaque to byte reinterpretation", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.p=nullptr};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: numeric addresses reject partial pointer overwrites", __LINE__,
+            SVI("constexpr union U {int* p; unsigned bit:1;} u={.p=(int*)6,.bit=1};\n"
+                "_Static_assert(u.p==(int*)7); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: numeric slice pointers reject partial overwrites", __LINE__,
+            SVI("constexpr union U {int s[:]; struct B {unsigned long count; unsigned bit:1;} b; struct V {unsigned long count; int* p;} v;} u={.s=((int*)6)[:2],.b.bit=1};\n"
+                "static struct V copy=u.v; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: floating views cannot reinterpret pointer relocations", __LINE__,
+            SVI("static int target; constexpr union U {int* p; double d;} u={.p=&target};\n"
+                "static const double d=u.d; return 0;\n"),
+            SVI("(test):2:24: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret pointer storage", __LINE__,
+            SVI("constexpr union U {int* p; struct B {unsigned long bits;} b;} u={.p=(int*)7};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: symbolic pointers cannot become integer relocations", __LINE__,
+            SVI("static int target; constexpr union U {int* p; unsigned long bits;} u={.p=&target};\n"
+                "static unsigned long bits=u.bits; return 0;\n"),
+            SVI("(test):2:28: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret metadata", __LINE__,
+            SVI("constexpr union U {_Type t; struct B {unsigned long bits;} b;} u={.t=int};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret Any tags", __LINE__,
+            SVI("constexpr union U {_Any a; struct B {unsigned long bits[2];} b;} u={.a=3};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: type metadata cannot feed a bitfield", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned bit:1;} u={.t=int};\n"
+                "_Static_assert(u.bit==u.bit); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: Any tags cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {_Any a; unsigned char bytes[sizeof(_Any)];} u={.a=3};\n"
+                "_Static_assert(u.bytes[0]==u.bytes[0]); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: pointer casts cannot expose metadata bytes", __LINE__,
+            SVI("constexpr _Type t=int; constexpr const unsigned char* p=(const unsigned char*)&t;\n"
+                "_Static_assert(p[0]==p[0]); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: fabricated type metadata is rejected", __LINE__,
+            SVI("constexpr union U {unsigned long bits; _Type t;} u={.bits=4096};\nstatic _Type t=u.t; return 0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: type overwrite cannot fabricate metadata", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t=int,.bits=4096};\n_Static_assert(u.t.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: integer bytes cannot fabricate Any tag", __LINE__,
+            SVI("constexpr union U {unsigned long bits[2]; _Any a;} u={.bits={4096,0}};\n_Static_assert(u.a.type.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate view cannot split a relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct B {unsigned low;} b;} u={.p=&a};\nstatic struct B b=u.b; return b.low;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: large aggregate view cannot cut trailing relocation", __LINE__,
+            SVI("static int a; constexpr union U {struct A {unsigned long x; int* p;} a; struct B {unsigned x[3];} b;} u={.a={7,&a}};\nstatic struct B b=u.b; return b.x[0];\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate view cannot split slice pointer", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:]; struct B {unsigned x[3];} b;} u={.s=a[:]};\nstatic struct B b=u.b; return b.x[0];\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: slice address cannot exceed one-past-end", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:];} u={.s=a[:]};\nstatic const int* p=&u.s[4]; return 0;\n"),
+            SVI("(test):2:21: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static reflection: invalid field index is rejected by parser", __LINE__,
+            SVI("struct S {int x;};\nstatic struct __builtin_Field f=(struct S).field(1); return 0;\n"),
+            SVI("(test):2:43: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static reflection: missing named field is rejected by parser", __LINE__,
+            SVI("struct S {int x;};\nstatic struct __builtin_Field f=(struct S).field(\"missing\"); return 0;\n"),
+            SVI("(test):2:43: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: slice address cannot have negative index", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:];} u={.s=a[:]};\nstatic const int* p=&u.s[-1]; return 0;\n"),
+            SVI("(test):2:21: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static union: aggregate view cannot start inside relocation", __LINE__,
+            SVI("static int a; constexpr union U {struct A {int* p; unsigned long x;} a; struct B {unsigned pad; struct C {unsigned x[3];} c;} b;} u={.a={&a,7}};\nstatic struct C c=u.b.c; return c.x[0];\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: narrow integer view of relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned low;} u={.p=&a};\nstatic unsigned low=u.low; return low;\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "constexpr union: high half of relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct W {unsigned low,high;} w;} u={.p=&a};\nstatic unsigned high=u.w.high; return high;\n"),
+            SVI("(test):2:25: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static Any: reject mismatched constant view", __LINE__,
+            SVI("const _Any boxed=7;\nstatic long x=boxed.as(long); return x;\n"),
+            SVI("(test):2:20: error: constant _Any.as requires the stored type, ignoring top-level qualifiers\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject volatile member read from const aggregate", __LINE__,
+            SVI("const struct S {volatile int x;} s={7};\nstatic int x=s.x; return x;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject atomic member read from const aggregate", __LINE__,
+            SVI("const struct S {_Atomic(int) x;} s={7};\nstatic int x=s.x; return x;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject volatile pointer member read", __LINE__,
+            SVI("static int a; const struct S {int* volatile p;} s={&a};\nstatic int* p=s.p; return p==&a;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: cyclic aggregate initializer is rejected", __LINE__,
+            SVI("const struct P {int* p;} s={s.p};\nstatic int same=s.p==s.p; return same;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: self copied aggregate initializer is rejected", __LINE__,
+            SVI("const struct P {int* p;} s=s;\nstatic int same=s.p==s.p; return same;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject automatic nested member addresses", __LINE__,
+            SVI("void f(void){struct S {int a,b;} s;\nconstexpr long d=&s.b-&s.a;} f();\n"),
+            SVI("(test):2:22: error: constexpr initializer requires a link-time constant\n"),
+            .lowering_error = 1,
+        },
+        {
+            "symbolic pointers: reject mutable pointer alias in static difference", __LINE__,
+            SVI("static int a; int* p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject volatile const pointer alias", __LINE__,
+            SVI("static int a; int* const volatile p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject atomic const pointer alias", __LINE__,
+            SVI("static int a; _Atomic(int*) const p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject runtime member read masquerading as an address", __LINE__,
+            SVI("static int a; struct S {int* p;} s={&a};\nstatic long d=s.p-&a; return d;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject constexpr subtraction of different symbols", __LINE__,
+            SVI("static int a,b;\nconstexpr long d=&b-&a; return d;\n"),
+            SVI("(test):2:20: error: constexpr initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject fractional element difference", __LINE__,
+            SVI("static int a;\nstatic long d=(int*)((char*)&a+1)-&a; return d;\n"),
+            SVI("(test):2:34: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject address-dependent comparison", __LINE__,
+            SVI("static int a[2],b[2];\nstatic int same=(a+2)==b; return same;\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject signed conversion below the truncated range", __LINE__,
+            SVI("static signed char x=(signed char)-129.0; return x;\n"),
+            SVI("(test):1:22: error: static initializer conversion is out of range\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject reversed slice bounds", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[2:1];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static slice bounds out of range\n"),
+            .lowering_error = 1,
+        },
+        {
+            "static data: reject slice bounds past array end", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[:4];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static slice bounds out of range\n"),
+            .lowering_error = 1,
+        },
+        {
+            "static data: reject negative slice bounds", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[-1:2];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static slice bounds out of range\n"),
+            .lowering_error = 1,
+        },
+        {
+            "static data: reject runtime slice bounds", __LINE__,
+            SVI("int n=1; static int a[3];\nstatic int s[:]=a[:n];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject runtime pointer members", __LINE__,
+            SVI("struct S {const char* p;} s={\"abc\"};\nstatic const char* p=s.p;\nreturn p[0];\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject runtime variable reads", __LINE__,
+            SVI("int source=7;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: parser rejects external const read without a known value", __LINE__,
+            SVI("extern const int source;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: parser rejects volatile const read", __LINE__,
+            SVI("const volatile int source=7;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: parser rejects const object with runtime initializer", __LINE__,
+            SVI("int f(void){return 7;} const int source=f();\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
         {
             "varargs: reject over-aligned int128", __LINE__,
             SVI("__int128 x=1;\nint f(int n,...){return n;}\nf(0,\nx);\n"),
@@ -10333,7 +12542,7 @@ TestFunction(test_interpreter_runtime_errors){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -10372,14 +12581,15 @@ TestFunction(test_interpreter_runtime_errors){
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto finally;}
 
-        err = cc_parse_all(&interp.parser);
-        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
-        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
-
-        // Expected lowering failures must be diagnosed before executing code.
         CiInterpFrame* frame = &interp.top_frame;
         _Bool trapped = 0;
+        err = cc_parse_all(&interp.parser);
+        if(tc->parser_error){
+            trapped = err != 0;
+            goto check_error;
+        }
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        // Expected lowering failures must be diagnosed before executing code.
         err = ci_prepare_toplevel(&interp);
         if(err) trapped = 1;
         if(tc->lowering_error) TestExpectTrue(_Bool, trapped);
@@ -10387,6 +12597,7 @@ TestFunction(test_interpreter_runtime_errors){
             err = ci_interp_step(&interp, frame);
             if(err) trapped = 1;
         }
+        check_error:
         err = 0; // the trap is the expected outcome, not a harness failure
         TEST_stats.executed++;
         if(!trapped){
@@ -10398,6 +12609,8 @@ TestFunction(test_interpreter_runtime_errors){
 
         finally:
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -10715,7 +12928,7 @@ TestFunction(test_interpreter_builtin_headers){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -10760,7 +12973,7 @@ TestFunction(test_interpreter_builtin_headers){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
@@ -10782,6 +12995,8 @@ TestFunction(test_interpreter_builtin_headers){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -10799,6 +13014,44 @@ TestFunction(test_cross_target){
         _Bool skip;
         CcTarget target;
     } testcases[] = {
+        {
+            "review: static binary128 bool conversion", __LINE__,
+            SVI("static _Bool value=0.5L; return value;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "review: static x87 bool conversion", __LINE__,
+            SVI("static _Bool value=0.5L; return value;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "static float128: precision, arithmetic, and conversions on x87 target", __LINE__,
+            SVI("constexpr _Float128 q=(_Float128)(((unsigned __int128)1<<100)+1);\n"
+                "static unsigned __int128 n=(unsigned __int128)(q+(_Float128)1);\n"
+                "static float f=(float)(_Float128)1.25;\n"
+                "static double d=(double)(_Float128)2.5;\n"
+                "static long double l=(long double)(_Float128)3.5;\n"
+                "return n==(((unsigned __int128)1<<100)+2) && f==1.25f && d==2.5 && l==3.5L;\n"),
+            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
+        },
+        {
+            "static long double retains binary128 integer precision", __LINE__,
+            SVI("static long double value=(long double)(((unsigned __int128)1<<100)+1);\n"
+                "return value-(long double)((unsigned __int128)1<<100)==1.L;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "static binary128 converts precisely to wide integer", __LINE__,
+            SVI("static unsigned __int128 value=(unsigned __int128)0x1.0000000000000000000000001p100L;\n"
+                "return value==(((unsigned __int128)1<<100)+1);\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
+        {
+            "static binary128 rounds directly to float", __LINE__,
+            SVI("static float value=(float)0x1.0000010000000000000000001p0L;\n"
+                "return value>1.f;\n"),
+            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
+        },
         {
             "long double literal precision and range X86_64_LINUX", __LINE__,
             SVI("constexpr long double x=0x1.000000000000001p60L;\n"
@@ -11436,7 +13689,7 @@ TestFunction(test_cross_target){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -11479,7 +13732,7 @@ TestFunction(test_cross_target){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse (error %d)\n%.*s", __FILE__, tc->line, err, (int)log_sb.cursor, log_sb.data); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
@@ -11501,6 +13754,8 @@ TestFunction(test_cross_target){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -11592,7 +13847,7 @@ TestFunction(test_ci_call_main){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -11634,7 +13889,7 @@ TestFunction(test_ci_call_main){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         char*_Null_unspecified argv_buf[5] = {0};
@@ -11669,6 +13924,8 @@ TestFunction(test_ci_call_main){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -11796,7 +14053,7 @@ TestFunction(test_ci_call_by_name){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -11844,7 +14101,7 @@ TestFunction(test_ci_call_by_name){
             TestPrintf("%s:%d: ci_add_root failed: err=%d\n", __FILE__, tc->line, err);
             goto finally;
         }
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiArg ci_args[MAX_ARGS];
@@ -11888,6 +14145,8 @@ TestFunction(test_ci_call_by_name){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -11895,6 +14154,9 @@ TestFunction(test_ci_call_by_name){
     TESTEND();
 }
 TestFunction(test_float_folding);
+TestFunction(test_lower_deps);
+TestFunction(test_static_blobs);
+TestFunction(test_symbolic_pointer_limits);
 
 
 int main(int argc, char** argv){
@@ -11908,6 +14170,9 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_lower_deps, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_static_blobs, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_symbolic_pointer_limits, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();
@@ -11932,6 +14197,326 @@ int main(int argc, char** argv){
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+
+TestFunction(test_symbolic_pointer_limits){
+    TESTBEGIN();
+    static const struct {
+        const char* name;
+        int64_t left, right, extra, expected;
+        CcBasicTypeKind element;
+        int status;
+        _Bool needs_64_bits;
+    } cases[] = {
+        {"zero", 0, 0, 0, 0, CCBT_char},
+        {"positive scaled difference", 7, 2, 0, 5, CCBT_int},
+        {"negative scaled difference", 2, 7, 0, -5, CCBT_int},
+        {"32-bit maximum", INT32_MAX, 0, 0, INT32_MAX, CCBT_char},
+        {"32-bit minimum", INT32_MIN, 0, 0, INT32_MIN, CCBT_char},
+        {"above 32-bit maximum", (int64_t)INT32_MAX+1, 0, 0, (int64_t)INT32_MAX+1, CCBT_char, 0, 1},
+        {"below 32-bit minimum", (int64_t)INT32_MIN-1, 0, 0, (int64_t)INT32_MIN-1, CCBT_char, 0, 1},
+        {"64-bit maximum", INT64_MAX, 0, 0, INT64_MAX, CCBT_char, 0, 1},
+        {"64-bit minimum", INT64_MIN, 0, 0, INT64_MIN, CCBT_char, 0, 1},
+        {"positive delta overflow", INT64_MAX, -1, 0, 0, CCBT_char, _cc_overflow_error},
+        {"negative delta overflow", INT64_MIN, 1, 0, 0, CCBT_char, _cc_overflow_error},
+        {"positive scale overflow", INT64_MAX, 0, 0, 0, CCBT_int, _cc_overflow_error},
+        {"negative scale overflow", INT64_MIN, 0, 0, 0, CCBT_int, _cc_overflow_error},
+        {"positive offset addition overflow", INT64_MAX, 0, 1, 0, CCBT_char, _cc_overflow_error},
+        {"negative offset addition overflow", INT64_MIN, 0, -1, 0, CCBT_char, _cc_overflow_error},
+    };
+    static int indexes[CC_TARGET_COUNT+1] = {0};
+    for(size_t target = 0; target <= CC_TARGET_COUNT; target++){
+        {
+            ArenaAllocator arena = {0};
+            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = allocator_from_arena(&arena)}};
+            if(target == CC_TARGET_COUNT) p.cpp.target.sizeof_[CCBT_nullptr_t] = 4;
+            CcPointer pointer = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_char)};
+            CcQualType ptr = {.bits = (uintptr_t)&pointer};
+            // Keep casts in the AST: parsing literals can fold them before
+            // the symbolic evaluator sees the integer-to-pointer conversion.
+            uint64_t bits[] = {UINT64_MAX, UINT64_C(1)<<63, UINT64_C(1)<<32};
+            for(size_t i = 0; i < arrlen(bits); i++){
+                CcExpr number = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_unsigned_long_long), .uinteger = bits[i]};
+                CcExpr cast = {.kind = CC_EXPR_CAST, .type = ptr, .lhs = &number};
+                CcExpr expected = {.kind = CC_EXPR_VALUE, .type = ptr, .uinteger = bits[i]};
+                if(p.cpp.target.sizeof_[CCBT_nullptr_t] == 4) expected.uinteger &= UINT32_MAX;
+                CcExpr* equal = cc_binary_expr(&p, CC_EXPR_EQ, (SrcLoc){0}, ccqt_basic(CCBT_int), &cast, &expected);
+                TestExpectTrue(_Bool, equal != NULL);
+                if(equal){
+                    int64_t value = 0;
+                    TestExpect(int, cc_eval_symbolic_binary(&p, equal, 0, &value), ==, 0);
+                    TestExpect(int64_t, value, ==, 1);
+                }
+            }
+            ArenaAllocator_free_all(&arena);
+            ArenaAllocator_free_all(&p.scratch_arena);
+        }
+        for(size_t i = test_atomic_increment(indexes+target); i < arrlen(cases); i = test_atomic_increment(indexes+target)){
+            ArenaAllocator arena = {0};
+            Allocator al = allocator_from_arena(&arena);
+            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = al}};
+            // Exercise the target-dependent range check even though the shipped
+            // configurations currently all use a 64-bit ptrdiff_t.
+            if(target == CC_TARGET_COUNT) p.cpp.target.ptrdiff_type = CCBT_int;
+            CcQualType element = ccqt_basic(cases[i].element);
+            CcPointer pointer = {.kind = CC_POINTER, .pointee = element};
+            CcQualType ptr = {.bits = (uintptr_t)&pointer};
+            CcQualType diff = ccqt_basic(p.cpp.target.ptrdiff_type);
+            CcVariable var = {.type = element};
+            CcExpr ref = {.kind = CC_EXPR_VARIABLE, .type = element, .var = &var};
+            CcExpr address = {.kind = CC_EXPR_ADDR, .type = ptr, .lhs = &ref};
+            CcExpr left_value = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_long_long), .integer = cases[i].left};
+            CcExpr right_value = {.kind = CC_EXPR_VALUE, .type = left_value.type, .integer = cases[i].right};
+            CcExpr extra = {.kind = CC_EXPR_VALUE, .type = left_value.type, .integer = cases[i].extra};
+            CcExpr* left = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, &address, &left_value);
+            CcExpr* right = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, &address, &right_value);
+            TestExpectTrue(_Bool, left && right);
+            if(left && right){
+                if(cases[i].extra) left = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, left, &extra);
+                CcExpr* expression = left ? cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, diff, left, right) : NULL;
+                TestExpectTrue(_Bool, expression != NULL);
+                if(expression){
+                    int64_t value = 0;
+                    int expected_status = cases[i].status;
+                    if(cases[i].needs_64_bits && p.cpp.target.sizeof_[p.cpp.target.ptrdiff_type] < 8)
+                        expected_status = _cc_overflow_error;
+                    int status = cc_eval_symbolic_binary(&p, expression, 0, &value);
+                    if(status != expected_status || (!status && value != cases[i].expected))
+                        TestPrintf("symbolic pointer limit: %s, target %zu\n", cases[i].name, target);
+                    TestExpect(int, status, ==, expected_status);
+                    if(!status) TestExpect(int64_t, value, ==, cases[i].expected);
+                }
+            }
+            ArenaAllocator_free_all(&arena);
+            ArenaAllocator_free_all(&p.scratch_arena);
+        }
+        {
+            ArenaAllocator arena = {0};
+            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = allocator_from_arena(&arena)}};
+            CcQualType integer = ccqt_basic(CCBT_int);
+            CcPointer pointer = {.kind = CC_POINTER, .pointee = integer};
+            CcQualType ptr = {.bits = (uintptr_t)&pointer};
+            CcVariable object = {.type = integer};
+            CcExpr ref = {.kind = CC_EXPR_VARIABLE, .type = integer, .var = &object};
+            CcExpr address = {.kind = CC_EXPR_ADDR, .type = ptr, .lhs = &ref};
+            CcVariable alias = {.type = ptr, .constexpr_ = 1};
+            CcExpr alias_ref = {.kind = CC_EXPR_VARIABLE, .type = ptr, .var = &alias};
+            alias.initializer = &alias_ref;
+            CcExpr* expression = cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, ccqt_basic(p.cpp.target.ptrdiff_type), &alias_ref, &address);
+            TestExpectTrue(_Bool, expression != NULL);
+            if(expression){
+                int64_t value;
+                // Cyclic aliases stop at the depth limit instead of recursing
+                // indefinitely or resolving an actual address.
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 0, &value), ==, _cc_not_constant_error);
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                alias.initializer = &address;
+                alias.constexpr_ = 0;
+                alias_ref.type.is_const = 1;
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 0, &value), ==, _cc_not_constant_error);
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, 0);
+                TestExpect(int64_t, value, ==, 0);
+                alias_ref.type.is_volatile = 1;
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                alias_ref.type.is_volatile = 0;
+                alias_ref.type.is_atomic = 1;
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                alias_ref.type.is_atomic = 0;
+                object.automatic = 1;
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                object.automatic = 0;
+                CcExpr unknown = {.kind = CC_EXPR_CALL, .type = ptr};
+                alias.initializer = &unknown;
+                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                CcExpr* casts[257];
+                _Bool built = 1;
+                for(size_t i = 0; i < arrlen(casts); i++){
+                    casts[i] = cc_make_expr(&p, CC_EXPR_CAST, (SrcLoc){0}, ptr, 0);
+                    if(!casts[i]){ built = 0; break; }
+                    casts[i]->lhs = i ? casts[i-1] : &address;
+                }
+                TestExpectTrue(_Bool, built);
+                if(built){
+                    alias.initializer = casts[256];
+                    TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
+                    alias.initializer = casts[250];
+                    TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, 0);
+                    TestExpect(int64_t, value, ==, 0);
+                }
+            }
+            ArenaAllocator_free_all(&arena);
+            ArenaAllocator_free_all(&p.scratch_arena);
+        }
+    }
+    TESTEND();
+}
+
+TestFunction(test_static_blobs){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = al}};
+    CiLowerDeps deps = {0};
+    CcQualType type = ccqt_basic(CCBT_int);
+    CcExpr value = {.kind = CC_EXPR_VALUE, .type = type, .integer = 7};
+    CcVariable a = {.type = type, .initializer = &value};
+    CcVariable b = {.type = type, .initializer = &value};
+    int target_a = 1, target_b = 2;
+    CcVariable ta = {.type = type, .interp_val = &target_a};
+    CcVariable tb = {.type = type, .interp_val = &target_b};
+    CcPointer pointer = {.kind = CC_POINTER, .pointee = type};
+    CcQualType ptr_type = {.bits = (uintptr_t)&pointer};
+    CcExpr ref_a = {.kind = CC_EXPR_VARIABLE, .type = type, .var = &ta};
+    CcExpr ref_b = {.kind = CC_EXPR_VARIABLE, .type = type, .var = &tb};
+    CcExpr addr_a = {.kind = CC_EXPR_ADDR, .type = ptr_type, .lhs = &ref_a};
+    CcExpr addr_b = {.kind = CC_EXPR_ADDR, .type = ptr_type, .lhs = &ref_b};
+    int* result_a = NULL;
+    int* result_b = NULL;
+    CcVariable pa = {.type = ptr_type, .initializer = &addr_a, .interp_val = &result_a};
+    CcVariable pb = {.type = ptr_type, .initializer = &addr_b, .interp_val = &result_b};
+    CiStaticData data[] = {{.var = &a}, {.var = &b}, {.var = &pa}, {.var = &pb}};
+    for(size_t i = 0; i < sizeof data / sizeof data[0]; i++){
+        int err = ci_build_static_data(&ci, &data[i], &deps);
+        TestExpect(int, err, ==, 0);
+        if(err) goto cleanup;
+    }
+    TestExpectTrue(_Bool, data[0].blob == data[1].blob);
+    TestExpect(uint32_t, data[0].size, ==, sizeof(int));
+    int stored;
+    memcpy(&stored, data[0].blob->data, sizeof stored);
+    TestExpect(int, stored, ==, 7);
+    // Identical unrelocated bytes can share a blob even with different symbols.
+    TestExpectTrue(_Bool, data[2].blob == data[3].blob);
+    ci_relocate_static_data(&data[2]);
+    ci_relocate_static_data(&data[3]);
+    TestExpectTrue(_Bool, result_a == &target_a);
+    TestExpectTrue(_Bool, result_b == &target_b);
+    TestExpect(uint64_t, data[2].blob->data[0], ==, 0);
+    cleanup:
+    for(size_t i = 0; i < sizeof data / sizeof data[0]; i++)
+        ci_static_data_cleanup(&data[i], al);
+    ci_lower_deps_cleanup(&deps, al);
+    ArenaAllocator_free_all(&ci.bt.arena);
+    ArenaAllocator_free_all(&arena);
+    TESTEND();
+}
+
+TestFunction(test_lower_deps){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = al}};
+    Marray(CiOp) ops = {0};
+    uint32_t frame_size = 0;
+    CiLowerCtx ctx = {.a = al, .out = &ops, .frame_size = &frame_size, .ptr_size = 8, .size_size = 8};
+    CcVariable global = {.type = ccqt_basic(CCBT_int)};
+    CcVariable local = {.type = ccqt_basic(CCBT_int), .automatic = 1};
+    CcExpr expr = {.kind = CC_EXPR_VARIABLE, .type = global.type, .var = &global, .is_lvalue = 1};
+    CiLowerVal value;
+    CiLowerAddr addr;
+    int err = ci_lower_expr_discard(&ci, &ctx, &expr);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 0);
+    err = ci_lower_expr(&ci, &ctx, &expr, CI_NO_SLOT, &value);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 1);
+    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.vars, &global), ==, 1);
+    expr.var = &local;
+    err = ci_lower_expr(&ci, &ctx, &expr, CI_NO_SLOT, &value);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 1);
+    CcVariable addressed = {.type = global.type};
+    expr.var = &addressed;
+    err = ci_lower_addr(&ci, &ctx, &expr, 0, &addr);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 2);
+    err = ci_lower_addr(&ci, &ctx, &expr, 0, &addr);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 2);
+    CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
+    CcFunc func = {.type = &type};
+    CcExpr callee = {.kind = CC_EXPR_FUNCTION, .type = {.bits = (uintptr_t)&type}, .func = &func};
+    CcExpr call = {.kind = CC_EXPR_CALL, .type = type.return_type, .lhs = &callee};
+    err = ci_lower_call(&ci, &ctx, &call, CI_NO_SLOT, NULL);
+    TestExpect(int, err, ==, 0);
+    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.funcs, &func), ==, CC_FUNC_DEP_USED);
+    err = ci_lower_cast_operand(&ci, &ctx, &callee, CI_NO_SLOT, &value);
+    TestExpect(int, err, ==, 0);
+    err = ci_lower_call(&ci, &ctx, &call, CI_NO_SLOT, NULL);
+    TestExpect(int, err, ==, 0);
+    TestExpect(size_t, ctx.deps.funcs.count, ==, 1);
+    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.funcs, &func), ==, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
+    // Lowering records dependencies locally, without modifying interpreter sets.
+    TestExpect(size_t, ci.deps.funcs.count, ==, 0);
+    TestExpect(size_t, ci.deps.vars.count, ==, 0);
+    ci_lower_deps_cleanup(&ctx.deps, al);
+    TestExpect(size_t, ctx.deps.vars.count, ==, 0);
+    TestExpect(size_t, ctx.deps.funcs.count, ==, 0);
+    ci_lower_deps_cleanup(&ctx.deps, al);
+    // A failed lazy parse must remain an error when preparation is retried.
+    CcFunc failed = {.type = &type, .defined = 1, .parse_failed = 1};
+    err = ci_deps_add_func(&ci.deps, al, &failed, CC_FUNC_DEP_USED);
+    TestExpect(int, err, ==, 0);
+    for(int i = 0; i < 2; i++){
+        err = ci_resolve_deps(&ci, &ci.deps);
+        TestExpect(int, err, ==, CI_SYNTAX_ERROR);
+        TestExpectTrue(_Bool, failed.interp_ops == NULL);
+    }
+    ci_lower_deps_cleanup(&ci.deps, al);
+    ArenaAllocator_free_all(&arena);
+    {
+        TestingAllocator ta = {0};
+        LOCK_T_init(&ta.lock);
+        Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = retry_al}};
+        CcVariable retry_global = {.type = ccqt_basic(CCBT_int)};
+        CcExpr retry_expr = {.kind = CC_EXPR_VARIABLE, .type = retry_global.type, .var = &retry_global};
+        CcStmtNode retry_stmt = {.kind = CC_STMT_RETURN, .expr = &retry_expr};
+        CcStmtNode* retry_nodes_data[] = {&retry_stmt};
+        Parray(CcStmtNode) retry_nodes = {.data = (void**)retry_nodes_data, .count = 1};
+        Marray(CiOp) retry_ops = {0};
+        AtomMap(uintptr_t) retry_labels = {0};
+        uint32_t retry_size = 0;
+        size_t retry_lowered = 0;
+        CiLowerDeps retry_deps = {0};
+        // Fail the dependency merge after the local dependency and ops allocations.
+        ta.fail_at = 3;
+        int retry_err = ci_lower_nodes(&retry_ci, &retry_nodes, &retry_lowered, &retry_ops, &retry_labels, &retry_size, &retry_deps);
+        TestExpect(int, retry_err, ==, CI_OOM_ERROR);
+        TestExpect(size_t, retry_lowered, ==, 0);
+        TestExpect(size_t, retry_ops.count, ==, 0);
+        TestExpect(uint32_t, retry_size, ==, 0);
+        ta.fail_at = 0;
+        retry_err = ci_lower_nodes(&retry_ci, &retry_nodes, &retry_lowered, &retry_ops, &retry_labels, &retry_size, &retry_deps);
+        TestExpect(int, retry_err, ==, 0);
+        TestExpect(size_t, retry_deps.vars.count, ==, 1);
+        TestExpect(size_t, retry_ops.count, ==, 3);
+        recording_free_all(&ta.recorder);
+        recording_cleanup(&ta.recorder);
+    }
+    {
+        TestingAllocator ta = {0};
+        LOCK_T_init(&ta.lock);
+        Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = retry_al}};
+        CiFuncOps prepared = {0};
+        CcFunc retry_func = {.type = &type, .defined = 1, .parsed = 1, .interp_ops = &prepared};
+        int retry_err = ci_deps_add_func(&retry_ci.deps, retry_al, &retry_func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
+        TestExpect(int, retry_err, ==, 0);
+        ta.nallocs = 0;
+        ta.fail_at = 1;
+        retry_err = ci_resolve_deps(&retry_ci, &retry_ci.deps);
+        TestExpect(int, retry_err, ==, CI_OOM_ERROR);
+        TestExpectTrue(_Bool, retry_func.native_func == NULL);
+        ta.fail_at = 0;
+        retry_err = ci_resolve_deps(&retry_ci, &retry_ci.deps);
+        TestExpect(int, retry_err, ==, 0);
+        TestExpectTrue(_Bool, retry_func.native_func != NULL);
+        TestExpectTrue(_Bool, BPM_get(&retry_ci.closure_map, &retry_func) == (void*)retry_func.native_func);
+        recording_free_all(&ta.recorder);
+        recording_cleanup(&ta.recorder);
+    }
+    TESTEND();
+}
 
 TestFunction(test_float_folding){
     TESTBEGIN();

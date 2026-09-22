@@ -39,7 +39,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     int err;
     err = env_setenv4(&env, "wolo", 4, "woo", 3);
@@ -100,6 +100,7 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
         StringView sv = msb_borrow_sv(&log_sb);
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
@@ -119,7 +120,7 @@ cpp_expand_with_files(
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     int err;
     CppPreprocessor cpp = {
@@ -180,6 +181,7 @@ cpp_expand_with_files(
         StringView sv = msb_borrow_sv(&log_sb);
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
@@ -195,7 +197,7 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     CppPreprocessor cpp = {
         .allocator = a,
@@ -233,6 +235,7 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     }
     else
         *err_out = (StringView){0};
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
@@ -247,7 +250,7 @@ cpp_expand_string_expect_message(StringView txt, StringView* err_out){
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     CppPreprocessor cpp = {
         .allocator = a,
@@ -285,6 +288,7 @@ cpp_expand_string_expect_message(StringView txt, StringView* err_out){
     }
     else
         *err_out = (StringView){0};
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;

@@ -22,11 +22,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ArenaAllocator aa = {0};
     Allocator al = allocator_from_arena(&aa);
     FileCache* fc = fc_create(al, FC_FLAGS_NONE);
-    if(!fc) goto done;
+    if(!fc){
+        ArenaAllocator_free_all(&aa);
+        return 0;
+    }
     MStringBuilder log_sb = {.allocator=al};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = al};
+    AtomTable at = {0};
     Environment env = {.allocator = al, .at=&at};
     CcParser cc = {
         .cpp = {
@@ -55,6 +58,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     (void)err;
 
     done:;
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cc.cpp.synth_arena);
     ArenaAllocator_free_all(&cc.scratch_arena);

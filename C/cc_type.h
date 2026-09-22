@@ -4,6 +4,8 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include <string.h>
+#include "ci_softnum.h"
 #include "srcloc.h"
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
@@ -177,11 +179,12 @@ struct CcField {
         CcFunc * method;
     };
     uint32_t offset;
-    uint32_t bitwidth:  7,
+    uint32_t bitwidth:  8,
              bitoffset: 7, // bit offset within storage unit
              is_method: 1,
              is_bitfield: 1,
-             alignment: 16; // from _Alignas, 0 means default
+             _padding: 15;
+    uint32_t alignment; // from _Alignas, 0 means default
     SrcLoc loc;
 };
 
@@ -279,7 +282,7 @@ _Static_assert(sizeof(CcUnion) == sizeof(CcStruct), "");
 typedef struct CcEnumerator CcEnumerator;
 struct CcEnumerator {
     Atom name;
-    int64_t value;
+    CiUint128 value;
     CcQualType type;
     SrcLoc loc;
 };
@@ -291,7 +294,9 @@ struct CC_ALIGN(8) CcEnum {
         struct {
             CcTypeKind kind:        4;
             uint32_t is_incomplete: 1;
-            uint32_t _padding:      27;
+            uint32_t has_fixed_underlying: 1;
+            uint32_t has_definition: 1;
+            uint32_t _padding:      25;
         };
     };
     Atom name;
@@ -519,6 +524,13 @@ static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_p
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 
 static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && t.basic.kind == bt;}
+static inline
+_Bool
+ccqt_is_bool(CcQualType t){
+    while(ccqt_kind(t) == CC_ENUM)
+        t = ccqt_as_enum(t)->underlying;
+    return ccqt_bt_eq(t, CCBT_bool);
+}
 static inline
 _Bool
 ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){

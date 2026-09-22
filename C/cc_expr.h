@@ -10,6 +10,8 @@
 #include "cc_type.h"
 #include "cc_memory_order.h"
 #include "ci_softnum.h"
+#include "../Drp/Allocators/allocator.h"
+#include "../Drp/ckdint.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -28,6 +30,8 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_FUNCTION, // Reference to a function, eagerly resolved
     CC_EXPR_COMPOUND_LITERAL,
     CC_EXPR_INIT_LIST,
+    // Owns lhs: a typed view of its storage, preserving padding and symbols.
+    CC_EXPR_OBJECT_VIEW,
     CC_EXPR_NEG,
     CC_EXPR_POS,
     CC_EXPR_BITNOT,
@@ -225,17 +229,226 @@ typedef struct CcVariable CcVariable;
 typedef struct CcFunc CcFunc;
 typedef struct CcExpr CcExpr;
 
-typedef struct CcFieldLoc CcFieldLoc;
-struct CcFieldLoc {
-    uint64_t byte_offset: 48;
-    uint64_t bit_offset: 8; // bit offset within storage unit (bitfields)
-    uint64_t bit_width: 8;  // 0 = not a bitfield
+typedef struct CcFieldPath CcFieldPath;
+struct CcFieldPath {
+    union {
+        uint64_t _bits;
+        struct {
+            uint64_t is_extended: 1, // if true, actually a pointer to CcFieldPathEx
+                     ptr: 63; // (uintptr_t)CcFieldPathEx* >> 1
+        };
+        struct {
+            uint64_t _inline_is_extended: 1,
+                     n_components: 3, // 0..6 inline components; 7 means one large index
+                     idx0: 10,
+                     idx1: 10,
+                     idx2: 10,
+                     idx3: 10,
+                     idx4: 10,
+                     idx5: 10;
+        };
+        struct {
+            uint64_t _large_is_extended: 1,
+                     _large_n_components: 3,
+                     large_index: 60;
+        };
+    };
 };
+typedef struct CcFieldPathEx CcFieldPathEx;
+struct CcFieldPathEx {
+    uint32_t n_components;
+    uint32_t components[];
+};
+_Static_assert(sizeof(CcFieldPath) == sizeof(uint64_t), "field paths must fit in eight bytes");
 
-// Each entry is a scalar store at a byte offset into the aggregate.
+static inline
+CcFieldPathEx*
+cc_field_path_extended(CcFieldPath path){
+    return (CcFieldPathEx*)((uintptr_t)path.ptr << 1);
+}
+static inline
+uint32_t
+cc_field_path_count(CcFieldPath path){
+    if(path.is_extended) return cc_field_path_extended(path)->n_components;
+    return path.n_components == 7 ? 1 : (uint32_t)path.n_components;
+}
+static inline
+uint32_t
+cc_field_path_component(CcFieldPath path, uint32_t i){
+    if(path.is_extended) return cc_field_path_extended(path)->components[i];
+    if(path.n_components == 7) return i == 0 ? (uint32_t)path.large_index : 0;
+    switch(i){
+        case 0: return (uint32_t)path.idx0;
+        case 1: return (uint32_t)path.idx1;
+        case 2: return (uint32_t)path.idx2;
+        case 3: return (uint32_t)path.idx3;
+        case 4: return (uint32_t)path.idx4;
+        case 5: return (uint32_t)path.idx5;
+        default: return 0;
+    }
+}
+static inline
+_Bool
+cc_field_path_is_prefix(CcFieldPath prefix, CcFieldPath path){
+    uint32_t count = cc_field_path_count(prefix);
+    if(count > cc_field_path_count(path)) return 0;
+    for(uint32_t i = 0; i < count; i++)
+        if(cc_field_path_component(prefix, i) != cc_field_path_component(path, i)) return 0;
+    return 1;
+}
+static inline
+_Bool
+cc_field_path_equal(CcFieldPath a, CcFieldPath b){
+    return cc_field_path_count(a) == cc_field_path_count(b) && cc_field_path_is_prefix(a, b);
+}
+// Ancestors replace their children. Distinct union members share storage;
+// distinct array elements and struct members identify independent subobjects.
+static inline
+_Bool
+cc_field_paths_overlap(CcQualType type, CcFieldPath a, CcFieldPath b){
+    uint32_t ac = cc_field_path_count(a), bc = cc_field_path_count(b);
+    for(uint32_t i = 0; i < ac && i < bc; i++){
+        uint32_t ai = cc_field_path_component(a, i), bi = cc_field_path_component(b, i);
+        CcTypeKind kind = ccqt_kind(type);
+        if(ai != bi) return kind == CC_UNION;
+        if(kind == CC_ARRAY) type = ccqt_as_array(type)->element;
+        else if(kind == CC_STRUCT) type = ccqt_as_struct(type)->fields[ai].type;
+        else if(kind == CC_UNION) type = ccqt_as_union(type)->fields[ai].type;
+        else return 1;
+    }
+    return 1;
+}
+static inline
+int
+cc_field_path_make(Allocator al, const uint32_t*_Nullable components, uint32_t count, CcFieldPath* out){
+    CcFieldPath path = {0};
+    if(count == 1 && components[0] > 1023){
+        path.n_components = 7;
+        path.large_index = components[0];
+        *out = path;
+        return 0;
+    }
+    _Bool extended = count > 6;
+    for(uint32_t i = 0; i < count && !extended; i++) extended = components[i] > 1023;
+    if(extended){
+        size_t size;
+        if(mul_overflow((size_t)count, sizeof(uint32_t), &size) || add_overflow(sizeof(CcFieldPathEx), size, &size))
+            return 1;
+        CcFieldPathEx* ex = Allocator_alloc(al, size);
+        if(!ex) return 1;
+        ex->n_components = count;
+        for(uint32_t i = 0; i < count; i++) ex->components[i] = components[i];
+        path.is_extended = 1;
+        path.ptr = (uintptr_t)ex >> 1;
+    }
+    else {
+        path.n_components = count;
+        if(count > 0) path.idx0 = components[0];
+        if(count > 1) path.idx1 = components[1];
+        if(count > 2) path.idx2 = components[2];
+        if(count > 3) path.idx3 = components[3];
+        if(count > 4) path.idx4 = components[4];
+        if(count > 5) path.idx5 = components[5];
+    }
+    *out = path;
+    return 0;
+}
+static inline
+void
+cc_field_path_free(Allocator al, CcFieldPath path){
+    if(path.is_extended){
+        CcFieldPathEx* ex = cc_field_path_extended(path);
+        Allocator_free(al, ex, sizeof *ex + (size_t)ex->n_components * sizeof(uint32_t));
+    }
+}
+static inline
+int
+cc_field_path_concat(Allocator al, CcFieldPath prefix, CcFieldPath suffix, CcFieldPath* out){
+    uint32_t a = cc_field_path_count(prefix), b = cc_field_path_count(suffix);
+    uint32_t count;
+    if(add_overflow(a, b, &count)) return 1;
+    uint32_t small[6];
+    if(count <= 6){
+        for(uint32_t i = 0; i < a; i++) small[i] = cc_field_path_component(prefix, i);
+        for(uint32_t i = 0; i < b; i++) small[a+i] = cc_field_path_component(suffix, i);
+        return cc_field_path_make(al, small, count, out);
+    }
+    size_t size;
+    if(mul_overflow((size_t)count, sizeof(uint32_t), &size) || add_overflow(sizeof(CcFieldPathEx), size, &size))
+        return 1;
+    CcFieldPathEx* ex = Allocator_alloc(al, size);
+    if(!ex) return 1;
+    ex->n_components = count;
+    for(uint32_t i = 0; i < a; i++) ex->components[i] = cc_field_path_component(prefix, i);
+    for(uint32_t i = 0; i < b; i++) ex->components[a+i] = cc_field_path_component(suffix, i);
+    *out = (CcFieldPath){.is_extended=1, .ptr=(uintptr_t)ex >> 1};
+    return 0;
+}
+static inline
+int
+cc_field_path_drop(Allocator al, CcFieldPath path, uint32_t count, CcFieldPath* out){
+    uint32_t length = cc_field_path_count(path);
+    if(count > length) return 1;
+    uint32_t small[6];
+    uint32_t rest = length - count;
+    if(rest <= 6){
+        for(uint32_t i = 0; i < rest; i++) small[i] = cc_field_path_component(path, count+i);
+        return cc_field_path_make(al, small, rest, out);
+    }
+    // Only the extended representation can have more than six components.
+    return cc_field_path_make(al, cc_field_path_extended(path)->components + count, rest, out);
+}
+
+static inline
+int
+cc_field_path_take(Allocator al, CcFieldPath path, uint32_t count, CcFieldPath* out){
+    if(count > cc_field_path_count(path)) return 1;
+    if(path.is_extended) return cc_field_path_make(al, cc_field_path_extended(path)->components, count, out);
+    uint32_t small[6];
+    for(uint32_t i = 0; i < count; i++) small[i] = cc_field_path_component(path, i);
+    return cc_field_path_make(al, small, count, out);
+}
+
+// Resolve member identity without computing a byte layout.
+static inline
+CcField*_Nullable
+cc_field_path_field(CcQualType type, CcFieldPath path){
+    CcField* field = NULL;
+    for(uint32_t i = 0, count = cc_field_path_count(path); i < count; i++){
+        uint32_t index = cc_field_path_component(path, i);
+        switch(ccqt_kind(type)){
+            case CC_STRUCT: field = &ccqt_as_struct(type)->fields[index]; break;
+            case CC_UNION: field = &ccqt_as_union(type)->fields[index]; break;
+            case CC_ARRAY:
+                field = NULL;
+                type = ccqt_as_array(type)->element;
+                continue;
+            default: return NULL; // Slice and _Any pseudo-members aren't bitfields.
+        }
+        type = field->type;
+    }
+    return field;
+}
+
+static inline
+uint32_t
+cc_field_path_bit_width(CcQualType type, CcFieldPath path){
+    CcField* field = cc_field_path_field(type, path);
+    return field && field->is_bitfield ? field->bitwidth : 0;
+}
+
+static inline
+uint32_t
+cc_field_path_bit_offset(CcQualType type, CcFieldPath path){
+    CcField* field = cc_field_path_field(type, path);
+    return field && field->is_bitfield ? field->bitoffset : 0;
+}
+
+// An initializer for the subobject at path.
+// A nested initializer list preserves whole-subobject initialization/zeroing.
 typedef struct CcInitEntry CcInitEntry;
 struct CcInitEntry {
-    CcFieldLoc field_loc;
+    CcFieldPath path;
     CcExpr*_Null_unspecified value;
 };
 
@@ -321,6 +534,7 @@ struct CcExpr {
     // For CC_EXPR_VALUE: reinterpret based on type (uinteger, float_, etc).
     union {
         CcExpr* lhs;
+        struct { CcExpr* lhs; CcQualType type; } compound; // arithmetic type before storing
         _Bool boolean;
         uint64_t uinteger;
         int64_t integer;
@@ -330,7 +544,7 @@ struct CcExpr {
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;
-        CcFieldLoc field_loc; // CC_EXPR_DOT, CC_EXPR_ARROW: resolved field offset+bitfield info
+        CcFieldPath field_path; // CC_EXPR_DOT, CC_EXPR_ARROW: member path from values[0]
         CcQualType type_value; // for expressions of type type
         CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
                                // value/type = trailing CC_STMT_EXPR's expr
@@ -343,6 +557,30 @@ struct CcExpr {
     };
     CcExpr*_Nonnull values[];
 };
+static inline
+CcQualType
+cc_expr_field_owner(const CcExpr* e){
+    CcQualType type = e->values[0]->type;
+    return e->kind == CC_EXPR_ARROW ? ccqt_as_ptr(type)->pointee : type;
+}
+
+static inline
+uint32_t
+cc_expr_field_bit_width(const CcExpr* e){
+    // Comma expressions preserve the right operand's lvalue designation.
+    while(e->kind == CC_EXPR_COMMA) e = e->values[0];
+    if(e->kind != CC_EXPR_DOT && e->kind != CC_EXPR_ARROW) return 0;
+    return cc_field_path_bit_width(cc_expr_field_owner(e), e->field_path);
+}
+
+static inline
+uint32_t
+cc_expr_field_bit_offset(const CcExpr* e){
+    while(e->kind == CC_EXPR_COMMA) e = e->values[0];
+    if(e->kind != CC_EXPR_DOT && e->kind != CC_EXPR_ARROW) return 0;
+    return cc_field_path_bit_offset(cc_expr_field_owner(e), e->field_path);
+}
+
 _Static_assert(offsetof(CcExpr, loc) ==8, "");
 
 

@@ -42,7 +42,7 @@ int main(int argc, char** argv, char** envp){
     _Bool eager = 0, syntax_only = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
-    static AtomTable at = {.allocator=MALLOCATORI};
+    static AtomTable at = {0};
     static Environment env = {.allocator=MALLOCATORI, .at=&at};
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
     // This is incorrect, but is good enough for now
@@ -389,7 +389,7 @@ int main(int argc, char** argv, char** envp){
     err = cc_parse_all(&interp.parser);
     if(err) goto stringify_error;
     if(!syntax_only){
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err) goto stringify_error;
     }
     if(dis.count || dis_top || dis_all){
@@ -451,7 +451,7 @@ int main(int argc, char** argv, char** envp){
             }
         }
         if(dis_top || dis_all){
-            err = ci_lower_toplevel(&interp);
+            err = ci_lower_toplevel(&interp, &interp.deps);
             if(err) goto stringify_error;
             MStringBuilder* sb = &logger->buff;
             msb_sprintf(sb, "top level: {\n");
@@ -550,7 +550,7 @@ int main(int argc, char** argv, char** envp){
                 err = cc_parse_all(&interp.parser);
                 if(err){ msb.cursor = 0; continue; }
                 if(!syntax_only){
-                    err = ci_resolve_refs(&interp, 0);
+                    err = ci_resolve_refs(&interp);
                     if(err){ msb.cursor = 0; continue; }
                     // Execute new statements
                     {

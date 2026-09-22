@@ -129,6 +129,30 @@ static inline void ci_uint128_write(void* buf, uint32_t sz, CiUint128 v){
 }
 #endif
 
+static inline float ci_uint128_to_float(CiUint128 v, _Bool is_unsigned){
+#ifdef __SIZEOF_INT128__
+    return is_unsigned ? (float)v : (float)(__int128)v;
+#else
+    _Bool negative = !is_unsigned && (ci_uint128_hi(v) >> 63);
+    if(negative) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    uint32_t shift = 0;
+    CiUint128 reduced = v;
+    // Retain 63 significant bits plus a sticky bit. The following float cast
+    // then rounds once, including under a directed rounding mode.
+    while(ci_uint128_hi(reduced) || (ci_uint128_lo(reduced) >> 63)){
+        reduced = ci_uint128_shr(reduced, 1);
+        shift++;
+    }
+    uint64_t n = ci_uint128_lo(reduced);
+    if(!ci_uint128_eq(v, ci_uint128_shl(reduced, shift))) n |= 1;
+    float f = (float)(negative ? -(int64_t)n : (int64_t)n);
+    uint32_t scale_bits = (127u + shift) << 23;
+    float scale;
+    memcpy(&scale, &scale_bits, sizeof scale);
+    return f * scale;
+#endif
+}
+
 static inline double ci_uint128_to_double(CiUint128 v, _Bool is_unsigned){
 #ifdef __SIZEOF_INT128__
     return is_unsigned ? (double)v : (double)(__int128)v;

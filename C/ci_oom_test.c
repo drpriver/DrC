@@ -36,6 +36,180 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("constexpr int a=__builtin_popcount(-1); constexpr int b=__builtin_clzll(1);\n"
+         "enum E:unsigned __int128 {BITS=((unsigned __int128)1<<100)|7};\n"
+         "int f(enum E x){return __builtin_popcountll(x);}\n"
+         "return a==sizeof(unsigned)*8&&b==sizeof(unsigned long long)*8-1&&f(BITS)==3;\n")},
+    {__LINE__, SVI("int (*f(void))[3]; int (*f(void))[]{static int a[3]={3,5,7};return &a;}\n"
+         "int (*f(void))[]; _Static_assert(sizeof(*f())==3*sizeof(int));\n"
+         "int g(int); int g(const int x){return x+1;} return (*f())[2]==g(6);\n")},
+    {__LINE__, SVI("int f(int (*cb)(const int)); int f(int (*cb)(int)){return cb(6);}\n"
+         "int g(int x){return x+1;} return f(g)==7;\n")},
+    {__LINE__, SVI("long f(long); long f(); _Static_assert(typeof(f).param_count==1);\n"
+         "long g(void){return f(7);} long f(long x){return x;} long f(); return g()==7;\n")},
+    {__LINE__, SVI("static int a[3]={3,5,7}; constexpr struct S {int* p;} s={a};\n"
+         "constexpr int* p=&a[2]; _Static_assert((&s)->p==a&&*(&p)-a==2);\n"
+         "static _Bool b=(&s)->p; static int* q=*(&p);\n"
+         "return b&&q==&a[2]&&*q==7;\n")},
+    {__LINE__, SVI("struct S {int a[8];} s={}; int i=0,j=0;\n"
+         "int a=!((i++,s.a)); int b=((i++,s.a)&&(j++,1));\n"
+         "int c=((i++,s.a)||(j++,0)); if((i++,s.a)) i++;\n"
+         "return a==0&&b==1&&c==1&&i==5&&j==1;\n")},
+    {__LINE__, SVI("struct S {unsigned pad:7; unsigned __int128 n:100; unsigned tail:3;} s={5,3,6};\n"
+         "int i=0,j=0; unsigned __int128 r=((i++,s.n)+=(j++,1)); s.n<<=80; s.n>>=80;\n"
+         "return r==4&&s.n==4&&s.pad==5&&s.tail==6&&i==1&&j==1;\n")},
+    {__LINE__, SVI("struct S {unsigned pad:3; unsigned n:3;} s={5,1}; int i=0;\n"
+         "int r=((i++,s.n)=3); int old=(i++,s.n)++; int q=((i++,s.n)*=0.5);\n"
+         "return r==3&&old==3&&q==2&&s.n==2&&s.pad==5&&i==3;\n")},
+    {__LINE__, SVI("int f(void){return 7;} _Bool b=f; static _Bool stored=f;\n"
+         "int (*p)(void)=f; int n=f?3:0; int i=0; _Bool side=(i++,f);\n"
+         "int result=({i++; *p;})();\n"
+         "return b&&stored&&f&&*p&&n==3&&side&&i==2&&result==7;\n")},
+    {__LINE__, SVI("int a[3]={3,5,7}; int* volatile p=a; _Atomic(int*) q=a;\n"
+         "int* x=p+1; int* y=q+2; const int part[:]=a[0:2];\n"
+         "enum E:unsigned __int128; enum E wide[2]={1,2}; enum E* e=wide; ++e;\n"
+         "return *x==5&&*y==7&&part[1]==5&&e-wide==1;\n")},
+    {__LINE__, SVI("enum E {ZERO=0}; constexpr int zero=0; static int* a=1-1;\n"
+         "static int* b=ZERO; static int* c=zero; int n=1; int* p=n?a:(2-2);\n"
+         "return a==0&&b==0&&c==0&&p==(3-3);\n")},
+    {__LINE__, SVI("int f(const int x){return x+1;} int (*p)(int)=f; int (*old)()=f;\n"
+         "int (*q)(const int)=p; int n=1; int result=(n?old:p)(6);\n"
+         "_Static_assert(typeof(n?old:p)==typeof(p)); return result==7&&q==old;\n")},
+    {__LINE__, SVI("static int target; constexpr int* p=&target; *p=9;\n"
+         "int f(int x){return x+1;} constexpr int (*fn)(int)=f;\n"
+         "struct B {int value;}; struct D {int pad; struct B;};\n"
+         "static struct D a[1]={{3,{7}}}; static struct B* base=a;\n"
+         "constexpr struct P {int* p;} s={&target}; static const int* q=s.p;\n"
+         "return *q==9&&fn(6)==7&&base->value==7;\n")},
+    {__LINE__, SVI("int f(void){return 7;} const int a[2]={3,4};\n"
+         "const int* p=1?a:0; int (*g)(void)=1?f:nullptr;\n"
+         "_Atomic int x=3; volatile int y=3; int old=x++; int result=(y+=2);\n"
+         "_Static_assert(typeof(++x)==int&&typeof(y=1)==int);\n"
+         "return p[1]==4&&g()==7&&x==4&&old==3&&result==5&&y==5;\n")},
+    {__LINE__, SVI("_Bool b=1; int old=b++; if(old!=1||*(unsigned char*)&b!=1) return 0;\n"
+         "b=0; --b; struct S {_Bool b:1;} s={1}; int post=s.b++;\n"
+         "_Atomic _Bool a=1; int atomic_post=a++; a=0; --a;\n"
+         "return b==1&&post==1&&s.b==1&&atomic_post==1&&a==1;\n")},
+    {__LINE__, SVI("int x=3; x*=0.5; unsigned char c=200; c/=300;\n"
+         "struct S {unsigned n:3;} a[2]={{3},{5}}; int i=0,j=0;\n"
+         "unsigned r=(a[i++].n*=(j++,0.5)); _Atomic int atomic=3; atomic*=0.5;\n"
+         "_Atomic _Bool b=1; b+=1; return x==1&&c==0&&i==1&&j==1&&r==1&&atomic==1&&b;\n")},
+    {__LINE__, SVI("static int target; static const long base={(long)&target};\n"
+         "constexpr struct S {long address;} s={(long)&target};\n"
+         "static long a=base+4,b=s.address+4,c=3+(2+((long)&target-1));\n"
+         "return a==b&&b==c;\n")},
+    {__LINE__, SVI("constexpr union U {struct P {void* p; _Type t;} p; struct B {void* p; _Type t;} b;} u={.p={}};\n"
+         "constexpr struct B value=u.b; static struct B copy=value;\n"
+         "_Static_assert(value.p==nullptr&&value.t.is_invalid);\n"
+         "return copy.p==nullptr&&copy.t.is_invalid;\n")},
+    {__LINE__, SVI("enum E:unsigned {ONE=1}; struct B {unsigned small:3; enum E bits:3;} b={1,ONE};\n"
+         "constexpr struct B c={1,ONE}; static int complement=~c.bits;\n"
+         "_Any boxed=+b.small; return !(b.small < -1)&&~b.bits==-2"
+         "&&complement==-2&&boxed.type==int&&boxed.as(int)==1;\n")},
+    {__LINE__, SVI("enum W:unsigned __int128 {HIGH=((unsigned __int128)1<<100)+7};\n"
+         "unsigned x=4294967295u; switch(x){case -1: break; default: return 0;}\n"
+         "int y=7; switch(y){case HIGH: break; default: return 0;}\n"
+         "enum __attribute__((packed)) P {LAST=255}; enum P p=LAST;\n"
+         "switch(p){case -1: return 0; case 255: return 1;} return 0;\n")},
+    {__LINE__, SVI("enum E:unsigned __int128; struct S {enum E value; int tail;};\n"
+         "static struct S s={(enum E)((unsigned __int128)1<<100),7};\n"
+         "enum E {HIGH=(unsigned __int128)1<<100};\n"
+         "return sizeof(s)==32&&s.value==HIGH&&s.tail==7&&!(enum E).is_incomplete;\n")},
+    {__LINE__, SVI("enum U:unsigned __int128 {HIGH=(unsigned __int128)1<<100,NEXT};\n"
+         "enum __attribute__((packed)) P {LAST=255}; static enum P p[2]={LAST,LAST};\n"
+         "constexpr struct __builtin_Enumerator folded=(enum U).enumerator(1);\n"
+         "struct __builtin_Enumerator runtime=(enum U).enumerator(0);\n"
+         "return folded.value==HIGH+1&&runtime.value==HIGH&&runtime.type==enum U&&sizeof(p)==2&&p[1]==255;\n")},
+    {__LINE__, SVI("constexpr union U {_Any a; struct B {_Type tag; int value;} b;} u={.a=7};\n"
+         "_Static_assert(u.b.tag==int&&u.b.value==7); static struct B copy=u.b;\n"
+         "return copy.tag==int&&copy.value==7;\n")},
+    {__LINE__, SVI("constexpr union U {int* p; struct B {int* p;} b;} u={.p=(int*)7};\n"
+         "constexpr struct B value=u.b; static struct B copy=value;\n"
+         "_Static_assert(value.p==(int*)7); return copy.p==(int*)7;\n")},
+    {__LINE__, SVI("constexpr union U {_Type t; unsigned long bits; struct B {unsigned low;} b;}\n"
+         "u={.t=int,.b.low=7}; static struct B copy=u.b;\n"
+         "_Static_assert(u.b.low==7); return copy.low==7;\n")},
+    {__LINE__, SVI("static int a[4]={3,5,7,9}; constexpr const int part[:]=a[1:4];\n"
+         "static const int tail[:]=part[1:]; static const int head[:]=part[:1];\n"
+         "static const int empty[:]=a[4:4]; static const int whole[:]=a;\n"
+         "return tail.count==2&&tail.data==a+2&&tail[1]==9&&head[0]==5\n"
+         "&&empty.count==0&&empty.data==a+4&&whole.count==4&&whole.data==a;\n")},
+    {__LINE__, SVI("constexpr const char part[:]=\"abcd\"[1:3];\n"
+         "static const char tail[:]=part[1:]; return tail.count==1&&tail[0]=='c';\n")},
+    {__LINE__, SVI("constexpr int part[:]=((int*)16)[1:3]; constexpr const int qualified[:]=part;\n"
+         "static const int tail[:]=qualified[1:]; return tail.count==1&&tail.data==(int*)24;\n")},
+    {__LINE__, SVI("static int target; struct I {int n; int* p;};\n"
+         "constexpr struct I a[1025]={[1024]={9,&target}};\n"
+         "constexpr const struct I* p=a+1024; static struct I copy=p[0];\n"
+         "return copy.n==9&&copy.p==&target;\n")},
+    {__LINE__, SVI("static int target; struct P {int* p;}; struct M {_Type t;};\n"
+         "constexpr _Any pointer=(struct P){&target}, metadata=(struct M){long};\n"
+         "static struct P copy=pointer.as(struct P); static struct M tag=metadata.as(struct M);\n"
+         "return tag.t==long&&copy.p==&target;\n")},
+    {__LINE__, SVI("if(0){struct I {int a,b;}; const struct S {struct I i; int unrelated;}\n"
+         "s={{1/0,2},1/0,.i.a=9}; static struct I copy=s.i;\n"
+         "if(copy.a!=9||copy.b!=2) return 0;} return 1;\n")},
+    {__LINE__, SVI("static int target; struct I {_Type t; int* p;};\n"
+         "constexpr union U {struct I a,b;} u={.a={int,&target}};\n"
+         "constexpr const struct I* p=&u.b; constexpr struct I copies[2]={*p,*p};\n"
+         "constexpr struct I x=copies[1]; static struct I copy=x;\n"
+         "_Static_assert(x.t==int&&x.p==&target); return copy.p==&target;\n")},
+    {__LINE__, SVI("constexpr int a[4]={3,5,7,9}; constexpr const int* p=a+2;\n"
+         "constexpr const int part[:]=a[1:3]; constexpr int x=(0,p)[-1]+part[1]+*p;\n"
+         "_Static_assert(x==19); static int copy=x; return copy;\n")},
+    {__LINE__, SVI("struct I {int a,b;}; constexpr struct I a[1025]={[1024]={3,4}};\n"
+         "constexpr const struct I* p=a+1024; constexpr struct I copy=p[0];\n"
+         "_Static_assert(p->b==4&&copy.a==3); static struct I stored=copy; return stored.b;\n")},
+    {__LINE__, SVI("constexpr int a[1][1][1][1][1][1][2]={{{{{{{3,4}}}}}}};\n"
+         "constexpr const int* p=&a[0][0][0][0][0][0][1];\n"
+         "_Static_assert(p[-1]==3); static int x=p[0]; return x;\n")},
+    {__LINE__, SVI("struct S {int hello;};\n"
+         "constexpr union U {struct __builtin_Field a,b;} u={.a=(struct S).field(0)};\n"
+         "constexpr struct __builtin_Field f=(struct S).field(u.b.name);\n"
+         "_Static_assert(f.type==int); return f.name.count==5&&f.offset==0;\n")},
+    {__LINE__, SVI("static int target; struct I {_Type t; int* p;};\n"
+         "constexpr union U {struct I a,b;} u={.a={int,&target}};\n"
+         "constexpr struct I x=(0,u).b; static struct I copy=x;\n"
+         "_Static_assert(x.t==int&&x.p==&target); return copy.t==int&&copy.p==&target;\n")},
+    {__LINE__, SVI("constexpr union U {unsigned char bytes[8]; struct I {unsigned char c; int n;} i;}\n"
+         "u={.bytes={1,2,3,4,5,6,7,8}}; constexpr struct I x=u.i;\n"
+         "constexpr union U alias={.i=x}; static union U copy=alias;\n"
+         "_Static_assert(alias.bytes[1]==2); return copy.bytes[7];\n")},
+    {__LINE__, SVI("struct I {int a,b;}; struct S {struct I x[1025];};\n"
+         "constexpr struct S s={.x[1024].a=3,.x[1024].b=4};\n"
+         "constexpr struct I y=s.x[1024]; static struct I copy=y; return copy.a+copy.b;\n")},
+    {__LINE__, SVI("struct I {int a,b;}; struct S {struct I x; int z;};\n"
+         "constexpr struct S s={1+2,3+4,9,.x.b=5+6};\n"
+         "constexpr struct I x=s.x; static struct I copy=x; return copy.a+copy.b;\n")},
+    {__LINE__, SVI("static int target; struct I {int a,b; int* p;}; struct S {struct I x;};\n"
+         "constexpr struct S s={1,2,&target,.x.b=7}; constexpr struct I x=s.x;\n"
+         "_Static_assert(x.a==1&&x.b==7&&x.p==&target); return x.b;\n")},
+    {__LINE__, SVI("struct L {int value; int bump(_Self* s){return ++s.value;}};\n"
+         "struct S {int pad; struct {int pad2; struct {struct {struct {struct {struct {struct L;};};};};};};};\n"
+         "int read(struct L* l){return l.value;} struct S s={.value=4};\n"
+         "struct L* p=&s; int *v=&s.value; return s.bump()+read(p)+*v;\n")},
+    {__LINE__, SVI("int f(int x){int a[1025]={[0]=1,[1]=2,[2]=3,[3]=4,[1024]=x}; return a[1024];}\nreturn f(7);\n")},
+    {__LINE__, SVI("int f(int x){int a[1][1][1][1][1][1][5]={{{{{{{1,2,x,4,5}}}}}}}; return a[0][0][0][0][0][0][2];}\nreturn f(7);\n")},
+    {__LINE__, SVI("static int a[2]={3,4}; struct P {int* p;};\n"
+         "constexpr _Any boxed=(struct P){&a[1]}; static _Any copy=boxed;\n"
+         "static int* p=boxed.as(struct P).p;\n"
+         "const _Any text=\"hello\"+1; static _Any values[2]={boxed,text};\n"
+         "return copy.as(struct P).p==p&&values[1].as(char*)[0]=='e';\n")},
+    {__LINE__, SVI("static int g=9; struct S {int* p;int a[6];};\n"
+         "int f(int x){struct S s={&g,{1,x,3,x+1,5,6}};\n"
+         "return *s.p+s.a[1]+s.a[3]+s.a[5];} return f(7);\n")},
+    {__LINE__, SVI("struct S {int values[3]; int* p;};\n"
+         "static struct S s={{1,2,3},&s.values[1]};\n"
+         "static const char* text=\"abc\"+1;\n"
+         "return *s.p+text[0];\n")},
+    {__LINE__, SVI("static int a[3]={2,4,6}; static int s[:]=(a[:])[1:];\n"
+         "constexpr struct S {const char* p[2];} v={{\"ab\",\"cd\"}};\n"
+         "static const char* p=v.p[1]+1; return s[0]+p[0];\n")},
+    {__LINE__, SVI("int g; int leaf(int n){return n ? leaf(n-1)+1 : ++g;}\n"
+         "int middle(int n){static int (*p)(int)=leaf; return p(n);}\n"
+         "int macro(int n){return middle(n);}\n"
+         "#pragma procmacro macro\n"
+         "return macro(3);\n")},
     {__LINE__, SVI("constexpr _Any c=1.f; _Static_assert(c.as(float)==1.f);\n"
          "constexpr _Type T=c.type; _Static_assert(T==float);\n"
          "constexpr const char* text=\"ok\"; _Static_assert(text[1]=='k');\n"
@@ -58,7 +232,6 @@ static struct OomTestCase {
          "#pragma procmacro twice\n"
          "return twice(21);\n")},
     {__LINE__, SVI("int x;\n"
-         "#pragma resolve x\n"
          "int identity(int x){ return x; }\n"
          "#pragma procmacro identity\n"
          "return identity(({ x = 2; switch(x){case 2: x=3; break; default: x=4;} x; }));\n")},
@@ -165,7 +338,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     MStringBuilder log_sb = {.allocator=arena_al};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = arena_al};
+    AtomTable at = {.arena.base=arena_al};
     Environment env = {.allocator = arena_al, .at=&at};
     CiInterpreter interp = {
         .procedural_macros = 1,
@@ -191,6 +364,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     LOCK_T_init(&interp.resolve_lock);
     interp.parser.cpp.synth_arena.base = al;
     interp.parser.scratch_arena.base = al;
+    interp.bt.arena.base = al;
     fc_write_path(fc, "(oom-test)", sizeof "(oom-test)" - 1);
     err = fc_cache_file(fc, program);
     if(err) goto cleanup;
@@ -218,7 +392,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     }
     err = cc_parse_all(&interp.parser);
     if(err) goto cleanup;
-    err = ci_resolve_refs(&interp, 0);
+    err = ci_resolve_refs(&interp);
     if(err) goto cleanup;
     {
         CiInterpFrame* frame = &interp.top_frame;
@@ -231,6 +405,8 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     }
     cleanup:
     msb_destroy(&log_sb);
+    ArenaAllocator_free_all(&interp.bt.arena);
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
     ArenaAllocator_free_all(&interp.parser.scratch_arena);
     ArenaAllocator_free_all(&arena);
@@ -341,7 +517,36 @@ TestFunction(test_oom){
 }
 
 
+TestFunction(test_blob_size_overflow){
+    TESTBEGIN();
+    size_t lengths[] = {SIZE_MAX, SIZE_MAX - 15, (size_t)PTRDIFF_MAX};
+    for(size_t i = 0; i < sizeof lengths / sizeof lengths[0]; i++){
+        // Deny allocations so an unchecked length cannot reach memcpy.
+        TestingAllocator ta = {0};
+        LOCK_T_init(&ta.lock);
+        Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+        BlobTable bt = {.arena.base = al};
+        unsigned char byte = 0;
+        BlobAtom seed = BT_atomize(&bt, &byte, 1);
+        TestExpectTrue(_Bool, seed != NULL);
+        ta.nallocs = 0;
+        ta.fail_at = -1;
+        BlobAtom blob = BT_raw_atomize(&bt, &byte, lengths[i]);
+        TestExpectTrue(_Bool, blob == NULL);
+        blob = BT_atomize(&bt, &byte, lengths[i]);
+        TestExpectTrue(_Bool, blob == NULL);
+        blob = BT_get_atom(&bt, &byte, lengths[i]);
+        TestExpectTrue(_Bool, blob == NULL);
+        TestExpect(int64_t, ta.nallocs, ==, 0);
+        ArenaAllocator_free_all(&bt.arena);
+        recording_free_all(&ta.recorder);
+        recording_cleanup(&ta.recorder);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
+    RegisterTestFlags(test_blob_size_overflow, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_oom_setup, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_oom, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     ArgToParse extra_args[] = {

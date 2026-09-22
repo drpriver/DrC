@@ -149,12 +149,8 @@ arg_needs_escape_win32(StringView arg){
 static
 int
 cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
-    if(cmd->errored){
-        return 1;
-    }
-    if(!cmd->prog.cursor){
-        return 1;
-    }
+    if(cmd->errored) return 1;
+    if(!cmd->prog.cursor) return 1;
     intptr_t hProc = -1;
     if(IS_WINDOWS){
         msb_reset(&cmd->cmd_line);
@@ -178,14 +174,13 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
         msb_nul_terminate(&cmd->prog);
         if(cmd->cmd_line.errored) return 1;
         if(cmd->prog.errored) return 1;
-
-        char* prog = cmd->prog.data;
-        char* cmdline = cmd->cmd_line.data;
+        const char* prog = msb_borrow_csv(&cmd->prog).text;
+        char* cmdline = cmd->cmd_line.data; // cmdline is inout
         #ifdef _WIN32
             STARTUPINFOA si = {.cb = sizeof si};
             PROCESS_INFORMATION pi = {0};
             BOOL ok = CreateProcessA(prog, cmdline, NULL, NULL, 0, 0, envp, NULL, &si, &pi);
-            if(!ok) {
+            if(!ok){
                 printf("CreateProcessA failed: %u\n", (unsigned)GetLastError());
                 return 1;
             }
@@ -247,7 +242,7 @@ cmd_exec(CmdBuilder* cmd, void* envp){
                 pargv[i] = cmd->args.data[i].text;
         }
         #ifndef _WIN32
-        int err = execve(cmd->prog.data, argv, envp);
+        int err = execve(msb_borrow_csv(&cmd->prog).text, argv, envp);
         if(err) return err;
         #else
         (void)argv;
@@ -261,6 +256,8 @@ int
 cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* out){
     if(cmd->errored) return 1;
     if(!cmd->prog.cursor) return 1;
+    msb_nul_terminate(&cmd->prog);
+    if(cmd->prog.errored) return 1;
     intptr_t hProc = -1;
     int ret = 0;
     if(IS_WINDOWS){
@@ -302,7 +299,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
             .dwFlags = STARTF_USESTDHANDLES,
         };
         PROCESS_INFORMATION pi = {0};
-        BOOL ok = CreateProcessA(cmd->prog.data, cmd->cmd_line.data, NULL, NULL, TRUE, 0, envp, NULL, &si, &pi);
+        BOOL ok = CreateProcessA(msb_borrow_csv(&cmd->prog).text, cmd->cmd_line.data, NULL, NULL, TRUE, 0, envp, NULL, &si, &pi);
         CloseHandle(write_handle);
         if(!ok){
             CloseHandle(read_handle);
@@ -332,7 +329,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         posix_spawn_file_actions_addclose(&actions, pipefd[0]);
         posix_spawn_file_actions_addclose(&actions, pipefd[1]);
         pid_t pid;
-        int e = posix_spawn(&pid, cmd->prog.data, &actions, NULL, argv, envp);
+        int e = posix_spawn(&pid, msb_borrow_csv(&cmd->prog).text, &actions, NULL, argv, envp);
         posix_spawn_file_actions_destroy(&actions);
         close(pipefd[1]);
         if(e){

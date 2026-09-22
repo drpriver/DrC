@@ -243,7 +243,7 @@ TestFunction(test_concurrent_callbacks){
     MStringBuilder log_sb = {.allocator=al};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = al};
+    AtomTable at = {0};
     Environment env = {.allocator = al, .at=&at};
     CiInterpreter interp = {
         .exit_code = -1,
@@ -290,7 +290,7 @@ TestFunction(test_concurrent_callbacks){
     if(err){ TestReport("failed to include"); goto finally; }
     err = cc_parse_all(&interp.parser);
     if(err){ TestReport("failed to parse"); goto finally; }
-    err = ci_resolve_refs(&interp, 0);
+    err = ci_resolve_refs(&interp);
     if(err){ TestReport("failed to link"); goto finally; }
 
     CiInterpFrame* frame = &interp.top_frame;
@@ -312,6 +312,8 @@ TestFunction(test_concurrent_callbacks){
         TestPrintf("%.*s\n", sv_p(sv));
     }
     if(err) TEST_stats.failures++;
+    ArenaAllocator_free_all(&interp.bt.arena);
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&arena);
     ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
     ArenaAllocator_free_all(&interp.parser.scratch_arena);

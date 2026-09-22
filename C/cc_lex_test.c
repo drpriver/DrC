@@ -33,7 +33,7 @@ enum { MAX_TEST_TOKENS = 64 };
 // Helper: lex a string into an array of CcTokens, return count or -1 on error.
 static
 int
-cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, ArenaAllocator* out_aa, ArenaAllocator* out_synth, const char* file, const char* func, int line, _Bool array, _Bool short_wchar, _Bool quiet){
+cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, ArenaAllocator* out_aa, ArenaAllocator* out_synth, ArenaAllocator* out_at, const char* file, const char* func, int line, _Bool array, _Bool short_wchar, _Bool quiet){
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
@@ -41,7 +41,7 @@ cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, 
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     int err;
     CppPreprocessor cpp = {
@@ -97,11 +97,12 @@ cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, 
         StringView sv = msb_borrow_sv(&log_sb);
         TestPrintf("%s%s:%d:%s%s\n    %.*s", _test_color_gray, file, line, func, _test_color_reset, sv_p(sv));
     }
+    *out_at = at.arena;
     *out_aa = aa;
     *out_synth = cpp.synth_arena;
     return result;
 }
-#define CC_LEX_STRING(txt, out, count, aa, synth) cc_lex_string_mode(txt, &out, count, aa, synth, __FILE__, __func__, __LINE__, 0, 0, 0)
+#define CC_LEX_STRING(txt, out, count, aa, synth, at) cc_lex_string_mode(txt, &out, count, aa, synth, at, __FILE__, __func__, __LINE__, 0, 0, 0)
 
 // Like cc_lex_string, but expects an error and captures the error message.
 // Returns 0 if an error occurred (success), 1 if no error (failure).
@@ -114,7 +115,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {.allocator = a};
+    AtomTable at = {};
     Environment env = {.allocator = a, .at=&at};
     int err;
     CppPreprocessor cpp = {
@@ -148,6 +149,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     }
     else
         *err_out = (StringView){0};
+    ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cpp.synth_arena);
     return result;
@@ -305,13 +307,14 @@ TestFunction(test_cc_lex_integers){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -323,6 +326,7 @@ TestFunction(test_cc_lex_integers){
             TestReport("  got type=%s ctype=%d value=%llu", cc_type_name(toks[0].type), toks[0].constant.ctype, (unsigned long long)toks[0].constant.integer_value);
             TestReport("  exp type=%s ctype=%d value=%llu", cc_type_name(test_cases[i].exp.type), test_cases[i].exp.constant.ctype, (unsigned long long)test_cases[i].exp.constant.integer_value);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -379,13 +383,14 @@ TestFunction(test_cc_lex_floats){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -395,6 +400,7 @@ TestFunction(test_cc_lex_floats){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): token mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -436,13 +442,14 @@ TestFunction(test_cc_lex_chars){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -456,6 +463,7 @@ TestFunction(test_cc_lex_chars){
                 cc_type_name(toks[0].type), toks[0].constant.ctype,
                 (unsigned long long)toks[0].constant.integer_value);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -538,13 +546,14 @@ TestFunction(test_cc_lex_strings){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestPrintf("%s:%d: test '%s': expected 1 token, got %d\n", __FILE__, test_cases[i].line, test_cases[i].name, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -554,6 +563,7 @@ TestFunction(test_cc_lex_strings){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): string mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -622,13 +632,14 @@ TestFunction(test_cc_lex_punctuators){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -638,6 +649,7 @@ TestFunction(test_cc_lex_punctuators){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): punct mismatch: got %u, expected %u", test_cases[i].name, test_cases[i].line, (unsigned)toks[0].punct.punct, (unsigned)test_cases[i].exp);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -719,13 +731,14 @@ TestFunction(test_cc_lex_keywords){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         if(count != 1){
             TestReport("test '%s' (line %d): expected 1 token, got %d", test_cases[i].name, test_cases[i].line, count);
             TEST_stats.executed++;
             TEST_stats.failures++;
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -735,6 +748,7 @@ TestFunction(test_cc_lex_keywords){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): keyword mismatch", test_cases[i].name, test_cases[i].line);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -800,13 +814,14 @@ TestFunction(test_cc_lex_multi_token){
     for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = CC_LEX_STRING(test_cases[i].inp, toks, &count, &aa, &synth, &at);
         TestAssertFalse(err);
         TEST_stats.executed++;
         if(count != test_cases[i].exp_count){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): expected %d tokens, got %d", test_cases[i].name, test_cases[i].line, test_cases[i].exp_count, count);
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
             continue;
@@ -818,6 +833,7 @@ TestFunction(test_cc_lex_multi_token){
                 TestReport("test '%s' (line %d): token %d mismatch: got type=%s, expected type=%s", test_cases[i].name, test_cases[i].line, j, cc_type_name(toks[j].type), cc_type_name(test_cases[i].exp[j].type));
             }
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -913,8 +929,8 @@ TestFunction(test_literal_regressions){
         static int case_idx[2] = {0};
         for(size_t i = test_atomic_increment(case_idx+array); i < arrlen(cases); i = test_atomic_increment(case_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
-            ArenaAllocator aa = {0}, synth = {0};
-            int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
+            ArenaAllocator aa = {0}, synth = {0}, at = {0};
+            int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, &at, __FILE__, __func__, __LINE__, array, 0, 1);
             TestExpectFalse(int, err);
             TestExpectEquals(int, count, 1);
             if(!err && count == 1){
@@ -922,6 +938,7 @@ TestFunction(test_literal_regressions){
                     TestReport("literal regression (%s): %.*s", array ? "array" : "stream", sv_p(cases[i].input));
                 TestExpectTrue(_Bool, cc_tok_matches(out[0], cases[i].expected));
             }
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
         }
@@ -963,10 +980,11 @@ TestFunction(test_literal_regressions){
         static int invalid_idx[2] = {0};
         for(size_t i = test_atomic_increment(invalid_idx+array); i < arrlen(invalid); i = test_atomic_increment(invalid_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
-            ArenaAllocator aa = {0}, synth = {0};
-            int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 0, 1);
+            ArenaAllocator aa = {0}, synth = {0}, at = {0};
+            int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, &at, __FILE__, __func__, __LINE__, array, 0, 1);
             if(!err) TestReport("expected invalid literal (%s): %.*s", array ? "array" : "stream", sv_p(invalid[i]));
             TestExpectTrue(int, err);
+            ArenaAllocator_free_all(&at);
             ArenaAllocator_free_all(&aa);
             ArenaAllocator_free_all(&synth);
         }
@@ -974,8 +992,8 @@ TestFunction(test_literal_regressions){
     static int short_wchar_idx = 0;
     for(int array = test_atomic_increment(&short_wchar_idx); array < 2; array = test_atomic_increment(&short_wchar_idx)){
         CcToken out[MAX_TEST_TOKENS]; int count = 0;
-        ArenaAllocator aa = {0}, synth = {0};
-        int err = cc_lex_string_mode(SV("L'\\x1234' L\"😀\""), &out, &count, &aa, &synth, __FILE__, __func__, __LINE__, array, 1, 1);
+        ArenaAllocator aa = {0}, synth = {0}, at = {0};
+        int err = cc_lex_string_mode(SV("L'\\x1234' L\"😀\""), &out, &count, &aa, &synth, &at, __FILE__, __func__, __LINE__, array, 1, 1);
         TestExpectFalse(int, err);
         TestExpectEquals(int, count, 2);
         if(!err && count == 2){
@@ -984,6 +1002,7 @@ TestFunction(test_literal_regressions){
             TestExpectEquals(unsigned short, out[1].str.utf16[0], 0xD83D);
             TestExpectEquals(unsigned short, out[1].str.utf16[1], 0xDE00);
         }
+        ArenaAllocator_free_all(&at);
         ArenaAllocator_free_all(&aa);
         ArenaAllocator_free_all(&synth);
     }
@@ -1079,7 +1098,7 @@ TestFunction(test_long_double_macros){
     for(size_t target = test_atomic_increment(&idx); target < CC_TARGET_COUNT; target=test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator a = allocator_from_arena(&aa);
-        AtomTable at = {.allocator = a};
+        AtomTable at = {0};
         FileCache* fc = fc_create(a, FC_FLAGS_NONE);
         CppPreprocessor cpp = {
             .allocator = a, .at = &at, .fc = fc,
@@ -1121,6 +1140,7 @@ TestFunction(test_long_double_macros){
         }
         test_expect_equals_sv(expected[format].properties, msb_borrow_sv(&properties),
             "expected properties", "properties", &TEST_stats, __FILE__, __func__, __LINE__);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&cpp.synth_arena);
         ArenaAllocator_free_all(&aa);
     }

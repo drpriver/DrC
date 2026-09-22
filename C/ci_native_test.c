@@ -23,6 +23,7 @@
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
+#include <fenv.h>
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -31,6 +32,22 @@
 
 static CiRtAny test_any_identity(CiRtAny a){ return a; }
 static CiRtAny test_any_callback(CiRtAny (*f)(CiRtAny), CiRtAny a){ return f(a); }
+
+#if !(defined __DRC__ && defined __GLIBC__)
+static int test_fp_callback(int (*f)(void)){
+    fenv_t saved;
+    if(feholdexcept(&saved)) return -1;
+    if(fesetround(FE_TONEAREST)){
+        fesetenv(&saved);
+        return -1;
+    }
+    int result = f();
+    fesetenv(&saved);
+    return result;
+}
+static void test_fp_clear(void){ feclearexcept(FE_ALL_EXCEPT); }
+static int test_fp_inexact(void){ return fetestexcept(FE_INEXACT) != 0; }
+#endif
 
 // Integer types
 static int test_add(int a, int b){ return a + b; }
@@ -221,6 +238,18 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
+#if !(defined __DRC__ && defined __GLIBC__)
+        {
+            "review: runtime aggregate preserves floating exceptions", __LINE__,
+            SV("int fp_callback(int(*)(void)); void fp_clear(void); int fp_inexact(void);\n"
+               "int f(void){fp_clear(); double a[4]={0.1+0.2,1,2,3};\n"
+               "return a[0]>0 && fp_inexact();} return fp_callback(f);\n"),
+            {{SV("fp_callback"), (void*)test_fp_callback},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_inexact"), (void*)test_fp_inexact}},
+            .exit_code = 1,
+        },
+#endif
         {
             "varargs: long double with 8-byte alignment", __LINE__,
             SV("int f(int n,...){__builtin_va_list ap; __builtin_va_start(ap,n);\n"
@@ -881,7 +910,7 @@ TestFunction(test_interop){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -930,11 +959,11 @@ TestFunction(test_interop){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
-        err = ci_lower_toplevel(&interp);
+        err = ci_lower_toplevel(&interp, &interp.deps);
         if(err) goto finally;
         err = ci_link_ops(&interp, interp.toplevel_ops.data, interp.toplevel_ops.count);
         if(err) goto finally;
@@ -954,6 +983,8 @@ TestFunction(test_interop){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -972,6 +1003,59 @@ TestFunction(test_interp){
         _Bool skip;
         const char*_Nullable parse_error;
     } testcases[] = {
+        {
+            "procmacro: file-scope static aggregate and scalar initialization", __LINE__,
+            SVI("static struct {short pad; char digits[5];} table={0,\"0123\"};\n"
+                "static char separator='.';\n"
+                "int probe(void){return table.digits[2]+separator;}\n"
+                "#pragma procmacro PROBE probe\n"
+                "int parsed=PROBE();\n"
+                "return parsed==('2'+'.') && probe()==parsed;\n"),
+            .exit_code = 1,
+        },
+        {
+            "procmacro: file-scope static initialization runs once", __LINE__,
+            SVI("static int count=40;\n"
+                "int next(void){return ++count;}\n"
+                "#pragma procmacro NEXT next\n"
+                "int a=NEXT(); int b=NEXT();\n"
+                "return a==41 && b==42 && next()==43;\n"),
+            .exit_code = 1,
+        },
+        {
+            "procmacro: address of a previously prepared function", __LINE__,
+            SVI("int leaf(int n){return n+1;}\n"
+                "int first(int n){return leaf(n);}\n"
+                "#pragma procmacro first\n"
+                "int second(int n){static int (*p)(int)=leaf; return p(n);}\n"
+                "#pragma procmacro second\n"
+                "return first(2)+second(3);\n"),
+            .exit_code = 7,
+        },
+        {
+            "module: unused eager body does not resolve externs", __LINE__,
+            SVI("_Module m=__compile(\"int missing_dvm_dep(void); int unused(void){return missing_dvm_dep();} int used(void){return 9;} return used();\", nullptr);\n"
+                "return m.run();\n"),
+            .exit_code = 9,
+        },
+        {
+            "procmacro: transitive dependencies without resolve", __LINE__,
+            SVI("int g;\n"
+                "int leaf(int n){return n ? leaf(n-1)+1 : ++g;}\n"
+                "int middle(int n){static int (*p)(int)=leaf; return p(n);}\n"
+                "int macro(int n){return middle(n);}\n"
+                "#pragma procmacro macro\n"
+                "return macro(5);\n"),
+            .exit_code = 6,
+        },
+        {
+            "procmacro: argument dependencies without resolve", __LINE__,
+            SVI("int g; int helper(void){return ++g;}\n"
+                "int identity(int n){return n;}\n"
+                "#pragma procmacro identity\n"
+                "return identity(helper());\n"),
+            .exit_code = 1,
+        },
         {
             "procmacro: any string literal result", __LINE__,
             SVI(
@@ -1091,7 +1175,7 @@ TestFunction(test_interp){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .exit_code = -1,
@@ -1141,7 +1225,7 @@ TestFunction(test_interp){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
@@ -1163,6 +1247,8 @@ TestFunction(test_interp){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -1277,7 +1363,6 @@ TestFunction(test_interp_fail){
         {
             "procmacro: argument with side effects", __LINE__,
             SVI("int n;\n"
-                "#pragma resolve n\n"
                 "int identity(int x){ return x; }\n"
                 "#pragma procmacro identity\n"
                 "return identity(++n) + identity(++n);\n"),
@@ -1287,7 +1372,6 @@ TestFunction(test_interp_fail){
         {
             "procmacro: argument is alloca", __LINE__,
             SVI("char* p;\n"
-                "#pragma resolve p\n"
                 "const char* identity(const char* s){ return s; }\n"
                 "#pragma procmacro identity\n"
                 "const char* s = identity((p = __builtin_alloca(3), p[0] = 111, p[1] = 107, p[2] = 0, p));\n"
@@ -1311,7 +1395,7 @@ TestFunction(test_interp_fail){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {.allocator = al};
+        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .can_dlopen = 1,
@@ -1355,7 +1439,7 @@ TestFunction(test_interp_fail){
         TEST_stats.executed++;
         err = cc_parse_all(&interp.parser);
         if(err) {err = 0; goto finally;}
-        err = ci_resolve_refs(&interp, 0);
+        err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         CiInterpFrame* frame = &interp.top_frame;
@@ -1373,6 +1457,8 @@ TestFunction(test_interp_fail){
         test_expect_equals_sv(tc->expected_msg, sv, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
         if(err && sv_equals(tc->expected_msg, sv)) err = 0;
         if(err) TEST_stats.failures++;
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
@@ -1380,11 +1466,14 @@ TestFunction(test_interp_fail){
     TESTEND();
 }
 
+TestFunction(test_native_closure_retry);
+
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interop, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_native_closure_retry, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interp, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interp_fail, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
@@ -1404,6 +1493,41 @@ int main(int argc, char** argv){
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
 #include "native_call.c"
+
+TestFunction(test_native_closure_retry){
+    TESTBEGIN();
+    #ifndef NO_NATIVE_CALL
+    TestingAllocator ta = {.fail_at = 3};
+    LOCK_T_init(&ta.lock);
+    Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_NATIVE](), .allocator = al}};
+    CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
+    CcFunc func = {.type = &type};
+    // The third allocation registers the closure after its userdata and libffi wrapper.
+    int err = ci_create_closure(&ci, &func);
+    TestExpect(int, err, ==, CI_OOM_ERROR);
+    TestExpectTrue(_Bool, func.native_func == NULL && func.native_closure == NULL);
+    for(size_t i = 0; i < ta.recorder.count; i++)
+        TestExpect(size_t, ta.recorder.allocation_sizes[i], ==, 0);
+    ta.fail_at = 0;
+    err = ci_create_closure(&ci, &func);
+    TestExpect(int, err, ==, 0);
+    TestExpectTrue(_Bool, func.native_func != NULL && func.native_closure != NULL);
+    TestExpectTrue(_Bool, BPM_get(&ci.closure_map, &func) == (void*)func.native_func);
+    if(func.native_closure){
+        NativeClosure* closure = (NativeClosure* _Nonnull)func.native_closure;
+        void* userdata = closure->userdata;
+        native_closure_destroy(al, closure);
+        Allocator_free(al, userdata, sizeof(CiClosureData));
+    }
+    if(ci.closure_map.cap) Allocator_free(al, ci.closure_map.data, BPM_alloc_size(ci.closure_map.cap));
+    for(size_t i = 0; i < ta.recorder.count; i++)
+        TestExpect(size_t, ta.recorder.allocation_sizes[i], ==, 0);
+    recording_free_all(&ta.recorder);
+    recording_cleanup(&ta.recorder);
+    #endif
+    TESTEND();
+}
 
 #ifdef __DRC__
 #include "../Vendored/softfloat/softfloat_unity.c"

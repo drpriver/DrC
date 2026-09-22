@@ -22,7 +22,7 @@
 int main(int argc, char** argv, char** envp){
     Logger* logger = std_logger();
     if(!logger) return 1;
-    AtomTable at = {.allocator=MALLOCATOR};
+    AtomTable at = {0};
     Environment env = {.allocator=MALLOCATOR, .at=&at};
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
     // This is incorrect, but is good enough for now
