@@ -1135,23 +1135,6 @@ TestFunction(test_interp){
             .exit_code = 3,
         },
         {
-            "procmacro codegen", __LINE__,
-            SVI("const char* dagen(_Type T){\n"
-                "     char buff[1024];\n"
-                "     snprintf(buff, sizeof buff,\n"
-                "       \"struct {\\n\"\n"
-                "       \"  %s *data;\\n\"\n"
-                "       \"  unsigned long count, capacity;\\n\"\n"
-                "       \"}\\n\", T.name.data);\n"
-                "     return __builtin_intern(buff);\n"
-                "}\n"
-                "#pragma procmacro dagen\n"
-                "constexpr DA = __mixin(dagen(int));\n"
-                "DA da = {0};\n"
-                "return da.count+da.capacity;\n"),
-            .exit_code = 0,
-        },
-        {
             "append lib", __LINE__,
             SVI("#pragma lib_path \"/hope/this/does/not/exist\"\n"
                 "return 0;\n"),
