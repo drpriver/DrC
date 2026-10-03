@@ -495,8 +495,23 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         // at interpreted call sites.
         entry = (void(*)(void))(uintptr_t)func;
     #else
-        if(func->type->is_variadic)
+        if(func->type->is_variadic){
+            if(IS_WINDOWS){
+                StringView name = {func->name?func->name->length:0, func->name?func->name->data:""};
+                if(sv_equals(name, SV("printf")) || sv_equals(name, SV("fprintf")) || sv_equals(name, SV("snprintf"))){
+                    // Microslop made these inline wrappers in headers instead of symbols you can just
+                    // link against. wtf microslop.
+                    void* native;
+                    err = ci_try_dlsym(ci, func->name, &native);
+                    if(err) return err;
+                    if(native){
+                        func->native_func = (void(*)(void))native;
+                        return 0;
+                    }
+                }
+            }
             return ci_error(ci, func->loc, "cannot take address of variadic interpreted function");
+        }
         CiClosureData* cd = Allocator_zalloc(al, sizeof *cd);
         if(!cd) return CI_OOM_ERROR;
         cd->ci = ci;

@@ -315,6 +315,8 @@ int main(int argc, char** argv, char** envp){
             #endif
             #if defined _WIN32
             { SVI("printf"), (void*)&printf, },
+            { SVI("fprintf"), (void*)&fprintf, },
+            { SVI("snprintf"), (void*)&snprintf, },
             #endif
         };
         for(size_t i = 0; i < arrlen(crt_syms); i++){
