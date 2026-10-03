@@ -29,6 +29,7 @@ typedef struct CcScope CcScope;
 typedef struct CcFuncParam CcFuncParam;
 struct CcFuncParam {
     Atom name;
+    _Bool typed_pack;
     uint32_t sz, offset; // set by lowering
 };
 

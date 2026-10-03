@@ -261,6 +261,20 @@ TestFunction(test_samples){
         { __LINE__, CSVI("Samples/Extensions/__mixin.c"), .syntax_only = 1 , .skip=1},
         { __LINE__, CSVI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1 , .skip=1},
         { __LINE__, CSVI("Samples/Extensions/_Type.c"), .syntax_only = 1 , .skip=1},
+        {
+            __LINE__, CSVI("Samples/Extensions/_Any.c"),
+            SVI("hello world" EOL
+                "1" EOL
+                "s = {.x=1, .y=2}" EOL
+                "b = {.a={.x=1, .y=2}, .b={.x=3, .y=4}}" EOL
+                "a = {.arr=[{.x=11, .y=12}, {.x=13, .y=14}, {.x=15, .y=16}, {.x=17, .y=18}]}" EOL
+                "[5, 4, 3, 2, 1]" EOL
+                "(NULL)" EOL
+                "slice = [5, 4, 3]" EOL
+                "int float const char *" EOL
+                "Formatted output is pretty cool" EOL
+                "My favorite type is void *" EOL),
+        },
         { __LINE__, CSVI("Samples/Extensions/defblock.c"), .syntax_only = 1 , .skip=1},
         { __LINE__, CSVI("Samples/Extensions/enum_strings.c"), .syntax_only = 1 , .skip=1},
         { __LINE__, CSVI("Samples/Extensions/fucs.c"), .syntax_only = 1 , .skip=1},

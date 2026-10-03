@@ -32,6 +32,7 @@ typedef struct CcParsedParams CcParsedParams;
 struct CcParsedParams {
     Marray(CcFuncParam) names;
     CcScope* _Nullable scope;
+    SrcLoc typed_pack_loc;
 };
 
 static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
@@ -4605,6 +4606,38 @@ cc_parse_Generic(CcParser* p, CcValueClass vc, CcExpr*_Nullable*_Nonnull out){
 
 static
 int
+cc_pack_call_args(CcParser* p, SrcLoc loc, CcQualType slice, Parray(CcExpression)* args, uint32_t start){
+    uint32_t count = (uint32_t)args->count - start;
+    CcQualType element = ccqt_as_slice(slice)->pointee;
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0, 0, 0);
+    if(!array) return CC_OOM_ERROR;
+    for(uint32_t i = start; i < args->count; i++){
+        CcExpr** arg = (CcExpr**)&args->data[i];
+        int err = cc_implicit_cast(p, *arg, element, arg);
+        if(err) return err;
+    }
+    CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + count * sizeof(CcInitEntry));
+    if(!list) return CC_OOM_ERROR;
+    CcExpr* literal = cc_make_expr(p, CC_EXPR_COMPOUND_LITERAL, loc, (CcQualType){.bits=(uintptr_t)array}, 0);
+    if(!literal){
+        Allocator_free(cc_allocator(p), list, sizeof *list + count * sizeof(CcInitEntry));
+        return CC_OOM_ERROR;
+    }
+    list->loc = loc;
+    list->count = count;
+    for(uint32_t i = 0; i < count; i++)
+        list->entries[i] = (CcInitEntry){.path={.n_components=1, .idx0=i}, .value=(CcExpr*)args->data[start+i]};
+    literal->init_list = list;
+    CcExpr* packed;
+    int err = cc_implicit_cast(p, literal, slice, &packed);
+    if(err) return err;
+    args->count = start;
+    if(pa_push(args, cc_scratch_allocator(p), packed)) return CC_OOM_ERROR;
+    return 0;
+}
+
+static
+int
 cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
     CcExpr* _Nullable receiver = NULL;
     for(;;){
@@ -5343,7 +5376,10 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                 CcToken peek;
                 err = cc_next_token(p, &peek);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen && !receiver){
+                _Bool typed_pack = operand->kind == CC_EXPR_FUNCTION
+                                && operand->func->params.count
+                                && operand->func->params.data[operand->func->params.count-1].typed_pack;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen && !receiver && !typed_pack){
                     CcQualType ct = operand->type;
                     if(ccqt_kind(ct) == CC_POINTER)
                         ct = ccqt_as_ptr(ct)->pointee;
@@ -5362,7 +5398,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     continue;
                 }
                 _Bool rparen_consumed = 0;
-                if(receiver && peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen)
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen)
                     rparen_consumed = 1;
                 else
                     cc_unget(p, &peek);
@@ -5387,6 +5423,8 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     receiver = NULL;
                 }
                 _Bool has_named = 0;
+                _Bool explicit_pack = 0;
+                uint32_t pack_index = typed_pack ? ftype->param_count-1 : UINT32_MAX;
                 uint32_t positional_index = has_receiver ? 1 : 0;
                 if(rparen_consumed) goto call_args_done;
                 for(;;){
@@ -5436,6 +5474,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             goto call_cleanup;
                         }
                         args.data[idx] = arg;
+                        if(idx == pack_index) explicit_pack = 1;
                         has_named = 1;
                     }
                     else if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_lbracket){
@@ -5477,6 +5516,7 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                             goto call_cleanup;
                         }
                         args.data[idx] = arg;
+                        if(idx == pack_index) explicit_pack = 1;
                         has_named = 1;
                     }
                     else {
@@ -5485,7 +5525,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                                 positional_index++;
                         }
                         CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, vc, &arg, positional_index < ftype->param_count?ftype->params[positional_index]:CCQT_NONE);
+                        if(explicit_pack && positional_index >= pack_index){
+                            err = cc_error(p, dot.loc, "cannot combine an explicit typed pack with trailing arguments");
+                            goto call_cleanup;
+                        }
+                        CcQualType hint = positional_index < ftype->param_count ? ftype->params[positional_index] : CCQT_NONE;
+                        if(typed_pack && positional_index >= pack_index)
+                            hint = ccqt_as_slice(ftype->params[pack_index])->pointee;
+                        err = cc_parse_assignment_expr(p, vc, &arg, hint);
                         if(err) goto call_cleanup;
                         if(has_named){
                             if(args.count <= positional_index){
@@ -5521,6 +5568,14 @@ cc_parse_postfix(CcParser* p, CcValueClass vc, CcExpr* operand, CcExpr* _Nullabl
                     }
                 }
                 call_args_done:;
+                if(typed_pack && !explicit_pack){
+                    if(args.count < pack_index){
+                        err = cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", pack_index, (unsigned)args.count);
+                        goto call_cleanup;
+                    }
+                    err = cc_pack_call_args(p, tok.loc, ftype->params[pack_index], &args, pack_index);
+                    if(err) goto call_cleanup;
+                }
                 uint32_t nargs = (uint32_t)args.count;
                 if(has_named){
                     for(uint32_t i = 0; i < nargs && i < ftype->param_count; i++){
@@ -11248,12 +11303,42 @@ cc_parse_declarator_inner(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull
                     if(err) goto param_err;
                 }
 
+                SrcLoc param_loc = peek.loc;
+                _Bool typed_pack = 0;
+                err = cc_peek(p, &peek);
+                if(err) goto param_err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_ellipsis){
+                    if(!out_param_names){
+                        err = cc_error(p, peek.loc, "typed varargs require a direct function declaration");
+                        goto param_err;
+                    }
+                    err = cc_next_token(p, &peek);
+                    if(err) goto param_err;
+                    out_param_names->typed_pack_loc = peek.loc;
+                    CcQualType element = cc_intern_qualtype(p, param_head);
+                    uint32_t size;
+                    if(ccqt_bt_eq(element, CCBT_void) || ccqt_kind(element) == CC_FUNCTION
+                        || cc_type_sizeof_complete(cc_target(p), element, &size)){
+                        err = cc_error(p, peek.loc, "typed varargs require a complete object element type");
+                        goto param_err;
+                    }
+                    err = cc_slice_of(p, element, &param_head);
+                    if(err) goto param_err;
+                    typed_pack = 1;
+                    err = cc_peek(p, &peek);
+                    if(err) goto param_err;
+                    if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_rparen){
+                        err = cc_error(p, peek.loc, "typed varargs must be the last parameter");
+                        goto param_err;
+                    }
+                }
+
                 err = ma_push(CcQualType)(&param_types, cc_scratch_allocator(p), param_head);
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
 
                 if(param_name){
                     if(cc_scope_lookup_var(p->current, param_name, CC_SCOPE_NO_WALK)){
-                        err = cc_error(p, peek.loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
+                        err = cc_error(p, param_loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
                         goto param_err;
                     }
                 }
@@ -11269,12 +11354,12 @@ cc_parse_declarator_inner(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull
                 CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
                 if(!var){ err = CC_OOM_ERROR; goto param_err; }
                 if(!param_name) param_name = nil_atom;
-                *var = (CcVariable){.name = param_name, .loc = peek.loc, .type = param_type, .automatic = 1};
+                *var = (CcVariable){.name = param_name, .loc = param_loc, .type = param_type, .automatic = 1};
                 err = cc_scope_insert_var(cc_allocator(p), p->current, param_name, var);
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
                 if(out_param_names){
                     Marray(CcFuncParam)* pn = &out_param_names->names;
-                    err = ma_push(CcFuncParam)(pn, cc_allocator(p), (CcFuncParam){.name = param_name});
+                    err = ma_push(CcFuncParam)(pn, cc_allocator(p), (CcFuncParam){.name = param_name, .typed_pack = typed_pack});
                     if(err){ err = CC_OOM_ERROR; goto param_err; }
                 }
 
@@ -11324,6 +11409,10 @@ int
 cc_parse_declarator(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, SrcLoc* _Nullable out_name_loc, CcParsedParams *_Nullable out_param_names){
     CcScope* saved_scope = p->current;
     int err = cc_parse_declarator_inner(p, out_head, out_tail, out_name, out_name_loc, out_param_names);
+    if(!err && out_param_names && out_param_names->names.count
+        && out_param_names->names.data[out_param_names->names.count-1].typed_pack
+        && (!out_name || ccqt_kind(*out_head) != CC_FUNCTION))
+        err = cc_error(p, out_param_names->typed_pack_loc, "typed varargs require a direct function declaration");
     while(p->current != saved_scope){
         CcScope* scope = p->current;
         if(out_param_names && scope == out_param_names->scope){
@@ -11424,6 +11513,17 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
             return t;
         DRP_CASES_EXHAUSTED;
     }
+}
+
+static
+int
+cc_check_pack_decl(CcParser* p, CcFunc* func, CcParsedParams* params, CcQualType type, SrcLoc loc){
+    if(func->type->no_prototype || ccqt_as_function(type)->no_prototype) return 0;
+    _Bool old_pack = func->params.count && func->params.data[func->params.count-1].typed_pack;
+    _Bool new_pack = params->names.count && params->names.data[params->names.count-1].typed_pack;
+    if(old_pack != new_pack)
+        return cc_error(p, loc, "conflicting typed varargs specifier for '%.*s'", func->name->length, func->name->data);
+    return 0;
 }
 
 static
@@ -11609,6 +11709,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 if(func->defined)
                     return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
                 err = cc_check_func_compat(p, func, declbase, type, 1, tok.loc);
+                if(err) return err;
+                err = cc_check_pack_decl(p, func, &param_names, type, tok.loc);
                 if(err) return err;
                 err = cc_merge_func_decl_type(p, func->type, &type);
                 if(err) return err;
@@ -11847,6 +11949,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         }
         if(declbase->spec.sp_typedef){
             CcSymbol sym;
+            if(param_names.names.count && param_names.names.data[param_names.names.count-1].typed_pack)
+                return cc_error(p, param_names.typed_pack_loc, "typed varargs require a direct function declaration");
             _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
             if(found){
                 switch(sym.kind){
@@ -11894,6 +11998,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             _Bool keep_prototype = func && !func->type->no_prototype && ccqt_as_function(type)->no_prototype;
             if(func){
                 err = cc_check_func_compat(p, func, declbase, type, 0, tok.loc);
+                if(err) return err;
+                err = cc_check_pack_decl(p, func, &param_names, type, tok.loc);
                 if(err) return err;
                 err = cc_merge_func_decl_type(p, func->type, &type);
                 if(err) return err;

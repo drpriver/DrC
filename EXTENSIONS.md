@@ -32,6 +32,7 @@
   * [Function Uniform Call Syntax (FUCS)](#function-uniform-call-syntax-fucs)
   * [Plan9 struct embedding](#plan9-struct-embedding)
   * [Slices](#slices)
+  * [Typed Variadics](#typed-variadics)
   * [`_Type`](#type)
     * [Properties](#properties)
     * [Methods](#methods)
@@ -629,6 +630,39 @@ char no[:] = (char[:])ci;   // error: cannot cast to slice of different type
 
 Slices of `void` and slices of functions are not allowed.
 We might allow slices of `void` at some point.
+
+### Typed Variadics
+
+A function can have its last param be variadic by immediately following it
+with `...`. This is sugar for a function taking a slice of that type and
+passing a sliced array compound literal.
+
+```C
+int sum(int vals...){ // vals is int[:]
+  int result = 0;
+  for(size_t i = 0; i < _Countof vals; i++)
+    result += vals[i];
+  return result;
+}
+sum(1, 2, 3); // like sum((int[]){1,2,3}[:]);
+```
+
+
+To pass a slice to the variadic param instead of comma-separated args, use a named argument
+
+```C
+int a[] = {1,2,3};
+sum(.vals=a);
+```
+
+
+This sugar only applies to direct calls. Function pointers do not allow the typed variadic syntax.
+
+```C
+int(*fp)(int[:]) = sum;
+fp(1,2,3); // error
+fp((int[]){1,2,3}); // ok
+```
 
 ### `_Type`
 

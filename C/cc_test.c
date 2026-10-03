@@ -3795,6 +3795,11 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "typed varargs have ordinary slice function types", __LINE__,
+            SVI("int sum(int args...);\n"),
+            .funcs = {{SVI("sum"), SVI("int(int[:])")}},
+        },
+        {
             "call: char arg promoted to int param", __LINE__,
             SVI("int f(int x);\n"
                "char c;\n"
@@ -6041,6 +6046,66 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        {
+            "typed varargs reject function pointer syntax", __LINE__,
+            SVI("int (*p)(int...);"),
+            SVI("(test):1:13: error: typed varargs require a direct function declaration\n"),
+        },
+        {
+            "typed varargs reject abstract function types", __LINE__,
+            SVI("(int(int...));"),
+            SVI("(test):1:9: error: typed varargs require a direct function declaration\n"),
+        },
+        {
+            "typed varargs reject function typedef syntax", __LINE__,
+            SVI("typedef int F(int...);"),
+            SVI("(test):1:18: error: typed varargs require a direct function declaration\n"),
+        },
+        {
+            "typed varargs must be last", __LINE__,
+            SVI("int f(int args..., int x);"),
+            SVI("(test):1:18: error: typed varargs must be the last parameter\n"),
+        },
+        {
+            "typed varargs reject incomplete elements", __LINE__,
+            SVI("struct S; int f(struct S args...);"),
+            SVI("(test):1:30: error: typed varargs require a complete object element type\n"),
+        },
+        {
+            "typed varargs require fixed arguments", __LINE__,
+            SVI("int f(int x, int args...);\nint n=f();"),
+            SVI("(test):2:8: error: Too few arguments: expected at least 1, got 0\n"),
+        },
+        {
+            "typed varargs function pointers do not pack", __LINE__,
+            SVI("int f(int args...);\nint (*p)(int[:])=f;\nint n=p(1,2);"),
+            SVI("(test):3:8: error: Expected 1 arguments, got 2\n"),
+        },
+        {
+            "typed varargs check element conversions", __LINE__,
+            SVI("int f(int args...);\nint n=f(\"bad\");"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'char[4]' to 'int'\n"),
+        },
+        {
+            "typed varargs redeclarations must agree", __LINE__,
+            SVI("int f(int args...);\nint f(int args[:]);"),
+            SVI("(test):2:19: error: conflicting typed varargs specifier for 'f'\n"),
+        },
+        {
+            "typed varargs definitions must agree", __LINE__,
+            SVI("int f(int args...);\nint f(int args[:]){return 0;}"),
+            SVI("(test):2:19: error: conflicting typed varargs specifier for 'f'\n"),
+        },
+        {
+            "slice declarations cannot acquire a typed varargs marker", __LINE__,
+            SVI("int f(int args[:]);\nint f(int args...);"),
+            SVI("(test):2:19: error: conflicting typed varargs specifier for 'f'\n"),
+        },
+        {
+            "typed varargs reject trailing args after an explicit slice", __LINE__,
+            SVI("int f(int args...);\nint n=f(.args=(int[]){1},2);"),
+            SVI("(test):2:26: error: cannot combine an explicit typed pack with trailing arguments\n"),
+        },
         {
             "TLS redeclaration requires matching storage duration", __LINE__,
             SVI("_Thread_local int x;\nint x;\n"),

@@ -202,6 +202,24 @@ int oob(int vals[:]){
 oob(a[:2]); // error: slice subscript out of bounds
 ```
 
+
+This can also be used for typed varargs, which are just sugar over
+a compound array literal that gets sliced.
+
+```C
+int sum(int vals...){
+  int result = 0;
+  for(size_t i = 0; i < vals.count; i++){
+    result += vals[i];
+  }
+  return result;
+}
+printf("sum(1,2,3,4,) = %d\n", sum(1,2,3,4));
+int a[] = {1,2,3,4};
+// You can use named arguments to call with an array or slice
+printf("sum(a) = %d\n", sum(.vals=a));
+```
+
 ## Static If
 
 Include or exclude statements/decls based on compile time expressions.

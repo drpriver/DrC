@@ -452,6 +452,59 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "typed varargs: direct calls pack slices including empty packs", __LINE__,
+            SVI("int sum(int args...){int r=0; for(size_t i=0;i<_Countof args;i++) r+=args[i]; return r;}\n"
+                "return sum(1,2,3)==6&&sum(1,2,3,4,3)==13&&sum()==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: fixed and named arguments with element conversions", __LINE__,
+            SVI("long sum(int start, long args...){long r=start; for(size_t i=0;i<args.count;i++) r+=args[i]; return r;}\n"
+                "return sum(4,1,2)==7&&sum(.start=5,2,3)==10&&sum(9)==9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: Any boxing preserves float and aggregate types", __LINE__,
+            SVI("struct S {int x;};\n"
+                "int check(_Any args...){return args.count==4&&args[0].type==int&&args[0].as(int)==1\n"
+                "&&args[1].type==float&&args[1].as(float)==2.f\n"
+                "&&args[2].type==double&&args[2].as(double)==3.\n"
+                "&&args[3].type==struct S&&args[3].as(struct S).x==4;}\n"
+                "return check(1,2.f,3.,(struct S){4});\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: function pointers take ordinary slices", __LINE__,
+            SVI("int sum(int args...){int r=0; for(size_t i=0;i<args.count;i++) r+=args[i]; return r;}\n"
+                "int (*p)(int[:])=sum; int a[]={2,3};\n"
+                "return p(a)==5&&p((int[]){4,5}[:])==9&&typeof(sum)==typeof(p).pointee;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: arguments evaluated once and storage survives call", __LINE__,
+            SVI("int calls; int next(void){return ++calls;}\n"
+                "int retain(int args...)[:]{return args;}\n"
+                "int test(void){int s[:]=retain(next(),next()); return calls==2&&s.count==2&&s[0]+s[1]==3;}\n"
+                "return test();\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: explicit slices, aggregates and nested packs", __LINE__,
+            SVI("struct S {int x,y;}; int sum(struct S args...){int r=0; for(size_t i=0;i<args.count;i++) r+=args[i].x+args[i].y; return r;}\n"
+                "struct S a[]={{1,2},{3,4}};\n"
+                "int nested(int args...){return args[0]+args[1];}\n"
+                "return sum({1,2},{3,4})==10&&sum(.args=a)==10&&sum([0]=a)==10\n"
+                "&&nested(nested(1,2),nested(3,4))==10;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: prototypes and definitions retain pack metadata", __LINE__,
+            SVI("int sum(int values...); int sum(int args...){int r=0; for(size_t i=0;i<args.count;i++) r+=args[i]; return r;}\n"
+                "int sum(int renamed...); int sum();\n"
+                "return sum(2,3)==5&&sum(.args=(int[]){7})==7;\n"),
+            .exit_code = 1,
+        },
+        {
             "constant slices: runtime bounds retain their effects", __LINE__,
             SVI("int calls; int low(void){calls++;return 1;} static int a[4]={3,5,7,9};\n"
                 "struct S {int part[:]; int marker;} s={a[low():3],7};\n"

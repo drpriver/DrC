@@ -83,15 +83,14 @@ void print_dynamic(_Type T, const void* p){
         break;
     }
 }
-void print(_Any args[:]){
+void print(_Any args...){
     for(size_t i = 0; i < _Countof args; i++){
         if(i) printf(" ");
         print_dynamic(args[i].type, args[i].payload);
     }
     printf("\n");
 }
-#define print(...) print((_Any[]){__VA_ARGS__})
-void printfmt(const char fmt[:], _Any args[:]){
+void printfmt(const char fmt[:], _Any args...){
     size_t i, prev, n, argidx;
     for(i = 0, n = fmt.count, prev=0, argidx=0; i < n; i++){
         if(fmt[i] == '%'){
@@ -110,7 +109,6 @@ void printfmt(const char fmt[:], _Any args[:]){
         printf("%.*s", (int)(i-prev), &fmt[prev]);
     }
 }
-#define printfmt(fmt, ...) printfmt(fmt, (_Any[]){__VA_ARGS__})
 
 
 

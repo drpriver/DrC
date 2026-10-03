@@ -137,6 +137,10 @@ static struct OomTestCase {
     {__LINE__, SVI("constexpr union U {_Type t; unsigned long bits; struct B {unsigned low;} b;}\n"
          "u={.t=int,.b.low=7}; static struct B copy=u.b;\n"
          "_Static_assert(u.b.low==7); return copy.low==7;\n")},
+    {__LINE__, SVI("int sum(int args...){int r=0; for(size_t i=0;i<args.count;i++) r+=args[i]; return r;}\n"
+         "return sum(1,2,3)==6&&sum()==0;\n")},
+    {__LINE__, SVI("int check(_Any args...){return args.count==2&&args[0].as(int)==7&&args[1].as(double)==3.;}\n"
+         "return check(7,3.);\n")},
     {__LINE__, SVI("static int a[4]={3,5,7,9}; constexpr const int part[:]=a[1:4];\n"
          "static const int tail[:]=part[1:]; static const int head[:]=part[:1];\n"
          "static const int empty[:]=a[4:4]; static const int whole[:]=a;\n"
