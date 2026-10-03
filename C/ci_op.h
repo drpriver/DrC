@@ -73,13 +73,6 @@ enum CiCheckedOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 
-enum CiBitCountOp TYPED_ENUM(uint32_t){
-    CI_BITCNT_POPCOUNT,
-    CI_BITCNT_CLZ,
-    CI_BITCNT_CTZ,
-};
-TYPEDEF_ENUM(CiBitCountOp, uint32_t);
-
 enum CiRuntimeOp TYPED_ENUM(uint32_t){
     CI_RT_INTERN,
     CI_RT_HOTSWAP,
@@ -117,7 +110,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FCMP80,
     CI_OP_FCMP128,
     CI_OP_CHECKED,
-    CI_OP_BITCOUNT,
+    CI_OP_BIT_BUILTIN,
     CI_OP_CONVERT,
     CI_OP_ITOF,
     CI_OP_FTOI,
@@ -292,16 +285,15 @@ struct CiOp {
             uint32_t pad;
             SrcLoc loc;
         } checked;
+
         struct {
-            CiOpKind kind: 8; // CI_OP_BITCOUNT
-            CiBitCountOp op: 8;
-            uint32_t src_size: 8,
-                     _bitpad: 8;
-            uint32_t slot, slot_size,
-                     src;
-            uint64_t pad;
+            CiOpKind kind: 8;
+            CcBitBuiltinOp op: 8;
+            uint32_t src_size: 8, src2_size: 8;
+            uint32_t slot, slot_size, src, src2;
+            uint32_t pad;
             SrcLoc loc;
-        } bitcount;
+        } bit_builtin;
         struct {
             CiOpKind kind: 8; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
             uint32_t is_unsigned: 1,

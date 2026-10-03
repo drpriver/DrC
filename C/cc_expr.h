@@ -10,6 +10,7 @@
 #include "cc_type.h"
 #include "cc_memory_order.h"
 #include "ci_softnum.h"
+#include "cc_bit_builtin.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/ckdint.h"
 #ifdef __clang__
@@ -85,9 +86,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_ADD_OVERFLOW,
     CC_EXPR_MUL_OVERFLOW,
     CC_EXPR_SUB_OVERFLOW,
-    CC_EXPR_POPCOUNT,
-    CC_EXPR_CLZ,
-    CC_EXPR_CTZ,
+    CC_EXPR_BIT_BUILTIN,
     CC_EXPR_BSWAP,
     CC_EXPR_ALLOCA,
     CC_EXPR_INTERN, // __builtin_intern(const char*) -> const char*
@@ -484,6 +483,13 @@ struct CcExpr {
         } call;
         struct {
             CcExprKind kind: 8;
+            CcBitBuiltinOp op: 8;
+            uint32_t _padding: 15;
+            uint32_t is_lvalue: 1;
+            uint32_t nargs;
+        } bit_builtin;
+        struct {
+            CcExprKind kind: 8;
             uint32_t _pad: 23;
             uint32_t is_lvalue: 1;
             uint32_t length; //
@@ -582,7 +588,6 @@ cc_expr_field_bit_offset(const CcExpr* e){
 }
 
 _Static_assert(offsetof(CcExpr, loc) ==8, "");
-
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

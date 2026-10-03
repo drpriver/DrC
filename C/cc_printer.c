@@ -625,21 +625,16 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
         case CC_EXPR_UMUL128:
             msb_write_literal(sb, "<unimpl>");
             return;
-        case CC_EXPR_POPCOUNT:
-            msb_write_literal(sb, "popcount(");
+        case CC_EXPR_BIT_BUILTIN:
+            msb_sprintf(sb, "%s(", cc_bit_builtin_name(e->bit_builtin.op));
             cc_print_expr(sb, e->lhs);
+            if(e->bit_builtin.nargs){
+                msb_write_literal(sb, ", ");
+                cc_print_expr(sb, e->values[0]);
+            }
             msb_write_literal(sb, ")");
             return;
-        case CC_EXPR_CTZ:
-            msb_write_literal(sb, "ctz(");
-            cc_print_expr(sb, e->lhs);
-            msb_write_literal(sb, ")");
-            return;
-        case CC_EXPR_CLZ:
-            msb_write_literal(sb, "clz(");
-            cc_print_expr(sb, e->lhs);
-            msb_write_literal(sb, ")");
-            return;
+
         case CC_EXPR_BSWAP:
             msb_write_literal(sb, "bswap(");
             cc_print_expr(sb, e->lhs);

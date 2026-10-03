@@ -773,6 +773,23 @@ TestFunction(test_parse_decls){
             .vars = {{.name=SVI("t"), .repr=SVI("const _Type"), .eval=1}},
         },
         {
+            "bit builtin printer uses names and retains optional arguments", __LINE__,
+            SVI("unsigned u; int s;\n"
+                "int a=__builtin_popcount(u), b=__builtin_clzg(u,s), c=__builtin_ctzg(u);\n"
+                "int d=__builtin_ffsg(s), e=__builtin_clrsbg(s), f=__builtin_parityg(u);\n"
+                "unsigned r=__builtin_stdc_rotate_left(u,s), z=__builtin_stdc_count_zeros(u);\n"),
+            .vars = {
+                {.name=SVI("a"), .repr=SVI("int"), .init=SVI("__builtin_popcountg(u)")},
+                {.name=SVI("b"), .repr=SVI("int"), .init=SVI("__builtin_clzg(u, s)")},
+                {.name=SVI("c"), .repr=SVI("int"), .init=SVI("__builtin_ctzg(u)")},
+                {.name=SVI("d"), .repr=SVI("int"), .init=SVI("__builtin_ffsg(s)")},
+                {.name=SVI("e"), .repr=SVI("int"), .init=SVI("__builtin_clrsbg(s)")},
+                {.name=SVI("f"), .repr=SVI("int"), .init=SVI("__builtin_parityg(u)")},
+                {.name=SVI("r"), .repr=SVI("unsigned int"), .init=SVI("__builtin_stdc_rotate_left(u, s)")},
+                {.name=SVI("z"), .repr=SVI("unsigned int"), .init=SVI("__builtin_stdc_count_zeros(u)")},
+            },
+        },
+        {
             "member printer: whole anonymous base retains its address adjustment", __LINE__,
             SVI("struct L {int x;}; struct S {int pad; struct L;}; struct S s; struct L* p=&s;\n"),
             .vars = {{.name=SVI("p"), .repr=SVI("struct L *"), .init=SVI("&*(struct L *)((char *)(&s) + 4)")}},

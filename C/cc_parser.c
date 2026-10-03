@@ -184,7 +184,6 @@ struct CcStmtSink {
 #pragma clang assume_nonnull begin
 #endif
 
-
 static int cc_parse_init(CcParser* p, CcValueClass vc, CcQualType target, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value, Marray(uint32_t)* path);
 
 typedef struct CcSpecifier CcSpecifier;
@@ -1163,7 +1162,6 @@ cc_parse_lambda(CcParser* p, CcValueClass vc, SrcLoc loc, CcExpr* _Nullable* _No
     }
     return cc_parse_lambda_body(p, vc, loc, type, &param_names, out);
 }
-
 
 static
 int
@@ -2439,9 +2437,7 @@ cc_parse_infix(CcParser* p, CcValueClass vc, CcExpr* left, int min_prec, CcExpr*
             case CC_EXPR_ADD_OVERFLOW:
             case CC_EXPR_MUL_OVERFLOW:
             case CC_EXPR_SUB_OVERFLOW:
-            case CC_EXPR_POPCOUNT:
-            case CC_EXPR_CLZ:
-            case CC_EXPR_CTZ:
+            case CC_EXPR_BIT_BUILTIN:
             case CC_EXPR_ALLOCA:
             case CC_EXPR_INTERN:
             case CC_EXPR_HOTSWAP:
@@ -2729,9 +2725,7 @@ cc_parse_prefix(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                 case CC_EXPR_ADD_OVERFLOW:
                 case CC_EXPR_MUL_OVERFLOW:
                 case CC_EXPR_SUB_OVERFLOW:
-                case CC_EXPR_POPCOUNT:
-                case CC_EXPR_CLZ:
-                case CC_EXPR_CTZ:
+                case CC_EXPR_BIT_BUILTIN:
                 case CC_EXPR_ALLOCA:
                 case CC_EXPR_INTERN:
                 case CC_EXPR_HOTSWAP:
@@ -3733,54 +3727,123 @@ cc_parse_primary(CcParser* p, CcValueClass vc, CcExpr* _Nullable* _Nonnull out){
                     *out = node;
                     return 0;
                 }
-                case CC__builtin_popcount:
-                case CC__builtin_popcountl:
-                case CC__builtin_popcountll:{
+                {
+                    CcBitBuiltinOp op;
+                case CC__builtin_popcount: op = CC_BIT_POPCOUNT; goto bit_builtin;
+                case CC__builtin_popcountl: op = CC_BIT_POPCOUNT; goto bit_builtin;
+                case CC__builtin_popcountll: op = CC_BIT_POPCOUNT; goto bit_builtin;
+                case CC__builtin_clz: op = CC_BIT_CLZ; goto bit_builtin;
+                case CC__builtin_clzl: op = CC_BIT_CLZ; goto bit_builtin;
+                case CC__builtin_clzll: op = CC_BIT_CLZ; goto bit_builtin;
+                case CC__builtin_ctz: op = CC_BIT_CTZ; goto bit_builtin;
+                case CC__builtin_ctzl: op = CC_BIT_CTZ; goto bit_builtin;
+                case CC__builtin_ctzll: op = CC_BIT_CTZ; goto bit_builtin;
+                case CC__builtin_ffs: op = CC_BIT_FFS; goto bit_builtin;
+                case CC__builtin_ffsl: op = CC_BIT_FFS; goto bit_builtin;
+                case CC__builtin_ffsll: op = CC_BIT_FFS; goto bit_builtin;
+                case CC__builtin_clrsb: op = CC_BIT_CLRSB; goto bit_builtin;
+                case CC__builtin_clrsbl: op = CC_BIT_CLRSB; goto bit_builtin;
+                case CC__builtin_clrsbll: op = CC_BIT_CLRSB; goto bit_builtin;
+                case CC__builtin_parity: op = CC_BIT_PARITY; goto bit_builtin;
+                case CC__builtin_parityl: op = CC_BIT_PARITY; goto bit_builtin;
+                case CC__builtin_parityll: op = CC_BIT_PARITY; goto bit_builtin;
+                case CC__builtin_ffsg: op = CC_BIT_FFS; goto bit_builtin;
+                case CC__builtin_clzg: op = CC_BIT_CLZ; goto bit_builtin;
+                case CC__builtin_ctzg: op = CC_BIT_CTZ; goto bit_builtin;
+                case CC__builtin_clrsbg: op = CC_BIT_CLRSB; goto bit_builtin;
+                case CC__builtin_popcountg: op = CC_BIT_POPCOUNT; goto bit_builtin;
+                case CC__builtin_parityg: op = CC_BIT_PARITY; goto bit_builtin;
+                case CC__builtin_stdc_bit_ceil: op = CC_BIT_BIT_CEIL; goto bit_builtin;
+                case CC__builtin_stdc_bit_floor: op = CC_BIT_BIT_FLOOR; goto bit_builtin;
+                case CC__builtin_stdc_bit_width: op = CC_BIT_BIT_WIDTH; goto bit_builtin;
+                case CC__builtin_stdc_count_ones: op = CC_BIT_COUNT_ONES; goto bit_builtin;
+                case CC__builtin_stdc_count_zeros: op = CC_BIT_COUNT_ZEROS; goto bit_builtin;
+                case CC__builtin_stdc_first_leading_one: op = CC_BIT_FIRST_LEADING_ONE; goto bit_builtin;
+                case CC__builtin_stdc_first_leading_zero: op = CC_BIT_FIRST_LEADING_ZERO; goto bit_builtin;
+                case CC__builtin_stdc_first_trailing_one: op = CC_BIT_FIRST_TRAILING_ONE; goto bit_builtin;
+                case CC__builtin_stdc_first_trailing_zero: op = CC_BIT_FIRST_TRAILING_ZERO; goto bit_builtin;
+                case CC__builtin_stdc_has_single_bit: op = CC_BIT_HAS_SINGLE_BIT; goto bit_builtin;
+                case CC__builtin_stdc_leading_ones: op = CC_BIT_LEADING_ONES; goto bit_builtin;
+                case CC__builtin_stdc_leading_zeros: op = CC_BIT_LEADING_ZEROS; goto bit_builtin;
+                case CC__builtin_stdc_trailing_ones: op = CC_BIT_TRAILING_ONES; goto bit_builtin;
+                case CC__builtin_stdc_trailing_zeros: op = CC_BIT_TRAILING_ZEROS; goto bit_builtin;
+                case CC__builtin_stdc_rotate_left: op = CC_BIT_ROTATE_LEFT; goto bit_builtin;
+                case CC__builtin_stdc_rotate_right: op = CC_BIT_ROTATE_RIGHT; goto bit_builtin;
+                    bit_builtin:;
+                    _Bool fixed = (builtin >= CC__builtin_popcount && builtin <= CC__builtin_clzll) || (builtin >= CC__builtin_ffs && builtin <= CC__builtin_parityll);
+                    _Bool stdc = builtin >= CC__builtin_stdc_bit_ceil && builtin <= CC__builtin_stdc_rotate_right;
+                    _Bool rotate = op == CC_BIT_ROTATE_LEFT || op == CC_BIT_ROTATE_RIGHT;
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
                     if(err) return err;
-                    CcBasicTypeKind param = builtin == CC__builtin_popcountl ? CCBT_unsigned_long
-                        : builtin == CC__builtin_popcountll ? CCBT_unsigned_long_long : CCBT_unsigned;
-                    err = cc_implicit_cast(p, arg, ccqt_basic(param), &arg);
+                    if(fixed){
+                        CcBasicTypeKind param;
+                        switch(builtin){
+                            case CC__builtin_popcount: param = CCBT_unsigned; break;
+                            case CC__builtin_popcountl: param = CCBT_unsigned_long; break;
+                            case CC__builtin_popcountll: param = CCBT_unsigned_long_long; break;
+                            case CC__builtin_clz: param = CCBT_unsigned; break;
+                            case CC__builtin_clzl: param = CCBT_unsigned_long; break;
+                            case CC__builtin_clzll: param = CCBT_unsigned_long_long; break;
+                            case CC__builtin_ctz: param = CCBT_unsigned; break;
+                            case CC__builtin_ctzl: param = CCBT_unsigned_long; break;
+                            case CC__builtin_ctzll: param = CCBT_unsigned_long_long; break;
+                            case CC__builtin_ffsl: case CC__builtin_clrsbl: param = CCBT_long; break;
+                            case CC__builtin_ffsll: case CC__builtin_clrsbll: param = CCBT_long_long; break;
+                            case CC__builtin_parity: param = CCBT_unsigned; break;
+                            case CC__builtin_parityl: param = CCBT_unsigned_long; break;
+                            case CC__builtin_parityll: param = CCBT_unsigned_long_long; break;
+                            default: param = CCBT_int; break;
+                        }
+                        err = cc_implicit_cast(p, arg, ccqt_basic(param), &arg);
+                        if(err) return err;
+                    }
+                    else {
+                        _Bool signed_arg = op == CC_BIT_FFS || op == CC_BIT_CLRSB;
+                        if(!ccqt_is_integer(arg->type) || ccqt_is_bool(arg->type) || (ccqt_is_unsigned(arg->type, !cc_target(p)->char_is_signed) == signed_arg))
+                            return cc_error(p, arg->loc, "bit builtin requires %s integer argument", signed_arg ? "a signed" : "an unsigned");
+                        // Load lvalues without applying integral promotions.
+                        err = cc_implicit_cast(p, arg, arg->type, &arg);
+                        if(err) return err;
+                    }
+                    CcExpr* second = NULL;
+                    CcToken next;
+                    err = cc_peek(p, &next);
                     if(err) return err;
+                    if(rotate || (!fixed && (op == CC_BIT_CLZ || op == CC_BIT_CTZ) && next.type == CC_PUNCTUATOR && next.punct.punct == ',')){
+                        err = cc_expect_punct(p, ',');
+                        if(err) return err;
+                        err = cc_parse_assignment_expr(p, vc, &second, CCQT_NONE);
+                        if(err) return err;
+                        if(rotate){
+                            if(!ccqt_is_integer(second->type))
+                                return cc_error(p, second->loc, "rotation count must have integer type");
+                            err = cc_implicit_cast(p, second, second->type, &second);
+                        }
+                        else {
+                            if(!ccqt_bt_eq(second->type, CCBT_int))
+                                return cc_error(p, second->loc, "zero fallback must have int type");
+                            err = cc_implicit_cast(p, second, ccqt_basic(CCBT_int), &second);
+                        }
+                        if(err) return err;
+                    }
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_POPCOUNT, tok.loc, ccqt_basic(CCBT_int), 0);
+                    CcQualType result_type = stdc ? ccqt_basic(CCBT_unsigned) : ccqt_basic(CCBT_int);
+                    if(op == CC_BIT_BIT_CEIL || op == CC_BIT_BIT_FLOOR || rotate)
+                        result_type = (CcQualType){.unqual = arg->type.unqual};
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BIT_BUILTIN, tok.loc, result_type, second != NULL);
                     if(!node) return CC_OOM_ERROR;
+                    node->bit_builtin.op = op;
+                    node->bit_builtin.nargs = second != NULL;
                     node->lhs = arg;
+                    if(second) node->values[0] = second;
                     *out = node;
                     return 0;
                 }
-                case CC__builtin_ctz:
-                case CC__builtin_ctzl:
-                case CC__builtin_ctzll:
-                case CC__builtin_clz:
-                case CC__builtin_clzl:
-                case CC__builtin_clzll:{
-                    err = cc_expect_punct(p, '(');
-                    if(err) return err;
-                    CcExpr* arg;
-                    err = cc_parse_assignment_expr(p, vc, &arg, CCQT_NONE);
-                    if(err) return err;
-                    CcBasicTypeKind param = builtin == CC__builtin_ctzl || builtin == CC__builtin_clzl
-                        ? CCBT_unsigned_long : builtin == CC__builtin_ctzll || builtin == CC__builtin_clzll
-                        ? CCBT_unsigned_long_long : CCBT_unsigned;
-                    err = cc_implicit_cast(p, arg, ccqt_basic(param), &arg);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ')');
-                    if(err) return err;
-                    CcExprKind kind = (builtin == CC__builtin_ctz
-                                    || builtin == CC__builtin_ctzl
-                                    || builtin == CC__builtin_ctzll)
-                                    ? CC_EXPR_CTZ : CC_EXPR_CLZ;
-                    CcExpr* node = cc_make_expr(p, kind, tok.loc, ccqt_basic(CCBT_int), 0);
-                    if(!node) return CC_OOM_ERROR;
-                    node->lhs = arg;
-                    *out = node;
-                    return 0;
-                }
+
                 case CC__builtin_huge_val:
                 case CC__builtin_huge_valf:
                 case CC__builtin_huge_vall:{
@@ -6247,6 +6310,8 @@ static
 size_t
 cc_expr_nvalues(CcExpr* e){
     switch(e->kind){
+        case CC_EXPR_BIT_BUILTIN:
+            return e->bit_builtin.nargs;
         case CC_EXPR_OBJECT_VIEW:
         case CC_EXPR_NEG:
         case CC_EXPR_POS:
@@ -6260,9 +6325,6 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_POSTDEC:
         case CC_EXPR_CAST:
         case CC_EXPR_SIZEOF_VMT:
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ:
         case CC_EXPR_BSWAP:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_INTERN:
@@ -6484,9 +6546,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_BITXORASSIGN:
         case CC_EXPR_CALL:
         case CC_EXPR_CAST:
-        case CC_EXPR_CLZ:
         case CC_EXPR_COMMA:
-        case CC_EXPR_CTZ:
         case CC_EXPR_BSWAP:
         case CC_EXPR_DEREF:
         case CC_EXPR_DIV:
@@ -6509,7 +6569,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_NE:
         case CC_EXPR_NEG:
-        case CC_EXPR_POPCOUNT:
+        case CC_EXPR_BIT_BUILTIN:
         case CC_EXPR_POS:
         case CC_EXPR_POSTDEC:
         case CC_EXPR_POSTINC:
@@ -7160,7 +7220,6 @@ cc_parse_declspec(CcParser* p, CcAttributes* attrs){
     }
 }
 
-
 static inline int
 cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32_t* out){
     uint32_t padding = (0u - offset) & (alignment - 1);
@@ -7171,7 +7230,6 @@ cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32
 
 static _Bool cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, CcSysVEightByte cls[_Nonnull 2]);
 static CcBasicTypeKind cc_arm64_hfa_check(const CcTargetConfig* tc, CcQualType type, CcBasicTypeKind base, uint32_t* count);
-
 
 static
 _Bool
@@ -7863,7 +7921,6 @@ cc_get_fields(CcQualType t, CcField*_Nullable*_Nonnull out_fields, uint32_t* out
     return 1;
 }
 
-
 static
 int
 cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_offset, CcQualType* out_type, CcField*_Nullable*_Nonnull out_field){
@@ -7877,7 +7934,6 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
     cc_field_path_free(cc_allocator(p), path);
     return err;
 }
-
 
 static
 int
@@ -10945,7 +11001,6 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     return 0;
 }
 
-
 // Recursive declarator parser using double-pointer technique.
 // out_head/out_tail thread the type chain: after return, set
 // *out_tail = base_type to complete the type.
@@ -12454,6 +12509,37 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_add_overflow"), CC__builtin_add_overflow},
             {SVI("__builtin_sub_overflow"), CC__builtin_sub_overflow},
             {SVI("__builtin_popcount"), CC__builtin_popcount},
+            {SVI("__builtin_ffs"), CC__builtin_ffs},
+            {SVI("__builtin_ffsl"), CC__builtin_ffsl},
+            {SVI("__builtin_ffsll"), CC__builtin_ffsll},
+            {SVI("__builtin_clrsb"), CC__builtin_clrsb},
+            {SVI("__builtin_clrsbl"), CC__builtin_clrsbl},
+            {SVI("__builtin_clrsbll"), CC__builtin_clrsbll},
+            {SVI("__builtin_parity"), CC__builtin_parity},
+            {SVI("__builtin_parityl"), CC__builtin_parityl},
+            {SVI("__builtin_parityll"), CC__builtin_parityll},
+            {SVI("__builtin_ffsg"), CC__builtin_ffsg},
+            {SVI("__builtin_clzg"), CC__builtin_clzg},
+            {SVI("__builtin_ctzg"), CC__builtin_ctzg},
+            {SVI("__builtin_clrsbg"), CC__builtin_clrsbg},
+            {SVI("__builtin_popcountg"), CC__builtin_popcountg},
+            {SVI("__builtin_parityg"), CC__builtin_parityg},
+            {SVI("__builtin_stdc_bit_ceil"), CC__builtin_stdc_bit_ceil},
+            {SVI("__builtin_stdc_bit_floor"), CC__builtin_stdc_bit_floor},
+            {SVI("__builtin_stdc_bit_width"), CC__builtin_stdc_bit_width},
+            {SVI("__builtin_stdc_count_ones"), CC__builtin_stdc_count_ones},
+            {SVI("__builtin_stdc_count_zeros"), CC__builtin_stdc_count_zeros},
+            {SVI("__builtin_stdc_first_leading_one"), CC__builtin_stdc_first_leading_one},
+            {SVI("__builtin_stdc_first_leading_zero"), CC__builtin_stdc_first_leading_zero},
+            {SVI("__builtin_stdc_first_trailing_one"), CC__builtin_stdc_first_trailing_one},
+            {SVI("__builtin_stdc_first_trailing_zero"), CC__builtin_stdc_first_trailing_zero},
+            {SVI("__builtin_stdc_has_single_bit"), CC__builtin_stdc_has_single_bit},
+            {SVI("__builtin_stdc_leading_ones"), CC__builtin_stdc_leading_ones},
+            {SVI("__builtin_stdc_leading_zeros"), CC__builtin_stdc_leading_zeros},
+            {SVI("__builtin_stdc_trailing_ones"), CC__builtin_stdc_trailing_ones},
+            {SVI("__builtin_stdc_trailing_zeros"), CC__builtin_stdc_trailing_zeros},
+            {SVI("__builtin_stdc_rotate_left"), CC__builtin_stdc_rotate_left},
+            {SVI("__builtin_stdc_rotate_right"), CC__builtin_stdc_rotate_right},
             {SVI("__builtin_popcountl"), CC__builtin_popcountl},
             {SVI("__builtin_popcountll"), CC__builtin_popcountll},
             {SVI("__builtin_ctz"), CC__builtin_ctz},
@@ -13217,7 +13303,6 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
             return CC_UNREACHABLE_ERROR;
     }
 }
-
 
 static
 void
@@ -14322,11 +14407,17 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
                 return 0;
             return cc_check_linktime_expr(p, e->values[0], 0, depth + 1);
         }
+        case CC_EXPR_BIT_BUILTIN: {
+            CcExpr* value;
+            err = cc_eval_linktime_scalar(p, e, &value);
+            if(!err) cc_release_expr(p, value);
+            return err;
+        }
         case CC_EXPR_NEG: case CC_EXPR_POS: case CC_EXPR_BITNOT: case CC_EXPR_LOGNOT:
         case CC_EXPR_ADD: case CC_EXPR_SUB: case CC_EXPR_MUL: case CC_EXPR_DIV: case CC_EXPR_MOD:
         case CC_EXPR_BITAND: case CC_EXPR_BITOR: case CC_EXPR_BITXOR:
         case CC_EXPR_EQ: case CC_EXPR_NE: case CC_EXPR_LT: case CC_EXPR_GT: case CC_EXPR_LE: case CC_EXPR_GE:
-        case CC_EXPR_POPCOUNT: case CC_EXPR_CLZ: case CC_EXPR_CTZ: case CC_EXPR_BSWAP:
+        case CC_EXPR_BSWAP:
             // Relocations can copy a floating representation, but arithmetic
             // on that representation requires its unresolved numeric value.
             if((ccqt_is_basic(e->lhs->type) && ccbt_is_float(e->lhs->type.basic.kind))
@@ -16549,40 +16640,33 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
             return CC_NOT_CONSTANT_ERROR;
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ: {
+        case CC_EXPR_BIT_BUILTIN: {
             CcExpr* operand;
             int err = cc_eval_expr(ctx, e->lhs, &operand);
             if(err) return err;
-            if(ccqt_bt_eq(operand->type, CCBT_float) || ccqt_bt_eq(operand->type, CCBT_double)){
-                err = CC_NOT_CONSTANT_ERROR;
-                goto fini_bitop;
-            }
-            uint64_t v;
-            err = cc_eval_to_u(p, operand, &v);
-            if(err) goto fini_bitop;
-            int64_t r;
-            if(e->kind == CC_EXPR_POPCOUNT){
-                r = popcount_64(v);
-            }
-            else if(e->kind == CC_EXPR_CLZ){
-                if(v == 0) { err = CC_NOT_CONSTANT_ERROR; goto fini_bitop; }
-                uint32_t sz;
-                err = cc_sizeof_as_uint(p, operand->type, e->loc, &sz);
-                if(err) goto fini_bitop;
-                r = clz_64(v) - (64 - sz * 8);
-            }
-            else {
-                if(v == 0) { err = CC_NOT_CONSTANT_ERROR; goto fini_bitop; }
-                r = ctz_64(v);
-            }
-            *result = cc_int64_expr(p, e->loc, e->type, r);
-            if(!*result) err = CC_OOM_ERROR;
-            fini_bitop:;
+            CiUint128 v = cc_eval_u128(p, operand), arg = ci_uint128_from_uint64(0), bits;
             cc_release_expr(p, operand);
-            return err;
+            if(e->bit_builtin.nargs && ((e->bit_builtin.op != CC_BIT_CLZ && e->bit_builtin.op != CC_BIT_CTZ)
+                || !ci_uint128_nonzero(v))){
+                CcExpr* second;
+                err = cc_eval_expr(ctx, e->values[0], &second);
+                if(err) return err;
+                arg = cc_eval_u128(p, second);
+                _Bool negative = !ccqt_is_unsigned(second->type, !cc_target(p)->char_is_signed)
+                    && (ci_uint128_hi(arg) >> 63);
+                cc_release_expr(p, second);
+                if(negative && (e->bit_builtin.op == CC_BIT_ROTATE_LEFT || e->bit_builtin.op == CC_BIT_ROTATE_RIGHT))
+                    return CC_NOT_CONSTANT_ERROR;
+            }
+            uint32_t sz;
+            err = cc_sizeof_as_uint(p, e->lhs->type, e->loc, &sz);
+            if(err) return err;
+            if(!cc_bit_builtin(e->bit_builtin.op, v, sz*8, arg, e->bit_builtin.nargs, &bits))
+                return CC_NOT_CONSTANT_ERROR;
+            *result = cc_integer_bits_expr(p, e->loc, e->type, bits);
+            return *result ? 0 : CC_OOM_ERROR;
         }
+
         case CC_EXPR_BSWAP:{
             CcExpr* operand;
             int err = cc_eval_expr(ctx, e->lhs, &operand);
@@ -16714,7 +16798,6 @@ cc_eval_truthy(CcEvalCtx* ctx, CcExpr* e, _Bool* out){
     cc_release_expr(p, val);
     return 0;
 }
-
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

@@ -60,7 +60,6 @@ struct CiLowerSwitch {
     _Bool has_default;
 };
 
-
 typedef struct CiLowerCtx CiLowerCtx;
 struct CiLowerCtx {
     Allocator a;
@@ -158,7 +157,7 @@ static int ci_try_lower_init_template(CiInterpreter*, CiLowerCtx*, CcExpr*, CiLo
 static int ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
-static int ci_lower_bitcount(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
@@ -2151,10 +2150,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         case CC_EXPR_MUL_OVERFLOW:
         case CC_EXPR_SUB_OVERFLOW:
             return ci_lower_checked(ci, ctx, e, dest, out);
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ:
-            return ci_lower_bitcount(ci, ctx, e, dest, out);
+        case CC_EXPR_BIT_BUILTIN:
+            return ci_lower_bit_builtin(ci, ctx, e, dest, out);
         case CC_EXPR_BSWAP:{
             CcExpr* arg = e->lhs;
             err = ci_lower_dest(ctx, &dest, size);
@@ -3038,43 +3035,57 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     return 0;
 }
 
-// Lower __builtin_popcount/clz/ctz into a CI_OP_BITCOUNT. The parser converts
-// the operand to the builtin's unsigned parameter type; the result is int.
-static
-int
-ci_lower_bitcount(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
-    int err;
-    CcParser* p = &ci->parser;
-    uint32_t sz;
-    err = cc_sizeof_as_uint(p, e->lhs->type, e->lhs->loc, &sz);
+static int
+ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    uint32_t sz, rsz, ssz = 0;
+    int err = cc_sizeof_as_uint(&ci->parser, e->lhs->type, e->loc, &sz);
     if(err) return err;
-    uint32_t rsz;
-    err = cc_sizeof_as_uint(p, e->type, e->loc, &rsz);
+    err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &rsz);
     if(err) return err;
-    CiBitCountOp bop = e->kind == CC_EXPR_POPCOUNT? CI_BITCNT_POPCOUNT
-                     : e->kind == CC_EXPR_CTZ? CI_BITCNT_CTZ
-                     : CI_BITCNT_CLZ;
     err = ci_lower_dest(ctx, &dest, rsz);
     if(err) return err;
     out->slot = dest;
     uint32_t save = ctx->temp;
-    CiLowerVal v;
-    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &v);
+    CiLowerVal a, b = {0};
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &a);
     if(err) return err;
+    uint32_t skip_fallback = 0, skip_count = 0;
+    _Bool lazy = e->bit_builtin.nargs && (e->bit_builtin.op == CC_BIT_CLZ || e->bit_builtin.op == CC_BIT_CTZ);
+    if(lazy){
+        uint32_t truth;
+        err = ci_alloc_slot(ctx, 1, 1, &truth);
+        if(err) return err;
+        err = ci_lower_istrue(ctx, &a, e->lhs->type, truth, 1, 0, e->loc);
+        if(err) return err;
+        CiOp* jump;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &jump);
+        if(err) return err;
+        skip_fallback = (uint32_t)ctx->out->count-1;
+        *jump = (CiOp){.jump_true = {.kind = CI_OP_JUMP_TRUE, .slot = truth, .slot_size = 1, .loc = e->loc}};
+        err = ci_lower_expr(ci, ctx, e->values[0], dest, &b);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &jump);
+        if(err) return err;
+        skip_count = (uint32_t)ctx->out->count-1;
+        *jump = (CiOp){.jump = {.kind = CI_OP_JUMP, .loc = e->loc}};
+        ctx->out->data[skip_fallback].jump_true.jump = (uint32_t)ctx->out->count;
+    }
+    else if(e->bit_builtin.nargs){
+        err = cc_sizeof_as_uint(&ci->parser, e->values[0]->type, e->loc, &ssz);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &b);
+        if(err) return err;
+    }
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
-    *op = (CiOp){
-        .bitcount = {
-            .kind = CI_OP_BITCOUNT,
-            .op = bop,
-            .src_size = sz,
-            .slot = dest,
-            .slot_size = rsz,
-            .src = v.slot,
-            .loc = e->loc,
-        }
-    };
+    *op = (CiOp){.bit_builtin = {
+        .kind = CI_OP_BIT_BUILTIN, .op = e->bit_builtin.op,
+        .src_size = sz, .src2_size = ssz,
+        .slot = dest, .slot_size = rsz, .src = a.slot, .src2 = b.slot,
+        .loc = e->loc,
+    }};
+    if(lazy) ctx->out->data[skip_count].jump.jump = (uint32_t)ctx->out->count;
     ctx->temp = save;
     return 0;
 }
@@ -4610,6 +4621,21 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             }
             return 0;
         }
+        case CC_EXPR_BIT_BUILTIN:
+            if(e->bit_builtin.nargs && (e->bit_builtin.op == CC_BIT_CLZ || e->bit_builtin.op == CC_BIT_CTZ)){
+                uint32_t chain = 0;
+                err = ci_lower_branch(ci, ctx, e->lhs, 1, e->loc, &chain);
+                if(err) return err;
+                err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+                if(err) return err;
+                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+                return 0;
+            }
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            if(e->bit_builtin.nargs)
+                return ci_lower_expr_discard(ci, ctx, e->values[0]);
+            return 0;
         case CC_EXPR_NEG:
         case CC_EXPR_POS:
         case CC_EXPR_BITNOT:
@@ -4617,9 +4643,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_DEREF:
         case CC_EXPR_ADDR:
         case CC_EXPR_CAST:
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_BSWAP:
@@ -4675,7 +4698,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
             return 0;
         }
-
         case CC_EXPR_ASSIGN:{
             _Bool handled;
             err = ci_lower_assign_direct(ci, ctx, e, &handled);
@@ -5635,9 +5657,6 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
     ctx->backpatches.count = 0;
     return 0;
 }
-
-
-
 
 static
 int
@@ -7591,13 +7610,28 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
             memcpy(result.bits, r.bits, sz);
             *folded = result;
             return 0;
+        case CC_EXPR_BIT_BUILTIN: {
+            err = ci_fold_operand(ci, ctx, e->lhs, &l);
+            if(err) return err;
+            CiUint128 arg = zero;
+            if(e->bit_builtin.nargs && ((e->bit_builtin.op != CC_BIT_CLZ && e->bit_builtin.op != CC_BIT_CTZ)
+                || !ci_uint128_nonzero(ci_fold_integer(ctx, &l)))){
+                err = ci_fold_operand(ci, ctx, e->values[0], &r);
+                if(err) return err;
+                arg = ci_fold_integer(ctx, &r);
+                if(!ccqt_is_unsigned(r.type, ctx->char_is_unsigned)
+                    && (ci_uint128_hi(arg) >> 63)
+                    && (e->bit_builtin.op == CC_BIT_ROTATE_LEFT || e->bit_builtin.op == CC_BIT_ROTATE_RIGHT))
+                    return FOLD_FAIL;
+            }
+            if(!cc_bit_builtin(e->bit_builtin.op, ci_fold_integer(ctx, &l), l.sz*8,
+                               arg, e->bit_builtin.nargs, &u)) return FOLD_FAIL;
+            break;
+        }
         case CC_EXPR_CAST:
         case CC_EXPR_POS:
         case CC_EXPR_NEG:
         case CC_EXPR_BITNOT:
-        case CC_EXPR_POPCOUNT:
-        case CC_EXPR_CLZ:
-        case CC_EXPR_CTZ:
         case CC_EXPR_BSWAP:
             err = ci_fold_operand(ci, ctx, e->lhs, &l);
             if(err) return err;
@@ -7650,13 +7684,8 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
                 default:{
                     if(l.sz > 8) return FOLD_FAIL;
                     uint64_t v = ci_read_uint(l.bits, l.sz), n;
-                    if(e->kind == CC_EXPR_POPCOUNT) n = (uint64_t)popcount_64(v);
-                    else if(e->kind == CC_EXPR_CLZ) n = v ? (uint64_t)clz_64(v) - (64 - l.sz * 8) : l.sz * 8;
-                    else if(e->kind == CC_EXPR_CTZ) n = v ? (uint64_t)ctz_64(v) : l.sz * 8;
-                    else {
-                        n = 0;
-                        for(uint32_t i = 0; i < l.sz; i++, v >>= 8) n = (n << 8) | (v & 255);
-                    }
+                    n = 0;
+                    for(uint32_t i = 0; i < l.sz; i++, v >>= 8) n = (n << 8) | (v & 255);
                     u = ci_uint128_from_uint64(n);
                     break;
                 }
@@ -7757,17 +7786,13 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
         case CC_EXPR_ARROW:
         case CC_EXPR_DEREF:
         case CC_EXPR_ADDR:
-
-
         // This could be done, just requires work.
         case CC_EXPR_TYPE_INTROSPECTION:
-
         // could elide bounds checks etc.
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_SLICE:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
-
         // If it fits, why not?
         // Also might be needed for type-punning like
         // `(union {int i; float f;}){.f=1.f}.i`

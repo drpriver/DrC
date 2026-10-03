@@ -39,6 +39,11 @@ static struct OomTestCase {
     {__LINE__, SVI("_Alignas(64) _Thread_local int x = 17;\n"
          "int f(void){static _Thread_local int y = 4; return ++y;}\n"
          "int* p = &x; *p += f(); return x == 22 && f() == 6;\n")},
+    {__LINE__, SVI("constexpr int a=__builtin_clzg((unsigned char)0,-7);\n"
+         "static unsigned __int128 b=__builtin_stdc_rotate_left((unsigned __int128)1,127);\n"
+         "int f(unsigned __int128 x,int n){return __builtin_clzg(x,n)+__builtin_parityg(x);}\n"
+         "int i=0,j=0; __builtin_stdc_rotate_right((i++,(unsigned char)1),j++);\n"
+         "return a==-7&&f(b,9)==1&&i==1&&j==1;\n")},
     {__LINE__, SVI("constexpr int a=__builtin_popcount(-1); constexpr int b=__builtin_clzll(1);\n"
          "enum E:unsigned __int128 {BITS=((unsigned __int128)1<<100)|7};\n"
          "int f(enum E x){return __builtin_popcountll(x);}\n"

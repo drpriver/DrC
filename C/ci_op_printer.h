@@ -430,13 +430,15 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_write_literal(out, ", ");
             ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
         } break;
-        case CI_OP_BITCOUNT:{
-            const char* name = op->bitcount.op == CI_BITCNT_POPCOUNT? "popcount"
-                             : op->bitcount.op == CI_BITCNT_CLZ? "clz" : "ctz";
-            ci_op_print_range(out, op->bitcount.slot, op->bitcount.slot_size);
-            msb_sprintf(out, " = %s ", name);
-            ci_op_print_range(out, op->bitcount.src, op->bitcount.src_size);
-        } break;
+        case CI_OP_BIT_BUILTIN:
+            ci_op_print_range(out, op->bit_builtin.slot, op->bit_builtin.slot_size);
+            msb_sprintf(out, " = %s ", cc_bit_builtin_name(op->bit_builtin.op));
+            ci_op_print_range(out, op->bit_builtin.src, op->bit_builtin.src_size);
+            if(op->bit_builtin.src2_size){
+                msb_write_literal(out, ", ");
+                ci_op_print_range(out, op->bit_builtin.src2, op->bit_builtin.src2_size);
+            }
+            break;
         case CI_OP_CONVERT:
             ci_op_print_range(out, op->convert.slot, op->convert.slot_size);
             msb_sprintf(out, " = %s ", op->convert.is_unsigned?"zext":"sext");

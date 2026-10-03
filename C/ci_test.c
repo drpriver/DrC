@@ -133,6 +133,193 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "all new bit builtin names support constant evaluation and correct result types", __LINE__,
+            SVI("_Static_assert(__builtin_ffs(8)==4);\n"
+                "_Static_assert(__builtin_ffsl(8)==4);\n"
+                "_Static_assert(__builtin_ffsll(8)==4);\n"
+                "_Static_assert(__builtin_clrsb(8)==sizeof(int)*8-5);\n"
+                "_Static_assert(__builtin_clrsbl(8)==sizeof(long)*8-5);\n"
+                "_Static_assert(__builtin_clrsbll(8)==sizeof(long long)*8-5);\n"
+                "_Static_assert(__builtin_parity(8)==1);\n"
+                "_Static_assert(__builtin_parityl(8)==1);\n"
+                "_Static_assert(__builtin_parityll(8)==1);\n"
+                "_Static_assert(__builtin_ffsg((signed char)8)==4);\n"
+                "_Static_assert(__builtin_clzg((unsigned char)65)==1);\n"
+                "_Static_assert(__builtin_ctzg((unsigned char)65)==0);\n"
+                "_Static_assert(__builtin_clrsbg((signed char)8)==3);\n"
+                "_Static_assert(__builtin_popcountg((unsigned char)65)==2);\n"
+                "_Static_assert(__builtin_parityg((unsigned char)65)==0);\n"
+                "_Static_assert(__builtin_stdc_bit_ceil((unsigned char)65)==128);\n"
+                "_Static_assert(__builtin_stdc_bit_floor((unsigned char)65)==64);\n"
+                "_Static_assert(__builtin_stdc_bit_width((unsigned char)65)==7);\n"
+                "_Static_assert(__builtin_stdc_count_ones((unsigned char)65)==2);\n"
+                "_Static_assert(__builtin_stdc_count_zeros((unsigned char)65)==6);\n"
+                "_Static_assert(__builtin_stdc_first_leading_one((unsigned char)65)==2);\n"
+                "_Static_assert(__builtin_stdc_first_leading_zero((unsigned char)65)==1);\n"
+                "_Static_assert(__builtin_stdc_first_trailing_one((unsigned char)65)==1);\n"
+                "_Static_assert(__builtin_stdc_first_trailing_zero((unsigned char)65)==2);\n"
+                "_Static_assert(__builtin_stdc_has_single_bit((unsigned char)65)==0);\n"
+                "_Static_assert(__builtin_stdc_leading_ones((unsigned char)65)==0);\n"
+                "_Static_assert(__builtin_stdc_leading_zeros((unsigned char)65)==1);\n"
+                "_Static_assert(__builtin_stdc_trailing_ones((unsigned char)65)==1);\n"
+                "_Static_assert(__builtin_stdc_trailing_zeros((unsigned char)65)==0);\n"
+                "_Static_assert(__builtin_stdc_rotate_left((unsigned char)65,1)==130);\n"
+                "_Static_assert(__builtin_stdc_rotate_right((unsigned char)65,1)==160);\n"
+                "_Static_assert(_Generic(__builtin_stdc_bit_ceil((unsigned char)1),unsigned char:1,default:0));\n"
+                "_Static_assert(_Generic(__builtin_stdc_bit_floor((unsigned short)1),unsigned short:1,default:0));\n"
+                "_Static_assert(_Generic(__builtin_stdc_rotate_left((unsigned __int128)1,0),unsigned __int128:1,default:0));\n"
+                "_Static_assert(_Generic(__builtin_stdc_has_single_bit(1u),unsigned int:1,default:0));\n"
+                "_Static_assert(_Generic(__builtin_popcountg(1u),int:1,default:0));\n"
+                "static int fallback=__builtin_ctzg((unsigned char)0,-7);\n"
+                "_Static_assert(__builtin_clrsbg((signed char)-128)==0);\n"
+                "_Static_assert(__builtin_ffsg((signed char)-128)==8);\n"
+                "_Static_assert(__builtin_clrsbg((signed char)0)==7);\n"
+                "_Static_assert(__builtin_clrsbg((__int128)1<<126)==0);\n"
+                "_Static_assert(__builtin_stdc_bit_ceil((unsigned __int128)1<<127)==((unsigned __int128)1<<127));\n"
+                "_Static_assert(__builtin_stdc_bit_floor(~(unsigned __int128)0)==((unsigned __int128)1<<127));\n"
+                "unsigned __int128 count=((unsigned __int128)1<<100)+129;\n"
+                "unsigned __int128 value=((unsigned __int128)1<<127)|1;\n"
+                "unsigned short narrow=0x8001;\n"
+                "signed char neg=-128;\n"
+                "int i=0,j=0;\n"
+                "__builtin_stdc_rotate_left((i++,(unsigned char)1),j++);\n"
+                "__builtin_clzg((i++,(unsigned char)0),j++);\n"
+                "return fallback==-7&&i==2&&j==2&&__builtin_ffsg(neg)==8&&__builtin_clrsbg(neg)==0\n"
+                "&&__builtin_stdc_rotate_left(value,count)==3\n"
+                "&&__builtin_stdc_rotate_right(value,count)==(((unsigned __int128)1<<126)|((unsigned __int128)1<<127))\n"
+                "&&__builtin_stdc_rotate_left(narrow,17)==3\n"
+                "&&__builtin_stdc_rotate_right(narrow,17)==0xc000;\n"),
+            .exit_code = 1,
+        },
+        {
+            "generic bit builtins preserve all supported integer widths at runtime", __LINE__,
+            SVI("#define CHECK(T,N) \\\n"
+                "int N(T hi,T ones){unsigned w=sizeof(T)*8; \\\n"
+                "return __builtin_clzg(hi)==0&&__builtin_ctzg(hi)==w-1 \\\n"
+                "&&__builtin_popcountg(ones)==w&&__builtin_parityg(ones)==0 \\\n"
+                "&&__builtin_stdc_bit_ceil(hi)==hi&&__builtin_stdc_bit_floor(ones)==hi \\\n"
+                "&&__builtin_stdc_bit_width(hi)==w&&__builtin_stdc_count_zeros(hi)==w-1 \\\n"
+                "&&__builtin_stdc_first_leading_one(hi)==1&&__builtin_stdc_first_trailing_one(hi)==w \\\n"
+                "&&__builtin_stdc_first_leading_zero(hi)==2&&__builtin_stdc_first_trailing_zero(hi)==1 \\\n"
+                "&&__builtin_stdc_leading_ones(hi)==1&&__builtin_stdc_trailing_zeros(hi)==w-1 \\\n"
+                "&&__builtin_stdc_rotate_left(hi,1)==1&&__builtin_stdc_rotate_right((T)1,1)==hi;}\n"
+                "CHECK(unsigned char,f8)\n"
+                "CHECK(unsigned short,f16)\n"
+                "CHECK(unsigned int,fi)\n"
+                "CHECK(unsigned long,fl)\n"
+                "CHECK(unsigned long long,fll)\n"
+                "CHECK(unsigned __int128,f128)\n"
+                "#undef CHECK\n"
+                "int s(signed char x,short y,int z,long l,long long ll,__int128 wide){\n"
+                "return __builtin_ffsg(x)==8&&__builtin_clrsbg(x)==0\n"
+                "&&__builtin_ffsg(y)==sizeof(short)*8&&__builtin_clrsbg(y)==0\n"
+                "&&__builtin_ffsg(z)==sizeof(int)*8&&__builtin_clrsbg(z)==0\n"
+                "&&__builtin_ffsg(l)==sizeof(long)*8&&__builtin_clrsbg(l)==0\n"
+                "&&__builtin_ffsg(ll)==sizeof(long long)*8&&__builtin_clrsbg(ll)==0\n"
+                "&&__builtin_ffsg(wide)==128&&__builtin_clrsbg(wide)==0;\n"
+                "}\n"
+                "return f8(128,255)&&f16(0x8000,0xffff)\n"
+                "&&fi(1u<<(sizeof(unsigned)*8-1),~0u)\n"
+                "&&fl(1ul<<(sizeof(unsigned long)*8-1),~0ul)\n"
+                "&&fll(1ull<<(sizeof(unsigned long long)*8-1),~0ull)\n"
+                "&&f128((unsigned __int128)1<<127,~(unsigned __int128)0)\n"
+                "&&s(-128,(short)(1u<<(sizeof(short)*8-1)),1u<<(sizeof(int)*8-1),\n"
+                "1ul<<(sizeof(long)*8-1),1ull<<(sizeof(long long)*8-1),(unsigned __int128)1<<127);\n"),
+            .exit_code = 1,
+        },
+        {
+            "generic bit count fallbacks are evaluated only for zero", __LINE__,
+            SVI("_Static_assert(__builtin_clzg((unsigned char)1,1/0)==7);\n"
+                "_Static_assert(__builtin_ctzg((unsigned __int128)8,1/0)==3);\n"
+                "int f(unsigned __int128 x){int n=0;\n"
+                "int a=__builtin_clzg(x,++n); int b=__builtin_ctzg(x,++n);\n"
+                "__builtin_clzg(x,++n); __builtin_ctzg(x,++n);\n"
+                "return x? a==124&&b==3&&n==0 : a==1&&b==2&&n==4;}\n"
+                "return f(8)&&f(0);\n"),
+            .exit_code = 1,
+        },
+        {
+            "new bit builtins preserve widths and evaluate arguments once", __LINE__,
+            SVI("constexpr int a=__builtin_clzg((unsigned char)1);\n"
+                "static unsigned char b=__builtin_stdc_bit_ceil((unsigned char)65);\n"
+                "static unsigned __int128 c=__builtin_stdc_rotate_left((unsigned __int128)1,127);\n"
+                "int f(unsigned char x,unsigned __int128 y){\n"
+                "return __builtin_ffsg((__int128)y)==101&&__builtin_clzg(y)==27\n"
+                "&&__builtin_ctzg(y)==100&&__builtin_popcountg(y)==1&&__builtin_parityg(y)==1\n"
+                "&&__builtin_clrsbg((signed char)-1)==7&&__builtin_clrsbg((__int128)-1)==127\n"
+                "&&__builtin_stdc_bit_floor(x)==64&&__builtin_stdc_bit_width(x)==7\n"
+                "&&__builtin_stdc_count_ones(x)==2&&__builtin_stdc_count_zeros(x)==6\n"
+                "&&__builtin_stdc_first_leading_one(x)==2&&__builtin_stdc_first_leading_zero(x)==1\n"
+                "&&__builtin_stdc_first_trailing_one(x)==1&&__builtin_stdc_first_trailing_zero(x)==2\n"
+                "&&__builtin_stdc_has_single_bit(y)&&__builtin_stdc_leading_ones(x)==0\n"
+                "&&__builtin_stdc_leading_zeros(x)==1&&__builtin_stdc_trailing_ones(x)==1\n"
+                "&&__builtin_stdc_trailing_zeros(x)==0&&__builtin_stdc_rotate_right(x,8)==x;}\n"
+                "unsigned char x=1; int n=0; unsigned char r=__builtin_stdc_rotate_left(x++,++n);\n"
+                "return a==7&&b==128&&c==((unsigned __int128)1<<127)&&f(65,(unsigned __int128)1<<100)\n"
+                "&&r==2&&x==2&&n==1&&__builtin_clzg((unsigned char)0,-7)==-7\n"
+                "&&__builtin_ctzg((unsigned __int128)0,123)==123;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fixed bit builtins and generic zero boundaries", __LINE__,
+            SVI("int f(int x,long l,long long ll){return __builtin_ffs(x)==4\n"
+                "&&__builtin_ffsl(l)==4&&__builtin_ffsll(ll)==4\n"
+                "&&__builtin_clrsb(x)==sizeof(int)*8-5&&__builtin_clrsbl(l)==sizeof(long)*8-5\n"
+                "&&__builtin_clrsbll(ll)==sizeof(long long)*8-5\n"
+                "&&__builtin_parity(x)==1&&__builtin_parityl(l)==1&&__builtin_parityll(ll)==1;}\n"
+                "static int a=__builtin_ffs(0),b=__builtin_clrsb(-1),c=__builtin_parity(3);\n"
+                "unsigned char z=0,ones=255; unsigned __int128 wide=~(unsigned __int128)0;\n"
+                "return f(8,8,8)&&a==0&&b==sizeof(int)*8-1&&c==0\n"
+                "&&__builtin_ffsg((signed char)0)==0&&__builtin_popcountg(wide)==128\n"
+                "&&__builtin_stdc_bit_ceil(z)==1&&__builtin_stdc_bit_floor(z)==0\n"
+                "&&__builtin_stdc_bit_width(z)==0&&__builtin_stdc_leading_zeros(z)==8\n"
+                "&&__builtin_stdc_trailing_zeros(z)==8&&__builtin_stdc_leading_ones(ones)==8\n"
+                "&&__builtin_stdc_trailing_ones(ones)==8&&__builtin_stdc_first_leading_one(z)==0\n"
+                "&&__builtin_stdc_first_trailing_one(z)==0&&__builtin_stdc_first_leading_zero(ones)==0\n"
+                "&&__builtin_stdc_first_trailing_zero(ones)==0&&!__builtin_stdc_has_single_bit(z)\n"
+                "&&__builtin_stdc_rotate_left(ones,0)==ones;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bit builtin word boundaries and rotations agree with integer arithmetic", __LINE__,
+            SVI("_Static_assert(__builtin_clzg((unsigned __int128)1<<64)==63);\n"
+                "_Static_assert(__builtin_ctzg((unsigned __int128)1<<64)==64);\n"
+                "_Static_assert(__builtin_stdc_bit_ceil(((unsigned __int128)1<<64)+1)==((unsigned __int128)1<<65));\n"
+                "_Static_assert(__builtin_stdc_rotate_left((unsigned __int128)1,64)==((unsigned __int128)1<<64));\n"
+                "int f(unsigned __int128 x){\n"
+                "for(unsigned n=0;n<256;n++){unsigned k=n%128;\n"
+                "unsigned __int128 l=k?(x<<k)|(x>>(128-k)):x;\n"
+                "unsigned __int128 r=k?(x>>k)|(x<<(128-k)):x;\n"
+                "if(__builtin_stdc_rotate_left(x,n)!=l||__builtin_stdc_rotate_right(x,n)!=r)return 0;}\n"
+                "return __builtin_popcountg(x)==64&&__builtin_clzg(x)==0&&__builtin_ctzg(x)==0\n"
+                "&&__builtin_stdc_leading_ones(x)==1&&__builtin_stdc_trailing_ones(x)==1;}\n"
+                "int g(unsigned long long x){for(unsigned n=0;n<128;n++){unsigned k=n%64;\n"
+                "unsigned long long l=k?(x<<k)|(x>>(64-k)):x;\n"
+                "unsigned long long r=k?(x>>k)|(x<<(64-k)):x;\n"
+                "if(__builtin_stdc_rotate_left(x,n)!=l||__builtin_stdc_rotate_right(x,n)!=r)return 0;}return 1;}\n"
+                "unsigned __int128 halves=(unsigned __int128)0xaaaaaaaaaaaaaaaaULL<<64|0x5555555555555555ULL;\n"
+                "unsigned __int128 middle=(unsigned __int128)1<<64;\n"
+                "return f(halves)&&g(0x8123456789abcdefULL)\n"
+                "&&__builtin_stdc_bit_ceil(middle-1)==middle&&__builtin_stdc_bit_ceil(middle+1)==middle*2\n"
+                "&&__builtin_stdc_bit_floor(middle-1)==middle/2&&__builtin_stdc_bit_floor(middle+1)==middle\n"
+                "&&__builtin_clrsbg((__int128)(~(unsigned __int128)0<<64))==63;\n"),
+            .exit_code = 1,
+        },
+        {
+            "fixed bit counts share generic operations after parameter conversion", __LINE__,
+            SVI("int f(unsigned __int128 x){unsigned a=x; unsigned long b=x; unsigned long long c=x;\n"
+                "return __builtin_popcount(x)==__builtin_popcountg(a)\n"
+                "&&__builtin_popcountl(x)==__builtin_popcountg(b)&&__builtin_popcountll(x)==__builtin_popcountg(c)\n"
+                "&&__builtin_clz(x)==__builtin_clzg(a)&&__builtin_clzl(x)==__builtin_clzg(b)\n"
+                "&&__builtin_clzll(x)==__builtin_clzg(c)&&__builtin_ctz(x)==__builtin_ctzg(a)\n"
+                "&&__builtin_ctzl(x)==__builtin_ctzg(b)&&__builtin_ctzll(x)==__builtin_ctzg(c);}\n"
+                "_Static_assert(__builtin_popcount(-1)==sizeof(unsigned)*8);\n"
+                "_Static_assert(__builtin_clz((unsigned char)1)==sizeof(unsigned)*8-1);\n"
+                "int i=0; __builtin_popcount(i++); __builtin_clzl(++i); __builtin_ctzll(++i);\n"
+                "return f(((unsigned __int128)1<<100)|0x100000010ULL)&&i==3;\n"),
+            .exit_code = 1,
+        },
+        {
             "constant bit counts use builtin parameter widths", __LINE__,
             SVI("constexpr int a=__builtin_clz((unsigned char)1);\n"
                 "constexpr int b=__builtin_clzll(1); constexpr int c=__builtin_clzl(1);\n"
@@ -11820,6 +12007,72 @@ TestFunction(test_interpreter_runtime_errors){
         _Bool lowering_error;
         _Bool parser_error;
     } testcases[] = {
+        {
+            "generic unsigned builtin rejects signed argument", __LINE__,
+            SVI("return __builtin_popcountg(1);\n"),
+            SVI("(test):1:28: error: bit builtin requires an unsigned integer argument\n"),
+            .parser_error = 1,
+        },
+        {
+            "generic signed builtin rejects unsigned argument", __LINE__,
+            SVI("return __builtin_ffsg(1u);\n"),
+            SVI("(test):1:23: error: bit builtin requires a signed integer argument\n"),
+            .parser_error = 1,
+        },
+        {
+            "generic builtin rejects floating argument", __LINE__,
+            SVI("return __builtin_clrsbg(1.0);\n"),
+            SVI("(test):1:25: error: bit builtin requires a signed integer argument\n"),
+            .parser_error = 1,
+        },
+        {
+            "generic builtin rejects boolean argument", __LINE__,
+            SVI("return __builtin_popcountg((_Bool)1);\n"),
+            SVI("(test):1:28: error: bit builtin requires an unsigned integer argument\n"),
+            .parser_error = 1,
+        },
+        {
+            "stdc builtin rejects signed argument", __LINE__,
+            SVI("return __builtin_stdc_bit_floor(1);\n"),
+            SVI("(test):1:33: error: bit builtin requires an unsigned integer argument\n"),
+            .parser_error = 1,
+        },
+        {
+            "generic zero fallback requires int", __LINE__,
+            SVI("return __builtin_clzg(1u,0L);\n"),
+            SVI("(test):1:26: error: zero fallback must have int type\n"),
+            .parser_error = 1,
+        },
+        {
+            "rotation count requires integer", __LINE__,
+            SVI("return __builtin_stdc_rotate_left(1u,1.0);\n"),
+            SVI("(test):1:38: error: rotation count must have integer type\n"),
+            .parser_error = 1,
+        },
+        {
+            "constant generic clz rejects zero without fallback", __LINE__,
+            SVI("_Static_assert(__builtin_clzg(0u));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constant generic ctz rejects zero without fallback", __LINE__,
+            SVI("_Static_assert(__builtin_ctzg(0u));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constant rotation rejects negative count", __LINE__,
+            SVI("_Static_assert(__builtin_stdc_rotate_left(1u,-1));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "constant bit ceil rejects unrepresentable result", __LINE__,
+            SVI("_Static_assert(__builtin_stdc_bit_ceil((unsigned char)129));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
         {
             "native extern TLS requires a resolver", __LINE__,
             SVI("extern _Thread_local int native_tls;\nreturn native_tls;\n"),

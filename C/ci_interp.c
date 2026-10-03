@@ -54,7 +54,6 @@
 force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable*_Nonnull child);
 static void ci_free_call_frame(CiInterpreter*, CiInterpFrame*);
 
-
 // Internal opcode result: enter the child frame
 enum { CI_STEP_ENTER_FRAME = -1 };
 
@@ -191,7 +190,6 @@ ci_read_int(const void* buf, uint32_t sz){
     return 0;
 }
 
-
 #if defined __has_builtin
 #if __has_builtin(__builtin_memcpy_inline)
 #define CI_INLINE_MEMCPY(dst, src, size) __builtin_memcpy_inline(dst, src, size)
@@ -239,8 +237,6 @@ ci_copy(void* dst, const void* src, uint32_t sz){
         default: memmove(dst, src, sz); return;
     }
 }
-
-
 
 static inline
 double
@@ -1700,29 +1696,18 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
-        case CI_OP_BITCOUNT: {
-            uint32_t sz = op->bitcount.src_size;
-            uint64_t val = ci_read_uint((char*)frame->slots + op->bitcount.src, sz);
-            uint64_t count;
-            switch((CiBitCountOp)op->bitcount.op){
-                case CI_BITCNT_POPCOUNT:
-                    count = (uint64_t)popcount_64(val);
-                    break;
-                case CI_BITCNT_CTZ:
-                    // ctz(0) is UB per the spec; return the operand bit width
-                    count = val? (uint64_t)ctz_64(val) : (uint64_t)(sz * 8);
-                    break;
-                case CI_BITCNT_CLZ:
-                    // clz counts from the operand width, not 64; clz(0) returns
-                    // the operand bit width
-                    count = val? (uint64_t)(clz_64(val) - (int)(64 - sz * 8)) : (uint64_t)(sz * 8);
-                    break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->bitcount.slot, op->bitcount.slot_size, count);
+        case CI_OP_BIT_BUILTIN: {
+            CiUint128 v, result,
+                      arg = ci_uint128_from_uint64(0);
+            ci_uint128_read(&v, (char*)frame->slots + op->bit_builtin.src, op->bit_builtin.src_size);
+            if(op->bit_builtin.src2_size)
+                ci_uint128_read(&arg, (char*)frame->slots + op->bit_builtin.src2, op->bit_builtin.src2_size);
+            cc_bit_builtin(op->bit_builtin.op, v, op->bit_builtin.src_size*8, arg, op->bit_builtin.src2_size != 0, &result);
+            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, op->bit_builtin.slot_size, result);
             frame->pc++;
             return 0;
         }
+
         case CI_OP_ITOF: {
             if(op->convert.dst_float == 80){
                 const void* src = (char*)frame->slots + op->convert.src;
