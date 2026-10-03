@@ -461,11 +461,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->slot_addr.slot, op->slot_addr.slot_size);
             msb_sprintf(out, " = &[%u]", op->slot_addr.src);
             break;
-        case CI_OP_VAR_ADDR:{
+        case CI_OP_VAR_ADDR: case CI_OP_TLS_ADDR:{
             Atom name = op->var_addr.var->name;
             const char *s = name&&name->length?name->data:"<anon>";
             ci_op_print_range(out, op->var_addr.slot, op->var_addr.slot_size);
-            msb_sprintf(out, " = &%s", s);
+            msb_sprintf(out, " = %s&%s", op->kind == CI_OP_TLS_ADDR ? "tls " : "", s);
         } break;
         case CI_OP_FUNC_ADDR:{
             Atom name = op->func_addr.func->name;

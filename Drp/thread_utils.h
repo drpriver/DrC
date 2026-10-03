@@ -146,12 +146,7 @@ typedef THREADFUNC(thread_func);
 static warn_unused int create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg);
 //
 // Waits for the corresponding thread to finish.
-// This is a synchronization event between the joiner and the joinee.
-// (I know that is true for pthreads and assume it is true for Win32 as well.)
-//
-#if THIS_IS_NEVER_TRUE_BUT_SYNTAX_HIGHLIGHTING_WILL_WORK_
 static void join_thread(ThreadHandle);
-#endif
 
 typedef struct WorkerThread WorkerThread;
 static THREADFUNC(worker_thread_main);
@@ -333,6 +328,42 @@ join_thread(ThreadHandle handle){
 
 #else
 #error "Unhandled threading platform."
+#endif
+
+#ifdef _WIN32
+typedef DWORD ThreadLocalKey;
+#define THREAD_LOCAL_DESTRUCTOR(name) void CALLBACK name(void*_Nullable value)
+static int thread_local_key_create(ThreadLocalKey* key, void (CALLBACK *destructor)(void*)){
+    *key = FlsAlloc(destructor);
+    return *key == FLS_OUT_OF_INDEXES;
+}
+static void*_Nullable thread_local_key_get(ThreadLocalKey key){ return FlsGetValue(key); }
+static int thread_local_key_set(ThreadLocalKey key, void*_Nullable value){ return !FlsSetValue(key, value); }
+static void thread_local_key_delete(ThreadLocalKey key){ FlsFree(key); }
+#elif defined(__linux__) || defined(__APPLE__)
+typedef pthread_key_t ThreadLocalKey;
+#define THREAD_LOCAL_DESTRUCTOR(name) void name(void*_Nullable value)
+static int thread_local_key_create(ThreadLocalKey* key, void (*destructor)(void*)){
+    return pthread_key_create(key, destructor);
+}
+static void*_Nullable thread_local_key_get(ThreadLocalKey key){ return pthread_getspecific(key); }
+static int thread_local_key_set(ThreadLocalKey key, void*_Nullable value){ return pthread_setspecific(key, value); }
+static void thread_local_key_delete(ThreadLocalKey key){ pthread_key_delete(key); }
+#elif defined(__wasm__)
+// The wasm execution profile has a single thread.
+typedef struct { void*_Nullable value; } ThreadLocalKey;
+#define THREAD_LOCAL_DESTRUCTOR(name) void name(void*_Nullable value)
+static int thread_local_key_create(ThreadLocalKey* key, void (*destructor)(void*)){
+    (void)destructor;
+    key->value = NULL;
+    return 0;
+}
+static void*_Nullable thread_local_key_get_impl(ThreadLocalKey* key){ return key->value; }
+static int thread_local_key_set_impl(ThreadLocalKey* key, void*_Nullable value){ key->value = value; return 0; }
+static void thread_local_key_delete_impl(ThreadLocalKey* key){ key->value = NULL; }
+#define thread_local_key_get(key) thread_local_key_get_impl(&(key))
+#define thread_local_key_set(key, value) thread_local_key_set_impl(&(key), (value))
+#define thread_local_key_delete(key) thread_local_key_delete_impl(&(key))
 #endif
 
 #ifdef __clang__

@@ -612,10 +612,12 @@ int main(int argc, char** argv, char** envp){
         }
     }
     fini:;
+    ci_tls_cleanup(&interp);
     return err;
     stringify_error:;
     const char* error_name = cc_stringify_error(err);
     fprintf(stderr, "Fail: %s\n", error_name);
+    ci_tls_cleanup(&interp);
     return 1;
 }
 

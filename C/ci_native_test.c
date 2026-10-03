@@ -983,6 +983,7 @@ TestFunction(test_interop){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -1247,6 +1248,7 @@ TestFunction(test_interp){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -1457,6 +1459,7 @@ TestFunction(test_interp_fail){
         test_expect_equals_sv(tc->expected_msg, sv, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
         if(err && sv_equals(tc->expected_msg, sv)) err = 0;
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);

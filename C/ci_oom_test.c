@@ -36,6 +36,9 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("_Alignas(64) _Thread_local int x = 17;\n"
+         "int f(void){static _Thread_local int y = 4; return ++y;}\n"
+         "int* p = &x; *p += f(); return x == 22 && f() == 6;\n")},
     {__LINE__, SVI("constexpr int a=__builtin_popcount(-1); constexpr int b=__builtin_clzll(1);\n"
          "enum E:unsigned __int128 {BITS=((unsigned __int128)1<<100)|7};\n"
          "int f(enum E x){return __builtin_popcountll(x);}\n"
@@ -405,6 +408,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     }
     cleanup:
     msb_destroy(&log_sb);
+    ci_tls_cleanup(&interp);
     ArenaAllocator_free_all(&interp.bt.arena);
     ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);

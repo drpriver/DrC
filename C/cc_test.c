@@ -6025,6 +6025,46 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "TLS redeclaration requires matching storage duration", __LINE__,
+            SVI("_Thread_local int x;\nint x;\n"),
+            SVI("(test):2:5: error: conflicting thread-local storage for 'x'\n"),
+        },
+        {
+            "TLS cannot qualify a function", __LINE__,
+            SVI("_Thread_local int f(void);\n"),
+            SVI("(test):1:19: error: thread_local is only valid on variables\n"),
+        },
+        {
+            "TLS cannot qualify a function definition", __LINE__,
+            SVI("_Thread_local int f(void){return 1;}\n"),
+            SVI("(test):1:19: error: thread_local is only valid on variables\n"),
+        },
+        {
+            "TLS cannot qualify a parameter", __LINE__,
+            SVI("int f(_Thread_local int x);\n"),
+            SVI("(test):1:7: error: thread_local is not valid on parameters\n"),
+        },
+        {
+            "TLS cannot qualify a struct member", __LINE__,
+            SVI("struct S { _Thread_local int x; };\n"),
+            SVI("(test):1:1: error: Storage class specifiers not allowed in struct/union members\n"),
+        },
+        {
+            "TLS block declaration requires linkage specifier", __LINE__,
+            SVI("int f(void){_Thread_local int x; return 0;}\nint y = f();\n"),
+            SVI("(test):1:31: error: block-scope thread_local requires static or extern\n"),
+        },
+        {
+            "TLS initializer must be constant", __LINE__,
+            SVI("int f(void);\n_Thread_local int x = f();\n"),
+            SVI("(test):2:24: error: function call in constant expression\n"),
+        },
+        {
+            "TLS address is not a static initializer", __LINE__,
+            SVI("_Thread_local int x;\nstatic int* p = &x;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+        },
+        {
             "sizeof rejects array product overflow", __LINE__,
             SVI("unsigned long n=sizeof(int[1073741824]);"),
             SVI("(test):1:17: error: object size exceeds 32-bit layout limit\n"),

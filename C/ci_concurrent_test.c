@@ -32,24 +32,78 @@ struct AtomicThreadCb {
 static
 void
 test_atomic_counter_inc(volatile int* p){
-#ifdef _MSC_VER
-    _InterlockedIncrement((volatile long*)p);
-#else
-    __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST);
-#endif
+    #ifdef _MSC_VER
+        _InterlockedIncrement((volatile long*)p);
+    #else
+        __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST);
+    #endif
 }
 
 static
 void
 test_atomic_counter_add(volatile int* p, int n){
-#ifdef _MSC_VER
-    _InterlockedExchangeAdd((volatile long*)p, n);
-#else
-    __atomic_add_fetch(p, n, __ATOMIC_SEQ_CST);
-#endif
+    #ifdef _MSC_VER
+        _InterlockedExchangeAdd((volatile long*)p, n);
+    #else
+        __atomic_add_fetch(p, n, __ATOMIC_SEQ_CST);
+    #endif
 }
 
 static volatile int test_atomic_thread_iters;
+
+struct TlsThreadCb {
+    int* (*fn)(int);
+    int index;
+    int* address;
+    int passed;
+    volatile int* ready;
+    volatile int* release;
+};
+
+static
+int
+test_counter_load(volatile int* p){
+    #ifdef _MSC_VER
+        return _InterlockedCompareExchange((volatile long*)p, 0, 0);
+    #else
+        return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+    #endif
+}
+
+static
+THREADFUNC(test_tls_thread_main){
+    struct TlsThreadCb* cb = thread_arg;
+    int* first = cb->fn(0);
+    cb->passed = *first == 17;
+    cb->address = cb->fn(cb->index);
+    cb->passed &= cb->address == first && *first == 17 + cb->index;
+    cb->passed &= cb->fn(0) == first && *first == 17 + cb->index;
+    test_atomic_counter_inc(cb->ready);
+    while(!test_counter_load(cb->release)){}
+    return 0;
+}
+
+static
+int
+test_run_tls_threads(int* (*fn)(int)){
+    ThreadHandle threads[4];
+    struct TlsThreadCb cb[4] = {0};
+    volatile int ready = 0, release = 0;
+    int count = 0, passed = 1;
+    for(int i = 0; i < 4; i++){
+        cb[i] = (struct TlsThreadCb){.fn=fn, .index=i+1, .ready=&ready, .release=&release};
+        if(create_thread(&threads[i], test_tls_thread_main, &cb[i])){ passed = 0; break; }
+        count++;
+    }
+    while(test_counter_load(&ready) != count){}
+    for(int i = 0; i < count; i++){
+        passed &= cb[i].passed;
+        for(int j = 0; j < i; j++) passed &= cb[i].address != cb[j].address;
+    }
+    test_atomic_counter_inc(&release);
+    for(int i = 0; i < count; i++) join_thread(threads[i]);
+    return passed;
+}
 
 static
 void
@@ -91,6 +145,40 @@ TestFunction(test_concurrent_callbacks){
         StringView program;
         int exit_code;
     } testcases[] = {
+        {
+            "TLS global isolation, persistence and fresh threads", __LINE__,
+            SV("int run_tls_threads(int* (*)(int));\n"
+               "extern _Thread_local int x;\n"
+               "_Thread_local int x = 17;\n"
+               "int* worker(int n){x += n; return &x;}\n"
+               "x = 99;\n"
+               "return run_tls_threads(worker) && run_tls_threads(worker) && x == 99;\n"),
+            .exit_code = 1,
+        },
+        {
+            "TLS static local isolation and persistence", __LINE__,
+            SV("int run_tls_threads(int* (*)(int));\n"
+               "int* worker(int n){static _Thread_local int x = 17; x += n; return &x;}\n"
+               "return run_tls_threads(worker) && run_tls_threads(worker);\n"),
+            .exit_code = 1,
+        },
+        {
+            "TLS atomic addresses", __LINE__,
+            SV("int run_tls_threads(int* (*)(int));\n"
+               "_Thread_local _Atomic int x = 17;\n"
+               "int* worker(int n){x += n; return (int*)&x;}\n"
+               "return run_tls_threads(worker);\n"),
+            .exit_code = 1,
+        },
+        {
+            "TLS reflected callback addresses", __LINE__,
+            SV("int run_tls_threads(int* (*)(int));\n"
+               "_Thread_local int x = 17;\n"
+               "int* worker(int n){int* p = __root_module().symbol(\"x\", int); *p += n; return p;}\n"
+               "x = 99;\n"
+               "return run_tls_threads(worker) && x == 99;\n"),
+            .exit_code = 1,
+        },
         {
             "implicit atomic post-increment", __LINE__,
             SV("int run_atomic_threads(void (*)(int), int, int, int*, int*);\n"
@@ -234,89 +322,92 @@ TestFunction(test_concurrent_callbacks){
     };
 
     for(size_t t = 0; t < sizeof testcases / sizeof testcases[0]; t++){
-    struct tc* tc = &testcases[t];
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    err = 0;
-    FileCache* fc = fc_create(al, FC_FLAGS_NONE);
-    if(!fc){ err = 1; TestReport("setup failure"); goto finally; }
-    MStringBuilder log_sb = {.allocator=al};
-    MsbLogger logger_ = {0};
-    Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {0};
-    Environment env = {.allocator = al, .at=&at};
-    CiInterpreter interp = {
-        .exit_code = -1,
-        .parser = {
-            .cpp = {
-                .allocator = al,
-                .fc = fc,
-                .at = &at,
-                .logger = logger,
-                .env = &env,
-                .target = cc_target_funcs[CC_TARGET_NATIVE](),
+        struct tc* tc = &testcases[t];
+        ArenaAllocator arena = {0};
+        Allocator al = allocator_from_arena(&arena);
+        err = 0;
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
+        if(!fc){ err = 1; TestReport("setup failure"); goto finally; }
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {0};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                },
+                .current = &interp.parser.global,
             },
-            .current = &interp.parser.global,
-        },
-        .top_frame = {
-            .return_buf = &interp.exit_code,
-            .return_size = sizeof interp.exit_code,
-        },
-    };
-    LOCK_T_init(&interp.error_lock);
-    LOCK_T_init(&interp.atom_lock);
-    LOCK_T_init(&interp.resolve_lock);
-    fc_write_path(fc, "(test)", sizeof "(test)" - 1);
-    err = fc_cache_file(fc, tc->program);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = cpp_define_builtin_macros(&interp.parser.cpp);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = cpp_setup_builtin_headers(&interp.parser.cpp);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = cc_define_builtin_types(&interp.parser);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = cc_register_pragmas(&interp.parser);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = ci_register_pragmas(&interp);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = ci_register_macros(&interp);
-    if(err){ TestReport("setup failure"); goto finally; }
-    err = ci_register_sym(&interp, SV("builtins"), SV("run_atomic_threads"), (void*)test_run_atomic_threads);
-    if(err){ TestReport("register sym failure"); goto finally; }
-    err = ci_register_sym(&interp, SV("builtins"), SV("report_atomic_thread_iters"), (void*)test_report_atomic_thread_iters);
-    if(err){ TestReport("register sym failure"); goto finally; }
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
+        fc_write_path(fc, "(test)", sizeof "(test)" - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = cpp_setup_builtin_headers(&interp.parser.cpp);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = cc_register_pragmas(&interp.parser);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = ci_register_pragmas(&interp);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = ci_register_macros(&interp);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = ci_register_sym(&interp, SV("builtins"), SV("run_atomic_threads"), (void*)test_run_atomic_threads);
+        if(err){ TestReport("register sym failure"); goto finally; }
+        err = ci_register_sym(&interp, SV("builtins"), SV("report_atomic_thread_iters"), (void*)test_report_atomic_thread_iters);
+        if(err){ TestReport("register sym failure"); goto finally; }
+        err = ci_register_sym(&interp, SV("builtins"), SV("run_tls_threads"), (void*)test_run_tls_threads);
+        if(err){ TestReport("register sym failure"); goto finally; }
 
-    err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
-    if(err){ TestReport("failed to include"); goto finally; }
-    err = cc_parse_all(&interp.parser);
-    if(err){ TestReport("failed to parse"); goto finally; }
-    err = ci_resolve_refs(&interp);
-    if(err){ TestReport("failed to link"); goto finally; }
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
+        if(err){ TestReport("failed to include"); goto finally; }
+        err = cc_parse_all(&interp.parser);
+        if(err){ TestReport("failed to parse"); goto finally; }
+        err = ci_resolve_refs(&interp);
+        if(err){ TestReport("failed to link"); goto finally; }
 
-    CiInterpFrame* frame = &interp.top_frame;
-    err = ci_prepare_toplevel(&interp);
-    if(err) goto finally;
-    while(frame->pc < frame->op_count){
-        err = ci_interp_step(&interp, frame);
+        CiInterpFrame* frame = &interp.top_frame;
+        err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-    }
-    TEST_stats.executed++;
-    if(interp.exit_code != tc->exit_code){
-        TEST_stats.failures++;
-        TestPrintf("%s:%d: %s: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->name, tc->exit_code, interp.exit_code);
-    }
+        while(frame->pc < frame->op_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) goto finally;
+        }
+        TEST_stats.executed++;
+        if(interp.exit_code != tc->exit_code){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: %s: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->name, tc->exit_code, interp.exit_code);
+        }
 
-    finally:
-    if(log_sb.cursor && !log_sb.errored){
-        StringView sv = msb_borrow_sv(&log_sb);
-        TestPrintf("%.*s\n", sv_p(sv));
-    }
-    if(err) TEST_stats.failures++;
-    ArenaAllocator_free_all(&interp.bt.arena);
-    ArenaAllocator_free_all(&at.arena);
-    ArenaAllocator_free_all(&arena);
-    ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
-    ArenaAllocator_free_all(&interp.parser.scratch_arena);
+        finally:
+        if(log_sb.cursor && !log_sb.errored){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
     }
     TESTEND();
 }

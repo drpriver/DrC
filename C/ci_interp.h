@@ -54,6 +54,7 @@ struct CiVirtualLib {
 };
 
 typedef struct CiModule CiModule;
+typedef struct CiTlsThread CiTlsThread;
 
 typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
@@ -88,6 +89,11 @@ struct CiInterpreter {
     CiLowerDeps deps;
     size_t next_module_id;
     BlobTable bt;
+    ThreadLocalKey tls_key;
+    _Bool tls_key_created;
+    size_t tls_slot_count;
+    LOCK_T tls_lock;
+    CiTlsThread*_Nullable tls_threads;
 };
 
 typedef struct CiArg CiArg;
@@ -117,6 +123,11 @@ static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 static int ci_register_sym(CiInterpreter*, StringView libname, StringView symname, void* sym);
 static AtomTable* ci_lock_atoms(CiInterpreter*);
 static void ci_unlock_atoms(CiInterpreter*, AtomTable*);
+// Call before releasing the interpreter or its parser.
+// However, this requires you to know there aren't any outstanding
+// threads, so in practice you can't really call this unless you have
+// control over all of the interpreted code.
+static void ci_tls_cleanup(CiInterpreter*);
 
 
 #ifdef __clang__

@@ -32,6 +32,7 @@
 #include "../Drp/stringview.h"
 #include "../Drp/argument_parsing.h"
 #include "../Drp/bit_util.h"
+#include "../Drp/ckdint.h"
 #include "../Drp/msb_atomize.h"
 #include "../Drp/switch_macros.h"
 #include "../Drp/atomics.h"
@@ -260,6 +261,119 @@ ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
     if(var->automatic) return 0;
     if(var->interp_val) return 0;
     return ci_ice(ci, var->loc, "variable '%s' storage not resolved before execution", var->name->data);
+}
+
+typedef struct CiTlsSlot CiTlsSlot;
+struct CiTlsSlot {
+    void*_Nullable address;
+    void*_Nullable allocation;
+    size_t allocation_size;
+};
+
+struct CiTlsThread {
+    CiInterpreter* owner;
+    Allocator allocator;
+    CiTlsThread*_Nullable next;
+    CiTlsThread*_Nullable prev;
+    CiTlsSlot*_Nullable slots;
+    size_t capacity;
+};
+
+static
+void
+ci_tls_free_thread(CiTlsThread* state){
+    Allocator al = state->allocator;
+    for(size_t i = 0; i < state->capacity; i++){
+        CiTlsSlot* slot = &state->slots[i];
+        if(slot->allocation) Allocator_free(al, slot->allocation, slot->allocation_size);
+    }
+    if(state->slots) Allocator_free(al, state->slots, state->capacity * sizeof *state->slots);
+    Allocator_free(al, state, sizeof *state);
+}
+
+static
+THREAD_LOCAL_DESTRUCTOR(ci_tls_thread_exit){
+    CiTlsThread* state = value;
+    if(!state) return;
+    CiInterpreter* ci = state->owner;
+    LOCK_T_lock(&ci->tls_lock);
+    if(state->prev) state->prev->next = state->next;
+    else ci->tls_threads = state->next;
+    if(state->next) state->next->prev = state->prev;
+    LOCK_T_unlock(&ci->tls_lock);
+    ci_tls_free_thread(state);
+}
+
+static
+void
+ci_tls_cleanup(CiInterpreter* ci){
+    if(!ci->tls_key_created) return;
+    // Windows FLS runs destructors here; POSIX leaves values to us. The
+    // caller has stopped execution and synchronized participating thread exits.
+    thread_local_key_delete(ci->tls_key);
+    while(ci->tls_threads){
+        CiTlsThread* state = ci->tls_threads;
+        ci->tls_threads = state->next;
+        ci_tls_free_thread(state);
+    }
+    ci->tls_key_created = 0;
+}
+
+static
+int
+ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
+    if(!ci->tls_key_created || !var->tls_slot || !var->interp_val)
+        return ci_ice(ci, var->loc, "thread_local variable '%s' not prepared", var->name->data);
+    CiTlsThread* state = thread_local_key_get(ci->tls_key);
+    if(!state){
+        Allocator al = ci_allocator(ci);
+        state = Allocator_zalloc(al, sizeof *state);
+        if(!state) return CI_OOM_ERROR;
+        state->owner = ci;
+        state->allocator = al;
+        if(thread_local_key_set(ci->tls_key, state)){
+            Allocator_free(al, state, sizeof *state);
+            return ci_error(ci, var->loc, "could not set interpreter TLS state");
+        }
+        LOCK_T_lock(&ci->tls_lock);
+        state->next = ci->tls_threads;
+        if(state->next) state->next->prev = state;
+        ci->tls_threads = state;
+        LOCK_T_unlock(&ci->tls_lock);
+    }
+    size_t index = var->tls_slot - 1;
+    if(index >= state->capacity){
+        size_t capacity = 8;
+        if(index >= capacity){
+            unsigned bits = 64 - clz_64(index);
+            if(bits >= sizeof(size_t) * 8) return CI_OOM_ERROR;
+            capacity = (size_t)1 << bits;
+        }
+        size_t slots_size;
+        if(mul_overflow(capacity, sizeof(CiTlsSlot), &slots_size)) return CI_OOM_ERROR;
+        CiTlsSlot* slots = Allocator_zalloc(state->allocator, slots_size);
+        if(!slots) return CI_OOM_ERROR;
+        if(state->slots){
+            memcpy(slots, state->slots, state->capacity * sizeof *slots);
+            Allocator_free(state->allocator, state->slots, state->capacity * sizeof *slots);
+        }
+        state->slots = slots;
+        state->capacity = capacity;
+    }
+    CiTlsSlot* slot = &state->slots[index];
+    if(!slot->address){
+        size_t alignment = var->tls_alignment;
+        size_t size = var->tls_size ? var->tls_size : 1;
+        size_t allocation_size;
+        if(add_overflow(size, alignment - 1, &allocation_size)) return CI_OOM_ERROR;
+        void* allocation = Allocator_alloc(state->allocator, allocation_size);
+        if(!allocation) return CI_OOM_ERROR;
+        void* address = (void*)(((uintptr_t)allocation + alignment - 1) & ~(uintptr_t)(alignment - 1));
+        memcpy(address, var->interp_val, var->tls_size);
+        *slot = (CiTlsSlot){.address=address, .allocation=allocation, .allocation_size=allocation_size};
+    }
+    *out = (void*_Nonnull)slot->address;
+    return 0;
 }
 
 static
@@ -1773,6 +1887,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
+        case CI_OP_TLS_ADDR: {
+            void* address;
+            int err = ci_tls_address(ci, op->var_addr.var, &address);
+            if(err) return err;
+            CI_INLINE_MEMCPY((char*)frame->slots + op->var_addr.slot, &address, sizeof address);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_FUNC_ADDR: {
             CcFunc* func = op->func_addr.func;
             if(!func->native_func)
@@ -2837,7 +2959,15 @@ int
 ci_reflect_var_unlocked(CiInterpreter* ci, SrcLoc loc, CcVariable* var, CiRtModuleMember* out){
     void* address = NULL;
     if(!var->automatic){
-        if(var->extern_ && !var->initializer){
+        if(var->thread_local_){
+            int err = ci_deps_add_var(&ci->deps, ci_allocator(ci), var, CI_VAR_DEP_USED);
+            if(err) return CI_OOM_ERROR;
+            err = ci_resolve_deps(ci, &ci->deps);
+            if(err) return err;
+            err = ci_tls_address(ci, var, &address);
+            if(err) return err;
+        }
+        else if(var->extern_ && !var->initializer){
             if(!var->interp_val){
                 Atom vsym = var->mangle?var->mangle:var->name;
                 int err = ci_try_dlsym(ci, vsym, &address);
@@ -3053,6 +3183,12 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                     goto done;
                 if(var->automatic)
                     goto done;
+                if(var->thread_local_){
+                    CiRtModuleMember member;
+                    ret = ci_reflect_var_unlocked(ci, loc, var, &member);
+                    if(!ret) *out = member.address;
+                    goto done;
+                }
                 if(var->extern_ && !var->initializer){
                     if(!var->interp_val){
                         Atom vsym = var->mangle?var->mangle:var->name;
@@ -3179,6 +3315,10 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
         while(vi < deps->vars.count){
             PointerMapItem item = PM_items(&deps->vars).data[vi++];
             CcVariable* var = (CcVariable*)(uintptr_t)item.key;
+            if(var->thread_local_ && var->extern_ && !var->initializer){
+                err = ci_error(ci, var->loc, "native extern thread_local variable '%s' is not supported", var->name->data);
+                goto cleanup;
+            }
             if(!var->interp_val){
                 if(var->extern_ && !var->initializer){
                     Atom sym = var->mangle ? var->mangle : var->name;
@@ -3191,9 +3331,26 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
                     uint32_t sz;
                     err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
                     if(err) goto cleanup;
-                    var->interp_val = Allocator_zalloc(al, sz);
+                    var->interp_val = Allocator_zalloc(al, sz ? sz : 1);
                     if(!var->interp_val){ err = CI_OOM_ERROR; goto cleanup; }
                 }
+            }
+            if(var->thread_local_ && !var->tls_slot){
+                err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &var->tls_size);
+                if(err) goto cleanup;
+                err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &var->tls_alignment);
+                if(err) goto cleanup;
+                if(var->alignment > var->tls_alignment) var->tls_alignment = var->alignment;
+                if(!var->tls_alignment) var->tls_alignment = 1;
+                if(!ci->tls_key_created){
+                    LOCK_T_init(&ci->tls_lock);
+                    if(thread_local_key_create(&ci->tls_key, ci_tls_thread_exit)){
+                        err = ci_error(ci, var->loc, "could not create interpreter TLS key");
+                        goto cleanup;
+                    }
+                    ci->tls_key_created = 1;
+                }
+                var->tls_slot = ++ci->tls_slot_count;
             }
             if(!(var->interp_preinit || ((uintptr_t)item.value & CI_VAR_DEP_INITIALIZE))
                 || !var->initializer || var->interp_initialized) continue;

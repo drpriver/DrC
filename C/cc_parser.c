@@ -11165,6 +11165,10 @@ cc_parse_declarator_inner(CcParser* p, CcQualType* out_head, CcQualType*_Nonnull
                     err = cc_error(p, peek.loc, "typedef not allowed in function parameter");
                     goto param_err;
                 }
+                if(param_base.spec.sp_thread_local){
+                    err = cc_error(p, peek.loc, "thread_local is not valid on parameters");
+                    goto param_err;
+                }
                 err = cc_resolve_specifiers(p, &param_base);
                 if(err) goto param_err;
                 if(param_base.spec.sp_infer_type){
@@ -11529,6 +11533,8 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         if(first && tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
             if(!is_fndef)
                 return cc_error(p, tok.loc, "Expected ',' or ';'");
+            if(declbase->spec.sp_thread_local)
+                return cc_error(p, name_loc, "thread_local is only valid on variables");
             _Bool eager = p->eager_parsing || p->current_func;
             CcSymbol sym;
             CcFunc* func = NULL;
@@ -11621,6 +11627,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
         CcVariable* _Null_unspecified var = NULL;
         _Bool redecl = 0;
         _Bool is_func_decl = is_fndef || (type.ptr && ccqt_kind(type) == CC_FUNCTION);
+        if(declbase->spec.sp_thread_local && (is_func_decl || declbase->spec.sp_typedef))
+            return cc_error(p, name_loc, "thread_local is only valid on variables");
+        if(declbase->spec.sp_thread_local && p->current_func && !declbase->spec.sp_static && !declbase->spec.sp_extern)
+            return cc_error(p, name_loc, "block-scope thread_local requires static or extern");
         if(name && !declbase->spec.sp_typedef && !is_func_decl){
             if(declbase->spec.sp_inline)
                 return cc_error(p, tok.loc, "'inline' is only valid on functions");
@@ -11628,14 +11638,26 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
             CcSymbol sym;
             _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            _Bool inherited_tls = 0;
+            if(!found && p->current_func && declbase->spec.sp_extern){
+                CcSymbol outer;
+                if(cc_scope_lookup_symbol(p->current, name, CC_SCOPE_WALK_CHAIN, &outer)
+                    && outer.kind == CC_SYM_VAR && (outer.var->thread_local_ || declbase->spec.sp_thread_local)){
+                    sym = outer;
+                    found = inherited_tls = 1;
+                }
+            }
             if(found){
                 switch(sym.kind){
                     case CC_SYM_VAR:
-                        if(p->current != &p->global && p->current != p->file_scope)
+                        if(p->current != &p->global && p->current != p->file_scope
+                            && !(declbase->spec.sp_extern && (sym.var->thread_local_ || declbase->spec.sp_thread_local)))
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                         // Validate declarations before constructing their composite type.
                         var = sym.var;
                         redecl = 1;
+                        if(var->thread_local_ != declbase->spec.sp_thread_local)
+                            return cc_error(p, name_loc, "conflicting thread-local storage for '%s'", name->data);
                         if((declbase->spec.sp_static && !var->static_) || (var->static_ && !declbase->spec.sp_static && !declbase->spec.sp_extern)){
                             return cc_error(p, tok.loc, "conflicting storage class for '%s': %s; previous declaration has %s",
                                 name->data, declbase->spec.sp_static ? "'static'" : "no storage class",
@@ -11646,6 +11668,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                             err = cc_check_var_type(p, var, &type, tok.loc);
                             if(err) return err;
                             var->type = type;
+                        }
+                        if(inherited_tls){
+                            err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
+                            if(err) return err;
                         }
                         goto skip_var_alloc;
                     case CC_SYM_FUNC:
@@ -11665,6 +11691,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 .extern_ = declbase->spec.sp_extern,
                 .static_ = declbase->spec.sp_static,
                 .constexpr_ = declbase->spec.sp_constexpr,
+                .thread_local_ = declbase->spec.sp_thread_local,
                 .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
             };
             err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
@@ -11675,7 +11702,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
             CcValueClass init_vc = CC_RUNTIME_VALUE;
             if(declbase->spec.sp_constexpr)
                 init_vc = CC_CONSTEXPR_VALUE;
-            else if(var && !var->automatic && var->static_)
+            else if(var && !var->automatic && (var->static_ || var->thread_local_))
                 init_vc = CC_LINKTIME_VALUE;
             err = cc_parse_assignment_expr(p, init_vc, &initializer, type);
             if(err) return err;
@@ -11865,10 +11892,10 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;
-                if(initializer && (var->static_ || var->constexpr_)){
+                if(initializer && (var->static_ || var->constexpr_ || var->thread_local_)){
                     err = cc_check_linktime_expr(p, initializer, 0, 0);
                     if(err == CC_NOT_CONSTANT_ERROR)
-                        return cc_error(p, initializer->loc, "%s initializer requires a link-time constant", var->constexpr_ ? "constexpr" : "static");
+                        return cc_error(p, initializer->loc, "%s initializer requires a link-time constant", var->constexpr_ ? "constexpr" : var->thread_local_ ? "thread_local" : "static");
                     if(err) return err;
                 }
                 if(var->constexpr_ && ccqt_bt_eq(type, CCBT__Type)){
@@ -11884,7 +11911,7 @@ cc_parse_decls(CcParser* p, const CcDeclBase* declbase){
                 }
             }
             if(initializer){
-                if(var && var->static_){
+                if(var && (var->static_ || var->thread_local_)){
                     var->interp_preinit = 1;
                     if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
                         initializer->kind = CC_EXPR_INIT_LIST;
@@ -13546,7 +13573,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
     switch((unsigned)e->kind){
         case CC_EXPR_VARIABLE:
             if(lvalue || ccqt_kind(e->type) == CC_ARRAY){
-                if(e->var->automatic) return CC_NOT_CONSTANT_ERROR;
+                if(e->var->automatic || e->var->thread_local_) return CC_NOT_CONSTANT_ERROR;
                 *out = (CcEvalAddress){.kind = CC_EVAL_VAR, .symbol = e->var};
                 uint32_t size;
                 if(!cc_type_sizeof_complete(cc_target(p), e->type, &size)){
@@ -14170,7 +14197,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
         case CC_EXPR_VALUE: case CC_EXPR_FUNCTION:
             return 0;
         case CC_EXPR_VARIABLE: {
-            if(address) return e->var->automatic ? CC_NOT_CONSTANT_ERROR : 0;
+            if(address) return (e->var->automatic || e->var->thread_local_) ? CC_NOT_CONSTANT_ERROR : 0;
             if(!cc_linktime_const_variable(e)) return CC_NOT_CONSTANT_ERROR;
             return cc_check_linktime_expr_inner(p, e->var->initializer, 0, selected, depth + 1);
         }

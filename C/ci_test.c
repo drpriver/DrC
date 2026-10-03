@@ -44,6 +44,33 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "TLS aggregate initialization, alignment and static persistence", __LINE__,
+            SVI("int target = 6;\n"
+                "_Alignas(64) _Thread_local struct S {int a[3]; int* p;} x = {{1,2,3}, &target};\n"
+                "_Thread_local int zero;\n"
+                "int next(void){static _Thread_local int n = 10; return ++n;}\n"
+                "int* saved = &x.a[1];\n"
+                "x.a[1] += 5;\n"
+                "return zero == 0 && x.a[0] == 1 && *saved == 7 && x.a[2] == 3\n"
+                "&& *x.p == 6 && ((unsigned long)&x % 64) == 0 && next() == 11 && next() == 12;\n"),
+            .exit_code = 1,
+        },
+        {
+            "TLS block extern uses the interpreted definition", __LINE__,
+            SVI("_Thread_local int x = 17;\n"
+                "int next(void){extern _Thread_local int x; return ++x;}\n"
+                "return next() == 18 && x == 18;\n"),
+            .exit_code = 1,
+        },
+        {
+            "TLS reflection returns the current instance", __LINE__,
+            SVI("_Thread_local int x = 17;\n"
+                "int* p = __root_module().symbol(\"x\", int);\n"
+                "*p = 42;\n"
+                "return p == &x && x == 42;\n"),
+            .exit_code = 1,
+        },
+        {
             "integer relocations preserve nested addends and scalar initializer storage", __LINE__,
             SVI("static int target; static const long base={(long)&target};\n"
                 "constexpr struct S {long address;} s={(long)&target};\n"
@@ -11771,6 +11798,7 @@ TestFunction(test_interpreter){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -11792,6 +11820,12 @@ TestFunction(test_interpreter_runtime_errors){
         _Bool lowering_error;
         _Bool parser_error;
     } testcases[] = {
+        {
+            "native extern TLS requires a resolver", __LINE__,
+            SVI("extern _Thread_local int native_tls;\nreturn native_tls;\n"),
+            SVI("(test):1:26: error: native extern thread_local variable 'native_tls' is not supported\n"),
+            .lowering_error = 1,
+        },
         {
             "symbolic pointers: reject subtraction of different symbols", __LINE__,
             SVI("static int a,b;\nstatic long d=&b-&a; return d;\n"),
@@ -12609,6 +12643,7 @@ TestFunction(test_interpreter_runtime_errors){
 
         finally:
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -12995,6 +13030,7 @@ TestFunction(test_interpreter_builtin_headers){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -13754,6 +13790,7 @@ TestFunction(test_cross_target){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -13924,6 +13961,7 @@ TestFunction(test_ci_call_main){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
@@ -14145,6 +14183,7 @@ TestFunction(test_ci_call_by_name){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);

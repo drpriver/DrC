@@ -124,6 +124,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FTOF,
     CI_OP_SLOT_ADDR,
     CI_OP_VAR_ADDR,
+    CI_OP_TLS_ADDR,
     CI_OP_FUNC_ADDR,
     CI_OP_BOUNDS,
     CI_OP_LOAD,
@@ -320,7 +321,7 @@ struct CiOp {
             SrcLoc loc;
         } slot_addr;
         struct {
-            CiOpKind kind: 8; // CI_OP_VAR_ADDR
+            CiOpKind kind: 8; // CI_OP_VAR_ADDR / CI_OP_TLS_ADDR
             uint32_t _bitpad: 24;
             uint32_t pad;
             uint32_t slot, slot_size;

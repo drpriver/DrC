@@ -841,7 +841,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 *op = (CiOp){
                     .var_addr = {
-                        .kind = CI_OP_VAR_ADDR,
+                        .kind = var->thread_local_ ? CI_OP_TLS_ADDR : CI_OP_VAR_ADDR,
                         .slot = aslot,
                         .slot_size = 8,
                         .var = var,
@@ -5039,7 +5039,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
             if(err) return err;
             *op = (CiOp){
                 .var_addr = {
-                    .kind = CI_OP_VAR_ADDR,
+                    .kind = var->thread_local_ ? CI_OP_TLS_ADDR : CI_OP_VAR_ADDR,
                     .slot = aslot,
                     .slot_size = ctx->ptr_size,
                     .var = var,
@@ -6340,7 +6340,7 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
                     return ci_static_address(ci, e->var->initializer, 0, out, runtime_ctx);
                 return _cc_not_constant_error;
             }
-            if(e->var->automatic) return _cc_not_constant_error;
+            if(e->var->automatic || e->var->thread_local_) return _cc_not_constant_error;
             out->kind = CI_STATIC_RELOC_VAR;
             out->var = e->var;
             return 0;
