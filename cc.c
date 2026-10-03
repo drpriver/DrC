@@ -3,6 +3,7 @@
 //
 #include "Drp/windowsheader.h"
 #include <stdlib.h>
+#include <inttypes.h>
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
 #include "Drp/compiler_warnings.h"
@@ -844,7 +845,7 @@ repl_builtin_command(CcParser* parser, StringView input){
                 log_sprintf(l, "  enum %.*s (%zu enumerators)\n", (int)a->length, a->data, e->enumerator_count);
                 if(detailed){
                     for(uint32_t j = 0; j < e->enumerator_count; j++)
-                        log_sprintf(l, "    %.*s = %lld\n", (int)e->enumerators[j]->name->length, e->enumerators[j]->name->data, (long long)e->enumerators[j]->value);
+                        log_sprintf(l, "    %.*s = %"PRIu64"\n", (int)e->enumerators[j]->name->length, e->enumerators[j]->name->data, ci_uint128_lo(e->enumerators[j]->value));
                 }
             }
         }
