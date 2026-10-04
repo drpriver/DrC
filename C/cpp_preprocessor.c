@@ -717,7 +717,8 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
                 *ctok = (CcToken){.type=CC_EOF, .loc=tok.loc};
                 return 0;
             case CPP_OTHER:
-                return cpp_error(cpp, tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(tok.txt));
+                cpp_error(cpp, tok.loc, "Invalid preprocessor token escaped to lexer: '%.*s'", sv_p(tok.txt));
+                return CPP_SYNTAX_ERROR;
             case CPP_NUMBER:
                 return cpp_number_to_cc_tok(cpp, &tok, ctok);
             case CPP_IDENTIFIER:
@@ -745,7 +746,8 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
                     }
                     err = cpp_merge_str_prefix(next.txt, &prefix);
                     if(err){
-                        err = cpp_error(cpp, next.loc, "Invalid string concatenation (different prefixes)");
+                        cpp_error(cpp, next.loc, "Invalid string concatenation (different prefixes)");
+                        err = CPP_SYNTAX_ERROR;
                         goto string_finally;
                     }
                     err = cpp_push_tok(cpp, strings, next);

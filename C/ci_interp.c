@@ -4035,6 +4035,10 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         const CppToken* end = args->data + args->count;
         while(arg_toks < end){
             CcToken tok;
+            #if defined(__GNUC__) && !defined(__clang__) && !defined(__DRC__) && __GNUC__ == 13
+                // this version had bad static analysis of uninitialized variables
+                tok = (CcToken){0};
+            #endif
             err = cpp_next_c_token_array(cpp, &arg_toks, end, &tok);
             if(err) goto restore;
             if(tok.type == CC_EOF)

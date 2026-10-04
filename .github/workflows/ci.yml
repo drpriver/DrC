@@ -18,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: sudo apt-get install -y libffi-dev
+      - run: ${{ matrix.cc }} --version
       - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
       - run: ./build test -- --multithreaded --force-colors
   windows-x64:
