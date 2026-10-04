@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "srcloc.h"
 #include "../Drp/atom.h"
-#include "../Drp/atom_map.h"
+#include "../Drp/atom_map16.h"
 #include "../Drp/parray.h"
 #include "cc_stmt.h"
 #include "cc_tok.h"
@@ -17,6 +17,21 @@
 #define MARRAY_T CcToken
 #include "../Drp/Marray.h"
 #endif
+
+// Label validation outlives statement trees discarded by sizeof, typeof, etc.
+typedef struct CcLabelRef CcLabelRef;
+struct CcLabelRef {
+    union {
+        struct {
+            Atom _Nonnull label;
+            SrcLoc loc;
+        };
+        uint64_t data[2];
+    };
+};
+_Static_assert(sizeof(CcLabelRef) == 2*sizeof(uint64_t), "");
+#define MARRAY_T CcLabelRef
+#include "../Drp/Marray.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -35,8 +50,8 @@ struct CcFuncParam {
 
 typedef struct CcLabelCtx CcLabelCtx;
 struct CcLabelCtx {
-    AtomMap(CcStmtNode) labels;
-    Parray(CcStmtNode) gotos;
+    AtomMap16(CcLabelRef) labels;
+    Marray(CcLabelRef) gotos;
 };
 
 typedef struct CcFunc CcFunc;

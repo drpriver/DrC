@@ -144,7 +144,7 @@ static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQual
 static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
 static _Bool cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
-static int cc_parse_expr(CcParser* p, CcValueClass, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
 
 static CppFuncMacroFn ci_shell, ci_procmacro_expand;
@@ -4050,7 +4050,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     if(err)goto restore;
     p->pending = *scratch;
     // FIXME: should really be constexpr, but functions aren't supported...
-    err = cc_parse_expr(p, CC_RUNTIME_VALUE, &expr);
+    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &expr);
     {
         restore:
         *scratch = p->pending;

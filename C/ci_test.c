@@ -1717,6 +1717,16 @@ TestFunction(test_interpreter){
             .exit_code = 8,
         },
         {
+            "sizeof statement expression discards statements and dependencies", __LINE__,
+            SVI("int missing_func(void);\n"
+                "int probe(void){ int effects=0;\n"
+                "  int size=sizeof(({ int local=missing_func(); effects++; local; }));\n"
+                "  return size==sizeof(int) && effects==0;\n"
+                "}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
             "lower deps: discarded branch does not resolve externs", __LINE__,
             SVI("extern int missing_var; int missing_func(void);\n"
                 "return 0 ? missing_func()+missing_var : 7;\n"),
@@ -7087,6 +7097,28 @@ TestFunction(test_interpreter){
             .exit_code = 4+5+6+8+9+8+9,
         },
         // _Generic
+        {
+            "_Generic: constexpr selection with runtime controlling expression", __LINE__,
+            SVI("int f(void){ int x=0;\n"
+                "  constexpr int y=_Generic(x++, int: 7, default: x++);\n"
+                "  return y==7 && x==0;\n"
+                "}\nreturn f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Generic: discarded calls do not resolve dependencies", __LINE__,
+            SVI("int missing(void);\n"
+                "constexpr int x=_Generic(missing(), default: missing(), int: 7);\n"
+                "return x;\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Generic: selected default executes once and preserves input", __LINE__,
+            SVI("int x=0;\n"
+                "int y=_Generic(1, default: (x++, 7), float: 8) + 2;\n"
+                "return x==1 && y==9;\n"),
+            .exit_code = 1,
+        },
         {
             "_Generic: basic int", __LINE__,
             SVI("int x = 1;\n"

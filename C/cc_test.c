@@ -6047,6 +6047,14 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "sizeof statement expression retains goto diagnostics", __LINE__,
+            SVI("int f(void){\n"
+                "  sizeof(({ goto missing; 1; }));\n"
+                "  return 0;\n"
+                "}\n"),
+            SVI("(test):2:13: error: Use of undeclared label 'missing'\n"),
+        },
+        {
             "typed varargs reject function pointer syntax", __LINE__,
             SVI("int (*p)(int...);"),
             SVI("(test):1:13: error: typed varargs require a direct function declaration\n"),

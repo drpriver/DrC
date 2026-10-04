@@ -39,12 +39,24 @@ struct CcPackRecord {
 #pragma clang assume_nonnull begin
 #endif
 
-enum CcValueClass TYPED_ENUM(int) {
+enum CcValueClass TYPED_ENUM(uint32_t) {
     CC_RUNTIME_VALUE,
     CC_LINKTIME_VALUE,
     CC_CONSTEXPR_VALUE,
 };
-TYPEDEF_ENUM(CcValueClass, int);
+TYPEDEF_ENUM(CcValueClass, uint32_t);
+
+typedef struct CcParseFlags CcParseFlags;
+struct CcParseFlags {
+    union {
+        uint32_t _bits;
+        struct {
+            CcValueClass vc: 2;
+            uint32_t parsing_default_arg: 1,
+                     _padding: 29;
+        };
+    };
+};
 
 typedef struct CcAttributes CcAttributes;
 struct CcAttributes {

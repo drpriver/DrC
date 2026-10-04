@@ -36,6 +36,10 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int x=0;\n"
+         "constexpr int a=_Generic(x++, default: x++, int: 7);\n"
+         "int b=_Generic(1, default: _Generic(1, default: ({x++; 7;})), float: 8)+2;\n"
+         "return a==7&&b==9&&x==1;\n")},
     {__LINE__, SVI("_Alignas(64) _Thread_local int x = 17;\n"
          "int f(void){static _Thread_local int y = 4; return ++y;}\n"
          "int* p = &x; *p += f(); return x == 22 && f() == 6;\n")},
