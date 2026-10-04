@@ -36,6 +36,25 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("struct S {_SrcLoc loc;};int expected;\n"
+         "int f(int args...,struct S s={__builtin_SRCLOC()}){return args.count==2&&s.loc.line==expected&&s.loc.file.count>0;}\n"
+         "int probe(void){expected=__LINE__;return f(1,2);}return probe();\n")},
+    {__LINE__, SVI("int n=0; int* inner(int* p=(int[]){++n}){return p;}\n"
+         "int* outer(int* p=inner()){return p;}\n"
+         "int probe(void){int* p=outer(); int* q=outer();\n"
+         "return p!=q&&*p==1&&*q==2&&n==2;} return probe();\n")},
+    {__LINE__, SVI("int n=0; int* inner(int values...,int extra=0){values[0]+=extra;return values.data;}\n"
+         "int* outer(int* p=inner(++n,.extra=10)){return p;}\n"
+         "int probe(void){int* p=outer(); int* q=outer();\n"
+         "return p!=q&&*p==11&&*q==12&&n==2;} return probe();\n")},
+    {__LINE__, SVI("int n=0; int* make(int* p=(int[]){++n}){return p;}\n"
+         "int probe(void){int* p=make(); int* q=make();\n"
+         "return p!=q&&*p==1&&*q==2&&n==2;} return probe();\n")},
+    {__LINE__, SVI("int n=0; struct S {int a,b;};\n"
+         "int f(struct S s={++n,2}, unsigned line=__builtin_LINE());\n"
+         "int f(struct S s,unsigned line){return s.a*10+s.b+(line>0);}\n"
+         "int g(int a=7,int rest...){return a+(int)rest.count;}\n"
+         "return f()==13&&f()==23&&g()==7;\n")},
     {__LINE__, SVI("int x=0;\n"
          "constexpr int a=_Generic(x++, default: x++, int: 7);\n"
          "int b=_Generic(1, default: _Generic(1, default: ({x++; 7;})), float: 8)+2;\n"
@@ -143,6 +162,8 @@ static struct OomTestCase {
          "_Static_assert(u.b.low==7); return copy.low==7;\n")},
     {__LINE__, SVI("int sum(int args...){int r=0; for(size_t i=0;i<args.count;i++) r+=args[i]; return r;}\n"
          "return sum(1,2,3)==6&&sum()==0;\n")},
+    {__LINE__, SVI("int sum(int start=1,int args...,int scale=2){int r=start;for(size_t i=0;i<args.count;i++)r+=args[i];return r*scale;}\n"
+         "return sum()==2&&sum(1,2,3,.scale=3)==18&&sum(.scale=3,1,2,3)==18&&sum(.args=(int[]){2,3})==12;\n")},
     {__LINE__, SVI("int check(_Any args...){return args.count==2&&args[0].as(int)==7&&args[1].as(double)==3.;}\n"
          "return check(7,3.);\n")},
     {__LINE__, SVI("static int a[4]={3,5,7,9}; constexpr const int part[:]=a[1:4];\n"

@@ -112,7 +112,6 @@ void printfmt(const char fmt[:], _Any args...){
 
 
 
-#if __INCLUDE_LEVEL__ == 1
 print("hello", "world");
 print(1);
 struct S { int x, y;} s = {1, 2};
@@ -130,4 +129,3 @@ print("slice =", &slice);
 print(int, float, const char*);
 printfmt("Formatted % is pretty cool\n", "output");
 printfmt("My favorite type is %\n", void*);
-#endif

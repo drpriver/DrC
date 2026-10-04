@@ -464,6 +464,36 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "typed varargs: named parameters after packs", __LINE__,
+            SVI("int sum(int start=10, int args..., int scale=2, int extra=0){int r=start; for(size_t i=0;i<args.count;i++)r+=args[i]; return r*scale+extra;}\n"
+                "return sum()==20&&sum(1,2,3)==12&&sum(1,2,3,.scale=3,.extra=4)==22\n"
+                "&&sum(.scale=3,1,2,3)==18&&sum(.args=(int[]){2,3},.start=1,.extra=4)==16\n"
+                "&&sum([2]=3,1,2,3)==18;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: Any pack followed by a default output parameter", __LINE__,
+            SVI("struct File {int id;}; struct File out={1},err={2};\n"
+                "int print(_Any args..., struct File* file=&out){return args.count==2&&args[1].as(int)==1?file->id:0;}\n"
+                "return print(\"hello\",1)==1&&print(\"hello\",1,.file=&err)==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: required named parameters and function pointers", __LINE__,
+            SVI("int f(int args..., int scale=2, int extra){return (int)args.count*scale+extra;}\n"
+                "int (*p)(int[:],int,int)=f;\n"
+                "return f(7,8,.extra=3)==7&&f(.extra=3)==3&&p((int[]){1,2},4,5)==13;\n"),
+            .exit_code = 1,
+        },
+        {
+            "typed varargs: trailing parameter defaults survive redeclarations", __LINE__,
+            SVI("int f(int values...,int scale=2);\n"
+                "int f(int args...,int factor){return (int)args.count*factor;}\n"
+                "int f(int renamed...,int renamed_factor);\n"
+                "return f(1,2)==4&&f(1,2,.factor=3)==6&&f(.args=(int[]){1,2})==4;\n"),
+            .exit_code = 1,
+        },
+        {
             "typed varargs: Any boxing preserves float and aggregate types", __LINE__,
             SVI("struct S {int x;};\n"
                 "int check(_Any args...){return args.count==4&&args[0].type==int&&args[0].as(int)==1\n"
@@ -7097,6 +7127,185 @@ TestFunction(test_interpreter){
             .exit_code = 4+5+6+8+9+8+9,
         },
         // _Generic
+        {
+            "default args: omitted, explicit, named and positional designators", __LINE__,
+            SVI("int f(int a, int b=2, int c=3){return a*100+b*10+c;}\n"
+                "return f(1)==123 && f(1,4)==143 && f(1,4,5)==145\n"
+                " && f(.a=1,.c=5)==125 && f([0]=1,[2]=5)==125;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: unused defaults do not resolve dependencies", __LINE__,
+            SVI("int missing(void); int f(int a=missing()){return a;}\nreturn f(7);\n"),
+            .exit_code = 7,
+        },
+        {
+            "default args: declaration binding and evaluation on every call", __LINE__,
+            SVI("int n=0; int next(void){return ++n;}\n"
+                "int f(int a=next()){return a;}\n"
+                "int probe(void){int n=100; int a=f(); int b=f();\n"
+                " return a==1 && b==2 && f(7)==7 && n==100;}\n"
+                "return probe() && n==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: merged declarations and definition names", __LINE__,
+            SVI("int f(int, int=3); int f(int=2, int);\n"
+                "int f(int a,int b){return a*10+b;}\n"
+                "int f(int,int); int f();\n"
+                "return f()==23 && f(.b=7)==27;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: added after definition", __LINE__,
+            SVI("int f(int a){return a;} int f(int a=7); return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "default args: lambdas and function pointer calls with explicit args", __LINE__,
+            SVI("int f(int a=7){return a;} int (*p)(int)=f;\n"
+                "return int(int a=3){return a;}()==3 && p(5)==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: aggregate defaults own each call's expressions", __LINE__,
+            SVI("int n=0; struct S {int a,b;};\n"
+                "int f(struct S s={++n,2}){return s.a*10+s.b;}\n"
+                "return f()==12 && f()==22 && n==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: compound literal storage belongs to each caller", __LINE__,
+            SVI("int n=0;\n"
+                "int f(int* p=(int[]){++n}){return p[0];}\n"
+                "int g(int* p=&(int){++n}){return *p;}\n"
+                "int probe(void){int x=7; if(f(&x)!=7 || n!=0)return 0;\n"
+                " int a=f(), b=f(), c=g(); return a==1 && b==2 && c==3 && n==3;}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: compound literal addresses differ across call expressions", __LINE__,
+            SVI("int n=0; int* make(int* p=(int[]){++n}){return p;}\n"
+                "int probe(void){int* p=make(); int* q=make();\n"
+                " return p!=q && *p==1 && *q==2 && n==2;}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: nested defaults allocate storage in each caller", __LINE__,
+            SVI("int n=0; int* inner(int* p=(int[]){++n}){return p;}\n"
+                "int* middle(int* p=inner()){return p;}\n"
+                "int* outer(int* p=middle()){return p;}\n"
+                "int probe(void){int x=7; if(outer(&x)!=&x || n!=0)return 0;\n"
+                " int* p=outer(); int* q=outer();\n"
+                " return p!=q && *p==1 && *q==2 && n==2;} return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: nested typed packs allocate storage in each caller", __LINE__,
+            SVI("int n=0; int* inner(int values..., int extra=0){values[0]+=extra;return values.data;}\n"
+                "int* outer(int* p=inner(++n,.extra=10)){return p;}\n"
+                "int probe(void){int* p=outer(); int* q=outer();\n"
+                " return p!=q && *p==11 && *q==12 && n==2;} return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: nested storage preserves inner source locations", __LINE__,
+            SVI("int* inner(int* p=(int[]){__builtin_LINE()}, const char* name=__builtin_FUNCTION()){return name[0]?0:p;}\n"
+                "constexpr int expected=__LINE__; int* outer(int* p=inner()){return p;}\n"
+                "int probe(void){int* p=outer(); int* q=outer();return p!=q && *p==expected && *q==expected;}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: methods retain receiver and fill missing parameters", __LINE__,
+            SVI("struct S {int x; int get(_Self* s,int add=2){return s.x+add;}};\n"
+                "struct S s={5}; return s.get()==7 && s.get(.add=3)==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: default array and function arguments decay", __LINE__,
+            SVI("int a[2]={3,5}; int g(void){return 7;}\n"
+                "int f(int p[]=a, int cb(void)=g){return p[1]+cb();}\n"
+                "return f();\n"),
+            .exit_code = 12,
+        },
+        {
+            "default args: sizeof and generic operands are discarded", __LINE__,
+            SVI("int f(int a=sizeof(({int x=1; x++; x;})),\n"
+                " int b=_Generic(({1;}),int:7,default:({2;}))){return a+b;}\n"
+                "return f();\n"),
+            .exit_code = 11,
+        },
+        {
+            "default args: typed and C varargs", __LINE__,
+            SVI("int f(int a=7, int values...){return a+(int)values.count;}\n"
+                "int g(int a=9,...){return a;}\n"
+                "return f()==7 && f(.values=(int[]){1,2})==9 && g()==9;\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: call site source location", __LINE__,
+            SVI("int same(const char* a,const char* b){while(*a && *a==*b){a++;b++;}return *a==*b;}\n"
+                "int expected_line;\n"
+                "int f(int line=__builtin_LINE()+1, const char* file=__builtin_FILE(),\n"
+                " const char* function=__builtin_FUNCTION()){return line==expected_line+1\n"
+                " && same(file,__FILE__) && function[0]=='p';}\n"
+                "int probe(void){expected_line=__LINE__; return f();}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "default args: source location inside aggregate defaults and macros", __LINE__,
+            SVI("#define LINE __builtin_LINE()\n#define CALL f()\n"
+                "struct Loc {unsigned line;const char* function;}; int expected;\n"
+                "int f(struct Loc loc={LINE,__builtin_FUNCTION()}){return loc.line==expected && loc.function[0]=='p';}\n"
+                "int probe(void){expected=__LINE__;return CALL;}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: explicit calls use their own location", __LINE__,
+            SVI("int same(const char* a,const char* b){while(*a && *a==*b){a++;b++;}return *a==*b;}\n"
+                "constexpr int line=__builtin_LINE(); constexpr int expected=__LINE__;\n"
+                "int probe(void){return __builtin_FUNCTION()[0]=='p';}\n"
+                "return line==expected && same(__builtin_FILE(),__FILE__) && __builtin_COLUMN()>0 && probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: SRCLOC returns a constexpr _SrcLoc", __LINE__,
+            SVI("#if !__has_builtin(__builtin_SRCLOC)\n#error missing SRCLOC builtin\n#endif\n"
+                "constexpr _SrcLoc loc=__builtin_SRCLOC(); constexpr int expected=__LINE__;\n"
+                "_Static_assert(typeof(__builtin_SRCLOC())==_SrcLoc); _Static_assert(loc.line==expected);\n"
+                "_Static_assert(loc.col==23);\n"
+                "const char file[:]=loc.file; const char* expected_file=__FILE__;\n"
+                "for(size_t i=0;i<file.count;i++)if(file[i]!=expected_file[i])return 0;\n"
+                "return loc!=nullptr && expected_file[file.count]==0\n"
+                " && __builtin_SRCLOC().line==__LINE__;\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: SRCLOC defaults use the caller and accept overrides", __LINE__,
+            SVI("int expected; int f(_SrcLoc loc=__builtin_SRCLOC()){return loc.line==expected && loc.col>0 && loc.file.count>0;}\n"
+                "int probe(void){expected=__LINE__;if(!f())return 0;\n"
+                "expected=__LINE__;if(!f())return 0;\n"
+                "_SrcLoc loc=__builtin_SRCLOC();expected=__LINE__;\n"
+                "return f(loc) && f(.loc=loc);}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: SRCLOC macros and aggregate defaults", __LINE__,
+            SVI("#define LOC __builtin_SRCLOC()\n#define CALL f(1,2)\n"
+                "struct S {_SrcLoc loc;};int expected;\n"
+                "int f(int args...,struct S s={LOC}){return args.count==2 && s.loc.line==expected && s.loc.col==1;}\n"
+                "int probe(void){expected=__LINE__+2;\nreturn\nCALL;}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: nested SRCLOC defaults keep the inner call location", __LINE__,
+            SVI("_SrcLoc inner(_SrcLoc loc=__builtin_SRCLOC()){return loc;}\n"
+                "constexpr int expected=__LINE__;_SrcLoc outer(_SrcLoc loc=inner()){return loc;}\n"
+                "return outer().line==expected;\n"),
+            .exit_code = 1,
+        },
         {
             "_Generic: constexpr selection with runtime controlling expression", __LINE__,
             SVI("int f(void){ int x=0;\n"

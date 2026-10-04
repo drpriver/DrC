@@ -143,6 +143,11 @@ enum CcBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BUILTIN_DEBUGTRAP,
     CC_BUILTIN_ABORT,
     CC_BUILTIN_BACKTRACE,
+    CC_BUILTIN_LINE,
+    CC_BUILTIN_COLUMN,
+    CC_BUILTIN_FILE,
+    CC_BUILTIN_FUNCTION,
+    CC_BUILTIN_SRCLOC,
 };
 TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
 
@@ -443,8 +448,6 @@ cc_field_path_bit_offset(CcQualType type, CcFieldPath path){
     return field && field->is_bitfield ? field->bitoffset : 0;
 }
 
-// An initializer for the subobject at path.
-// A nested initializer list preserves whole-subobject initialization/zeroing.
 typedef struct CcInitEntry CcInitEntry;
 struct CcInitEntry {
     CcFieldPath path;
@@ -464,7 +467,8 @@ struct CcExpr {
         uint32_t bits[2];
         struct {
             CcExprKind kind: 8;
-            uint32_t _padding: 23;
+            uint32_t _padding: 22;
+            uint32_t defer_compound_storage: 1;
             uint32_t is_lvalue: 1;
             uint32_t _pad;
         };

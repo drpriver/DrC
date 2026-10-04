@@ -35,6 +35,10 @@ _Static_assert(sizeof(CcLabelRef) == 2*sizeof(uint64_t), "");
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#else
+#ifndef _Nullable
+#define _Nullable
+#endif
 #endif
 
 typedef struct CiFuncOps CiFuncOps;
@@ -46,6 +50,7 @@ struct CcFuncParam {
     Atom name;
     _Bool typed_pack;
     uint32_t sz, offset; // set by lowering
+    CcExpr*_Nullable default_value;
 };
 
 typedef struct CcLabelCtx CcLabelCtx;

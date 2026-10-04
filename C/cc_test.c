@@ -6047,6 +6047,86 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "SRCLOC builtin requires parentheses", __LINE__,
+            SVI("_SrcLoc loc=__builtin_SRCLOC;"),
+            SVI("(test):1:29: error: Expected '('\n"),
+        },
+        {
+            "SRCLOC builtin rejects arguments", __LINE__,
+            SVI("_SrcLoc loc=__builtin_SRCLOC(1);"),
+            SVI("(test):1:30: error: Expected ')'\n"),
+        },
+        {
+            "default args reject enclosing automatic variables", __LINE__,
+            SVI("int outer(void){\nint x=1;\nint f(int a=x);\nreturn 0;\n}"),
+            SVI("(test):3:13: error: default argument may not use automatic variable 'x'\n"),
+        },
+        {
+            "default args reject standalone function type expressions", __LINE__,
+            SVI("constexpr _Type t=int(int a=1);"),
+            SVI("(test):1:29: error: default arguments require a function declaration or definition\n"),
+        },
+        {
+            "default args reject function type expressions", __LINE__,
+            SVI("typeof(int(int a=1)) x;"),
+            SVI("(test):1:17: error: default arguments require a direct function declaration\n"),
+        },
+        {
+            "default args require a trailing sequence", __LINE__,
+            SVI("int f(int a=1,int b);"),
+            SVI("(test):1:5: error: missing default argument for parameter 2\n"),
+        },
+        {
+            "default args cannot be redefined", __LINE__,
+            SVI("int f(int a=1);\nint f(int a=1);"),
+            SVI("(test):2:13: error: redefinition of default argument for parameter 1\n"),
+        },
+        {
+            "default args cannot reference earlier parameter values", __LINE__,
+            SVI("int f(int a,int b=a);"),
+            SVI("(test):1:19: error: default argument may not use automatic variable 'a'\n"),
+        },
+        {
+            "default args cannot reference their own parameter", __LINE__,
+            SVI("int f(int a=a);"),
+            SVI("(test):1:13: error: default argument may not use automatic variable 'a'\n"),
+        },
+        {
+            "default args reject surviving statement expressions", __LINE__,
+            SVI("int f(int a=({1;}));"),
+            SVI("(test):1:13: error: default argument may not use a statement expression\n"),
+        },
+        {
+            "default args reject function pointer declarations", __LINE__,
+            SVI("int (*p)(int a=1);"),
+            SVI("(test):1:16: error: default arguments require a direct function declaration\n"),
+        },
+        {
+            "default args reject typedefs", __LINE__,
+            SVI("typedef int F(int a=1);"),
+            SVI("(test):1:21: error: default arguments are not allowed in typedefs\n"),
+        },
+        {
+            "default args reject nested function parameter types", __LINE__,
+            SVI("int f(int g(int a=1));"),
+            SVI("(test):1:18: error: default arguments require a direct function declaration\n"),
+        },
+        {
+            "default args check initializer types at declaration", __LINE__,
+            SVI("struct S {int x;};\nint f(int a=(struct S){1});"),
+            SVI("(test):2:23: error: cannot implicitly convert from 'struct S' to 'int'\n"),
+        },
+        {
+            "default args do not change function pointer calls", __LINE__,
+            SVI("int f(int a=1){return a;}\nint (*p)(int)=f;\nint x=p();"),
+            SVI("(test):3:8: error: Expected 1 arguments, got 0\n"),
+        },
+        {
+            "default args do not fill required parameters", __LINE__,
+            SVI("int f(int a,int b=1);\nint x=f();"),
+            SVI("(test):2:8: error: missing argument for parameter 'a'\n"),
+        },
+        {
             "sizeof statement expression retains goto diagnostics", __LINE__,
             SVI("int f(void){\n"
                 "  sizeof(({ goto missing; 1; }));\n"
@@ -6070,9 +6150,29 @@ TestFunction(test_parse_errors){
             SVI("(test):1:18: error: typed varargs require a direct function declaration\n"),
         },
         {
-            "typed varargs must be last", __LINE__,
-            SVI("int f(int args..., int x);"),
-            SVI("(test):1:18: error: typed varargs must be the last parameter\n"),
+            "typed varargs require named-only arguments", __LINE__,
+            SVI("int f(int args..., int x);\nint n=f(1,2);"),
+            SVI("(test):2:8: error: missing argument for parameter 'x'\n"),
+        },
+        {
+            "typed varargs reject multiple packs", __LINE__,
+            SVI("int f(int args..., int more...);"),
+            SVI("(test):1:28: error: only one typed varargs pack is allowed\n"),
+        },
+        {
+            "typed varargs reject moving packs in redeclarations", __LINE__,
+            SVI("int f(int args..., int x[:]);\nint f(int args[:], int x...);"),
+            SVI("(test):2:29: error: conflicting typed varargs specifier for 'f'\n"),
+        },
+        {
+            "typed varargs reject pointer syntax with named-only parameters", __LINE__,
+            SVI("int (*p)(int args..., int x);"),
+            SVI("(test):1:18: error: typed varargs require a direct function declaration\n"),
+        },
+        {
+            "typed varargs reject defaults for packs", __LINE__,
+            SVI("int f(int args...=0);"),
+            SVI("(test):1:18: error: typed varargs packs cannot have default arguments\n"),
         },
         {
             "typed varargs reject incomplete elements", __LINE__,

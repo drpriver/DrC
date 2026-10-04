@@ -2422,6 +2422,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     ci_backtrace(ci, frame, 0);
                     frame->pc++;
                     return 0;
+                case CC_BUILTIN_LINE:
+                case CC_BUILTIN_COLUMN:
+                case CC_BUILTIN_FILE:
+                case CC_BUILTIN_FUNCTION:
+                case CC_BUILTIN_SRCLOC:
+                    return ci_unreachable(ci, op->loc, "unexpanded default argument source location");
                 DRP_CASES_EXHAUSTED;
             }
         }
