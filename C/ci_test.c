@@ -2437,7 +2437,7 @@ TestFunction(test_interpreter){
 
         {
             "reflection: discarded module run", __LINE__,
-            SVI("_Module m = __compile(\"int x; x = 42;\", nullptr);\n"
+            SVI("_Module m = __compile(\"int x; x = 42;\", \"\");\n"
                 "m.run();\n"
                 "return *m.symbol(\"x\", int);\n"),
             .exit_code = 42,
@@ -2475,7 +2475,7 @@ TestFunction(test_interpreter){
         },
         {
             "reflection: module receiver snapshot", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int T;\", \"\");\n"
                 "_ModuleMember t = m.type((m = __root_module(), 0));\n"
                 "return t.type == int;\n"),
             .exit_code = 1,
@@ -4925,6 +4925,88 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
+            "_Module.symbol Any bounded slice", __LINE__,
+            SVI("int target = 42;\n"
+                "char name[6] = {'t', 'a', 'r', 'g', 'e', 't'};\n"
+                "const char slice[:] = name;\n"
+                "_Any a = __root_module().symbol(slice);\n"
+                "_Any b = __root_module().symbol(\"!target?\"[1:7]);\n"
+                "if(a.type != int* || b.type != int*) return 99;\n"
+                "return *a.as(int*) == 42 && a.as(int*) == b.as(int*);\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Module.symbol Any empty and embedded null slices", __LINE__,
+            SVI("int target = 42;\n"
+                "const char empty[:] = {};\n"
+                "_Any a = __root_module().symbol(empty);\n"
+                "_Any b = __root_module().symbol(\"target\\0suffix\");\n"
+                "return a.type.is_invalid && b.type.is_invalid;\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Module.symbol Any function", __LINE__,
+            SVI("int add(int a, int b){ return a + b; }\n"
+                "_Any a = __root_module().symbol(\"add\");\n"
+                "if(a.type != typeof(&add)) return 99;\n"
+                "return a.as(typeof(&add))(3, 4);\n"),
+            .exit_code = 7,
+        },
+        {
+            "_Module.symbol Any compiled module", __LINE__,
+            SVI("_Module m = __compile(\"int f(void){ return 42; } int x = 7;\", \"\");\n"
+                "_Any f = m.symbol(\"f\"), x = m.symbol(\"x\");\n"
+                "if(f.type != typeof(int(*)(void)) || x.type != int*) return 99;\n"
+                "*x.as(int*) = 8;\n"
+                "return f.as(int(*)(void))() + *m.symbol(\"x\").as(int*);\n"),
+            .exit_code = 50,
+        },
+        {
+            "_Module.symbol Any variable types", __LINE__,
+            SVI("const int c = 3; int values[2] = {4, 5}; int g = 10;\n"
+                "_Any a = __root_module().symbol(\"g\");\n"
+                "_Any cptr = __root_module().symbol(\"c\");\n"
+                "_Any arr = __root_module().symbol(\"values\");\n"
+                "if(a.type != int* || cptr.type != const int* || arr.type != typeof(&values)) return 99;\n"
+                "*a.as(int*) = 42;\n"
+                "return g + *cptr.as(const int*) + (*arr.as(typeof(&values)))[1];\n"),
+            .exit_code = 50,
+        },
+        {
+            "_Module.symbol Any missing and non-addressable symbols", __LINE__,
+            SVI("typedef int T; enum { E = 1 }; extern int missing_extern_symbol;\n"
+                "int missing_function(void);\n"
+                "_Module m = __root_module();\n"
+                "_Any a = m.symbol(\"absent\"), b = m.symbol(\"T\"), c = m.symbol(\"E\");\n"
+                "_Any d = m.symbol(\"missing_extern_symbol\"), e = m.symbol(\"missing_function\");\n"
+                "return a.type.is_invalid && b.type.is_invalid && c.type.is_invalid\n"
+                "    && d.type.is_invalid && e.type.is_invalid\n"
+                "    && *(void**)a.payload == nullptr && *(void**)d.payload == nullptr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Module.symbol typed bounded slices", __LINE__,
+            SVI("_Module m = __compile(\"int target = 42; int add(int a, int b){return a + b;}\", \"\");\n"
+                "char name[6] = {'t', 'a', 'r', 'g', 'e', 't'};\n"
+                "const char slice[:] = name;\n"
+                "int* p = m.symbol(slice, int);\n"
+                "const char* nameptr = name;\n"
+                "int* q = m.symbol(nameptr[:6], int);\n"
+                "int (*f)(int, int) = m.symbol(\"!add?\"[1:4], typeof(*f));\n"
+                "if(!p || q != p || !f || m.symbol(slice, long) != nullptr) return 99;\n"
+                "*p = 35; return f(*p, 7);\n"),
+            .exit_code = 42,
+        },
+        {
+            "_Module.symbol typed empty and embedded null slices", __LINE__,
+            SVI("int target = 42; const char empty[:] = {};\n"
+                "_Module m = __root_module();\n"
+                "return m.symbol(empty, int) == nullptr\n"
+                "    && m.symbol(\"target\\0suffix\", int) == nullptr\n"
+                "    && m.symbol(\"target\"[0:0], int) == nullptr;\n"),
+            .exit_code = 1,
+        },
+        {
             "_Module.symbol function", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
                "int (*fp)(int, int) = __root_module().symbol(\"add\", typeof(*fp));\n"
@@ -4946,7 +5028,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module symbol", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){ return 42; }\", nullptr);\n"
+            SVI("_Module m = __compile(\"int f(void){ return 42; }\", \"\");\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -4954,7 +5036,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module method symbol", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){ return 7; }\", nullptr);\n"
+            SVI("_Module m = __compile(\"int f(void){ return 7; }\", \"\");\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -4963,7 +5045,7 @@ TestFunction(test_interpreter){
         {
             "__compile module sees global", __LINE__,
             SVI("int g(void){ return 5; }\n"
-               "_Module m = __compile(\"int f(void){ return g() + 2; }\", nullptr);\n"
+               "_Module m = __compile(\"int f(void){ return g() + 2; }\", \"\");\n"
                "if(!m) return 99;\n"
                "int (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
                "return fp ? fp() : 98;\n"),
@@ -4972,7 +5054,7 @@ TestFunction(test_interpreter){
         {
             "__compile module shadows global", __LINE__,
             SVI("int f(void){ return 1; }\n"
-               "_Module m = __compile(\"int f(void){ return 7; }\", nullptr);\n"
+               "_Module m = __compile(\"int f(void){ return 7; }\", \"\");\n"
                "if(!m) return 99;\n"
                "int (*mf)(void) = m.symbol(\"f\", typeof(*mf));\n"
                "int (*rf)(void) = __root_module().symbol(\"f\", typeof(*rf));\n"
@@ -4981,7 +5063,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run", __LINE__,
-            SVI("_Module m = __compile(\"int x = 1; x = x + 41;\", nullptr);\n"
+            SVI("_Module m = __compile(\"int x = 1; x = x + 41;\", \"\");\n"
                "if(!m) return 99;\n"
                "if(m.run()) return 98;\n"
                "int* x = m.symbol(\"x\", typeof(*x));\n"
@@ -4990,7 +5072,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run returns top-level value", __LINE__,
-            SVI("_Module m = __compile(\"int x; x++; return -17; x = 99;\", nullptr);\n"
+            SVI("_Module m = __compile(\"int x; x++; return -17; x = 99;\", \"\");\n"
                "if(!m) return 99;\n"
                "int* x = m.symbol(\"x\", int);\n"
                "int first = m.run();\n"
@@ -5000,7 +5082,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile module run recursion", __LINE__,
-            SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\", nullptr);\n"
+            SVI("_Module m = __compile(\"_Module self; int n; if(n){ n--; self.run(); }\", \"\");\n"
                 "_Module* self = m.symbol(\"self\", _Module);\n"
                 "int* n = m.symbol(\"n\", int);\n"
                 "*self = m; *n = 100;\n"
@@ -5011,7 +5093,7 @@ TestFunction(test_interpreter){
         {
             "__compile owns source", __LINE__,
             SVI("char src[] = \"const char* f(void){ return \\\"ok\\\"; }\";\n"
-               "_Module m = __compile(src, nullptr);\n"
+               "_Module m = __compile(src[:sizeof(src)-1], \"\");\n"
                "if(!m) return 99;\n"
                "for(int i = 0; src[i]; i++) src[i] = '?';\n"
                "const char* (*fp)(void) = m.symbol(\"f\", typeof(*fp));\n"
@@ -5022,7 +5104,7 @@ TestFunction(test_interpreter){
         },
         {
             "__compile synthetic file", __LINE__,
-            SVI("_Module m = __compile(\"const char* file(void){ return __FILE__; }\", nullptr);\n"
+            SVI("_Module m = __compile(\"const char* file(void){ return __FILE__; }\", \"\");\n"
                "if(!m) return 99;\n"
                "const char* (*file)(void) = m.symbol(\"file\", typeof(*file));\n"
                "if(!file) return 98;\n"
@@ -5031,8 +5113,37 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "__compile bounded source and path slices", __LINE__,
+            SVI("char source[] = {'i','n','t',' ','x','=','4','2',';'};\n"
+                "_Module m = __compile(source[:9], \"!bounded.c?\"[1:10]);\n"
+                "if(!m) return 99;\n"
+                "if(m.run()) return 98;\n"
+                "_ModuleMember x = m.var(0); const char path[:] = x.srcloc.file;\n"
+                "if(*m.symbol(\"x\", int) != 42) return 91;\n"
+                "if(path.count < 9) return 92;\n"
+                "if(path[path.count-9] != 'b' || path[path.count-1] != 'c') return 93;\n"
+                "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__compile empty slices", __LINE__,
+            SVI("const char empty[:] = {};\n"
+                "_Module m = __compile(empty, empty);\n"
+                "return m != nullptr && m.var_count == 0 && m.func_count == 0 && m.run() == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "_Module.parse_type bounded and empty slices", __LINE__,
+            SVI("char name[3] = {'i','n','t'}; const char empty[:] = {};\n"
+                "_Module m = __root_module();\n"
+                "return m.parse_type(name[:3]) == int\n"
+                "    && m.parse_type(\"!int*?\"[1:5]) == int*\n"
+                "    && m.parse_type(empty).is_invalid;\n"),
+            .exit_code = 1,
+        },
+        {
             "_Module.parse_type invalid input and recovery", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int MyInt;\", \"\");\n"
                "if(!m) return 99;\n"
                "if(!m.parse_type(\"int name\").is_invalid) return 98;\n"
                "if(!m.parse_type(\"int;\").is_invalid) return 97;\n"
@@ -5049,7 +5160,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module.parse_type module typedef", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int MyInt;\", \"\");\n"
                "if(!m) return 99;\n"
                "_Type T = m.parse_type(\"MyInt\");\n"
                "return T == int ? 7 : 98;\n"),
@@ -5057,7 +5168,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module.parse_type module struct", __LINE__,
-            SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int MyInt; struct S { MyInt x; };\", \"\");\n"
                "if(!m) return 99;\n"
                "_Type T = m.parse_type(\"struct S\");\n"
                "return T.is_struct && T.fields == 1 ? 7 : 98;\n"),
@@ -5065,14 +5176,14 @@ TestFunction(test_interpreter){
         },
         {
             "_Module reflection counts", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int T; struct S{int x;}; int f(void){return 1;} int x;\", \"\");\n"
                "if(!m) return 99;\n"
                "return m.func_count == 1 && m.var_count == 1 && m.type_count == 2 ? 7 : 98;\n"),
             .exit_code = 7,
         },
         {
             "_Module reflection excludes compound literal backing variables", __LINE__,
-            SVI("_Module m = __compile(\"(int){3} = 4; int *p = &(int){3};\", nullptr);\n"
+            SVI("_Module m = __compile(\"(int){3} = 4; int *p = &(int){3};\", \"\");\n"
                 "if(!m) return 99;\n"
                 "if(m.var_count != 1) return 98;\n"
                 "_ModuleMember v = m.var(0);\n"
@@ -5081,7 +5192,7 @@ TestFunction(test_interpreter){
         },
         {
             "_Module reflection entries", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T; int f(void){return 3;} int x;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int T; int f(void){return 3;} int x;\", \"\");\n"
                "if(!m) return 99;\n"
                "_ModuleMember f = m.func(0);\n"
                "_ModuleMember fd = m.func_decl(0);\n"
@@ -5097,7 +5208,7 @@ TestFunction(test_interpreter){
         },
         {
             "_SrcLoc module properties", __LINE__,
-            SVI("_Module m = __compile(\"int f(void){return 1;}\\n  int x;\\nstruct S {int x;};\", nullptr);\n"
+            SVI("_Module m = __compile(\"int f(void){return 1;}\\n  int x;\\nstruct S {int x;};\", \"\");\n"
                "_SrcLoc f = m.func(0).srcloc;\n"
                "_SrcLoc v = m.var(0).srcloc;\n"
                "_SrcLoc t = m.type(0).srcloc;\n"
@@ -5117,7 +5228,7 @@ TestFunction(test_interpreter){
                 "  struct S {int a;};\\n"
                 "  union U {int a;};\\n"
                 "  enum E {A};\\n"
-                "int f(void); extern int x; struct S; union U; enum E;\", nullptr);\n"
+                "int f(void); extern int x; struct S; union U; enum E;\", \"\");\n"
                 "if(!m) return 90;\n"
                 "if(m.func(0).srcloc.line != 2 || m.func(0).srcloc.col != 7) return 91;\n"
                 "if(m.var(0).srcloc.line != 3 || m.var(0).srcloc.col != 7) return 92;\n"
@@ -5149,7 +5260,7 @@ TestFunction(test_interpreter){
         },
         {
             "_SrcLoc typedef properties", __LINE__,
-            SVI("_Module m = __compile(\"typedef int T;\", nullptr);\n"
+            SVI("_Module m = __compile(\"typedef int T;\", \"\");\n"
                "_SrcLoc loc = m.type(0).srcloc;\n"
                "return loc.line == 1 && loc.col == 13 && loc.file.count > 0 ? 7 : 91;\n"),
             .exit_code = 7,
@@ -7260,6 +7371,24 @@ TestFunction(test_interpreter){
                 "struct Loc {unsigned line;const char* function;}; int expected;\n"
                 "int f(struct Loc loc={LINE,__builtin_FUNCTION()}){return loc.line==expected && loc.function[0]=='p';}\n"
                 "int probe(void){expected=__LINE__;return CALL;}\nreturn probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: character pointer types", __LINE__,
+            SVI("_Static_assert(typeof(__builtin_FILE()) == const char*);\n"
+                "_Static_assert(typeof(__builtin_FUNCTION()) == const char*);\n"
+                "_Static_assert(sizeof(__builtin_FILE()) == sizeof(const char*));\n"
+                "int probe(void){return __builtin_FUNCTION()[0] == 'p';}\n"
+                "const char file[:] = __builtin_SRCLOC().file;\n"
+                "return file.count == sizeof(__FILE__)-1 && probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "source builtins: boxed default preserves pointer type", __LINE__,
+            SVI("int check(_Any name=__builtin_FUNCTION()){return name.type == const char*;}\n"
+                "int comma(_Any name=(0,__builtin_FUNCTION())){return name.type == const char*;}\n"
+                "int probe(void){return check() && comma();}\n"
+                "return probe();\n"),
             .exit_code = 1,
         },
         {
@@ -9598,11 +9727,31 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "__builtin_intern bounded slice and terminator", __LINE__,
+            SVI("char name[3] = {'a','b','c'};\n"
+                "const char a[:] = __builtin_intern(name[:3]);\n"
+                "const char b[:] = __builtin_intern(\"!abc?\"[1:4]);\n"
+                "name[0] = 'x';\n"
+                "return a.count == 3 && a.data == b.data && a[0] == 'a'\n"
+                "    && a.data[a.count] == 0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__builtin_intern empty and embedded null slices", __LINE__,
+            SVI("const char empty[:] = {};\n"
+                "const char a[:] = __builtin_intern(empty);\n"
+                "const char b[:] = __builtin_intern(\"\");\n"
+                "const char c[:] = __builtin_intern(\"a\\0b\");\n"
+                "return a.count == 0 && a.data != nullptr && a.data[0] == 0\n"
+                "    && a.data == b.data && c.count == 3 && c[1] == 0\n"
+                "    && c[2] == 'b' && c.data[c.count] == 0;\n"),
+            .exit_code = 1,
+        },
+        {
             "__builtin_intern", __LINE__,
-            SVI("const char* __builtin_intern(const char*);\n"
-               "const char* a = __builtin_intern(\"hello\");\n"
-               "const char* b = __builtin_intern(\"hello\");\n"
-               "return a == b;\n"),
+            SVI("const char a[:] = __builtin_intern(\"hello\");\n"
+               "const char b[:] = __builtin_intern(\"hello\");\n"
+               "return a.data == b.data && a.count == 5 && a.data[5] == 0;\n"),
             .exit_code = 1,
         },
         {
@@ -10891,7 +11040,7 @@ TestFunction(test_interpreter){
             "FUCS opaque builtins", __LINE__,
             SVI("int module_ok(_Module m){ return (int)m.type_count; }\n"
                "int loc_ok(_SrcLoc loc){ return loc == nullptr; }\n"
-               "return __compile(\"typedef int T;\", nullptr).module_ok() + ((_SrcLoc)nullptr).loc_ok();\n"),
+               "return __compile(\"typedef int T;\", \"\").module_ok() + ((_SrcLoc)nullptr).loc_ok();\n"),
             .exit_code = 2,
         },
         {
@@ -12857,13 +13006,34 @@ TestFunction(test_interpreter_runtime_errors){
         {
             "reflection: null symbol name", __LINE__,
             SVI("_Module m = __root_module();\n"
-                "return m.symbol((const char*)0, int) != 0;\n"),
+                "return m.symbol(((const char*)0)[:1], int) != 0;\n"),
             SVI("(test):2:9: error: _Module.symbol name must not be NULL\n"),
+        },
+        {
+            "reflection: null Any symbol name", __LINE__,
+            SVI("_Module m = __root_module();\n"
+                "return m.symbol(((const char*)0)[:1]).type == int*;\n"),
+            SVI("(test):2:9: error: _Module.symbol name must not be NULL\n"),
+        },
+        {
+            "intern: null data with nonzero count", __LINE__,
+            SVI("return __builtin_intern(((const char*)0)[:1]).count;\n"),
+            SVI("(test):1:8: error: __builtin_intern data must not be NULL\n"),
+        },
+        {
+            "compile: null source with nonzero count", __LINE__,
+            SVI("return __compile(((const char*)0)[:1], \"\") != nullptr;\n"),
+            SVI("(test):1:8: error: __compile source data must not be NULL\n"),
+        },
+        {
+            "compile: null path with nonzero count", __LINE__,
+            SVI("return __compile(\"int x;\", ((const char*)0)[:1]) != nullptr;\n"),
+            SVI("(test):1:8: error: __compile path data must not be NULL\n"),
         },
         {
             "reflection: null parse type name", __LINE__,
             SVI("_Module m = __root_module();\n"
-                "return m.parse_type((const char*)0) == int;\n"),
+                "return m.parse_type(((const char*)0)[:1]) == int;\n"),
             SVI("(test):2:9: error: _Module.parse_type name must not be NULL\n"),
         },
         {

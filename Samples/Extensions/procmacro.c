@@ -35,7 +35,7 @@ const char* gen_vec(int n){
     for(int i = 0; i < n; i++)
         off += snprintf(buf + off, sizeof buf - off, "    float v%d;\n", i);
     off += snprintf(buf + off, sizeof buf - off, "};");
-    return __builtin_intern(buf);
+    return __builtin_intern(buf[:off]).data;
 }
 #pragma procmacro gen_vec
 

@@ -338,7 +338,7 @@ load_modules_into(World* w, ModuleSource sources[:]){
         // Keep the candidate buffer for the caller to commit or discard.
         source.text = text;
         source.size = size;
-        _Module module = __compile(text, source.path);
+        _Module module = __compile(text[:size], source.path[:SDL_strlen(source.path)]);
         if(!module || source.load(w, module)){
             SDL_Log("Failed to reload '%s'", source.path);
             return 1;

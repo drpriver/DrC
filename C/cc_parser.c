@@ -3951,13 +3951,13 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, flags, &arg, CCQT_NONE);
                     if(err) return err;
-                    if(!cc_implicit_convertible(p, arg->type, p->const_char_star))
-                        return cc_error(p, arg->loc, "__builtin_intern argument must be a char pointer");
-                    err = cc_implicit_cast(p, arg, p->const_char_star, &arg);
+                    if(!cc_implicit_convertible(p, arg->type, p->const_char_slice))
+                        return cc_error(p, arg->loc, "__builtin_intern argument must be convertible to const char[:]");
+                    err = cc_implicit_cast(p, arg, p->const_char_slice, &arg);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_star, 0);
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_INTERN, tok.loc, p->const_char_slice, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->lhs = arg;
                     *out = node;
@@ -3975,22 +3975,22 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     }
                     err = cc_parse_assignment_expr(p, flags, &arg, CCQT_NONE);
                     if(err) return err;
-                    if(!cc_implicit_convertible(p, arg->type, p->const_char_star)){
-                        err = cc_error(p, arg->loc, "__compile argument must be convertible to const char*");
+                    if(!cc_implicit_convertible(p, arg->type, p->const_char_slice)){
+                        err = cc_error(p, arg->loc, "__compile argument must be convertible to const char[:]");
                         goto __compile_fail;
                     }
-                    err = cc_implicit_cast(p, arg, p->const_char_star, &arg);
+                    err = cc_implicit_cast(p, arg, p->const_char_slice, &arg);
                     if(err) goto __compile_fail;
 
                     err = cc_expect_punct(p, ',');
                     if(err) goto __compile_fail;
                     err = cc_parse_assignment_expr(p, flags, &arg2, CCQT_NONE);
                     if(err) goto __compile_fail;
-                    if(!cc_implicit_convertible(p, arg2->type, p->const_char_star)){
-                        err = cc_error(p, arg2->loc, "__compile argument must be convertible to const char*");
+                    if(!cc_implicit_convertible(p, arg2->type, p->const_char_slice)){
+                        err = cc_error(p, arg2->loc, "__compile argument must be convertible to const char[:]");
                         goto __compile_fail;
                     }
-                    err = cc_implicit_cast(p, arg2, p->const_char_star, &arg2);
+                    err = cc_implicit_cast(p, arg2, p->const_char_slice, &arg2);
                     if(err) goto __compile_fail;
 
                     err = cc_expect_punct(p, ')');
@@ -4982,17 +4982,22 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         CcExpr* name;
                         err = cc_parse_assignment_expr(p, flags, &name, CCQT_NONE);
                         if(err) return err;
-                        if(!cc_implicit_convertible(p, name->type, p->const_char_star))
-                            return cc_error(p, name->loc, "_Module.symbol first argument must be convertible to const char*");
-                        err = cc_implicit_cast(p, name, p->const_char_star, &name);
+                        CcToken next;
+                        err = cc_peek(p, &next);
                         if(err) return err;
-                        err = cc_expect_punct(p, ',');
-                        if(err) return err;
-                        CcQualType symbol_type;
-                        err = cc_parse_type_name(p, flags, &symbol_type, NULL);
-                        if(err) return err;
-                        CcQualType result_type;
-                        err = cc_pointer_of(p, symbol_type, &result_type);
+                        CcQualType result_type = ccqt_basic(CCBT__Any);
+                        if(next.type == CC_PUNCTUATOR && next.punct.punct == ','){
+                            err = cc_expect_punct(p, ',');
+                            if(err) return err;
+                            CcQualType symbol_type;
+                            err = cc_parse_type_name(p, flags, &symbol_type, NULL);
+                            if(err) return err;
+                            err = cc_pointer_of(p, symbol_type, &result_type);
+                            if(err) return err;
+                        }
+                        if(!cc_implicit_convertible(p, name->type, p->const_char_slice))
+                            return cc_error(p, name->loc, "_Module.symbol first argument must be convertible to const char[:]");
+                        err = cc_implicit_cast(p, name, p->const_char_slice, &name);
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
                         if(err) return err;
@@ -5022,9 +5027,9 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         CcExpr* name;
                         err = cc_parse_assignment_expr(p, flags, &name, CCQT_NONE);
                         if(err) return err;
-                        if(!cc_implicit_convertible(p, name->type, p->const_char_star))
-                            return cc_error(p, name->loc, "_Module.parse_type first argument must be convertible to const char*");
-                        err = cc_implicit_cast(p, name, p->const_char_star, &name);
+                        if(!cc_implicit_convertible(p, name->type, p->const_char_slice))
+                            return cc_error(p, name->loc, "_Module.parse_type first argument must be convertible to const char[:]");
+                        err = cc_implicit_cast(p, name, p->const_char_slice, &name);
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
                         if(err) return err;

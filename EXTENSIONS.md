@@ -541,7 +541,7 @@ int f[:] = x; // length 4
 As a special case, implicit conversion from string literals to arrays
 excludes the terminating nul. Explicit casts and explicit slicing retains
 the nul.  This is mostly for convenience when calling functions that take a
-char slice.
+`char[:]`.
 
 ```C
 const char x[:] = "hello";
@@ -876,7 +876,7 @@ const char* gen_print(_Type T){
     off += snprintf(buf+off, sizeof buf-off,
         "    printf(\"}\\n\");\n"
         "});\n");
-    return __builtin_intern(buf);
+    return __builtin_intern(buf[:off]).data;
 }
 #pragma procmacro gen_print
 
@@ -1062,14 +1062,18 @@ void outer(void){
 
 ### `__builtin_intern(s)`
 
-Returns a `const char*` that is deduplicated and valid for the
-lifetime of the program. Runtime version of string literals basically.
+Accepts a `const char[:]` and returns a deduplicated `const char[:]`
+valid for the lifetime of the program. The slice is nul-terminated,
+but its count does not it. Embedded nuls are preserved.
+An empty input returns an empty slice with a non-null data pointer to a
+terminating nul.
+Use `.data` when a C string pointer is needed.
 
 ```C
 const char* make_name(int id){
     char buf[64];
-    snprintf(buf, sizeof buf, "item_%d", id);
-    return __builtin_intern(buf);
+    int len = snprintf(buf, sizeof buf, "item_%d", id);
+    return __builtin_intern(buf[:len]).data;
 }
 ```
 
@@ -1123,7 +1127,7 @@ An incomplete list:
     + `long long long` is also a spelling for int128.
     + use `i128/lll` suffixes for int128 literals
 * Arrays can be assigned to other arrays.
-    + `int a[3](3) = {1,2,3}; int b[3](3) = a; int c[3](3); c = b;`
+    + `int a[3] = {1,2,3}; int b[3] = a; int c[3]; c = b;`
 * `_Self` names the enclosing type in `struct` or `union` declarations, including anonymous types.
     + `typedef struct { _Self* next; } Node;`
 * FIXME: list all the other random minor extensions.
@@ -1166,6 +1170,9 @@ scope.
 `__compile(source, path)` parses `source` as C code in a new scope whose
 parent is the global scope. Code in the source can refer to symbols
 in the global scope of the parent.
+Both arguments accept `const char[:]` and don't require nul termination.
+An empty path (for example `""`) selects a generated filename.
+An empty source compiles an empty module.
 
 
 `__compile` returns `NULL` if parsing fails. Diagnostics are still emitted.
@@ -1176,7 +1183,7 @@ automatically. Call `module.run()` to execute them.
 It returns `0` on success and nonzero if the module handle is `NULL` or invalid.
 
 ```C
-_Module m = __compile("int add(int a, int b){ return a + b; }", nullptr);
+_Module m = __compile("int add(int a, int b){ return a + b; }", "");
 if(!m)
     return 1;
 
@@ -1214,21 +1221,41 @@ printf("%d\n", add(2, 3));
 <td>`_ModuleMember type(size_t)`</td><td>Get the `i`th type.</td>
 </tr>
 <tr>
-<td>`_Type parse_type(const char*)`</td><td>Parse a type name string in this `_Module`'s scope</td>
+<td>`_Type parse_type(const char[:])`</td><td>Parse a type name slice in this `_Module`'s scope</td>
 </tr>
 <tr>
 <td>`int run()`</td><td>Run the top-level statements in this module,</td>
 </tr>
 <tr>
-<td>`T* symbol(const char*, constexpr _Type T)`</td><td>Retrieve a symbol of the given type.</td>
+<td>`T* symbol(const char[:], constexpr _Type T)`</td><td>Retrieve a symbol of the given type.</td>
+</tr>
+<tr>
+<td>`_Any symbol(const char[:])`</td><td>Retrieve a symbol pointer with its actual type.</td>
 </tr>
 </tbody>
 </table>
 
-##### `_Module.symbol(const char*, constexpr _Type T)`
+##### `_Module.symbol(const char[:])` / `_Module.symbol(const char[:], constexpr _Type T)`
 
 Looks up a symbol from the `_Module`, like a strongly typed `dlsym()`.
-Returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
+
+
+With one argument, accepts a `const char[:]` and returns an `_Any`
+containing a pointer to the symbol, with its actual pointer type in
+`.type`. For object symbols this is a pointer to the object, preserving
+qualifiers and array types; for functions it is a function pointer.
+Missing or unresolved symbols return an empty `_Any` with an invalid
+`.type` (`.type.is_invalid`) and zero payload.
+
+```C
+int counter = 42;
+_Any symbol = __root_module().symbol("counter");
+if(symbol.type == int*)
+    *symbol.as(int*) += 1;
+```
+
+
+With two arguments, returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
 cannot be resolved or does not match the type given.
 
 ```C
@@ -1246,18 +1273,20 @@ int counter;
 // will fail to compile as the return type is `int **`
 // int* p = __root_module().symbol("counter", typeof(p));
 int* p = __root_module().symbol("counter", typeof(*p));
+// AKA:
+// int* p = __root_module().symbol("counter", int);
 if(p)
     *p += 1;
 ```
 
-##### `_Module.parse_type(const char*)`
+##### `_Module.parse_type(const char[:])`
 
-Parses the given string as a type name. This can return typedefs,
-structs, unions, enums, or basic types if you wanted.
+Parses the given slice as a type name.
+This can return typedefs, structs, unions, enums, or basic types if you wanted.
 On error, returns the invalid type (check `.is_valid`/`is_invalid`).
 
 ```C
-_Module m = __compile("typedef int MyInt; struct S { MyInt x; };", nullptr);
+_Module m = __compile("typedef int MyInt; struct S { MyInt x; };", "");
 _Type T = m.parse_type("struct S");
 if(T.is_struct)
     printf("%s\n", T.name);
@@ -1315,7 +1344,7 @@ The return value is 0 or the result of a top level return statement.
 
 ```C
 #include <assert.h>
-_Module m = __compile("int x; x = 42;", nullptr);
+_Module m = __compile("int x; x = 42;", "");
 int* x = m.symbol("x", typeof(*x));
 assert(x && *x == 0);
 m.run();
@@ -1451,7 +1480,7 @@ The following return values are supported:
 <td>`void`</td><td>expands to no tokens</td>
 </tr>
 <tr>
-<td>`char *` or `char` slice</td><td>string literal or `nullptr`</td>
+<td>`char *` or `char[:]`</td><td>string literal or `nullptr`</td>
 </tr>
 <tr>
 <td>`nullptr_t`</td><td>`nullptr`</td>
@@ -1502,7 +1531,7 @@ const char* gen_vec(int n){
     for(int i = 0; i < n; i++)
         off += snprintf(buf + off, sizeof buf - off, " float v%d;", i);
     off += snprintf(buf + off, sizeof buf - off, " };");
-    return __builtin_intern(buf); // avoid dangling pointer
+    return __builtin_intern(buf[:off]).data; // avoid dangling pointer
 }
 #pragma procmacro gen_vec
 

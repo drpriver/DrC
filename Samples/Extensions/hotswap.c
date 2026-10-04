@@ -37,8 +37,9 @@ for(;;){
     if(!line) break;
     if(!line[0]) continue;
     add_history(line);
+    const char name[:] = line[:strlen(line)];
     {
-        typeof(&math) sym = root.symbol(line, typeof(*sym));
+        typeof(&math) sym = root.symbol(name, typeof(*sym));
         if(sym){
             __hotswap(math, sym);
             printf("math(%d, %d) = %d\n", x, y, math(x,y));
@@ -52,7 +53,7 @@ for(;;){
             printf("math(%d, %d) = %d\n", x, y, math(x,y));
             continue;
     }
-    int* p = root.symbol(line, int);
+    int* p = root.symbol(name, int);
     if(p) {
         ++*p;
         printf("++%s -> %d\n", line, *p);

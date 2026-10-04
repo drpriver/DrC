@@ -34,7 +34,7 @@ int json_parse_(_Type T, const char** p, void* out){
         memcpy(buf, start, len);
         buf[len] = 0;
         if(**p == '"') ++*p;
-        const char* result = __builtin_intern(buf);
+        const char* result = __builtin_intern(buf[:len]).data;
         free(buf);
         return result;
     }

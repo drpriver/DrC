@@ -31,7 +31,7 @@ const char* gen_enum_strings(_Type T){
         auto e = T.enumerator(i);
         off += snprintf(buf+off, sizeof buf-off,
             "        case %lld: return \"%s\";\n",
-            e.value, e.name.data);
+            (long long)e.value, e.name.data);
     }
     off += snprintf(buf+off, sizeof buf-off,
         "    }\n"
@@ -46,13 +46,13 @@ const char* gen_enum_strings(_Type T){
         auto e = T.enumerator(i);
         off += snprintf(buf+off, sizeof buf-off,
             "    if(strieq(s, \"%s\")){ *out = %lld; return 1; }\n",
-            e.name.data, e.value);
+            e.name.data, (long long)e.value);
     }
     off += snprintf(buf+off, sizeof buf-off,
         "    return 0;\n"
         "}\n");
 
-    return __builtin_intern(buf);
+    return __builtin_intern(buf[:off]).data;
 }
 #pragma procmacro gen_enum_strings
 

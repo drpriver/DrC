@@ -2309,7 +2309,8 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         .slot = dest,
         .slot_size = out ? out->size : 0,
         .reflect_op = subop,
-        .member_by_name = !module && !srcloc && (subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD || subop == CC_TYPE_HAS_FIELD || subop == CC_TYPE_HAS_METHOD)
+        .member_by_name = (module ? subop == CC_MODULE_SYMBOL || subop == CC_MODULE_PARSE_TYPE :
+            !srcloc && (subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD || subop == CC_TYPE_HAS_FIELD || subop == CC_TYPE_HAS_METHOD))
             && ccqt_kind(e->values[0]->type) == CC_SLICE,
         .loc = e->loc,
     }};
@@ -2332,7 +2333,7 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             check->rt_call.slot_size = 0;
         }
     }
-    if(module && subop == CC_MODULE_SYMBOL){
+    if(module && subop == CC_MODULE_SYMBOL && ccqt_kind(e->type) == CC_POINTER){
         err = ci_alloc_slot(ctx, 8, 8, &call.rt_call.args[2]);
         if(err) return err;
         CiOp* expected;

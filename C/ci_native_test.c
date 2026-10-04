@@ -1033,7 +1033,7 @@ TestFunction(test_interp){
         },
         {
             "module: unused eager body does not resolve externs", __LINE__,
-            SVI("_Module m=__compile(\"int missing_dvm_dep(void); int unused(void){return missing_dvm_dep();} int used(void){return 9;} return used();\", nullptr);\n"
+            SVI("_Module m=__compile(\"int missing_dvm_dep(void); int unused(void){return missing_dvm_dep();} int used(void){return 9;} return used();\", \"\");\n"
                 "return m.run();\n"),
             .exit_code = 9,
         },

@@ -408,7 +408,7 @@ C::md
     As a special case, implicit conversion from string literals to arrays
     excludes the terminating nul. Explicit casts and explicit slicing retains
     the nul.  This is mostly for convenience when calling functions that take a
-    char slice.
+    `char[:]`.
 
     ::pre.C
       const char x[:] = "hello";
@@ -700,7 +700,7 @@ C::md
             off += snprintf(buf+off, sizeof buf-off,
                 "    printf(\"}\\n\");\n"
                 "});\n");
-            return __builtin_intern(buf);
+            return __builtin_intern(buf[:off]).data;
         }
         #pragma procmacro gen_print
 
@@ -857,14 +857,18 @@ C::md
       }
 
   `__builtin_intern(s)`::md
-    Returns a `const char*` that is deduplicated and valid for the
-    lifetime of the program. Runtime version of string literals basically.
+    Accepts a `const char[:]` and returns a deduplicated `const char[:]`
+    valid for the lifetime of the program. The slice is nul-terminated,
+    but its count does not it. Embedded nuls are preserved.
+    An empty input returns an empty slice with a non-null data pointer to a
+    terminating nul.
+    Use `.data` when a C string pointer is needed.
 
     ::pre.C
       const char* make_name(int id){
           char buf[64];
-          snprintf(buf, sizeof buf, "item_%d", id);
-          return __builtin_intern(buf);
+          int len = snprintf(buf, sizeof buf, "item_%d", id);
+          return __builtin_intern(buf[:len]).data;
       }
 
   `#pragma typedef`::md
@@ -944,6 +948,9 @@ Interpreter-only::md
     `__compile(source, path)` parses `source` as C code in a new scope whose
     parent is the global scope. Code in the source can refer to symbols
     in the global scope of the parent.
+    Both arguments accept `const char[:]` and don't require nul termination.
+    An empty path (for example `""`) selects a generated filename.
+    An empty source compiles an empty module.
 
     `__compile` returns `NULL` if parsing fails. Diagnostics are still emitted.
     Top-level statements are stored in the module and are not run
@@ -952,7 +959,7 @@ Interpreter-only::md
     It returns `0` on success and nonzero if the module handle is `NULL` or invalid.
 
     ::pre.C
-      _Module m = __compile("int add(int a, int b){ return a + b; }", nullptr);
+      _Module m = __compile("int add(int a, int b){ return a + b; }", "");
       if(!m)
           return 1;
 
@@ -969,13 +976,28 @@ Interpreter-only::md
         `_ModuleMember var(size_t)` | Get the `i`th variable.
         `size_t type_count` | how many global types are declared in the module
         `_ModuleMember type(size_t)` | Get the `i`th type.
-        `_Type parse_type(const char*)` | Parse a type name string in this `_Module`'s scope
+        `_Type parse_type(const char[:])` | Parse a type name slice in this `_Module`'s scope
         `int run()` | Run the top-level statements in this module,
-        `T* symbol(const char*, constexpr _Type T)` | Retrieve a symbol of the given type.
+        `T* symbol(const char[:], constexpr _Type T)` | Retrieve a symbol of the given type.
+        `_Any symbol(const char[:])` | Retrieve a symbol pointer with its actual type.
 
-      `_Module.symbol(const char*, constexpr _Type T)`::md
+      `_Module.symbol(const char[:])` / `_Module.symbol(const char[:], constexpr _Type T)`::md
         Looks up a symbol from the `_Module`, like a strongly typed `dlsym()`.
-        Returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
+
+        With one argument, accepts a `const char[:]` and returns an `_Any`
+        containing a pointer to the symbol, with its actual pointer type in
+        `.type`. For object symbols this is a pointer to the object, preserving
+        qualifiers and array types; for functions it is a function pointer.
+        Missing or unresolved symbols return an empty `_Any` with an invalid
+        `.type` (`.type.is_invalid`) and zero payload.
+
+        ::pre.C
+          int counter = 42;
+          _Any symbol = __root_module().symbol("counter");
+          if(symbol.type == int*)
+              *symbol.as(int*) += 1;
+
+        With two arguments, returns a pointer of type pointer-to-`T` or `NULL` if the symbol is not known,
         cannot be resolved or does not match the type given.
         ::pre.C
           _Module root = __root_module();
@@ -989,15 +1011,17 @@ Interpreter-only::md
           // will fail to compile as the return type is `int **`
           // int* p = __root_module().symbol("counter", typeof(p));
           int* p = __root_module().symbol("counter", typeof(*p));
+          // AKA:
+          // int* p = __root_module().symbol("counter", int);
           if(p)
               *p += 1;
-      `_Module.parse_type(const char*)`::md
-        Parses the given string as a type name. This can return typedefs,
-        structs, unions, enums, or basic types if you wanted.
+      `_Module.parse_type(const char[:])`::md
+        Parses the given slice as a type name.
+        This can return typedefs, structs, unions, enums, or basic types if you wanted.
         On error, returns the invalid type (check `.is_valid`/`is_invalid`).
 
         ::pre.C
-          _Module m = __compile("typedef int MyInt; struct S { MyInt x; };", nullptr);
+          _Module m = __compile("typedef int MyInt; struct S { MyInt x; };", "");
           _Type T = m.parse_type("struct S");
           if(T.is_struct)
               printf("%s\n", T.name);
@@ -1043,7 +1067,7 @@ Interpreter-only::md
         The return value is 0 or the result of a top level return statement.
         ::pre.C
           #include <assert.h>
-          _Module m = __compile("int x; x = 42;", nullptr);
+          _Module m = __compile("int x; x = 42;", "");
           int* x = m.symbol("x", typeof(*x));
           assert(x && *x == 0);
           m.run();
@@ -1143,7 +1167,7 @@ Interpreter-only::md
       `_Bool` | `true` / `false`
       `int`, `float`, etc. | pp-number
       `void` | expands to no tokens
-      `char *` or `char` slice | string literal or `nullptr`
+      `char *` or `char[:]` | string literal or `nullptr`
       `nullptr_t` | `nullptr`
       `_Any` | type is introspected and payload is converted as above.
 
@@ -1183,7 +1207,7 @@ Interpreter-only::md
           for(int i = 0; i < n; i++)
               off += snprintf(buf + off, sizeof buf - off, " float v%d;", i);
           off += snprintf(buf + off, sizeof buf - off, " };");
-          return __builtin_intern(buf); // avoid dangling pointer
+          return __builtin_intern(buf[:off]).data; // avoid dangling pointer
       }
       #pragma procmacro gen_vec
 

@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Example 1: Auto-generated struct printer
 //
@@ -24,7 +25,8 @@ const char* fmtspec(_Type T){
 }
 #pragma procmacro fmtspec
 
-const char* gen_print(_Type T){
+typedef const char StringView[:];
+StringView gen_print(_Type T){
     if(!T.is_struct) return "";
     char buf[4096];
     int off = 0;
@@ -32,11 +34,11 @@ const char* gen_print(_Type T){
     off += snprintf(buf+off, sizeof buf-off,
         "(%s).push_method(print, void (%s* v){\n"
         "    printf(\"%s {\\n\");\n",
-        T.name, T.name, T.name);
+        T.name.data, T.name.data, T.name.data);
     for(int i = 0; i < (int)T.fields; i++){
         auto f = T.field(i);
         _Type ft = f.type;
-        const char* name = f.name;
+        const char* name = f.name.data;
         const char* fmt = (fmtspec)(ft);
         off += snprintf(buf+off, sizeof buf-off,
             "    printf(\"    %s = %s\\n\", v->%s);\n",
@@ -45,7 +47,7 @@ const char* gen_print(_Type T){
     off += snprintf(buf+off, sizeof buf-off,
         "    printf(\"}\\n\");\n"
         "});\n");
-    return __builtin_intern(buf);
+    return __builtin_intern(buf[:off]);
 }
 #pragma procmacro gen_print
 
@@ -69,8 +71,8 @@ p2.print();
 // Generates a Vec struct with push, pop and free, parameterized by
 // element type.
 
-const char* Vec(_Type T){
-    const char* n = T.name;
+StringView Vec(_Type T){
+    const char* n = T.name.data;
     char buf[4096];
     int off = 0;
     off += snprintf(buf+off, sizeof buf-off,
@@ -90,7 +92,7 @@ const char* Vec(_Type T){
         "    }\n"
         "};\n",
         n, n, n, n, n, n, n, n, n, n);
-    return __builtin_intern(buf);
+    return __builtin_intern(buf[:off]);
 }
 #pragma procmacro Vec
 

@@ -255,9 +255,15 @@ static struct OomTestCase {
     {__LINE__, SVI("_Any boxed(int x){return x+1;}\n"
          "#pragma procmacro boxed\n"
          "return boxed(41);\n")},
-    {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\", nullptr);\n"
+    {__LINE__, SVI("_Module m = __compile(\"int f(int n){ return n ? f(n-1) : 0; } f(3);\", \"\");\n"
          "if(m) m.run();\n"
          "return 0;\n")},
+    {__LINE__, SVI("_Module m = __compile(\"struct S { int x; }; struct S s = {42}; int f(void){return s.x;}\", \"\");\n"
+         "if(m){ _Any s = m.symbol(\"s\"); _Any f = m.symbol(\"f\"); }\n"
+         "return 0;\n")},
+    {__LINE__, SVI("const char name[:] = __builtin_intern(\"new_interned_name\");\n"
+         "_Type t = __root_module().parse_type(\"struct OomType { int value; }\");\n"
+         "return name.count != 0 && t.is_valid;\n")},
     {__LINE__, SVI("int recurse(int n){\n"
          "int *p = __builtin_alloca(sizeof(int)); *p = n;\n"
          "return n ? recurse(n-1) + *p : 0; }\n"

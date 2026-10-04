@@ -126,10 +126,10 @@ static int ci_dlsym(CiInterpreter*, SrcLoc, Atom, const char* what, void*_Nullab
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
 static int ci_make_flat_call_frame(CiInterpreter*, CiInterpFrame*, CcFunc*, const CiOp*, CiInterpFrame*_Nullable*_Nonnull);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame*_Nullable caller, CcFunc*, void*_Nonnull*_Nonnull argv, uint32_t nargs, const uint32_t*_Nullable arg_sizes, void* result, size_t size, SrcLoc loc);
-static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType, void*_Nullable*_Nonnull);
-static int ci_compile_module(CiInterpreter*, const char*_Null_unspecified, const char* _Null_unspecified, CiModule*_Nullable*_Nonnull);
+static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, size_t, CcQualType, void*_Nullable*_Nonnull, CcQualType*_Nullable);
+static int ci_compile_module(CiInterpreter*, StringView, StringView, CiModule*_Nullable*_Nonnull);
 static int ci_resolve_module(CiInterpreter*, CiModule*);
-static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, CcQualType*);
+static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, StringView, CcQualType*);
 static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
 static int ci_reflect_func_unlocked(CiInterpreter*, SrcLoc, CcFunc*, CiRtModuleMember*, _Bool);
 static int ci_try_dlsym(CiInterpreter*, Atom, void*_Nullable*_Nonnull);
@@ -987,12 +987,24 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
         case CC_MODULE_NONE:
             break;
         case CC_MODULE_SYMBOL:{
-            const char* name = (const char*)arg;
-            if(!name)
+            const CiRtSlice* name_slice = (const CiRtSlice*)arg;
+            const char* name = name_slice->data;
+            size_t len = name_slice->count;
+            if(len && !name)
                 return ci_error(ci, loc, "_Module.symbol name must not be NULL");
             void* sym = NULL;
-            err = ci_lookup_symbol(ci, loc, module, name, expected, &sym);
-            if(err) return err;
+            CiRtAny any = {0};
+            if(len){
+                err = ci_lookup_symbol(ci, loc, module, name, len, expected, &sym, expected.bits ? NULL : &any.type);
+                if(err) return err;
+            }
+            if(!expected.bits){
+                if(sizeof any > size)
+                    return CI_RESULT_TOO_SMALL(ci, loc, sizeof any, size);
+                CI_INLINE_MEMCPY(any.payload, &sym, sizeof sym);
+                CI_INLINE_MEMCPY(result, &any, sizeof any);
+                return 0;
+            }
             if(sizeof sym > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof sym, size);
             CI_INLINE_MEMCPY(result, &sym, sizeof sym);
@@ -1023,16 +1035,15 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             return CI_STEP_ENTER_FRAME;
         }
         case CC_MODULE_PARSE_TYPE:{
-            const char* name = (const char*)arg;
-            if(!name)
+            const CiRtSlice* name = (const CiRtSlice*)arg;
+            if(name->count && !name->data)
                 return ci_error(ci, loc, "_Module.parse_type name must not be NULL");
             CcQualType type = {0};
-            err = ci_parse_module_type(ci, loc, module, name, &type);
+            err = ci_parse_module_type(ci, loc, module, (StringView){name->count, name->data}, &type);
             if(err) return err;
-            uintptr_t bits = type.bits;
-            if(sizeof bits > size)
-                return CI_RESULT_TOO_SMALL(ci, loc, sizeof bits, size);
-            CI_INLINE_MEMCPY(result, &bits, sizeof bits);
+            if(sizeof type > size)
+                return CI_RESULT_TOO_SMALL(ci, loc, sizeof type, size);
+            CI_INLINE_MEMCPY(result, &type, sizeof type);
             return 0;
         }
     }
@@ -1091,8 +1102,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         err = ci_module_reflect_validate(ci, op->rt_call.loc, (CiModule*)receiver);
                     else if(op->rt_call.op == CI_RT_TYPE_REFLECT)
                         err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, op->rt_call.member_by_name ? (const CiRtSlice*)((char*)frame->slots + op->rt_call.args[1]) : NULL, result);
-                    else
+                    else {
+                        if(op->rt_call.member_by_name)
+                            arg = (uintptr_t)((char*)frame->slots + op->rt_call.args[1]);
                         err = ci_module_reflect(ci, frame, op->rt_call.loc, op->rt_call.reflect_op, (CiModule*)receiver, arg, expected, result, op->rt_call.slot_size ? op->rt_call.slot_size : sizeof ci_discard_buf, child);
+                    }
                     break;
                 }
                 case CI_RT_SRCLOC_REFLECT: {
@@ -1124,17 +1138,15 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     break;
                 }
                 case CI_RT_INTERN: {
-                    const char* s;
+                    CiRtSlice s;
                     CI_INLINE_MEMCPY(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
-                    const char* interned = NULL;
-                    if(s){
-                        Atom a;
-                        AtomTable* at = ci_lock_atoms(ci);
-                        a = AT_atomize(at, s, strlen(s));
-                        ci_unlock_atoms(ci, at);
-                        if(!a) return CI_OOM_ERROR;
-                        interned = a->data;
-                    }
+                    if(s.count && !s.data)
+                        return ci_error(ci, op->rt_call.loc, "__builtin_intern data must not be NULL");
+                    AtomTable* at = ci_lock_atoms(ci);
+                    Atom a = AT_atomize(at, s.count ? s.data : "", s.count);
+                    ci_unlock_atoms(ci, at);
+                    if(!a) return CI_OOM_ERROR;
+                    CiRtSlice interned = {.count = a->length, .data = (void*)(uintptr_t)a->data};
                     if(op->rt_call.slot_size)
                         CI_INLINE_MEMCPY(result, &interned, sizeof interned);
                     break;
@@ -1156,17 +1168,20 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     break;
                 }
                 case CI_RT_COMPILE: {
-                    const char* source, *path;
+                    CiRtSlice source, path;
                     CI_INLINE_MEMCPY(&source, (char*)frame->slots + op->rt_call.args[0], sizeof source);
                     CI_INLINE_MEMCPY(&path, (char*)frame->slots + op->rt_call.args[1], sizeof path);
                     CiModule* module = NULL;
-                    if(source){
-                        err = ci_compile_module(ci, source, path, &module);
-                        if(err == CI_OOM_ERROR) return err;
-                        // Compilation diagnostics produce a null module, not
-                        // an interpreter execution failure.
-                        err = 0;
-                    }
+                    if(source.count && !source.data)
+                        return ci_error(ci, op->rt_call.loc, "__compile source data must not be NULL");
+                    if(path.count && !path.data)
+                        return ci_error(ci, op->rt_call.loc, "__compile path data must not be NULL");
+                    err = ci_compile_module(ci, (StringView){source.count, source.count ? source.data : ""},
+                        (StringView){path.count, path.count ? path.data : ""}, &module);
+                    if(err == CI_OOM_ERROR) return err;
+                    // Compilation diagnostics produce a null module, not
+                    // an interpreter execution failure.
+                    err = 0;
                     if(op->rt_call.slot_size)
                         CI_INLINE_MEMCPY(result, &module, sizeof module);
                     break;
@@ -2803,8 +2818,7 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
 
 static
 int
-ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const char*_Null_unspecified path, CiModule*_Nullable*_Nonnull out){
-    if(!source) source = "";
+ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModule*_Nullable*_Nonnull out){
     int err = 0;
     *out = NULL;
     ci_lock_resolver(ci);
@@ -2819,11 +2833,11 @@ ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const 
         goto done;
     }
     module->scope.parent = &ci->parser.global;
-    size_t source_len = strlen(source);
+    size_t source_len = source.length;
     char* source_copy = "";
     if(source_len){
         // TODO: maybe this should just go through the file cache?
-        source_copy = Allocator_dupe(ci_allocator(ci), source, source_len);
+        source_copy = Allocator_dupe(ci_allocator(ci), source.text, source_len);
         if(!source_copy){
             err = CI_OOM_ERROR;
             goto done;
@@ -2834,7 +2848,7 @@ ci_compile_module(CiInterpreter* ci, const char*_Null_unspecified source, const 
     p->current = &module->scope;
     cc_parser_discard_input(p);
 
-    if(path) fc_write_pathf(p->cpp.fc, "%s", path);
+    if(path.length) fc_write_path(p->cpp.fc, path.text, path.length);
     else fc_write_pathf(p->cpp.fc, "<__compile:%zu>", ci->next_module_id++);
     uint32_t file_id = 0;
     err = fc_intern_path(p->cpp.fc, &file_id);
@@ -2886,13 +2900,13 @@ ci_resolve_module(CiInterpreter* ci, CiModule* module){
 
 static
 int
-ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* source, CcQualType* out){
+ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, StringView source, CcQualType* out){
     *out = (CcQualType){0};
     CcParser* p = &ci->parser;
     int err = 0;
 
     ci_lock_resolver(ci);
-    err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, (StringView){strlen(source), source}, out);
+    err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, source, out);
     if(err && err != CI_OOM_ERROR){
         *out = (CcQualType){0};
         err = 0;
@@ -3142,15 +3156,16 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
 
 static
 int
-ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* name, CcQualType expected, void*_Nullable*_Nonnull out){
-    size_t len = strlen(name);
+ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* name, size_t len, CcQualType expected, void*_Nullable*_Nonnull out, CcQualType*_Nullable pointer_type){
     *out = NULL;
     AtomTable* at = ci_lock_atoms(ci);
     Atom atom = AT_atomize(at, name, len);
     ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
+    name = atom->data;
 
     int ret = 0;
+    CcQualType symbol_type = {0};
     ci_lock_resolver(ci);
     CcSymbol sym;
     CcScope* scope = module ? &module->scope : &ci->parser.global;
@@ -3160,7 +3175,8 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
             case CC_SYM_FUNC: {
                 CcFunc* func = sym.func;
                 CcQualType func_type = {.bits = (uintptr_t)func->type};
-                if(func_type.bits != expected.bits)
+                symbol_type = func_type;
+                if(expected.bits && func_type.bits != expected.bits)
                     goto done;
                 if(!func->defined){
                     if(!func->native_func){
@@ -3185,7 +3201,8 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
             }
             case CC_SYM_VAR: {
                 CcVariable* var = sym.var;
-                if(var->type.bits != expected.bits)
+                symbol_type = var->type;
+                if(expected.bits && var->type.bits != expected.bits)
                     goto done;
                 if(var->automatic)
                     goto done;
@@ -3222,6 +3239,11 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
         }
     }
 done:
+    if(!ret && *out && pointer_type){
+        CcPointer* ptr = cc_intern_pointer(&ci->parser.type_cache, cc_allocator(&ci->parser), symbol_type, 0, 0);
+        if(!ptr) ret = CI_OOM_ERROR;
+        else *pointer_type = (CcQualType){.bits = (uintptr_t)ptr};
+    }
     ci_unlock_resolver(ci);
     return ret;
 }
@@ -4235,8 +4257,42 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         case CC_UNION:
             err = ci_unimplemented(ci, loc, "union to cpp tokens");
             goto cleanup;
+        case CC_SLICE:{
+            CcSlice* sl = ccqt_as_slice(rt);
+            if(!ccqt_bt_eq((CcQualType){.unqual=sl->pointee.unqual}, CCBT_char)){
+                err = ci_unimplemented(ci, loc, "Unsupported return type: slice");
+                goto cleanup;
+            }
+            CiRtSlice s = *(CiRtSlice*)result;
+            MStringBuilder sb = {.allocator = ci_scratch_allocator(ci)};
+            msb_write_char(&sb, '"');
+            for(size_t i = 0, slen = s.count; i < slen; i++){
+                unsigned char c = (unsigned char)((char*)s.data)[i];
+                switch(c){
+                    case '\\': msb_write_literal(&sb, "\\\\"); break;
+                    case '"':  msb_write_literal(&sb, "\\\""); break;
+                    case '\n': msb_write_literal(&sb, "\\n"); break;
+                    case '\t': msb_write_literal(&sb, "\\t"); break;
+                    case '\r': msb_write_literal(&sb, "\\r"); break;
+                    case '\a': msb_write_literal(&sb, "\\a"); break;
+                    case '\b': msb_write_literal(&sb, "\\b"); break;
+                    case '\f': msb_write_literal(&sb, "\\f"); break;
+                    case '\v': msb_write_literal(&sb, "\\v"); break;
+                    case '\0': msb_write_literal(&sb, "\\0"); break;
+                    default:   msb_write_char(&sb, c); break;
+                }
+            }
+            msb_write_char(&sb, '"');
+            a = msb_atomize(&sb, cpp->at);
+            msb_destroy(&sb);
+            tok_type = CPP_STRING;
+            if(!a){
+                err = CI_OOM_ERROR;
+                goto cleanup;
+            }
+            break;
+        }
         case CC_BLOCK_POINTER:
-        case CC_SLICE:
             err = ci_unimplemented(ci, loc, "Unsupported return type");
             goto cleanup;
         case CC_ARRAY:
