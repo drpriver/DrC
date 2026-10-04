@@ -516,7 +516,8 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_SWITCH
             uint32_t is_unsigned: 1,
-                     _bitpad: 23;
+                     is_dense: 1,
+                     _bitpad: 22;
             uint32_t jump;
             uint32_t slot, slot_size;
             CiSwitchTable*_Null_unspecified table;

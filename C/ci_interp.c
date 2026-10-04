@@ -2138,6 +2138,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 val = (uint64_t)ci_read_int(src, op->switch_.slot_size);
             size_t count = op->switch_.table->count;
             const CcSwitchEntry* table = op->switch_.table->data;
+            if(op->switch_.is_dense){
+                uint64_t index = val - table[0].value;
+                frame->pc = index < count ? table[index].target : op->switch_.jump;
+                return 0;
+            }
             // Binary search for matching case
             size_t lo = 0, hi = count;
             while(lo < hi){

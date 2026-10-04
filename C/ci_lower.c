@@ -386,18 +386,32 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                     goto switch_cleanup;
                 }
             }
+            size_t first = 0;
+            size_t count = sw.entries.count;
+            // Find first signed value
+            if(count && !is_unsigned && !(sw.entries.data[0].value >> 63) && (sw.entries.data[count-1].value >> 63)){
+                while(!(sw.entries.data[first].value >> 63)) first++;
+            }
+            size_t last = first ? first-1 : count ? count-1 : 0;
+            _Bool is_dense = count && sw.entries.data[last].value - sw.entries.data[first].value == count-1;
             // Copy the sorted entries into the op's out-of-line table
             {
                 size_t table_size = sizeof(CiSwitchTable) + sw.entries.count * sizeof(CcSwitchEntry);
                 CiSwitchTable* table = Allocator_alloc(ctx->a, table_size);
                 if(!table){ err = CI_OOM_ERROR; goto switch_cleanup; }
                 table->count = sw.entries.count;
-                if(sw.entries.count)
+                if(is_dense && first){
+                    // Rotate dense signed ranges into signed order.
+                    memcpy(table->data, sw.entries.data + first, (count-first) * sizeof(CcSwitchEntry));
+                    memcpy(table->data + count-first, sw.entries.data, first * sizeof(CcSwitchEntry));
+                }
+                else if(sw.entries.count)
                     memcpy(table->data, sw.entries.data, sw.entries.count * sizeof(CcSwitchEntry));
                 uint32_t break_target = (uint32_t)ctx->out->count;
                 CiOp* swop = &ctx->out->data[sw_idx];
                 swop->switch_.jump = sw.has_default ? sw.default_target : break_target;
                 swop->switch_.table = table;
+                swop->switch_.is_dense = is_dense;
                 ci_backpatch_break(ctx, backpatch_start, break_target);
             }
             switch_cleanup:

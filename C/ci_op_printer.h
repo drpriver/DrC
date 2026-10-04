@@ -577,7 +577,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->return_slot.src, op->return_slot.src_size);
             break;
         case CI_OP_SWITCH:
-            msb_sprintf(out, "switch%s ", op->switch_.is_unsigned?".u":"");
+            msb_sprintf(out, "switch%s%s ", op->switch_.is_unsigned?".u":"", op->switch_.is_dense?".dense":"");
             ci_op_print_range(out, op->switch_.slot, op->switch_.slot_size);
             msb_write_literal(out, " {");
             if(op->switch_.table){
