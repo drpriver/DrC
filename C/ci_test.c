@@ -5404,6 +5404,54 @@ TestFunction(test_interpreter){
             .exit_code = 2,
         },
         {
+            "__hotswap rejects inline original", __LINE__,
+            SVI("inline int f(void){return 1;} int g(void){return 2;}\n"
+                "return __hotswap(f,g)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap rejects inline original through pointer", __LINE__,
+            SVI("static inline int f(void){return 1;} int g(void){return 2;}\n"
+                "int (*p)(void)=f; return __hotswap(p,g)!=0&&p()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap rejects inline self replacement", __LINE__,
+            SVI("inline int f(void){return 1;} return __hotswap(f,f)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap rejects force_inline original", __LINE__,
+            SVI("#define force_inline static inline __attribute__((always_inline))\n"
+                "force_inline int f(void){return 1;} int g(void){return 2;}\n"
+                "return __hotswap(f,g)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap rejects always_inline without inline keyword", __LINE__,
+            SVI("__attribute__((always_inline)) int f(void){return 1;} int g(void){return 2;}\n"
+                "int (*p)(void)=f; return __hotswap(f,g)!=0&&__hotswap(p,g)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap preserves inline prototype on definition", __LINE__,
+            SVI("inline int f(void); int f(void){return 1;} int g(void){return 2;}\n"
+                "return __hotswap(f,g)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap preserves inline definition on redeclaration", __LINE__,
+            SVI("inline int f(void){return 1;} int f(void); int g(void){return 2;}\n"
+                "return __hotswap(f,g)!=0&&f()==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "__hotswap permits inline replacement", __LINE__,
+            SVI("int f(void){return 1;} inline int g(void){return 2;}\n"
+                "return __hotswap(f,g)==0&&f()==2&&__hotswap(g,f)!=0&&g()==2;\n"),
+            .exit_code = 1,
+        },
+        {
             "__hotswap indirect call", __LINE__,
             SVI("int f(void){ return 1; }\n"
                "int g(void){ return 2; }\n"

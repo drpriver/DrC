@@ -720,6 +720,7 @@ TestFunction(test_cc_lex_keywords){
         {"_Decimal64", SV("_Decimal64"), CC__Decimal64, __LINE__},
         {"_Decimal128", SV("_Decimal128"), CC__Decimal128, __LINE__},
         {"thread_local", SV("thread_local"), CC_thread_local, __LINE__},
+        {"__forceinline", SV("__forceinline"), CC___forceinline, __LINE__},
         {"_Thread_local", SV("_Thread_local"), CC_thread_local, __LINE__},
         {"static_assert", SV("static_assert"), CC_static_assert, __LINE__},
         {"_Static_assert", SV("_Static_assert"), CC_static_assert, __LINE__},

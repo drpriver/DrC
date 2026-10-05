@@ -1355,7 +1355,9 @@ assert(x && *x == 42);
 
 Replaces the interpreted function reached by `original` with
 `replacement` at runtime. Both arguments must be function expressions or
-function pointers with the same exact function pointer type.
+function pointers with the same exact function pointer type. `inline`,
+`__forceinline`, `__attribute__((always_inline))` functions cannot be
+swapped (as they may have been already inlined).
 
 
 Returns `0` on success and nonzero on failure.

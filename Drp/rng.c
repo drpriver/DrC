@@ -6,7 +6,7 @@
 #include "rng.h"
 
 #ifndef force_inline
-#if defined(__GNUC__) || defined(__clang__)
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
 #define force_inline static inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
 #define force_inline static inline __forceinline

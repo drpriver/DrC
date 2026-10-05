@@ -42,7 +42,7 @@
 #endif
 
 #ifndef force_inline
-#if defined __GNUC__ || defined __clang__
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
 #define force_inline static inline __attribute__((always_inline))
 #elif defined _MSC_VER
 #define force_inline static inline __forceinline
@@ -1207,10 +1207,12 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     int ret = 1;
                     CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
                     CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
-                    if(old_func == new_func) ret = 0;
-                    else if(old_func && new_func && old_func->type == new_func->type){
-                        drp_atomic_ptr_store(&old_func->hotswap, new_func);
-                        ret = 0;
+                    if(!old_func || !(old_func->inline_ || old_func->always_inline)){
+                        if(old_func == new_func) ret = 0;
+                        else if(old_func && new_func && old_func->type == new_func->type){
+                            drp_atomic_ptr_store(&old_func->hotswap, new_func);
+                            ret = 0;
+                        }
                     }
                     if(op->rt_call.slot_size)
                         CI_INLINE_MEMCPY(result, &ret, sizeof ret);

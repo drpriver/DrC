@@ -69,7 +69,8 @@ struct CcAttributes {
                      printf_like:       1,
                      is_noreturn:       1,
                      is_thread_local:   1,
-                     _padding:          10,
+                     always_inline:     1,
+                     _padding:          9,
                      vector_size:       16,
                      aligned:           16,
                      _padding2:         16;

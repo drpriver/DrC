@@ -998,6 +998,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_constexpr:
             case CC__Noreturn:
             case CC_thread_local:
+            case CC___forceinline:
             case CC_static_assert:
             case CC__Countof:
             case CC___attribute__:
@@ -4510,6 +4511,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC_static_assert:
             case CC_switch:
             case CC_thread_local:
+            case CC___forceinline:
             case CC_typedef:
             case CC_while:
                 return cc_error(p, tok.loc, "Unexpected keyword in expression");
@@ -7084,6 +7086,9 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
     CcToken tok;
     if(sv_equals(attr_name, SV("packed"))){
         attrs->packed = 1;
+    }
+    else if(sv_equals(attr_name, SV("always_inline"))){
+        attrs->always_inline = 1;
     }
     else if(sv_equals(attr_name, SV("transparent_union"))){
         attrs->transparent_union = 1;
@@ -10063,7 +10068,11 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "extern after constexpr");
                         spec->sp_extern = 1;
                         continue;
+                    case CC___forceinline:
+                        p->attributes.always_inline = 1;
+                        goto inline_;
                     case CC_inline:
+                        inline_:;
                         if(spec->sp_typedef)
                             return cc_error(p, tok.loc, "inline after typedef");
                         spec->sp_inline = 1;
@@ -11097,6 +11106,7 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 case CC___auto_type:
                 case CC___int128:
                 case CC_thread_local:
+                case CC___forceinline:
                 case CC_static_assert:
                 case CC_typeof_unqual:
                 case CC__Any:
@@ -11812,6 +11822,8 @@ int
 cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
     int err = 0;
     CcToken tok;
+    _Bool decl_always_inline = p->attributes.always_inline;
+    p->attributes.always_inline = 0;
     if(p->auto_typedef && !declbase->spec.sp_typedef && !declbase->spec.sp_infer_type){
         Atom tag_name = NULL;
         CcQualType base = declbase->type;
@@ -11933,6 +11945,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 return cc_error(p, declbase->loc, "transparent_union attribute on non-union type is not supported");
         }
         _Bool is_printf_like = p->attributes.printf_like;
+        _Bool is_always_inline = decl_always_inline || p->attributes.always_inline;
         cc_clear_attributes(&p->attributes);
         // asm label: asm("symbol")
         Atom asm_label = NULL;
@@ -11962,6 +11975,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
         err = cc_parse_attributes(p, flags, &p->attributes);
         if(err) return err;
         is_printf_like = is_printf_like || p->attributes.printf_like;
+        is_always_inline = is_always_inline || p->attributes.always_inline;
+        p->attributes.always_inline = 0;
         // postfix processing
         _Bool stop = 0;
         err = cc_next_token(p, &tok);
@@ -12011,7 +12026,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 func->extern_ = declbase->spec.sp_extern;
                 func->static_ = declbase->spec.sp_static;
             }
-            func->inline_ = declbase->spec.sp_inline;
+            func->inline_ = func->inline_ || declbase->spec.sp_inline;
+            func->always_inline = func->always_inline || is_always_inline;
             func->printf_like = func->printf_like || is_printf_like;
             err = cc_merge_default_args(p, func, &param_names, 1, name_loc);
             if(err) return err;
@@ -12304,7 +12320,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 func->extern_ = declbase->spec.sp_extern;
                 func->static_ = declbase->spec.sp_static;
             }
-            func->inline_ = declbase->spec.sp_inline;
+            func->inline_ = func->inline_ || declbase->spec.sp_inline;
+            func->always_inline = func->always_inline || is_always_inline;
             func->printf_like = func->printf_like || is_printf_like;
             err = cc_merge_default_args(p, func, &param_names, !func->defined && !keep_prototype, name_loc);
             if(err) return err;
