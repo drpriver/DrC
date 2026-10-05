@@ -248,6 +248,16 @@ TestFunction(test_interop){
             .exit_code = 1,
         },
         {
+            "inline: native callbacks preserve inline locals and addresses", __LINE__,
+            SV("int apply(int(*)(int,int),int,int);\n"
+               "inline int add(int a,int b){return a+b;}\n"
+               "__forceinline int wrapper(int x){int local=x;int* p=&local;\n"
+               "int r=apply(add,x,3);return *p+r;}\n"
+               "int outer(void){return wrapper(7)==17&&wrapper(9)==21;}return outer();\n"),
+            {{SV("apply"), (void*)test_apply}},
+            .exit_code = 1,
+        },
+        {
             "memcpy: runtime size and its side effects retain native behavior", __LINE__,
             SV("char src[4]={1,2,3,4};char dst[4]={0};volatile unsigned long n=3;int calls=0;\n"
                "void* result=__builtin_memcpy(dst,src,(calls++,n));\n"

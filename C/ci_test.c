@@ -44,6 +44,138 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "inline: early scalar returns and caller continuation", __LINE__,
+            SVI("__forceinline int choose(int x){if(x<0)return x-3;if(x==0)return 11;return x+5;}\n"
+                "__forceinline double half(double x){if(x<0)return -x;return x/2;}\n"
+                "int probe(void){int a=choose(-2)+1,b=choose(0)+2,c=choose(4)+3;\n"
+                "return a==-4&&b==13&&c==12&&half(-6)==6&&half(8)==4;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: branches bypassing a return producer and mixed return sources", __LINE__,
+            SVI("__forceinline int joined(int x){int r=7;if(x)goto done;r+=3;done:return r;}\n"
+                "__forceinline int mixed(int x){if(x>0)return x;return x-2;}\n"
+                "__forceinline int pick(int x){switch(x){case 0:return 3;case 1:return 5;default:return x+7;}}\n"
+                "int probe(void){return joined(1)==7&&joined(0)==10&&mixed(4)==4&&mixed(-1)==-3\n"
+                "&&pick(0)==3&&pick(1)==5&&pick(2)==9;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: early returns preserve aliasing and discarded-call side effects", __LINE__,
+            SVI("int calls;__forceinline int update(int* p,int x){++calls;int old=*p;*p=9;\n"
+                "if(x)return old+1;return old+2;}\n"
+                "int probe(void){int a=4,b=5;a=update(&a,1);b=update(&b,0);update(&a,1);\n"
+                "return a==9&&b==7&&calls==3;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: returns preserve branches and argument/result aliasing", __LINE__,
+            SVI("inline int add(int x){return x+3;}\n"
+                "__forceinline int select(int x){return x?11:23;}\n"
+                "__forceinline int side(int* p){int n=*p;*p=9;return n+1;}\n"
+                "int probe(void){int x=4;x=add(x);int a=select(1),b=select(0);x=side(&x);\n"
+                "return x==8&&a==11&&b==23;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: scalar returns, discarded calls and addressed locals", __LINE__,
+            SVI("int calls;\n"
+                "inline unsigned swap(unsigned x){calls++;return __builtin_bswap32(x);}\n"
+                "inline double half(double x){return x/2;}\n"
+                "inline unsigned narrow(unsigned long long x){return (unsigned)x;}\n"
+                "__forceinline int addressed(int x){int r=x+2;int* p=&r;r+=*p;return r;}\n"
+                "int probe(void){unsigned x=swap(0x01020304u);swap(0);\n"
+                "return x==0x04030201u&&calls==2&&half(9.0)==4.5&&narrow(0x1234567800000042ull)==66&&addressed(3)==10;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: parameter mapping preserves padding, aggregate mutation and direct returns", __LINE__,
+            SVI("struct S {int a,b,c,d;};\n"
+                "__forceinline struct S identity(struct S s){return s;}\n"
+                "__forceinline struct S update(char a,struct S s,short b,double d){\n"
+                "int* p=&s.b;*p+=a+b+(int)d;return s;}\n"
+                "int probe(void){struct S s={2,4,6,8};struct S t=identity(s);\n"
+                "struct S u=update(1,s,3,5.0);\n"
+                "return s.b==4&&t.a==2&&t.d==8&&u.a==2&&u.b==13&&u.c==6&&u.d==8;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: nested parameter mapping keeps staging independent", __LINE__,
+            SVI("int calls;int next(void){return ++calls;}\n"
+                "__forceinline int mutate(int x){int* p=&x;*p+=4;return x;}\n"
+                "__forceinline int pair(int a,int b){return mutate(a)*10+mutate(b)+a+b;}\n"
+                "int probe(void){int r=pair(next(),next());return calls==2&&r==59;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: arguments, parameter mutation and independent automatic objects", __LINE__,
+            SVI("int calls; int next(void){return ++calls;}\n"
+                "inline int small(int x){x+=3;return x;}\n"
+                "__forceinline int addressed(int x,int* caller){int* p=&x;*p+=5;return x+*caller;}\n"
+                "int probe(void){int x=10;int a=small(next());int b=addressed(next(),&x);\n"
+                "return a==4&&b==17&&x==10&&calls==2;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: loops, early returns, caller branches and goto", __LINE__,
+            SVI("__forceinline int helper(int n){int sum=0;for(int i=0;i<n;i++){\n"
+                "if(i==7)return sum;sum+=i;}return sum;}\n"
+                "int probe(void){int sum=0;for(int j=0;j<10;j++){\n"
+                "if(j==2)continue;sum+=helper(j);}if(sum==97)goto yes;return 0;yes:return 1;}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: dense and sparse switch tables remain independent", __LINE__,
+            SVI("__forceinline int dense(int x){switch(x){case 0:return 3;case 1:return 5;case 2:return 7;default:return 11;}}\n"
+                "__forceinline int sparse(int x){switch(x){case -100:return 13;case 42:return 17;default:return 19;}}\n"
+                "int a(int x){return dense(x)+sparse(x);} int b(int x){return sparse(x)+dense(x);}\n"
+                "return a(0)==22&&a(1)==24&&a(2)==26&&a(42)==28&&b(-100)==24&&b(42)==28;\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: nested expansion, discarded results and function pointers", __LINE__,
+            SVI("int calls;inline int leaf(int x){calls++;return x+1;}\n"
+                "__forceinline int middle(int x){return leaf(x)*2;}\n"
+                "inline void empty(void){}\n"
+                "int probe(void){int(*p)(int)=leaf;empty();middle(3);int r=middle(4)+p(5);return calls==3&&r==16;}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: aggregate arguments and returns, bitfields and unaligned memcpy", __LINE__,
+            SVI("struct S {int x;unsigned y:5;};\n"
+                "__forceinline struct S change(struct S s){s.x+=3;s.y+=2;return s;}\n"
+                "__forceinline unsigned read(const void* p){unsigned x;__builtin_memcpy(&x,p,sizeof x);return x;}\n"
+                "int probe(void){struct S a={7,4};struct S b=change(a);unsigned char p[5]={0,1,2,3,4};\n"
+                "return a.x==7&&a.y==4&&b.x==10&&b.y==6&&read(p+1)==0x04030201u;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: alloca, variadic functions and recursive cycles keep frames", __LINE__,
+            SVI("__forceinline int allocated(int n){unsigned char* p=__builtin_alloca(70001);p[0]=n;p[70000]=n+1;\n"
+                "int r=n?allocated(n-1):0;return r+p[0]+p[70000];}\n"
+                "__forceinline int sum(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);int s=0;for(int i=0;i<n;i++)s+=__builtin_va_arg(ap,int);__builtin_va_end(ap);return s;}\n"
+                "__forceinline int odd(int n);__forceinline int even(int n){return n?odd(n-1):1;}\n"
+                "__forceinline int odd(int n){return n?even(n-1):0;}\n"
+                "int probe(void){return allocated(3)==16&&sum(3,2,4,6)==12&&even(20)&&odd(19);}\n"
+                "return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: large ordinary inline function remains callable", __LINE__,
+            SVI("inline int large(int n){int s=0;for(int i=0;i<n;i++){if(i&1)s+=i;else s-=i;}return s;}\n"
+                "int probe(void){return large(10)==5&&large(11)==-5;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: compiled module bodies and repeated module execution", __LINE__,
+            SVI("_Module m=__compile(\"inline int add(int x){return x+3;} int count; count=add(count);\",\"\");\n"
+                "if(!m)return 0; int* count=m.symbol(\"count\",int);\n"
+                "m.run();m.run();return count&&*count==6;\n"),
+            .exit_code = 1,
+        },
+        {
             "frame reuse: partial aggregate and bitfield initializers clear omitted fields", __LINE__,
             SVI("struct S { unsigned a:3,b:5; int values[3]; };\n"
                 "int f(int n){struct S s={.a=n};int a[4]={[2]=n};\n"
@@ -15407,6 +15539,8 @@ TestFunction(test_lower_deps){
         TestExpectTrue(_Bool, failed.interp_ops == NULL);
     }
     ci_lower_deps_cleanup(&ci.deps, al);
+    ci_tls_cleanup(&ci);
+    TestExpectFalse(_Bool, ci.tls_key_created);
     ArenaAllocator_free_all(&arena);
     {
         TestingAllocator ta = {0};
@@ -15457,6 +15591,8 @@ TestFunction(test_lower_deps){
         TestExpect(int, retry_err, ==, 0);
         TestExpectTrue(_Bool, retry_func.native_func != NULL);
         TestExpectTrue(_Bool, BPM_get(&retry_ci.closure_map, &retry_func) == (void*)retry_func.native_func);
+        ci_tls_cleanup(&retry_ci);
+        TestExpectFalse(_Bool, retry_ci.tls_key_created);
         recording_free_all(&ta.recorder);
         recording_cleanup(&ta.recorder);
     }

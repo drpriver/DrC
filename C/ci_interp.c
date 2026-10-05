@@ -14,6 +14,7 @@
 #endif
 #include "ci_interp.h"
 #include "ci_op.h"
+#include "ci_optimize.h"
 #include "cc_memory_order.h"
 #include "cc_errors.h"
 #include "cc_var.h"
@@ -81,6 +82,7 @@ struct CiModule {
     AtomMap(uintptr_t) labels; // label -> op index + 1
     size_t lowered; // count of nodes already lowered into ops
     uint32_t slot_size; // bytes of slot storage the ops need
+    size_t inlined;
 };
 static int ci_lower_module(CiInterpreter*, CiModule*, CiLowerDeps*);
 
@@ -2953,6 +2955,10 @@ ci_resolve_module(CiInterpreter* ci, CiModule* module){
     err = ci_lower_module(ci, module, &ci->deps);
     if(err) goto finally;
     err = ci_resolve_deps(ci, &ci->deps);
+    if(!err){
+        err = ci_optimize_code(ci, &module->ops, &module->slot_size, module->inlined, &module->labels, NULL);
+        if(!err) module->inlined = module->ops.count;
+    }
     finally:
     ci_unlock_resolver(ci);
     return err;
@@ -3360,6 +3366,8 @@ ci_prepare_toplevel(CiInterpreter* ci){
     if(err) return err;
     err = ci_resolve_deps(ci, &ci->deps);
     if(err) return err;
+    err = ci_optimize_toplevel(ci);
+    if(err) return err;
     return ci_link_ops(ci, ci->toplevel_ops.data, ci->toplevel_ops.count);
 }
 
@@ -3448,6 +3456,13 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
         }
         // Building one initializer can upgrade an already visited dependency.
         if(initializers.count != init_count) vi = 0;
+    }
+    for(size_t i = 0; i < deps->funcs.count; i++){
+        CcFunc* func = (CcFunc*)(uintptr_t)PM_items(&deps->funcs).data[i].key;
+        if(func->interp_ops){
+            err = ci_optimize_func(ci, func);
+            if(err) goto cleanup;
+        }
     }
     for(size_t i = 0; i < deps->funcs.count; i++){
         PointerMapItem item = PM_items(&deps->funcs).data[i];
@@ -4619,6 +4634,7 @@ ci_unlock_resolver(CiInterpreter* ci){
 #pragma clang assume_nonnull end
 #endif
 #include "ci_lower.c"
+#include "ci_optimize.c"
 
 // Execute prepared code only after its dependencies have been resolved.
 static
@@ -4653,6 +4669,7 @@ ci_eval_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, 
     CiLoweredExpr code = {0};
     int err = ci_lower_standalone_expr(ci, expr, &code, &ci->deps);
     if(!err) err = ci_resolve_deps(ci, &ci->deps);
+    if(!err) err = ci_optimize_code(ci, &code.ops, &code.frame_size, 0, NULL, NULL);
     if(!err) err = ci_run_lowered_expr(ci, parent, &code, expr->loc, result, size);
     ci_lowered_expr_cleanup(&code, ci_allocator(ci));
     return err;

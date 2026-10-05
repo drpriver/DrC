@@ -58,6 +58,7 @@ struct CiInterpreter {
     Marray(CiOp) toplevel_ops;
     AtomMap(uintptr_t) toplevel_labels; // label -> toplevel op index + 1
     size_t toplevel_lowered; // count of parser.toplevel_nodes already lowered
+    size_t toplevel_inlined; // prefix already processed by the inliner
     uint32_t toplevel_slot_size; // bytes of slot storage the toplevel ops need
     uint32_t toplevel_slots_cap;
     void*_Null_unspecified toplevel_slots;

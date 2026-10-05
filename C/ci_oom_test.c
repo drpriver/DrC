@@ -36,6 +36,10 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("inline int leaf(int x){return x+1;}\n"
+         "__forceinline int choose(int x){switch(x){case 0:return leaf(3);case 1:return leaf(5);default:return leaf(7);}}\n"
+         "int a(int x){return choose(x);}int b(int x){return choose(x)+1;}\n"
+         "return a(0)==4&&b(1)==7&&a(4)==8;\n")},
     {__LINE__, SVI("int f(int n){char* p=__builtin_alloca(70001);p[0]=n;p[70000]=n+1;\n"
          "int v=n?f(n-1):0;return v+p[0]+p[70000];}return f(2);\n")},
     {__LINE__, SVI("struct S {_SrcLoc loc;};int expected;\n"

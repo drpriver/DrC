@@ -1500,7 +1500,7 @@ cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefix){
         column = loc.column;
         file_id = loc.file_id;
     }
-    CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
+    CStringView path = cpp->fc && file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     log_sprintf(cpp->logger, "%s:%d:%d: %s: ", path.text, (int)line, (int)column, prefix);
 }
 
@@ -1514,7 +1514,7 @@ cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level){
             uint64_t line = e->line;
             uint64_t column = e->column;
             uint64_t file_id = e->file_id;
-            CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
+            CStringView path = cpp->fc && file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
             log_logf(cpp->logger, level, "%s:%d:%d: ... expanded from here", path.text, (int)line, (int)column);
         }
     }
@@ -1526,7 +1526,7 @@ cpp_include_backtrace(CppPreprocessor* cpp, LogLevel level){
     if(cpp->frames.count < 2) return;
     for(size_t i = 0; i < cpp->frames.count - 1; i++){
         CppFrame* f = &cpp->frames.data[i];
-        CStringView path = f->file_id < cpp->fc->map.count?cpp->fc->map.data[f->file_id].path:CSV("???");
+        CStringView path = cpp->fc && f->file_id < cpp->fc->map.count?cpp->fc->map.data[f->file_id].path:CSV("???");
         log_logf(cpp->logger, level, "In file included from %s:%d:", path.text, (int)(f->line - 1));
     }
 }

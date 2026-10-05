@@ -9,6 +9,7 @@
 #include "cc_stmt.h"
 #include "cc_expr.h"
 #include "cc_memory_order.h"
+#include "cc_target.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
 
@@ -578,10 +579,19 @@ _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump),
 #include "../Drp/Marray.h"
 #endif
 
+enum CiInlineState TYPED_ENUM(uint8_t) {
+    CI_INLINE_UNVISITED,
+    CI_INLINE_VISITING,
+    CI_INLINE_FINISHED,
+};
+TYPEDEF_ENUM(CiInlineState, uint8_t);
+
 // The lowered code of one function, hung off CcFunc.interp_ops.
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
     Marray(CiOp) code;
+    CiInlineState inline_state; // 0: unvisited, 1: visiting, 2: prepared for execution
+    _Bool inline_blocked; // Recursive cycle or an operation requiring its own frame.
 };
 
 #endif

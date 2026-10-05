@@ -7,6 +7,7 @@
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/parray.h"
+#include "../Drp/atom.h"
 typedef struct CcExpr CcExpr;
 typedef struct CcVariable CcVariable;
 #ifdef __clang__
