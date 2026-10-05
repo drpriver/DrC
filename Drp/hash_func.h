@@ -6,9 +6,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#ifdef __DRC__
-#define USE_MURMUR 1
-#endif
 
 #ifndef __clang__
 #ifndef _Null_unspecified
@@ -118,7 +115,15 @@ read_unaligned1(const void* p){
 
 
 
-#if !defined(USE_MURMUR) && defined(__ARM_ACLE) && __ARM_FEATURE_CRC32
+#if !defined(USE_MURMUR) && defined(__DRC__)
+#define USE_CRC32
+force_inline uint32_t crc32_u64(uint32_t h, uint64_t v){ return __builtin_crc32c64(h, v); }
+force_inline uint32_t crc32_u32(uint32_t h, uint32_t v){ return __builtin_crc32c32(h, v); }
+force_inline uint32_t crc32_u16(uint32_t h, uint16_t v){ return __builtin_crc32c16(h, v); }
+force_inline uint32_t crc32_u8 (uint32_t h, uint8_t  v){ return __builtin_crc32c8(h, v); }
+#endif
+
+#if !defined(__DRC__) && !defined(USE_MURMUR) && defined(__ARM_ACLE) && __ARM_FEATURE_CRC32
 #define USE_CRC32
 #ifdef __clang__
 #pragma clang assume_nonnull end
@@ -133,7 +138,7 @@ force_inline uint32_t crc32_u16(uint32_t h, uint16_t v){ return __crc32ch(h, v);
 force_inline uint32_t crc32_u8 (uint32_t h, uint8_t  v){ return __crc32cb(h, v); }
 #endif
 
-#if !defined USE_MURMUR && ((defined __x86_64__ && defined __SSE4_2__) || (defined _M_AMD64 && defined _MSC_VER && !defined __clang__))
+#if !defined(__DRC__) && !defined USE_MURMUR && ((defined __x86_64__ && defined __SSE4_2__) || (defined _M_AMD64 && defined _MSC_VER && !defined __clang__))
 #define USE_CRC32
 #ifndef __clang__
 #include <nmmintrin.h>

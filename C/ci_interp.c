@@ -1776,6 +1776,14 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_BIT_BUILTIN: {
+            if(op->bit_builtin.op >= CC_BIT_CRC32C8 && op->bit_builtin.op <= CC_BIT_CRC32C64){
+                uint32_t seed = *(uint32_t*)((char*)frame->slots + op->bit_builtin.src);
+                uint64_t value = ci_read_uint((char*)frame->slots + op->bit_builtin.src2, op->bit_builtin.src2_size);
+                *(uint32_t*)((char*)frame->slots + op->bit_builtin.slot) =
+                    drp_crc32c(seed, value, op->bit_builtin.src2_size);
+                frame->pc++;
+                return 0;
+            }
             CiUint128 v, result,
                       arg = ci_uint128_from_uint64(0);
             ci_uint128_read(&v, (char*)frame->slots + op->bit_builtin.src, op->bit_builtin.src_size);

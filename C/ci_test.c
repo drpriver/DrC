@@ -12180,6 +12180,31 @@ TestFunction(test_interpreter){
             .exit_code = 600 + 80 + 3,
         },
         {
+            "crc32c: widths, seeds, truncation and side effects", __LINE__,
+            SVI("unsigned ref(unsigned h, unsigned long long v, int n){\n"
+                "for(int i=0;i<n;i++,v>>=8){h^=(unsigned char)v;\n"
+                "for(int j=0;j<8;j++)h=(h>>1)^(0x82f63b78u&(0u-(h&1)));}return h;}\n"
+                "unsigned h=0x12345678u; unsigned long long v=0xfedcba9876543210ull;\n"
+                "for(int i=0;i<64;i++,v=v*6364136223846793005ull+1,h=h*1664525u+1013904223u){\n"
+                "if(__builtin_crc32c8(h,v)!=ref(h,v,1)||__builtin_crc32c16(h,v)!=ref(h,v,2)\n"
+                "||__builtin_crc32c32(h,v)!=ref(h,v,4)||__builtin_crc32c64(h,v)!=ref(h,v,8))return 0;}\n"
+                "int a=1,b=2; unsigned r=__builtin_crc32c64(a++,b++);\n"
+                "__builtin_crc32c8(a++,b++);\n"
+                "return a==3&&b==4&&r==ref(1,2,8);\n"),
+            .exit_code = 1,
+        },
+        {
+            "crc32c: constant evaluation and standard vector", __LINE__,
+            SVI("_Static_assert(__builtin_crc32c8(0,0)==0);\n"
+                "_Static_assert(__builtin_crc32c16(0,0)==0);\n"
+                "_Static_assert(__builtin_crc32c32(0,0)==0);\n"
+                "constexpr unsigned h=__builtin_crc32c64(~0u,0x3837363534333231ull);\n"
+                "_Static_assert((__builtin_crc32c8(h,'9')^~0u)==0xe3069283u);\n"
+                "unsigned v=__builtin_crc32c64(~0u,0x3837363534333231ull);\n"
+                "return (__builtin_crc32c8(v,'9')^~0u)==0xe3069283u;\n"),
+            .exit_code = 1,
+        },
+        {
             "bswap16: gcc", __LINE__,
             SVI("unsigned short v = 0x0102;\n"
                 "return __builtin_bswap16(v);\n"),

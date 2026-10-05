@@ -3903,6 +3903,37 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     return 0;
                 }
 
+                case CC__builtin_crc32c8:
+                case CC__builtin_crc32c16:
+                case CC__builtin_crc32c32:
+                case CC__builtin_crc32c64:{
+                    unsigned index = (unsigned)(builtin - CC__builtin_crc32c8);
+                    CcBasicTypeKind types[] = {CCBT_unsigned_char, CCBT_unsigned_short, CCBT_unsigned,
+                        ccbt_to_unsigned(cc_target(p)->int64_type)};
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr *seed, *value;
+                    err = cc_parse_assignment_expr(p, flags, &seed, CCQT_NONE);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, seed, ccqt_basic(CCBT_unsigned), &seed);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ',');
+                    if(err) return err;
+                    err = cc_parse_assignment_expr(p, flags, &value, CCQT_NONE);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, value, ccqt_basic(types[index]), &value);
+                    if(err) return err;
+                    err = cc_expect_punct(p, ')');
+                    if(err) return err;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BIT_BUILTIN, tok.loc, ccqt_basic(CCBT_unsigned), 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->bit_builtin.op = CC_BIT_CRC32C8 + index;
+                    node->bit_builtin.nargs = 1;
+                    node->lhs = seed;
+                    node->values[0] = value;
+                    *out = node;
+                    return 0;
+                }
                 case CC__builtin_huge_val:
                 case CC__builtin_huge_valf:
                 case CC__builtin_huge_vall:{
@@ -12926,6 +12957,10 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_bswap16"), CC__builtin_bswap16},
             {SVI("__builtin_bswap32"), CC__builtin_bswap32},
             {SVI("__builtin_bswap64"), CC__builtin_bswap64},
+            {SVI("__builtin_crc32c8"), CC__builtin_crc32c8},
+            {SVI("__builtin_crc32c16"), CC__builtin_crc32c16},
+            {SVI("__builtin_crc32c32"), CC__builtin_crc32c32},
+            {SVI("__builtin_crc32c64"), CC__builtin_crc32c64},
             {SVI("__builtin_alloca"), CC__builtin_alloca},
             {SVI("_alloca"), CC__builtin_alloca},
             {SVI("alloca"), CC__builtin_alloca},

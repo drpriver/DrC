@@ -7,6 +7,7 @@
 #include "../Drp/typed_enum.h"
 #include "../Drp/bit_util.h"
 #include "../Drp/switch_macros.h"
+#include "../Drp/crc32c.h"
 
 enum CcBitBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BIT_FFS,
@@ -31,6 +32,10 @@ enum CcBitBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BIT_TRAILING_ZEROS,
     CC_BIT_ROTATE_LEFT,
     CC_BIT_ROTATE_RIGHT,
+    CC_BIT_CRC32C8,
+    CC_BIT_CRC32C16,
+    CC_BIT_CRC32C32,
+    CC_BIT_CRC32C64,
 };
 TYPEDEF_ENUM(CcBitBuiltinOp, uint32_t);
 
@@ -61,6 +66,10 @@ cc_bit_builtin_name(CcBitBuiltinOp op){
         case CC_BIT_TRAILING_ZEROS: return "__builtin_stdc_trailing_zeros";
         case CC_BIT_ROTATE_LEFT: return "__builtin_stdc_rotate_left";
         case CC_BIT_ROTATE_RIGHT: return "__builtin_stdc_rotate_right";
+        case CC_BIT_CRC32C8: return "__builtin_crc32c8";
+        case CC_BIT_CRC32C16: return "__builtin_crc32c16";
+        case CC_BIT_CRC32C32: return "__builtin_crc32c32";
+        case CC_BIT_CRC32C64: return "__builtin_crc32c64";
     }
     return "<invalid bit builtin>";
 }
@@ -101,6 +110,9 @@ cc_bit_builtin(CcBitBuiltinOp op, CiUint128 v, uint32_t width, CiUint128 arg, _B
     uint32_t n = 0;
     *result = ci_uint128_from_uint64(0);
     switch(op){
+        case CC_BIT_CRC32C8: case CC_BIT_CRC32C16: case CC_BIT_CRC32C32: case CC_BIT_CRC32C64:
+            n = drp_crc32c((uint32_t)lo, ci_uint128_lo(arg), 1u << (op - CC_BIT_CRC32C8));
+            break;
         case CC_BIT_FFS:
             n = nonzero ? cc_bit_builtin_ctz(lo, hi, width)+1 : 0;
             break;
