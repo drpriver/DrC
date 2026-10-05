@@ -44,6 +44,15 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "frame reuse: partial aggregate and bitfield initializers clear omitted fields", __LINE__,
+            SVI("struct S { unsigned a:3,b:5; int values[3]; };\n"
+                "int f(int n){struct S s={.a=n};int a[4]={[2]=n};\n"
+                "return s.a==n&&s.b==0&&s.values[0]==0&&s.values[1]==0&&s.values[2]==0\n"
+                "&&a[0]==0&&a[1]==0&&a[2]==n&&a[3]==0;}\n"
+                "for(int i=0;i<100;i++)if(!f(i%8))return 0;return 1;\n"),
+            .exit_code = 1,
+        },
+        {
             "frame stack: recursive alloca survives segment boundaries and repeated calls", __LINE__,
             SVI("int descend(int n){unsigned char* a=__builtin_alloca(4097);unsigned char* b=__builtin_alloca(32);\n"
                 "a[0]=n;a[4096]=n+1;b[0]=n+2;int v=n?descend(n-1):0;\n"
@@ -12445,6 +12454,7 @@ TestFunction(test_interpreter){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -13397,6 +13407,7 @@ TestFunction(test_interpreter_runtime_errors){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -13784,6 +13795,7 @@ TestFunction(test_interpreter_builtin_headers){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -14546,6 +14558,7 @@ TestFunction(test_cross_target){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -14705,6 +14718,7 @@ TestFunction(test_ci_call_main){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -14912,6 +14926,7 @@ TestFunction(test_ci_call_by_name){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {

@@ -386,6 +386,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     AtomTable at = {.arena.base=arena_al};
     Environment env = {.allocator = arena_al, .at=&at};
     CiInterpreter interp = {
+        .poison_frame_slots = 1,
         .procedural_macros = 1,
         .exit_code = -1,
         .parser = {

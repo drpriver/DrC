@@ -934,6 +934,7 @@ TestFunction(test_interop){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -1182,6 +1183,7 @@ TestFunction(test_interp){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .procedural_macros = 1,
             .parser = {
@@ -1403,6 +1405,7 @@ TestFunction(test_interp_fail){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .can_dlopen = 1,
             .exit_code = -1,
             .procedural_macros = 1,

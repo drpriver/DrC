@@ -65,7 +65,7 @@ cc_cleanup_interp(void){
 }
 
 int main(int argc, char** argv, char** envp){
-    _Bool eager = 0, syntax_only = 0;
+    _Bool eager = 0, syntax_only = 0, poison_frame_slots = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
@@ -177,6 +177,11 @@ int main(int argc, char** argv, char** envp){
             .help = "Parse functions eagerly instead of deferring to usage",
         },
         {
+            .name = SV("--poison-frame-slots"),
+            .dest = ARGDEST(&poison_frame_slots),
+            .help = "Fill new frame slots with 0xCC to expose uninitialized reads",
+        },
+        {
             .name = SV("--dump"),
             .dest = ARGDEST(&dump),
             .help = "Dump symbols after execution",
@@ -256,6 +261,7 @@ int main(int argc, char** argv, char** envp){
             break;
     }
     enum ArgParseError parse_err = parse_args(&parser, &args, ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL);
+    cc_interp.poison_frame_slots = poison_frame_slots;
     if(parse_err){
         print_argparse_error(&parser, parse_err);
         return 1;

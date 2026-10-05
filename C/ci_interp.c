@@ -371,12 +371,13 @@ ci_new_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, size_t data_size
     int err = ci_frame_stack(ci, caller, &stack);
     if(err) return err;
     CiStackMark mark = ci_stack_mark(stack);
-    CiInterpFrame* frame = ci_stack_zalloc(stack, allocation_size);
+    CiInterpFrame* frame = ci_stack_alloc(stack, allocation_size);
     if(!frame) return CI_OOM_ERROR;
     *frame = (CiInterpFrame){
         .parent = caller, .stack = stack, .stack_mark = mark,
         .slots = frame + 1, .data_length = data_size,
     };
+    if(ci->poison_frame_slots) memset(frame->slots, 0xCC, data_size);
     *out = frame;
     return 0;
 }
@@ -4625,8 +4626,9 @@ ci_run_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, c
     if(err) return err;
     frame.stack_mark = ci_stack_mark(frame.stack);
     if(code->frame_size){
-        frame.slots = ci_stack_zalloc(frame.stack, code->frame_size);
+        frame.slots = ci_stack_alloc(frame.stack, code->frame_size);
         if(!frame.slots) return CI_OOM_ERROR;
+        if(ci->poison_frame_slots) memset(frame.slots, 0xCC, code->frame_size);
     }
     err = ci_interp_run(ci, &frame);
     if(!err && code->value_size)

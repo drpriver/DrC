@@ -345,6 +345,7 @@ TestFunction(test_concurrent_callbacks){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
+            .poison_frame_slots = 1,
             .exit_code = -1,
             .parser = {
                 .cpp = {

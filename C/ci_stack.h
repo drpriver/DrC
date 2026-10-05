@@ -46,7 +46,7 @@ ci_stack_rewind(CiStack* stack, CiStackMark mark){ stack->top = mark; }
 
 static
 void*_Nullable
-ci_stack_zalloc(CiStack* stack, size_t size){
+ci_stack_alloc(CiStack* stack, size_t size){
     size_t rounded;
     if(add_overflow(size ? size : 1, (size_t)15, &rounded)) return NULL;
     rounded &= ~(size_t)15;
@@ -54,7 +54,6 @@ ci_stack_zalloc(CiStack* stack, size_t size){
     if(segment && rounded <= segment->capacity - stack->top.used){
         void* result = segment->data + stack->top.used;
         stack->top.used += rounded;
-        memset(result, 0, size);
         return result;
     }
     // Segments after the current one are inactive and retained for reuse.
@@ -73,8 +72,15 @@ ci_stack_zalloc(CiStack* stack, size_t size){
         stack->last = segment;
     }
     stack->top = (CiStackMark){.segment = segment, .used = rounded};
-    memset(segment->data, 0, size);
     return segment->data;
+}
+
+static
+void*_Nullable
+ci_stack_zalloc(CiStack* stack, size_t size){
+    void* result = ci_stack_alloc(stack, size);
+    if(result) memset(result, 0, size);
+    return result;
 }
 
 static

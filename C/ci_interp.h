@@ -66,7 +66,8 @@ struct CiInterpreter {
         struct {
             uint32_t can_dlopen: 1,
                      procedural_macros: 1,
-                    _padding:30;
+                     poison_frame_slots: 1, // debug fill for uninitialized automatic storage
+                    _padding:29;
         };
     };
     int exit_code;
