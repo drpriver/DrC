@@ -38,53 +38,60 @@ static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 static const char* cc_stringify_error(int err);
 static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast);
 
+// static lifetime atexit callbacks with interpreted code work
+static AtomTable cc_at = {0};
+static Environment cc_env = {.allocator=MALLOCATORI, .at=&cc_at};
+static CiInterpreter cc_interp = {
+    .parser = {
+        .cpp = {
+            .allocator = MALLOCATORI,
+            .at = &cc_at,
+            .env = &cc_env,
+        },
+        .current = &cc_interp.parser.global,
+    },
+    .top_frame = {
+        .return_buf = &cc_interp.exit_code,
+        .return_size = sizeof cc_interp.exit_code,
+    },
+    .can_dlopen = 1,
+    .procedural_macros = 1,
+};
+
+static
+void
+cc_cleanup_interp(void){
+    ci_tls_cleanup(&cc_interp);
+}
 
 int main(int argc, char** argv, char** envp){
     _Bool eager = 0, syntax_only = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
-    static AtomTable at = {0};
-    static Environment env = {.allocator=MALLOCATORI, .at=&at};
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
     // This is incorrect, but is good enough for now
     if(IS_WINDOWS || IS_APPLE) flags |= FC_IS_CASE_INSENSITIVE;
     FileCache* fc = fc_create(MALLOCATOR, flags);
-    int err = env_parse_posix(&env, envp);
+    int err = env_parse_posix(&cc_env, envp);
     if(err){
         log_error(logger, "Unable to parse environment");
         return 1;
     }
-    // static so atexit callbacks with interpreted code work
-    static CiInterpreter interp = {
-        .parser = {
-            .cpp = {
-                .allocator = MALLOCATORI,
-                .at = &at,
-                .env = &env,
-            },
-            .current = &interp.parser.global,
-        },
-        .top_frame = {
-            .return_buf = &interp.exit_code,
-            .return_size = sizeof interp.exit_code,
-        },
-        .can_dlopen = 1,
-        .procedural_macros = 1,
-    };
+    if(atexit(cc_cleanup_interp)) return 1;
     Marray(StringView) libs = {0}, lib_paths = {0}, frameworks = {0};
     Marray(StringView) dis = {0};
     _Bool dis_top = 0, dis_all = 0, ast=0;
     ArgParseUserDefinedType tpath = {
         .type_name = SV("path"),
-        .user_data = &interp.parser.cpp,
+        .user_data = &cc_interp.parser.cpp,
     };
     ArgParseUserDefinedType tlib = {
         .type_name = SV("lib"),
-        .user_data = &interp.parser.cpp,
+        .user_data = &cc_interp.parser.cpp,
     };
     ArgParseUserDefinedType tsym = {
         .type_name = SV("symbol"),
-        .user_data = &interp.parser.cpp,
+        .user_data = &cc_interp.parser.cpp,
     };
     StringView filename = {0};
     enum { MAX_PROG_ARGS = 128 };
@@ -223,7 +230,7 @@ int main(int argc, char** argv, char** envp){
         .positional.count = arrlen(pos_args),
         .keyword.args = kw_args,
         .keyword.count = arrlen(kw_args),
-        .keyword.next = cpp_kwargs(&interp.parser.cpp),
+        .keyword.next = cpp_kwargs(&cc_interp.parser.cpp),
         .early_out.args = early_args,
         .early_out.count = arrlen(early_args),
         .styling.plain = !stdout_is_terminal(),
@@ -253,14 +260,14 @@ int main(int argc, char** argv, char** envp){
         print_argparse_error(&parser, parse_err);
         return 1;
     }
-    LOCK_T_init(&interp.error_lock);
-    LOCK_T_init(&interp.atom_lock);
-    LOCK_T_init(&interp.resolve_lock);
-    interp.parser.cpp.fc = fc;
-    interp.parser.cpp.logger = logger;
-    interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
-    interp.parser.eager_parsing = eager;
-    err = cpp_define_builtin_macros(&interp.parser.cpp);
+    LOCK_T_init(&cc_interp.error_lock);
+    LOCK_T_init(&cc_interp.atom_lock);
+    LOCK_T_init(&cc_interp.resolve_lock);
+    cc_interp.parser.cpp.fc = fc;
+    cc_interp.parser.cpp.logger = logger;
+    cc_interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
+    cc_interp.parser.eager_parsing = eager;
+    err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     // _Argc, _Argv and args to main
     static int script_argc;
@@ -287,21 +294,21 @@ int main(int argc, char** argv, char** envp){
     #pragma clang diagnostic pop
     #endif
     script_argv_storage[script_argc] = NULL;
-    err = cc_define_builtin_types(&interp.parser);
+    err = cc_define_builtin_types(&cc_interp.parser);
     if(err) goto stringify_error;
     {
         CcQualType char_star, char_star_star;
-        err = cc_pointer_of(&interp.parser, ccqt_basic(CCBT_char), &char_star);
+        err = cc_pointer_of(&cc_interp.parser, ccqt_basic(CCBT_char), &char_star);
         if(err) goto stringify_error;
-        err = cc_pointer_of(&interp.parser, char_star, &char_star_star);
+        err = cc_pointer_of(&cc_interp.parser, char_star, &char_star_star);
         if(err) goto stringify_error;
-        err = cc_register_extern_var(&interp.parser, SV("_Argc"), ccqt_basic(CCBT_int));
+        err = cc_register_extern_var(&cc_interp.parser, SV("_Argc"), ccqt_basic(CCBT_int));
         if(err) goto stringify_error;
-        err = cc_register_extern_var(&interp.parser, SV("_Argv"), char_star_star);
+        err = cc_register_extern_var(&cc_interp.parser, SV("_Argv"), char_star_star);
         if(err) goto stringify_error;
-        err = ci_register_sym(&interp, SV("builtins"), SV("_Argc"), &script_argc);
+        err = ci_register_sym(&cc_interp, SV("builtins"), SV("_Argc"), &script_argc);
         if(err) goto stringify_error;
-        err = ci_register_sym(&interp, SV("builtins"), SV("_Argv"), &script_argv);
+        err = ci_register_sym(&cc_interp, SV("builtins"), SV("_Argv"), &script_argv);
         if(err) goto stringify_error;
         // This is kind of a hack, but on some platforms, certain symbols are provided
         // only in the static crt for whatever reason. So there is no symbol for us
@@ -320,31 +327,31 @@ int main(int argc, char** argv, char** envp){
             #endif
         };
         for(size_t i = 0; i < arrlen(crt_syms); i++){
-            err = ci_register_sym(&interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
+            err = ci_register_sym(&cc_interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
             if(err) goto stringify_error;
         }
     }
-    err = cc_register_pragmas(&interp.parser);
+    err = cc_register_pragmas(&cc_interp.parser);
     if(err) goto stringify_error;
-    err = ci_register_pragmas(&interp);
+    err = ci_register_pragmas(&cc_interp);
     if(err) goto stringify_error;
-    err = ci_preload_system_libs(&interp);
+    err = ci_preload_system_libs(&cc_interp);
     if(err) goto stringify_error;
-    err = ci_register_macros(&interp);
+    err = ci_register_macros(&cc_interp);
     if(err) goto stringify_error;
-    err = cpp_setup_builtin_headers(&interp.parser.cpp);
+    err = cpp_setup_builtin_headers(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     if(!cpp_nostdinc){
-        err = cpp_setup_default_includes(&interp.parser.cpp);
+        err = cpp_setup_default_includes(&cc_interp.parser.cpp);
         if(err) goto stringify_error;
     }
     for(size_t i = 0; i < lib_paths.count; i++){
-        err = ci_append_lib_path(&interp, lib_paths.data[i]);
+        err = ci_append_lib_path(&cc_interp, lib_paths.data[i]);
         if(err) goto stringify_error;
     }
     for(size_t i = 0; i < libs.count; i++){
         StringView l = libs.data[i];
-        err = ci_load_library(&interp, l);
+        err = ci_load_library(&cc_interp, l);
         if(err){
             log_error(logger, "Unable to load library '%s'", l.text);
             goto stringify_error;
@@ -352,7 +359,7 @@ int main(int argc, char** argv, char** envp){
     }
     for(size_t i = 0; i < frameworks.count; i++){
         StringView f = frameworks.data[i];
-        err = ci_load_framework(&interp, f);
+        err = ci_load_framework(&cc_interp, f);
         if(err){
             log_error(logger, "Unable to load framework '%s'", f.text);
             goto stringify_error;
@@ -379,67 +386,67 @@ int main(int argc, char** argv, char** envp){
         Allocator_free(MALLOCATOR, txt.text, txt.length+1);
         if(err) goto stringify_error;
     }
-    err = cpp_cli_defines(&interp.parser.cpp);
+    err = cpp_cli_defines(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     fc->may_read_real_files = 1;
     if(filename.length){
-        err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){filename.length, filename.text});
+        err = cpp_include_file_via_file_cache(&cc_interp.parser.cpp, (StringView){filename.length, filename.text});
         if(err){
             log_error(logger, "Unable to read '%s'", filename.text);
             goto stringify_error;
         }
     }
-    err = cc_parse_all(&interp.parser);
+    err = cc_parse_all(&cc_interp.parser);
     if(err) goto stringify_error;
     if(!syntax_only){
-        err = ci_resolve_refs(&interp);
+        err = ci_resolve_refs(&cc_interp);
         if(err) goto stringify_error;
     }
     if(dis.count || dis_top || dis_all){
         if(dis_all){
-            for(size_t i = 0; i < interp.parser.global.functions.count; i++){
-                AtomMapItem* items = interp.parser.global.functions.data;
+            for(size_t i = 0; i < cc_interp.parser.global.functions.count; i++){
+                AtomMapItem* items = cc_interp.parser.global.functions.data;
                 Atom atom = items[i].atom;
                 CcFunc* func = items[i].p;
                 if(!func->defined) continue;
                 StringView d = {atom->length, atom->data};
-                err = ci_resolve_root(&interp, d);
+                err = ci_resolve_root(&cc_interp, d);
                 if(err){
                     log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
                     err = 0;
                     continue;
                 }
-                Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
+                Atom a = AT_get_atom(cc_interp.parser.cpp.at, d.text, d.length);
                 if(!a){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
                 }
-                func = AM_get(&interp.parser.global.functions, a);
+                func = AM_get(&cc_interp.parser.global.functions, a);
                 if(!func){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
                 }
                 if(!func->interp_ops)
                     continue;
-                cc_print_func(&interp.parser, func, &logger->buff, ast);
+                cc_print_func(&cc_interp.parser, func, &logger->buff, ast);
                 log_flush(logger, LOG_PRINT);
                 continue;
             }
         }
         else {
             MARRAY_FOR_EACH_VALUE(StringView, d, dis){
-                err = ci_resolve_root(&interp, d);
+                err = ci_resolve_root(&cc_interp, d);
                 if(err){
                     log_error(logger, "Error resolving '%s': %s", d.text, cc_stringify_error(err));
                     err = 0;
                     continue;
                 }
-                Atom a = AT_get_atom(interp.parser.cpp.at, d.text, d.length);
+                Atom a = AT_get_atom(cc_interp.parser.cpp.at, d.text, d.length);
                 if(!a){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
                 }
-                CcFunc* func = AM_get(&interp.parser.global.functions, a);
+                CcFunc* func = AM_get(&cc_interp.parser.global.functions, a);
                 if(!func){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
@@ -448,26 +455,27 @@ int main(int argc, char** argv, char** envp){
                     log_warn(logger, "No bytecode for '%s'", d.text);
                     continue;
                 }
-                cc_print_func(&interp.parser, func, &logger->buff, ast);
+                cc_print_func(&cc_interp.parser, func, &logger->buff, ast);
                 log_flush(logger, LOG_PRINT);
                 continue;
             }
         }
         if(dis_top || dis_all){
-            err = ci_lower_toplevel(&interp, &interp.deps);
+            err = ci_lower_toplevel(&cc_interp, &cc_interp.deps);
             if(err) goto stringify_error;
             MStringBuilder* sb = &logger->buff;
             msb_sprintf(sb, "top level: {\n");
+            msb_sprintf(sb, "  // frame size: %u bytes of slots\n", cc_interp.toplevel_slot_size);
             if(ast){
-                for(size_t i = 0; i < interp.parser.toplevel_nodes.count; i++)
-                    cc_print_statement(sb, interp.parser.toplevel_nodes.data[i]);
+                for(size_t i = 0; i < cc_interp.parser.toplevel_nodes.count; i++)
+                    cc_print_statement(sb, cc_interp.parser.toplevel_nodes.data[i]);
                 msb_write_literal(sb, "-------\n");
             }
-            for(size_t i = 0; i < interp.toplevel_ops.count; i++){
-                CiOp* op = &interp.toplevel_ops.data[i];
+            for(size_t i = 0; i < cc_interp.toplevel_ops.count; i++){
+                CiOp* op = &cc_interp.toplevel_ops.data[i];
                 size_t cur = sb->cursor;
                 msb_sprintf(sb, "  0x%02zx)  ", i);
-                ci_op_print(op, sb, interp.parser.cpp.target.long_double_format);
+                ci_op_print(op, sb, cc_interp.parser.cpp.target.long_double_format);
                 size_t dif = sb->cursor - cur;
                 if(dif < 60)
                     msb_write_nchar(sb, ' ', 60-dif);
@@ -489,7 +497,7 @@ int main(int argc, char** argv, char** envp){
                         column = loc.column;
                         file_id = loc.file_id;
                     }
-                    CStringView path = file_id < interp.parser.cpp.fc->map.count?interp.parser.cpp.fc->map.data[file_id].path:CSV("???");
+                    CStringView path = file_id < cc_interp.parser.cpp.fc->map.count?cc_interp.parser.cpp.fc->map.data[file_id].path:CSV("???");
                     msb_sprintf(sb, "// %s:%d:%d\n", path.text, (int)line, (int)column);
                 }
             }
@@ -502,17 +510,17 @@ int main(int argc, char** argv, char** envp){
     if(repl){
         // Execute any statements from the initial file before entering REPL.
         if(!syntax_only){
-            CiInterpFrame* frame = &interp.top_frame;
-            err = ci_prepare_toplevel(&interp);
+            CiInterpFrame* frame = &cc_interp.top_frame;
+            err = ci_prepare_toplevel(&cc_interp);
             if(err) goto stringify_error;
             while(frame->pc < frame->op_count){
-                err = ci_interp_step(&interp, frame);
+                err = ci_interp_step(&cc_interp, frame);
                 if(err) goto stringify_error;
             }
         }
-        interp.parser.repl = 1;
+        cc_interp.parser.repl = 1;
         fc->may_read_real_files = 1;
-        struct ReplCompleterCtx completer_ctx = {.parser = &interp.parser};
+        struct ReplCompleterCtx completer_ctx = {.parser = &cc_interp.parser};
         GetInputCtx gi = {
             .tab_completion_func = repl_tab_complete,
             .tab_completion_user_data = &completer_ctx,
@@ -521,14 +529,14 @@ int main(int argc, char** argv, char** envp){
         MStringBuilder msb = {.allocator=MALLOCATORI};
         int input_num = 0;
         for(;;){
-            cc_parser_discard_input(&interp.parser);
+            cc_parser_discard_input(&cc_interp.parser);
             gi.prompt = msb.cursor ? SV("... ") : SV("cc> ");
             ssize_t n = gi_get_input(&gi);
             if(n < 0) break; // ctrl-d
             StringView line = {n, gi.buff};
             line = stripped(line);
             if(!sv_startswith(line, SV("/*"))){ // comment, not command
-                if(repl_builtin_command(&interp.parser, line))
+                if(repl_builtin_command(&cc_interp.parser, line))
                     continue;
             }
             if(n == 0){
@@ -544,24 +552,24 @@ int main(int argc, char** argv, char** envp){
                 fc_write_path(fc, name, namelen);
                 err = fc_cache_file(fc, src);
                 if(err) goto stringify_error;
-                err = cpp_include_file_via_file_cache(&interp.parser.cpp, (StringView){namelen, name});
+                err = cpp_include_file_via_file_cache(&cc_interp.parser.cpp, (StringView){namelen, name});
                 if(err){
                     log_error(logger, "REPL error");
                     msb.cursor = 0;
                     continue;
                 }
-                err = cc_parse_all(&interp.parser);
+                err = cc_parse_all(&cc_interp.parser);
                 if(err){ msb.cursor = 0; continue; }
                 if(!syntax_only){
-                    err = ci_resolve_refs(&interp);
+                    err = ci_resolve_refs(&cc_interp);
                     if(err){ msb.cursor = 0; continue; }
                     // Execute new statements
                     {
-                        CiInterpFrame* frame = &interp.top_frame;
-                        err = ci_prepare_toplevel(&interp);
+                        CiInterpFrame* frame = &cc_interp.top_frame;
+                        err = ci_prepare_toplevel(&cc_interp);
                         if(err) break;
                         while(frame->pc < frame->op_count){
-                            err = ci_interp_step(&interp, frame);
+                            err = ci_interp_step(&cc_interp, frame);
                             if(err) break;
                         }
                     }
@@ -585,29 +593,29 @@ int main(int argc, char** argv, char** envp){
         // Execute toplevel statements
         enum { EXIT_CODE_SENTINEL = 0x4a544d }; // "JTM" = jump to main
         if(!syntax_only){
-            interp.exit_code = EXIT_CODE_SENTINEL;
-            CiInterpFrame* frame = &interp.top_frame;
-            err = ci_prepare_toplevel(&interp);
+            cc_interp.exit_code = EXIT_CODE_SENTINEL;
+            CiInterpFrame* frame = &cc_interp.top_frame;
+            err = ci_prepare_toplevel(&cc_interp);
             if(err) goto stringify_error;
             while(frame->pc < frame->op_count){
-                err = ci_interp_step(&interp, frame);
+                err = ci_interp_step(&cc_interp, frame);
                 if(err) goto stringify_error;
             }
         }
-        if(dump)repl_builtin_command(&interp.parser, SV("/dump"));
+        if(dump)repl_builtin_command(&cc_interp.parser, SV("/dump"));
         if(syntax_only){
             err = 0;
             goto fini;
         }
         // Top-level return sets exit code
-        if(interp.exit_code != EXIT_CODE_SENTINEL){
-            err = interp.exit_code;
+        if(cc_interp.exit_code != EXIT_CODE_SENTINEL){
+            err = cc_interp.exit_code;
             goto fini;
         }
         // Call main if defined
         {
             int result = 0;
-            err = ci_call_main(&interp, script_argc, script_argv, envp, &result);
+            err = ci_call_main(&cc_interp, script_argc, script_argv, envp, &result);
             if(!err) { err = result; goto fini;}
             if(err != _cc_symbol_not_found_error) goto stringify_error;
             err = 0;
@@ -615,12 +623,10 @@ int main(int argc, char** argv, char** envp){
         }
     }
     fini:;
-    ci_tls_cleanup(&interp);
     return err;
     stringify_error:;
     const char* error_name = cc_stringify_error(err);
     fprintf(stderr, "Fail: %s\n", error_name);
-    ci_tls_cleanup(&interp);
     return 1;
 }
 
@@ -955,6 +961,8 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
     msb_sprintf(sb, ") -> ");
     cc_print_type(sb, ft->return_type);
     msb_sprintf(sb, "{\n");
+    if(func->interp_ops)
+        msb_sprintf(sb, "  // frame size: %u bytes of slots\n", func->frame_size);
     if(ast && func->body_tree){
         cc_print_statement(sb, (CcStmtNode*)func->body_tree);
     }

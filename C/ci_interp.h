@@ -8,6 +8,7 @@
 #include "cc_expr.h"
 #include "ci_op.h"
 #include "ci_lower.h"
+#include "ci_stack.h"
 #include "cc_parser.h"
 #include "cc_type.h"
 #include "../Drp/stringview.h"
@@ -21,13 +22,6 @@
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
-
-typedef struct CiAllocaBlock CiAllocaBlock;
-struct CiAllocaBlock {
-    CiAllocaBlock*_Null_unspecified next;
-    size_t size;
-    // data follows
-};
 
 typedef struct CiInterpFrame CiInterpFrame;
 struct CiInterpFrame {
@@ -43,7 +37,8 @@ struct CiInterpFrame {
     size_t return_size;
     size_t data_length;
     void*_Null_unspecified varargs_buf; // either borrowed buffer or trailing data.
-    CiAllocaBlock*_Null_unspecified alloca_list;
+    CiStack*_Null_unspecified stack;
+    CiStackMark stack_mark; // rewind point before this frame's allocation
 };
 _Static_assert(_Alignof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
 _Static_assert(sizeof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");

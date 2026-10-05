@@ -146,6 +146,17 @@ TestFunction(test_concurrent_callbacks){
         int exit_code;
     } testcases[] = {
         {
+            "frame stack: concurrent callbacks have independent alloca storage", __LINE__,
+            SV("int run_atomic_threads(void(*)(int),int,int,volatile int*,volatile int*);\n"
+               "void report_atomic_thread_iters(int);\n"
+               "_Atomic int failures;void work(int n){char* p=__builtin_alloca(80001);\n"
+               "for(int i=0;i<n;i++){p[0]=17;p[80000]=23;\n"
+               "char* q=__builtin_alloca(33);q[32]=42;if(p[0]!=17||p[80000]!=23||q[32]!=42)failures++;}report_atomic_thread_iters(n);}\n"
+               "volatile int entries=0,exits=0;return run_atomic_threads(work,8,100,&entries,&exits)==800"
+               "&&entries==8&&exits==8&&failures==0;\n"),
+            .exit_code = 1,
+        },
+        {
             "TLS global isolation, persistence and fresh threads", __LINE__,
             SV("int run_tls_threads(int* (*)(int));\n"
                "extern _Thread_local int x;\n"

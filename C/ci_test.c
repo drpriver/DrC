@@ -44,6 +44,35 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "frame stack: recursive alloca survives segment boundaries and repeated calls", __LINE__,
+            SVI("int descend(int n){unsigned char* a=__builtin_alloca(4097);unsigned char* b=__builtin_alloca(32);\n"
+                "a[0]=n;a[4096]=n+1;b[0]=n+2;int v=n?descend(n-1):0;\n"
+                "return v+(a[0]==n&&a[4096]==n+1&&b[0]==n+2&&a!=b);}\n"
+                "for(int i=0;i<4;i++)if(descend(24)!=25)return 0;return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "frame stack: large alloca preserves earlier allocations and alignment", __LINE__,
+            SVI("int f(void){char* a=__builtin_alloca(17);char* b=__builtin_alloca(300001);char* c=__builtin_alloca(33);\n"
+                "a[0]=1;a[16]=2;b[0]=3;b[300000]=4;c[0]=5;c[32]=6;\n"
+                "return a[0]+a[16]+b[0]+b[300000]+c[0]+c[32]==21\n"
+                "&&((unsigned long long)a%16)==0&&((unsigned long long)b%16)==0&&((unsigned long long)c%16)==0;}\n"
+                "return f()&&f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "frame stack: large frames preserve caller locals", __LINE__,
+            SVI("int inner(int n){int a[20000];a[0]=n;a[19999]=n+1;return a[0]+a[19999];}\n"
+                "int outer(void){int value=7;return inner(value)==15&&inner(9)==19&&value==7;}return outer();\n"),
+            .exit_code = 1,
+        },
+        {
+            "frame stack: top-level alloca survives child calls", __LINE__,
+            SVI("int f(void){char* p=__builtin_alloca(80000);p[0]=7;p[79999]=9;return p[0]+p[79999];}\n"
+                "char* p=__builtin_alloca(19);p[0]=42;p[18]=7;return f()==16&&p[0]==42&&p[18]==7;\n"),
+            .exit_code = 1,
+        },
+        {
             "memcpy: fixed-size builtin preserves bytes and returns destination", __LINE__,
             SVI("unsigned char src[9]={1,2,3,4,5,6,7,8,9}; unsigned char dst[11]={0};\n"
                 "void* result=__builtin_memcpy(dst+1,src,sizeof src);\n"

@@ -83,6 +83,19 @@ TestFunction(test_snippets){
             ),
         },
         {
+            "atexit retains top-level stack storage", __LINE__,
+            .program = CSVI(
+                "#include <stdio.h>\n"
+                "#include <stdlib.h>\n"
+                "char* saved;\n"
+                "saved=__builtin_alloca(80001); saved[0]=17; saved[80000]=23;\n"
+                "void cb(void){char* p=__builtin_alloca(90001);p[90000]=42;\n"
+                "puts(saved[0]==17&&saved[80000]==23&&p[90000]==42?\"ok\":\"bad\");}\n"
+                "atexit(cb);\n"
+            ),
+            .expected_output = SVI("ok" EOL),
+        },
+        {
             "_Argc/_Argv/argc/argv", __LINE__,
             .program = CSVI(
                 "#include <stdio.h>\n"

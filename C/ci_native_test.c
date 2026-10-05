@@ -239,6 +239,15 @@ TestFunction(test_interop){
         _Bool skip;
     } testcases[] = {
         {
+            "frame stack: reentrant native callbacks preserve parent alloca", __LINE__,
+            SV("int apply(int(*)(int,int),int,int);\n"
+               "int descend(int n,int value){char* p=__builtin_alloca(40001);p[0]=n;p[40000]=value;\n"
+               "int v=n?apply(descend,n-1,value+1):0;return v+(p[0]==n&&p[40000]==value);}\n"
+               "return descend(5,7)==6&&descend(5,7)==6;\n"),
+            {{SV("apply"), (void*)test_apply}},
+            .exit_code = 1,
+        },
+        {
             "memcpy: runtime size and its side effects retain native behavior", __LINE__,
             SV("char src[4]={1,2,3,4};char dst[4]={0};volatile unsigned long n=3;int calls=0;\n"
                "void* result=__builtin_memcpy(dst,src,(calls++,n));\n"

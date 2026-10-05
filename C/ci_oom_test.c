@@ -36,6 +36,8 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int f(int n){char* p=__builtin_alloca(70001);p[0]=n;p[70000]=n+1;\n"
+         "int v=n?f(n-1):0;return v+p[0]+p[70000];}return f(2);\n")},
     {__LINE__, SVI("struct S {_SrcLoc loc;};int expected;\n"
          "int f(int args...,struct S s={__builtin_SRCLOC()}){return args.count==2&&s.loc.line==expected&&s.loc.file.count>0;}\n"
          "int probe(void){expected=__LINE__;return f(1,2);}return probe();\n")},

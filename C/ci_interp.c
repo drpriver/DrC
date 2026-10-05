@@ -112,15 +112,6 @@ static Allocator ci_scratch_allocator(CiInterpreter*);
 
 static Allocator cc_allocator(CcParser*);
 
-static
-void
-ci_free_alloca_list(Allocator al, CiAllocaBlock*_Null_unspecified list){
-    while(list){
-        CiAllocaBlock* next = list->next;
-        Allocator_free(al, list, sizeof(CiAllocaBlock) + list->size);
-        list = next;
-    }
-}
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, Atom, const char* what, void*_Nullable*_Nonnull);
 static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
@@ -273,6 +264,7 @@ struct CiTlsThread {
     CiTlsThread*_Nullable prev;
     CiTlsSlot*_Nullable slots;
     size_t capacity;
+    CiStack stack;
 };
 
 static
@@ -284,6 +276,7 @@ ci_tls_free_thread(CiTlsThread* state){
         if(slot->allocation) Allocator_free(al, slot->allocation, slot->allocation_size);
     }
     if(state->slots) Allocator_free(al, state->slots, state->capacity * sizeof *state->slots);
+    ci_stack_destroy(&state->stack);
     Allocator_free(al, state, sizeof *state);
 }
 
@@ -301,6 +294,17 @@ THREAD_LOCAL_DESTRUCTOR(ci_tls_thread_exit){
 }
 
 static
+int
+ci_tls_prepare(CiInterpreter* ci){
+    if(ci->tls_key_created) return 0;
+    LOCK_T_init(&ci->tls_lock);
+    if(thread_local_key_create(&ci->tls_key, ci_tls_thread_exit))
+        return ci_error(ci, (SrcLoc){0}, "could not create interpreter TLS key");
+    ci->tls_key_created = 1;
+    return 0;
+}
+
+static
 void
 ci_tls_cleanup(CiInterpreter* ci){
     if(!ci->tls_key_created) return;
@@ -313,13 +317,14 @@ ci_tls_cleanup(CiInterpreter* ci){
         ci_tls_free_thread(state);
     }
     ci->tls_key_created = 0;
+    ci->top_frame.stack = NULL;
 }
 
 static
 int
-ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
-    if(!ci->tls_key_created || !var->tls_slot || !var->interp_val)
-        return ci_ice(ci, var->loc, "thread_local variable '%s' not prepared", var->name->data);
+ci_tls_get(CiInterpreter* ci, CiTlsThread*_Nullable*_Nonnull out){
+    if(!ci->tls_key_created)
+        return ci_ice(ci, (SrcLoc){0}, "interpreter TLS state not prepared%s", "");
     CiTlsThread* state = thread_local_key_get(ci->tls_key);
     if(!state){
         Allocator al = ci_allocator(ci);
@@ -327,9 +332,10 @@ ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
         if(!state) return CI_OOM_ERROR;
         state->owner = ci;
         state->allocator = al;
+        state->stack.allocator = al;
         if(thread_local_key_set(ci->tls_key, state)){
             Allocator_free(al, state, sizeof *state);
-            return ci_error(ci, var->loc, "could not set interpreter TLS state");
+            return ci_error(ci, (SrcLoc){0}, "could not set interpreter TLS state");
         }
         LOCK_T_lock(&ci->tls_lock);
         state->next = ci->tls_threads;
@@ -337,6 +343,52 @@ ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
         ci->tls_threads = state;
         LOCK_T_unlock(&ci->tls_lock);
     }
+    *out = state;
+    return 0;
+}
+
+static
+int
+ci_frame_stack(CiInterpreter* ci, CiInterpFrame*_Nullable frame, CiStack*_Nullable*_Nonnull out){
+    if(frame && frame->stack){
+        *out = frame->stack;
+        return 0;
+    }
+    CiTlsThread* state;
+    int err = ci_tls_get(ci, &state);
+    if(err) return err;
+    *out = &state->stack;
+    if(frame) frame->stack = *out;
+    return 0;
+}
+
+static
+int
+ci_new_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, size_t data_size, CiInterpFrame*_Nullable*_Nonnull out){
+    size_t allocation_size;
+    if(add_overflow(sizeof(CiInterpFrame), data_size, &allocation_size)) return CI_OOM_ERROR;
+    CiStack* stack;
+    int err = ci_frame_stack(ci, caller, &stack);
+    if(err) return err;
+    CiStackMark mark = ci_stack_mark(stack);
+    CiInterpFrame* frame = ci_stack_zalloc(stack, allocation_size);
+    if(!frame) return CI_OOM_ERROR;
+    *frame = (CiInterpFrame){
+        .parent = caller, .stack = stack, .stack_mark = mark,
+        .slots = frame + 1, .data_length = data_size,
+    };
+    *out = frame;
+    return 0;
+}
+
+static
+int
+ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
+    if(!var->tls_slot || !var->interp_val)
+        return ci_ice(ci, var->loc, "thread_local variable '%s' not prepared", var->name->data);
+    CiTlsThread* state;
+    int err = ci_tls_get(ci, &state);
+    if(err) return err;
     size_t index = var->tls_slot - 1;
     if(index >= state->capacity){
         size_t capacity = 8;
@@ -1019,17 +1071,13 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             int ret = 0;
             if(result != ci_discard_buf && sizeof ret > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
-            CiInterpFrame* module_frame = Allocator_zalloc(ci_allocator(ci), sizeof *module_frame + module->slot_size);
-            if(!module_frame) return CI_OOM_ERROR;
-            *module_frame = (CiInterpFrame){
-                .parent = frame,
-                .ops = module->ops.data,
-                .op_count = module->ops.count,
-                .slots = module_frame + 1,
-                .data_length = module->slot_size,
-                .return_buf = result,
-                .return_size = result == ci_discard_buf ? sizeof ci_discard_buf : size,
-            };
+            CiInterpFrame* module_frame;
+            err = ci_new_frame(ci, frame, module->slot_size, &module_frame);
+            if(err) return err;
+            module_frame->ops = module->ops.data;
+            module_frame->op_count = module->ops.count;
+            module_frame->return_buf = result;
+            module_frame->return_size = result == ci_discard_buf ? sizeof ci_discard_buf : size;
             if(result != ci_discard_buf) CI_INLINE_MEMCPY(result, &ret, sizeof ret);
             *child = module_frame;
             return CI_STEP_ENTER_FRAME;
@@ -2403,12 +2451,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             size_t sz;
             void* dest = (char*)frame->slots + op->alloca.slot;
             CI_INLINE_MEMCPY(&sz, (char*)frame->slots + op->alloca.src, sizeof sz);
-            CiAllocaBlock* block = Allocator_zalloc(ci_allocator(ci), sizeof(CiAllocaBlock) + sz);
-            if(!block) return CI_OOM_ERROR;
-            block->size = sz;
-            block->next = frame->alloca_list;
-            frame->alloca_list = block;
-            void* ptr = block + 1;
+            CiStack* stack;
+            int err = ci_frame_stack(ci, frame, &stack);
+            if(err) return err;
+            void* ptr = ci_stack_zalloc(stack, sz);
+            if(!ptr) return CI_OOM_ERROR;
             CI_INLINE_MEMCPY(dest, &ptr, sizeof dest);
             frame->pc++;
             return 0;
@@ -2591,18 +2638,15 @@ ci_alloc_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* f
         return ci_ice(ci, func->loc, "function '%s' not parsed before execution", func->name->data);
     if(!func->interp_ops)
         return ci_ice(ci, func->loc, "function '%s' not lowered before execution", func->name->data);
-    size_t alloc_size = sizeof(CiInterpFrame) + func->frame_size + varargs_size;
-    CiInterpFrame* frame = Allocator_zalloc(ci_allocator(ci), alloc_size);
-    if(!frame) return CI_OOM_ERROR;
-    *frame = (CiInterpFrame){
-        .name = func->name,
-        .parent = caller,
-        .ops = func->interp_ops->code.data,
-        .op_count = func->interp_ops->code.count,
-        .slots = frame + 1,
-        .data_length = func->frame_size + varargs_size,
-        .varargs_buf = func->type->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL,
-    };
+    size_t data_size;
+    if(add_overflow((size_t)func->frame_size, varargs_size, &data_size)) return CI_OOM_ERROR;
+    CiInterpFrame* frame;
+    int err = ci_new_frame(ci, caller, data_size, &frame);
+    if(err) return err;
+    frame->name = func->name;
+    frame->ops = func->interp_ops->code.data;
+    frame->op_count = func->interp_ops->code.count;
+    frame->varargs_buf = func->type->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL;
     *out = frame;
     return 0;
 }
@@ -2629,8 +2673,8 @@ ci_make_flat_call_frame(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, 
 static
 void
 ci_free_call_frame(CiInterpreter* ci, CiInterpFrame* frame){
-    ci_free_alloca_list(ci_allocator(ci), frame->alloca_list);
-    Allocator_free(ci_allocator(ci), frame, sizeof *frame + frame->data_length);
+    (void)ci;
+    ci_stack_rewind(frame->stack, frame->stack_mark);
 }
 
 static
@@ -3319,7 +3363,8 @@ ci_relocate_static_data(CiStaticData* data){
 static
 int
 ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
-    int err = 0;
+    int err = ci_tls_prepare(ci);
+    if(err) return err;
     Allocator al = ci_allocator(ci);
     Marray(CiStaticData) initializers = {0};
     size_t fi = 0, vi = 0;
@@ -3375,14 +3420,6 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
                 if(err) goto cleanup;
                 if(var->alignment > var->tls_alignment) var->tls_alignment = var->alignment;
                 if(!var->tls_alignment) var->tls_alignment = 1;
-                if(!ci->tls_key_created){
-                    LOCK_T_init(&ci->tls_lock);
-                    if(thread_local_key_create(&ci->tls_key, ci_tls_thread_exit)){
-                        err = ci_error(ci, var->loc, "could not create interpreter TLS key");
-                        goto cleanup;
-                    }
-                    ci->tls_key_created = 1;
-                }
                 var->tls_slot = ++ci->tls_slot_count;
             }
             if(!(var->interp_preinit || ((uintptr_t)item.value & CI_VAR_DEP_INITIALIZE))
@@ -4578,22 +4615,23 @@ int
 ci_run_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, const CiLoweredExpr*_Nonnull code, SrcLoc loc, void*_Nonnull result, size_t size){
     if(code->value_size > size)
         return CI_RESULT_TOO_SMALL(ci, loc, code->value_size, size);
-    Allocator al = ci_allocator(ci);
     CiInterpFrame frame = {
         .parent = parent, .return_buf = result, .return_size = size,
         .ops = code->ops.data, .op_count = code->ops.count,
     };
     int err = ci_link_ops(ci, code->ops.data, code->ops.count);
     if(err) return err;
+    err = ci_frame_stack(ci, NULL, &frame.stack);
+    if(err) return err;
+    frame.stack_mark = ci_stack_mark(frame.stack);
     if(code->frame_size){
-        frame.slots = Allocator_zalloc(al, code->frame_size);
+        frame.slots = ci_stack_zalloc(frame.stack, code->frame_size);
         if(!frame.slots) return CI_OOM_ERROR;
     }
     err = ci_interp_run(ci, &frame);
     if(!err && code->value_size)
         memcpy(result, (char*)frame.slots + code->value_slot, code->value_size);
-    ci_free_alloca_list(al, frame.alloca_list);
-    if(frame.slots) Allocator_free(al, frame.slots, code->frame_size);
+    ci_stack_rewind(frame.stack, frame.stack_mark);
     return err;
 }
 
