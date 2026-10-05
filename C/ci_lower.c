@@ -3106,6 +3106,91 @@ ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t des
 }
 
 static
+_Bool
+ci_memcpy_frame_addr(CiInterpreter* ci, CcExpr* e, uint32_t* slot){
+    // Pointer casts and array decay preserve the address of local storage.
+    while(e->kind == CC_EXPR_CAST && ccqt_kind(e->type) == CC_POINTER && (ccqt_kind(e->lhs->type) == CC_POINTER || ccqt_kind(e->lhs->type) == CC_ARRAY))
+        e = e->lhs;
+    if(e->kind == CC_EXPR_ADDR)
+        return ci_frame_lvalue(ci, e->lhs, slot);
+    if(ccqt_kind(e->type) == CC_ARRAY)
+        return ci_frame_lvalue(ci, e, slot);
+    return 0;
+}
+
+static
+int
+ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, uint32_t size){
+    int err;
+    if(out){
+        err = ci_lower_dest(ctx, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t temp = ctx->temp;
+    uint32_t dst, src;
+    _Bool dst_frame = ci_memcpy_frame_addr(ci, e->values[0], &dst);
+    _Bool src_frame = ci_memcpy_frame_addr(ci, e->values[1], &src);
+    // Capture argument values in independent slots, as a normal call does:
+    // evaluating the source may change the destination pointer variable.
+    CiLowerVal v;
+    if(!dst_frame){
+        err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &dst);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[0], dst, &v);
+        if(err) return err;
+    }
+    if(!src_frame){
+        err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &src);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[1], src, &v);
+        if(err) return err;
+    }
+    CiOp* op;
+    if(size){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        if(dst_frame && src_frame) *op = (CiOp){.copy = {
+            .kind = CI_OP_COPY, .slot = dst, .slot_size = size,
+            .src = src, .src_size = size, .loc = e->loc,
+        }};
+        else if(dst_frame) *op = (CiOp){.load = {
+            .kind = CI_OP_LOAD, .slot = dst, .slot_size = size,
+            .src = src, .loc = e->loc,
+        }};
+        else if(src_frame) *op = (CiOp){.store = {
+            .kind = CI_OP_STORE, .slot = dst, .src = src,
+            .src_size = size, .loc = e->loc,
+        }};
+        else *op = (CiOp){.memcopy = {
+            .kind = CI_OP_MEMCOPY,
+            .slot = dst,
+            .src = src,
+            .size = size,
+            .loc = e->loc,
+        }};
+    }
+    if(out){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        if(dst_frame) *op = (CiOp){.slot_addr = {
+            .kind = CI_OP_SLOT_ADDR, .slot = dest, .slot_size = ctx->ptr_size,
+            .src = dst, .loc = e->loc,
+        }};
+        else *op = (CiOp){.copy = {
+            .kind = CI_OP_COPY,
+            .slot = dest,
+            .slot_size = ctx->ptr_size,
+            .src = dst,
+            .src_size = ctx->ptr_size,
+            .loc = e->loc,
+        }};
+    }
+    ctx->temp = temp;
+    return 0;
+}
+
+static
 int
 ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     int err;
@@ -3116,8 +3201,6 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     if(callee->kind == CC_EXPR_FUNCTION){
         func = callee->func;
         ftype = func->type;
-        err = ci_lower_func_dep(ctx, func, CC_FUNC_DEP_USED);
-        if(err) return err;
     }
     else {
         CcQualType ct = callee->type;
@@ -3139,6 +3222,17 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     uint32_t nargs = e->call.nargs;
     if(!ftype->is_variadic && nargs != ftype->param_count)
         return ci_unimplemented(ci, e->loc, "K&R calls");
+    if(func && func->libc_builtin && !func->defined && !func->mangle && nargs == 3 && sv_equals2(SV("memcpy"), func->name->data, func->name->length)){
+        CiFoldValue size;
+        err = ci_fold_expr(ci, ctx, e->values[2], &size);
+        if(err > 0) return err;
+        if(!err && size.sz <= 8 && size.bits[0] <= UINT32_MAX)
+            return ci_lower_memcpy(ci, ctx, e, dest, out, (uint32_t)size.bits[0]);
+    }
+    if(func){
+        err = ci_lower_func_dep(ctx, func, CC_FUNC_DEP_USED);
+        if(err) return err;
+    }
     uint32_t ret_size = 0;
     if(out){
         err = ci_lower_dest(ctx, &dest, out->size);

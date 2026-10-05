@@ -44,6 +44,78 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "memcpy: fixed-size builtin preserves bytes and returns destination", __LINE__,
+            SVI("unsigned char src[9]={1,2,3,4,5,6,7,8,9}; unsigned char dst[11]={0};\n"
+                "void* result=__builtin_memcpy(dst+1,src,sizeof src);\n"
+                "for(int i=0;i<9;i++)if(dst[i+1]!=src[i])return 0;\n"
+                "return result==dst+1 && dst[0]==0 && dst[10]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: ordinary libc name and folded size", __LINE__,
+            SVI("int src[2]={42,7}; int dst[2]={0};\n"
+                "memcpy(dst,src,2*sizeof(int));return dst[0]==42&&dst[1]==7;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: pointer arguments are captured once before copying", __LINE__,
+            SVI("char src[2]={42,7}; char dst[2]={0}; char* p=dst; int calls=0;\n"
+                "char* source(void){calls++;p=dst+1;return src;}\n"
+                "void* result=__builtin_memcpy(p,source(),1);\n"
+                "return result==dst&&p==dst+1&&calls==1&&dst[0]==42&&dst[1]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: zero size still evaluates pointer arguments", __LINE__,
+            SVI("char src[2]={42,7}; char dst[2]={3,4};char* s=src;char* d=dst;\n"
+                "void* result=__builtin_memcpy(d++,s++,0);\n"
+                "return result==dst&&d==dst+1&&s==src+1&&dst[0]==3&&dst[1]==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: assignment result retains the original destination", __LINE__,
+            SVI("char src[2]={42,7};char dst[2]={0};char* p=dst;\n"
+                "p=__builtin_memcpy(p,src+1,1);return p==dst&&dst[0]==7&&dst[1]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: copy between local objects", __LINE__,
+            SVI("int f(void){int x=2,y=3;__builtin_memcpy(&x,&y,sizeof x);return x+y;}return f();\n"),
+            .exit_code = 6,
+        },
+        {
+            "memcpy: local destination reads source after argument side effects", __LINE__,
+            SVI("int* source(int* p){*p=7;return p;}int f(void){int x=2,y=3;\n"
+                "void* result=__builtin_memcpy(&x,source(&y),sizeof x);return result==&x&&x==7&&y==7;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: local source and pointer destination retain return value", __LINE__,
+            SVI("int f(int* dst){int src=42;return __builtin_memcpy(dst,&src,sizeof src)==dst;}\n"
+                "int x=0;return f(&x)&&x==42;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: local aggregate fields preserve neighboring bytes", __LINE__,
+            SVI("int f(void){struct S{int a,b,c;}dst={1,2,3},src={4,5,6};\n"
+                "void* result=__builtin_memcpy(&dst.b,&src.b,sizeof dst.b);\n"
+                "return result==&dst.b&&dst.a==1&&dst.b==5&&dst.c==3;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: local array decay copies exact bytes", __LINE__,
+            SVI("int f(void){char src[3]={1,2,3},dst[4]={0};\n"
+                "void* result=__builtin_memcpy(dst,src,sizeof src);\n"
+                "return result==dst&&dst[0]==1&&dst[1]==2&&dst[2]==3&&dst[3]==0;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: a user-defined function keeps its behavior", __LINE__,
+            SVI("void* memcpy(void* d,const void* s,unsigned long n){*(char*)d=99;return (void*)s;}\n"
+                "char src=42,dst=0;void* result=memcpy(&dst,&src,1);return result==&src&&dst==99;\n"),
+            .exit_code = 1,
+        },
+        {
             "TLS aggregate initialization, alignment and static persistence", __LINE__,
             SVI("int target = 6;\n"
                 "_Alignas(64) _Thread_local struct S {int a[3]; int* p;} x = {{1,2,3}, &target};\n"

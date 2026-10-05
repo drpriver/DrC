@@ -238,6 +238,20 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
+        {
+            "memcpy: runtime size and its side effects retain native behavior", __LINE__,
+            SV("char src[4]={1,2,3,4};char dst[4]={0};volatile unsigned long n=3;int calls=0;\n"
+               "void* result=__builtin_memcpy(dst,src,(calls++,n));\n"
+               "return result==dst&&calls==1&&dst[0]==1&&dst[1]==2&&dst[2]==3&&dst[3]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "memcpy: side effects in an otherwise fixed size are preserved", __LINE__,
+            SV("char src=42,dst=0;int calls=0;\n"
+               "void* result=__builtin_memcpy(&dst,&src,(calls++,1));\n"
+               "return result==&dst&&calls==1&&dst==42;\n"),
+            .exit_code = 1,
+        },
 #if !(defined __DRC__ && defined __GLIBC__)
         {
             "review: runtime aggregate preserves floating exceptions", __LINE__,
