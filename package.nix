@@ -61,6 +61,7 @@ in stdenv.mkDerivation (self: {
             ./cc.c
             ./cpp.c
             ./drc_test.c
+            ./ctags.c
             ./cc_repl_completion.h
             ./cpp_args.h
         ] ++ lib.optional self.doCheck ./Samples);
