@@ -15,8 +15,18 @@
 #include "Drp/Allocators/arena_allocator.h"
 #include "Drp/msb_sprintf.h"
 CStringView DRC_PATH;
+CStringView DRC_RUNNER;
 StringView COVDIR;
 char** ENVP;
+
+static
+void
+drc_command(CmdBuilder* cmd){
+    CStringView program = DRC_RUNNER.length ? DRC_RUNNER : DRC_PATH;
+    cmd_prog(cmd, program);
+    msb_write_str(&cmd->prog, program.text, program.length);
+    if(DRC_RUNNER.length) cmd_arg(cmd, DRC_PATH);
+}
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -158,8 +168,7 @@ TestFunction(test_snippets){
     for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
         cmd_clear(&cmd);
-        cmd_prog(&cmd, DRC_PATH);
-        msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
+        drc_command(&cmd);
         cmd_arg(&cmd, CSV("-e"));
         cmd_arg(&cmd, c->program);
         for(size_t a = 0; a < arrlen(c->args); a++){
@@ -187,7 +196,7 @@ TestFunction(test_snippets){
             }
         }
         size_t envp_size = 0;
-        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size);
+        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size, NULL, 0);
         err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->name, err);
@@ -341,8 +350,7 @@ TestFunction(test_samples){
         const struct Case* c = &testcases[i];
         if(c->skip) continue;
         cmd_clear(&cmd);
-        cmd_prog(&cmd, DRC_PATH);
-        msb_write_str(&cmd.prog, DRC_PATH.text, DRC_PATH.length);
+        drc_command(&cmd);
         if(c->syntax_only)
             cmd_arg(&cmd, CSV("--syntax-only"));
         cmd_arg(&cmd, c->program);
@@ -371,7 +379,7 @@ TestFunction(test_samples){
             }
         }
         size_t envp_size = 0;
-        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size);
+        void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size, NULL, 0);
         err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->program.text, err);
@@ -397,6 +405,12 @@ int main(int argc, char** argv, char** envp){
     RegisterTestFlags(test_snippets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_samples, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     ArgToParse kwargs[] = {
+        {
+            .name = SV("--runner"),
+            .dest = ARGDEST(&DRC_RUNNER),
+            .help = "Executable or wrapper for running the drc binary",
+            .min_num = 1, .max_num = 1,
+        },
         {
             .name = SV("--drc"),
             .dest = ARGDEST(&DRC_PATH),

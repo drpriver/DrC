@@ -53,7 +53,7 @@ in stdenv.mkDerivation (self: {
     env.NIX_CFLAGS_COMPILE = lib.optionalString host.isx86_64 "-march=x86-64-v2";
     src = lib.fileset.toSource {
         root = ./.;
-        fileset = lib.fileset.unions [
+        fileset = lib.fileset.unions ([
             ./build.c
             ./Drp
             ./C
@@ -63,7 +63,7 @@ in stdenv.mkDerivation (self: {
             ./drc_test.c
             ./cc_repl_completion.h
             ./cpp_args.h
-        ];
+        ] ++ lib.optional self.doCheck ./Samples);
     };
     nativeCheckInputs = lib.optional self.doCheck buildPackages.libffi;
     depsBuildBuild = [ buildPackages.stdenv.cc ];

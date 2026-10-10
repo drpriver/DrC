@@ -144,6 +144,11 @@ typedef THREADFUNC(thread_func);
 // Initializes the given handle with the info that identifies that thread.
 // thread_arg should be what the thread_func expects.
 static warn_unused int create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg);
+typedef struct ThreadAttrs ThreadAttrs;
+struct ThreadAttrs {
+    size_t stack_size;
+};
+static warn_unused int create_thread_with_attrs(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg, const ThreadAttrs* _Nullable);
 //
 // Waits for the corresponding thread to finish.
 static void join_thread(ThreadHandle);
@@ -161,6 +166,7 @@ struct ThreadHandle {
 
 #if defined(__APPLE__)
 typedef os_unfair_lock LOCK_T;
+#define LOCK_T_INIT OS_UNFAIR_LOCK_INIT
 static inline
 void
 LOCK_T_init(LOCK_T* lock){
@@ -180,6 +186,7 @@ LOCK_T_unlock(LOCK_T* lock){
 }
 #elif defined(__linux__)
 typedef struct { int val; } LOCK_T;
+#define LOCK_T_INIT {0}
 static inline
 void
 LOCK_T_init(LOCK_T* lock){
@@ -221,8 +228,18 @@ num_cpus(void){
 static
 warn_unused
 int
-create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg){
-    int err = pthread_create(&handle->thread, NULL, func, thread_arg);
+create_thread_with_attrs(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg, const ThreadAttrs*_Nullable attrs){
+    if(!attrs || !attrs->stack_size)
+        return pthread_create(&handle->thread, NULL, func, thread_arg);
+    pthread_attr_t attr;
+    int err = pthread_attr_init(&attr);
+    if(err) return err;
+    err = pthread_attr_setstacksize(&attr, attrs->stack_size);
+    if(err){
+        pthread_attr_destroy(&attr);
+        return err;
+    }
+    err = pthread_create(&handle->thread, &attr, func, thread_arg);
     return err;
 }
 
@@ -237,6 +254,7 @@ join_thread(ThreadHandle handle){
 #elif defined(_WIN32)
 
 typedef struct { LONG val; } LOCK_T;
+#define LOCK_T_INIT {0}
 static inline
 void
 LOCK_T_init(LOCK_T* lock){
@@ -283,8 +301,10 @@ num_cpus(void){
 static
 warn_unused
 int
-create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg){
-    handle->thread = CreateThread(NULL, 0, func, thread_arg, 0, NULL);
+create_thread_with_attrs(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg, const ThreadAttrs*_Nullable attrs){
+    size_t stack = 0;
+    if(attrs) stack = attrs->stack_size;
+    handle->thread = CreateThread(NULL, stack, func, thread_arg, stack ? STACK_SIZE_PARAM_IS_A_RESERVATION : 0, NULL);
     return handle->thread == NULL;
 }
 
@@ -300,6 +320,7 @@ join_thread(ThreadHandle handle){
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 
 typedef struct { int unused; } LOCK_T;
+#define LOCK_T_INIT {0}
 static inline void LOCK_T_init(LOCK_T* lock){ (void)lock; }
 static inline void LOCK_T_lock(LOCK_T* lock){ (void)lock; }
 static inline void LOCK_T_unlock(LOCK_T* lock){ (void)lock; }
@@ -312,10 +333,11 @@ struct ThreadHandle {
 static
 warn_unused
 int
-create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg){
+create_thread_with_attrs(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg, const ThreadAttrs*_Nullable attrs){
     (void)handle;
     (void)func;
     (void)thread_arg;
+    (void)attrs;
     unimplemented();
 }
 
@@ -329,6 +351,13 @@ join_thread(ThreadHandle handle){
 #else
 #error "Unhandled threading platform."
 #endif
+
+static
+warn_unused
+int
+create_thread(ThreadHandle* handle, thread_func* func, void*_Nullable thread_arg){
+    return create_thread_with_attrs(handle, func, thread_arg, NULL);
+}
 
 #ifdef _WIN32
 typedef DWORD ThreadLocalKey;

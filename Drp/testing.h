@@ -1111,7 +1111,19 @@ run_the_tests_multithreaded(size_t*_Nonnull which_tests, size_t test_count, stru
             .test_idx = &test_idx,
             .result = {0},
         };
-        int err = create_thread(&handles[i], &test_thread_worker, &jds[i]);
+        #if !defined TEST_STACK_SIZE && defined __SANITIZE_ADDRESS__
+            #define TEST_STACK_SIZE 16*1024*1024
+        #endif
+        #if !defined TEST_STACK_SIZE && defined __has_feature
+            #if __has_feature(address_sanitizer)
+                #define TEST_STACK_SIZE 16*1024*1024
+            #endif
+        #endif
+        #if !defined TEST_STACK_SIZE
+            #define TEST_STACK_SIZE 0
+        #endif
+        ThreadAttrs attrs = {.stack_size = TEST_STACK_SIZE};
+        int err = create_thread_with_attrs(&handles[i], &test_thread_worker, &jds[i], &attrs);
         if(err) {
             fprintf(stderr, "error spawning thread\n");
             abort();

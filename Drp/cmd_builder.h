@@ -16,6 +16,12 @@
 #include "Marray.h"
 #endif
 
+#ifndef MARRAY_T_StringView2
+#define MARRAY_T_StringView2
+#define MARRAY_T StringView2
+#include "Marray.h"
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -28,6 +34,8 @@ typedef struct CmdBuilder CmdBuilder;
 struct CmdBuilder {
     MStringBuilder prog;
     Marray(CStringView) args;
+    Marray(StringView2) env_override;
+    CStringView wd;
     union {
         MStringBuilder cmd_line;
         struct {
@@ -51,6 +59,20 @@ cmd_prog(CmdBuilder* cmd, CStringView prog){
     cmd->errored = ma_push(CStringView)(&cmd->args, cmd->allocator, prog);
     if(cmd->errored) return;
     cmd->prog.allocator = cmd->allocator;
+}
+
+static
+void
+cmd_chdir(CmdBuilder* cmd, CStringView wd){
+    cmd->wd = wd;
+}
+
+static
+void
+cmd_set_envvar(CmdBuilder* cmd, StringView key, StringView value){
+    if(cmd->errored) return;
+    StringView2 kv = {key, value};
+    cmd->errored = ma_push(StringView2)(&cmd->env_override, cmd->allocator, kv);
 }
 
 static
@@ -97,8 +119,10 @@ cmd_cargs_(CmdBuilder* cmd, size_t count, const char*_Nonnull*_Nonnull args){
 static
 void
 cmd_clear(CmdBuilder* cmd){
-    cmd->args.count = 0;
     msb_reset(&cmd->prog);
+    cmd->args.count = 0;
+    cmd->env_override.count = 0;
+    cmd->wd = CSV("");
     msb_reset(&cmd->cmd_line);
     cmd->errored = 0;
 }
@@ -109,6 +133,8 @@ cmd_destroy(CmdBuilder* cmd){
     msb_destroy(&cmd->prog);
     msb_destroy(&cmd->cmd_line);
     ma_cleanup(CStringView)(&cmd->args, cmd->allocator);
+    ma_cleanup(StringView2)(&cmd->env_override, cmd->allocator);
+    cmd->wd = CSV("");
     cmd->errored = 0;
 }
 

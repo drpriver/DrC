@@ -4,6 +4,7 @@
 #include <string.h>
 #include "atom_table.h"
 #include "Allocators/allocator.h"
+#include "cstring_view.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -42,10 +43,10 @@ static int env_setenv4(Environment* env, const char* key, size_t keylen, const c
 static Atom _Nullable env_getenv(Environment* env, Atom key);
 static Atom _Nullable env_getenv2(Environment* env, const char* key, size_t keylen);
 static int env_parse_posix(Environment* env, char*_Null_unspecified*_Null_unspecified envp);
-static int env_parse_win32(Environment* env, char* envp);
+static int env_parse_win32(Environment* env, char*_Nullable envp);
 static Atom _Nullable _env_fold_key(Environment* env, Atom key);
-static char*_Null_unspecified*_Nullable env_to_posix(Environment* env, Allocator a, size_t* alloc_size);
-static char*_Nullable env_to_win32(Environment* env, Allocator a, size_t* alloc_size);
+static char*_Null_unspecified*_Nullable env_to_posix(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified, size_t);
+static char*_Nullable env_to_win32(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified, size_t);
 
 static
 int
@@ -62,13 +63,17 @@ env_parse_posix(Environment* env, char*_Null_unspecified*_Null_unspecified envp)
 
 static
 int
-env_parse_win32(Environment* env, char* envp){
+env_parse_win32(Environment* env, char*_Nullable envp){
+    if(!envp) return 0;
     for(char* p = envp;;){
         size_t len = strlen(p);
         if(!len) break;
-        char* eq = strchr(p, '=');
-        int err = env_setenv4(env, p, eq-p, eq+1, p+len-eq-1);
-        if(err) return err;
+        // Drive working-directory entries have keys such as "=C:".
+        char* eq = strchr(p+(*p == '='), '=');
+        if(eq){
+            int err = env_setenv4(env, p, eq-p, eq+1, p+len-eq-1);
+            if(err) return err;
+        }
         p += len+1;
     }
     return 0;
@@ -195,15 +200,43 @@ env_getenv(Environment* env, Atom key){
     return NULL;
 }
 
-static 
-char*_Null_unspecified*_Nullable
-env_to_posix(Environment* env, Allocator a, size_t* alloc_size){
-    size_t nkvs = env->count+1; // +1 for NULL terminator
-    size_t strsize = 0;
-    for(size_t i = 0; i < env->count; i++){
+static
+_Bool
+_env_output_kv(Environment* env, const StringView2* _Null_unspecified override, size_t override_count, size_t i, StringView2* out){
+    size_t start;
+    if(i < env->count){
         EnvKV kv = env->data[i];
-        //                         '='                   '\0'
-        strsize += kv.key->length + 1 + kv.value->length + 1;
+        Atom key = env->windows ? kv.original_key : kv.key;
+        *out = (StringView2){{key->length, key->data}, {kv.value->length, kv.value->data}};
+        start = 0;
+    }
+    else {
+        i -= env->count;
+        *out = override[i];
+        start = i+1;
+    }
+    if(env->windows)
+        for(size_t j = start; j < override_count; j++){
+            if(sv_iequals(out->key, override[j].key)) return 0;
+        }
+    else
+        for(size_t j = start; j < override_count; j++){
+            if(sv_equals(out->key, override[j].key)) return 0;
+        }
+    return 1;
+}
+
+static
+char*_Null_unspecified*_Nullable
+env_to_posix(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified override, size_t override_count){
+    size_t nkvs = 1; // +1 for NULL terminator
+    size_t strsize = 0;
+    for(size_t i = 0; i < env->count+override_count; i++){
+        StringView2 kv;
+        if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
+        nkvs++;
+        //                        '='                   '\0'
+        strsize += kv.key.length + 1 + kv.value.length + 1;
     }
     size_t sz = nkvs * sizeof(char*) + strsize;
     void* p = Allocator_alloc(a, sz);
@@ -211,55 +244,59 @@ env_to_posix(Environment* env, Allocator a, size_t* alloc_size){
     *alloc_size = sz;
     char** envp = p;
     char* s = (char*)p+nkvs*sizeof(char*);
-    for(size_t i = 0; i < env->count; i++){
-        EnvKV kv = env->data[i];
-        envp[i] = s;
-        memcpy(s, kv.key->data, kv.key->length);
-        s += kv.key->length;
+    size_t n = 0;
+    for(size_t i = 0; i < env->count+override_count; i++){
+        StringView2 kv;
+        if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
+        envp[n++] = s;
+        memcpy(s, kv.key.text, kv.key.length);
+        s += kv.key.length;
         s++[0] = '=';
-        memcpy(s, kv.value->data, kv.value->length);
-        s += kv.value->length;
+        memcpy(s, kv.value.text, kv.value.length);
+        s += kv.value.length;
         s++[0] = '\0';
     }
-    envp[env->count] = NULL;
+    envp[n] = NULL;
     return envp;
 }
 
 static 
 char*_Nullable
-env_to_win32(Environment* env, Allocator a, size_t* alloc_size){
+env_to_win32(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified override, size_t override_count){
     size_t strsize = 1; // double nul terminator
-    for(size_t i = 0; i < env->count; i++){
-        EnvKV kv = env->data[i];
-        //                                  '='                   '\0'
-        strsize += kv.original_key->length + 1 + kv.value->length + 1;
+    for(size_t i = 0; i < env->count+override_count; i++){
+        StringView2 kv;
+        if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
+        //                        '='                   '\0'
+        strsize += kv.key.length + 1 + kv.value.length + 1;
     }
-    if(!env->count) strsize = 2;
+    if(strsize == 1) strsize = 2;
     void* envp = Allocator_alloc(a, strsize);
     if(!envp) return NULL;
     *alloc_size = strsize;
     char* s = envp;
-    for(size_t i = 0; i < env->count; i++){
-        EnvKV kv = env->data[i];
-        memcpy(s, kv.original_key->data, kv.original_key->length);
-        s += kv.original_key->length;
+    for(size_t i = 0; i < env->count+override_count; i++){
+        StringView2 kv;
+        if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
+        memcpy(s, kv.key.text, kv.key.length);
+        s += kv.key.length;
         s++[0] = '=';
-        memcpy(s, kv.value->data, kv.value->length);
-        s += kv.value->length;
+        memcpy(s, kv.value.text, kv.value.length);
+        s += kv.value.length;
         s++[0] = '\0';
     }
     s[0] = '\0'; // final double nul terminator
-    if(!env->count) s[1] = '\0';
+    if(s == envp) s[1] = '\0';
     return envp;
 }
 
 static
 void*_Nullable
-env_to_envp(Environment* env, Allocator a, size_t* alloc_size){
+env_to_envp(Environment* env, Allocator a, size_t* alloc_size, const StringView2*_Null_unspecified overrides, size_t override_count){
     if(env->windows)
-        return env_to_win32(env, a, alloc_size);
+        return env_to_win32(env, a, alloc_size, overrides, override_count);
     else
-        return env_to_posix(env, a, alloc_size);
+        return env_to_posix(env, a, alloc_size, overrides, override_count);
 }
 
 #ifdef __clang__

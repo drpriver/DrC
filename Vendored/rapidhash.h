@@ -250,7 +250,7 @@ RAPIDHASH_INLINE uint64_t rapid_read64_zp(
     if(offset >= actual_len) return 0;
     size_t available = actual_len - offset;
     if(available >= 8) return rapid_read64(base + offset);
-    _Alignas(8) uint8_t scratch[8] = {};
+    _Alignas(8) uint8_t scratch[8] = {0};
     memcpy(scratch, base + offset, available);
     return rapid_read64(scratch);
 }

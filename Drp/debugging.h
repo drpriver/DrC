@@ -126,11 +126,8 @@ bt(void){
 #pragma clang assume_nonnull end
 #endif
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#define WIN32_EXTRA_LEAN
-#include <Windows.h>
-#endif
+#include "windowsheader.h"
+#include "thread_utils.h"
 #include <dbghelp.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -142,30 +139,45 @@ bt(void){
 #pragma clang assume_nonnull begin
 #endif
 
+static LOCK_T Dbg_lock = LOCK_T_INIT;
 static int Dbg_sym_is_init = 0;
 static HANDLE Dbg_process;
+
+static
+_Bool
+dbg_can_capture_stack(void){
+    static LONG capture_state;
+    LONG state = InterlockedCompareExchange(&capture_state, 0, 0);
+    if(!state){
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        // Wine's stack capture can fault while unwinding its ELF-based DLLs.
+        state = ntdll && GetProcAddress(ntdll, "wine_get_version") ? -1 : 1;
+        InterlockedExchange(&capture_state, state);
+    }
+    return state > 0;
+}
 
 static
 dbg_noinline
 void
 dbg_ensure_init(void){
-    if(Dbg_sym_is_init) return;
-    Dbg_sym_is_init = 1;
-    Dbg_process = GetCurrentProcess();
-    SymInitialize(Dbg_process, NULL, TRUE);
+    LOCK_T_lock(&Dbg_lock);
+    if(!Dbg_sym_is_init){
+        Dbg_sym_is_init = 1;
+        Dbg_process = GetCurrentProcess();
+        SymInitialize(Dbg_process, NULL, TRUE);
+    }
+    LOCK_T_unlock(&Dbg_lock);
 }
 
 static
 dbg_noinline
 void
 bt(void){
-    // Apparently this stuff is only safe to call from a single thread at a time.
-    // But putting a critical section in here seemed like it'd be annoying.
-    // Idk.
+    if(!dbg_can_capture_stack()) return;
     enum {bufflen=256};
     void* array[bufflen];
     dbg_ensure_init();
-
     unsigned frames = CaptureStackBackTrace(0, bufflen, array, NULL);
     struct {
         SYMBOL_INFO symbol;
@@ -173,31 +185,23 @@ bt(void){
     } sym = {0};
     sym.symbol.MaxNameLen   = 255;
     sym.symbol.SizeOfStruct = sizeof(SYMBOL_INFO);
-
-    IMAGEHLP_LINE64 line = {
-        .SizeOfStruct = sizeof(IMAGEHLP_LINE64),
-    };
+    IMAGEHLP_LINE64 line = { .SizeOfStruct = sizeof(IMAGEHLP_LINE64), };
     DWORD disp;
-
+    LOCK_T_lock(&Dbg_lock);
     for(unsigned i = 0; i < frames; i++ ){
-        BOOL addrsuccess = SymFromAddr(Dbg_process, (DWORD64)array[i], 0, &sym.symbol);
-        if(!addrsuccess){
-            fprintf(stderr, "%2d  %-24s  0x%p\n",
-                frames-i-1, "???", array[i]);
+        BOOL ok;
+        ok = SymFromAddr(Dbg_process, (DWORD64)array[i], 0, &sym.symbol);
+        if(!ok){
+            fprintf(stderr, "%2d  %-24s  0x%p\n", frames-i-1, "???", array[i]);
             continue;
         }
-        BOOL linesuccess = SymGetLineFromAddr64(Dbg_process, (DWORD64)array[i], &disp, &line);
-        if(linesuccess){
-            fprintf(stderr, "%2d  %-24s  at %s:%-4lu\n",
-                frames-i-1, sym.symbol.Name,
-                line.FileName, line.LineNumber);
-        }
-        else {
-            fprintf(stderr, "%2d  %-24s  0x%p\n",
-                frames-i-1, sym.symbol.Name,
-                (void*)sym.symbol.Address);
-        }
+        ok = SymGetLineFromAddr64(Dbg_process, (DWORD64)array[i], &disp, &line);
+        if(ok)
+            fprintf(stderr, "%2d  %-24s  at %s:%-4lu\n", frames-i-1, sym.symbol.Name, line.FileName, line.LineNumber);
+        else
+            fprintf(stderr, "%2d  %-24s  0x%p\n", frames-i-1, sym.symbol.Name, (void*)sym.symbol.Address);
     }
+    LOCK_T_unlock(&Dbg_lock);
 }
 static
 dbg_noinline
@@ -205,7 +209,9 @@ BacktraceArray*
 get_bt(void){
     enum {bufflen=256};
     void* array[bufflen];
-    unsigned frames = CaptureStackBackTrace(0, bufflen, array, NULL);
+    unsigned frames = 0;
+    if(dbg_can_capture_stack())
+        frames = CaptureStackBackTrace(0, bufflen, array, NULL);
     BacktraceArray* result = malloc(sizeof(*result)+sizeof(void*)*frames);
     result->count = frames;
     memcpy(result->symbols, array, sizeof(void*)*frames);
@@ -216,41 +222,33 @@ static
 dbg_noinline
 void
 dump_bt(BacktraceArray* bta){
+    if(!bta->count) return;
     dbg_ensure_init();
     int count = bta->count;
     void** array = bta->symbols;
-
     struct {
         SYMBOL_INFO symbol;
         char buff[256];
     } sym = {0};
     sym.symbol.MaxNameLen   = 255;
     sym.symbol.SizeOfStruct = sizeof(SYMBOL_INFO);
-
-    IMAGEHLP_LINE64 line = {
-        .SizeOfStruct = sizeof(IMAGEHLP_LINE64),
-    };
+    IMAGEHLP_LINE64 line = { .SizeOfStruct = sizeof(IMAGEHLP_LINE64) };
     DWORD disp;
-
+    LOCK_T_lock(&Dbg_lock);
     for(int i = 0; i < count; i++ ){
-        BOOL addrsuccess = SymFromAddr(Dbg_process, (DWORD64)bta->symbols[i], 0, &sym.symbol);
-        if(!addrsuccess){
-            fprintf(stderr, "%2d  %-24s  0x%p\n",
-                count-i-1, "???", array[i]);
+        BOOL ok;
+        ok = SymFromAddr(Dbg_process, (DWORD64)bta->symbols[i], 0, &sym.symbol);
+        if(!ok){
+            fprintf(stderr, "%2d  %-24s  0x%p\n", count-i-1, "???", array[i]);
             continue;
         }
-        BOOL linesuccess = SymGetLineFromAddr64(Dbg_process, (DWORD64)array[i], &disp, &line);
-        if(linesuccess){
-            fprintf(stderr, "%2d  %-24s  at %s:%-4lu\n",
-                count-i-1, sym.symbol.Name,
-                line.FileName, line.LineNumber);
-        }
-        else {
-            fprintf(stderr, "%2d  %-24s  0x%p\n",
-                count-i-1, sym.symbol.Name,
-                (void*)sym.symbol.Address);
-        }
+        ok = SymGetLineFromAddr64(Dbg_process, (DWORD64)array[i], &disp, &line);
+        if(ok)
+            fprintf(stderr, "%2d  %-24s  at %s:%-4lu\n", count-i-1, sym.symbol.Name, line.FileName, line.LineNumber);
+        else
+            fprintf(stderr, "%2d  %-24s  0x%p\n", count-i-1, sym.symbol.Name, (void*)sym.symbol.Address);
     }
+    LOCK_T_unlock(&Dbg_lock);
 }
 
 

@@ -5031,6 +5031,28 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
     if((CcTarget)CC_TARGET_NATIVE != t.target)
         goto finally;
+    Atom include_paths = env_getenv2(cpp->env, "DRC_INCLUDE_PATH", sizeof "DRC_INCLUDE_PATH" - 1);
+    if(include_paths && include_paths->length){
+        char separator = t.target == CC_TARGET_X86_64_WINDOWS ? ';' : ':';
+        const char* path = include_paths->data;
+        const char* end = path + include_paths->length;
+        do {
+            const char* next = memchr(path, separator, end - path);
+            size_t length = next ? (size_t)(next - path) : (size_t)(end - path);
+            msb_reset(&sb);
+            if(length) msb_write_str(&sb, path, length);
+            else msb_write_literal(&sb, ".");
+            if(sb.errored){
+                err = CPP_OOM_ERROR;
+                goto finally;
+            }
+            CStringView directory = msb_borrow_csv(&sb);
+            err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, directory.text);
+            if(err) goto finally;
+            if(!next) break;
+            path = next + 1;
+        } while(path <= end);
+    }
     switch(t.target){
         DRP_CASES_EXHAUSTED;
         case CC_TARGET_AARCH64_MACOS:

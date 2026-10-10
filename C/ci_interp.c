@@ -5,7 +5,7 @@
 #include <stddef.h>
 #ifdef _WIN32
 #include "../Drp/windowsheader.h"
-#include <Psapi.h>
+#include <psapi.h>
 #else
 #include <dlfcn.h>
 #if defined __GLIBC__ && !defined RTLD_DEFAULT
@@ -1999,7 +1999,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_CALL: {
             CiCallDescriptor* d = op->call.descrip;
-            char* args = (char*)frame->slots + op->call.args_slot;
+            char* args = frame->slots ? (char*)frame->slots + op->call.args_slot : ci_discard_buf;
             void* result = op->call.ret_size ? (char*)frame->slots + op->call.ret_slot : ci_discard_buf;
             if(op->call.is_indirect){
                 void (*fn)(void);
@@ -2674,7 +2674,7 @@ ci_make_flat_call_frame(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, 
     CiInterpFrame* frame = NULL;
     int err = ci_alloc_call_frame(ci, caller, func, 0, &frame);
     if(err) return err;
-    char* args = (char*)caller->slots + op->call.args_slot;
+    char* args = caller->slots ? (char*)caller->slots + op->call.args_slot : ci_discard_buf;
     if(layout->fixed_size) memcpy(frame->slots, args, layout->fixed_size);
     if(func->type->is_variadic) frame->varargs_buf = args + layout->varargs_offset;
     frame->return_buf = op->call.ret_size ? (char*)caller->slots + op->call.ret_slot : ci_discard_buf;
@@ -3966,7 +3966,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             cmd_aarg(&cmd, a);
         }
         size_t envp_size = 0;
-        void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+        void* envp = env_to_envp(cpp->env, scratch, &envp_size, NULL, 0);
         if(!envp){
             err = CI_OOM_ERROR;
             goto finally;
@@ -4544,7 +4544,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         return cpp_error(cpp, loc, "__SHELL__: requires at least one argument");
     }
     size_t envp_size = 0;
-    void* envp = env_to_envp(cpp->env, scratch, &envp_size);
+    void* envp = env_to_envp(cpp->env, scratch, &envp_size, NULL, 0);
     if(!envp){
         cmd_destroy(&cmd);
         return CI_OOM_ERROR;

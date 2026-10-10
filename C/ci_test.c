@@ -44,6 +44,11 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "calls: discarded void calls need no caller slots", __LINE__,
+            SVI("void empty(void){} empty(); empty();\n"),
+            .exit_code = -1,
+        },
+        {
             "inline: early scalar returns and caller continuation", __LINE__,
             SVI("__forceinline int choose(int x){if(x<0)return x-3;if(x==0)return 11;return x+5;}\n"
                 "__forceinline double half(double x){if(x<0)return -x;return x/2;}\n"

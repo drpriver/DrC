@@ -178,10 +178,15 @@ int main(int argc, char** argv, char** envp){
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
             cmd->is_phony = 1;
+            if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
+                cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
             if(test_files[i].needs_lffi && ffi_dll)
                 b_add_dep(ctx, cmd, ffi_dll);
-            if(test_files[i].needs_drc_path)
+            if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cmd, "--drc", cc_opt);
+                if(ctx->target.os != OS_WINDOWS && ctx->target.runner->length)
+                    b_args(ctx, cmd, "--runner", ctx->target.runner->data);
+            }
             if(!ctx->dash_dash_args.count)
                 b_args(ctx, cmd, "--multithreaded", "--time");
             else
@@ -215,6 +220,8 @@ int main(int argc, char** argv, char** envp){
                 b_add_dep(ctx, cov_cmd, ffi_dll);
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cov_cmd, "--drc", cc_cov);
+                if(ctx->target.os != OS_WINDOWS && ctx->target.runner->length)
+                    b_args(ctx, cov_cmd, "--runner", ctx->target.runner->data);
                 b_arg(ctx, cov_cmd, "--covdir");
                 b_argf(ctx, cov_cmd, "%s/drc_test_coverage", ctx->bin_dir->data);
             }
@@ -279,6 +286,8 @@ int main(int argc, char** argv, char** envp){
     {
         selfhost = b_cmd_target_prog(ctx, "selfhost", cc_opt);
         selfhost->is_phony = 1;
+        if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
+            cmd_set_envvar(&selfhost->cmd, SV("MallocNanoZone"), SV("0"));
         if(ffi_dll) b_add_dep(ctx, selfhost, ffi_dll);
         b_args(ctx, selfhost, "cc.c", "Samples/hello.c");
         if(BUILD_OS != OS_WINDOWS)
@@ -289,11 +298,16 @@ int main(int argc, char** argv, char** envp){
             Atom name = b_atomize_f(ctx, "self-%s", test_files[i].name);
             BuildTarget* cmd = b_cmd_target_prog(ctx, name->data, cc_opt);
             cmd->is_phony = 1;
+            if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
+                cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
             if(test_files[i].needs_lffi && ffi_lib)
                 b_arg(ctx, cmd, "-IFetched/libffi");
             b_arg(ctx, cmd, test_files[i].file);
-            if(test_files[i].needs_drc_path)
+            if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cmd, "--drc", cc_opt);
+                if(ctx->target.os != OS_WINDOWS && ctx->target.runner->length)
+                    b_args(ctx, cmd, "--runner", ctx->target.runner->data);
+            }
             if(!ctx->dash_dash_args.count)
                 b_args(ctx, cmd, "--multithreaded", "--time");
             else

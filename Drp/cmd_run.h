@@ -21,6 +21,10 @@
 #endif
 #endif
 
+#if !defined _WIN32 && defined __linux__ && !defined _GNU_SOURCE
+extern int posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t*, const char*);
+#endif
+
 static
 int
 cmd_wait(intptr_t* pproc_handle){
@@ -148,7 +152,7 @@ arg_needs_escape_win32(StringView arg){
 
 static
 int
-cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
+cmd_run(CmdBuilder* cmd, void*_Nullable envp, intptr_t*_Nullable proc_handle){
     if(cmd->errored) return 1;
     if(!cmd->prog.cursor) return 1;
     intptr_t hProc = -1;
@@ -179,7 +183,7 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
         #ifdef _WIN32
             STARTUPINFOA si = {.cb = sizeof si};
             PROCESS_INFORMATION pi = {0};
-            BOOL ok = CreateProcessA(prog, cmdline, NULL, NULL, 0, 0, envp, NULL, &si, &pi);
+            BOOL ok = CreateProcessA(prog, cmdline, NULL, NULL, 0, 0, envp, cmd->wd.length ? cmd->wd.text : NULL, &si, &pi);
             if(!ok){
                 printf("CreateProcessA failed: %u\n", (unsigned)GetLastError());
                 return 1;
@@ -193,6 +197,7 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
     }
     else {
         void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
+        if(!_argv) return 1;
         char** argv = _argv;
         {
             const char** pargv = _argv;
@@ -200,11 +205,17 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
                 pargv[i] = cmd->args.data[i].text;
         }
         #ifndef _WIN32
-            pid_t pid;
+            pid_t pid = -1;
             int e;
-            posix_spawn_file_actions_t* actions = NULL;
+            posix_spawn_file_actions_t actions;
             posix_spawnattr_t* attrs = NULL;
-            e = posix_spawn(&pid, cmd->prog.data, actions, attrs, argv, envp);
+            e = posix_spawn_file_actions_init(&actions);
+            if(!e){
+                if(cmd->wd.length) e = posix_spawn_file_actions_addchdir_np(&actions, cmd->wd.text);
+                if(!e) e = posix_spawn(&pid, cmd->prog.data, &actions, attrs, argv, envp);
+                posix_spawn_file_actions_destroy(&actions);
+            }
+            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
             if(e){
                 // fprintf(stderr, "posix_spawn: %s\n", strerror(e));
                 return e;
@@ -224,17 +235,20 @@ cmd_run(CmdBuilder* cmd, void* envp, intptr_t*_Nullable proc_handle){
 
 static
 int
-cmd_exec(CmdBuilder* cmd, void* envp){
-    if(cmd->errored) return 1;
+cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
+    if(cmd->errored || !cmd->prog.cursor) return 1;
     if(IS_WINDOWS){
         int err = cmd_run(cmd, envp, NULL);
         #ifdef _WIN32
         ExitProcess(err);
+        #else
+        exit(err);
         #endif
         if(err) return err;
     }
     else {
         void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
+        if(!_argv) return 1;
         char** argv = _argv;
         {
             const char** pargv = _argv;
@@ -242,8 +256,24 @@ cmd_exec(CmdBuilder* cmd, void* envp){
                 pargv[i] = cmd->args.data[i].text;
         }
         #ifndef _WIN32
+        int saved_dir = -1;
+        if(cmd->wd.length){
+            saved_dir = open(".", O_RDONLY | O_CLOEXEC);
+            if(saved_dir == -1 || chdir(cmd->wd.text)){
+                if(saved_dir != -1) close(saved_dir);
+                Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+                return -1;
+            }
+        }
         int err = execve(msb_borrow_csv(&cmd->prog).text, argv, envp);
-        if(err) return err;
+        int saved_errno = errno;
+        if(saved_dir != -1){
+            fchdir(saved_dir);
+            close(saved_dir);
+        }
+        Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+        errno = saved_errno;
+        return err;
         #else
         (void)argv;
         #endif
@@ -299,7 +329,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
             .dwFlags = STARTF_USESTDHANDLES,
         };
         PROCESS_INFORMATION pi = {0};
-        BOOL ok = CreateProcessA(msb_borrow_csv(&cmd->prog).text, cmd->cmd_line.data, NULL, NULL, TRUE, 0, envp, NULL, &si, &pi);
+        BOOL ok = CreateProcessA(msb_borrow_csv(&cmd->prog).text, cmd->cmd_line.data, NULL, NULL, TRUE, 0, envp, cmd->wd.length ? cmd->wd.text : NULL, &si, &pi);
         CloseHandle(write_handle);
         if(!ok){
             CloseHandle(read_handle);
@@ -317,6 +347,11 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         int pipefd[2];
         if(pipe(pipefd) != 0) return 1;
         void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
+        if(!_argv){
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return 1;
+        }
         char** argv = _argv;
         {
             const char** pargv = _argv;
@@ -324,22 +359,43 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
                 pargv[i] = cmd->args.data[i].text;
         }
         posix_spawn_file_actions_t actions;
-        posix_spawn_file_actions_init(&actions);
-        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-        posix_spawn_file_actions_addclose(&actions, pipefd[0]);
-        posix_spawn_file_actions_addclose(&actions, pipefd[1]);
         pid_t pid;
-        int e = posix_spawn(&pid, msb_borrow_csv(&cmd->prog).text, &actions, NULL, argv, envp);
+        int err = posix_spawn_file_actions_init(&actions);
+        if(err){
+            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            return err;
+        }
+        if(0){
+            actions_fail:
+            posix_spawn_file_actions_destroy(&actions);
+            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            return err;
+        }
+        if(cmd->wd.length) {
+            err = posix_spawn_file_actions_addchdir_np(&actions, cmd->wd.text);
+            if(err) goto actions_fail;
+        }
+        err = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+        if(err) goto actions_fail;
+        err = posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+        if(err) goto actions_fail;
+        err = posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+        if(err) goto actions_fail;
+        err = posix_spawn(&pid, msb_borrow_csv(&cmd->prog).text, &actions, NULL, argv, envp);
         posix_spawn_file_actions_destroy(&actions);
+        Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
         close(pipefd[1]);
-        if(e){
+        if(err){
             close(pipefd[0]);
-            return e;
+            return err;
         }
         hProc = (intptr_t)pid;
         FileError fe = read_file_handle(pipefd[0], a, out);
         close(pipefd[0]);
-        if(fe.errored){ ret = 1; goto wait; }
+        if(fe.errored){
+            ret = 1;
+            goto wait;
+        }
         #endif
     }
     wait:;

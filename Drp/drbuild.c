@@ -530,7 +530,7 @@ enum {
 
 static struct BuildTargetSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
-    MemberInfo members[11 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
+    MemberInfo members[12 + TARGET_SETTINGS_EXTRA_FIELDS_COUNT];
 } TI_BuildTargetSettings;
 static struct GlobalCachedSettingsInfo {
     union { TypeInfo type_info; struct { STRUCTINFO; }; };
@@ -620,6 +620,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     ctx->obj_dir = nil_atom;
     ctx->deps_dir = nil_atom;
     ctx->cwd = nil_atom;
+    ctx->target.runner = nil_atom;
     ctx->njobs = -1;
     #ifdef _WIN32
     ctx->logger.errhandle = (intptr_t)(uintptr_t)GetStdHandle(STD_ERROR_HANDLE);
@@ -868,6 +869,11 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
                     .name = b_atomize(ctx, "cc_handles_target"),
                     .type = &TI__Bool.type_info,
                     .offset = offsetof(BuildTargetSettings, cc_handles_target),
+                },
+                {
+                    .name = b_atomize(ctx, "runner"),
+                    .type = &TI_Atom.type_info,
+                    .offset = offsetof(BuildTargetSettings, runner),
                 },
                 #ifdef TARGET_SETTINGS_EXTRA_FIELDS
                     #define X(ty, field, cli, help, def) { \
@@ -1247,8 +1253,9 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     if(!ctx->target.cc || ctx->target.cc == nil_atom) ctx->target.cc = ctx->build_cc;
     {
         size_t alloc_size = 0;
-        ctx->envp = (void*)env_to_envp(&ctx->env, allocator_from_arena(&ctx->perm_aa), &alloc_size);
-        if(!ctx->envp) goto fail;
+        void* cached_envp = env_to_envp(&ctx->env, allocator_from_arena(&ctx->perm_aa), &alloc_size, NULL, 0);
+        if(!cached_envp) goto fail;
+        ctx->cached_envp = cached_envp;
     }
     {
         err = ma_push(Atom)(&ctx->build_targets, allocator_from_arena(&ctx->perm_aa), b_atomize(ctx, "all"));
@@ -1430,6 +1437,12 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .help = "Logging level.",
             .min_num = 1, .max_num = 1,
         },
+        {
+            .name = SV("--runner"),
+            .dest = BARGDEST(&ctx->target.runner),
+            .help = "Executable or wrapper for running target binaries",
+            .min_num = 1, .max_num = 1,
+        },
         #ifdef TARGET_SETTINGS_EXTRA_FIELDS
             #define X(ty, field, cli, h, def) { \
                 .name = SV(cli), \
@@ -1591,6 +1604,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             err = read_from_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
             (void)err;
             if(after_ap.cc != before_ap.cc) ctx->target.cc = after_ap.cc;
+            if(after_ap.runner != before_ap.runner) ctx->target.runner = after_ap.runner;
             if(after_ap.compiler_flavor != before_ap.compiler_flavor) ctx->target.compiler_flavor = after_ap.compiler_flavor;
             if(after_ap.os != before_ap.os) ctx->target.os = after_ap.os;
             if(after_ap.arch != before_ap.arch) ctx->target.arch = after_ap.arch;
@@ -2199,6 +2213,11 @@ b_print_command(BuildCtx* ctx, CmdBuilder* cmd){
         msb_nul_terminate(&cmd->prog);
         b_log(ctx, "%s: ", cmd->prog.data);
     }
+    if(cmd->wd.length)
+        b_log(ctx, "cd '%s'; ", cmd->wd.text);
+    MARRAY_FOR_EACH(StringView2, kv, cmd->env_override){
+        b_log(ctx, "%.*s=%.*s ", sv_p(kv->key), sv_p(kv->value));
+    }
     MARRAY_FOR_EACH(CStringView, cs, cmd->args)
         b_log(ctx, "%s ", cs->text);
     b_log(ctx, "\n");
@@ -2669,7 +2688,13 @@ b_execute_targets(BuildCtx* ctx){
                             // flush caches etc.
                             write_to_json_file(ctx, &ctx->cmd_history, &TI_AM_MA_Atom.type_info, ctx->cmd_cache_path);
                             cmd_resolve_prog_path(&tgt->cmd, &ctx->env, b_file_exists, ctx);
-                            err = cmd_exec(&tgt->cmd, ctx->envp);
+                            void* envp = ctx->cached_envp;
+                            size_t alloc_size;
+                            if(tgt->cmd.env_override.count){
+                                envp = env_to_envp(&ctx->env, allocator_from_arena(&ctx->perm_aa), &alloc_size, tgt->cmd.env_override.data, tgt->cmd.env_override.count);
+                                if(!envp) goto finally;
+                            }
+                            err = cmd_exec(&tgt->cmd, envp);
                             if(err) goto finally;
                         }
                         else {
@@ -2898,7 +2923,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
     }
     cmd_resolve_prog_path(&build->cmd, &ctx->env, b_file_exists, ctx);
     b_print_command(ctx, &build->cmd);
-    err = cmd_run(&build->cmd, ctx->envp, NULL);
+    err = cmd_run(&build->cmd, ctx->cached_envp, NULL);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "cmd failed: %d\n", err);
         b_move_file(ctx, old->data, progpath->data);
@@ -2916,7 +2941,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
     for(int i = 1; i < argc; i++)
         cmd_carg(&cmd, argv[i]);
     cmd_resolve_prog_path(&cmd, &ctx->env, b_file_exists, ctx);
-    err = cmd_exec(&cmd, ctx->envp);
+    err = cmd_exec(&cmd, ctx->cached_envp);
     return err;
 }
 
@@ -3082,6 +3107,7 @@ enum BuildCompileKind{B_COMPILE_EXE, B_COMPILE_OBJ};
 static inline
 BuildTarget*
 b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS target_os, enum BuildCompileKind kind, unsigned flags){
+    _Bool build_binary = target_os == OS_NATIVE;
     // char sep = BUILD_OS == OS_WINDOWS?'\\':'/';
     char sep = '/';
     Atom cc = ctx->target.cc;
@@ -3126,6 +3152,7 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
     Atom binary = b_atomize_f(ctx, "%s%c%s%s", kind == B_COMPILE_OBJ?ctx->obj_dir->data:ctx->bin_dir->data, sep, name, ext);
     BuildTarget* target = b_targeta(ctx, binary);
     target->is_binary = 1;
+    target->is_build_binary = build_binary;
     target->is_cmd = 1;
     target->is_compile_command = 1;
     target->compiler_flavor = flavor;
@@ -3304,7 +3331,13 @@ b_prog(BuildCtx* ctx, BuildTarget* tgt, BuildTarget* prog){
     if(!tgt->is_cmd) b_debug_break(ctx, "tgt is not command");
     if(!prog->is_binary) b_debug_break(ctx, "prog is not a binary");
     b_add_dep(ctx, tgt, prog);
-    cmd_prog(&tgt->cmd, (CStringView){prog->name->length, prog->name->data});
+    Atom runner = ctx->target.runner;
+    if(runner && runner->length && !prog->is_build_binary){
+        cmd_prog(&tgt->cmd, AT_to_CSV(runner));
+        cmd_aarg(&tgt->cmd, prog->name);
+    }
+    else
+        cmd_prog(&tgt->cmd, AT_to_CSV(prog->name));
 }
 
 static
@@ -3610,7 +3643,19 @@ b_run_cmd_async(BuildCtx* ctx, BuildTarget* target, CmdBuilder* cmd){
     BuildJob* job = &ctx->jobs.jobs[ctx->jobs.count];
     cmd_resolve_prog_path(cmd, &ctx->env, b_file_exists, ctx);
     b_print_command(ctx, cmd);
-    int err = cmd_run(cmd, ctx->envp, proc);
+    void* envp = ctx->cached_envp;
+    size_t alloc_size = 0;
+    Allocator scratch = allocator_from_arena(&ctx->tmp_aa);
+    if(cmd->env_override.count){
+        envp = env_to_envp(&ctx->env, scratch, &alloc_size, cmd->env_override.data, cmd->env_override.count);
+        if(!envp){
+            b_loglvl(BLOG_ERROR, ctx, "OOM running command: ");
+            b_print_command(ctx, cmd);
+            return 1;
+        }
+    }
+    int err = cmd_run(cmd, envp, proc);
+    if(alloc_size) Allocator_free(scratch, envp, alloc_size);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
         b_print_command(ctx, cmd);
@@ -3630,7 +3675,19 @@ int
 b_run_cmd_sync(BuildCtx* ctx, CmdBuilder* cmd){
     cmd_resolve_prog_path(cmd, &ctx->env, b_file_exists, ctx);
     b_print_command(ctx, cmd);
-    int err = cmd_run(cmd, ctx->envp, NULL);
+    void* envp = ctx->cached_envp;
+    size_t alloc_size = 0;
+    Allocator scratch = allocator_from_arena(&ctx->tmp_aa);
+    if(cmd->env_override.count){
+        envp = env_to_envp(&ctx->env, scratch, &alloc_size, cmd->env_override.data, cmd->env_override.count);
+        if(!envp){
+            b_loglvl(BLOG_ERROR, ctx, "OOM running command: ");
+            b_print_command(ctx, cmd);
+            return 1;
+        }
+    }
+    int err = cmd_run(cmd, envp, NULL);
+    if(alloc_size) Allocator_free(scratch, envp, alloc_size);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
         b_print_command(ctx, cmd);

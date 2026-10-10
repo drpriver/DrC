@@ -351,6 +351,7 @@ typedef struct BuildTargetSettings BuildTargetSettings;
 // Settings for configuring the final target program.
 struct BuildTargetSettings {
     Atom cc;
+    Atom runner; // optional command to run cross-compiled program
     enum CompilerFlavor compiler_flavor;
     enum OS os;
     enum ArchFam arch;
@@ -395,7 +396,7 @@ struct BuildCtx {
     Environment env;
     ArenaAllocator tmp_aa;
     ArenaAllocator perm_aa;
-    void* envp;
+    void* cached_envp;
     Marray(Atom) build_targets;
     Marray(Atom) dash_dash_args; // args after the "--", for exec commands
 
@@ -491,10 +492,11 @@ struct BuildTarget {
     union {
         struct {
             // is a command that should be output to compile_commands.json
-            _Bool is_compile_command: 1;
-            _Bool is_coro: 1;
+            uint8_t is_compile_command: 1;
+            uint8_t is_coro: 1;
             uint8_t visit_state: 2;
-            uint8_t _pad: 4;
+            uint8_t is_build_binary: 1;
+            uint8_t _pad: 3;
         };
         uint8_t _bits2;
     };

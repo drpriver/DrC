@@ -31,11 +31,7 @@
 #pragma warning(disable:5105)   // macro producing defined is UB lmao
 #include <intrin.h>
 #endif
-#ifdef __MINGW32__
 #include <windows.h>
-#else
-#include <Windows.h>
-#endif
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif

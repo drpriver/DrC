@@ -115,7 +115,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     MStringBuilder log_sb = {.allocator=a};
     MsbLogger logger_ = {0};
     Logger* logger = msb_logger(&logger_, &log_sb);
-    AtomTable at = {};
+    AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     int err;
     CppPreprocessor cpp = {
