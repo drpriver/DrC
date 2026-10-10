@@ -68,7 +68,6 @@ LOG_PRINTF(3, 4) static MStringBuilder* cc_start_error(CcParser*, SrcLoc, const 
 static int cc_finish_error(CcParser*, SrcLoc);
 LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
-LOG_PRINTF(3, 4) static void cc_debug(CcParser*, SrcLoc, const char*, ...);
 #define cc_unimplemented(p, loc, msg) (cc_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CC_UNIMPLEMENTED_ERROR)
 #define cc_unreachable(p, loc, msg) (cc_error(p, loc, "UNREACHABLE code reached: " msg " at %s:%d", __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
 #define cc_ice(cc, loc, fmt, ...) (cc_error(p, loc, "ICE: " fmt " at %s:%d", __VA_ARGS__, __FILE__, __LINE__), CC_UNREACHABLE_ERROR)
@@ -7907,15 +7906,6 @@ cc_info(CcParser* p, SrcLoc loc, const char* fmt, ...){
     va_list va;
     va_start(va, fmt);
     cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "info", fmt, va);
-    va_end(va);
-}
-
-static
-void
-cc_debug(CcParser* p, SrcLoc loc, const char* fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    cpp_msg(&p->cpp, loc, LOG_PRINT_ERROR, "debug", fmt, va);
     va_end(va);
 }
 

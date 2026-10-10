@@ -169,20 +169,6 @@ ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
 #define ci_unimplemented(p, loc, msg) (ci_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CI_UNIMPLEMENTED_ERROR)
 #define ci_unreachable(p, loc, msg) (ci_error(p, loc, "UNREACHABLE: " msg " at %s:%d", __FILE__, __LINE__), CI_UNREACHABLE_ERROR)
 
-static
-void
-ci_log_native_signature_error(CiInterpreter* ci, SrcLoc loc, const char* operation, CcFunc*_Nullable func, CcFunction* type){
-    MStringBuilder* signature;
-    if(func){
-        StringView name = func->name ? (StringView){func->name->length, func->name->data} : SV("(anonymous)");
-        signature = ci_start_error(ci, loc, "unsupported native %s signature for '%.*s': ", operation, sv_p(name));
-    }
-    else
-        signature = ci_start_error(ci, loc, "unsupported indirect native %s signature: ", operation);
-    cc_print_type(signature, (CcQualType){.bits = (uintptr_t)type});
-    ci_finish_error(ci, loc);
-}
-
 // Only use this when it is absolutely impossible, prefer ci_ice() above
 // if it could be a bug.
 #ifdef __GNUC__
@@ -468,21 +454,6 @@ ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
     return 0;
 }
 
-static
-int
-ci_atomic_check_size(CiInterpreter* ci, SrcLoc loc, uint32_t sz){
-    if(!sz || (sz & (sz - 1)))
-        return ci_error(ci, loc, "atomic operand size %u is not a power of 2", sz);
-    if(sz > ci_target(ci)->atomic_lock_free_max)
-        return ci_error(ci, loc, "atomic operand size %u exceeds target's maximum lock-free size %u", sz, ci_target(ci)->atomic_lock_free_max);
-    switch(sz){
-        case 1: case 2: case 4: case 8: case 16:
-            return 0;
-        default:
-            return ci_error(ci, loc, "unsupported atomic operand size %u", sz);
-    }
-}
-
 static inline
 uint64_t
 ci_bitfield_read(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, uint8_t bit_width){
@@ -677,7 +648,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         if(err){
             Allocator_free(al, cd, sizeof *cd);
             if(err == CI_UNIMPLEMENTED_ERROR)
-                ci_log_native_signature_error(ci, func->loc, "callback", func, func->interp_ops->native_type);
+                ci_ice(ci, func->loc, "function should've already been rejected in lowering%s", "");
             return err;
         }
         entry = nc_closure_get_fn(nc);
@@ -704,16 +675,28 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
 static
 int
 ci_type_reflect_validate(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualType qt){
-    if(op == CC_TYPE_FIELD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION)
-        return ci_error(ci, loc, "_Type.field: not a struct or union type");
-    if(op == CC_TYPE_METHOD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION)
-        return ci_error(ci, loc, "_Type.method: not a struct or union type");
-    if(op == CC_TYPE_ENUMERATOR && ccqt_kind(qt) != CC_ENUM)
-        return ci_error(ci, loc, "_Type.enumerator: not an enum type");
+    if(op == CC_TYPE_FIELD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION){
+        MStringBuilder* sb = ci_start_error(ci, loc, "_Type.field: not a struct or union type: ");
+        cc_print_type(sb, qt);
+        return ci_finish_error(ci, loc);
+    }
+    if(op == CC_TYPE_METHOD && ccqt_kind(qt) != CC_STRUCT && ccqt_kind(qt) != CC_UNION){
+        MStringBuilder* sb = ci_start_error(ci, loc, "_Type.method: not a struct or union type: ");
+        cc_print_type(sb, qt);
+        return ci_finish_error(ci, loc);
+    }
+    if(op == CC_TYPE_ENUMERATOR && ccqt_kind(qt) != CC_ENUM){
+        MStringBuilder* sb = ci_start_error(ci, loc, "_Type.enumerator: not an enum type: ");
+        cc_print_type(sb, qt);
+        return ci_finish_error(ci, loc);
+    }
     if(op == CC_TYPE_PARAM_TYPE){
         if(ccqt_kind(qt) == CC_POINTER) qt = ccqt_as_ptr(qt)->pointee;
-        if(ccqt_kind(qt) != CC_FUNCTION)
-            return ci_error(ci, loc, "_Type.param_type: not a function type");
+        if(ccqt_kind(qt) != CC_FUNCTION){
+            MStringBuilder* sb = ci_start_error(ci, loc, "_Type.param_type: not a function type: ");
+            cc_print_type(sb, qt);
+            return ci_finish_error(ci, loc);
+        }
     }
     return 0;
 }
@@ -838,8 +821,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_POINTEE: {
-            if(ccqt_kind(qt) != CC_POINTER)
-                return ci_error(ci, loc, "_Type.pointee: not a pointer type");
+            if(ccqt_kind(qt) != CC_POINTER){
+                MStringBuilder* sb = ci_start_error(ci, loc, "_Type.pointee: not a pointer type: ");
+                cc_print_type(sb, qt);
+                return ci_finish_error(ci, loc);
+            }
             CcPointer* ptr = ccqt_as_ptr(qt);
             *(uintptr_t*)result = ptr->pointee.bits;
             return 0;
@@ -888,8 +874,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_COUNT: {
-            if(ccqt_kind(qt) != CC_ARRAY)
-                return ci_error(ci, loc, "_Type.count: not an array type");
+            if(ccqt_kind(qt) != CC_ARRAY){
+                MStringBuilder* sb = ci_start_error(ci, loc, "_Type.count: not an array type: ");
+                cc_print_type(sb, qt);
+                return ci_finish_error(ci, loc);
+            }
             *(size_t*)result = ccqt_as_array(qt)->length;
             return 0;
         }

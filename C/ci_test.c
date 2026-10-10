@@ -17301,7 +17301,7 @@ TestFunction(test_interpreter_diagnostics){
                 "  return 0;\n"
                 "}\n"
                 "return fail(100);\n"),
-            SVI("(test):5:4: error: _Type.field: not a struct or union type\n"),
+            SVI("(test):5:4: error: _Type.field: not a struct or union type: int\n"),
         },
         {
             "reflection: module validation before name", __LINE__,
@@ -17358,25 +17358,37 @@ TestFunction(test_interpreter_diagnostics){
             "reflection: field validation before index", __LINE__,
             SVI("_Type t = int;\n"
                 "t.field((__builtin_trap(), 0));\n"),
-            SVI("(test):2:2: error: _Type.field: not a struct or union type\n"),
+            SVI("(test):2:2: error: _Type.field: not a struct or union type: int\n"),
         },
         {
             "reflection: enumerator validation before index", __LINE__,
             SVI("_Type t = int;\n"
                 "t.enumerator((__builtin_trap(), 0));\n"),
-            SVI("(test):2:2: error: _Type.enumerator: not an enum type\n"),
+            SVI("(test):2:2: error: _Type.enumerator: not an enum type: int\n"),
+        },
+        {
+            "reflection: pointee validation before index", __LINE__,
+            SVI("_Type t = int;\n"
+                "_Type q = t.pointee;\n"),
+            SVI("(test):2:12: error: _Type.pointee: not a pointer type: int\n"),
+        },
+        {
+            "reflection: pointee validation before index", __LINE__,
+            SVI("_Type t = int;\n"
+                "size_t s = t.count;\n"),
+            SVI("(test):2:13: error: _Type.count: not an array type: int\n"),
         },
         {
             "reflection: param validation before index", __LINE__,
             SVI("_Type t = int;\n"
                 "t.param_type((__builtin_trap(), 0));\n"),
-            SVI("(test):2:2: error: _Type.param_type: not a function type\n"),
+            SVI("(test):2:2: error: _Type.param_type: not a function type: int\n"),
         },
         {
             "reflection: field validation before name", __LINE__,
             SVI("_Type t = int;\n"
                 "t.field((__builtin_trap(), \"x\"[:1]));\n"),
-            SVI("(test):2:2: error: _Type.field: not a struct or union type\n"),
+            SVI("(test):2:2: error: _Type.field: not a struct or union type: int\n"),
         },
         {
             "reflection: missing field name", __LINE__,
@@ -17438,7 +17450,7 @@ TestFunction(test_interpreter_diagnostics){
             "reflection: method validation before name", __LINE__,
             SVI("_Type t = int;\n"
                 "t.method((__builtin_trap(), \"get\"));\n"),
-            SVI("(test):2:2: error: _Type.method: not a struct or union type\n"),
+            SVI("(test):2:2: error: _Type.method: not a struct or union type: int\n"),
         },
         {
             "reflection: methods requires aggregate", __LINE__,
