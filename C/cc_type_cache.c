@@ -34,7 +34,7 @@ cctc_hash_array(CcQualType element, size_t length, uint32_t flags){ // flags: bi
 
 static inline
 uint32_t
-cctc_hash_function(CcQualType return_type, const CcQualType* params, uint32_t param_count, uint32_t flags){
+cctc_hash_function(CcQualType return_type, const CcQualType*_Null_unspecified params, uint32_t param_count, uint32_t flags){
     uint64_t buf[2] = { return_type.bits, (uint64_t)param_count | ((uint64_t)flags << 32)};
     uint32_t h = hash_align8(buf, sizeof buf);
     if(param_count)
@@ -261,12 +261,13 @@ cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t len
 
 static inline
 _Bool
-cctc_function_eq(const CcFunction* a, CcQualType return_type, const CcQualType* params, uint32_t param_count, uint32_t fixed_param_count, _Bool is_variadic, _Bool no_prototype){
+cctc_function_eq(const CcFunction* a, CcQualType return_type, const CcQualType*_Null_unspecified params, uint32_t param_count, uint32_t fixed_param_count, _Bool is_variadic, _Bool no_prototype){
     if(a->return_type.bits != return_type.bits) return 0;
     if(a->param_count != param_count) return 0;
     if(a->fixed_param_count != fixed_param_count) return 0;
     if(a->is_variadic != (uint32_t)is_variadic) return 0;
     if(a->no_prototype != (uint32_t)no_prototype) return 0;
+    if(!param_count) return 1;
     return memcmp(a->params, params, sizeof *params * param_count) == 0;
 }
 
@@ -291,7 +292,7 @@ cctc_rebuild_functions(CcTypeTable* t){
 warn_unused
 static inline
 CcFunction* _Nullable
-cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, const CcQualType* params, uint32_t param_count, uint32_t fixed_param_count, _Bool is_variadic, _Bool no_prototype){
+cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, const CcQualType*_Null_unspecified params, uint32_t param_count, uint32_t fixed_param_count, _Bool is_variadic, _Bool no_prototype){
     if(fixed_param_count > CC_MAX_PARAMS || fixed_param_count > param_count) return NULL;
     CcTypeTable* t = &cache->functions;
     uint32_t flags = (uint32_t)is_variadic | ((uint32_t)no_prototype << 1) | (fixed_param_count << 2);

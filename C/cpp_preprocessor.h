@@ -269,7 +269,7 @@ static void cpp_discard_all_input(CppPreprocessor* cpp);
 typedef int CppPragmaFn(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified toks, size_t ntoks);
 static int cpp_register_pragma(CppPreprocessor* cpp, StringView name, CppPragmaFn* fn, void* _Null_unspecified ctx);
 struct CppPragma {
-    void* ctx;
+    void*_Null_unspecified ctx;
     CppPragmaFn* fn;
 };
 
