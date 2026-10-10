@@ -417,7 +417,7 @@ union CiIEE754Float128 {
 #pragma clang diagnostic pop
 #endif
 
-#if defined __LDBL_MANT_DIG__ && __LDBL_MANT_DIG__ == 64 && __LDBL_MAX_EXP__ == 16384
+#if !defined(_WIN32) && defined __LDBL_MANT_DIG__ && __LDBL_MANT_DIG__ == 64 && __LDBL_MAX_EXP__ == 16384
 #define CI_NATIVE_FLOAT80 1
 typedef long double CiFloat80;
 #else
