@@ -87,8 +87,55 @@ free_bt(BacktraceArray* a){
 #include <execinfo.h>
 #include <stdlib.h>
 
+#if defined __linux__
+#include <pthread.h>
+#include <stdint.h>
+#if !defined _GNU_SOURCE
+extern int pthread_getattr_np(pthread_t, pthread_attr_t* _Nonnull);
+#endif
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#endif
+
+#if defined __linux__ && (defined __x86_64__ || defined __aarch64__) && !defined __DRC__
+static dbg_noinline
+int
+dbg_capture_stack(void* _Nonnull* _Nonnull array, int capacity){
+    static _Thread_local uintptr_t stack_low, stack_high;
+    if(!stack_high){
+        pthread_attr_t attr;
+        void* base;
+        size_t size;
+        if(pthread_getattr_np(pthread_self(), &attr)) return 0;
+        int err = pthread_attr_getstack(&attr, &base, &size);
+        pthread_attr_destroy(&attr);
+        if(err || size < 2*sizeof(uintptr_t)) return 0;
+        stack_low = (uintptr_t)base;
+        stack_high = stack_low + size;
+        if(stack_high < stack_low){
+            stack_high = 0;
+            return 0;
+        }
+    }
+    uintptr_t fp = (uintptr_t)__builtin_frame_address(0);
+    int n = 0;
+    while(n < capacity){
+        if(fp < stack_low || fp > stack_high - 2*sizeof(uintptr_t) || fp % sizeof(uintptr_t))
+            break;
+        const uintptr_t* frame = (const uintptr_t*)fp;
+        uintptr_t caller = frame[0],
+                  pc = frame[1];
+        if(!pc) break;
+        array[n++] = (void*)pc;
+        if(caller <= fp) break;
+        fp = caller;
+    }
+    return n;
+}
+#else
+#define dbg_capture_stack backtrace
 #endif
 
 static
@@ -97,7 +144,7 @@ BacktraceArray*
 get_bt(void){
     enum {bufflen=256};
     void* array[bufflen];
-    int n = backtrace(array, bufflen);
+    int n = dbg_capture_stack(array, bufflen);
     BacktraceArray* result = malloc(sizeof(*result)+n*sizeof(void*));
     result->count = n;
     __builtin_memcpy(result->symbols, array, n*sizeof(void*));
@@ -108,7 +155,8 @@ static
 dbg_noinline
 void
 dump_bt(BacktraceArray*_Nonnull a){
-    backtrace_symbols_fd(a->symbols+4, a->count-5, 2);
+    if(a->count > 4)
+        backtrace_symbols_fd(a->symbols+4, a->count-4, 2);
 }
 
 static
@@ -117,8 +165,8 @@ void
 bt(void){
     enum {bufflen=256};
     void* array[bufflen];
-    int n = backtrace(array, bufflen);
-    backtrace_symbols_fd(array, n-2, 2);
+    int n = dbg_capture_stack(array, bufflen);
+    backtrace_symbols_fd(array, n, 2);
 }
 #elif defined(_WIN32)
 

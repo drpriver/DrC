@@ -3178,6 +3178,7 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
                 }
             }
             if(debug) b_args(ctx, target, "-g");
+            if(target_os == OS_LINUX) b_args(ctx, target, "-fno-omit-frame-pointer");
             goto fallthrough2;
         case COMPILER_CLANG_CL:
             fallthrough2:;
