@@ -165,7 +165,7 @@ nc_abi_type(const CcTargetConfig* tc, CcQualType qt, NcAbiRole role, NcAbiType* 
                 if(nc_abi_windows(target) && t.size > 8)
                     t.mode = NC_ABI_INDIRECT;
                 else
-                    nc_abi_piece(&t, 0, t.size, nc_abi_windows(target) && t.size < 4? NC_ABI_GP : NC_ABI_FP);
+                    nc_abi_piece(&t, 0, t.size, NC_ABI_FP);
                 goto finish;
             }
             break;
