@@ -211,7 +211,14 @@ cmd_run(CmdBuilder* cmd, void*_Nullable envp, intptr_t*_Nullable proc_handle){
             posix_spawnattr_t* attrs = NULL;
             e = posix_spawn_file_actions_init(&actions);
             if(!e){
+                #if defined __APPLE__
+                #pragma GCC diagnostic push
+                #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+                #endif
                 if(cmd->wd.length) e = posix_spawn_file_actions_addchdir_np(&actions, cmd->wd.text);
+                #if defined __APPLE__
+                #pragma GCC diagnostic pop
+                #endif
                 if(!e) e = posix_spawn(&pid, cmd->prog.data, &actions, attrs, argv, envp);
                 posix_spawn_file_actions_destroy(&actions);
             }
@@ -372,7 +379,14 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
             return err;
         }
         if(cmd->wd.length) {
+            #if defined __APPLE__
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            #endif
             err = posix_spawn_file_actions_addchdir_np(&actions, cmd->wd.text);
+            #if defined __APPLE__
+            #pragma GCC diagnostic pop
+            #endif
             if(err) goto actions_fail;
         }
         err = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
