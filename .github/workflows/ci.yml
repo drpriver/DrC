@@ -1,6 +1,8 @@
 permissions:
   contents: read
 name: CI
+env:
+  ASAN_OPTIONS: detect_leaks=0
 on:
   push:
   pull_request:
@@ -9,6 +11,8 @@ on:
 jobs:
   linux:
     if: github.event_name != 'schedule'
+    env:
+      ASAN_OPTIONS: detect_leaks=0:disable_coredump=0:abort_on_error=1
     strategy:
       fail-fast: false
       matrix:
@@ -17,10 +21,47 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - run: sudo apt-get install -y libffi-dev
+      - run: sudo apt-get install -y libffi-dev gdb
       - run: ${{ matrix.cc }} --version
-      - run: ${{ matrix.cc }} build.c -o build && ./build -b Bin
-      - run: ./build test -- --multithreaded --force-colors
+      - name: Build Linux binaries
+        id: linux-build
+        run: ${{ matrix.cc }} build.c -o build && ./build --sanitize -b Bin
+      - name: Test sanitized Linux binaries
+        id: linux-sanitized
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cores/sanitized" diagnostics/sanitized
+          sudo sysctl -w "kernel.core_pattern=$RUNNER_TEMP/cores/sanitized/%p.%E"
+          ulimit -c unlimited
+          ./build test --sanitize -- --multithreaded --force-colors 2>&1 | tee diagnostics/sanitized/tests.log
+      - name: Collect sanitized Linux crash evidence
+        if: failure() && steps.linux-sanitized.outcome == 'failure'
+        timeout-minutes: 10
+        env:
+          CI_COMPILER: ${{ matrix.cc }}
+        run: bash .github/scripts/linux-crash-diagnostics.sh sanitized
+      - name: Test unsanitized Linux binaries
+        id: linux-unsanitized
+        if: ${{ !cancelled() && steps.linux-build.outcome == 'success' }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cores/unsanitized" diagnostics/unsanitized
+          sudo sysctl -w "kernel.core_pattern=$RUNNER_TEMP/cores/unsanitized/%p.%E"
+          ulimit -c unlimited
+          ./build test --no-sanitize -- --multithreaded --force-colors 2>&1 | tee diagnostics/unsanitized/tests.log
+      - name: Collect unsanitized Linux crash evidence
+        if: failure() && steps.linux-unsanitized.outcome == 'failure'
+        timeout-minutes: 10
+        env:
+          CI_COMPILER: ${{ matrix.cc }}
+        run: bash .github/scripts/linux-crash-diagnostics.sh unsanitized
+      - name: Upload Linux crash evidence
+        if: ${{ !cancelled() && (steps.linux-sanitized.outcome == 'failure' || steps.linux-unsanitized.outcome == 'failure') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-crash-evidence-${{ matrix.os }}-${{ matrix.cc }}
+          path: diagnostics/
+          retention-days: 7
   windows-x64:
     if: github.event_name != 'schedule'
     strategy:
@@ -39,7 +80,84 @@ jobs:
         shell: cmd
     steps:
       - uses: actions/checkout@v6
-      - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
+      - name: Build sanitized Windows binaries
+        id: windows-sanitized-build
+        run: |
+          call "${{ matrix.vcvars }}" || exit /b 1
+          cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe || exit /b 1
+          build.exe --sanitize -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} || exit /b 1
+          if not "${{ matrix.cc }}"=="cl" for /f "delims=" %%R in ('clang -print-resource-dir') do echo clang-resource-dir=%%R>>"%GITHUB_OUTPUT%"
+      - name: Copy matching Clang ASan runtime
+        if: matrix.cc != 'cl'
+        shell: pwsh
+        env:
+          CLANG_RESOURCE_DIR: ${{ steps.windows-sanitized-build.outputs.clang-resource-dir }}
+        run: |
+          if (!$env:CLANG_RESOURCE_DIR) {
+            throw 'Clang did not report its resource directory'
+          }
+          $runtime = Get-ChildItem -LiteralPath $env:CLANG_RESOURCE_DIR -Recurse -File -Filter clang_rt.asan_dynamic-x86_64.dll |
+            Select-Object -First 1
+          if (!$runtime) {
+            throw "Cannot find Clang's ASan runtime under $env:CLANG_RESOURCE_DIR"
+          }
+          Write-Host "Using ASan runtime: $($runtime.FullName)"
+          Copy-Item -LiteralPath $runtime.FullName -Destination Bin/bin/ -Force
+      - name: Test sanitized Windows binaries
+        id: windows-sanitized
+        run: call "${{ matrix.vcvars }}" && build.exe test -- --multithreaded --force-colors
+      - name: Install Windows debugging tools if needed
+        if: failure() && steps.windows-sanitized.outcome == 'failure' && matrix.cc != 'cl'
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          $debuggers = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64"
+          if (!(Test-Path "$debuggers\cdb.exe") -or !(Test-Path "$debuggers\gflags.exe")) {
+            $installer = Join-Path $env:RUNNER_TEMP 'winsdksetup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2382321' -OutFile $installer
+            $setup = Start-Process $installer -ArgumentList '/quiet /norestart /features OptionId.WindowsDesktopDebuggers' -Wait -PassThru
+            if ($setup.ExitCode -notin @(0, 3010)) {
+              throw "Debugging tools installer exited with $($setup.ExitCode)"
+            }
+          }
+          if (!(Test-Path "$debuggers\cdb.exe") -or !(Test-Path "$debuggers\gflags.exe")) {
+            throw 'Windows debugging tools are unavailable'
+          }
+      - name: Diagnose Windows Clang loader failure
+        if: failure() && steps.windows-sanitized.outcome == 'failure' && matrix.cc != 'cl'
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          call "${{ matrix.vcvars }}" || exit /b 1
+          if not exist Bin\diagnostics mkdir Bin\diagnostics
+          where clang > Bin\diagnostics\toolchain.txt 2>&1
+          where clang-cl >> Bin\diagnostics\toolchain.txt 2>&1
+          ${{ matrix.cc }} --version >> Bin\diagnostics\toolchain.txt 2>&1
+          clang -print-runtime-dir >> Bin\diagnostics\toolchain.txt 2>&1
+          echo PATH=%PATH% >> Bin\diagnostics\toolchain.txt
+          echo LIB=%LIB% >> Bin\diagnostics\toolchain.txt
+          where clang_rt.asan_dynamic-x86_64.dll >> Bin\diagnostics\toolchain.txt 2>&1
+          for /f "delims=" %%D in ('clang -print-runtime-dir') do dir "%%D\clang_rt.asan*.dll" >> Bin\diagnostics\toolchain.txt 2>&1
+          for %%T in (cpp_test cc_lex_test) do if exist Bin\bin\%%T.exe dumpbin /imports Bin\bin\%%T.exe > Bin\diagnostics\%%T-imports.txt 2>&1
+          set "DBG=%ProgramFiles(x86)%\Windows Kits\10\Debuggers\x64"
+          if not exist "%DBG%\cdb.exe" (
+            echo Windows debugging tools are unavailable > Bin\diagnostics\loader-error.txt
+            exit /b 1
+          )
+          for %%T in (cpp_test cc_lex_test) do if exist Bin\bin\%%T.exe (
+            "%DBG%\gflags.exe" /i %%T.exe +sls
+            "%DBG%\cdb.exe" -logo Bin\diagnostics\%%T-loader.log -c "g; lm; q" Bin\bin\%%T.exe --multithreaded --force-colors > Bin\diagnostics\%%T-debugger.txt 2>&1
+            "%DBG%\gflags.exe" /i %%T.exe -sls
+          )
+      - name: Upload Windows Clang diagnostics
+        if: always() && steps.windows-sanitized.outcome == 'failure' && matrix.cc != 'cl'
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-clang-diagnostics-${{ matrix.os }}-${{ matrix.cc }}
+          path: Bin/diagnostics/
+          if-no-files-found: warn
+      - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe --no-sanitize -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
   macos:
     if: github.event_name != 'schedule'
     strategy:
@@ -49,8 +167,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - run: cc build.c -o build && ./build -b Bin
-      - run: ./build test -- --multithreaded --force-colors
+      - run: cc build.c -o build && ./build --sanitize -b Bin
+      - run: ./build test --sanitize -- --multithreaded --force-colors
+      - run: ./build test --no-sanitize -- --multithreaded --force-colors
   coverage:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest

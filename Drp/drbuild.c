@@ -3204,6 +3204,10 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
                 }
             }
             if(flavor == COMPILER_CLANG_CL){
+                if(debug){
+                    b_arg(ctx, target, "/Zi");
+                    if(kind == B_COMPILE_EXE) b_linkarg(ctx, target, "/DEBUG");
+                }
                 if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
                 b_argf(ctx, target, "/Fo%s/%s.obj", ctx->obj_dir->data, name);
                 b_args(ctx, target, "/clang:-MMD", "/clang:-MP");
@@ -3227,6 +3231,10 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
                 if(kind == B_COMPILE_EXE) b_arg(ctx, target, "/DEBUG");
                 b_argf(ctx, target, "/Fd:%s/%s.pdb", ctx->bin_dir->data, name);
             }
+            if(sanitize){
+                b_arg(ctx, target, "/fsanitize=address");
+                if(kind == B_COMPILE_EXE) b_linkarg(ctx, target, "/INCREMENTAL:NO");
+            }
             if(optimize) b_args(ctx, target, "/O2");
             if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
             b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->obj_dir->data, name);
@@ -3237,9 +3245,23 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
     b_argf(ctx, target, "-I%s", ctx->gen_dir->data);
     b_src_inp(ctx, target, src_dep);
     if(kind == B_COMPILE_OBJ) return target;
+    if(target_os == OS_WINDOWS && sanitize){
+        // Asan can cause correct recursive functions to exhaust the stack.
+        // Increase the main-thread stack reserve size.
+        if(flavor == COMPILER_CL || flavor == COMPILER_CLANG_CL){
+            b_linkarg(ctx, target, "/STACK:16777216");
+            if(flavor == COMPILER_CLANG_CL) b_linkarg(ctx, target, "/INCREMENTAL:NO");
+        }
+        else if(flavor == COMPILER_CLANG)
+            b_linkarg(ctx, target, "-Wl,/STACK:16777216");
+        else if(flavor == COMPILER_GCC_MINGW)
+            b_linkarg(ctx, target, "-Wl,--stack,16777216");
+    }
     if(target_os == OS_LINUX){
         b_linkarg(ctx, target, "-lm");
         b_linkarg(ctx, target, "-lpthread");
+        if(flavor == COMPILER_CLANG && sanitize)
+            b_linkarg(ctx, target, "--rtlib=compiler-rt");
         if(flavor == COMPILER_GCC) b_linkarg(ctx, target, "-latomic");
     }
     if(target_os == OS_WINDOWS && flavor == COMPILER_GCC_MINGW){
