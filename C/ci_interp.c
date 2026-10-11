@@ -2518,7 +2518,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 return ci_error(ci, op->loc, "va_start used in non-variadic function");
             switch(op->va_start_.target){
             case CC_TARGET_AARCH64_MACOS:
-            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_X86_64_WINDOWS_MSVC:
+            case CC_TARGET_X86_64_WINDOWS_MINGW:
             case CC_TARGET_TEST: {
                 void* va_ptr = frame->varargs_buf;
                 CI_INLINE_MEMCPY(ap_ptr, &va_ptr, sizeof(void*));
@@ -2558,7 +2559,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             void* dest = (char*)frame->slots + op->va_arg_.slot;
             switch(op->va_arg_.target){
             case CC_TARGET_AARCH64_MACOS:
-            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_X86_64_WINDOWS_MSVC:
+            case CC_TARGET_X86_64_WINDOWS_MINGW:
             case CC_TARGET_TEST: {
                 void* cur;
                 CI_INLINE_MEMCPY(&cur, ap_ptr, sizeof(void*));

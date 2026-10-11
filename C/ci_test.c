@@ -14170,17 +14170,37 @@ TestFunction(test_cross_target){
                 "_Static_assert(x && (1.L ? 1 : 0));\n"
                 "volatile long double y=x;\n"
                 "return y-0x1p100L==1.L;"), .exit_code=1, .target=CC_TARGET_AARCH64_LINUX},
+        {"mingw target types and long double precision", __LINE__,
+            SVI("_Static_assert(sizeof(long)==4 && sizeof(void*)==8);\n"
+                "_Static_assert(sizeof(long double)==16 && alignof(long double)==16);\n"
+                "_Static_assert(sizeof(__INT_FAST16_TYPE__)==2);\n"
+                "_Static_assert(__INT_FAST16_MAX__==32767 && __INT_FAST16_WIDTH__==16);\n"
+                "_Static_assert(__MINGW32__ && __MINGW64__);\n"
+                "constexpr long double x=0x1p60L+1.L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MINGW},
+        {"mingw va_list copy", __LINE__,
+            SVI("int f(int n,...){\n"
+                "__builtin_va_list ap, copy;\n"
+                "__builtin_va_start(ap,n); __builtin_va_copy(copy,ap);\n"
+                "int x=__builtin_va_arg(ap,int);\n"
+                "int y=__builtin_va_arg(copy,int);\n"
+                "double z=__builtin_va_arg(copy,double);\n"
+                "__builtin_va_end(ap); __builtin_va_end(copy);\n"
+                "return x+y+(int)z; }\n"
+                "return f(2,20,2.0);"), .exit_code=42, .target=CC_TARGET_X86_64_WINDOWS_MINGW},
         {"wide long double binary64 runtime", __LINE__,
             SVI("long double x=0x1p50L+1.L;\n"
                 "volatile long double y=x;\n"
-                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS},
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MSVC},
         {"wide long double binary64 constexpr", __LINE__,
             SVI("constexpr long double x=0x1p50L+1.L;\n"
                 "_Static_assert(x-0x1p50L==1.L);\n"
                 "_Static_assert(!(-0.L));\n"
                 "_Static_assert(x && (1.L ? 1 : 0));\n"
                 "volatile long double y=x;\n"
-                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS},
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MSVC},
         {
             "constexpr wide conversions", __LINE__,
             SVI("constexpr long double a=42;\n"
@@ -14278,12 +14298,12 @@ TestFunction(test_cross_target){
             SVI("_Any a=(long)0x100000001ull;\n"
                 "return sizeof(_Any)==16 && alignof(_Any)==8\n"
                 " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS,
+            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "fold: windows long truncates", __LINE__,
             SVI("return (long)0x100000001ULL == 1;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS,
+            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "fold: linux long preserves high bits", __LINE__,
@@ -14378,7 +14398,7 @@ TestFunction(test_cross_target){
             "windows sizeof long", __LINE__,
             SVI("return sizeof(long);\n"),
             .exit_code = 4,
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "linux sizeof long", __LINE__,
@@ -14391,7 +14411,7 @@ TestFunction(test_cross_target){
             SVI("typedef struct { char c; long x; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // 1 + 3 pad + 4
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "linux struct layout with long", __LINE__,
@@ -14419,7 +14439,7 @@ TestFunction(test_cross_target){
             SVI("unsigned long x = 0xFFFFFFFF;\n"
                "return (x + 1) == 0;\n"),
             .exit_code = 1, // 32-bit wraps
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "linux long no overflow", __LINE__,
@@ -14613,7 +14633,7 @@ TestFunction(test_cross_target){
             "windows sizeof size_t", __LINE__,
             SVI("return sizeof(__SIZE_TYPE__);\n"),
             .exit_code = 8, // unsigned long long is 8
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         // MSVC bitfield: different types don't share storage units
         {
@@ -14621,7 +14641,7 @@ TestFunction(test_cross_target){
             SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // short unit (2) + pad(2) + int unit (4)
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "sysv bitfield layout", __LINE__,
@@ -14644,7 +14664,7 @@ TestFunction(test_cross_target){
                "typedef struct { enum A a: 4; unsigned int b: 1; enum B c: 1; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 4, // all have uint32_t underlying, pack together
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "msvc bitfield diff size enum starts new unit", __LINE__,
@@ -14652,7 +14672,7 @@ TestFunction(test_cross_target){
                "typedef struct { enum A a: 4; unsigned int b: 1; } S;\n"
                "return sizeof(S);\n"),
             .exit_code = 8, // short(2) + pad(2) + int(4)
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "alignof", __LINE__,
@@ -14682,7 +14702,7 @@ TestFunction(test_cross_target){
             "alignof", __LINE__,
             SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
             .exit_code = 8,
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         // abi smoke tests... don't have a direct way to test them in the cross interpreter
         {
@@ -14715,7 +14735,7 @@ TestFunction(test_cross_target){
                 "return 12;\n"
             ),
             .exit_code = 12,
-            .target = CC_TARGET_X86_64_WINDOWS,
+            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         },
         {
             "mac arm64", __LINE__,

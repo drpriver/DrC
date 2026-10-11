@@ -4662,7 +4662,8 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         uint32_t n;
         switch(ci_target(ci)->target){
         case CC_TARGET_AARCH64_MACOS:
-        case CC_TARGET_X86_64_WINDOWS:
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
         case CC_TARGET_TEST:
             n = sizeof(void*);
             break;

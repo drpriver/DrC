@@ -4,8 +4,8 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 
-#ifdef _WIN32
-// libffi incorrectly assumes gnu-flavored compiler = GNU ABI
+#if defined _WIN32 && !defined __MINGW32__
+// Use the MSVC ABI with clang targeting the Microsoft CRT.
 #pragma push_macro("__GNUC__")
 #undef __GNUC__
 #endif
@@ -23,7 +23,7 @@
 #include <ffi.h>
 #endif
 #endif
-#ifdef _WIN32
+#if defined _WIN32 && !defined __MINGW32__
 #pragma pop_macro("__GNUC__")
 #endif
 
@@ -177,7 +177,8 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     return NC_NO_ERROR;
                 }
                 break;
-            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_X86_64_WINDOWS_MSVC:
+            case CC_TARGET_X86_64_WINDOWS_MINGW:
             case CC_TARGET_TEST:
             case CC_TARGET_COUNT:
                 break;
@@ -266,7 +267,8 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     return NC_NO_ERROR;
                 }
                 break;
-            case CC_TARGET_X86_64_WINDOWS:
+            case CC_TARGET_X86_64_WINDOWS_MSVC:
+            case CC_TARGET_X86_64_WINDOWS_MINGW:
             case CC_TARGET_TEST:
             case CC_TARGET_COUNT:
                 break;

@@ -5033,7 +5033,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
         goto finally;
     Atom include_paths = env_getenv2(cpp->env, "DRC_INCLUDE_PATH", sizeof "DRC_INCLUDE_PATH" - 1);
     if(include_paths && include_paths->length){
-        char separator = t.target == CC_TARGET_X86_64_WINDOWS ? ';' : ':';
+        char separator = t.os == CC_OS_WINDOWS ? ';' : ':';
         const char* path = include_paths->data;
         const char* end = path + include_paths->length;
         do {
@@ -5114,7 +5114,8 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
                 if(err) goto finally;
             }
             break;
-        case CC_TARGET_X86_64_WINDOWS: {
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW: {
             // Use the INCLUDE env var (set by vcvarsall.bat / Developer Command Prompt).
             // It's a semicolon-separated list of include paths.
             Atom include_env = env_getenv2(cpp->env, "INCLUDE", 7);

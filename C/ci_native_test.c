@@ -65,6 +65,8 @@ static float test_fadd(float a, float b){ return a + b; }
 static double test_mixed_int_double(int a, double b, int c, double d){ return a + b + c + d; }
 static float test_float_identity(float x){ return x; }
 static double test_double_identity(double x){ return x; }
+static long double test_long_double_identity(long double x){ return x; }
+static long double test_long_double_callback(long double (*f)(long double), long double x){ return f(x); }
 static int test_double_to_int(double x){ return (int)x; }
 static double test_int_to_double(int x){ return (double)x; }
 
@@ -415,6 +417,23 @@ TestFunction(test_interop){
                "return d2i(7.9);\n"),
             {{SV("d2i"), (void*)test_double_to_int},},
             .exit_code = 7,
+        },
+        {
+            "long double native argument and return", __LINE__,
+            SV("long double identity(long double);\n"
+               "long double x=__LDBL_MANT_DIG__>53 ? 0x1p60L : 0x1p50L;\n"
+               "return identity(x+1.L)-x==1.L;\n"),
+            {{SV("identity"), (void*)test_long_double_identity}},
+            .exit_code = 1,
+        },
+        {
+            "long double native callback", __LINE__,
+            SV("long double apply(long double(*)(long double),long double);\n"
+               "long double inc(long double x){return x+1.L;}\n"
+               "long double x=__LDBL_MANT_DIG__>53 ? 0x1p60L : 0x1p50L;\n"
+               "return apply(inc,x)-x==1.L;\n"),
+            {{SV("apply"), (void*)test_long_double_callback}},
+            .exit_code = 1,
         },
         {
             "int to double", __LINE__,

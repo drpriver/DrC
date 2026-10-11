@@ -16,7 +16,8 @@ enum CcTarget TYPED_ENUM(int) {
     CC_TARGET_AARCH64_LINUX,
     CC_TARGET_X86_64_MACOS,
     CC_TARGET_AARCH64_MACOS,
-    CC_TARGET_X86_64_WINDOWS,
+    CC_TARGET_X86_64_WINDOWS_MSVC,
+    CC_TARGET_X86_64_WINDOWS_MINGW,
     CC_TARGET_TEST, // stable target for tests, not a real platform
     CC_TARGET_COUNT,
 };
@@ -38,12 +39,13 @@ enum CcArch TYPED_ENUM(int){
 TYPEDEF_ENUM(CcArch, int);
 
 static const StringView cc_target_names[CC_TARGET_COUNT] = {
-    [CC_TARGET_X86_64_LINUX]   = SVI("x86_64-linux"),
-    [CC_TARGET_AARCH64_LINUX]  = SVI("aarch64-linux"),
-    [CC_TARGET_X86_64_MACOS]   = SVI("x86_64-macos"),
-    [CC_TARGET_AARCH64_MACOS]  = SVI("aarch64-macos"),
-    [CC_TARGET_X86_64_WINDOWS] = SVI("x86_64-windows"),
-    [CC_TARGET_TEST]           = SVI("test"),
+    [CC_TARGET_X86_64_LINUX]         = SVI("x86_64-linux"),
+    [CC_TARGET_AARCH64_LINUX]        = SVI("aarch64-linux"),
+    [CC_TARGET_X86_64_MACOS]         = SVI("x86_64-macos"),
+    [CC_TARGET_AARCH64_MACOS]        = SVI("aarch64-macos"),
+    [CC_TARGET_X86_64_WINDOWS_MSVC]  = SVI("x86_64-windows-msvc"),
+    [CC_TARGET_X86_64_WINDOWS_MINGW] = SVI("x86_64-windows-mingw"),
+    [CC_TARGET_TEST]                 = SVI("test"),
 };
 
 enum CcBitfieldABI TYPED_ENUM(uint8_t) {
@@ -496,9 +498,9 @@ cc_target_aarch64_macos(void){
 }
 
 static inline CcTargetConfig
-cc_target_x86_64_windows(void){
+cc_target_x86_64_windows_msvc(void){
     return (CcTargetConfig){
-        .target = CC_TARGET_X86_64_WINDOWS,
+        .target = CC_TARGET_X86_64_WINDOWS_MSVC,
         .long_double_format = CC_LONG_DOUBLE_BINARY64,
         .os = CC_OS_WINDOWS,
         .arch = CC_ARCH_x86_64,
@@ -583,6 +585,112 @@ cc_target_x86_64_windows(void){
         .platform_macros = SV(
             "_WIN32\0"
             "_WIN64\0"
+            "__x86_64__\0"
+            "__x86_64\0"
+            "__amd64__\0"
+            "__amd64\0"
+            "_M_X64\0"
+            "_M_AMD64\0"
+            "__cdecl=\0"
+            "__stdcall=\0"
+            "__fastcall=\0"
+            "__vectorcall=\0"
+            "__thiscall=\0"
+            "__unaligned=\0"
+        ),
+    };
+}
+
+static inline CcTargetConfig
+cc_target_x86_64_windows_mingw(void){
+    return (CcTargetConfig){
+        .target = CC_TARGET_X86_64_WINDOWS_MINGW,
+        .long_double_format = CC_LONG_DOUBLE_X87,
+        .os = CC_OS_WINDOWS,
+        .arch = CC_ARCH_x86_64,
+        .bitfield_abi = CC_BITFIELD_MSVC,
+        .sizeof_ = {
+            [CCBT_void]                = 1,
+            [CCBT_bool]                = 1,
+            [CCBT_char]                = 1,
+            [CCBT_signed_char]         = 1,
+            [CCBT_unsigned_char]       = 1,
+            [CCBT_short]               = 2,
+            [CCBT_unsigned_short]      = 2,
+            [CCBT_int]                 = 4,
+            [CCBT_unsigned]            = 4,
+            [CCBT_long]                = 4,
+            [CCBT_unsigned_long]       = 4,
+            [CCBT_long_long]           = 8,
+            [CCBT_unsigned_long_long]  = 8,
+            [CCBT_int128]              = 16,
+            [CCBT_unsigned_int128]     = 16,
+            [CCBT_float16]             = 2,
+            [CCBT_float]               = 4,
+            [CCBT_double]              = 8,
+            [CCBT_long_double]         = 16,
+            [CCBT_float128]            = 16,
+            [CCBT_float_complex]       = 8,
+            [CCBT_double_complex]      = 16,
+            [CCBT_long_double_complex] = 32,
+            [CCBT_nullptr_t]           = 8,
+            [CCBT__Type]               = 8,
+            [CCBT__Any]                = 16,
+        },
+        .alignof_ = {
+            [CCBT_void]                = 1,
+            [CCBT_bool]                = 1,
+            [CCBT_char]                = 1,
+            [CCBT_signed_char]         = 1,
+            [CCBT_unsigned_char]       = 1,
+            [CCBT_short]               = 2,
+            [CCBT_unsigned_short]      = 2,
+            [CCBT_int]                 = 4,
+            [CCBT_unsigned]            = 4,
+            [CCBT_long]                = 4,
+            [CCBT_unsigned_long]       = 4,
+            [CCBT_long_long]           = 8,
+            [CCBT_unsigned_long_long]  = 8,
+            [CCBT_int128]              = 16,
+            [CCBT_unsigned_int128]     = 16,
+            [CCBT_float16]             = 2,
+            [CCBT_float]               = 4,
+            [CCBT_double]              = 8,
+            [CCBT_long_double]         = 16,
+            [CCBT_float128]            = 16,
+            [CCBT_float_complex]       = 4,
+            [CCBT_double_complex]      = 8,
+            [CCBT_long_double_complex] = 16,
+            [CCBT_nullptr_t]           = 8,
+            [CCBT__Type]               = 8,
+            [CCBT__Any]                = 8,
+        },
+        .size_type    = CCBT_unsigned_long_long,
+        .ptrdiff_type = CCBT_long_long,
+        .max_align_type = CCBT_long_double,
+        .wchar_type   = CCBT_unsigned_short,
+        .char16_type  = CCBT_unsigned_short,
+        .char32_type  = CCBT_unsigned,
+        .wint_type    = CCBT_unsigned_short,
+        .intmax_type  = CCBT_long_long,
+        .intptr_type  = CCBT_long_long,
+        .int64_type   = CCBT_long_long,
+        .sig_atomic_type = CCBT_int,
+        .int_fast8_type  = CCBT_signed_char,
+        .int_fast16_type = CCBT_short,
+        .int_fast32_type = CCBT_int,
+        .int_fast64_type = CCBT_long_long,
+        .max_align = 16,
+        .is_lp64 = 0,
+        .user_label_prefix = 0,
+        .char_is_signed = 1,
+        .atomic_lock_free_max = 16,
+        .flt_eval_method = 0,
+        .platform_macros = SV(
+            "_WIN32\0"
+            "_WIN64\0"
+            "__MINGW32__\0"
+            "__MINGW64__\0"
             "__x86_64__\0"
             "__x86_64\0"
             "__amd64__\0"
@@ -688,12 +796,13 @@ cc_target_test(void){
 
 typedef CcTargetConfig (* _Nonnull CcTargetFunc)(void);
 static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
-    [CC_TARGET_X86_64_LINUX]   = cc_target_x86_64_linux,
-    [CC_TARGET_AARCH64_LINUX]  = cc_target_aarch64_linux,
-    [CC_TARGET_X86_64_MACOS]   = cc_target_x86_64_macos,
-    [CC_TARGET_AARCH64_MACOS]  = cc_target_aarch64_macos,
-    [CC_TARGET_X86_64_WINDOWS] = cc_target_x86_64_windows,
-    [CC_TARGET_TEST]           = cc_target_test,
+    [CC_TARGET_X86_64_LINUX]         = cc_target_x86_64_linux,
+    [CC_TARGET_AARCH64_LINUX]        = cc_target_aarch64_linux,
+    [CC_TARGET_X86_64_MACOS]         = cc_target_x86_64_macos,
+    [CC_TARGET_AARCH64_MACOS]        = cc_target_aarch64_macos,
+    [CC_TARGET_X86_64_WINDOWS_MSVC]  = cc_target_x86_64_windows_msvc,
+    [CC_TARGET_X86_64_WINDOWS_MINGW] = cc_target_x86_64_windows_mingw,
+    [CC_TARGET_TEST]                 = cc_target_test,
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -704,8 +813,12 @@ static const CcTargetFunc cc_target_funcs[CC_TARGET_COUNT] = {
     enum {CC_TARGET_NATIVE = CC_TARGET_AARCH64_LINUX};
 #elif defined(__linux__) && defined(__x86_64__)
     enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_LINUX};
-#elif defined(_WIN32) && defined(_M_X64)
-    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_WINDOWS};
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    #if defined(__MINGW32__)
+    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_WINDOWS_MINGW};
+    #else
+    enum {CC_TARGET_NATIVE = CC_TARGET_X86_64_WINDOWS_MSVC};
+    #endif
 #else
     #error "Unknown native target"
 #endif

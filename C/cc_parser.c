@@ -7810,7 +7810,8 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             }
             break;
         }
-        case CC_TARGET_X86_64_WINDOWS:
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
         case CC_TARGET_TEST:
         case CC_TARGET_COUNT:
             break;
@@ -7900,7 +7901,8 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
             }
             break;
         }
-        case CC_TARGET_X86_64_WINDOWS:
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
         case CC_TARGET_TEST:
         case CC_TARGET_COUNT:
             break;
@@ -12632,7 +12634,8 @@ cc_define_builtin_types(CcParser* p){
             va_list_type = p->void_star;
             break;
         }
-        case CC_TARGET_X86_64_WINDOWS: {
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW: {
             // typedef char *__builtin_va_list
             va_list_type = p->char_star;
             break;

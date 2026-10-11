@@ -330,6 +330,9 @@ int main(int argc, char** argv, char** envp){
             { SVI("printf"), (void*)&printf, },
             { SVI("fprintf"), (void*)&fprintf, },
             { SVI("snprintf"), (void*)&snprintf, },
+            #if defined __MINGW32__
+            { SVI("vprintf"), (void*)&vprintf, },
+            #endif
             #endif
         };
         for(size_t i = 0; i < arrlen(crt_syms); i++){
