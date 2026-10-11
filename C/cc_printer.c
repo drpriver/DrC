@@ -8,6 +8,18 @@
 #pragma clang assume_nonnull begin
 #endif
 
+// Only use this when it is absolutely impossible, prefer cc_ice() above
+// if it could be a bug.
+#ifndef cc_unsafe_unreachable
+#ifdef __GNUC__
+#define cc_unsafe_unreachable() __builtin_unreachable()
+#elif defined _MSC_VER
+#define cc_unsafe_unreachable() __assume(0)
+#else
+#define cc_unsafe_unreachable() abort()
+#endif
+#endif
+
 static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_INVALID]            = "<invalid>",
     [CCBT_void]               = "void",
@@ -51,13 +63,20 @@ cc_type_needs_parens(CcQualType t){
 static
 void
 cc_print_type_pre(MStringBuilder* sb, CcQualType t){
+    if(ccqt_raw_kind(t) == CC_ALIGNED){
+        cc_print_type_pre(sb, ccqt_unaligned(t));
+        if(ccqt_kind(t) != CC_ARRAY)
+            msb_sprintf(sb, " __attribute__((aligned(%u)))", ccqt_as_aligned(t)->alignment);
+        return;
+    }
     CcTypeKind kind = ccqt_kind(t);
     switch(kind){
+        case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC:
             if(t.is_const) msb_write_literal(sb, "const ");
             if(t.is_volatile) msb_write_literal(sb, "volatile ");
             if(t.is_atomic) msb_write_literal(sb, "_Atomic ");
-            CcBasicTypeKind k = t.basic.kind;
+            CcBasicTypeKind k = ccqt_basic_kind(t);
             msb_sprintf(sb, "%s", k < CCBT_COUNT ? cc_basic_names[k] : "<bad-basic>");
             return;
         case CC_BLOCK_POINTER:
@@ -134,7 +153,14 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
 static
 void
 cc_print_type_post(MStringBuilder* sb, CcQualType t){
+    if(ccqt_raw_kind(t) == CC_ALIGNED){
+        cc_print_type_post(sb, ccqt_unaligned(t));
+        if(ccqt_kind(t) == CC_ARRAY)
+            msb_sprintf(sb, " __attribute__((aligned(%u)))", ccqt_as_aligned(t)->alignment);
+        return;
+    }
     switch(ccqt_kind(t)){
+        case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BLOCK_POINTER:
         case CC_POINTER: {
             CcPointer* p = ccqt_as_ptr(t);
@@ -153,7 +179,6 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
             CcArray* a = ccqt_as_array(t);
             if(a->is_vector){
                 msb_sprintf(sb, " __attribute__((vector_size(%u)", a->vector_size);
-                if(a->vector_alignment) msb_sprintf(sb, ", aligned(%u)", a->vector_alignment);
                 msb_write_literal(sb, "))");
             }
             else if(a->is_incomplete)
@@ -222,8 +247,9 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
     const CcTargetConfig* tgt = cc_target(p);
     SrcLoc loc = {0};
     switch(ccqt_kind(type)){
+        case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC: {
-            CcBasicTypeKind k = type.basic.kind;
+            CcBasicTypeKind k = ccqt_basic_kind(type);
             switch(k){
                 case CCBT_void:
                     msb_write_literal(sb, "void");
@@ -311,7 +337,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
         }
         case CC_ENUM: {
             CcEnum* e = ccqt_as_enum(type);
-            uint32_t sz = tgt->sizeof_[e->underlying.basic.kind];
+            uint32_t sz = tgt->sizeof_[ccqt_basic_kind(e->underlying)];
             if(!sz || sz > 16){ msb_write_literal(sb, "<invalid enum>"); return; }
             CiUint128 bits;
             ci_uint128_read(&bits, data, sz);
@@ -458,7 +484,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                     CcQualType pointee = ccqt_as_array(e->type)->element;
                     if(ccqt_is_basic(pointee)){
                         // FIXME: adhoc
-                        switch(pointee.basic.kind){
+                        switch(ccqt_basic_kind(pointee)){
                             case CCBT_char:
                             case CCBT_signed_char:
                             case CCBT_unsigned_char:
@@ -549,11 +575,11 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                     }
                 }
             }
-            else if(ccqt_is_basic(e->type) && e->type.basic.kind == CCBT__Type){
+            else if(ccqt_is_basic(e->type) && ccqt_basic_kind(e->type) == CCBT__Type){
                 cc_print_type(sb, (CcQualType){.bits = e->uinteger});
             }
-            else if(ccqt_is_basic(e->type) && ccbt_is_float(e->type.basic.kind)){
-                if(e->type.basic.kind == CCBT_float)
+            else if(ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type))){
+                if(ccqt_basic_kind(e->type) == CCBT_float)
                     msb_sprintf(sb, "%gf", (double)e->float_);
                 else
                     msb_sprintf(sb, "%g", e->double_);

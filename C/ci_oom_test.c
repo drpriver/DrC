@@ -36,6 +36,16 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("typedef int I1 __attribute__((aligned(1)));\n"
+         "typedef int I2 __attribute__((aligned(2)));\n"
+         "typedef int I4 __attribute__((aligned(4)));\n"
+         "typedef int I8 __attribute__((aligned(8)));\n"
+         "typedef int I16 __attribute__((aligned(16)));\n"
+         "typedef int J __attribute__((aligned(1)));\n"
+         "_Static_assert(typeof(I1)==typeof(J) && typeof(I1)!=typeof(I2));\n"
+         "typedef I1 A[] __attribute__((aligned(16)));\n"
+         "constexpr A a={3,5,7}; I1 f(J x); I1 f(I1 x){I16 local=x;return local+1;}\n"
+         "return a[1]==5&&f(a[0])==4&&_Alignof(typeof(a))==16;\n")},
     {__LINE__, SVI("inline int leaf(int x){return x+1;}\n"
          "__forceinline int choose(int x){switch(x){case 0:return leaf(3);case 1:return leaf(5);default:return leaf(7);}}\n"
          "int a(int x){return choose(x);}int b(int x){return choose(x)+1;}\n"

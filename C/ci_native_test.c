@@ -64,6 +64,7 @@ static double test_dadd(double a, double b){ return a + b; }
 static float test_fadd(float a, float b){ return a + b; }
 static double test_mixed_int_double(int a, double b, int c, double d){ return a + b + c + d; }
 static float test_float_identity(float x){ return x; }
+static float test_float_callback(float (*f)(float), float x){ return f(x); }
 static double test_double_identity(double x){ return x; }
 static long double test_long_double_identity(long double x){ return x; }
 static long double test_long_double_callback(long double (*f)(long double), long double x){ return f(x); }
@@ -396,6 +397,18 @@ TestFunction(test_interop){
                "return (int)mixed(1, 2.0, 3, 4.0);\n"),
             {{SV("mixed"), (void*)test_mixed_int_double},},
             .exit_code = 10,
+        },
+        {
+            "aligned typedefs: native scalar arguments, results and callbacks", __LINE__,
+            SV("typedef float F __attribute__((aligned(1)));\n"
+               "typedef int I __attribute__((aligned(32)));\n"
+               "F fid(F); I add(I,I); F callback(F (*)(F),F);\n"
+               "F local(F x){return x+1;}\n"
+               "return (int)fid(3.0f)+add(4,5)+(int)callback(local,6.0f);\n"),
+            {{SV("fid"), (void*)test_float_identity},
+             {SV("add"), (void*)test_add},
+             {SV("callback"), (void*)test_float_callback}},
+            .exit_code = 19,
         },
         {
             "float identity", __LINE__,

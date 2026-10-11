@@ -4,6 +4,7 @@
 #ifndef CI_STACK_H
 #define CI_STACK_H
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/ckdint.h"
@@ -46,39 +47,41 @@ ci_stack_rewind(CiStack* stack, CiStackMark mark){ stack->top = mark; }
 
 static
 void*_Nullable
-ci_stack_alloc(CiStack* stack, size_t size){
-    size_t rounded;
-    if(add_overflow(size ? size : 1, (size_t)15, &rounded)) return NULL;
-    rounded &= ~(size_t)15;
+ci_stack_alloc(CiStack* stack, size_t size, size_t alignment){
+    if(!alignment || (alignment & (alignment - 1))) return NULL;
     CiStackSegment* segment = stack->top.segment;
-    if(segment && rounded <= segment->capacity - stack->top.used){
-        void* result = segment->data + stack->top.used;
-        stack->top.used += rounded;
-        return result;
+    size_t used = segment ? stack->top.used : 0;
+    if(!segment) segment = stack->first;
+    if(!size && segment) return segment->data + used;
+    for(; segment; segment = segment->next, used = 0){
+        size_t padding = -(uintptr_t)(segment->data + used) & (alignment - 1);
+        size_t available = segment->capacity - used;
+        if(padding <= available && size <= available - padding){
+            size_t offset = used + padding;
+            stack->top = (CiStackMark){.segment = segment, .used = offset + size};
+            return segment->data + offset;
+        }
     }
-    // Segments after the current one are inactive and retained for reuse.
-    // Never resize a segment: native code may hold pointers into live storage.
-    segment = segment ? segment->next : stack->first;
-    while(segment && segment->capacity < rounded) segment = segment->next;
-    if(!segment){
-        size_t capacity = rounded > CI_STACK_SEGMENT_SIZE ? rounded : CI_STACK_SEGMENT_SIZE;
-        size_t allocation_size;
-        if(add_overflow(sizeof *segment, capacity, &allocation_size)) return NULL;
-        segment = Allocator_alloc(stack->allocator, allocation_size);
-        if(!segment) return NULL;
-        *segment = (CiStackSegment){.capacity = capacity};
-        if(stack->last) stack->last->next = segment;
-        else stack->first = segment;
-        stack->last = segment;
-    }
-    stack->top = (CiStackMark){.segment = segment, .used = rounded};
-    return segment->data;
+    size_t required = size;
+    if(size && add_overflow(size, alignment - 1, &required)) return NULL;
+    size_t capacity = required > CI_STACK_SEGMENT_SIZE ? required : CI_STACK_SEGMENT_SIZE;
+    size_t allocation_size;
+    if(add_overflow(sizeof *segment, capacity, &allocation_size)) return NULL;
+    segment = Allocator_alloc(stack->allocator, allocation_size);
+    if(!segment) return NULL;
+    *segment = (CiStackSegment){.capacity = capacity};
+    if(stack->last) stack->last->next = segment;
+    else stack->first = segment;
+    stack->last = segment;
+    size_t padding = size ? -(uintptr_t)segment->data & (alignment - 1) : 0;
+    stack->top = (CiStackMark){.segment = segment, .used = padding + size};
+    return segment->data + padding;
 }
 
 static
 void*_Nullable
-ci_stack_zalloc(CiStack* stack, size_t size){
-    void* result = ci_stack_alloc(stack, size);
+ci_stack_zalloc(CiStack* stack, size_t size, size_t alignment){
+    void* result = ci_stack_alloc(stack, size, alignment);
     if(result) memset(result, 0, size);
     return result;
 }

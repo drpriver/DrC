@@ -3677,6 +3677,66 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "arrays of aligned types preserve alignment and element stride", __LINE__,
+            SVI("typedef int Low __attribute__((aligned(1)));\n"
+                "Low a[3]; Low nested[2][3];\n"
+                "_Static_assert(sizeof(a)==3*sizeof(int) && _Alignof(typeof(a))==1);\n"
+                "_Static_assert(sizeof(nested)==6*sizeof(int) && _Alignof(typeof(nested))==1);\n"
+                "typedef struct {char bytes[16];} High __attribute__((aligned(8)));\n"
+                "High b[3];\n"
+                "_Static_assert(sizeof(b)==48 && _Alignof(typeof(b))==8);\n"
+                "typedef int Whole[3] __attribute__((aligned(16)));\n"
+                "Whole whole;\n"
+                "_Static_assert(sizeof(whole)==12 && _Alignof(typeof(whole))==16);\n"),
+        },
+        {
+            "aligned typedef printing distinguishes pointers and pointees", __LINE__,
+            SVI("typedef int I __attribute__((aligned(1))); I i; I* p;\n"
+                "typedef int* P __attribute__((aligned(1))); P q;\n"),
+            .vars = {
+                { SVI("i"), SVI("int __attribute__((aligned(1)))") },
+                { SVI("p"), SVI("int __attribute__((aligned(1))) *") },
+                { SVI("q"), SVI("int * __attribute__((aligned(1)))") },
+            },
+        },
+        {
+            "aligned typedefs preserve underlying layout and compatibility", __LINE__,
+            SVI("typedef float F __attribute__((aligned(1)));\n"
+                "typedef int I __attribute__((aligned(32)));\n"
+                "typedef F F2 __attribute__((aligned(2)));\n"
+                "typedef const F CF;\n"
+                "_Static_assert(sizeof(F)==sizeof(float) && _Alignof(F)==1);\n"
+                "_Static_assert(_Alignof(float)==4 && _Alignof(CF)==1 && _Alignof(F2)==2);\n"
+                "_Static_assert(sizeof(I)==sizeof(int) && _Alignof(I)==32);\n"
+                "_Static_assert(__builtin_types_compatible_p(F, float));\n"
+                "_Static_assert(__builtin_types_compatible_p(F*, float*));\n"
+                "_Static_assert(_Alignof(F*)==_Alignof(float*));\n"
+                "struct S {char c; F f;};\n"
+                "_Static_assert(sizeof(struct S)==5 && _Alignof(struct S)==1);\n"
+                "typedef struct S AS __attribute__((aligned(16)));\n"
+                "_Static_assert(sizeof(AS)==5 && _Alignof(AS)==16 && _Alignof(struct S)==1);\n"
+                "typedef union {int x; char c;} U;\n"
+                "typedef U AU __attribute__((aligned(1)));\n"
+                "_Static_assert(sizeof(AU)==sizeof(U) && _Alignof(AU)==1 && _Alignof(U)==4);\n"
+                "typedef int A[3] __attribute__((aligned(1)));\n"
+                "typedef const A CA;\n"
+                "_Static_assert(sizeof(A)==12 && _Alignof(A)==1 && _Alignof(CA)==1);\n"
+                "typedef float* P __attribute__((aligned(1)));\n"
+                "_Static_assert(sizeof(P)==sizeof(float*) && _Alignof(P)==1);\n"
+                "typedef float __attribute__((aligned(2))) F3, F4;\n"
+                "_Static_assert(_Alignof(F3)==2 && _Alignof(F4)==2);\n"
+                "typedef char CA0[] __attribute__((aligned(16)));\n"
+                "CA0 ca0=\"abc\";\n"
+                "_Static_assert(sizeof(ca0)==4 && _Alignof(__typeof__(ca0))==16);\n"
+                "typedef enum {E0=0} E;\n"
+                "typedef E EA __attribute__((aligned(1)));\n"
+                "_Static_assert(sizeof(EA)==sizeof(E) && _Alignof(EA)==1);\n"
+                "typedef int IA0[] __attribute__((aligned(16)));\n"
+                "constexpr IA0 ia0={1,2,3};\n"
+                "_Static_assert(sizeof(ia0)==12 && _Alignof(__typeof__(ia0))==16 && ia0[1]==2);\n"
+                "float identity(F f){return f+1;}\n"),
+        },
+        {
             "vector: explicit typedef alignment preserves natural type", __LINE__,
             SVI("typedef int V __attribute__((vector_size(16)));\n"
                 "typedef V U __attribute__((aligned(1)));\n"
@@ -5273,6 +5333,31 @@ TestFunction(test_parse_decls){
             .vars = {
                 { SVI("s"), SVI("struct S") },
             },
+        },
+        {
+            "enum underlying typedef alignment is ignored", __LINE__,
+            SVI("typedef unsigned int High __attribute__((aligned(32)));\n"
+                "typedef unsigned int Low __attribute__((aligned(1)));\n"
+                "enum EH : High { H = 4294967295u };\n"
+                "enum EL : Low { L = 7 };\n"
+                "_Static_assert(_Alignof(High)==32 && _Alignof(Low)==1);\n"
+                "_Static_assert(_Alignof(enum EH)==_Alignof(unsigned int));\n"
+                "_Static_assert(_Alignof(enum EL)==_Alignof(unsigned int));\n"
+                "_Static_assert(sizeof(enum EH)==sizeof(unsigned int));\n"
+                "_Static_assert(sizeof(enum EL)==sizeof(unsigned int));\n"
+                "_Static_assert(H==4294967295u && L==7);\n"),
+        },
+        {
+            "fixed enum redeclarations ignore underlying typedef alignment", __LINE__,
+            SVI("typedef unsigned int High __attribute__((aligned(32)));\n"
+                "typedef unsigned int Low __attribute__((aligned(1)));\n"
+                "enum E : High;\n"
+                "_Static_assert(_Alignof(enum E)==_Alignof(unsigned int));\n"
+                "enum E : Low;\n"
+                "enum E : unsigned int { A = 3 };\n"
+                "enum E : High;\n"
+                "enum E : Low;\n"
+                "_Static_assert(_Alignof(enum E)==_Alignof(unsigned int) && A==3);\n"),
         },
         {
             "enum with underlying type", __LINE__,
@@ -7219,6 +7304,48 @@ TestFunction(test_parse_errors){
             SVI("(test):2:19: error: array designator value out of range\n"),
         },
         {
+            "array element alignment exceeds size", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "High a[3];"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "pointer to invalid aligned array", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "High (*p)[3];"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "typedef of invalid aligned array", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "typedef High A[3];"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "aligned array parameter before decay", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "void f(High a[3]);"),
+            SVI("(test):2:8: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "invalid aligned array type name", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "_Static_assert(sizeof(High[3])>0);"),
+            SVI("(test):2:23: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "invalid aligned member array", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16)));\n"
+                "struct S { High a[3]; };"),
+            SVI("(test):2:12: error: alignment of array elements is greater than element size\n"),
+        },
+        {
+            "array element size must be a multiple of alignment", __LINE__,
+            SVI("typedef struct { char bytes[6]; } Odd __attribute__((aligned(4)));\n"
+                "Odd a[3];"),
+            SVI("(test):2:1: error: size of array element is not a multiple of its alignment\n"),
+        },
+        {
             "vector_size on non-scalar type", __LINE__,
             SVI("struct S { int a; };\n"
                "typedef struct S v4s __attribute__((vector_size(16)));"),
@@ -7238,16 +7365,6 @@ TestFunction(test_parse_errors){
             "vector_size smaller than element", __LINE__,
             SVI("typedef int v __attribute__((vector_size(2)));"),
             SVI("(test):1:1: error: vector_size is smaller than the element type\n"),
-        },
-        {
-            "aligned on typedef", __LINE__,
-            SVI("typedef int aligned_int __attribute__((aligned(16)));"),
-            SVI("(test):1:1: error: aligned attribute on non-struct/union type is not supported\n"),
-        },
-        {
-            "aligned on typedef cannot decrease alignment", __LINE__,
-            SVI("typedef int aligned_int __attribute__((aligned(1)));"),
-            SVI("(test):1:1: error: aligned attribute on non-struct/union type is not supported\n"),
         },
         {
             "vector init: excess elements", __LINE__,

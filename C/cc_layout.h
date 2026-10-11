@@ -10,7 +10,8 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static inline int
+static inline
+int
 cc_layout_array_size(uint64_t element_size, size_t length, uint32_t* out){
     uint64_t size;
     if(mul_overflow(element_size, (uint64_t)length, &size) || size > UINT32_MAX)
@@ -19,11 +20,13 @@ cc_layout_array_size(uint64_t element_size, size_t length, uint32_t* out){
     return 0;
 }
 
-static inline int
+static inline
+int
 cc_type_sizeof_complete(const CcTargetConfig* tc, CcQualType type, uint32_t* out){
     switch(ccqt_kind(type)){
+        case CC_ALIGNED: return _cc_unreachable_error;
         DRP_CASES_EXHAUSTED;
-        case CC_BASIC:    *out = tc->sizeof_[type.basic.kind]; return 0;
+        case CC_BASIC:    *out = tc->sizeof_[ccqt_basic_kind(type)]; return 0;
         case CC_POINTER: case CC_BLOCK_POINTER: case CC_FUNCTION:
             *out = tc->sizeof_[CCBT_nullptr_t]; return 0;
         case CC_SLICE:    *out = 2*tc->sizeof_[CCBT_nullptr_t]; return 0;

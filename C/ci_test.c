@@ -44,6 +44,37 @@ TestFunction(test_interpreter){
         uint32_t expect_runtime_stores;
     } testcases[] = {
         {
+            "zero-size stack allocation is not an allocation failure", __LINE__,
+            SVI("void f(void){} f(); return __builtin_alloca(0)!=0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "aggregate temporaries use power-of-two stack alignment", __LINE__,
+            SVI("struct S {long long a,b,c;};\n"
+                "struct S make(void){return (struct S){1,2,3};}\n"
+                "int sum(struct S s){return s.a+s.b+s.c;}\n"
+                "int f(void){return sum(make());} return f();\n"),
+            .exit_code = 6,
+        },
+        {
+            "aligned typedefs: unaligned fields, pointers, arithmetic and aggregates", __LINE__,
+            SVI("typedef float F __attribute__((aligned(1)));\n"
+                "typedef int I __attribute__((aligned(64)));\n"
+                "struct S {char c; F f;};\n"
+                "typedef struct S AS __attribute__((aligned(1)));\n"
+                "I global=3;\n"
+                "F add(F a,F b){return a+b;}\n"
+                "AS identity(struct S s){return s;}\n"
+                "int probe(void){struct S s={1,2.5f};F* p=&s.f;*p+=1.5f;\n"
+                "I i=7;i+=2;AS a=identity(s);struct S b=a;b=a;\n"
+                "F v[2]={3,6};F* q=v;q++;\n"
+                "return s.f==4&&add(*p,2)==6&&i==9&&b.f==4&&*q==6\n"
+                "&&q-v==1&&_Alignof(__typeof__(*p))==1&&((unsigned long long)&i%64)==0\n"
+                "&&((unsigned long long)&global%64)==0&&global==3\n"
+                "&&_Generic(*p,float:1,default:0); } return probe();\n"),
+            .exit_code = 1,
+        },
+        {
             "calls: discarded void calls need no caller slots", __LINE__,
             SVI("void empty(void){} empty(); empty();\n"),
             .exit_code = -1,
@@ -15259,7 +15290,6 @@ TestFunction(test_float_folding);
 TestFunction(test_lower_deps);
 TestFunction(test_static_blobs);
 TestFunction(test_symbolic_pointer_limits);
-
 
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR

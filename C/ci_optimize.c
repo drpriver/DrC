@@ -403,6 +403,9 @@ ci_inline_visit(CiInterpreter* ci, CcFunc* f, const CiInlineVisit*_Nullable pare
         }
         return 0;
     }
+    // Slot relocation currently assumes a 16-aligned destination frame.
+    // Keep functions with stronger local alignment in their own aligned frame.
+    if(ops->frame_alignment > 16) ops->inline_blocked = 1;
     ops->inline_state = CI_INLINE_VISITING;
     CiInlineVisit visit = {.func=f, .parent=parent};
     int err = 0;

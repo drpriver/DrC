@@ -157,6 +157,16 @@ ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
 #define ci_unimplemented(p, loc, msg) (ci_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CI_UNIMPLEMENTED_ERROR)
 #define ci_unreachable(p, loc, msg) (ci_error(p, loc, "UNREACHABLE: " msg " at %s:%d", __FILE__, __LINE__), CI_UNREACHABLE_ERROR)
 
+// Only use this when it is absolutely impossible, prefer ci_ice() above
+// if it could be a bug.
+#ifdef __GNUC__
+#define ci_unsafe_unreachable() __builtin_unreachable()
+#elif defined _MSC_VER
+#define ci_unsafe_unreachable() __assume(0)
+#else
+#define ci_unsafe_unreachable() abort()
+#endif
+
 static inline
 uint64_t
 ci_read_uint(const void* buf, uint32_t sz){
@@ -366,18 +376,21 @@ ci_frame_stack(CiInterpreter* ci, CiInterpFrame*_Nullable frame, CiStack*_Nullab
 
 static
 int
-ci_new_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, size_t data_size, CiInterpFrame*_Nullable*_Nonnull out){
-    size_t allocation_size;
-    if(add_overflow(sizeof(CiInterpFrame), data_size, &allocation_size)) return CI_OOM_ERROR;
+ci_new_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, size_t data_size, uint32_t alignment, CiInterpFrame*_Nullable*_Nonnull out){
     CiStack* stack;
     int err = ci_frame_stack(ci, caller, &stack);
     if(err) return err;
     CiStackMark mark = ci_stack_mark(stack);
-    CiInterpFrame* frame = ci_stack_alloc(stack, allocation_size);
+    CiInterpFrame* frame = ci_stack_alloc(stack, sizeof *frame, _Alignof(CiInterpFrame));
     if(!frame) return CI_OOM_ERROR;
+    void* slots = ci_stack_alloc(stack, data_size, alignment > 16 ? alignment : 16);
+    if(!slots){
+        ci_stack_rewind(stack, mark);
+        return CI_OOM_ERROR;
+    }
     *frame = (CiInterpFrame){
         .parent = caller, .stack = stack, .stack_mark = mark,
-        .slots = frame + 1, .data_length = data_size,
+        .slots = slots, .data_length = data_size,
     };
     if(ci->poison_frame_slots) memset(frame->slots, 0xCC, data_size);
     *out = frame;
@@ -664,15 +677,15 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_IS_INTEGER: {
             CcQualType st = qt;
             while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind);
+            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(ccqt_basic_kind(st));
             return 0;
         }
         case CC_TYPE_IS_FLOAT: {
-            *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(qt.basic.kind);
+            *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(ccqt_basic_kind(qt));
             return 0;
         }
         case CC_TYPE_IS_ARITHMETIC: {
-            *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(qt.basic.kind)) || ccqt_kind(qt) == CC_ENUM;
+            *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(ccqt_basic_kind(qt))) || ccqt_kind(qt) == CC_ENUM;
             return 0;
         }
         case CC_TYPE_IS_POINTER: {
@@ -726,7 +739,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_IS_SIGNED: {
             CcQualType st = qt;
             while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(st.basic.kind) && !ccbt_is_unsigned(st.basic.kind, !ci_target(ci)->char_is_signed);
+            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(ccqt_basic_kind(st)) && !ccbt_is_unsigned(ccqt_basic_kind(st), !ci_target(ci)->char_is_signed);
             return 0;
         }
         case CC_TYPE_SIZEOF: {
@@ -758,6 +771,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_IS_INCOMPLETE: {
             CcTypeKind k = ccqt_kind(qt);
             switch(k){
+                case CC_ALIGNED: ci_unsafe_unreachable();
                 DRP_CASES_EXHAUSTED;
                 case CC_STRUCT:
                     *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
@@ -801,6 +815,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_LOC:{
             SrcLoc* out = result;
             switch(ccqt_kind(qt)){
+                case CC_ALIGNED: ci_unsafe_unreachable();
                 DRP_CASES_EXHAUSTED;
                 case CC_ENUM:
                     *out = ccqt_as_enum(qt)->loc;
@@ -1075,7 +1090,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             if(result != ci_discard_buf && sizeof ret > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
             CiInterpFrame* module_frame;
-            err = ci_new_frame(ci, frame, module->slot_size, &module_frame);
+            err = ci_new_frame(ci, frame, module->slot_size, 16, &module_frame);
             if(err) return err;
             module_frame->ops = module->ops.data;
             module_frame->op_count = module->ops.count;
@@ -2467,7 +2482,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CiStack* stack;
             int err = ci_frame_stack(ci, frame, &stack);
             if(err) return err;
-            void* ptr = ci_stack_zalloc(stack, sz);
+            void* ptr = ci_stack_zalloc(stack, sz, 16);
             if(!ptr) return CI_OOM_ERROR;
             CI_INLINE_MEMCPY(dest, &ptr, sizeof dest);
             frame->pc++;
@@ -2656,12 +2671,12 @@ ci_alloc_call_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* f
     size_t data_size;
     if(add_overflow((size_t)func->frame_size, varargs_size, &data_size)) return CI_OOM_ERROR;
     CiInterpFrame* frame;
-    int err = ci_new_frame(ci, caller, data_size, &frame);
+    int err = ci_new_frame(ci, caller, data_size, func->interp_ops->frame_alignment, &frame);
     if(err) return err;
     frame->name = func->name;
     frame->ops = func->interp_ops->code.data;
     frame->op_count = func->interp_ops->code.count;
-    frame->varargs_buf = func->type->is_variadic ? (char*)(frame + 1) + func->frame_size : NULL;
+    frame->varargs_buf = func->type->is_variadic ? (char*)frame->slots + func->frame_size : NULL;
     *out = frame;
     return 0;
 }
@@ -3430,8 +3445,20 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
                     uint32_t sz;
                     err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
                     if(err) goto cleanup;
-                    var->interp_val = Allocator_zalloc(al, sz ? sz : 1);
-                    if(!var->interp_val){ err = CI_OOM_ERROR; goto cleanup; }
+                    uint32_t alignment;
+                    err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &alignment);
+                    if(err) goto cleanup;
+                    if(var->alignment > alignment) alignment = var->alignment;
+                    if(!alignment) alignment = 1;
+                    // FIXME: Allocator abstraction needs to take an alignment
+                    size_t allocation_size;
+                    if(add_overflow((size_t)(sz ? sz : 1), (size_t)alignment - 1, &allocation_size)){
+                        err = CI_OOM_ERROR;
+                        goto cleanup;
+                    }
+                    void* storage = Allocator_zalloc(al, allocation_size);
+                    if(!storage){ err = CI_OOM_ERROR; goto cleanup; }
+                    var->interp_val = (void*)(((uintptr_t)storage + alignment - 1) & ~(uintptr_t)(alignment - 1));
                 }
             }
             if(var->thread_local_ && !var->tls_slot){
@@ -4180,8 +4207,9 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     int tok_type = CPP_NUMBER;
     retry:;
     switch(ccqt_kind(rt)){
+        case CC_ALIGNED: ci_unsafe_unreachable();
         case CC_BASIC:
-            switch(rt.basic.kind){
+            switch(ccqt_basic_kind(rt)){
                 case CCBT_nullptr_t:
                     a = AT_ATOMIZE(cpp->at, "nullptr");
                     tok_type = CPP_IDENTIFIER;
@@ -4278,7 +4306,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                 max_slen = ccqt_as_array(ptr->pointee)->length;
                 goto handle_string;
             }
-            if(ccqt_is_basic(ptr->pointee) && ptr->pointee.basic.kind == CCBT_char){
+            if(ccqt_is_basic(ptr->pointee) && ccqt_basic_kind(ptr->pointee) == CCBT_char){
                 handle_string:;
                 // string literal
                 const char* s = *(const char**)result;
@@ -4654,7 +4682,8 @@ ci_run_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, c
     if(err) return err;
     frame.stack_mark = ci_stack_mark(frame.stack);
     if(code->frame_size){
-        frame.slots = ci_stack_alloc(frame.stack, code->frame_size);
+        uint32_t alignment = code->frame_alignment > 16 ? code->frame_alignment : 16;
+        frame.slots = ci_stack_alloc(frame.stack, code->frame_size, alignment);
         if(!frame.slots) return CI_OOM_ERROR;
         if(ci->poison_frame_slots) memset(frame.slots, 0xCC, code->frame_size);
     }

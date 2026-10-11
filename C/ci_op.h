@@ -590,6 +590,7 @@ TYPEDEF_ENUM(CiInlineState, uint8_t);
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
     Marray(CiOp) code;
+    uint32_t frame_alignment;
     CiInlineState inline_state; // 0: unvisited, 1: visiting, 2: prepared for execution
     _Bool inline_blocked; // Recursive cycle or an operation requiring its own frame.
 };

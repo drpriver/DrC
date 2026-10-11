@@ -47,6 +47,17 @@ enum {
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+// Only use this when it is absolutely impossible, prefer an unreachable error
+// if it could be a bug.
+#ifndef nc_unsafe_unreachable
+#ifdef __GNUC__
+#define nc_unsafe_unreachable() __builtin_unreachable()
+#elif defined _MSC_VER
+#define nc_unsafe_unreachable() __assume(0)
+#else
+#define nc_unsafe_unreachable() abort()
+#endif
+#endif
 
 #ifndef NO_NATIVE_CALL
 
@@ -74,6 +85,7 @@ static
 int
 cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
+        case CC_ALIGNED: nc_unsafe_unreachable();
         case CC_SLICE:
             return cctype_integer_ffi(a, sizeof(CiRtSlice), _Alignof(CiRtSlice), out);
         case CC_BLOCK_POINTER:
@@ -281,7 +293,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
             }
         }
         case CC_BASIC:
-            switch(t.basic.kind){
+            switch(ccqt_basic_kind(t)){
                 case CCBT_void:
                     *out = &ffi_type_void;
                     return NC_NO_ERROR;

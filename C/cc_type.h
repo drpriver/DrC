@@ -32,6 +32,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_ARRAY,
     CC_BLOCK_POINTER,
     CC_SLICE,
+    CC_ALIGNED,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -88,15 +89,21 @@ struct CcQualType {
 };
 #define CCQT_NONE (CcQualType){0}
 
-static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
+static inline CcQualType ccqt_unaligned(CcQualType t);
+static inline
+CcTypeKind
+ccqt_raw_kind(CcQualType t){
+    if(t.ptr < CCBT_COUNT) return CC_BASIC;
+    return (CcTypeKind)(*(uint32_t*)(t.bits & ~(uintptr_t)7) & 0xf);
+}
+static inline void* _ccqt_to_type_ptr(CcQualType t){ return (void*)(ccqt_unaligned(t).bits & ~(uintptr_t)7); }
 
-static inline _Bool ccqt_is_basic(CcQualType t) { return t.ptr < CCBT_COUNT; }
+static inline _Bool ccqt_is_basic(CcQualType t) { return ccqt_unaligned(t).ptr < CCBT_COUNT; }
 
 static
 inline
 CcTypeKind ccqt_kind(CcQualType t) {
-    if (ccqt_is_basic(t)) return CC_BASIC;
-    return (CcTypeKind)(*(uint32_t*)_ccqt_to_type_ptr(t) & 0xf);
+    return ccqt_raw_kind(ccqt_unaligned(t));
 }
 
 typedef struct CcPointer CcPointer;
@@ -139,8 +146,7 @@ struct CC_ALIGN(8) CcArray {
             uint32_t is_vla:        1;
             uint32_t is_incomplete: 1;
             uint32_t is_vector:     1;
-            uint32_t vector_alignment: 16; // explicit alignment in bytes, 0 means default
-            uint32_t _padding:      8;
+            uint32_t _padding:      24;
         };
     };
     uint32_t vector_size; // in bytes
@@ -308,6 +314,31 @@ struct CC_ALIGN(8) CcEnum {
 };
 _Static_assert(_Alignof(CcEnum)==8, "");
 
+typedef struct CcAligned CcAligned;
+struct CC_ALIGN(8) CcAligned {
+    union {
+        uint32_t _bits;
+        struct {
+            CcTypeKind kind: 4;
+            uint32_t _padding: 28;
+        };
+    };
+    uint32_t alignment;
+    CcQualType underlying;
+};
+_Static_assert(_Alignof(CcAligned)==8, "");
+
+static inline
+CcQualType
+ccqt_unaligned(CcQualType t){
+    while(ccqt_raw_kind(t) == CC_ALIGNED){
+        CcQualType underlying = ((CcAligned*)(t.bits & ~(uintptr_t)7))->underlying;
+        underlying.quals |= t.quals;
+        t = underlying;
+    }
+    return t;
+}
+static inline CcBasicTypeKind ccqt_basic_kind(CcQualType t){ return ccqt_unaligned(t).basic.kind; }
 
 static inline
 _Bool
@@ -507,7 +538,7 @@ static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || (k == CC_BASIC && t.basic.kind == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
+    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
 }
 
 static inline
@@ -523,8 +554,9 @@ static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_p
 static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcAligned*  ccqt_as_aligned (CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
 
-static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && t.basic.kind == bt;}
+static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && ccqt_basic_kind(t) == bt;}
 static inline
 _Bool
 ccqt_is_bool(CcQualType t){
@@ -537,14 +569,14 @@ _Bool
 ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    return ccqt_is_basic(t) && ccbt_is_unsigned(t.basic.kind, unsigned_char);
+    return ccqt_is_basic(t) && ccbt_is_unsigned(ccqt_basic_kind(t), unsigned_char);
 }
 static inline
 _Bool
 ccqt_is_integer(CcQualType t){
     while(ccqt_kind(t) == CC_ENUM)
         t = ccqt_as_enum(t)->underlying;
-    return ccqt_is_basic(t) && ccbt_is_integer(t.basic.kind);
+    return ccqt_is_basic(t) && ccbt_is_integer(ccqt_basic_kind(t));
 }
 #undef CC_ALIGN
 
