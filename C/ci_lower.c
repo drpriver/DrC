@@ -163,6 +163,8 @@ static int ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
 static int ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static _Bool ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out);
 static int ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size);
+static int ci_lower_atomic_operand(CiInterpreter*, CiLowerCtx*, const CcExpr*, CiLowerVal*, uint32_t, SrcLoc);
+static int ci_emit_copy(CiLowerCtx*, uint32_t dst, uint32_t src, uint32_t size, SrcLoc);
 static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size, _Bool is_ptr, uint32_t elem_sz, _Bool op_unsigned, _Bool is_float, CiFaluOp fop);
 static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
@@ -1223,6 +1225,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                 if(err) return err;
                 CiLowerVal v;
                 err = ci_lower_expr(ci, ctx, rhs, dest, &v);
+                if(err) return err;
+                err = ci_lower_atomic_operand(ci, ctx, rhs, &v, size, e->loc);
                 if(err) return err;
                 CiOp* op;
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -3488,7 +3492,14 @@ ci_armw_op_for(CcExprKind kind, CiAtomicRmwOp* out){
     }
 }
 
-// Load of an _Atomic lvalue in value context; plain accesses are seq_cst.
+static
+int
+ci_lower_atomic_slot(CiLowerCtx* ctx, uint32_t size, uint32_t* slot){
+    if(size > ctx->frame_alignment) ctx->frame_alignment = size;
+    if((*slot & (size - 1)) == 0) return 0;
+    return ci_alloc_slot(ctx, size, size, slot);
+}
+
 static
 int
 ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out, uint32_t size){
@@ -3499,6 +3510,9 @@ ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     CiLowerAddr a;
     err = ci_lower_addr(ci, ctx, e, 0, &a); // access
     if(err) return err;
+    uint32_t slot = dest;
+    err = ci_lower_atomic_slot(ctx, size, &slot);
+    if(err) return err;
     CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
@@ -3506,13 +3520,17 @@ ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
         .atomic_load = {
             .kind = CI_OP_ATOMIC_LOAD,
             .memorder = CC_MO_SEQ_CST,
-            .slot = dest,
+            .slot = slot,
             .slot_size = size,
             .src = a.slot,
             .offset = a.disp,
             .loc = e->loc,
         }
     };
+    if(slot != dest){
+        err = ci_emit_copy(ctx, dest, slot, size, e->loc);
+        if(err) return err;
+    }
     ctx->temp = temp;
     out->slot = dest;
     return 0;
@@ -3522,7 +3540,13 @@ static
 int
 ci_lower_atomic_operand(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* ve, CiLowerVal* v, uint32_t sz, SrcLoc loc){
     (void)ci;
-    if(v->size == sz) return 0;
+    if(v->size == sz){
+        uint32_t src = v->slot;
+        int err = ci_lower_atomic_slot(ctx, sz, &v->slot);
+        if(err) return err;
+        if(v->slot == src) return 0;
+        return ci_emit_copy(ctx, v->slot, src, sz, loc);
+    }
     int err;
     uint32_t conv;
     err = ci_alloc_slot(ctx, sz, sz, &conv);
@@ -3782,6 +3806,10 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     CiLowerVal pv;
     err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &pv);
     if(err) return err;
+    if(out && out->size == sz){
+        err = ci_lower_atomic_slot(ctx, sz, &dest);
+        if(err) return err;
+    }
     switch(aop){
         case CC_ATOMIC_LOAD_N:{
             uint32_t slot = dest;
@@ -4341,6 +4369,10 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
         case CC_ATOMIC_THREAD_FENCE:
         case CC_ATOMIC_SIGNAL_FENCE:
             break; // handled above
+    }
+    if(out && dest != out->slot){
+        err = ci_emit_copy(ctx, out->slot, dest, sz, e->loc);
+        if(err) return err;
     }
     ctx->temp = temp;
     return 0;

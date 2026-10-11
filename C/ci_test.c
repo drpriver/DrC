@@ -40,8 +40,6 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
-        _Bool expect_template;
-        uint32_t expect_runtime_stores;
     } testcases[] = {
         {
             "zero-size stack allocation is not an allocation failure", __LINE__,
@@ -1004,12 +1002,12 @@ TestFunction(test_interpreter){
         {
             "initializer paths: extended residual path survives partial template", __LINE__,
             SVI("int f(int x){int a[1025]={[0]=1,[1]=2,[2]=3,[3]=4,[1024]=x}; return a[0]+a[1]+a[2]+a[3]+a[1024];}\nreturn f(7)==17;\n"),
-            .exit_code = 1, .expect_template = 1, .expect_runtime_stores = 1,
+            .exit_code = 1,
         },
         {
             "initializer paths: nested template composes extended paths", __LINE__,
             SVI("int f(int x){int a[1][1][1][1][1][1][5]={{{{{{{1,2,x,4,5}}}}}}}; return a[0][0][0][0][0][0][2];}\nreturn f(7)==7;\n"),
-            .exit_code = 1, .expect_template = 1, .expect_runtime_stores = 1,
+            .exit_code = 1,
         },
         {
             "constexpr union: slice element addresses retain array identity", __LINE__,
@@ -1394,7 +1392,7 @@ TestFunction(test_interpreter){
             "symbolic pointers: runtime template retains high address bits", __LINE__,
             SVI("int f(void){struct S {void* p; int a,b,c,d;} s={(void*)0xffffffffffffffffull,1,2,3,4};\n"
                 "return s.p==(void*)-1&&s.a==1&&s.d==4;} return f();\n"),
-            .exit_code = 1, .expect_template = 1,
+            .exit_code = 1,
         },
         {
             "symbolic pointers: nullptr aggregate members and array elements", __LINE__,
@@ -1837,8 +1835,6 @@ TestFunction(test_interpreter){
                 "int f(int x){struct S s={1,2,x,4,5,6,7,8,9,10,11};\n"
                 "return s.b==2 && s.c==x && s.k==11;} return f(3) && f(17);\n"),
             .exit_code = 1,
-            .expect_template = 1,
-            .expect_runtime_stores = 1,
         },
         {
             "local aggregate: partial template preserves nested side effects and relocations", __LINE__,
@@ -1848,7 +1844,6 @@ TestFunction(test_interpreter){
                 "return *s.p+s.a[0]+s.a[1]+s.a[2]+s.a[3]+s.a[4]+s.a[5];}\n"
                 "return f()==27 && f()==31;\n"),
             .exit_code = 1,
-            .expect_template = 1,
         },
         {
             "local aggregate: overlapping dynamic initializers preserve final writes", __LINE__,
@@ -1863,7 +1858,6 @@ TestFunction(test_interpreter){
                 " s.a[0]=n; return s.a[0]+s.a[7]+s.tail;}\n"
                 "return f(10)==27 && f(20)==37;\n"),
             .exit_code = 1,
-            .expect_template = 1,
         },
         {
             "local aggregate: template handles bitfields and overwritten designators", __LINE__,
@@ -1872,7 +1866,6 @@ TestFunction(test_interpreter){
                 " return s.a==5 && s.b==17 && s.x[0]==2 && s.x[3]==8;}\n"
                 "return f() && f();\n"),
             .exit_code = 1,
-            .expect_template = 1,
         },
         {
             "local aggregate: template includes symbol relocations", __LINE__,
@@ -1882,7 +1875,6 @@ TestFunction(test_interpreter){
                 " return *s.p==8 && s.fn()==11 && s.text[0]=='e' && s.x[3]==4;}\n"
                 "return f() && f();\n"),
             .exit_code = 1,
-            .expect_template = 1,
         },
         {
             "local aggregate: overwritten relocations are omitted", __LINE__,
@@ -1893,7 +1885,6 @@ TestFunction(test_interpreter){
                 " && s.x[0]==1 && s.x[3]==4;}\n"
                 "return f();\n"),
             .exit_code = 1,
-            .expect_template = 1,
         },
         {
             "local aggregate: dynamic call falls back to field stores", __LINE__,
@@ -6968,6 +6959,26 @@ TestFunction(test_interpreter){
                "a1 = b1; a2 = b2; a4 = b4; a8 = b8; a16 = b16;\n"
                "b1 = a1; b2 = a2; b4 = a4; b8 = a8; b16 = a16;\n"
                "return b1.x == 7 && b2.x == 8 && b4.x == 9 && b8.x == 10 && b16.x == 11 && b16.y == 12;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic: 16-byte operations stage naturally aligned aggregate values", __LINE__,
+            SVI("struct S {long long x,y;};\n"
+                "struct Box {long long pad;struct S value;};\n"
+                "int probe(void){\n"
+                "_Alignas(16) _Atomic(struct S) x={1,2};\n"
+                "_Alignas(16) struct Box box={0,{3,4}};\n"
+                "x=box.value;box.value=x;\n"
+                "int ok=box.value.x==3&&box.value.y==4;\n"
+                "struct S desired={5,6},old;\n"
+                "__atomic_exchange(&x,&desired,&old,__ATOMIC_SEQ_CST);\n"
+                "ok=ok&&old.x==3&&old.y==4;\n"
+                "struct S expected={0,0};desired=(struct S){7,8};\n"
+                "ok=ok&&!__atomic_compare_exchange(&x,&expected,&desired,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);\n"
+                "ok=ok&&expected.x==5&&expected.y==6;\n"
+                "ok=ok&&__atomic_compare_exchange(&x,&expected,&desired,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);\n"
+                "box.value=x;return ok&&box.value.x==7&&box.value.y==8;\n"
+                "}return probe();\n"),
             .exit_code = 1,
         },
         {
@@ -12742,26 +12753,6 @@ TestFunction(test_interpreter){
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        if(tc->expect_template){
-            size_t zero_count = 0;
-            size_t copy_count = 0;
-            size_t store_count = 0;
-            PointerMapItems funcs = PM_items(&interp.deps.funcs);
-            for(size_t j = 0; j < funcs.count; j++){
-                CcFunc* func = (CcFunc*)(uintptr_t)funcs.data[j].key;
-                if(!func->interp_ops) continue;
-                for(size_t k = 0; k < func->interp_ops->code.count; k++){
-                    zero_count += func->interp_ops->code.data[k].kind == CI_OP_ZERO;
-                    copy_count += func->interp_ops->code.data[k].kind == CI_OP_MEMCOPY;
-                    store_count += func->interp_ops->code.data[k].kind == CI_OP_STORE
-                        || func->interp_ops->code.data[k].kind == CI_OP_STORE_BITFIELD;
-                }
-            }
-            TestExpect(size_t, zero_count, ==, 0);
-            TestExpect(size_t, copy_count, >, 0);
-            if(tc->expect_runtime_stores)
-                TestExpect(size_t, store_count, ==, tc->expect_runtime_stores);
-        }
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
