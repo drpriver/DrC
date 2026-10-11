@@ -11,6 +11,9 @@ let pkgs = import <nixpkgs> {
                     "${final.lib.getDev libc}/include"
                     "${final.lib.getDev final.libffi}/include"
                 ];
+                compilerIncludeHook = final.lib.optionalString (host.isWindows && self.drc.stdenv.cc.isGNU) ''
+                    export DRC_INCLUDE_PATH="$DRC_INCLUDE_PATH;$("$CC" -print-file-name=include)"
+                '';
                 winePath = final.lib.concatStringsSep ";" [
                     "${final.lib.getLib final.libffi}/bin"
                     "${ccLib}/${host.config}/lib"
@@ -32,6 +35,7 @@ let pkgs = import <nixpkgs> {
                         emulatedCheckPhase = ''
                             runHook preCheck
                             export DRC_INCLUDE_PATH="${includePath}"
+                            ${compilerIncludeHook}
                             ${final.lib.optionalString host.isWindows ''
                                 export WINEPREFIX="$TMPDIR/wine"
                                 export WINEDEBUG=-all
@@ -62,8 +66,10 @@ let pkgs = import <nixpkgs> {
                     shellHook =
                         let
                             config = host.config;
+                            buildDir = ".nix-build/${config}";
                         in ''
-                            export BUILD="${config}"-build
+                            mkdir -p "${buildDir}"
+                            export BUILD="${buildDir}"/build
                             (
                                 set -ex
                                 if [ ! -e "$BUILD" ]; then
@@ -72,7 +78,7 @@ let pkgs = import <nixpkgs> {
                                 ./"$BUILD" nothing \
                                     --host-cc="$CC" \
                                     --build-cc="$CC_FOR_BUILD" \
-                                    --builddir=${config}-builddir \
+                                    --builddir=${buildDir}/builddir \
                                     --cc-handles-target \
                                     --os=${self.drc.hostOS} \
                                     --arch=${self.drc.hostArch} \
@@ -82,6 +88,7 @@ let pkgs = import <nixpkgs> {
                             alias mk=./"$BUILD"
                             ${final.lib.optionalString (cross && (host.isLinux || host.isWindows)) ''
                                 export DRC_INCLUDE_PATH="${includePath}''${DRC_INCLUDE_PATH:+${includeSep}$DRC_INCLUDE_PATH}"
+                                ${compilerIncludeHook}
                             ''}
                             ${final.lib.optionalString (cross && host.isWindows) ''
                                 export WINEPREFIX="''${WINEPREFIX:-$PWD/.cache/wine-${config}}"
