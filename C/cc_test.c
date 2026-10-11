@@ -3677,6 +3677,23 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "vector: explicit typedef alignment preserves natural type", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "typedef V U __attribute__((aligned(1)));\n"
+                "typedef const U CU;\n"
+                "_Static_assert(sizeof(U)==16 && _Alignof(U)==1);\n"
+                "_Static_assert(_Alignof(CU)==1 && _Alignof(V)==16);\n"
+                "struct S {char c; U v;};\n"
+                "_Static_assert(sizeof(struct S)==17 && _Alignof(struct S)==1);\n"
+                "typedef int W __attribute__((vector_size(16), aligned(32)));\n"
+                "_Static_assert(sizeof(W)==16 && _Alignof(W)==32);\n"
+                "typedef int U2 __attribute__((vector_size(16), aligned(1)));\n"
+                "_Static_assert(_Alignof(U2)==1 && _Alignof(V)==16);\n"
+                "V v __attribute__((aligned(32)));\n"
+                "_Static_assert(__alignof__(v)==32 && _Alignof(V)==16);\n"
+                "U identity(U v){return v;}\n"),
+        },
+        {
             "asm label on function", __LINE__,
             SVI("int foo(void) __asm(\"_foo_mangled\");\n"),
             .funcs = {

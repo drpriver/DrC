@@ -1402,8 +1402,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
                 *out = (CcQualType){.bits = (uintptr_t)arr | new_.quals};
                 return 0;
             }
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element,
-                bound->length, bound->is_static, bound->is_incomplete, bound->is_vector, bound->vector_size);
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element, bound->length, bound->is_static, bound->is_incomplete, bound->is_vector, bound->vector_size, bound->vector_alignment);
             if(!arr) return CC_OOM_ERROR;
             *out = (CcQualType){.bits = (uintptr_t)arr | new_.quals};
             return 0;
@@ -1680,7 +1679,7 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
             if(arr->is_vector){
-                align = arr->vector_size > cfg->max_align ? cfg->max_align:arr->vector_size;
+                align = arr->vector_alignment ? arr->vector_alignment : arr->vector_size > cfg->max_align ? cfg->max_align:arr->vector_size;
                 break;
             }
             return cc_alignof_as_expr(p, arr->element, loc, out);
@@ -1798,7 +1797,7 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
             if(arr->is_vector){
-                *out = arr->vector_size > tgt->max_align ? tgt->max_align:arr->vector_size;
+                *out = arr->vector_alignment ? arr->vector_alignment : arr->vector_size > tgt->max_align ? tgt->max_align:arr->vector_size;
                 return 0;
             }
             return cc_alignof_as_uint(p, arr->element, loc, out);
@@ -2892,7 +2891,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
                 DRP_CASES_EXHAUSTED;
             }
-            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
+            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
             node->is_lvalue = 1;
@@ -3089,7 +3088,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
                     uint32_t len = name ? name->length : 0;
-                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0, 0, 0);
+                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0, 0, 0, 0);
                     if(!sa) return CC_OOM_ERROR;
                     CcQualType type = {.bits = (uintptr_t)sa};
                     CcExpr* node = cc_value_expr(p, tok.loc, type);
@@ -4753,7 +4752,7 @@ int
 cc_pack_call_args(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice, Parray(CcExpression)* args, uint32_t start){
     uint32_t count = (uint32_t)args->count - start;
     CcQualType element = ccqt_as_slice(slice)->pointee;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0, 0, 0, 0);
     if(!array) return CC_OOM_ERROR;
     for(uint32_t i = start; i < args->count; i++){
         CcExpr** arg = (CcExpr**)&args->data[i];
@@ -6935,8 +6934,7 @@ cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include
     il->count = 2;
     count = cc_uint64_expr(p, loc, ccqt_basic(cc_target(p)->size_type), name->length+include_nul);
     if(!count) goto oom;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p),
-        ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0, 0, 0, 0, 0);
     if(!array) goto oom;
     literal = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!literal) goto oom;
@@ -8881,8 +8879,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             CcArray* target = ccqt_as_array(target_type);
             CcArray* source = ccqt_as_array(value->type);
             if(target->is_incomplete){
-                CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), target->element,
-                    source->length, target->is_static, 0, 0, 0);
+                CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), target->element, source->length, target->is_static, 0, 0, 0, 0);
                 if(!array) return CC_OOM_ERROR;
                 resolved_type = (CcQualType){.bits = (uintptr_t)array | target_type.quals};
             }
@@ -8973,7 +8970,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         if(tk == CC_ARRAY){
             CcArray* arr = ccqt_as_array(target_type);
             if(arr->is_incomplete){
-                CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0, 0, 0);
+                CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0, 0, 0, 0);
                 if(!new_arr){ err = CC_OOM_ERROR; goto release_list; }
                 resolved_type = (CcQualType){.bits = (uintptr_t)new_arr | (target_type.quals)};
             }
@@ -11729,8 +11726,7 @@ cc_const_object_type(CcParser* p, CcQualType type, CcQualType* out){
     CcQualType element;
     int err = cc_const_object_type(p, old->element, &element);
     if(err) return err;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element,
-        old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size, old->vector_alignment);
     if(!array) return CC_OOM_ERROR;
     *out = (CcQualType){.bits=(uintptr_t)array | type.quals};
     if(old->is_vector) out->is_const = 1;
@@ -11771,7 +11767,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         case CC_ARRAY: {
             CcArray* old = ccqt_as_array(t);
             CcQualType elem = cc_intern_qualtype(p, old->element);
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size);
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size, old->vector_alignment);
             if(!arr) return t;
             return (CcQualType){.bits = (uintptr_t)arr | quals};
         }
@@ -11845,6 +11841,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
     }
     for(_Bool first = 1;;first=0){
         Atom name = NULL;
+        uint16_t decl_alignment = declbase->alignment;
         SrcLoc name_loc = {0};
         CcQualType type;
         _Bool is_fndef = 0;
@@ -11898,7 +11895,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                     CcQualType ret = ccqt_as_function(type)->return_type;
                     if(!ccqt_is_basic(ret)){
                         CcTypeKind rk = ccqt_kind(ret);
-                        if(rk == CC_ARRAY)
+                        if(rk == CC_ARRAY && !ccqt_as_array(ret)->is_vector)
                             return cc_error(p, declbase->loc, "function cannot return array type");
                         if(rk == CC_FUNCTION)
                             return cc_error(p, declbase->loc, "function cannot return function type");
@@ -11919,12 +11916,24 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             if(p->attributes.vector_size % elem_size != 0)
                 return cc_error(p, declbase->loc, "vector_size must be a multiple of the element size");
             uint32_t vs = p->attributes.vector_size;
-            CcArray* v = cc_intern_array(&p->type_cache, cc_allocator(p), base, vs / elem_size, 0, 0, 1, vs);
+            CcArray* v = cc_intern_array(&p->type_cache, cc_allocator(p), base, vs / elem_size, 0, 0, 1, vs, 0);
             if(!v) return CC_OOM_ERROR;
             type = (CcQualType){.bits = (uintptr_t)v | base.quals};
         }
         if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
             CcTypeKind tk = ccqt_kind(type);
+            if(p->attributes.has_aligned && tk == CC_ARRAY && ccqt_as_array(type)->is_vector){
+                if(declbase->spec.sp_typedef){
+                    CcArray* old = ccqt_as_array(type);
+                    CcArray* v = cc_intern_array(&p->type_cache, cc_allocator(p), old->element, old->length, old->is_static, old->is_incomplete, 1, old->vector_size, p->attributes.aligned);
+                    if(!v) return CC_OOM_ERROR;
+                    type = (CcQualType){.bits = (uintptr_t)v | type.quals};
+                }
+                else if(p->attributes.aligned > decl_alignment)
+                    decl_alignment = p->attributes.aligned;
+                p->attributes.has_aligned = 0;
+                p->attributes.aligned = 0;
+            }
             if(p->attributes.has_aligned && tk != CC_STRUCT && tk != CC_UNION){
                 _Bool natural_alignment = 0;
                 if(declbase->spec.sp_typedef){
@@ -12143,7 +12152,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 .mangle = asm_label,
                 .loc = name_loc,
                 .type = type,
-                .alignment = declbase->alignment,
+                .alignment = decl_alignment,
                 .extern_ = declbase->spec.sp_extern,
                 .static_ = declbase->spec.sp_static,
                 .constexpr_ = declbase->spec.sp_constexpr,
@@ -12209,9 +12218,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 if(target_arr->is_incomplete){
                     // char s[] = "abc" -> size from string literal.
                     // Intern a new complete array with the original element type.
-                    CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p),
-                        target_arr->element, init_arr->length,
-                        target_arr->is_static, 0, 0, 0);
+                    CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), target_arr->element, init_arr->length, target_arr->is_static, 0, 0, 0, 0);
                     if(!arr) return CC_OOM_ERROR;
                     type = (CcQualType){.bits = (uintptr_t)arr | type.quals};
                 }
@@ -12584,7 +12591,7 @@ cc_define_builtin_types(CcParser* p){
 
             // typedef __va_list_tag __builtin_va_list[1];
             CcQualType struct_type = {.bits = (uintptr_t)s};
-            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0, 0, 0);
+            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0, 0, 0, 0);
             if(!arr) return CC_OOM_ERROR;
             va_list_type = (CcQualType){.bits = (uintptr_t)arr};
             break;
@@ -15288,7 +15295,7 @@ cc_source_location_expr(CcParser* p, CcBuiltinOp op, SrcLoc loc, CcExpr*_Nullabl
     else return CC_UNREACHABLE_ERROR;
     Atom atom = AT_atomize(p->cpp.at, text.text, text.length);
     if(!atom) return CC_OOM_ERROR;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0, 0, 0, 0, 0);
     if(!array) return CC_OOM_ERROR;
     CcExpr* value = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!value) return CC_OOM_ERROR;

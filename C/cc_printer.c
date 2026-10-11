@@ -151,8 +151,11 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
         }
         case CC_ARRAY: {
             CcArray* a = ccqt_as_array(t);
-            if(a->is_vector)
-                msb_sprintf(sb, " __attribute__((vector_size(%u)))", a->vector_size);
+            if(a->is_vector){
+                msb_sprintf(sb, " __attribute__((vector_size(%u)", a->vector_size);
+                if(a->vector_alignment) msb_sprintf(sb, ", aligned(%u)", a->vector_alignment);
+                msb_write_literal(sb, "))");
+            }
             else if(a->is_incomplete)
                 msb_write_literal(sb, "[]");
             else

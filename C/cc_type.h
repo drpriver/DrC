@@ -139,7 +139,8 @@ struct CC_ALIGN(8) CcArray {
             uint32_t is_vla:        1;
             uint32_t is_incomplete: 1;
             uint32_t is_vector:     1;
-            uint32_t _padding:      24;
+            uint32_t vector_alignment: 16; // explicit alignment in bytes, 0 means default
+            uint32_t _padding:      8;
         };
     };
     uint32_t vector_size; // in bytes
