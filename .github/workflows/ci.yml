@@ -12,7 +12,8 @@ jobs:
   linux:
     if: github.event_name != 'schedule'
     env:
-      ASAN_OPTIONS: detect_leaks=0:disable_coredump=0:abort_on_error=1
+      # Work around GCC 13 stack-use-after-return slowdown.
+      ASAN_OPTIONS: detect_leaks=0:disable_coredump=0:abort_on_error=1${{ matrix.os == 'ubuntu-24.04-arm' && matrix.cc == 'gcc' && ':detect_stack_use_after_return=0' || '' }}
     strategy:
       fail-fast: false
       matrix:
