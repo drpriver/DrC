@@ -890,6 +890,9 @@ TestFunction(test_builtin_macros){
         const char* name; StringView inp, exp; int line; _Bool disabled;
     } test_cases[] = {
         {"__FILE__", SV("__FILE__"), SV("\"(test)\""), __LINE__, 0},
+        {"type builtin redef", SV("#define __int64 long long\n__int64"), SV("\nlong long"), __LINE__, 0},
+        {"type builtin redef empty", SV("#define __int64\n__int64"), SV("\n"), __LINE__, 0},
+        {"type builtin redef function", SV("#define __int64(x) x + 1\n__int64(2)"), SV("\n2 + 1"), __LINE__, 0},
         {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
         {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 0},
         {"__COUNTER__", SV("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SV("0\n1\n2\n3 4"), __LINE__, 0},
@@ -1688,6 +1691,10 @@ TestFunction(test_erroneous_condition){
         {"obj macro redef different", __LINE__,
             SV("#define X 1\n#define X 2\n"),
             SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
+               "(test):1:9: error: ... previously defined here\n")},
+        {"type builtin replacement cannot redef again", __LINE__,
+            SV("#define __int64 1\n#define __int64 2\n"),
+            SV("(test):2:18: error: Duplicate object-like macro (__int64) with different definitions (0 different content)\n"
                "(test):1:9: error: ... previously defined here\n")},
         {
             "func macro redef different body", __LINE__,

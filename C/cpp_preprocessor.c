@@ -69,6 +69,7 @@ static int cpp_handle_directive(CppPreprocessor *cpp);
 static int cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp);
 static int cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, CppTokens *dst);
 static int cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst);
+static void cpp_free_macro(CppPreprocessor* cpp, CppMacro* macro);
 
 static
 int
@@ -76,7 +77,9 @@ cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t npa
     Atom key = AT_atomize(cpp->at, name.text, name.length);
     if(!key) return CPP_OOM_ERROR;
     CppMacro* macro = AM_get(&cpp->macros, key);
-    if(macro) return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
+    if(macro && !macro->may_redef)
+        return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
+    CppMacro* old_macro = macro;
     size_t size = sizeof *macro + sizeof(CppToken)*ntoks + sizeof(Atom)*nparams;
     macro = Allocator_zalloc(cpp->allocator, size);
     if(!macro) return CPP_OOM_ERROR;
@@ -84,7 +87,10 @@ cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t npa
     macro->nparams = nparams;
     int err = AM_put(&cpp->macros, cpp->allocator, key, macro);
     if(err) Allocator_free(cpp->allocator, macro, size);
-    else *outmacro = macro;
+    else {
+        if(old_macro) cpp_free_macro(cpp, old_macro);
+        *outmacro = macro;
+    }
     return err?CPP_OOM_ERROR:0;
 }
 
@@ -3998,7 +4004,12 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
         case CCBT_COUNT:
             return CPP_UNIMPLEMENTED_ERROR;
     }
-    return cpp_define_obj_macro(cpp, name, toks, ntoks);
+    int err = cpp_define_obj_macro(cpp, name, toks, ntoks);
+    if(err) return err;
+    Atom key = AT_get_atom(cpp->at, name.text, name.length);
+    CppMacro* macro = AM_get(&cpp->macros, key);
+    macro->may_redef = 1;
+    return 0;
 }
 
 static
