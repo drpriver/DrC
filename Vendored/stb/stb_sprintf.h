@@ -1272,12 +1272,21 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             stbsp__int32 i;
             stbsp__cb_buf_clamp(i, n);
             n -= i;
+            #ifdef __GNUC__
+            while (i >= 4) {
+               __builtin_memcpy(bf, s, 4);
+               bf += 4;
+               s += 4;
+               i -= 4;
+            }
+            #else
             STBSP__UNALIGNED(while (i >= 4) {
                *(stbsp__uint32 volatile *)bf = *(stbsp__uint32 volatile *)s;
                bf += 4;
                s += 4;
                i -= 4;
             })
+            #endif
             while (i) {
                *bf++ = *s++;
                --i;
