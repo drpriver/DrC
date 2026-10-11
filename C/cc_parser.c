@@ -2890,6 +2890,10 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, (CcQualType){0}, 0);
             if(!node) return CC_OOM_ERROR;
             switch(tok.constant.ctype){
+                case CC_FLOAT16:
+                    node->type.basic.kind = CCBT_float16;
+                    node->uinteger = tok.constant.integer_value;
+                    break;
                 case CC_FLOAT:
                     node->type.basic.kind = CCBT_float;
                     node->float_ = tok.constant.float_value;

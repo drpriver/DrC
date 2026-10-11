@@ -145,6 +145,10 @@ typedef struct fast_float_from_chars_result{
  * both `fixed` and `scientific`. If no valid format bits are set, an error is
  * returned.
  *
+ * Rounds directly to nearest, ties to even.
+ *
+ * Overflow produces infinity and underflow produces a subnormal or signed zero.
+ * These don't return errors at the moment, but maybe they should?
  */
 
 
@@ -152,17 +156,26 @@ FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_double(const char *first, const char *last, double *value, enum fast_float_chars_format fmt);
 
-// Ditto, but for floats:
+// Ditto, but for IEEE float32 encoding.
 FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_float(const char *first, const char *last, float *value, enum fast_float_chars_format fmt);
 
-// Host-independent encodings, least significant word first. For x87,
-// value[0] is the explicit significand and value[1] holds the 16-bit sign/exponent.
+// ditto but for IEEE binary16 encoding.
+// Uses uint16_t* for compilers that don't support _Float16.
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt);
+
+// ditto, but for IEE binary128 encoding.
+// Uses pointer to a pair of uint64_t for compilers that don't support _Float128.
+// Least significant word first.
 FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_binary128(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt);
 
+// ditto, but for the dumb x87 format.
+// value[0] is the explicit significand and value[1] holds the 16-bit sign/exponent.
 FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_x87(const char *first, const char *last, uint64_t *value, enum fast_float_chars_format fmt);
@@ -2001,7 +2014,7 @@ fast_float_wide_at_least_power2(value128 n, unsigned bit){
     return n.high != 0 || n.low >= ((uint64_t)1 << bit);
 }
 
-// Simple Decimal Conversion, shared by all four destination precisions.
+// Simple Decimal Conversion, shared by all destination precisions.
 static
 fast_float_wide_mantissa
 fast_float_compute_float_spec(fast_float_decimal* d, unsigned precision,
@@ -2304,6 +2317,43 @@ fast_float_from_chars_double(const char *first, const char *last, double *value,
         am = fast_float_parse_long_mantissa_double(first,last);
     fast_float_to_float_double(pns.negative, am, value);
     return answer;
+}
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt){
+    while(first != last && *first == '+') first++;
+    fast_float_from_chars_result result = {first, FASTFLOAT_NO_ERROR};
+    if(first == last){
+        result.error = FASTFLOAT_INVALID_VALUE;
+        return result;
+    }
+    if((fmt & FASTFLOAT_FORMAT_GENERAL) == 0){
+        result.error = FASTFLOAT_BAD_FORMAT;
+        return result;
+    }
+    fast_float_parsed_number_string pns = fast_float_parse_number_string(first, last, fmt);
+    _Bool negative = *first == '-';
+    uint16_t bits;
+    if(!pns.valid){
+        double special;
+        result = fast_float_parse_infnan_double(first, last, &special);
+        if(result.error) return result;
+        // Only reuse the syntax scanner, never an intermediate finite float.
+        bits = fast_float_strncasecmp(first + negative, "nan", 3) ? 0x7e00 : 0x7c00;
+    }
+    else {
+        result.ptr = pns.lastmatch;
+        uint8_t digits[FAST_FLOAT_DECIMAL_MAX_DIGITS];
+        fast_float_decimal d = fast_float_parse_decimal(first, pns.lastmatch, digits, sizeof digits);
+        // 11 significant bits, exponent bias 15, all-ones exponent 31.
+        // The decimal cutoffs lie outside the rounding boundaries at
+        // 2^-25 (zero/least subnormal) and 65520 (largest finite/infinity).
+        fast_float_wide_mantissa am = fast_float_compute_float_spec(&d, 11, -15, 31, -8, 6);
+        bits = (uint16_t)((am.mantissa.low & 0x3ff) | ((uint16_t)am.power2 << 10));
+    }
+    *value = (uint16_t)(bits | ((uint16_t)negative << 15));
+    return result;
 }
 
 static

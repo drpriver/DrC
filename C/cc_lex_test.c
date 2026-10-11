@@ -203,6 +203,8 @@ cc_tok_matches(CcToken got, CcToken exp){
         case CC_CONSTANT:
             if(got.constant.ctype != exp.constant.ctype) return 0;
             switch(got.constant.ctype){
+                case CC_FLOAT16:
+                    return got.constant.integer_value == exp.constant.integer_value;
                 case CC_FLOAT:
                     return got.constant.float_value == exp.constant.float_value;
                 case CC_DOUBLE:
@@ -260,6 +262,8 @@ TestFunction(test_cc_lex_integers){
         {"decimal",      SV("42"),         cc_int_tok(42, CC_INT), __LINE__},
         {"hex",          SV("0xFF"),       cc_int_tok(0xFF, CC_INT), __LINE__},
         {"hex_upper",    SV("0XAB"),       cc_int_tok(0xAB, CC_INT), __LINE__},
+        {"hex_f16_digits", SV("0xf16"),    cc_int_tok(0xf16, CC_INT), __LINE__},
+        {"hex_F16_digits", SV("0XF16"),    cc_int_tok(0xf16, CC_INT), __LINE__},
         {"binary",       SV("0b1010"),     cc_int_tok(10, CC_INT), __LINE__},
         {"octal",        SV("077"),        cc_int_tok(077, CC_INT), __LINE__},
         {"unsigned",     SV("42u"),        cc_int_tok(42, CC_UNSIGNED), __LINE__},
@@ -337,6 +341,8 @@ TestFunction(test_cc_lex_integers){
         } error_cases[] = {
             {"fu", SV("0fu"), SV("(test):1:1: error: Invalid suffix: 'f' and 'u' are mutually exclusive\n"), __LINE__},
             {"fll", SV("0fll"), SV("(test):1:1: error: Invalid suffix: 'f' and 'll' are mutually exclusive\n"), __LINE__},
+            {"integer_f16", SV("1f16"), SV("(test):1:1: error: Invalid floating-point literal\n"), __LINE__},
+            {"mixed_f16", SV("0.0i16f16"), SV("(test):1:1: error: Invalid floating-point literal\n"), __LINE__},
         };
         static int error_idx = 0;
         for(size_t i = test_atomic_increment(&error_idx); i < arrlen(error_cases); i = test_atomic_increment(&error_idx)){
@@ -363,6 +369,15 @@ TestFunction(test_cc_lex_floats){
         const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
         {"float_f",      SV("3.14f"),      cc_float_tok(3.14f), __LINE__},
+        {"half_zero",    SV("0.0f16"),     cc_int_tok(0, CC_FLOAT16), __LINE__},
+        {"half_upper",   SV("1.5F16"),     cc_int_tok(0x3e00, CC_FLOAT16), __LINE__},
+        {"half_exp",     SV("1.5e2f16"),   cc_int_tok(0x58b0, CC_FLOAT16), __LINE__},
+        {"half_hex",     SV("0x1.8p0f16"), cc_int_tok(0x3e00, CC_FLOAT16), __LINE__},
+        {"half_hex_upper", SV("0X1P-24F16"), cc_int_tok(1, CC_FLOAT16), __LINE__},
+        {"half_hex_tie", SV("0x1.002p0f16"), cc_int_tok(0x3c00, CC_FLOAT16), __LINE__},
+        {"half_decimal_subnormal", SV("0.000000059604644775390625f16"), cc_int_tok(1, CC_FLOAT16), __LINE__},
+        {"half_decimal_above_tie", SV("1.0004882812500000000000000000000000000001f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
+        {"half_decimal_below_tie", SV("1.0014648437499999999999999999999999999999f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
         {"float_F",      SV("3.14F"),      cc_float_tok(3.14f), __LINE__},
         {"double",       SV("3.14"),       cc_double_tok(3.14), __LINE__},
         {"double_exp",   SV("1e10"),       cc_double_tok(1e10), __LINE__},
@@ -1148,6 +1163,131 @@ TestFunction(test_long_double_macros){
     TESTEND();
 }
 
+// Exact binary16 magnitude in units of 2^-24. 0x7c00 is the virtual finite
+// successor 65536, used to test the overflow midpoint at 65520.
+static uint64_t test_binary16_units(unsigned bits){
+    unsigned exponent = bits >> 10;
+    return exponent ? (uint64_t)(1024 + (bits & 1023)) << (exponent-1) : bits;
+}
+
+TestFunction(test_fast_float_binary16){
+    TESTBEGIN();
+    struct { StringView text; uint16_t bits; } cases[] = {
+        {SV("0"), 0}, {SV("-0"), 0x8000}, {SV("+1.5"), 0x3e00},
+        {SV("0.1"), 0x2e66}, {SV("65504"), 0x7bff},
+        {SV("65520"), 0x7c00}, {SV("-1e999999"), 0xfc00},
+        {SV("-1e-999999"), 0x8000},
+        {SV("inf"), 0x7c00}, {SV("-INFINITY"), 0xfc00},
+        {SV("nan(payload)"), 0x7e00}, {SV("-NaN"), 0xfe00},
+        // These round to a midpoint in binary128; direct conversion must
+        // retain the information deciding which side of the tie to choose.
+        {SV("1.0004882812500000000000000000000000000001"), 0x3c01},
+        {SV("1.0014648437499999999999999999999999999999"), 0x3c01},
+        {SV("0.0000000298023223876953125"), 0},
+        {SV("0.0000000298023223876953125000000000000001"), 1},
+    };
+    {
+        static int idx = 0;
+        for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+            StringView sv = cases[i].text;
+            uint16_t bits = 42;
+            fast_float_from_chars_result r = fast_float_from_chars_binary16(sv.text, sv.text+sv.length, &bits, FASTFLOAT_FORMAT_GENERAL);
+            TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
+            TestExpectTrue(_Bool, r.ptr == sv.text+sv.length);
+            TestExpectEquals(uint16_t, bits, cases[i].bits);
+        }
+    }
+    struct { StringView text; enum fast_float_chars_format fmt; int error, consumed; } syntax[] = {
+        {SV(""), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 0},
+        {SV("+"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 1},
+        {SV("."), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 0},
+        {SV(" 1.5"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_INVALID_VALUE, 0},
+        {SV("1.5"), (enum fast_float_chars_format)0, FASTFLOAT_BAD_FORMAT, 0},
+        {SV("1.5tail"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_NO_ERROR, 3},
+        {SV("1.5e+"), FASTFLOAT_FORMAT_GENERAL, FASTFLOAT_NO_ERROR, 3},
+        {SV("1.5e2"), FASTFLOAT_FORMAT_FIXED, FASTFLOAT_NO_ERROR, 3},
+        {SV("1.5"), FASTFLOAT_FORMAT_SCIENTIFIC, FASTFLOAT_INVALID_VALUE, 0},
+        {SV("1.5e0"), FASTFLOAT_FORMAT_SCIENTIFIC, FASTFLOAT_NO_ERROR, 5},
+    };
+    {
+        static int idx = 0;
+        for(size_t i = test_atomic_increment(&idx); i < arrlen(syntax); i = test_atomic_increment(&idx)){
+            StringView sv = syntax[i].text;
+            uint16_t bits = 42;
+            fast_float_from_chars_result r = fast_float_from_chars_binary16(sv.text, sv.text+sv.length, &bits, syntax[i].fmt);
+            TestExpectEquals(int, r.error, syntax[i].error);
+            TestExpectTrue(_Bool, r.ptr == sv.text+syntax[i].consumed);
+            TestExpectEquals(uint16_t, bits, r.error ? 42 : 0x3e00);
+        }
+    }
+    {
+        static int idx = 0;
+        if(test_atomic_increment(&idx) == 0){
+            // A nonzero digit beyond the retained buffer must break a tie.
+            char text[FAST_FLOAT_DECIMAL_MAX_DIGITS + 100];
+            const char prefix[] = "1.00048828125";
+            memcpy(text, prefix, sizeof prefix-1);
+            memset(text+sizeof prefix-1, '0', sizeof text-(sizeof prefix-1));
+            text[sizeof text-1] = '1';
+            uint16_t bits;
+            fast_float_from_chars_result r = fast_float_from_chars_binary16(text, text+sizeof text, &bits, FASTFLOAT_FORMAT_GENERAL);
+            TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
+            TestExpectTrue(_Bool, r.ptr == text+sizeof text);
+            TestExpectEquals(uint16_t, bits, 0x3c01);
+        }
+    }
+    TESTEND();
+}
+TestFunction(test_fast_float_binary16_exhaust){
+    TESTBEGIN();
+    {
+        MStringBuilder sb = {.allocator=MALLOCATOR};
+        int err = msb_ensure_additional(&sb, 40);
+        TestAssertFalse(err);
+        static int idx = 0;
+        for(unsigned lo = test_atomic_increment(&idx); lo < 0x7c00; lo = test_atomic_increment(&idx)){
+            // Check every finite magnitude and every midpoint, plus a decimal
+            // step on each side.
+            for(int variant = 0; variant < 4; variant++){
+                uint64_t units = test_binary16_units(lo);
+                uint64_t numerator = variant ? units + test_binary16_units(lo+1) : 2*units;
+                uint32_t remainder = (uint32_t)(numerator & (((uint64_t)1 << 25)-1));
+                msb_reset(&sb);
+                _Bool negative = lo & 1;
+                msb_sprintf(&sb, "%s%u.", negative ? "-" : "", (unsigned)(numerator >> 25));
+                char* text = sb.data;
+                int length = sb.cursor;
+                for(int digit = 0; digit < 25; digit++){
+                    remainder *= 10;
+                    text[length++] = (char)('0' + (remainder >> 25));
+                    remainder &= ((uint32_t)1 << 25)-1;
+                }
+                if(variant == 1 || variant == 3){
+                    int digit = length-1;
+                    char limit = variant == 1 ? '0' : '9';
+                    while(text[digit] == limit || text[digit] == '.'){
+                        if(text[digit] == '.'){
+                            digit--;
+                            continue;
+                        }
+                        text[digit--] = variant == 1 ? '9' : '0';
+                    }
+                    text[digit] += variant == 1 ? -1 : 1;
+                }
+                uint16_t expected = (uint16_t)(variant == 3 ? lo+1 : variant == 2 ? lo+(lo&1) : lo);
+                expected = (uint16_t)(expected | ((uint16_t)negative << 15));
+                uint16_t bits;
+                fast_float_from_chars_result r = fast_float_from_chars_binary16(text, text+length, &bits, FASTFLOAT_FORMAT_GENERAL);
+                TestExpectEquals(int, r.error, FASTFLOAT_NO_ERROR);
+                TestExpectTrue(_Bool, r.ptr == text+length);
+                TestExpectEquals(uint16_t, bits, expected);
+            }
+        }
+        msb_destroy(&sb);
+    }
+    TESTEND();
+}
+
 TestFunction(test_fast_float_wide){
     TESTBEGIN();
     struct { StringView text; uint64_t quad[2], x87[2]; } cases[] = {
@@ -1313,6 +1453,8 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_long_double_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_long_double_targets, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_fast_float_wide,     TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_fast_float_binary16, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_fast_float_binary16_exhaust, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD|TEST_CASE_FLAGS_SKIP_UNLESS_NAMED);
     RegisterTestFlags(test_cc_lex_chars,        TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cc_lex_strings,      TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_literal_regressions, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
