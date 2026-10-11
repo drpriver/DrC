@@ -2931,8 +2931,7 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
     }
     else {
         err = b_rm_file(ctx, old->data);
-        if(err)
-            b_loglvl(BLOG_ERROR, ctx, "Error removing %s\n", old->data);
+        (void)err;
     }
     CmdBuilder cmd = {
         .allocator = allocator_from_arena(&ctx->tmp_aa),
