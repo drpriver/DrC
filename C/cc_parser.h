@@ -91,6 +91,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_FILE,
     CC__builtin_FUNCTION,
     CC__builtin_SRCLOC,
+    CC__builtin_complex,
     CC__builtin_constant_p,
     CC__builtin_offsetof,
     CC__builtin_types_compatible_p,

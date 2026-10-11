@@ -2523,6 +2523,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CC_BUILTIN_FUNCTION:
                 case CC_BUILTIN_SRCLOC:
                     return ci_unreachable(ci, op->loc, "unexpanded default argument source location");
+                case CC_BUILTIN_COMPLEX:
+                    return ci_unimplemented(ci, op->loc, "complex expression lowering");
                 DRP_CASES_EXHAUSTED;
             }
         }
@@ -4292,6 +4294,20 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                 case CCBT_float_complex:
                 case CCBT_double_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     err = ci_error(ci, loc, "Invalid return type");
                     goto cleanup;
             }

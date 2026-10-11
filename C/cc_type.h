@@ -57,9 +57,23 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_double,
     CCBT_long_double,
     CCBT_float128,
+    CCBT_float16_complex,
     CCBT_float_complex,
     CCBT_double_complex,
     CCBT_long_double_complex,
+    CCBT_char_complex,
+    CCBT_signed_char_complex,
+    CCBT_unsigned_char_complex,
+    CCBT_short_complex,
+    CCBT_unsigned_short_complex,
+    CCBT_int_complex,
+    CCBT_unsigned_complex,
+    CCBT_long_complex,
+    CCBT_unsigned_long_complex,
+    CCBT_long_long_complex,
+    CCBT_unsigned_long_long_complex,
+    CCBT_int128_complex,
+    CCBT_unsigned_int128_complex,
     CCBT_nullptr_t,
     CCBT__Type,
     CCBT__Any,
@@ -228,10 +242,10 @@ struct CC_ALIGN(8) CcStruct {
             uint32_t is_incomplete: 1,
                      packed:        1,
                      has_fam:       1,
-                     _padding:     17,
-                     hfa_type:      5,
+                     _padding:     16,
+                     hfa_type:      6,
                      hfa_count:     3; // 0-4, 0 means not hfa
-            _Static_assert(CCBT_COUNT <= (1<<5)-1, "");
+            _Static_assert(CCBT_COUNT <= (1<<6)-1, "");
         } arm64;
     };
     uint32_t size;
@@ -267,10 +281,10 @@ struct CC_ALIGN(8) CcUnion {
             CcTypeKind kind:        4;
             uint32_t is_incomplete: 1,
                      packed:        1,
-                     _padding:     18,
-                     hfa_type:      5,
+                     _padding:     17,
+                     hfa_type:      6,
                      hfa_count:     3; // 0-4, 0 means not hfa
-            _Static_assert(CCBT_COUNT <= (1<<5)-1, "");
+            _Static_assert(CCBT_COUNT <= (1<<6)-1, "");
         } arm64;
     };
     uint32_t size;
@@ -354,8 +368,28 @@ ccbt_is_float(CcBasicTypeKind k){
 
 static inline
 _Bool
+ccbt_is_complex(CcBasicTypeKind k){
+    return k >= CCBT_float16_complex && k <= CCBT_unsigned_int128_complex;
+}
+
+static inline CcBasicTypeKind ccbt_complex_real(CcBasicTypeKind k){
+    return k <= CCBT_long_double_complex
+        ? CCBT_float16 + (k-CCBT_float16_complex)
+        : CCBT_char + (k-CCBT_char_complex);
+}
+
+static inline CcBasicTypeKind ccbt_complex_kind(CcBasicTypeKind k){
+    if(k >= CCBT_float16 && k <= CCBT_long_double)
+        return CCBT_float16_complex + (k-CCBT_float16);
+    if(k >= CCBT_char && k <= CCBT_unsigned_int128)
+        return CCBT_char_complex + (k-CCBT_char);
+    return CCBT_INVALID;
+}
+
+static inline
+_Bool
 ccbt_is_arithmetic(CcBasicTypeKind k){
-    return k >= CCBT_bool && k <= CCBT_long_double_complex;
+    return k >= CCBT_bool && k <= CCBT_unsigned_int128_complex;
 }
 
 static inline
@@ -387,6 +421,20 @@ ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
         case CCBT_long:
         case CCBT_long_double:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_long_long:
         case CCBT_nullptr_t:
         case CCBT_short:
@@ -434,6 +482,20 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_float_complex:
         case CCBT_long_double:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_nullptr_t:
         case CCBT_void:
             return -1;
@@ -471,6 +533,20 @@ ccbt_to_unsigned(CcBasicTypeKind k){
         case CCBT_float_complex:
         case CCBT_long_double:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_nullptr_t:
         case CCBT_unsigned:
         case CCBT_unsigned_char:
@@ -517,6 +593,20 @@ ccbt_to_signed(CcBasicTypeKind k){
         case CCBT_long:
         case CCBT_long_double:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_long_long:
         case CCBT_nullptr_t:
         case CCBT_short:

@@ -84,6 +84,7 @@
     X(__int128, __int128) \
 
 #define CCKWS9(X) \
+    X(__complex, _Complex) \
     X(constexpr, constexpr) \
     X(_Noreturn, _Noreturn) \
     X(_Float128, _Float128) \
@@ -105,6 +106,7 @@
     X(__declspec, __declspec) \
 
 #define CCKWS11(X) \
+    X(__complex__, _Complex) \
     X(_Decimal128, _Decimal128) \
     X(__auto_type, __auto_type) \
     X(__attribute, __attribute__) \

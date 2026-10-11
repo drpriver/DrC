@@ -213,7 +213,8 @@ struct CcSpecifier {
                      sp_qualbits: 4,
 
                      _sp_infer: 1,
-                     _padding1: 32-23;
+                     sp_complex: 1,
+                     _padding1: 32-24;
         };
         struct {
             uint32_t
@@ -243,8 +244,8 @@ struct CcSpecifier {
                      sp_restrict:     1,
 
                      sp_infer_type:    1,
-
-                     _padding2:       32-23;
+                     _sp_complex:     1,
+                     _padding2:       32-24;
         };
     };
 };
@@ -317,7 +318,7 @@ cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
     CcBasicTypeKind k = ccqt_basic_kind(t);
     if(k == CCBT_void)
         return cc_error(p, loc, "integer promotion of void");
-    if(ccbt_is_float(k)){
+    if(ccbt_is_float(k) || ccbt_is_complex(k)){
         *out = t;
         return 0;
     }
@@ -342,6 +343,18 @@ cc_usual_arithmetic(CcParser* p, CcExpr* lhs, CcExpr* rhs, CcQualType* out, SrcL
     if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
         return cc_error(p, loc, "usual arithmetic conversions require arithmetic types");
     CcBasicTypeKind ak = ccqt_basic_kind(a), bk = ccqt_basic_kind(b);
+    if(ccbt_is_complex(ak) || ccbt_is_complex(bk)){
+        CcExpr real_a = {.type = ccqt_basic(ccbt_is_complex(ak) ? ccbt_complex_real(ak) : ak)};
+        CcExpr real_b = {.type = ccqt_basic(ccbt_is_complex(bk) ? ccbt_complex_real(bk) : bk)};
+        CcQualType real;
+        int err = cc_usual_arithmetic(p, &real_a, &real_b, &real, loc);
+        if(err) return err;
+        CcBasicTypeKind complex = ccbt_complex_kind(ccqt_basic_kind(real));
+        if(complex == CCBT_INVALID)
+            return cc_unimplemented(p, loc, "extended precision complex arithmetic");
+        *out = ccqt_basic(complex);
+        return 0;
+    }
     if(ak == CCBT_void || bk == CCBT_void)
         return cc_error(p, loc, "usual arithmetic conversions on void");
     if(ak == CCBT_float128 || bk == CCBT_float128){
@@ -355,6 +368,9 @@ cc_usual_arithmetic(CcParser* p, CcExpr* lhs, CcExpr* rhs, CcQualType* out, SrcL
     }
     if(ak == CCBT_float || bk == CCBT_float){
         *out = ccqt_basic(CCBT_float); return 0;
+    }
+    if(ak == CCBT_float16 || bk == CCBT_float16){
+        *out = ccqt_basic(CCBT_float16); return 0;
     }
     CcQualType ap, bp;
     int err = cc_integer_promote(p, a, &ap, loc);
@@ -2322,6 +2338,8 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     CcQualType common;
                     err = cc_usual_arithmetic(p, left, right, &common, tok.loc);
                     if(err) return err;
+                    if(kind != CC_EXPR_EQ && kind != CC_EXPR_NE && ccbt_is_complex(ccqt_basic_kind(common)))
+                        return cc_error(p, tok.loc, "ordered comparison requires real operands");
                     err = cc_implicit_cast(p, left, common, &left);
                     if(err) return err;
                     err = cc_implicit_cast(p, right, common, &right);
@@ -2962,6 +2980,22 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     node->uinteger = tok.constant.integer_value;
                     break;
             }
+            if(tok.constant.is_imaginary){
+                CcBasicTypeKind scalar = ccqt_basic_kind(node->type);
+                if(ccbt_complex_kind(scalar) == CCBT_INVALID){
+                    cc_release_expr(p, node);
+                    return cc_unimplemented(p, tok.loc, "extended precision imaginary literal");
+                }
+                CcExpr* zero = cc_value_expr(p, tok.loc, node->type);
+                if(!zero){ cc_release_expr(p, node); return CC_OOM_ERROR; }
+                CcExpr* complex = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc,
+                    ccqt_basic(ccbt_complex_kind(scalar)), 2);
+                if(!complex){ cc_release_expr(p, node); cc_release_expr(p, zero); return CC_OOM_ERROR; }
+                complex->builtin.op = CC_BUILTIN_COMPLEX;
+                complex->values[0] = zero;
+                complex->values[1] = node;
+                node = complex;
+            }
             *out = node;
             return 0;
         }
@@ -2991,6 +3025,34 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             switch(builtin){
                 case CC_BUILTIN_NONE:
                     break;
+                case CC__builtin_complex: {
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    CcExpr* real = NULL;
+                    CcExpr* imag = NULL;
+                    err = cc_parse_assignment_expr(p, flags, &real, CCQT_NONE);
+                    if(!err) err = cc_expect_punct(p, ',');
+                    if(!err) err = cc_parse_assignment_expr(p, flags, &imag, CCQT_NONE);
+                    if(!err) err = cc_expect_punct(p, ')');
+                    if(!err && (!real || !imag || !ccqt_is_basic(real->type)
+                        || !ccqt_is_basic(imag->type) || real->type.unqual != imag->type.unqual
+                        || ccqt_basic_kind(real->type) < CCBT_float16
+                        || ccqt_basic_kind(real->type) > CCBT_long_double))
+                        err = cc_error(p, tok.loc, "__builtin_complex requires two arguments of the same real floating type");
+                    if(err){
+                        if(real) cc_release_expr(p, real);
+                        if(imag) cc_release_expr(p, imag);
+                        return err;
+                    }
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc,
+                        ccqt_basic(ccbt_complex_kind(ccqt_basic_kind(real->type))), 2);
+                    if(!node){ cc_release_expr(p, real); cc_release_expr(p, imag); return CC_OOM_ERROR; }
+                    node->builtin.op = CC_BUILTIN_COMPLEX;
+                    node->values[0] = real;
+                    node->values[1] = imag;
+                    *out = node;
+                    return 0;
+                }
                 {
                     CcBuiltinOp op;
                     CcQualType type;
@@ -6696,8 +6758,9 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_VALUE:
         case CC_EXPR_VARIABLE:
         case CC_EXPR_FUNCTION:
-        case CC_EXPR_BUILTIN:
             return 0;
+        case CC_EXPR_BUILTIN:
+            return e->builtin.op == CC_BUILTIN_COMPLEX ? 2 : 0;
         case CC_EXPR_ADD:
         case CC_EXPR_SUB:
         case CC_EXPR_MUL:
@@ -7613,7 +7676,7 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             if(bk == CCBT_long_double || bk == CCBT_float128 || bk == CCBT_long_double_complex)
                 return 1;
             CcSysVEightByte c;
-            if(ccbt_is_float(bk) || bk == CCBT_float_complex || bk == CCBT_double_complex)
+            if(ccbt_is_float(bk) || bk == CCBT_float16_complex || bk == CCBT_float_complex || bk == CCBT_double_complex)
                 c = CC_SYSV_SSE;
             else
                 c = CC_SYSV_INTEGER;
@@ -7668,7 +7731,8 @@ cc_arm64_hfa_check(const CcTargetConfig* tc, CcQualType type, CcBasicTypeKind ba
             CcBasicTypeKind bk = ccqt_basic_kind(type);
             CcBasicTypeKind effective = bk;
             uint32_t n = 1;
-            if(bk == CCBT_float_complex){ effective = CCBT_float; n = 2; }
+            if(bk == CCBT_float16_complex){ effective = CCBT_float16; n = 2; }
+            else if(bk == CCBT_float_complex){ effective = CCBT_float; n = 2; }
             else if(bk == CCBT_double_complex){ effective = CCBT_double; n = 2; }
             else if(bk == CCBT_long_double_complex){ effective = CCBT_long_double; n = 2; }
             else if(!ccbt_is_float(bk)) return CCBT_INVALID;
@@ -10009,8 +10073,10 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_int = 1;
                         continue;
                     case CC_long:
-                        if(base_type->bits)
+                        if(base_type->bits && !ccqt_bt_eq(*base_type, CCBT_double))
                             return cc_error(p, tok.loc, "Second type in declaration");
+                        if(ccqt_bt_eq(*base_type, CCBT_double) && spec->sp_long)
+                            return cc_error(p, tok.loc, "long long double in declaration");
                         if(spec->sp_long > 2)
                             return cc_error(p, tok.loc, "Duplicate long after long long long in declaration");
                         if(spec->sp_char)
@@ -10327,7 +10393,10 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                     case CC__BitInt:
                         return cc_unimplemented(p, tok.loc, "_BitInt parsing in declaration");
                     case CC__Complex:
-                        return cc_unimplemented(p, tok.loc, "_Complex parsing in declaration");
+                        if(spec->sp_complex)
+                            return cc_error(p, tok.loc, "Duplicate _Complex in declaration");
+                        spec->sp_complex = 1;
+                        continue;
                     case CC_register:
                         if(spec->sp_typedef)
                             return cc_error(p, tok.loc, "register after typedef");
@@ -11345,10 +11414,12 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     if(!b.spec.bits && !b.type.bits) return cc_unreachable(p, declbase->loc, "Resolving specifier with no spec and no type");
     if(!b.spec.sp_typebits && !b.type.bits && b.spec.sp_typedef)
         return cc_unreachable(p, declbase->loc, "typedef with no type in resolve_specifiers");
-    if(!b.spec.sp_typebits && !b.type.bits)
+    if(!b.spec.sp_typebits && !b.type.bits && !b.spec.sp_complex)
         b.spec.sp_infer_type = 1;
     if(b.spec.sp___auto_type)
         b.spec.sp_infer_type = 1;
+    if(b.spec.sp_complex && !b.type.bits && !b.spec.sp_typebits)
+        b.type = ccqt_basic(CCBT_double);
     if(!b.type.bits && !b.spec.sp_infer_type){
         // construct type from keywords
         if(b.spec.sp_char){
@@ -11369,6 +11440,12 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     }
     if(ccqt_is_basic(b.type) && ccqt_basic_kind(b.type) == CCBT_double && b.spec.sp_long)
         b.type.basic.kind = CCBT_long_double;
+    if(b.spec.sp_complex){
+        if(!ccqt_is_basic(b.type) || b.spec.sp_infer_type
+            || ccbt_complex_kind(ccqt_basic_kind(b.type)) == CCBT_INVALID)
+            return cc_error(p, b.loc, "invalid scalar type for _Complex");
+        b.type.basic.kind = ccbt_complex_kind(ccqt_basic_kind(b.type));
+    }
     if(b.spec.sp_const) b.type.is_const = 1;
     if(b.spec.sp_volatile) b.type.is_volatile = 1;
     if(b.spec.sp_atomic) b.type.is_atomic = 1;
@@ -13018,6 +13095,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_FILE"), CC__builtin_FILE},
             {SVI("__builtin_FUNCTION"), CC__builtin_FUNCTION},
             {SVI("__builtin_SRCLOC"), CC__builtin_SRCLOC},
+            {SVI("__builtin_complex"), CC__builtin_complex},
             {SVI("__builtin_constant_p"), CC__builtin_constant_p},
             {SVI("__builtin_offsetof"), CC__builtin_offsetof},
             {SVI("__builtin_types_compatible_p"), CC__builtin_types_compatible_p},
@@ -13629,6 +13707,20 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
         case CCBT_float_complex:
         case CCBT_double_complex:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_INVALID:
         case CCBT_void:
@@ -13696,6 +13788,20 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
         case CCBT_float_complex:
         case CCBT_double_complex:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_INVALID:
         case CCBT_void:
@@ -13773,6 +13879,20 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
         case CCBT_float_complex:
         case CCBT_double_complex:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_nullptr_t:
         case CCBT_INVALID:
@@ -13845,6 +13965,20 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
         case CCBT_float_complex:
         case CCBT_double_complex:
         case CCBT_long_double_complex:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_nullptr_t:
         case CCBT_INVALID:
@@ -16186,6 +16320,20 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_float_complex:
                 case CCBT_double_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     err = CC_UNIMPLEMENTED_ERROR;
                     break;
             }
@@ -16262,6 +16410,20 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_float_complex:
                 case CCBT_double_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     err = CC_UNIMPLEMENTED_ERROR;
                     break;
             }
@@ -16367,6 +16529,20 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_float_complex:
                 case CCBT_double_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     err = CC_UNIMPLEMENTED_ERROR;
                     goto fini_lognot;
                 #undef LOGNOT
@@ -16691,6 +16867,20 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_float_complex:
                 case CCBT_double_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     err = CC_UNIMPLEMENTED_ERROR;
                     goto fini_binary;
             }

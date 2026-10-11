@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include "cc_printer.h"
+#include <math.h>
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -21,33 +22,47 @@
 #endif
 
 static const char* _Null_unspecified cc_basic_names[] = {
-    [CCBT_INVALID]            = "<invalid>",
-    [CCBT_void]               = "void",
-    [CCBT_bool]               = "_Bool",
-    [CCBT_char]               = "char",
-    [CCBT_signed_char]        = "signed char",
-    [CCBT_unsigned_char]      = "unsigned char",
-    [CCBT_short]              = "short",
-    [CCBT_unsigned_short]     = "unsigned short",
-    [CCBT_int]                = "int",
-    [CCBT_unsigned]           = "unsigned int",
-    [CCBT_long]               = "long",
-    [CCBT_unsigned_long]      = "unsigned long",
-    [CCBT_long_long]          = "long long",
-    [CCBT_unsigned_long_long] = "unsigned long long",
-    [CCBT_int128]             = "__int128",
-    [CCBT_unsigned_int128]    = "unsigned __int128",
-    [CCBT_float16]            = "_Float16",
-    [CCBT_float]              = "float",
-    [CCBT_double]             = "double",
-    [CCBT_long_double]        = "long double",
-    [CCBT_float128]           = "_Float128",
-    [CCBT_float_complex]      = "float _Complex",
-    [CCBT_double_complex]     = "double _Complex",
-    [CCBT_long_double_complex]= "long double _Complex",
-    [CCBT_nullptr_t]          = "nullptr_t",
-    [CCBT__Type]              = "_Type",
-    [CCBT__Any]               = "_Any",
+    [CCBT_INVALID]                    = "<invalid>",
+    [CCBT_void]                       = "void",
+    [CCBT_bool]                       = "_Bool",
+    [CCBT_char]                       = "char",
+    [CCBT_signed_char]                = "signed char",
+    [CCBT_unsigned_char]              = "unsigned char",
+    [CCBT_short]                      = "short",
+    [CCBT_unsigned_short]             = "unsigned short",
+    [CCBT_int]                        = "int",
+    [CCBT_unsigned]                   = "unsigned int",
+    [CCBT_long]                       = "long",
+    [CCBT_unsigned_long]              = "unsigned long",
+    [CCBT_long_long]                  = "long long",
+    [CCBT_unsigned_long_long]         = "unsigned long long",
+    [CCBT_int128]                     = "__int128",
+    [CCBT_unsigned_int128]            = "unsigned __int128",
+    [CCBT_float16]                    = "_Float16",
+    [CCBT_float]                      = "float",
+    [CCBT_double]                     = "double",
+    [CCBT_long_double]                = "long double",
+    [CCBT_float128]                   = "_Float128",
+    [CCBT_float16_complex]            = "_Float16 _Complex",
+    [CCBT_float_complex]              = "float _Complex",
+    [CCBT_double_complex]             = "double _Complex",
+    [CCBT_long_double_complex]        = "long double _Complex",
+    [CCBT_char_complex]               = "char _Complex",
+    [CCBT_signed_char_complex]        = "signed char _Complex",
+    [CCBT_unsigned_char_complex]      = "unsigned char _Complex",
+    [CCBT_short_complex]              = "short _Complex",
+    [CCBT_unsigned_short_complex]     = "unsigned short _Complex",
+    [CCBT_int_complex]                = "int _Complex",
+    [CCBT_unsigned_complex]           = "unsigned _Complex",
+    [CCBT_long_complex]               = "long _Complex",
+    [CCBT_unsigned_long_complex]      = "unsigned long _Complex",
+    [CCBT_long_long_complex]          = "long long _Complex",
+    [CCBT_unsigned_long_long_complex] = "unsigned long long _Complex",
+    [CCBT_int128_complex]             = "int128 _Complex",
+    [CCBT_unsigned_int128_complex]    = "unsigned int128 _Complex",
+    [CCBT_nullptr_t]                  = "nullptr_t",
+    [CCBT__Type]                      = "_Type",
+    [CCBT__Any]                       = "_Any",
 };
 
 static void cc_print_type_pre(MStringBuilder*, CcQualType t);
@@ -317,6 +332,20 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 case CCBT_float16:
                 case CCBT_float_complex:
                 case CCBT_long_double_complex:
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
                     msb_write_literal(sb, "<unknown basic>");
                     return;
                 DRP_CASES_EXHAUSTED;
@@ -579,7 +608,16 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 cc_print_type(sb, (CcQualType){.bits = e->uinteger});
             }
             else if(ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type))){
-                if(ccqt_basic_kind(e->type) == CCBT_float)
+                if(ccqt_basic_kind(e->type) == CCBT_float16){
+                    unsigned bits = (unsigned)e->uinteger;
+                    unsigned exponent = (bits >> 10) & 31;
+                    unsigned fraction = bits & 1023;
+                    double value = exponent == 31 ? (fraction ? (double)NAN : (double)INFINITY)
+                        : ldexp((double)(fraction + (exponent ? 1024 : 0)), exponent ? (int)exponent-25 : -24);
+                    if(bits & 0x8000) value = -value;
+                    msb_sprintf(sb, "%gf16", value);
+                }
+                else if(ccqt_basic_kind(e->type) == CCBT_float)
                     msb_sprintf(sb, "%gf", (double)e->float_);
                 else
                     msb_sprintf(sb, "%g", e->double_);
@@ -614,6 +652,13 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 case CC_BUILTIN_FILE: msb_write_literal(sb, "__builtin_FILE()"); break;
                 case CC_BUILTIN_FUNCTION: msb_write_literal(sb, "__builtin_FUNCTION()"); break;
                 case CC_BUILTIN_SRCLOC: msb_write_literal(sb, "__builtin_SRCLOC()"); break;
+                case CC_BUILTIN_COMPLEX:
+                    msb_write_literal(sb, "__builtin_complex(");
+                    cc_print_expr(sb, e->values[0]);
+                    msb_write_literal(sb, ", ");
+                    cc_print_expr(sb, e->values[1]);
+                    msb_write_char(sb, ')');
+                    break;
             }
             return;
         case CC_EXPR_VA:

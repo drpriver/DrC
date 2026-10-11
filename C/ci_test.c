@@ -12803,6 +12803,36 @@ TestFunction(test_interpreter_runtime_errors){
         _Bool parser_error;
     } testcases[] = {
         {
+            "complex literal fails during lowering", __LINE__,
+            SVI("float _Complex z=1.0fi;\n"),
+            SVI("(test):1:23: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "half precision complex literal fails during lowering", __LINE__,
+            SVI("1.5f16i;\n"),
+            SVI("(test):1:1: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "half precision complex constructor fails during lowering", __LINE__,
+            SVI("__builtin_complex(1.0f16,2.0f16);\n"),
+            SVI("(test):1:1: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "discarded complex constructor fails during lowering", __LINE__,
+            SVI("__builtin_complex(1.0,2.0);\n"),
+            SVI("(test):1:1: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "integer imaginary literal fails during lowering", __LINE__,
+            SVI("int _Complex z=42i;\n"),
+            SVI("(test):1:19: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
             "generic unsigned builtin rejects signed argument", __LINE__,
             SVI("return __builtin_popcountg(1);\n"),
             SVI("(test):1:28: error: bit builtin requires an unsigned integer argument\n"),

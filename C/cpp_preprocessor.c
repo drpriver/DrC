@@ -3974,6 +3974,11 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
         case CCBT_float128:
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float128")};
             break;
+        case CCBT_float16_complex:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float16")};
+            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Complex")};
+            break;
         case CCBT_float_complex:
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("float")};
             toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
@@ -4001,6 +4006,19 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Any")};
             break;
         case CCBT_INVALID:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_COUNT:
             return CPP_UNIMPLEMENTED_ERROR;
     }
@@ -4043,6 +4061,20 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT_nullptr_t:
         case CCBT__Type:
         case CCBT__Any:
+        case CCBT_float16_complex:
+        case CCBT_char_complex:
+        case CCBT_signed_char_complex:
+        case CCBT_unsigned_char_complex:
+        case CCBT_short_complex:
+        case CCBT_unsigned_short_complex:
+        case CCBT_int_complex:
+        case CCBT_unsigned_complex:
+        case CCBT_long_complex:
+        case CCBT_unsigned_long_complex:
+        case CCBT_long_long_complex:
+        case CCBT_unsigned_long_long_complex:
+        case CCBT_int128_complex:
+        case CCBT_unsigned_int128_complex:
         case CCBT_COUNT:
             return "";
         DRP_CASES_EXHAUSTED;
@@ -7459,9 +7491,38 @@ invalid:
 
 static
 int
-cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok, _Bool imaginary_suffix){
     const char* s = cpptok->txt.text;
     size_t len = cpptok->txt.length;
+    // GNU imaginary suffixes may precede or follow the precision suffix.
+    // A numbered i suffix (e.g. i64) remains an MSVC integer suffix.
+    size_t imaginary = len;
+    // Also allow the imaginary suffix before a half-precision f16 suffix.
+    size_t suffix_end = len;
+    if(len >= 3 && (s[len-3] == 'f' || s[len-3] == 'F') && s[len-2] == '1' && s[len-1] == '6')
+        suffix_end -= 3;
+    for(size_t i = suffix_end; i; i--){
+        char c = s[i-1];
+        if(c == 'i' || c == 'I' || c == 'j' || c == 'J'){
+            imaginary = i-1;
+            break;
+        }
+        if(c != 'f' && c != 'F' && c != 'l' && c != 'L' && c != 'u' && c != 'U') break;
+    }
+    if(imaginary != len){
+        if(len > 256) return cpp_error(cpp, cpptok->loc, "Number literal too long");
+        char real[256];
+        memcpy(real, s, imaginary);
+        memcpy(real+imaginary, s+imaginary+1, len-imaginary-1);
+        CppToken scalar = *cpptok;
+        scalar.txt = (StringView){len-1, real};
+        int err = cpp_number_to_cc_tok_inner(cpp, &scalar, cctok, 1);
+        if(err) return err;
+        if(cctok->constant.is_imaginary)
+            return cpp_error(cpp, cpptok->loc, "Duplicate imaginary suffix");
+        cctok->constant.is_imaginary = 1;
+        return 0;
+    }
     // Detect hex prefix before suffix stripping so we don't eat hex digits
     _Bool maybe_hex = (len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'));
     if(maybe_hex){
@@ -7542,7 +7603,9 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
         return cpp_error(cpp, cpptok->loc, "Invalid number literal");
     // Detect float: contains '.', or 'e'/'E' (decimal), or 'p'/'P' (hex)
     int err;
-    _Bool is_float = 0;
+    // An explicit f suffix selects floating components even without a decimal
+    // point (1if). A lone l suffix still selects integer components (1il).
+    _Bool is_float = imaginary_suffix && (has_f || has_f16);
     _Bool is_hex = (buf_len > 2 && buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X'));
     for(size_t i = 0; i < buf_len; i++){
         if(buf[i] == '.'){
@@ -7691,6 +7754,13 @@ cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .integer_value = v, .loc = cpptok->loc}};
     return 0;
 }
+
+static
+int
+cpp_number_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
+    return cpp_number_to_cc_tok_inner(cpp, cpptok, cctok, 0);
+}
+
 static
 int
 cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){

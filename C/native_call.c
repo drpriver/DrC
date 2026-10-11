@@ -140,6 +140,20 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_int128:
                         case CCBT_long:
                         case CCBT_long_double_complex:
+                        case CCBT_float16_complex:
+                        case CCBT_char_complex:
+                        case CCBT_signed_char_complex:
+                        case CCBT_unsigned_char_complex:
+                        case CCBT_short_complex:
+                        case CCBT_unsigned_short_complex:
+                        case CCBT_int_complex:
+                        case CCBT_unsigned_complex:
+                        case CCBT_long_complex:
+                        case CCBT_unsigned_long_complex:
+                        case CCBT_long_long_complex:
+                        case CCBT_unsigned_long_long_complex:
+                        case CCBT_int128_complex:
+                        case CCBT_unsigned_int128_complex:
                         case CCBT_long_long:
                         case CCBT_nullptr_t:
                         case CCBT_short:
@@ -228,6 +242,20 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_int128:
                         case CCBT_long:
                         case CCBT_long_double_complex:
+                        case CCBT_float16_complex:
+                        case CCBT_char_complex:
+                        case CCBT_signed_char_complex:
+                        case CCBT_unsigned_char_complex:
+                        case CCBT_short_complex:
+                        case CCBT_unsigned_short_complex:
+                        case CCBT_int_complex:
+                        case CCBT_unsigned_complex:
+                        case CCBT_long_complex:
+                        case CCBT_unsigned_long_complex:
+                        case CCBT_long_long_complex:
+                        case CCBT_unsigned_long_long_complex:
+                        case CCBT_int128_complex:
+                        case CCBT_unsigned_int128_complex:
                         case CCBT_long_long:
                         case CCBT_nullptr_t:
                         case CCBT_short:
@@ -356,6 +384,21 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                     #else
                     return NC_UNSUPPORTED_TYPE;
                     #endif
+                case CCBT_float16_complex:
+                case CCBT_char_complex:
+                case CCBT_signed_char_complex:
+                case CCBT_unsigned_char_complex:
+                case CCBT_short_complex:
+                case CCBT_unsigned_short_complex:
+                case CCBT_int_complex:
+                case CCBT_unsigned_complex:
+                case CCBT_long_complex:
+                case CCBT_unsigned_long_complex:
+                case CCBT_long_long_complex:
+                case CCBT_unsigned_long_long_complex:
+                case CCBT_int128_complex:
+                case CCBT_unsigned_int128_complex:
+                    return NC_UNSUPPORTED_TYPE;
                 case CCBT_long_double_complex:
                     #if defined FFI_TARGET_HAS_COMPLEX_TYPE && !defined NATIVE_CALL_NO_COMPLEX_TYPE
                     *out = &ffi_type_complex_longdouble;

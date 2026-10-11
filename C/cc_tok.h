@@ -215,7 +215,8 @@ struct CcToken {
         struct {
             CcTokenType type: 8;
             CcConstantType ctype: 8;
-            uint32_t _bitpadding: 16;
+            uint32_t is_imaginary: 1;
+            uint32_t _bitpadding: 15;
             uint32_t _pad;
             SrcLoc loc;
             union {

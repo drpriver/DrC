@@ -751,6 +751,10 @@ static
 int
 ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     int err;
+    if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
+        ci_error(ci, e->loc, "complex expression lowering is not supported");
+        return CI_UNIMPLEMENTED_ERROR;
+    }
     if(ccqt_kind(e->type) == CC_FUNCTION && e->kind == CC_EXPR_DEREF)
         return ci_lower_expr(ci, ctx, e->lhs, dest, out);
     {
@@ -4712,6 +4716,10 @@ static
 int
 ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     int err;
+    if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
+        ci_error(ci, e->loc, "complex expression lowering is not supported");
+        return CI_UNIMPLEMENTED_ERROR;
+    }
     switch(e->kind){
         case CC_EXPR_OBJECT_VIEW:
             return ci_lower_expr_discard(ci, ctx, e->lhs);

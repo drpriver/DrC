@@ -148,6 +148,7 @@ enum CcBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BUILTIN_FILE,
     CC_BUILTIN_FUNCTION,
     CC_BUILTIN_SRCLOC,
+    CC_BUILTIN_COMPLEX, // values[0] and values[1] are real and imaginary components
 };
 TYPEDEF_ENUM(CcBuiltinOp, uint32_t);
 

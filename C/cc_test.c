@@ -192,6 +192,8 @@ TestFunction(test_call_abi_types){
     static int idx = 0;
     for(int i = test_atomic_increment(&idx); i < CC_TARGET_COUNT; i = test_atomic_increment(&idx)){
         CcTargetConfig target = cc_target_funcs[i]();
+        TestExpectEquals(unsigned, target.sizeof_[CCBT_float16_complex], 2*target.sizeof_[CCBT_float16]);
+        TestExpectEquals(unsigned, target.alignof_[CCBT_float16_complex], target.alignof_[CCBT_float16]);
         CcPointer ip = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_int)};
         CcPointer vp = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_void)};
         TestExpectTrue(_Bool, cc_call_abi_type_equal(&target, (CcQualType){.bits = (uintptr_t)&ip},
@@ -286,6 +288,80 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "complex types in either specifier order", __LINE__,
+            SVI("_Complex float f; float _Complex g; _Complex double d; double _Complex e;\n"
+                "_Complex long double l; long _Complex double m; double long _Complex n;\n"
+                "typedef const float _Complex CF; CF a; _Complex z;\n"
+                "__complex float h; __complex__ double j;\n"
+                "_Static_assert(sizeof(f)==2*sizeof(float));\n"
+                "_Static_assert(alignof(l)==alignof(long double));\n"
+                "_Static_assert(typeof(f)==typeof(g)&&typeof(d)==typeof(e));\n"
+                "_Static_assert(typeof(l)==typeof(m)&&typeof(l)==typeof(n));\n"),
+            .vars = {{SVI("f"), SVI("float _Complex")}, {SVI("g"), SVI("float _Complex")},
+                {SVI("d"), SVI("double _Complex")}, {SVI("e"), SVI("double _Complex")},
+                {SVI("l"), SVI("long double _Complex")}, {SVI("a"), SVI("const float _Complex")},
+                {SVI("z"), SVI("double _Complex")}},
+        },
+        {
+            "imaginary literals preserve components and precision", __LINE__,
+            SVI("float _Complex f=1.5fi; double _Complex d=2.5J;\n"
+                "long double _Complex l=0x1.8p0Li; float _Complex g=2.0if;\n"
+                "int _Complex n=42i; unsigned long long _Complex u=3ullJ;\n"
+                "_Static_assert(typeof(1.0I)==double _Complex);\n"
+                "_Static_assert(typeof(1.0fj)==float _Complex);\n"
+                "_Static_assert(typeof(1if)==float _Complex);\n"
+                "_Static_assert(typeof(1fi)==float _Complex);\n"
+                "_Static_assert(typeof(1il)==long _Complex);\n"
+                "_Static_assert(typeof(1.0il)==long double _Complex);\n"
+                "_Static_assert(typeof(1.0iL)==long double _Complex);\n"
+                "_Static_assert(typeof(0xffi)==int _Complex);\n"
+                "_Static_assert(typeof(42i64)==long long);\n"
+                "_Static_assert(sizeof(n)==2*sizeof(int));\n"),
+            .vars = {{SVI("f"), SVI("float _Complex"), SVI("__builtin_complex(0f, 1.5f)")},
+                {SVI("d"), SVI("double _Complex"), SVI("__builtin_complex(0, 2.5)")},
+                {SVI("n"), SVI("int _Complex"), SVI("__builtin_complex(0, 42)")},
+                {SVI("u"), SVI("unsigned long long _Complex"), SVI("__builtin_complex(0, 3)")}},
+        },
+        {
+            "complex constructors and arithmetic conversions", __LINE__,
+            SVI("double _Complex z=__builtin_complex(1.0,2.0);\n"
+                "float _Complex f=1.0f+2.0fi;\n"
+                "_Static_assert(typeof(1.0+2.0fi)==double _Complex);\n"
+                "_Static_assert(typeof(1+2i)==int _Complex);\n"
+                "_Static_assert(typeof(2i+1.0L)==long double _Complex);\n"
+                "_Static_assert(typeof(-2.0fi)==float _Complex);\n"
+                "_Static_assert(typeof(+2i)==int _Complex);\n"
+                "_Static_assert(typeof(__builtin_complex(1.0f,2.0f))==float _Complex);\n"
+                "_Static_assert(typeof(__builtin_complex(1.0L,2.0L))==long double _Complex);\n"),
+            .vars = {{SVI("z"), SVI("double _Complex"), SVI("__builtin_complex(1, 2)")}},
+        },
+        {
+            "integer spelling with imaginary float suffix preserves value", __LINE__,
+            SVI("auto f=42if; auto l=42il;"),
+            .vars = {{SVI("f"), SVI("float _Complex"), SVI("__builtin_complex(0f, 42f)")},
+                {SVI("l"), SVI("long _Complex"), SVI("__builtin_complex(0, 42)")}},
+        },
+        {
+            "half precision complex types and literals", __LINE__,
+            SVI("_Complex _Float16 a; _Float16 _Complex b;\n"
+                "typedef const _Float16 _Complex CH; CH c;\n"
+                "auto z=1.5f16i; auto w=__builtin_complex(1.0f16,2.0f16);\n"
+                "_Static_assert(typeof(a)==typeof(b)&&typeof(z)==typeof(a));\n"
+                "_Static_assert(sizeof(a)==4&&alignof(a)==alignof(_Float16));\n"
+                "_Static_assert(typeof(1if16)==_Float16 _Complex);\n"
+                "_Static_assert(typeof(-1.5f16i)==_Float16 _Complex);\n"
+                "_Static_assert(typeof(z+1)==_Float16 _Complex);\n"
+                "_Static_assert(typeof(z+1.0f16)==_Float16 _Complex);\n"
+                "_Static_assert(typeof(z+1.0f)==float _Complex);\n"
+                "_Static_assert(typeof(z+1.0)==double _Complex);\n"
+                "_Static_assert(typeof(z+1.0L)==long double _Complex);\n"),
+            .vars = {{SVI("a"), SVI("_Float16 _Complex")},
+                {SVI("b"), SVI("_Float16 _Complex")},
+                {SVI("c"), SVI("const _Float16 _Complex")},
+                {SVI("z"), SVI("_Float16 _Complex"), SVI("__builtin_complex(0f16, 1.5f16)")},
+                {SVI("w"), SVI("_Float16 _Complex"), SVI("__builtin_complex(1f16, 2f16)")}},
+        },
         {
             "assignment and increment results discard object qualifiers", __LINE__,
             SVI("volatile int v; _Atomic int a;\n"
@@ -6149,6 +6225,32 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "complex rejects void", __LINE__, SVI("_Complex void z;"),
+            SVI("(test):1:1: error: invalid scalar type for _Complex\n"),
+        },
+        {
+            "complex rejects duplicate specifier", __LINE__, SVI("_Complex _Complex float z;"),
+            SVI("(test):1:10: error: Duplicate _Complex in declaration\n"),
+        },
+        {
+            "complex constructor rejects mixed precision", __LINE__,
+            SVI("auto z=__builtin_complex(1.0f,2.0);"),
+            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type\n"),
+        },
+        {
+            "complex constructor rejects integers", __LINE__,
+            SVI("auto z=__builtin_complex(1,2);"),
+            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type\n"),
+        },
+        {
+            "imaginary rejects duplicate suffix", __LINE__, SVI("auto z=1.0ii;"),
+            SVI("(test):1:8: error: Duplicate imaginary suffix\n"),
+        },
+        {
+            "complex rejects ordered comparison", __LINE__, SVI("int x=1.0i<2.0;"),
+            SVI("(test):1:11: error: ordered comparison requires real operands\n"),
+        },
+        {
             "SRCLOC builtin requires parentheses", __LINE__,
             SVI("_SrcLoc loc=__builtin_SRCLOC;"),
             SVI("(test):1:29: error: Expected '('\n"),
@@ -8621,11 +8723,6 @@ TestFunction(test_parse_errors){
         {
             "msvc suffix i7 invalid", __LINE__,
             SVI("int x = 42i7;\n"),
-            SVI("(test):1:9: error: Invalid digit in number\n"),
-        },
-        {
-            "msvc suffix bare i invalid", __LINE__,
-            SVI("int x = 42i;\n"),
             SVI("(test):1:9: error: Invalid digit in number\n"),
         },
         {

@@ -202,6 +202,7 @@ cc_tok_matches(CcToken got, CcToken exp){
         }
         case CC_CONSTANT:
             if(got.constant.ctype != exp.constant.ctype) return 0;
+            if(got.constant.is_imaginary != exp.constant.is_imaginary) return 0;
             switch(got.constant.ctype){
                 case CC_FLOAT16:
                     return got.constant.integer_value == exp.constant.integer_value;
@@ -253,6 +254,11 @@ static CcToken cc_int128_tok(uint64_t hi, uint64_t lo, CcConstantType ctype){
         .integer128_value=ci_uint128_or(ci_uint128_shl(ci_uint128_from_uint64(hi), 64), ci_uint128_from_uint64(lo))}};
 }
 
+static CcToken cc_imaginary_tok(CcToken scalar){
+    scalar.constant.is_imaginary = 1;
+    return scalar;
+}
+
 TestFunction(test_cc_lex_integers){
     TESTBEGIN();
     struct {
@@ -260,6 +266,9 @@ TestFunction(test_cc_lex_integers){
     } test_cases[] = {
         {"zero",         SV("0"),          cc_int_tok(0, CC_INT), __LINE__},
         {"decimal",      SV("42"),         cc_int_tok(42, CC_INT), __LINE__},
+        {"imaginary_integer", SV("42i"), cc_imaginary_tok(cc_int_tok(42, CC_INT)), __LINE__},
+        {"imaginary_unsigned_long", SV("42ulJ"), cc_imaginary_tok(cc_int_tok(42, CC_UNSIGNED_LONG)), __LINE__},
+        {"imaginary_hex_integer", SV("0xfi"), cc_imaginary_tok(cc_int_tok(15, CC_INT)), __LINE__},
         {"hex",          SV("0xFF"),       cc_int_tok(0xFF, CC_INT), __LINE__},
         {"hex_upper",    SV("0XAB"),       cc_int_tok(0xAB, CC_INT), __LINE__},
         {"hex_f16_digits", SV("0xf16"),    cc_int_tok(0xf16, CC_INT), __LINE__},
@@ -380,6 +389,25 @@ TestFunction(test_cc_lex_floats){
         {"half_decimal_below_tie", SV("1.0014648437499999999999999999999999999999f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
         {"float_F",      SV("3.14F"),      cc_float_tok(3.14f), __LINE__},
         {"double",       SV("3.14"),       cc_double_tok(3.14), __LINE__},
+        {"imaginary_i", SV("3.14i"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
+        {"imaginary_I", SV("3.14I"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
+        {"imaginary_j", SV("3.14j"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
+        {"imaginary_J", SV("3.14J"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
+        {"imaginary_fi", SV("3.14fi"), cc_imaginary_tok(cc_float_tok(3.14f)), __LINE__},
+        {"imaginary_if", SV("3.14if"), cc_imaginary_tok(cc_float_tok(3.14f)), __LINE__},
+        {"imaginary_integer_if", SV("1if"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
+        {"imaginary_half", SV("1.5f16i"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
+        {"imaginary_half_prefix", SV("1.5if16"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
+        {"imaginary_half_integer", SV("1if16"), cc_imaginary_tok(cc_int_tok(0x3c00, CC_FLOAT16)), __LINE__},
+        {"imaginary_half_hex", SV("0x1.8p0f16J"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
+        {"imaginary_half_hex_prefix", SV("0x1.8p0jf16"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
+        {"imaginary_half_subnormal", SV("0x1p-24f16i"), cc_imaginary_tok(cc_int_tok(1, CC_FLOAT16)), __LINE__},
+        {"imaginary_integer_fi", SV("1fi"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
+        {"imaginary_integer_IF", SV("1IF"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
+        {"imaginary_integer_il", SV("1il"), cc_imaginary_tok(cc_int_tok(1, CC_LONG)), __LINE__},
+        {"imaginary_large_integer_if", SV("18446744073709551616if"), cc_imaginary_tok(cc_float_tok(18446744073709551616.0f)), __LINE__},
+        {"imaginary_hex", SV("0x1.8p0fi"), cc_imaginary_tok(cc_float_tok(1.5f)), __LINE__},
+        {"imaginary_long_double", SV("3.14Li"), cc_imaginary_tok(cc_long_double_tok((uint64_t[2]){0xeb851eb851eb851fULL, 0x400091eb851eb851ULL})), __LINE__},
         {"double_exp",   SV("1e10"),       cc_double_tok(1e10), __LINE__},
         {"double_Exp",   SV("1E10"),       cc_double_tok(1E10), __LINE__},
         {"double_frac",  SV(".5"),         cc_double_tok(.5), __LINE__},
