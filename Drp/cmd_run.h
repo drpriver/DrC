@@ -275,8 +275,10 @@ cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
         int err = execve(msb_borrow_csv(&cmd->prog).text, argv, envp);
         int saved_errno = errno;
         if(saved_dir != -1){
-            fchdir(saved_dir);
-            close(saved_dir);
+            int e = fchdir(saved_dir);
+            (void)e;
+            e = close(saved_dir);
+            (void)e;
         }
         Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
         errno = saved_errno;
