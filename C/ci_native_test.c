@@ -292,7 +292,7 @@ TestFunction(test_interop){
                "long double x=__builtin_va_arg(ap,long double); __builtin_va_end(ap);\n"
                "return n+(int)x;}\nreturn f(40,2.0L);\n"),
             .exit_code = 42,
-            .skip = cc_target_funcs[CC_TARGET_NATIVE]().alignof_[CCBT_long_double] > 8,
+            .skip = cc_target_native.alignof_[CCBT_long_double] > 8,
         },
         {
             "any: native argument and return", __LINE__,
@@ -358,7 +358,7 @@ TestFunction(test_interop){
             "char signedness", __LINE__,
             SV("char c = (char)200;\n"
                "return c < 0;\n"),
-            .exit_code = cc_target_funcs[CC_TARGET_NATIVE]().char_is_signed,
+            .exit_code = cc_target_native.char_is_signed,
         },
         {
             "mixed integer widths", __LINE__,
@@ -985,7 +985,7 @@ TestFunction(test_interop){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = &cc_target_native,
                 },
                 .current = &interp.parser.global,
             },
@@ -1235,7 +1235,7 @@ TestFunction(test_interp){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = &cc_target_native,
                 },
                 .current = &interp.parser.global,
             },
@@ -1458,7 +1458,7 @@ TestFunction(test_interp_fail){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = &cc_target_native,
                 },
                 .current = &interp.parser.global,
             },
@@ -1551,7 +1551,7 @@ TestFunction(test_native_closure_retry){
     TestingAllocator ta = {.fail_at = 3};
     LOCK_T_init(&ta.lock);
     Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_NATIVE](), .allocator = al}};
+    CiInterpreter ci = {.parser.cpp = {.target = &cc_target_native, .allocator = al}};
     CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
     CcFunc func = {.type = &type};
     // The third allocation registers the closure after its userdata and libffi wrapper.

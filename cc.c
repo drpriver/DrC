@@ -271,7 +271,7 @@ int main(int argc, char** argv, char** envp){
     LOCK_T_init(&cc_interp.resolve_lock);
     cc_interp.parser.cpp.fc = fc;
     cc_interp.parser.cpp.logger = logger;
-    cc_interp.parser.cpp.target = cc_target_funcs[cc_target_arg]();
+    cc_interp.parser.cpp.target = cc_targets[cc_target_arg];
     cc_interp.parser.eager_parsing = eager;
     err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
@@ -484,7 +484,7 @@ int main(int argc, char** argv, char** envp){
                 CiOp* op = &cc_interp.toplevel_ops.data[i];
                 size_t cur = sb->cursor;
                 msb_sprintf(sb, "  0x%02zx)  ", i);
-                ci_op_print(op, sb, cc_interp.parser.cpp.target.long_double_format);
+                ci_op_print(op, sb, cc_interp.parser.cpp.target->long_double_format);
                 size_t dif = sb->cursor - cur;
                 if(dif < 60)
                     msb_write_nchar(sb, ' ', 60-dif);
@@ -980,7 +980,7 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
             CiOp* op = &func->interp_ops->code.data[i];
             size_t cur = sb->cursor;
             msb_sprintf(sb, "  0x%02zx)  ", i);
-            ci_op_print(op, sb, p->cpp.target.long_double_format);
+            ci_op_print(op, sb, p->cpp.target->long_double_format);
             size_t dif = sb->cursor - cur;
             if(dif < 60)
                 msb_write_nchar(sb, ' ', 60-dif);

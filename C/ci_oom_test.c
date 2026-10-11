@@ -410,7 +410,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = cc_target_funcs[CC_TARGET_TEST](),
+                .target = cc_targets[CC_TARGET_TEST],
             },
             .current = &interp.parser.global,
         },

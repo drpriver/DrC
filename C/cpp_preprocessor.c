@@ -609,7 +609,7 @@ cpp_strings_to_cc_tok(CppPreprocessor* cpp, const CppTokens* strings, StringView
     }
     else if(sv_equals(prefix, SV("u"))){ width = 2; stype = CC_uSTRING; }
     else if(sv_equals(prefix, SV("L"))){
-        width = cpp->target.wchar_type == CCBT_unsigned_short ? 2 : 4;
+        width = cpp->target->wchar_type == CCBT_unsigned_short ? 2 : 4;
         stype = CC_LSTRING;
     }
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
@@ -4107,7 +4107,7 @@ static
 int
 cpp_define_target_macros(CppPreprocessor* cpp){
     int err;
-    CcTargetConfig t = cpp->target;
+    const CcTargetConfig* t = cpp->target;
 
     #define DEF1(name) do { \
         err = cpp_def_1(cpp, SV(name)); \
@@ -4131,7 +4131,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__DRC__", 1);
     DEFINT("__ANY_PAYLOAD_SIZE__", 8);
     DEFINT("_FORTIFY_SOURCE", 0);
-    DEFINT("__FLT_EVAL_METHOD__", t.flt_eval_method);
+    DEFINT("__FLT_EVAL_METHOD__", t->flt_eval_method);
 
     // __GNUC__ compatibility
     DEFINT("__GNUC__", 7);
@@ -4140,20 +4140,20 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__OPTIMIZE__", 1);
 
     // __SIZEOF_*__
-    DEFINT("__SIZEOF_SHORT__",       t.sizeof_[CCBT_short]);
-    DEFINT("__SIZEOF_INT__",         t.sizeof_[CCBT_int]);
-    DEFINT("__SIZEOF_LONG__",        t.sizeof_[CCBT_long]);
-    DEFINT("__SIZEOF_LONG_LONG__",   t.sizeof_[CCBT_long_long]);
-    DEFINT("__SIZEOF_FLOAT__",       t.sizeof_[CCBT_float]);
-    DEFINT("__SIZEOF_DOUBLE__",      t.sizeof_[CCBT_double]);
-    DEFINT("__SIZEOF_LONG_DOUBLE__", t.sizeof_[CCBT_long_double]);
-    DEFINT("__SIZEOF_FLOAT128__",    t.sizeof_[CCBT_float128]);
-    DEFINT("__SIZEOF_POINTER__",     t.sizeof_[CCBT_nullptr_t]);
-    DEFINT("__SIZEOF_SIZE_T__",      t.sizeof_[t.size_type]);
-    DEFINT("__SIZEOF_PTRDIFF_T__",   t.sizeof_[t.ptrdiff_type]);
-    DEFINT("__SIZEOF_WCHAR_T__",     t.sizeof_[t.wchar_type]);
-    DEFINT("__SIZEOF_WINT_T__",      t.sizeof_[t.wint_type]);
-    DEFINT("__SIZEOF_INT128__",      t.sizeof_[CCBT_unsigned_int128]);
+    DEFINT("__SIZEOF_SHORT__",       t->sizeof_[CCBT_short]);
+    DEFINT("__SIZEOF_INT__",         t->sizeof_[CCBT_int]);
+    DEFINT("__SIZEOF_LONG__",        t->sizeof_[CCBT_long]);
+    DEFINT("__SIZEOF_LONG_LONG__",   t->sizeof_[CCBT_long_long]);
+    DEFINT("__SIZEOF_FLOAT__",       t->sizeof_[CCBT_float]);
+    DEFINT("__SIZEOF_DOUBLE__",      t->sizeof_[CCBT_double]);
+    DEFINT("__SIZEOF_LONG_DOUBLE__", t->sizeof_[CCBT_long_double]);
+    DEFINT("__SIZEOF_FLOAT128__",    t->sizeof_[CCBT_float128]);
+    DEFINT("__SIZEOF_POINTER__",     t->sizeof_[CCBT_nullptr_t]);
+    DEFINT("__SIZEOF_SIZE_T__",      t->sizeof_[t->size_type]);
+    DEFINT("__SIZEOF_PTRDIFF_T__",   t->sizeof_[t->ptrdiff_type]);
+    DEFINT("__SIZEOF_WCHAR_T__",     t->sizeof_[t->wchar_type]);
+    DEFINT("__SIZEOF_WINT_T__",      t->sizeof_[t->wint_type]);
+    DEFINT("__SIZEOF_INT128__",      t->sizeof_[CCBT_unsigned_int128]);
 
     DEFINT("__CHAR_BIT__", 8);
 
@@ -4164,24 +4164,24 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__ATOMIC_RELEASE", CC_MO_RELEASE);
     DEFINT("__ATOMIC_ACQ_REL", CC_MO_ACQ_REL);
     DEFINT("__ATOMIC_SEQ_CST", CC_MO_SEQ_CST);
-    DEFINT("__DVM_ATOMIC_LOCK_FREE_MAX", t.atomic_lock_free_max);
+    DEFINT("__DVM_ATOMIC_LOCK_FREE_MAX", t->atomic_lock_free_max);
 
-    if(t.is_lp64){
+    if(t->is_lp64){
         DEF1("__LP64__");
         DEF1("_LP64");
     }
 
     // Signedness
-    if(!t.char_is_signed) {
+    if(!t->char_is_signed) {
         DEF1("__CHAR_UNSIGNED__");
         DEF1("_CHAR_UNSIGNED");
     }
 
-    if(ccbt_is_unsigned(t.wchar_type, !t.char_is_signed))
+    if(ccbt_is_unsigned(t->wchar_type, !t->char_is_signed))
         DEF1("__WCHAR_UNSIGNED__");
 
     // __USER_LABEL_PREFIX__
-    if(t.user_label_prefix){
+    if(t->user_label_prefix){
         err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"),
             (CppToken[]){{.type=CPP_IDENTIFIER, .txt=SV("_")}}, 1);
         if(err) return err;
@@ -4192,47 +4192,47 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     }
 
     // __*_TYPE__ macros
-    DEFTYPE("__SIZE_TYPE__",       t.size_type);
-    DEFTYPE("__PTRDIFF_TYPE__",    t.ptrdiff_type);
-    DEFTYPE("__WCHAR_TYPE__",      t.wchar_type);
-    DEFTYPE("__MAX_ALIGN_TYPE__",  t.max_align_type);
-    DEFTYPE("__WINT_TYPE__",       t.wint_type);
-    DEFTYPE("__INTMAX_TYPE__",     t.intmax_type);
-    DEFTYPE("__UINTMAX_TYPE__",    ccbt_to_unsigned(t.intmax_type));
-    DEFTYPE("__SIG_ATOMIC_TYPE__", t.sig_atomic_type);
+    DEFTYPE("__SIZE_TYPE__",       t->size_type);
+    DEFTYPE("__PTRDIFF_TYPE__",    t->ptrdiff_type);
+    DEFTYPE("__WCHAR_TYPE__",      t->wchar_type);
+    DEFTYPE("__MAX_ALIGN_TYPE__",  t->max_align_type);
+    DEFTYPE("__WINT_TYPE__",       t->wint_type);
+    DEFTYPE("__INTMAX_TYPE__",     t->intmax_type);
+    DEFTYPE("__UINTMAX_TYPE__",    ccbt_to_unsigned(t->intmax_type));
+    DEFTYPE("__SIG_ATOMIC_TYPE__", t->sig_atomic_type);
     DEFTYPE("__INT8_TYPE__",       CCBT_signed_char);
     DEFTYPE("__INT16_TYPE__",      CCBT_short);
     DEFTYPE("__INT32_TYPE__",      CCBT_int);
-    DEFTYPE("__INT64_TYPE__",      t.int64_type);
+    DEFTYPE("__INT64_TYPE__",      t->int64_type);
     DEFTYPE("__INT128_TYPE__",     CCBT_int128);
     DEFTYPE("__UINT8_TYPE__",      CCBT_unsigned_char);
     DEFTYPE("__UINT16_TYPE__",     CCBT_unsigned_short);
     DEFTYPE("__UINT32_TYPE__",     CCBT_unsigned);
-    DEFTYPE("__UINT64_TYPE__",     ccbt_to_unsigned(t.int64_type));
+    DEFTYPE("__UINT64_TYPE__",     ccbt_to_unsigned(t->int64_type));
     DEFTYPE("__UINT128_TYPE__",     CCBT_unsigned_int128);
     DEFTYPE("__INT_LEAST8_TYPE__",  CCBT_signed_char);
     DEFTYPE("__INT_LEAST16_TYPE__", CCBT_short);
     DEFTYPE("__INT_LEAST32_TYPE__", CCBT_int);
-    DEFTYPE("__INT_LEAST64_TYPE__", t.int64_type);
+    DEFTYPE("__INT_LEAST64_TYPE__", t->int64_type);
     DEFTYPE("__UINT_LEAST8_TYPE__",  CCBT_unsigned_char);
     DEFTYPE("__UINT_LEAST16_TYPE__", CCBT_unsigned_short);
     DEFTYPE("__UINT_LEAST32_TYPE__", CCBT_unsigned);
-    DEFTYPE("__UINT_LEAST64_TYPE__", ccbt_to_unsigned(t.int64_type));
-    DEFTYPE("__INTPTR_TYPE__",     t.intptr_type);
-    DEFTYPE("__UINTPTR_TYPE__",    ccbt_to_unsigned(t.intptr_type));
-    DEFTYPE("__INT_FAST8_TYPE__",   t.int_fast8_type);
-    DEFTYPE("__INT_FAST16_TYPE__",  t.int_fast16_type);
-    DEFTYPE("__INT_FAST32_TYPE__",  t.int_fast32_type);
-    DEFTYPE("__INT_FAST64_TYPE__",  t.int_fast64_type);
-    DEFTYPE("__UINT_FAST8_TYPE__",  ccbt_to_unsigned(t.int_fast8_type));
-    DEFTYPE("__UINT_FAST16_TYPE__", ccbt_to_unsigned(t.int_fast16_type));
-    DEFTYPE("__UINT_FAST32_TYPE__", ccbt_to_unsigned(t.int_fast32_type));
-    DEFTYPE("__UINT_FAST64_TYPE__", ccbt_to_unsigned(t.int_fast64_type));
+    DEFTYPE("__UINT_LEAST64_TYPE__", ccbt_to_unsigned(t->int64_type));
+    DEFTYPE("__INTPTR_TYPE__",     t->intptr_type);
+    DEFTYPE("__UINTPTR_TYPE__",    ccbt_to_unsigned(t->intptr_type));
+    DEFTYPE("__INT_FAST8_TYPE__",   t->int_fast8_type);
+    DEFTYPE("__INT_FAST16_TYPE__",  t->int_fast16_type);
+    DEFTYPE("__INT_FAST32_TYPE__",  t->int_fast32_type);
+    DEFTYPE("__INT_FAST64_TYPE__",  t->int_fast64_type);
+    DEFTYPE("__UINT_FAST8_TYPE__",  ccbt_to_unsigned(t->int_fast8_type));
+    DEFTYPE("__UINT_FAST16_TYPE__", ccbt_to_unsigned(t->int_fast16_type));
+    DEFTYPE("__UINT_FAST32_TYPE__", ccbt_to_unsigned(t->int_fast32_type));
+    DEFTYPE("__UINT_FAST64_TYPE__", ccbt_to_unsigned(t->int_fast64_type));
     // msvc fixed size types
     DEFTYPE("__int8",              CCBT_char);
     DEFTYPE("__int16",             CCBT_short);
     DEFTYPE("__int32",             CCBT_int);
-    DEFTYPE("__int64",             t.int64_type);
+    DEFTYPE("__int64",             t->int64_type);
 
     // __*_MAX__ macros
     {
@@ -4244,7 +4244,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         if(!smax[CCBT_short]) return CPP_OOM_ERROR;
         smax[CCBT_int]                 = cpp_atomizef(cpp, "2147483647");
         if(!smax[CCBT_int]) return CPP_OOM_ERROR;
-        if(t.sizeof_[CCBT_long] == 8)
+        if(t->sizeof_[CCBT_long] == 8)
             smax[CCBT_long]            = cpp_atomizef(cpp, "9223372036854775807%s", ccbt_literal_suffix(CCBT_long));
         else
             smax[CCBT_long]            = cpp_atomizef(cpp, "2147483647%s", ccbt_literal_suffix(CCBT_long));
@@ -4257,7 +4257,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         if(!umax[CCBT_unsigned_short]) return CPP_OOM_ERROR;
         umax[CCBT_unsigned]            = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned));
         if(!umax[CCBT_unsigned]) return CPP_OOM_ERROR;
-        if(t.sizeof_[CCBT_unsigned_long] == 8)
+        if(t->sizeof_[CCBT_unsigned_long] == 8)
             umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "18446744073709551615%s", ccbt_literal_suffix(CCBT_unsigned_long));
         else
             umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned_long));
@@ -4287,57 +4287,57 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         DEFSMAX("__INT8_MAX__",       CCBT_signed_char);
         DEFSMAX("__INT16_MAX__",      CCBT_short);
         DEFSMAX("__INT32_MAX__",      CCBT_int);
-        DEFSMAX("__INT64_MAX__",      t.int64_type);
+        DEFSMAX("__INT64_MAX__",      t->int64_type);
         DEFUMAX("__UINT8_MAX__",      CCBT_unsigned_char);
         DEFUMAX("__UINT16_MAX__",     CCBT_unsigned_short);
         DEFUMAX("__UINT32_MAX__",     CCBT_unsigned);
-        DEFUMAX("__UINT64_MAX__",     ccbt_to_unsigned(t.int64_type));
+        DEFUMAX("__UINT64_MAX__",     ccbt_to_unsigned(t->int64_type));
 
         DEFSMAX("__INT_LEAST8_MAX__",  CCBT_signed_char);
         DEFSMAX("__INT_LEAST16_MAX__", CCBT_short);
         DEFSMAX("__INT_LEAST32_MAX__", CCBT_int);
-        DEFSMAX("__INT_LEAST64_MAX__", t.int64_type);
+        DEFSMAX("__INT_LEAST64_MAX__", t->int64_type);
         DEFUMAX("__UINT_LEAST8_MAX__",  CCBT_unsigned_char);
         DEFUMAX("__UINT_LEAST16_MAX__", CCBT_unsigned_short);
         DEFUMAX("__UINT_LEAST32_MAX__", CCBT_unsigned);
-        DEFUMAX("__UINT_LEAST64_MAX__", ccbt_to_unsigned(t.int64_type));
+        DEFUMAX("__UINT_LEAST64_MAX__", ccbt_to_unsigned(t->int64_type));
 
-        DEFSMAX("__INT_FAST8_MAX__",  t.int_fast8_type);
-        DEFSMAX("__INT_FAST16_MAX__", t.int_fast16_type);
-        DEFSMAX("__INT_FAST32_MAX__", t.int_fast32_type);
-        DEFSMAX("__INT_FAST64_MAX__", t.int_fast64_type);
-        DEFUMAX("__UINT_FAST8_MAX__",  ccbt_to_unsigned(t.int_fast8_type));
-        DEFUMAX("__UINT_FAST16_MAX__", ccbt_to_unsigned(t.int_fast16_type));
-        DEFUMAX("__UINT_FAST32_MAX__", ccbt_to_unsigned(t.int_fast32_type));
-        DEFUMAX("__UINT_FAST64_MAX__", ccbt_to_unsigned(t.int_fast64_type));
+        DEFSMAX("__INT_FAST8_MAX__",  t->int_fast8_type);
+        DEFSMAX("__INT_FAST16_MAX__", t->int_fast16_type);
+        DEFSMAX("__INT_FAST32_MAX__", t->int_fast32_type);
+        DEFSMAX("__INT_FAST64_MAX__", t->int_fast64_type);
+        DEFUMAX("__UINT_FAST8_MAX__",  ccbt_to_unsigned(t->int_fast8_type));
+        DEFUMAX("__UINT_FAST16_MAX__", ccbt_to_unsigned(t->int_fast16_type));
+        DEFUMAX("__UINT_FAST32_MAX__", ccbt_to_unsigned(t->int_fast32_type));
+        DEFUMAX("__UINT_FAST64_MAX__", ccbt_to_unsigned(t->int_fast64_type));
 
-        DEFSMAX("__INTPTR_MAX__",  t.intptr_type);
-        DEFUMAX("__UINTPTR_MAX__", ccbt_to_unsigned(t.intptr_type));
-        DEFSMAX("__INTMAX_MAX__",  t.intmax_type);
-        DEFUMAX("__UINTMAX_MAX__", ccbt_to_unsigned(t.intmax_type));
-        DEFUMAX("__SIZE_MAX__",    t.size_type);
-        DEFSMAX("__PTRDIFF_MAX__", t.ptrdiff_type);
+        DEFSMAX("__INTPTR_MAX__",  t->intptr_type);
+        DEFUMAX("__UINTPTR_MAX__", ccbt_to_unsigned(t->intptr_type));
+        DEFSMAX("__INTMAX_MAX__",  t->intmax_type);
+        DEFUMAX("__UINTMAX_MAX__", ccbt_to_unsigned(t->intmax_type));
+        DEFUMAX("__SIZE_MAX__",    t->size_type);
+        DEFSMAX("__PTRDIFF_MAX__", t->ptrdiff_type);
 
-        if(ccbt_is_unsigned(t.wchar_type, !t.char_is_signed)){
-            DEFUMAX("__WCHAR_MAX__", t.wchar_type);
+        if(ccbt_is_unsigned(t->wchar_type, !t->char_is_signed)){
+            DEFUMAX("__WCHAR_MAX__", t->wchar_type);
             DEFNUM("__WCHAR_MIN__", "0");
         }
         else {
-            DEFSMAX("__WCHAR_MAX__", t.wchar_type);
-            if(t.sizeof_[t.wchar_type] == 4)
+            DEFSMAX("__WCHAR_MAX__", t->wchar_type);
+            if(t->sizeof_[t->wchar_type] == 4)
                 DEFNUM("__WCHAR_MIN__", "(-__WCHAR_MAX__-1)");
             else
                 DEFNUM("__WCHAR_MIN__", "(-32767-1)");
         }
-        if(ccbt_is_unsigned(t.wint_type, !t.char_is_signed)){
-            DEFUMAX("__WINT_MAX__", t.wint_type);
+        if(ccbt_is_unsigned(t->wint_type, !t->char_is_signed)){
+            DEFUMAX("__WINT_MAX__", t->wint_type);
             DEFNUM("__WINT_MIN__", "0");
         }
         else {
-            DEFSMAX("__WINT_MAX__", t.wint_type);
+            DEFSMAX("__WINT_MAX__", t->wint_type);
             DEFNUM("__WINT_MIN__", "(-__WINT_MAX__-1)");
         }
-        DEFSMAX("__SIG_ATOMIC_MAX__", t.sig_atomic_type);
+        DEFSMAX("__SIG_ATOMIC_MAX__", t->sig_atomic_type);
         DEFNUM("__SIG_ATOMIC_MIN__", "(-__SIG_ATOMIC_MAX__-1)");
 
         #undef DEFSMAX
@@ -4346,25 +4346,25 @@ cpp_define_target_macros(CppPreprocessor* cpp){
 
     // __*_WIDTH__ macros
     DEFINT("__SCHAR_WIDTH__",      8);
-    DEFINT("__SHRT_WIDTH__",       t.sizeof_[CCBT_short] * 8);
-    DEFINT("__INT_WIDTH__",        t.sizeof_[CCBT_int] * 8);
-    DEFINT("__LONG_WIDTH__",       t.sizeof_[CCBT_long] * 8);
-    DEFINT("__LONG_LONG_WIDTH__",  t.sizeof_[CCBT_long_long] * 8);
-    DEFINT("__PTRDIFF_WIDTH__",    t.sizeof_[ t.ptrdiff_type] * 8);
-    DEFINT("__SIG_ATOMIC_WIDTH__", t.sizeof_[t.sig_atomic_type] * 8);
-    DEFINT("__SIZE_WIDTH__",       t.sizeof_[t.size_type] * 8);
-    DEFINT("__WCHAR_WIDTH__",      t.sizeof_[t.wchar_type] * 8);
-    DEFINT("__WINT_WIDTH__",       t.sizeof_[t.wint_type] * 8);
+    DEFINT("__SHRT_WIDTH__",       t->sizeof_[CCBT_short] * 8);
+    DEFINT("__INT_WIDTH__",        t->sizeof_[CCBT_int] * 8);
+    DEFINT("__LONG_WIDTH__",       t->sizeof_[CCBT_long] * 8);
+    DEFINT("__LONG_LONG_WIDTH__",  t->sizeof_[CCBT_long_long] * 8);
+    DEFINT("__PTRDIFF_WIDTH__",    t->sizeof_[ t->ptrdiff_type] * 8);
+    DEFINT("__SIG_ATOMIC_WIDTH__", t->sizeof_[t->sig_atomic_type] * 8);
+    DEFINT("__SIZE_WIDTH__",       t->sizeof_[t->size_type] * 8);
+    DEFINT("__WCHAR_WIDTH__",      t->sizeof_[t->wchar_type] * 8);
+    DEFINT("__WINT_WIDTH__",       t->sizeof_[t->wint_type] * 8);
     DEFINT("__INT_LEAST8_WIDTH__",  8);
     DEFINT("__INT_LEAST16_WIDTH__", 16);
     DEFINT("__INT_LEAST32_WIDTH__", 32);
     DEFINT("__INT_LEAST64_WIDTH__", 64);
-    DEFINT("__INTPTR_WIDTH__",     t.sizeof_[CCBT_nullptr_t] * 8);
-    DEFINT("__INTMAX_WIDTH__",     t.sizeof_[t.intmax_type] * 8);
-    DEFINT("__INT_FAST8_WIDTH__",  t.sizeof_[t.int_fast8_type] * 8);
-    DEFINT("__INT_FAST16_WIDTH__", t.sizeof_[t.int_fast16_type] * 8);
-    DEFINT("__INT_FAST32_WIDTH__", t.sizeof_[t.int_fast32_type] * 8);
-    DEFINT("__INT_FAST64_WIDTH__", t.sizeof_[t.int_fast64_type] * 8);
+    DEFINT("__INTPTR_WIDTH__",     t->sizeof_[CCBT_nullptr_t] * 8);
+    DEFINT("__INTMAX_WIDTH__",     t->sizeof_[t->intmax_type] * 8);
+    DEFINT("__INT_FAST8_WIDTH__",  t->sizeof_[t->int_fast8_type] * 8);
+    DEFINT("__INT_FAST16_WIDTH__", t->sizeof_[t->int_fast16_type] * 8);
+    DEFINT("__INT_FAST32_WIDTH__", t->sizeof_[t->int_fast32_type] * 8);
+    DEFINT("__INT_FAST64_WIDTH__", t->sizeof_[t->int_fast64_type] * 8);
 
     // Floating-point property macros
     // float
@@ -4398,7 +4398,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__DBL_HAS_INFINITY__", 1);
     DEFINT("__DBL_HAS_QUIET_NAN__", 1);
     // long double
-    switch(t.long_double_format){
+    switch(t->long_double_format){
         DRP_CASES_EXHAUSTED;
         case CC_LONG_DOUBLE_BINARY64:
             DEFNUM("__LDBL_MAX__",        "1.7976931348623157e+308L");
@@ -4446,10 +4446,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     // __*_C function-like macros
     {
         // Suffix for 64-bit literal depends on whether long is 64-bit
-        const char* i64_suf  = ccbt_literal_suffix(t.int64_type);
-        const char* u64_suf  = ccbt_literal_suffix(ccbt_to_unsigned(t.int64_type));
-        const char* imax_suf = ccbt_literal_suffix(t.intmax_type);
-        const char* umax_suf = ccbt_literal_suffix(ccbt_to_unsigned(t.intmax_type));
+        const char* i64_suf  = ccbt_literal_suffix(t->int64_type);
+        const char* u64_suf  = ccbt_literal_suffix(ccbt_to_unsigned(t->int64_type));
+        const char* imax_suf = ccbt_literal_suffix(t->intmax_type);
+        const char* umax_suf = ccbt_literal_suffix(ccbt_to_unsigned(t->intmax_type));
         struct { StringView name; const char*_Nullable suffix; } c_macros[] = {
             {SVI("__INT8_C"),    NULL},
             {SVI("__INT16_C"),   NULL},
@@ -4493,24 +4493,24 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFNUM("__FLOAT_WORD_ORDER__", "1234");
 
     // Atomic lock-free macros based on target's max lock-free size.
-    #define ATOMIC_LF(sz) ((sz) <= t.atomic_lock_free_max ? 2 : 0)
-    DEFINT("__GCC_ATOMIC_BOOL_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_bool]));
-    DEFINT("__GCC_ATOMIC_CHAR_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_char]));
-    DEFINT("__GCC_ATOMIC_CHAR16_T_LOCK_FREE", ATOMIC_LF(t.sizeof_[t.char16_type]));
-    DEFINT("__GCC_ATOMIC_CHAR32_T_LOCK_FREE", ATOMIC_LF(t.sizeof_[t.char32_type]));
-    DEFINT("__GCC_ATOMIC_WCHAR_T_LOCK_FREE",  ATOMIC_LF(t.sizeof_[t.wchar_type]));
-    DEFINT("__GCC_ATOMIC_SHORT_LOCK_FREE",    ATOMIC_LF(t.sizeof_[CCBT_short]));
-    DEFINT("__GCC_ATOMIC_INT_LOCK_FREE",      ATOMIC_LF(t.sizeof_[CCBT_int]));
-    DEFINT("__GCC_ATOMIC_LONG_LOCK_FREE",     ATOMIC_LF(t.sizeof_[CCBT_long]));
-    DEFINT("__GCC_ATOMIC_LLONG_LOCK_FREE",    ATOMIC_LF(t.sizeof_[CCBT_long_long]));
-    DEFINT("__GCC_ATOMIC_POINTER_LOCK_FREE",  ATOMIC_LF(t.sizeof_[CCBT_nullptr_t]));
+    #define ATOMIC_LF(sz) ((sz) <= t->atomic_lock_free_max ? 2 : 0)
+    DEFINT("__GCC_ATOMIC_BOOL_LOCK_FREE",     ATOMIC_LF(t->sizeof_[CCBT_bool]));
+    DEFINT("__GCC_ATOMIC_CHAR_LOCK_FREE",     ATOMIC_LF(t->sizeof_[CCBT_char]));
+    DEFINT("__GCC_ATOMIC_CHAR16_T_LOCK_FREE", ATOMIC_LF(t->sizeof_[t->char16_type]));
+    DEFINT("__GCC_ATOMIC_CHAR32_T_LOCK_FREE", ATOMIC_LF(t->sizeof_[t->char32_type]));
+    DEFINT("__GCC_ATOMIC_WCHAR_T_LOCK_FREE",  ATOMIC_LF(t->sizeof_[t->wchar_type]));
+    DEFINT("__GCC_ATOMIC_SHORT_LOCK_FREE",    ATOMIC_LF(t->sizeof_[CCBT_short]));
+    DEFINT("__GCC_ATOMIC_INT_LOCK_FREE",      ATOMIC_LF(t->sizeof_[CCBT_int]));
+    DEFINT("__GCC_ATOMIC_LONG_LOCK_FREE",     ATOMIC_LF(t->sizeof_[CCBT_long]));
+    DEFINT("__GCC_ATOMIC_LLONG_LOCK_FREE",    ATOMIC_LF(t->sizeof_[CCBT_long_long]));
+    DEFINT("__GCC_ATOMIC_POINTER_LOCK_FREE",  ATOMIC_LF(t->sizeof_[CCBT_nullptr_t]));
     #undef ATOMIC_LF
 
     // Platform macros from target config.
     // Format: nul-separated entries. "NAME" defines as 1, "NAME=VAL" defines as VAL.
-    if(t.platform_macros.length){
-        const char* p = t.platform_macros.text;
-        const char* end = p + t.platform_macros.length;
+    if(t->platform_macros.length){
+        const char* p = t->platform_macros.text;
+        const char* end = p + t->platform_macros.length;
         while(p < end){
             const char* term = memchr(p, 0, end - p);
             if(!term) break;
@@ -5074,13 +5074,13 @@ static
 int
 cpp_setup_default_includes(CppPreprocessor* cpp){
     int err = 0;
-    CcTargetConfig t = cpp->target;
+    const CcTargetConfig *t = cpp->target;
     MStringBuilder sb = {.allocator=allocator_from_arena(&cpp->synth_arena)};
-    if((CcTarget)CC_TARGET_NATIVE != t.target)
+    if(CC_TARGET_NATIVE != t->target)
         goto finally;
     Atom include_paths = env_getenv2(cpp->env, "DRC_INCLUDE_PATH", sizeof "DRC_INCLUDE_PATH" - 1);
     if(include_paths && include_paths->length){
-        char separator = t.os == CC_OS_WINDOWS ? ';' : ':';
+        char separator = t->os == CC_OS_WINDOWS ? ';' : ':';
         const char* path = include_paths->data;
         const char* end = path + include_paths->length;
         do {
@@ -5100,7 +5100,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
             path = next + 1;
         } while(path <= end);
     }
-    switch(t.target){
+    switch(t->target){
         DRP_CASES_EXHAUSTED;
         case CC_TARGET_AARCH64_MACOS:
         case CC_TARGET_X86_64_MACOS: {
@@ -5152,7 +5152,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
             err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/include");
             if(err) goto finally;
             // arch-specific include path
-            if(t.target == CC_TARGET_X86_64_LINUX){
+            if(t->target == CC_TARGET_X86_64_LINUX){
                 err = cpp_add_default_include(cpp, &cpp->istandard_system_paths, "/usr/include/x86_64-linux-gnu");
                 if(err) goto finally;
             }
@@ -6996,7 +6996,7 @@ cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char*
         }
         uint32_t limit = UINT32_MAX;
         if(ctype == CC_UCHAR) limit = numeric ? UINT8_MAX : 0x7F;
-        else if(ctype == CC_CHAR16 || (ctype == CC_WCHAR && cpp->target.wchar_type == CCBT_unsigned_short))
+        else if(ctype == CC_CHAR16 || (ctype == CC_WCHAR && cpp->target->wchar_type == CCBT_unsigned_short))
             limit = UINT16_MAX;
         else if(ctype == CC_INT && numeric) limit = UINT8_MAX;
         if(cp > limit) return cpp_error(cpp, loc, "Character constant out of range");
@@ -7346,7 +7346,7 @@ int
 cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok,
         const char* s, size_t len, CcToken* out){
     uint64_t words[2];
-    _Bool x87 = cpp->target.long_double_format == CC_LONG_DOUBLE_X87;
+    _Bool x87 = cpp->target->long_double_format == CC_LONG_DOUBLE_X87;
     fast_float_from_chars_result result = x87
         ? fast_float_from_chars_x87(s, s+len, words, FASTFLOAT_FORMAT_GENERAL)
         : fast_float_from_chars_binary128(s, s+len, words, FASTFLOAT_FORMAT_GENERAL);
@@ -7424,8 +7424,8 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     if(i != len) goto invalid;
     if(negative_exp) exponent = -exponent;
     exponent += bits - 1 - 4*fractional_digits;
-    _Bool x87 = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_X87;
-    _Bool quad = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_BINARY128;
+    _Bool x87 = type == CC_LONG_DOUBLE && cpp->target->long_double_format == CC_LONG_DOUBLE_X87;
+    _Bool quad = type == CC_LONG_DOUBLE && cpp->target->long_double_format == CC_LONG_DOUBLE_BINARY128;
     int precision = quad ? 113 : x87 ? 64 : type == CC_BFLOAT16 ? 8 : type == CC_FLOAT16 ? 11 : type == CC_FLOAT ? 24 : 53;
     int bias = (quad || x87) ? 16383 : type == CC_FLOAT16 ? 15 : (type == CC_FLOAT || type == CC_BFLOAT16) ? 127 : 1023;
     uint64_t lo = 0, hi = 0;
@@ -7663,7 +7663,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
             *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .float_value = fval, .loc = cpptok->loc},
             };
         }
-        else if(num_l && cpp->target.long_double_format != CC_LONG_DOUBLE_BINARY64){
+        else if(num_l && cpp->target->long_double_format != CC_LONG_DOUBLE_BINARY64){
             return cpp_long_double_to_cc_tok(cpp, cpptok, buf, buf_len, cctok);
         }
         else {
@@ -7748,7 +7748,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         _Bool is_decimal = !is_hex
             && !(buf_len > 2 && buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B'))
             && !(buf_len > 1 && buf[0] == '0');
-        const uint8_t* sizes = cpp->target.sizeof_;
+        const uint8_t* sizes = cpp->target->sizeof_;
         #define SMAX(bt) (sizes[bt] >= 8 ? (uint64_t)INT64_MAX  : ((uint64_t)1 << (sizes[bt] * 8 - 1)) - 1)
         #define UMAX(bt) (sizes[bt] >= 8 ? UINT64_MAX           : ((uint64_t)1 << (sizes[bt] * 8)) - 1)
         if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;

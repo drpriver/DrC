@@ -4460,7 +4460,7 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
 static
 const CcTargetConfig*
 ci_target(const CiInterpreter* ci){
-    return &ci->parser.cpp.target;
+    return ci->parser.cpp.target;
 }
 static
 int
@@ -4469,7 +4469,7 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, Atom sym, const char* what, void*_Nullab
     int err = ci_try_dlsym(ci, sym, &p);
     if(err) return err;
     if(!p){
-        if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
+        if(ci_target(ci)->target != CC_TARGET_NATIVE)
             return ci_error(ci, loc, "%s '%s' not found (cross-interpreting)", what, sym->data);
         #ifdef NO_NATIVE_CALL
         return ci_error(ci, loc, "%s '%s' not found (native calls disabled)", what, sym->data);
@@ -4511,7 +4511,7 @@ ci_try_dlsym(CiInterpreter* ci, Atom sym, void*_Nullable*_Nonnull out){
             }
         }
     }
-    if(ci_target(ci)->target != (CcTarget)CC_TARGET_NATIVE)
+    if(ci_target(ci)->target != CC_TARGET_NATIVE)
         return 0;
     void* p = NULL;
     #ifdef NO_NATIVE_CALL

@@ -12333,7 +12333,7 @@ TestFunction(test_interpreter){
         {
             // A braced assignment (not a declaration initializer) is a compound
             // literal: a distinct object, so the initializers read the old value
-            // of the target. This must hold for locals too, not just globals.
+            // of the target-> This must hold for locals too, not just globals.
             "struct self assign local", __LINE__,
             SVI("int f(void){\n"
                 "    struct S {int x, y;} s = {-1, -2};\n"
@@ -12715,7 +12715,7 @@ TestFunction(test_interpreter){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_TEST](),
+                    .target = cc_targets[CC_TARGET_TEST],
                 },
                 .current = &interp.parser.global,
             },
@@ -13684,7 +13684,7 @@ TestFunction(test_interpreter_runtime_errors){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_TEST](),
+                    .target = cc_targets[CC_TARGET_TEST],
                 },
                 .current = &interp.parser.global,
             },
@@ -14072,7 +14072,7 @@ TestFunction(test_interpreter_builtin_headers){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_TEST](),
+                    .target = cc_targets[CC_TARGET_TEST],
                 },
                 .current = &interp.parser.global,
             },
@@ -14855,7 +14855,7 @@ TestFunction(test_cross_target){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[tc->target](),
+                    .target = cc_targets[tc->target],
                 },
                 .current = &interp.parser.global,
             },
@@ -15015,7 +15015,7 @@ TestFunction(test_ci_call_main){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = cc_targets[CC_TARGET_NATIVE],
                 },
                 .current = &interp.parser.global,
             },
@@ -15223,7 +15223,7 @@ TestFunction(test_ci_call_by_name){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = cc_targets[CC_TARGET_NATIVE],
                 },
                 .current = &interp.parser.global,
             },
@@ -15270,7 +15270,7 @@ TestFunction(test_ci_call_by_name){
                 break;
             ci_args[nargs++] = (CiArg){
                 .data = &tc->args[j].d,
-                .size = interp.parser.cpp.target.sizeof_[tc->args[j].kind],
+                .size = interp.parser.cpp.target->sizeof_[tc->args[j].kind],
                 .type.basic.kind = tc->args[j].kind,
             };
         }
@@ -15386,8 +15386,9 @@ TestFunction(test_symbolic_pointer_limits){
     for(size_t target = 0; target <= CC_TARGET_COUNT; target++){
         {
             ArenaAllocator arena = {0};
-            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = allocator_from_arena(&arena)}};
-            if(target == CC_TARGET_COUNT) p.cpp.target.sizeof_[CCBT_nullptr_t] = 4;
+            CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
+            CcParser p = {.cpp = {.target = &t, .allocator = allocator_from_arena(&arena)}};
+            if(target == CC_TARGET_COUNT) t.sizeof_[CCBT_nullptr_t] = 4;
             CcPointer pointer = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_char)};
             CcQualType ptr = {.bits = (uintptr_t)&pointer};
             // Keep casts in the AST: parsing literals can fold them before
@@ -15397,7 +15398,7 @@ TestFunction(test_symbolic_pointer_limits){
                 CcExpr number = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_unsigned_long_long), .uinteger = bits[i]};
                 CcExpr cast = {.kind = CC_EXPR_CAST, .type = ptr, .lhs = &number};
                 CcExpr expected = {.kind = CC_EXPR_VALUE, .type = ptr, .uinteger = bits[i]};
-                if(p.cpp.target.sizeof_[CCBT_nullptr_t] == 4) expected.uinteger &= UINT32_MAX;
+                if(p.cpp.target->sizeof_[CCBT_nullptr_t] == 4) expected.uinteger &= UINT32_MAX;
                 CcExpr* equal = cc_binary_expr(&p, CC_EXPR_EQ, (SrcLoc){0}, ccqt_basic(CCBT_int), &cast, &expected);
                 TestExpectTrue(_Bool, equal != NULL);
                 if(equal){
@@ -15412,14 +15413,15 @@ TestFunction(test_symbolic_pointer_limits){
         for(size_t i = test_atomic_increment(indexes+target); i < arrlen(cases); i = test_atomic_increment(indexes+target)){
             ArenaAllocator arena = {0};
             Allocator al = allocator_from_arena(&arena);
-            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = al}};
+            CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
+            CcParser p = {.cpp = {.target = &t, .allocator = al}};
             // Exercise the target-dependent range check even though the shipped
             // configurations currently all use a 64-bit ptrdiff_t.
-            if(target == CC_TARGET_COUNT) p.cpp.target.ptrdiff_type = CCBT_int;
+            if(target == CC_TARGET_COUNT) t.ptrdiff_type = CCBT_int;
             CcQualType element = ccqt_basic(cases[i].element);
             CcPointer pointer = {.kind = CC_POINTER, .pointee = element};
             CcQualType ptr = {.bits = (uintptr_t)&pointer};
-            CcQualType diff = ccqt_basic(p.cpp.target.ptrdiff_type);
+            CcQualType diff = ccqt_basic(p.cpp.target->ptrdiff_type);
             CcVariable var = {.type = element};
             CcExpr ref = {.kind = CC_EXPR_VARIABLE, .type = element, .var = &var};
             CcExpr address = {.kind = CC_EXPR_ADDR, .type = ptr, .lhs = &ref};
@@ -15436,7 +15438,7 @@ TestFunction(test_symbolic_pointer_limits){
                 if(expression){
                     int64_t value = 0;
                     int expected_status = cases[i].status;
-                    if(cases[i].needs_64_bits && p.cpp.target.sizeof_[p.cpp.target.ptrdiff_type] < 8)
+                    if(cases[i].needs_64_bits && p.cpp.target->sizeof_[p.cpp.target->ptrdiff_type] < 8)
                         expected_status = _cc_overflow_error;
                     int status = cc_eval_symbolic_binary(&p, expression, 0, &value);
                     if(status != expected_status || (!status && value != cases[i].expected))
@@ -15450,7 +15452,7 @@ TestFunction(test_symbolic_pointer_limits){
         }
         {
             ArenaAllocator arena = {0};
-            CcParser p = {.cpp = {.target = cc_target_funcs[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target](), .allocator = allocator_from_arena(&arena)}};
+            CcParser p = {.cpp = {.target = cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target], .allocator = allocator_from_arena(&arena)}};
             CcQualType integer = ccqt_basic(CCBT_int);
             CcPointer pointer = {.kind = CC_POINTER, .pointee = integer};
             CcQualType ptr = {.bits = (uintptr_t)&pointer};
@@ -15460,7 +15462,7 @@ TestFunction(test_symbolic_pointer_limits){
             CcVariable alias = {.type = ptr, .constexpr_ = 1};
             CcExpr alias_ref = {.kind = CC_EXPR_VARIABLE, .type = ptr, .var = &alias};
             alias.initializer = &alias_ref;
-            CcExpr* expression = cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, ccqt_basic(p.cpp.target.ptrdiff_type), &alias_ref, &address);
+            CcExpr* expression = cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, ccqt_basic(p.cpp.target->ptrdiff_type), &alias_ref, &address);
             TestExpectTrue(_Bool, expression != NULL);
             if(expression){
                 int64_t value;
@@ -15513,7 +15515,7 @@ TestFunction(test_static_blobs){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = al}};
+    CiInterpreter ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = al}};
     CiLowerDeps deps = {0};
     CcQualType type = ccqt_basic(CCBT_int);
     CcExpr value = {.kind = CC_EXPR_VALUE, .type = type, .integer = 7};
@@ -15563,7 +15565,7 @@ TestFunction(test_lower_deps){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    CiInterpreter ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = al}};
+    CiInterpreter ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = al}};
     Marray(CiOp) ops = {0};
     uint32_t frame_size = 0;
     CiLowerCtx ctx = {.a = al, .out = &ops, .frame_size = &frame_size, .ptr_size = 8, .size_size = 8};
@@ -15628,7 +15630,7 @@ TestFunction(test_lower_deps){
         TestingAllocator ta = {0};
         LOCK_T_init(&ta.lock);
         Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = retry_al}};
+        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = retry_al}};
         CcVariable retry_global = {.type = ccqt_basic(CCBT_int)};
         CcExpr retry_expr = {.kind = CC_EXPR_VARIABLE, .type = retry_global.type, .var = &retry_global};
         CcStmtNode retry_stmt = {.kind = CC_STMT_RETURN, .expr = &retry_expr};
@@ -15658,7 +15660,7 @@ TestFunction(test_lower_deps){
         TestingAllocator ta = {0};
         LOCK_T_init(&ta.lock);
         Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_target_funcs[CC_TARGET_TEST](), .allocator = retry_al}};
+        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = retry_al}};
         CiFuncOps prepared = {0};
         CcFunc retry_func = {.type = &type, .defined = 1, .parsed = 1, .interp_ops = &prepared};
         int retry_err = ci_deps_add_func(&retry_ci.deps, retry_al, &retry_func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
@@ -15686,7 +15688,7 @@ TestFunction(test_float_folding){
     #if defined __DRC__ && defined __GLIBC__
     // fenv functions have inline gnu asm with glibc
     #else
-    CiInterpreter ci = {.parser.cpp.target = cc_target_funcs[CC_TARGET_TEST]()};
+    CiInterpreter ci = {.parser.cpp.target = cc_targets[CC_TARGET_TEST]};
     CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed, .ldbl_fmt=ci_target(&ci)->long_double_format};
     static const struct {
         CcBasicTypeKind from, to;

@@ -354,7 +354,7 @@ TestFunction(test_concurrent_callbacks){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_target_funcs[CC_TARGET_NATIVE](),
+                    .target = cc_targets[CC_TARGET_NATIVE],
                 },
                 .current = &interp.parser.global,
             },

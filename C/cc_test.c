@@ -66,7 +66,7 @@ static _Bool test_init_path_layouts(CcParser* p, CcExpr* e){
     for(uint32_t i = 0; i < e->init_list->count; i++){
         CcInitEntry* entry = &e->init_list->entries[i];
         uint64_t offset;
-        if(cc_field_path_resolve(&p->cpp.target, e->type, entry->path, &offset)) return 0;
+        if(cc_field_path_resolve(p->cpp.target, e->type, entry->path, &offset)) return 0;
         uint32_t size;
         if(cc_sizeof_as_uint(p, e->type, e->loc, &size) || offset > size) return 0;
         if(entry->value && !test_init_path_layouts(p, entry->value)) return 0;
@@ -175,14 +175,14 @@ TestFunction(test_field_paths){
     TestExpectFalse(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&st >> 3}, left, right));
     TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&un >> 3}, left, right));
     TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.bits=(uintptr_t)&st}, (CcFieldPath){0}, left));
-    CcTargetConfig target = cc_target_funcs[CC_TARGET_TEST]();
+    const CcTargetConfig *target = cc_targets[CC_TARGET_TEST];
     CcArray row = {.kind=CC_ARRAY, .element=ccqt_basic(CCBT_int), .length=1073741824};
     CcArray matrix = {.kind=CC_ARRAY, .element={.bits=(uintptr_t)&row}, .length=2};
     uint64_t offset;
-    TestExpectEquals(int, cc_field_path_resolve(&target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset),
+    TestExpectEquals(int, cc_field_path_resolve(target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset),
         _cc_overflow_error);
     row.length = 1073741823;
-    TestExpectEquals(int, cc_field_path_resolve(&target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset), 0);
+    TestExpectEquals(int, cc_field_path_resolve(target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset), 0);
     TestExpectEquals(uint64_t, offset, UINT64_C(4294967292));
     TESTEND();
 }
@@ -191,25 +191,25 @@ TestFunction(test_call_abi_types){
     TESTBEGIN();
     static int idx = 0;
     for(int i = test_atomic_increment(&idx); i < CC_TARGET_COUNT; i = test_atomic_increment(&idx)){
-        CcTargetConfig target = cc_target_funcs[i]();
-        TestExpectEquals(unsigned, target.sizeof_[CCBT_bfloat16], 2);
-        TestExpectEquals(unsigned, target.alignof_[CCBT_bfloat16], 2);
-        TestExpectEquals(unsigned, target.sizeof_[CCBT_float16_complex], 2*target.sizeof_[CCBT_float16]);
-        TestExpectEquals(unsigned, target.alignof_[CCBT_float16_complex], target.alignof_[CCBT_float16]);
+        const CcTargetConfig *target = cc_targets[i];
+        TestExpectEquals(unsigned, target->sizeof_[CCBT_bfloat16], 2);
+        TestExpectEquals(unsigned, target->alignof_[CCBT_bfloat16], 2);
+        TestExpectEquals(unsigned, target->sizeof_[CCBT_float16_complex], 2*target->sizeof_[CCBT_float16]);
+        TestExpectEquals(unsigned, target->alignof_[CCBT_float16_complex], target->alignof_[CCBT_float16]);
         CcPointer ip = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_int)};
         CcPointer vp = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_void)};
-        TestExpectTrue(_Bool, cc_call_abi_type_equal(&target, (CcQualType){.bits = (uintptr_t)&ip},
+        TestExpectTrue(_Bool, cc_call_abi_type_equal(target, (CcQualType){.bits = (uintptr_t)&ip},
             (CcQualType){.bits = (uintptr_t)&vp}));
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long), ccqt_basic(CCBT_int)),
-            target.sizeof_[CCBT_long] == target.sizeof_[CCBT_int]);
-        TestExpectTrue(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_unsigned)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_signed_char), ccqt_basic(CCBT_unsigned_char)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_bool), ccqt_basic(CCBT_unsigned_char)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_float)));
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_double)),
-            target.long_double_format == CC_LONG_DOUBLE_BINARY64);
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(&target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_float128)),
-            target.long_double_format == CC_LONG_DOUBLE_BINARY128);
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long), ccqt_basic(CCBT_int)),
+            target->sizeof_[CCBT_long] == target->sizeof_[CCBT_int]);
+        TestExpectTrue(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_unsigned)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_signed_char), ccqt_basic(CCBT_unsigned_char)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_bool), ccqt_basic(CCBT_unsigned_char)));
+        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_float)));
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_double)),
+            target->long_double_format == CC_LONG_DOUBLE_BINARY64);
+        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_float128)),
+            target->long_double_format == CC_LONG_DOUBLE_BINARY128);
     }
     TESTEND();
 }
@@ -228,7 +228,7 @@ TestFunction(test_runtime_bitfields){
         {CCBT_int128, 128, 0, SVI("{\n  <anon> = -1,\n}")},
         {CCBT_int, 4, 0, SVI("{\n  <anon> = -1,\n}")},
     };
-    CcParser parser = {.cpp.target=cc_target_test()};
+    CcParser parser = {.cpp.target=&cc_target_test};
     unsigned char bytes[16];
     memset(bytes, 0xff, sizeof bytes);
     for(size_t i = 0; i < arrlen(cases); i++){
@@ -6039,7 +6039,7 @@ TestFunction(test_parse_decls){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = cc_target_test(),
+                .target = &cc_target_test,
             },
             .current = &cc.global,
             .eager_parsing = 1,
@@ -9668,7 +9668,7 @@ TestFunction(test_parse_errors){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = cc_target_test(),
+                .target = &cc_target_test,
             },
             .current = &cc.global,
             .eager_parsing = 1,
@@ -10198,7 +10198,7 @@ TestFunction(test_struct_layout){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = cc_target_test(),
+                .target = &cc_target_test,
             },
             .current = &cc.global,
         };
@@ -10477,7 +10477,7 @@ TestFunction(test_bitfield_abi){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         int err = 0;
-        CcTargetConfig tgt = cc_target_test();
+        CcTargetConfig tgt = cc_target_test;
         tgt.bitfield_abi = cases[i].abi;
         CcParser cc = {
             .cpp = {
@@ -10486,7 +10486,7 @@ TestFunction(test_bitfield_abi){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = tgt,
+                .target = &tgt,
             },
             .current = &cc.global,
         };
@@ -10690,7 +10690,7 @@ TestFunction(test_pragma_pack){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = cc_target_test(),
+                .target = &cc_target_test,
             },
             .current = &cc.global,
             .eager_parsing = 1,

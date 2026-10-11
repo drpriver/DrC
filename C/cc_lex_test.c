@@ -44,15 +44,16 @@ cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, 
     AtomTable at = {0};
     Environment env = {.allocator = a, .at=&at};
     int err;
+    CcTargetConfig target = cc_target_test;
     CppPreprocessor cpp = {
         .allocator = a,
         .fc = fc,
         .at = &at,
         .logger = logger,
         .env = &env,
-        .target = cc_target_test(),
+        .target = &target,
     };
-    if(short_wchar) cpp.target.wchar_type = CCBT_unsigned_short;
+    if(short_wchar) target.wchar_type = CCBT_unsigned_short;
     err = env_setenv4(&env, "literal_test", 12, "C:\\new\\test\"\n", 13);
     if(err){ result = 1; goto finally; }
     fc_write_path(fc, "(test)", 6);
@@ -124,7 +125,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
         .at = &at,
         .logger = logger,
         .env = &env,
-        .target = cc_target_test(),
+        .target = &cc_target_test,
     };
     fc_write_path(fc, "(test)", 6);
     err = fc_cache_file(fc, txt);
@@ -1101,8 +1102,9 @@ TestFunction(test_long_double_targets){
     };
     CcLongDoubleFormat formats[] = {CC_LONG_DOUBLE_BINARY128, CC_LONG_DOUBLE_X87, CC_LONG_DOUBLE_BINARY64};
     for(size_t f = 0; f < arrlen(formats); f++){
-        CppPreprocessor cpp = {.target = cc_target_test()};
-        cpp.target.long_double_format = formats[f];
+        CcTargetConfig target = cc_target_test;
+        target.long_double_format = formats[f];
+        CppPreprocessor cpp = {.target = &target};
         static int case_idx[3] = {0};
         for(size_t i = test_atomic_increment(case_idx+f); i < arrlen(cases); i = test_atomic_increment(case_idx+f)){
             CppToken input = {.txt = cases[i].text};
@@ -1166,9 +1168,9 @@ TestFunction(test_long_double_macros){
         FileCache* fc = fc_create(a, FC_FLAGS_NONE);
         CppPreprocessor cpp = {
             .allocator = a, .at = &at, .fc = fc,
-            .target = cc_target_funcs[target](),
+            .target = cc_targets[target],
         };
-        CcLongDoubleFormat format = cpp.target.long_double_format;
+        CcLongDoubleFormat format = cpp.target->long_double_format;
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, source);
         TestExpectFalse(int, err);

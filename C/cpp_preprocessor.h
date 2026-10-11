@@ -202,7 +202,7 @@ struct CppPreprocessor {
     Marray(uint32_t) pragma_once_files; // sorted list of file_ids with #pragma once
     Marray(uint32_t) include_guard_files;  // sorted by file_id
     Marray(Atom)     include_guard_macros; // parallel to above
-    CcTargetConfig target;
+    const CcTargetConfig* target;
     SrcLoc eof_loc; // location of EOF in the base file
 };
 

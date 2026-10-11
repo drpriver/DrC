@@ -251,7 +251,7 @@ int main(int argc, char** argv, char** envp){
     // Virtual files belong to the shared cache, so register them only once.
     cpp.fc = fc;
     cpp.logger = logger;
-    cpp.target = cc_target_funcs[cc_target_arg]();
+    cpp.target = cc_targets[cc_target_arg];
     err = cpp_setup_builtin_headers(&cpp);
     if(err) goto stringify_error;
     if(!cpp_nostdinc){

@@ -2927,7 +2927,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     break;
                 case CC_LONG_DOUBLE:
                     node->type.basic.kind = CCBT_long_double;
-                    switch(p->cpp.target.long_double_format){
+                    switch(p->cpp.target->long_double_format){
                         case CC_LONG_DOUBLE_BINARY64:
                             node->double_ = tok.constant.double_value;
                             break;
@@ -12623,7 +12623,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
 static
 const CcTargetConfig*
 cc_target(const CcParser* p){
-    return &p->cpp.target;
+    return p->cpp.target;
 }
 
 static
@@ -12738,7 +12738,7 @@ int
 cc_define_builtin_types(CcParser* p){
     int err;
     Allocator al = cc_allocator(p);
-    CcTargetConfig t = p->cpp.target;
+    const CcTargetConfig *t = p->cpp.target;
 
     {
         err = cc_pointer_of(p, ccqt_basic(CCBT_void), &p->void_star);
@@ -12764,7 +12764,7 @@ cc_define_builtin_types(CcParser* p){
     if(!gnu_va_list) return CC_OOM_ERROR;
     CcQualType va_list_type;
 
-    switch(t.target){
+    switch(t->target){
         case CC_TARGET_X86_64_LINUX:
         case CC_TARGET_X86_64_MACOS: {
             // struct __va_list_tag { unsigned gp_offset; unsigned fp_offset;
@@ -13075,11 +13075,11 @@ cc_define_builtin_types(CcParser* p){
             { SVI("__uint128_t"), CCBT_unsigned_int128, },
             { SVI("int128_t"), CCBT_int128},
             { SVI("uint128_t"), CCBT_unsigned_int128},
-            { SVI("int64_t"), t.int64_type},
-            { SVI("uint64_t"), ccbt_to_unsigned(t.int64_type)},
-            { SVI("intptr_t"), t.intptr_type},
-            { SVI("uintptr_t"), ccbt_to_unsigned(t.intptr_type)},
-            { SVI("size_t"), t.size_type},
+            { SVI("int64_t"), t->int64_type},
+            { SVI("uint64_t"), ccbt_to_unsigned(t->int64_type)},
+            { SVI("intptr_t"), t->intptr_type},
+            { SVI("uintptr_t"), ccbt_to_unsigned(t->intptr_type)},
+            { SVI("size_t"), t->size_type},
             { SVI("uint32_t"), CCBT_unsigned},
             { SVI("int32_t"), CCBT_int},
             { SVI("uint16_t"), CCBT_unsigned_short},
@@ -13313,17 +13313,17 @@ cc_define_builtin_types(CcParser* p){
     // Register __builtin_ libc functions
     {
         struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic; _Bool printf_like;} builtins[] = {
-            {SVI("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
             {SVI("strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
-            {SVI("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("malloc"), p->void_star, 1, {{.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("calloc"), p->void_star, 2, {{.basic.kind=t.size_type},{.basic.kind=t.size_type}}, .variadic=0},
+            {SVI("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("malloc"), p->void_star, 1, {{.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("calloc"), p->void_star, 2, {{.basic.kind=t->size_type},{.basic.kind=t->size_type}}, .variadic=0},
             {SVI("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
-            {SVI("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t.size_type}}, .variadic=0},
-            {SVI("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t.size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t->size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
             {SVI("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
             {SVI("fabsf"), {.basic.kind=CCBT_float}, 1, {{.basic.kind=CCBT_float}}},
             {SVI("fabs"), {.basic.kind=CCBT_double}, 1, {{.basic.kind=CCBT_double}}},
