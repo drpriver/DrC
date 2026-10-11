@@ -394,7 +394,8 @@ cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, con
     f->return_type = return_type;
     f->param_count = param_count;
     f->fixed_param_count = fixed_param_count;
-    memcpy(f->params, params, sizeof *params * param_count);
+    if(param_count)
+        memcpy(f->params, params, sizeof *params * param_count);
     void** items = t->data;
     uint32_t* idxes = cctc_idxes(t);
     uint32_t slot = t->count++;
