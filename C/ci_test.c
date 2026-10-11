@@ -12809,6 +12809,12 @@ TestFunction(test_interpreter_runtime_errors){
             .lowering_error = 1,
         },
         {
+            "bfloat16 literal fails during lowering", __LINE__,
+            SVI("1.5bf16;\n"),
+            SVI("(test):1:1: error: bfloat16 expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
             "half precision complex literal fails during lowering", __LINE__,
             SVI("1.5f16i;\n"),
             SVI("(test):1:1: error: complex expression lowering is not supported\n"),

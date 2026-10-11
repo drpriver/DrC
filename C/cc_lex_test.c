@@ -204,6 +204,7 @@ cc_tok_matches(CcToken got, CcToken exp){
             if(got.constant.ctype != exp.constant.ctype) return 0;
             if(got.constant.is_imaginary != exp.constant.is_imaginary) return 0;
             switch(got.constant.ctype){
+                case CC_BFLOAT16:
                 case CC_FLOAT16:
                     return got.constant.integer_value == exp.constant.integer_value;
                 case CC_FLOAT:
@@ -389,6 +390,25 @@ TestFunction(test_cc_lex_floats){
         {"half_decimal_below_tie", SV("1.0014648437499999999999999999999999999999f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
         {"float_F",      SV("3.14F"),      cc_float_tok(3.14f), __LINE__},
         {"double",       SV("3.14"),       cc_double_tok(3.14), __LINE__},
+        {"bfloat16", SV("1.5bf16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_upper", SV("1.5BF16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_zero", SV("0.0bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_exponent", SV("1.5e2bf16"), cc_int_tok(0x4316, CC_BFLOAT16), __LINE__},
+        {"bfloat16_hex", SV("0x1.8p0bf16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_hex_upper", SV("0X1.8P0BF16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_tie_even", SV("1.00390625bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
+        {"bfloat16_above_tie", SV("1.003906250000000000000000000000000000001bf16"), cc_int_tok(0x3f81, CC_BFLOAT16), __LINE__},
+        {"bfloat16_below_tie", SV("1.003906249999999999999999999999999999999bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
+        {"bfloat16_tie_odd", SV("1.01171875bf16"), cc_int_tok(0x3f82, CC_BFLOAT16), __LINE__},
+        {"bfloat16_hex_tie", SV("0x1.01p0bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
+        {"bfloat16_subnormal", SV("0x1p-133bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
+        {"bfloat16_decimal_subnormal", SV("9.18355e-41bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
+        {"bfloat16_decimal_above_underflow_tie", SV("4.5917748078995606e-41bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
+        {"bfloat16_hex_integer", SV("0xbf16"), cc_int_tok(0xbf16, CC_INT), __LINE__},
+        {"bfloat16_underflow_tie", SV("0x1p-134bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
+        {"bfloat16_above_underflow_tie", SV("0x1.0001p-134bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
+        {"bfloat16_overflow", SV("1e100bf16"), cc_int_tok(0x7f80, CC_BFLOAT16), __LINE__},
+        {"bfloat16_underflow", SV("1e-100bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
         {"imaginary_i", SV("3.14i"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
         {"imaginary_I", SV("3.14I"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
         {"imaginary_j", SV("3.14j"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
@@ -1284,7 +1304,7 @@ TestFunction(test_fast_float_binary16_exhaust){
                 _Bool negative = lo & 1;
                 msb_sprintf(&sb, "%s%u.", negative ? "-" : "", (unsigned)(numerator >> 25));
                 char* text = sb.data;
-                int length = sb.cursor;
+                int length = (int)sb.cursor;
                 for(int digit = 0; digit < 25; digit++){
                     remainder *= 10;
                     text[length++] = (char)('0' + (remainder >> 25));

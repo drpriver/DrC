@@ -192,6 +192,8 @@ TestFunction(test_call_abi_types){
     static int idx = 0;
     for(int i = test_atomic_increment(&idx); i < CC_TARGET_COUNT; i = test_atomic_increment(&idx)){
         CcTargetConfig target = cc_target_funcs[i]();
+        TestExpectEquals(unsigned, target.sizeof_[CCBT_bfloat16], 2);
+        TestExpectEquals(unsigned, target.alignof_[CCBT_bfloat16], 2);
         TestExpectEquals(unsigned, target.sizeof_[CCBT_float16_complex], 2*target.sizeof_[CCBT_float16]);
         TestExpectEquals(unsigned, target.alignof_[CCBT_float16_complex], target.alignof_[CCBT_float16]);
         CcPointer ip = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_int)};
@@ -288,6 +290,22 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "bfloat16 types, casts, literals, and arithmetic types", __LINE__,
+            SVI("__bf16 a; typedef const __bf16 BF; BF b;\n"
+                "auto z=1.5bf16; auto w=2.0BF16; auto cast=(__bf16)1.0f;\n"
+                "__bf16 values[2]; __bf16 *p; __bf16 f(__bf16 x);\n"
+                "_Static_assert(typeof(z)==__bf16&&sizeof(z)==2&&alignof(z)==2);\n"
+                "_Static_assert(typeof(z)!=_Float16&&typeof(z)!=float);\n"
+                "_Static_assert(typeof(z+1)==__bf16);\n"
+                "_Static_assert(typeof(-z)==__bf16);\n"
+                "_Static_assert(typeof(z+1.0f)==float);\n"
+                "_Static_assert(typeof(z+1.0)==double);\n"),
+            .vars = {{SVI("a"), SVI("__bf16")}, {SVI("b"), SVI("const __bf16")},
+                {SVI("z"), SVI("__bf16"), SVI("1.5bf16")},
+                {SVI("w"), SVI("__bf16"), SVI("2bf16")},
+                {SVI("values"), SVI("__bf16[2]")}, {SVI("p"), SVI("__bf16 *")}},
+        },
         {
             "complex types in either specifier order", __LINE__,
             SVI("_Complex float f; float _Complex g; _Complex double d; double _Complex e;\n"

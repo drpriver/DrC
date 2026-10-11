@@ -167,6 +167,11 @@ FASTFLOAT_API
 fast_float_from_chars_result
 fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt);
 
+// Ditto, but for bfloat16 encoding (8-bit exponent, 8-bit significand).
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_bfloat16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt);
+
 // ditto, but for IEE binary128 encoding.
 // Uses pointer to a pair of uint64_t for compilers that don't support _Float128.
 // Least significant word first.
@@ -2319,9 +2324,9 @@ fast_float_from_chars_double(const char *first, const char *last, double *value,
     return answer;
 }
 
-FASTFLOAT_API
+static
 fast_float_from_chars_result
-fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt){
+fast_float_from_chars_16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt, _Bool bfloat){
     while(first != last && *first == '+') first++;
     fast_float_from_chars_result result = {first, FASTFLOAT_NO_ERROR};
     if(first == last){
@@ -2340,20 +2345,35 @@ fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *va
         result = fast_float_parse_infnan_double(first, last, &special);
         if(result.error) return result;
         // Only reuse the syntax scanner, never an intermediate finite float.
-        bits = fast_float_strncasecmp(first + negative, "nan", 3) ? 0x7e00 : 0x7c00;
+        bits = fast_float_strncasecmp(first + negative, "nan", 3)
+            ? (bfloat ? 0x7fc0 : 0x7e00) : (bfloat ? 0x7f80 : 0x7c00);
     }
     else {
         result.ptr = pns.lastmatch;
         uint8_t digits[FAST_FLOAT_DECIMAL_MAX_DIGITS];
         fast_float_decimal d = fast_float_parse_decimal(first, pns.lastmatch, digits, sizeof digits);
-        // 11 significant bits, exponent bias 15, all-ones exponent 31.
-        // The decimal cutoffs lie outside the rounding boundaries at
-        // 2^-25 (zero/least subnormal) and 65520 (largest finite/infinity).
-        fast_float_wide_mantissa am = fast_float_compute_float_spec(&d, 11, -15, 31, -8, 6);
-        bits = (uint16_t)((am.mantissa.low & 0x3ff) | ((uint16_t)am.power2 << 10));
+        // Round directly to the destination format, avoiding double rounding.
+        // Decimal cutoffs lie beyond each format's rounding boundaries.
+        fast_float_wide_mantissa am = bfloat
+            ? fast_float_compute_float_spec(&d, 8, -127, 255, -42, 40)
+            : fast_float_compute_float_spec(&d, 11, -15, 31, -8, 6);
+        bits = (uint16_t)((am.mantissa.low & (bfloat ? 0x7f : 0x3ff))
+            | ((uint16_t)am.power2 << (bfloat ? 7 : 10)));
     }
     *value = (uint16_t)(bits | ((uint16_t)negative << 15));
     return result;
+}
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_binary16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt){
+    return fast_float_from_chars_16(first, last, value, fmt, 0);
+}
+
+FASTFLOAT_API
+fast_float_from_chars_result
+fast_float_from_chars_bfloat16(const char *first, const char *last, uint16_t *value, enum fast_float_chars_format fmt){
+    return fast_float_from_chars_16(first, last, value, fmt, 1);
 }
 
 static

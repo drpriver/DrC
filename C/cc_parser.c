@@ -372,6 +372,9 @@ cc_usual_arithmetic(CcParser* p, CcExpr* lhs, CcExpr* rhs, CcQualType* out, SrcL
     if(ak == CCBT_float16 || bk == CCBT_float16){
         *out = ccqt_basic(CCBT_float16); return 0;
     }
+    if(ak == CCBT_bfloat16 || bk == CCBT_bfloat16){
+        *out = ccqt_basic(CCBT_bfloat16); return 0;
+    }
     CcQualType ap, bp;
     int err = cc_integer_promote(p, a, &ap, loc);
     if(err) return err;
@@ -997,6 +1000,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_typeof: case CC_typeof_unqual:
             case CC___auto_type:
             case CC__Complex: case CC__Imaginary:
+            case CC___bf16:
             case CC__Float16: case CC__Float32: case CC__Float64: case CC__Float128: case CC__Float32x: case CC__Float64x:
             case CC__Decimal32: case CC__Decimal64: case CC__Decimal128:
             case CC__BitInt:
@@ -2908,8 +2912,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, (CcQualType){0}, 0);
             if(!node) return CC_OOM_ERROR;
             switch(tok.constant.ctype){
+                case CC_BFLOAT16:
                 case CC_FLOAT16:
-                    node->type.basic.kind = CCBT_float16;
+                    node->type.basic.kind = tok.constant.ctype == CC_BFLOAT16 ? CCBT_bfloat16 : CCBT_float16;
                     node->uinteger = tok.constant.integer_value;
                     break;
                 case CC_FLOAT:
@@ -4607,6 +4612,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC__Decimal32:
             case CC__Decimal64:
             case CC__Float128:
+            case CC___bf16:
             case CC__Float16:
             case CC__Float32:
             case CC__Float32x:
@@ -10434,12 +10440,13 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "constexpr after _Atomic");
                         spec->sp_constexpr = 1;
                         continue;
+                    case CC___bf16:
                     case CC__Float16:
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_float16);
+                        *base_type = ccqt_basic(tok.kw.kw == CC___bf16 ? CCBT_bfloat16 : CCBT_float16);
                         continue;
                     case CC__Float32:
                         if(base_type->bits)
@@ -11267,6 +11274,7 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 case CC_restrict:
                 case CC_unsigned:
                 case CC_volatile:
+                case CC___bf16:
                 case CC__Float16:
                 case CC__Float32:
                 case CC__Float64:
@@ -13484,6 +13492,12 @@ cc_eval_u128(CcParser* p, CcExpr* v){
 static
 CiFloat128
 cc_eval_quad(CcParser* p, CcExpr* v){
+    if(ccqt_bt_eq(v->type, CCBT_bfloat16)){
+        uint32_t bits = (uint32_t)v->uinteger << 16;
+        float value;
+        memcpy(&value, &bits, sizeof value);
+        return ci_float128_from_float(value);
+    }
     if(ccqt_bt_eq(v->type, CCBT_float128)) return v->quad;
     if(ccqt_bt_eq(v->type, CCBT_long_double)){
         switch(cc_target(p)->long_double_format){
@@ -13525,7 +13539,7 @@ static
 int
 cc_eval_wide_cast(CcParser* p, CcExpr* v, CcExpr* out){
     CcQualType t = out->type;
-    if(ccqt_bt_eq(t, CCBT_float16) || ccqt_bt_eq(v->type, CCBT_float16))
+    if(ccqt_bt_eq(t, CCBT_float16) || ccqt_bt_eq(v->type, CCBT_float16) || ccqt_bt_eq(t, CCBT_bfloat16) || ccqt_bt_eq(v->type, CCBT_bfloat16))
         return CC_UNIMPLEMENTED_ERROR;
     if(ccqt_bt_eq(t, CCBT_bool)){
         out->integer = cc_eval_value_truth(p, v);
@@ -13699,6 +13713,7 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
         case CCBT_unsigned_long_long:
             *out = v->integer;
             return 0;
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -13780,6 +13795,7 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
         case CCBT_unsigned_long_long:
             *out = v->uinteger;
             return 0;
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -13873,6 +13889,7 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_int128:
         case CCBT_unsigned_int128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -13959,6 +13976,7 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT__Any:
             return CC_UNIMPLEMENTED_ERROR;
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -16314,6 +16332,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 }
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
+                case CCBT_bfloat16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -16404,6 +16423,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     break;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
+                case CCBT_bfloat16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -16523,6 +16543,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     LOGNOT(double_);
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
+                case CCBT_bfloat16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -16861,6 +16882,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     goto fini_binary;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
+                case CCBT_bfloat16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -16898,6 +16920,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             return err;
         }
         case CC_EXPR_CAST: {
+            if(e->type.unqual != e->lhs->type.unqual && (ccqt_bt_eq(e->type, CCBT_bfloat16) || ccqt_bt_eq(e->lhs->type, CCBT_bfloat16)))
+                return CC_NOT_CONSTANT_ERROR;
             CcQualType target = e->type;
             while(ccqt_kind(target) == CC_ENUM) target = ccqt_as_enum(target)->underlying;
             if(ccqt_bt_eq(target, CCBT_bool)){
@@ -17575,9 +17599,6 @@ cc_eval_integer(CcEvalCtx* ctx, CcExpr* e, int64_t* out){
     if(cc_eval_wide(val->type)){
         CiUint128 bits = cc_eval_u128(p, val);
         _Bool is_unsigned = ccqt_is_unsigned(val->type, !cc_target(p)->char_is_signed);
-        // Preserve the existing uint64_t bit-pattern convention, but never
-        // discard significant bits from a wider evaluated constant. Explicit
-        // casts have already narrowed their operand in cc_eval_expr.
         _Bool positive = !ci_uint128_hi(bits) && (is_unsigned || ci_uint128_lo(bits) <= INT64_MAX);
         _Bool negative = !is_unsigned && ci_uint128_hi(bits) == UINT64_MAX && ci_uint128_lo(bits) > INT64_MAX;
         if(!positive && !negative){

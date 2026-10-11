@@ -57,6 +57,7 @@ enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
     CCBT_double,
     CCBT_long_double,
     CCBT_float128,
+    CCBT_bfloat16,
     CCBT_float16_complex,
     CCBT_float_complex,
     CCBT_double_complex,
@@ -363,7 +364,7 @@ ccbt_is_integer(CcBasicTypeKind k){
 static inline
 _Bool
 ccbt_is_float(CcBasicTypeKind k){
-    return k >= CCBT_float16 && k <= CCBT_float128;
+    return k >= CCBT_float16 && k <= CCBT_bfloat16;
 }
 
 static inline
@@ -414,6 +415,7 @@ ccbt_is_unsigned(CcBasicTypeKind k, _Bool char_is_unsigned){
         case CCBT_double_complex:
         case CCBT_float:
         case CCBT_float128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_float_complex:
         case CCBT_int:
@@ -478,6 +480,7 @@ ccbt_int_rank(CcBasicTypeKind k){
         case CCBT_double_complex:
         case CCBT_float:
         case CCBT_float128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_float_complex:
         case CCBT_long_double:
@@ -529,6 +532,7 @@ ccbt_to_unsigned(CcBasicTypeKind k){
         case CCBT_double_complex:
         case CCBT_float:
         case CCBT_float128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_float_complex:
         case CCBT_long_double:
@@ -586,6 +590,7 @@ ccbt_to_signed(CcBasicTypeKind k){
         case CCBT_double_complex:
         case CCBT_float:
         case CCBT_float128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_float_complex:
         case CCBT_int:

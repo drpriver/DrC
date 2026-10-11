@@ -4280,6 +4280,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                 case CCBT_unsigned_int128:
                     err = ci_error(ci, loc, "Invalid return type: int128 not expressable as cpp token");
                     goto cleanup;
+                case CCBT_bfloat16:
                 case CCBT_float16:
                     err = ci_unimplemented(ci, loc, "TODO: float16a");
                     goto cleanup;

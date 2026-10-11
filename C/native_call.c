@@ -134,6 +134,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_char:
                         case CCBT_double_complex:
                         case CCBT_float128:
+                        case CCBT_bfloat16:
                         case CCBT_float16:
                         case CCBT_float_complex:
                         case CCBT_int:
@@ -236,6 +237,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         case CCBT_char:
                         case CCBT_double_complex:
                         case CCBT_float128:
+                        case CCBT_bfloat16:
                         case CCBT_float16:
                         case CCBT_float_complex:
                         case CCBT_int:
@@ -416,6 +418,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                 case CCBT_unsigned_int128:
                     return cctype_integer_ffi(a, 16, 16, out);
                 case CCBT_float128:
+                case CCBT_bfloat16:
                 case CCBT_float16:
                     return NC_UNSUPPORTED_TYPE;
                 case CCBT__Any:

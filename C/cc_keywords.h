@@ -39,6 +39,7 @@
     X(_Self, _Self) \
 
 #define CCKWS6(X) \
+    X(__bf16, __bf16) \
     X(double, double) \
     X(extern, extern) \
     X(inline, inline) \

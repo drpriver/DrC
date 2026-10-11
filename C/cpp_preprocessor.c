@@ -3968,6 +3968,9 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
         case CCBT_double:
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
             break;
+        case CCBT_bfloat16:
+            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__bf16")};
+            break;
         case CCBT_float16:
             toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float16")};
             break;
@@ -4050,6 +4053,7 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT_int:
         case CCBT_int128:
         case CCBT_unsigned_int128:
+        case CCBT_bfloat16:
         case CCBT_float16:
         case CCBT_float:
         case CCBT_double:
@@ -7404,7 +7408,11 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     if(!exponent_digits) goto invalid;
     CcConstantType type = CC_DOUBLE;
     if(i < len){
-        if(s[i] == 'f' || s[i] == 'F') type = CC_FLOAT;
+        if(i + 4 == len && (!memcmp(s+i, "bf16", 4) || !memcmp(s+i, "BF16", 4))){
+            type = CC_BFLOAT16;
+            i += 3;
+        }
+        else if(s[i] == 'f' || s[i] == 'F') type = CC_FLOAT;
         else if(s[i] == 'l' || s[i] == 'L') type = CC_LONG_DOUBLE;
         else goto invalid;
         i++;
@@ -7418,8 +7426,8 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     exponent += bits - 1 - 4*fractional_digits;
     _Bool x87 = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_X87;
     _Bool quad = type == CC_LONG_DOUBLE && cpp->target.long_double_format == CC_LONG_DOUBLE_BINARY128;
-    int precision = quad ? 113 : x87 ? 64 : type == CC_FLOAT16 ? 11 : type == CC_FLOAT ? 24 : 53;
-    int bias = (quad || x87) ? 16383 : type == CC_FLOAT16 ? 15 : type == CC_FLOAT ? 127 : 1023;
+    int precision = quad ? 113 : x87 ? 64 : type == CC_BFLOAT16 ? 8 : type == CC_FLOAT16 ? 11 : type == CC_FLOAT ? 24 : 53;
+    int bias = (quad || x87) ? 16383 : type == CC_FLOAT16 ? 15 : (type == CC_FLOAT || type == CC_BFLOAT16) ? 127 : 1023;
     uint64_t lo = 0, hi = 0;
     int encoded_exponent = 0;
     if(bits){
@@ -7472,6 +7480,9 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     else if(x87){
         uint64_t words[2] = {lo | (encoded_exponent ? (uint64_t)1 << 63 : 0), (uint64_t)encoded_exponent};
         out->constant.x87_value = ci_float80_read(words);
+    }
+    else if(type == CC_BFLOAT16){
+        out->constant.integer_value = (lo & 0x7f) | ((uint64_t)encoded_exponent << 7);
     }
     else if(type == CC_FLOAT16){
         out->constant.integer_value = (lo & 0x3ff) | ((uint64_t)encoded_exponent << 10);
@@ -7530,7 +7541,9 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
             if(s[i] == '.' || s[i] == 'p' || s[i] == 'P')
                 return cpp_hex_float_to_cc_tok(cpp, cpptok, cctok);
     }
-    _Bool has_f16 = len >= 3 && !(s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+    _Bool has_bf16 = !maybe_hex && len >= 4 && (sv_equals2(SV("bf16"), s+len-4, 4) || sv_equals2(SV("BF16"), s+len-4, 4));
+    if(has_bf16) len -= 4;
+    _Bool has_f16 = !has_bf16 && len >= 3 && !(s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
         && (s[len-3] == 'f' || s[len-3] == 'F')
         && s[len-2] == '1' && s[len-1] == '6';
     if(has_f16) len -= 3;
@@ -7552,7 +7565,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
     else if(len >= 2 && s[len-1] == '8' && (s[len-2] == 'i' || s[len-2] == 'I')){
         msvc_bits = 8; len -= 2;
     }
-    if(has_f16 && msvc_bits)
+    if((has_f16 || has_bf16) && msvc_bits)
         return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
     if(msvc_bits){
         if(len && (s[len-1] == 'u' || s[len-1] == 'U')){
@@ -7563,7 +7576,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
     // Strip standard suffix from end
     int num_l = 0;
     _Bool has_f = 0;
-    if(!msvc_bits && !has_f16){
+    if(!msvc_bits && !has_f16 && !has_bf16){
         while(len){
             char c = s[len-1];
             if(c == 'u' || c == 'U'){
@@ -7627,7 +7640,14 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         if(has_u)
             return cpp_error(cpp, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
         CcConstantType ctype;
-        if(has_f16){
+        if(has_bf16){
+            uint16_t value;
+            fast_float_from_chars_result result = fast_float_from_chars_bfloat16(buf, buf + buf_len, &value, FASTFLOAT_FORMAT_GENERAL);
+            if(result.error || result.ptr != buf + buf_len)
+                return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
+            *cctok = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_BFLOAT16, .integer_value=value, .loc=cpptok->loc}};
+        }
+        else if(has_f16){
             uint16_t value;
             fast_float_from_chars_result result = fast_float_from_chars_binary16(
                 buf, buf + buf_len, &value, FASTFLOAT_FORMAT_GENERAL);
@@ -7657,7 +7677,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         }
         return 0;
     }
-    if(has_f16) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
+    if(has_f16 || has_bf16) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
     // Explicit 128-bit literals retain both words through tokenization.
     if(msvc_bits == 128 || num_l == 3){
         unsigned base = 10;

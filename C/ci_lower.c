@@ -751,6 +751,10 @@ static
 int
 ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     int err;
+    if(ccqt_bt_eq(e->type, CCBT_bfloat16)){
+        ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
+        return CI_UNIMPLEMENTED_ERROR;
+    }
     if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
         ci_error(ci, e->loc, "complex expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
@@ -4716,6 +4720,10 @@ static
 int
 ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     int err;
+    if(ccqt_bt_eq(e->type, CCBT_bfloat16)){
+        ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
+        return CI_UNIMPLEMENTED_ERROR;
+    }
     if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
         ci_error(ci, e->loc, "complex expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
