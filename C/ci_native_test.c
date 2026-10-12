@@ -322,9 +322,11 @@ static double abi_mix_fp_callback(double (*fn)(double,double,double,double,doubl
 static struct BigRecord abi_hidden_callback(struct BigRecord (*fn)(long long,long long,long long,long long,long long,struct MixRecord,long long,double)){
     return fn(1,2,3,4,5,(struct MixRecord){6,7.},8,9.);
 }
+#if defined __GNUC__ || defined __clang__
 static struct PaddedIntRecord abi_padding_callback(struct PaddedIntRecord (*fn)(long long,long long,long long,long long,long long,struct PaddedIntRecord,long long)){
     return fn(1,2,3,4,5,(struct PaddedIntRecord){3},7);
 }
+#endif
 
 #define ABI_ODD_FIXTURE(N) \
     struct AbiOdd##N { unsigned char bytes[N]; }; \
@@ -362,8 +364,15 @@ static union AbiX87Integer abi_union_callback(union AbiX87Integer (*fn)(union Ab
 #define ABI_I128_SKIP 1
 #endif
 
+#if defined __GNUC__ || defined __clang__
+#define ABI_PACKED_SYMBOL(name) (void*)name
+#define ABI_PACKED_SKIP 0
 struct __attribute__((packed)) AbiPacked64 {unsigned a:4; unsigned long long b:64;};
 static struct AbiPacked64 abi_packed64_callback(struct AbiPacked64 (*fn)(struct AbiPacked64),struct AbiPacked64 x){return fn(x);}
+#else
+#define ABI_PACKED_SYMBOL(name) NULL
+#define ABI_PACKED_SKIP 1
+#endif
 struct AbiLeadingPadding {unsigned long long:64; double x;};
 static struct AbiLeadingPadding abi_leading_bump(struct AbiLeadingPadding x){x.x+=1.; return x;}
 static struct AbiLeadingPadding abi_leading_callback(struct AbiLeadingPadding (*fn)(struct AbiLeadingPadding),struct AbiLeadingPadding x){return fn(x);}
@@ -371,26 +380,29 @@ static struct AbiLeadingPadding abi_leading_callback(struct AbiLeadingPadding (*
 // compiled with Clang, which otherwise ignores the unnamed bitfield.
 #if (defined __clang__ && !defined __APPLE__) || defined _WIN32
 struct AbiOnlyPadding {unsigned char padding:7;};
+#define ABI_EMPTY_INIT {0}
 #else
 struct AbiOnlyPadding {unsigned:7;};
+#define ABI_EMPTY_INIT {}
 #endif
 static long long abi_only_padding(long long a,long long b,long long c,long long d,long long e,struct AbiOnlyPadding p,long long tail){
     (void)p; return a+b+c+d+e+tail;
 }
 static long long abi_only_padding_callback(long long (*fn)(long long,long long,long long,long long,long long,struct AbiOnlyPadding,long long)){
-    return fn(1,2,3,4,5,(struct AbiOnlyPadding){},6);
+    return fn(1,2,3,4,5,(struct AbiOnlyPadding)ABI_EMPTY_INIT,6);
 }
 static int abi_empty_only(struct AbiOnlyPadding p){(void)p; return 9;}
 static int abi_empty_only_callback(int (*fn)(struct AbiOnlyPadding)){
-    return fn((struct AbiOnlyPadding){});
+    return fn((struct AbiOnlyPadding)ABI_EMPTY_INIT);
 }
 struct AbiNestedEmpty {struct AbiOnlyPadding e[2]; unsigned:7;};
 static long long abi_nested_empty(struct AbiOnlyPadding p,long long a,long long b,long long c,long long d,long long e,long long f,long long g,long long h,long long i,struct AbiNestedEmpty q,long long tail){
     (void)p; (void)q; return a+b+c+d+e+f+g+h+i+tail;
 }
 static long long abi_nested_empty_callback(long long (*fn)(struct AbiOnlyPadding,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct AbiNestedEmpty,long long)){
-    return fn((struct AbiOnlyPadding){},1,2,3,4,5,6,7,8,9,(struct AbiNestedEmpty){},10);
+    return fn((struct AbiOnlyPadding)ABI_EMPTY_INIT,1,2,3,4,5,6,7,8,9,(struct AbiNestedEmpty)ABI_EMPTY_INIT,10);
 }
+#undef ABI_EMPTY_INIT
 #ifndef __DRC__
 static long long abi_empty_varargs(struct AbiOnlyPadding p,int n,...){
     (void)p;
@@ -424,6 +436,9 @@ static double abi_hfa_variadic_callback(double (*fn)(int,...)){
 #define ABI_VARARG_SKIP 1
 #endif
 
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
+#define ABI_COMPLEX_RECORD_SYMBOL(name) (void*)name
+#define ABI_COMPLEX_RECORD_SKIP 0
 #ifndef __DRC__
 #define ABI_COMPLEX_SCALAR_SYMBOL(name) (void*)name
 #else
@@ -439,6 +454,11 @@ ABI_COMPLEX_FIXTURE(float,f)
 ABI_COMPLEX_FIXTURE(double,d)
 ABI_COMPLEX_FIXTURE(long double,ld)
 #undef ABI_COMPLEX_FIXTURE
+#else
+#define ABI_COMPLEX_SCALAR_SYMBOL(name) NULL
+#define ABI_COMPLEX_RECORD_SYMBOL(name) NULL
+#define ABI_COMPLEX_RECORD_SKIP 1
+#endif
 
 #if !defined __DRC__ && ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 12) || (defined __clang__ && __clang_major__ >= 15))
 #define ABI_HALF_SYMBOL(name) (void*)name
@@ -510,6 +530,7 @@ TestFunction(test_interop){
             "struct B x=apply(f); return x.a==21&&x.b==16&&x.c==8;\n"),
         {{SV("apply"),(void*)abi_hidden_callback}}, .exit_code=1,
     },
+    #if defined __GNUC__ || defined __clang__
     {
         "ABI callback: padded integer record under register pressure", __LINE__,
         SVI("struct __attribute__((aligned(16))) S {long long x;};\n"
@@ -518,6 +539,7 @@ TestFunction(test_interop){
             "return apply(f).x==25;\n"),
         {{SV("apply"),(void*)abi_padding_callback}}, .exit_code=1,
     },
+    #endif
     #define ABI_ODD_CASE(N) { \
         "ABI: " #N "-byte arguments, results and callbacks preserve canaries", __LINE__, \
         SVI("struct S {unsigned char bytes[" #N "];}; struct W {unsigned char before;struct S s;unsigned char after;};\n" \
@@ -588,7 +610,7 @@ TestFunction(test_interop){
             "struct S apply(struct S(*)(struct S),struct S);struct S f(struct S s){s.a++;s.b+=2;return s;}\n"
             "struct W {unsigned char before;struct S s;unsigned char after;} w={.before=0xa5,.s={7,0xfedcba9876543210ULL},.after=0x5a};\n"
             "w.s=apply(f,w.s);return w.s.a==8&&w.s.b==0xfedcba9876543212ULL&&w.before==0xa5&&w.after==0x5a;\n"),
-        {{SV("apply"),(void*)abi_packed64_callback}}, .exit_code=1,
+        {{SV("apply"),ABI_PACKED_SYMBOL(abi_packed64_callback)}}, .exit_code=1, .skip=ABI_PACKED_SKIP,
     },
     {
         "ABI callback: packed full-width 128-bit field starting mid-byte", __LINE__,
@@ -682,8 +704,8 @@ TestFunction(test_interop){
             "struct S g(struct S s){return s;}union U {struct S s;T parts[2];} in={.parts={3,5}};\n" \
             "union U out={.s=echo_record(in.s)},cb={.s=apply_record(g,in.s)};\n" \
             "return out.parts[0]==3&&out.parts[1]==5&&cb.parts[0]==3&&cb.parts[1]==5;\n"), \
-        {{SV("echo_record"),(void*)abi_complex_record_##tag},{SV("apply_record"),(void*)abi_complex_record_callback_##tag}}, \
-        .exit_code=1, \
+        {{SV("echo_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_##tag)},{SV("apply_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_callback_##tag)}}, \
+        .exit_code=1, .skip=ABI_COMPLEX_RECORD_SKIP, \
     },
     ABI_COMPLEX_CASE(float,f)
     ABI_COMPLEX_CASE(double,d)
