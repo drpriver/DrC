@@ -229,8 +229,7 @@ struct CcSysvAggregate {
     uint32_t eightbyte_count:4;
     uint32_t gp_count:2, fp_count:2; // SSEUP shares the preceding SSE register
     uint32_t x87_count:2; // return registers only
-    // Widest SSE/SSEUP group. 32/64-byte groups require AVX/AVX-512 PCS
-    // support; unnamed arguments of those vector types are passed on the stack.
+    // Widest SSE/SSEUP group. 32/64-byte groups describe AVX/AVX-512 PCS
     uint32_t vector_size:7;
     uint32_t is_memory_class:1; // stack argument, indirect return
     uint32_t argument_on_stack:1; // also true for X87/X87UP (direct x87 return)
@@ -299,7 +298,8 @@ struct CC_ALIGN(8) CcStruct {
             uint32_t is_incomplete: 1,
                      packed:        1,
                      has_fam:       1,
-                     _padding:     25;
+                     has_wide_vector: 1,
+                     _padding:     24;
         };
     };
     uint32_t size;
@@ -325,7 +325,9 @@ struct CC_ALIGN(8) CcUnion {
             CcTypeKind kind:        4;
             uint32_t is_incomplete: 1,
                      packed:        1,
-                     _padding:     26;
+                     _reserved_has_fam: 1,
+                     has_wide_vector: 1,
+                     _padding:     24;
         };
     };
     uint32_t size;

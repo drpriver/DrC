@@ -10759,6 +10759,7 @@ TestFunction(test_record_call_abi){
         CcSysvAggregate sysv;
         CcArm64Aggregate arm64;
         CcWindowsAggregate win64;
+        _Bool has_wide_vector;
     } cases[] = {
         {CC_TARGET_X86_64_LINUX, SVI("struct S { double x; int y; };"), 0, 16,
             .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=1, .fp_count=1, .vector_size=8}},
@@ -10805,9 +10806,39 @@ TestFunction(test_record_call_abi){
         {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); struct S { V x; };"), 0, 16,
             .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3), .eightbyte_count=2, .fp_count=1, .vector_size=16}},
         {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(32))); struct S { V x; };"), 0, 32,
-            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9), .eightbyte_count=4, .fp_count=1, .vector_size=32}},
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9), .eightbyte_count=4, .fp_count=1, .vector_size=32}, .has_wide_vector=1},
         {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(64))); struct S { V x; };"), 0, 64,
-            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9) | (CC_SYSV_SSEUP << 12) | (CC_SYSV_SSEUP << 15) | (CC_SYSV_SSEUP << 18) | (CC_SYSV_SSEUP << 21), .eightbyte_count=8, .fp_count=1, .vector_size=64}},
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9) | (CC_SYSV_SSEUP << 12) | (CC_SYSV_SSEUP << 15) | (CC_SYSV_SSEUP << 18) | (CC_SYSV_SSEUP << 21), .eightbyte_count=8, .fp_count=1, .vector_size=64}, .has_wide_vector=1},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef __int128 V __attribute__((vector_size(32))); struct S { V x; };"), 0, 32,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}, .has_wide_vector=1},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(32))); union I {V x;}; struct S {union I x[1];};"), 0, 32,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9), .eightbyte_count=4, .fp_count=1, .vector_size=32}, .has_wide_vector=1},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef char V __attribute__((vector_size(1))); struct S {V x;};"), 0, 1,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef short V __attribute__((vector_size(2))); struct S {V x;};"), 0, 2,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("typedef int V __attribute__((vector_size(4))); struct S {V x;};"), 0, 4,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(4))); struct S {V x;};"), 0, 4,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("typedef float V __attribute__((vector_size(4))); struct S {V x;};"), 0, 4,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef _Float16 V __attribute__((vector_size(2))); struct S {V x;};"), 0, 2,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef _Float16 V __attribute__((vector_size(4))); struct S {V x;};"), 0, 4,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_MACOS, SVI("typedef _Float16 V __attribute__((vector_size(4))); struct S {V x;};"), 0, 4,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(8))); struct S {V x;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef double V __attribute__((vector_size(8))); struct S {V x;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("typedef double V __attribute__((vector_size(8))); struct S {V x;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef long long V __attribute__((vector_size(8))); struct S {V x;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_MACOS, SVI("typedef long long V __attribute__((vector_size(8))); struct S {V x;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
         {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); struct S { V x[2]; };"), 0, 32,
             .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
         {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); union S { V x; int y; };"), 1, 16,
@@ -10910,6 +10941,7 @@ TestFunction(test_record_call_abi){
             TestExpectTrue(void*, s);
             if(!s) goto done;
             TestExpectEquals(uint32_t, s->size, cases[i].size);
+            TestExpectEquals(_Bool, s->has_wide_vector, cases[i].has_wide_vector);
             switch(cases[i].target){
                 case CC_TARGET_X86_64_LINUX:
                 case CC_TARGET_X86_64_MACOS:

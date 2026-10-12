@@ -7742,7 +7742,28 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             CcArray* arr = ccqt_as_array(type);
             if(arr->is_vector){
                 uint32_t sz = arr->vector_size;
-                if((sz != 8 && sz != 16 && sz != 32 && sz != 64) || off % sz) return 1;
+                if((sz != 1 && sz != 2 && sz != 4 && sz != 8 && sz != 16 && sz != 32 && sz != 64) || off % sz) return 1;
+                CcBasicTypeKind elem = ccqt_basic_kind(arr->element);
+                if(sz < 8){
+                    // Clang coerces small vectors to integers. GCC uses SSE
+                    // for two half-precision elements, but passes other small
+                    // floating vectors in memory.
+                    if(tc->os != CC_OS_MACOS && ccbt_is_float(elem)){
+                        if(sz == 4 && (elem == CCBT_float16 || elem == CCBT_bfloat16))
+                            return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
+                        return 1;
+                    }
+                    return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
+                }
+                if(sz == 8){
+                    if(elem == CCBT_double) return 1; // single-double vector
+                    if(tc->os == CC_OS_MACOS && tc->sizeof_[elem] == 8 && ccbt_is_integer(elem))
+                        return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
+                    return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
+                }
+                // GCC passes wide vectors of 128-bit integers in memory even with AVX enabled.
+                if(sz > 16 && tc->os != CC_OS_MACOS && ccbt_is_integer(elem) && tc->sizeof_[elem] == 16)
+                    return 1;
                 if(cc_sysv_mark(cls, off, 8, CC_SYSV_SSE)) return 1;
                 for(uint32_t i = 8; i < sz; i += 8)
                     if(cc_sysv_mark(cls, off+i, 8, CC_SYSV_SSEUP)) return 1;
@@ -7876,7 +7897,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
             }
             if(arr->is_incomplete || arr->is_vla)
                 return 0;
-            // Zero-length array members disqualify Clang HFAs. 
+            // Zero-length array members disqualify Clang HFAs.
             // GCC also rejects arrays whose element type is not homogeneous.
             if(!arr->length && tc->os == CC_OS_MACOS)
                 return 0;
@@ -7942,9 +7963,30 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
 }
 
 static
+_Bool
+cc_type_has_wide_vector(CcQualType type){
+    switch(ccqt_kind(type)){
+        case CC_ARRAY:{
+            CcArray* arr = ccqt_as_array(type);
+            return arr->is_vector ? arr->vector_size > 16 : cc_type_has_wide_vector(arr->element);
+        }
+        case CC_STRUCT: case CC_UNION:
+            return ccqt_as_struct(type)->has_wide_vector;
+        default: return 0; // pointees and function signatures are not subobjects
+    }
+}
+
+static
 void
 cc_classify_record(CcParser* p, CcStruct* s, uint32_t natural_alignment){
     const CcTargetConfig* tc = cc_target(p);
+    s->has_wide_vector = 0;
+    for(uint32_t i = 0; i < s->field_count; i++){
+        if(!s->fields[i].is_method && cc_type_has_wide_vector(s->fields[i].type)){
+            s->has_wide_vector = 1;
+            break;
+        }
+    }
     switch(tc->target){
         case CC_TARGET_X86_64_LINUX:
         case CC_TARGET_X86_64_MACOS:

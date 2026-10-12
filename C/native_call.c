@@ -177,6 +177,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
         case CC_STRUCT:
         case CC_UNION:{
             CcStruct* s = ccqt_as_struct(t);
+            if(s->has_wide_vector) return NC_UNSUPPORTED_TYPE;
             if(s->ffi_cache){ *out = s->ffi_cache; return NC_NO_ERROR; }
             int err;
             switch(CC_TARGET_NATIVE){
