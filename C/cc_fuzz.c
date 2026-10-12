@@ -38,7 +38,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             .at = &at,
             .logger = logger,
             .env = &env,
-            .target = cc_target_test(),
+            .target = &cc_target_test,
         },
         .current = &cc.global,
         .eager_parsing = 1,
