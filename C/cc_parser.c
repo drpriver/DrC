@@ -7880,7 +7880,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
                 bk = CCBT_double;
             if(bk == CCBT_float128 && tc->long_double_format == CC_LONG_DOUBLE_BINARY128)
                 bk = CCBT_long_double;
-            out->hfa_type = bk;
+            out->hfa_type = (uint32_t)bk;
             out->hfa_count = (uint8_t)n;
             out->member_size = tc->sizeof_[bk];
             if(n == 2) cc_arm64_set_member_offset(out, 1, out->member_size);
