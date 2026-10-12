@@ -74,7 +74,7 @@ cctype_integer_ffi(Allocator a, uint32_t sz, uint32_t al, ffi_type*_Nonnull*_Non
     ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (rep_count + 1));
     if(!st) return NC_OOM_ERROR;
     ffi_type** elements = (ffi_type**)(st + 1);
-    *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
+    *st = (ffi_type){.size = sz, .alignment = (unsigned short)al, .type = FFI_TYPE_STRUCT, .elements = elements};
     for(uint32_t i = 0; i < rep_count; i++) elements[i] = rep_elem;
     elements[rep_count] = NULL;
     *out = st;
@@ -211,7 +211,7 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
                         *out = st;
                         err = NC_NO_ERROR;
                     }
-                    else err = cctype_integer_ffi(a, s->size, s->alignment, out);
+                    else err = cctype_integer_ffi(a, s->size, s->arm64.copy_alignment, out);
                     break;
                 case CC_TARGET_X86_64_WINDOWS_MSVC:
                 case CC_TARGET_X86_64_WINDOWS_MINGW:
