@@ -197,7 +197,7 @@ TestFunction(test_snippets){
         }
         size_t envp_size = 0;
         void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size, NULL, 0);
-        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
+        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output, CMD_CAPTURE_STDERR|CMD_CAPTURE_STDOUT);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->name, err);
             if(output.length){
@@ -278,11 +278,18 @@ TestFunction(test_samples){
                 "Samples/Simple/vfprintf.c:15: hello" EOL
             )
         },
-        { __LINE__, CSVI("Samples/Extensions/moremacros.c"), .syntax_only = 1, .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/__get.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/__mixin.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/_Type.c"), .syntax_only = 1 , .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/moremacros.c"),
+            CSVI(
+                "Samples/Extensions/moremacros.c:5:2: info: hello" EOL
+                "Samples/Extensions/moremacros.c:6:2: warning: #warning warning" EOL
+                "Samples/Extensions/moremacros.c:7:1: \"hi from print\"" EOL
+                "Samples/Extensions/moremacros.c:9:9: info: FOO defined" EOL
+            ),
+            .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/__get.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/__mixin.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/__VA_COUNT__.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/_Type.c"), .syntax_only = 1},
         {
             __LINE__, CSVI("Samples/Extensions/_Any.c"),
             SVI("hello world" EOL
@@ -297,16 +304,38 @@ TestFunction(test_samples){
                 "Formatted output is pretty cool" EOL
                 "My favorite type is void *" EOL),
         },
-        { __LINE__, CSVI("Samples/Extensions/defblock.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/enum_strings.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/fucs.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/json_parse.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/methods.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/moremacros.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/procmacro-if.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/procmacro.c"), .syntax_only = 1 , .skip=1},
-        { __LINE__, CSVI("Samples/Extensions/static-if.c"), .syntax_only = 1, .skip = 1 },
+        { __LINE__, CSVI("Samples/Extensions/defblock.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/enum_strings.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/fucs.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/json_parse.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/methods.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/procmacro-if.c"),
+            CSVI(
+                "Samples/Extensions/procmacro-if.c:6:2: info: void* is a pointer" EOL
+                "Samples/Extensions/procmacro-if.c:16:2: info: int is not a pointer" EOL
+            ),
+            .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/procmacro.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/static-if.c"), .syntax_only = 1, .skip=1},
+        { __LINE__, CSVI("Samples/Extensions/static-for.c"),
+            CSVI(
+                "APPLES" EOL
+                "Unknown fruit" EOL
+                "----" EOL
+                "APPLES (0)" EOL
+                "PEARS (2)" EOL
+            ),
+        },
+        {__LINE__, CSVI("Samples/Extensions/static-control.c"),
+            CSVI(
+                "host = \"localhost\"" EOL
+                "port = 8080" EOL
+                "tracing = true" EOL
+                "timeout = 2.5" EOL
+            ),
+        },
+        { __LINE__, CSVI("Samples/Extensions/static-goto.c"), CSVI("lmao" EOL)},
         {
             __LINE__, CSVI("Samples/Extensions/argv.c"),
             SVI(
@@ -380,7 +409,7 @@ TestFunction(test_samples){
         }
         size_t envp_size = 0;
         void* envp = env_to_envp(&env, allocator_from_arena(&arena), &envp_size, NULL, 0);
-        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output);
+        err = cmd_run_capture(&cmd, envp, allocator_from_arena(&arena), &output, CMD_CAPTURE_STDERR|CMD_CAPTURE_STDOUT);
         if(err){
             TestPrintf("%s:%d %s failed: %d\n", __FILE__, c->line, c->program.text, err);
             if(output.length){

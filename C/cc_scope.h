@@ -34,6 +34,8 @@ _Static_assert(sizeof(SrcLoc) == sizeof(uint64_t), "");
 _Static_assert(sizeof(CcTypedef) == 2*sizeof(uint64_t), "");
 struct CcScope {
     CcScope* parent;
+    _Bool static_for_bindings; // participates in lookup, not body declarations
+    _Bool retained; // referenced by a function's lexical scope
     AtomMap16(CcTypedef) typedefs;
     CcAnonAtomMap(CcVariable) variables;
     AtomMap(CcFunc) functions;
@@ -45,6 +47,8 @@ struct CcScope {
 };
 
 static inline void cc_scope_clear(CcScope* scope);
+static inline CcScope* cc_scope_declarations(CcScope*);
+static inline CcScope* cc_scope_retain(CcScope*);
 static SrcLoc cc_typedef_loc(const CcTypedef*);
 
 enum {

@@ -223,13 +223,104 @@ enum {FOLD_FAIL=-1};
 static int ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded);
 static uint64_t ci_fold_offset(CiLowerCtx* ctx, const CiFoldValue* index, uint32_t elem_sz);
 static int ci_fold_condition(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* truth);
+static int ci_fold_read_inputs(CiInterpreter*, CiLowerCtx*, CcExpr*, unsigned);
 enum {CI_ASSUMED_VARARG_ALIGN=8};
+static size_t cc_expr_nvalues(CcExpr*);
+
+static int ci_constexpr_uses_stmt(CiInterpreter*, CiLowerCtx*, CcStmtNode*_Nullable, Parray(CcVariable)*);
+
+// Successful folding consumes values without accessing the source object's
+// storage. Unfolded accesses conservatively keep its normal initialization.
+static
+int
+ci_constexpr_uses_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool address, Parray(CcVariable)* storage){
+    if(e->kind == CC_EXPR_ASSIGN && e->lhs->kind == CC_EXPR_VARIABLE
+       && e->lhs->var->constexpr_ && e->values[0] == e->lhs->var->initializer)
+        return 0; // Analyze this initializer only if the object is materialized.
+    if(!address){
+        CiFoldValue value;
+        int err = ci_fold_expr(ci, ctx, e, &value);
+        if(!err) return 0;
+        if(err == CI_OOM_ERROR) return err;
+    }
+    if(e->kind == CC_EXPR_VARIABLE){
+        CcVariable* var = e->var;
+        if(!var->automatic || !var->constexpr_) return 0;
+        var->constexpr_storage = 1;
+        for(size_t i = 0; i < storage->count; i++)
+            if(storage->data[i] == var) return 0;
+        return pa_push(storage, ctx->a, var) ? CI_OOM_ERROR : 0;
+    }
+    size_t count = cc_expr_nvalues(e);
+    for(size_t i = 0; i < count; i++){
+        int err = ci_constexpr_uses_expr(ci, ctx, e->values[i], address, storage);
+        if(err) return err;
+    }
+    switch((uint32_t)e->kind){
+        case CC_EXPR_VALUE: case CC_EXPR_FUNCTION: case CC_EXPR_BUILTIN:
+        case CC_EXPR_DOT: case CC_EXPR_ARROW:
+            return 0;
+        case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
+            for(size_t i = 0; i < e->init_list->count; i++){
+                CcExpr* value = e->init_list->entries[i].value;
+                if(!value) continue;
+                int err = ci_constexpr_uses_expr(ci, ctx, value, 0, storage);
+                if(err) return err;
+            }
+            return 0;
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            return ci_constexpr_uses_stmt(ci, ctx, e->stmt_body, storage);
+        default:
+            if(e->lhs) return ci_constexpr_uses_expr(ci, ctx, e->lhs,
+                address || e->kind == CC_EXPR_ADDR, storage);
+            return 0;
+    }
+}
+
+static
+int
+ci_constexpr_uses_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n, Parray(CcVariable)* storage){
+    if(!n) return 0;
+    unsigned expressions = 0;
+    switch((uint32_t)n->kind){
+        case CC_STMT_EXPR: case CC_STMT_IF: case CC_STMT_WHILE:
+        case CC_STMT_DOWHILE: case CC_STMT_SWITCH: case CC_STMT_RETURN:
+            expressions = 1;
+            break;
+        case CC_STMT_FOR: expressions = 2; break;
+        default: break;
+    }
+    for(unsigned i = 0; i < expressions; i++){
+        if(!n->exprs[i]) continue;
+        int err = ci_constexpr_uses_expr(ci, ctx, n->exprs[i], 0, storage);
+        if(err) return err;
+    }
+    for(size_t i = 0; i < n->count; i++){
+        int err = ci_constexpr_uses_stmt(ci, ctx, n->stmts[i], storage);
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
+ci_constexpr_dependencies(CiInterpreter* ci, CiLowerCtx* ctx, Parray(CcVariable)* storage){
+    for(size_t i = 0; i < storage->count; i++){
+        CcVariable* var = storage->data[i];
+        CcExpr* initializer = var->initializer;
+        if(!initializer) continue;
+        int err = ci_constexpr_uses_expr(ci, ctx, initializer, 0, storage);
+        if(err) return err;
+    }
+    return 0;
+}
 
 static
 int
 ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
     for(uint32_t i = 0; i < n->decls.count; i++){
         CcVariable* var = n->decls.data[i];
+        if(var->constexpr_ && !var->constexpr_storage) continue;
         uint32_t size, align, slot;
         int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &size);
         if(err) return err;
@@ -262,6 +353,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_NULL:
             return 0;
         case CC_STMT_EXPR:
+            if(n->exprs[0]->kind == CC_EXPR_ASSIGN && n->exprs[0]->lhs->kind == CC_EXPR_VARIABLE){
+                CcVariable* var = n->exprs[0]->lhs->var;
+                if(var->automatic && var->constexpr_ && !var->constexpr_storage
+                   && n->exprs[0]->values[0] == var->initializer) return 0;
+            }
             return ci_lower_expr_discard(ci, ctx, n->exprs[0]);
         case CC_STMT_COMPOUND:{
             for(uint32_t i = 0; i < n->count; i++){
@@ -2335,6 +2431,22 @@ ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
 static
 int
 ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    // Metadata aggregates may need runtime storage (for example when passed
+    // by value), but their construction still need not call the runtime.
+    if(e->kind == CC_EXPR_TYPE_INTROSPECTION || e->kind == CC_EXPR_SRCLOC_REFLECT){
+        int err = ci_fold_read_inputs(ci, ctx, e, 0);
+        if(err == CI_OOM_ERROR) return err;
+        if(!err){
+            CcExpr* value = NULL;
+            err = cc_eval_linktime_expr(&ci->parser, e, &value);
+            if(!err){
+                if(out) err = ci_lower_expr(ci, ctx, value, dest, (CiLowerVal*)out);
+                cc_release_expr(&ci->parser, value);
+                return err;
+            }
+            if(err == CI_OOM_ERROR) return err;
+        }
+    }
     _Bool module = e->kind == CC_EXPR_MODULE_REFLECT;
     _Bool srcloc = e->kind == CC_EXPR_SRCLOC_REFLECT;
     uint32_t subop = srcloc ? (uint32_t)e->srcloc.op : module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
@@ -5919,7 +6031,11 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
     };
-    err = ci_lower_stmt(ci, &ctx, f->body_tree);
+    Parray(CcVariable) storage = {0};
+    err = ci_constexpr_uses_stmt(ci, &ctx, f->body_tree, &storage);
+    if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    pa_cleanup(&storage, al);
+    if(!err) err = ci_lower_stmt(ci, &ctx, f->body_tree);
     if(err) goto finally;
     uint32_t native_index = 0;
     for(size_t i = 0; i < f->params.count; i++){
@@ -5979,6 +6095,11 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .ldbl_fmt = t->long_double_format,
     };
     for(size_t i = *lowered; i < nodes->count; i++){
+        Parray(CcVariable) storage = {0};
+        err = ci_constexpr_uses_stmt(ci, &ctx, nodes->data[i], &storage);
+        if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+        pa_cleanup(&storage, al);
+        if(err) break;
         err = ci_lower_stmt(ci, &ctx, nodes->data[i]);
         if(err) break;
     }
@@ -6062,7 +6183,11 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     };
     CiLowerVal value = {0};
     _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
-    int err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
+    Parray(CcVariable) storage = {0};
+    int err = ci_constexpr_uses_expr(ci, &ctx, expr, 0, &storage);
+    if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    pa_cleanup(&storage, al);
+    if(!err) err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
     if(!err) err = ci_lower_resolve_gotos(ci, &ctx);
     if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, al);
     code->frame_alignment = ctx.frame_alignment > 16 ? ctx.frame_alignment : 16;
@@ -6388,7 +6513,7 @@ ci_static_fold(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
         ma_cleanup(CiStaticReloc)(&buffer.relocs, ci_allocator(ci));
         return err;
     }
-    if(e->kind == CC_EXPR_TYPE_INTROSPECTION){
+    if(e->kind == CC_EXPR_TYPE_INTROSPECTION || e->kind == CC_EXPR_SRCLOC_REFLECT){
         CcExpr* value;
         int err = cc_eval_linktime_scalar(&ci->parser, e, &value);
         if(err) return err;
@@ -6814,7 +6939,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
         || (e->kind == CC_EXPR_CAST && (e->type.unqual == e->lhs->type.unqual
             || (ccqt_kind(e->type) == CC_POINTER && ccqt_kind(e->lhs->type) == CC_POINTER))))
         return ci_static_read_range(ci, data, e->lhs, start, offset, size, mask, depth+1);
-    if(e->kind == CC_EXPR_TYPE_INTROSPECTION){
+    if(e->kind == CC_EXPR_TYPE_INTROSPECTION || e->kind == CC_EXPR_SRCLOC_REFLECT){
         CcExpr* value;
         err = cc_eval_linktime_expr(p, e, &value);
         if(err) return err;
@@ -7035,7 +7160,7 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
         return ci_error(ci, e->loc, "static initializer exceeds object size");
     memset(data->bytes + offset, 0, size);
     ci_static_forget_relocs(data, offset, size);
-    if(e->kind == CC_EXPR_TYPE_INTROSPECTION){
+    if(e->kind == CC_EXPR_TYPE_INTROSPECTION || e->kind == CC_EXPR_SRCLOC_REFLECT){
         CcExpr* value;
         err = cc_eval_linktime_expr(p, e, &value);
         if(err) return err;
@@ -7782,6 +7907,78 @@ ci_fold_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* fold
     return ctx->static_initializer ? ci_static_fold(ci, e, folded) : ci_fold_expr(ci, ctx, e, folded);
 }
 
+// Object-view resolution uses the link-time evaluator. Before using it while
+// optimizing runtime code, check computations with the runtime folder instead:
+// in particular, do not discard effects or round inexact floating expressions.
+static int
+ci_fold_read_inputs(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, unsigned depth){
+    if(depth >= 256 || e->type.is_volatile || e->type.is_atomic) return FOLD_FAIL;
+    int err;
+    switch((uint32_t)e->kind){
+        case CC_EXPR_VALUE: case CC_EXPR_FUNCTION: return 0;
+        case CC_EXPR_VARIABLE:
+            if(!ci_foldable_variable(e)) return FOLD_FAIL;
+            return ci_fold_read_inputs(ci, ctx, e->var->initializer, depth+1);
+        case CC_EXPR_DOT: case CC_EXPR_ARROW:
+            return ci_fold_read_inputs(ci, ctx, e->values[0], depth+1);
+        case CC_EXPR_ADDR:
+            if(e->lhs->kind == CC_EXPR_VARIABLE) return 0;
+            return ci_fold_read_inputs(ci, ctx, e->lhs, depth+1);
+        case CC_EXPR_DEREF: case CC_EXPR_OBJECT_VIEW:
+            return ci_fold_read_inputs(ci, ctx, e->lhs, depth+1);
+        case CC_EXPR_TERNARY:{
+            _Bool truth;
+            err = ci_fold_condition(ci, ctx, e->lhs, &truth);
+            if(err) return err;
+            return ci_fold_read_inputs(ci, ctx, e->values[truth ? 0 : 1], depth+1);
+        }
+        case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
+            for(size_t i = 0; i < e->init_list->count; i++){
+                CcExpr* value = e->init_list->entries[i].value;
+                if(!value) continue;
+                err = ci_fold_read_inputs(ci, ctx, value, depth+1);
+                if(err) return err;
+            }
+            return 0;
+        case CC_EXPR_CAST:
+            if(e->type.unqual == e->lhs->type.unqual
+                || ccqt_kind(e->type) == CC_POINTER || ccqt_kind(e->type) == CC_SLICE)
+                return ci_fold_read_inputs(ci, ctx, e->lhs, depth+1);
+            break;
+        case CC_EXPR_TYPE_INTROSPECTION: case CC_EXPR_SRCLOC_REFLECT: case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_SLICE: case CC_EXPR_SLICE_LO: case CC_EXPR_SLICE_HI:
+        case CC_EXPR_SLICE_ALL: case CC_EXPR_COMMA:
+            err = ci_fold_read_inputs(ci, ctx, e->lhs, depth+1);
+            if(err) return err;
+            for(size_t i = 0; i < cc_expr_nvalues(e); i++){
+                err = ci_fold_read_inputs(ci, ctx, e->values[i], depth+1);
+                if(err) return err;
+            }
+            return 0;
+        default: break;
+    }
+    CiFoldValue ignored;
+    return ci_fold_expr(ci, ctx, e, &ignored);
+}
+
+static int
+ci_fold_read(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* result){
+    int err = ctx->static_initializer ? 0 : ci_fold_read_inputs(ci, ctx, e, 0);
+    if(err) return err;
+    CiStaticBuffer buffer = {.bytes=(unsigned char*)result->bits, .size=result->sz,
+        .runtime_ctx=ctx->static_initializer ? NULL : ctx};
+    err = ci_static_write(ci, &buffer, e, 0, result->sz);
+    for(size_t i = 0; !err && i < buffer.relocs.count; i++){
+        CiStaticReloc* r = &buffer.relocs.data[i];
+        // Literal storage lives with the program. Other symbols must retain
+        // their relocations until dependency resolution, not become raw bits.
+        if(r->kind != CI_STATIC_RELOC_LITERAL || r->initialize) err = FOLD_FAIL;
+        else ci_write_uint(buffer.bytes+r->offset, r->size, (uintptr_t)r->literal+r->addend);
+    }
+    ma_cleanup(CiStaticReloc)(&buffer.relocs, ci_allocator(ci));
+    return err == _cc_not_constant_error || err == _cc_overflow_error ? FOLD_FAIL : err;
+}
+
 static
 int
 ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
@@ -7816,6 +8013,20 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
         case CC_EXPR_VARIABLE:
             // I think we can also detect write-once variables.
             if(!ci_foldable_variable(e)) return FOLD_FAIL;
+            if(e->var->constexpr_ && ccqt_kind(e->type) == CC_POINTER){
+                // Symbolic literal pointers can be constexpr even when the scalar
+                // evaluator cannot represent their relocation as numeric bytes.
+                CiStaticReloc address = {.kind=CI_STATIC_RELOC_ABSOLUTE};
+                err = ci_static_address(ci, e, 0, &address, ctx);
+                if(!err && (address.kind == CI_STATIC_RELOC_ABSOLUTE || address.kind == CI_STATIC_RELOC_LITERAL)){
+                    uint64_t bits = address.addend;
+                    if(address.kind == CI_STATIC_RELOC_LITERAL) bits += (uintptr_t)address.literal;
+                    ci_write_uint(result.bits, sz, bits);
+                    *folded = result;
+                    return 0;
+                }
+                if(err == CI_OOM_ERROR) return err;
+            }
             err = ci_fold_operand(ci, ctx, e->var->initializer, &l);
             if(err) return err;
             if(l.sz != sz) return FOLD_FAIL;
@@ -8009,39 +8220,25 @@ ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded)
         }
         case CC_EXPR_CALL: // I think gcc treats some libc/libm funcs as intrins, we could do the same
             return FOLD_FAIL;
-        // TODO: folded lvalues? can't produce them in the bytecode,
-        // but we could have them as intermediaries.
-        // But especially with const/constexpr vars we should be
-        // able to fold out reads from them.
         case CC_EXPR_DOT:
         case CC_EXPR_SUBSCRIPT:
-            if(!ctx->static_initializer
-                || (e->kind == CC_EXPR_SUBSCRIPT && ccqt_kind(e->lhs->type) != CC_ARRAY))
-                return FOLD_FAIL;
-            {
-                CiStaticBuffer buffer = {.bytes = (unsigned char*)result.bits, .size = sz};
-                err = ci_static_write(ci, &buffer, e, 0, sz);
-                if(!err && buffer.relocs.count) err = FOLD_FAIL;
-                ma_cleanup(CiStaticReloc)(&buffer.relocs, ci_allocator(ci));
-                if(err) return err;
-                *folded = result;
-                return 0;
-            }
         case CC_EXPR_ARROW:
         case CC_EXPR_DEREF:
-        case CC_EXPR_ADDR:
-        // This could be done, just requires work.
         case CC_EXPR_TYPE_INTROSPECTION:
+        case CC_EXPR_SRCLOC_REFLECT:
+        case CC_EXPR_OBJECT_VIEW:
+        case CC_EXPR_COMPOUND_LITERAL:
+        case CC_EXPR_INIT_LIST:
+            err = ci_fold_read(ci, ctx, e, &result);
+            if(err) return err;
+            *folded = result;
+            return 0;
+        case CC_EXPR_ADDR:
         // could elide bounds checks etc.
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_SLICE:
         case CC_EXPR_SLICE_LO:
         case CC_EXPR_SLICE_HI:
-        // If it fits, why not?
-        // Also might be needed for type-punning like
-        // `(union {int i; float f;}){.f=1.f}.i`
-        case CC_EXPR_COMPOUND_LITERAL:
-        case CC_EXPR_INIT_LIST:
         // rest are runtime
         default: return FOLD_FAIL;
     }

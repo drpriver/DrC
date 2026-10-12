@@ -36,8 +36,8 @@ struct CcParsedParams {
 };
 static int cc_merge_default_args(CcParser*, CcFunc*, CcParsedParams*, _Bool, SrcLoc);
 static int cc_clone_expr(CcParser*, CcExpr*, unsigned, SrcLoc, _Bool, CcExpr*_Nullable*_Nonnull);
+static size_t cc_expr_nvalues(CcExpr*);
 static int cc_source_location_expr(CcParser*, CcBuiltinOp, SrcLoc, CcExpr*_Nullable*_Nonnull);
-
 static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_assignment_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType);
 static int cc_parse_ternary_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
@@ -98,6 +98,35 @@ struct CcEvalCtx {
     CcEvalVisit* expressions;
     CcEvalVisit* objects;
 };
+
+typedef struct CcStaticControl CcStaticControl;
+struct CcStaticControl {
+    CcStaticControl* _Nullable previous;
+    _Bool is_loop;
+    unsigned runtime_control_depth;
+    enum {CC_STATIC_NEXT, CC_STATIC_BREAK, CC_STATIC_CONTINUE} control;
+};
+
+typedef struct CcStaticFor CcStaticFor;
+struct CcStaticFor {
+    CcStaticFor* _Nullable previous;
+    CcScope* bindings;
+    CcStaticControl flow;
+};
+
+static _Bool
+cc_static_control_pending(CcParser* p){
+    for(CcStaticControl* c = p->static_control; c; c = c->previous)
+        if(c->control) return 1;
+    return 0;
+}
+
+static
+_Bool
+cc_static_rebind_target(CcParser* p, CcExpr* e){
+    return p->static_for && e->kind == CC_EXPR_VARIABLE && cc_scope_lookup_var(p->static_for->bindings, e->var->name, CC_SCOPE_NO_WALK) == e->var;
+}
+
 static int cc_eval_expr(CcEvalCtx*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_integer(CcEvalCtx*, CcExpr*, int64_t*);
 static CiUint128 cc_eval_u128(CcParser*, CcExpr*);
@@ -195,6 +224,11 @@ struct CcStmtSink {
 #define MARRAY_T CcSwitchEntry
 #include "../Drp/Marray.h"
 #endif
+
+typedef struct CcStaticCase CcStaticCase;
+struct CcStaticCase { CiUint128 value; SrcLoc loc; };
+#define MARRAY_T CcStaticCase
+#include "../Drp/Marray.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -266,7 +300,6 @@ static int cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* dec
 static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
 static int cc_parse_one_inner(CcParser* p);
-static int cc_skip_braced_block(CcParser* p);
 static int cc_static_goto_missing(CcParser* p);
 
 static
@@ -288,7 +321,7 @@ void
 cc_pop_scope(CcParser* p){
     CcScope* s = p->current;
     p->current = s->parent;
-    fl_push(&p->scratch_scopes, s);
+    if(!s->retained) fl_push(&p->scratch_scopes, s);
 }
 
 static
@@ -1192,6 +1225,7 @@ cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType typ
     err = cc_merge_default_args(p, func, param_names, 1, loc);
     if(err) return err;
     func->param_scope = param_names->scope;
+    func->definition_scope = cc_scope_retain(p->current);
     func->enclosing = p->current_func;
     err = cc_parse_func_body_inner(p, func, 1);
     if(err) return err;
@@ -1278,7 +1312,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         .automatic = p->current_func != NULL,
         .initializer = cl,
     };
-    err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
+    err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), nil_atom, anon);
     if(err) return err;
     cl->kind = CC_EXPR_INIT_LIST; // demote to plain init list for the assignment RHS
     CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
@@ -1330,7 +1364,7 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcParseFlags flags, CcExpr* o
         .automatic = p->current_func != NULL,
         .initializer = operand,
     };
-    err = cc_scope_insert_var(cc_allocator(p), p->current, nil_atom, anon);
+    err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), nil_atom, anon);
     if(err) return err;
     CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
     if(!var_ref) return CC_OOM_ERROR;
@@ -2043,7 +2077,9 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
         if(cc_assign_lookup(tok.punct.punct, &kind)){
-            if(flags.vc > CC_RUNTIME_VALUE)
+            if(flags.static_rebind && !cc_static_rebind_target(p, left))
+                return cc_error(p, left->loc, "static for update must rebind a clause-1 variable");
+            if(flags.vc > CC_RUNTIME_VALUE && !flags.static_rebind)
                 return cc_error(p, tok.loc, "assignment in constant expression");
             if(left->kind == CC_EXPR_COMPOUND_LITERAL){
                 err = cc_desugar_compound_literal(p, left, &left);
@@ -2051,7 +2087,7 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
             }
             if(!left->is_lvalue)
                 return cc_error(p, tok.loc, "expression is not assignable");
-            if(left->type.is_const)
+            if(left->type.is_const && !flags.static_rebind)
                 return cc_error(p, tok.loc, "cannot assign to variable with const-qualified type");
             CcExpr* right;
             CcToken peek_assign;
@@ -2118,7 +2154,7 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
                 err = cc_implicit_cast(p, right, operation_type, &right);
                 if(err) return err;
             }
-            if(kind == CC_EXPR_ASSIGN && (right->kind == CC_EXPR_COMPOUND_LITERAL || right->kind == CC_EXPR_INIT_LIST)){
+            if(!flags.static_rebind && kind == CC_EXPR_ASSIGN && (right->kind == CC_EXPR_COMPOUND_LITERAL || right->kind == CC_EXPR_INIT_LIST)){
                 err = cc_desugar_compound_literal(p, right, &right);
                 if(err) return err;
             }
@@ -2724,7 +2760,7 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                 is_prefix = 0; break;
         }
         if(is_prefix){
-            if((kind == CC_EXPR_PREINC || kind == CC_EXPR_PREDEC) && flags.vc > CC_RUNTIME_VALUE)
+            if((kind == CC_EXPR_PREINC || kind == CC_EXPR_PREDEC) && flags.vc > CC_RUNTIME_VALUE && !flags.static_rebind)
                 return cc_error(p, tok.loc, "increment/decrement in constant expression");
             CcExpr* operand;
             CcParseFlags operand_flags = flags;
@@ -2803,13 +2839,15 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                 }
                 case CC_EXPR_PREINC:
                 case CC_EXPR_PREDEC:
+                    if(flags.static_rebind && !cc_static_rebind_target(p, operand))
+                        return cc_error(p, operand->loc, "static for update must rebind a clause-1 variable");
                     if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
                     }
                     if(!operand->is_lvalue)
                         return cc_error(p, tok.loc, "expression is not an lvalue");
-                    if(operand->type.is_const)
+                    if(operand->type.is_const && !flags.static_rebind)
                         return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                     err = cc_check_incdec_type(p, operand->type, tok.loc);
                     if(err) return err;
@@ -4294,11 +4332,15 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             if(!cc_scope_lookup_symbol(p->current, tok.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)){
                 return cc_error(p, tok.loc, "undeclared identifier '%.*s'", tok.ident.ident->length, tok.ident.ident->data);
             }
+            if(flags.static_rebind && p->static_for){
+                CcVariable* binding = cc_scope_lookup_var(p->static_for->bindings, tok.ident.ident, CC_SCOPE_NO_WALK);
+                if(binding) sym = (CcSymbol){.kind=CC_SYM_VAR, .var=binding};
+            }
             switch(sym.kind){
                 case CC_SYM_VAR:{
                     if(flags.parsing_default_arg && sym.var->automatic && !sym.var->constexpr_)
                         return cc_error(p, tok.loc, "default argument may not use automatic variable '%.*s'", tok.ident.ident->length, tok.ident.ident->data);
-                    if(flags.vc == CC_CONSTEXPR_VALUE && !sym.var->constexpr_ && ccqt_kind(sym.var->type) != CC_ARRAY)
+                    if(flags.vc == CC_CONSTEXPR_VALUE && !flags.static_rebind && !sym.var->constexpr_ && ccqt_kind(sym.var->type) != CC_ARRAY)
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     if(flags.vc == CC_LINKTIME_VALUE && sym.var->automatic)
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
@@ -4973,11 +5015,13 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
         }
         switch((uint32_t)tok.punct.punct){
             case CC_plusplus: {
-                if(flags.vc > CC_RUNTIME_VALUE)
+                if(flags.static_rebind && !cc_static_rebind_target(p, operand))
+                    return cc_error(p, operand->loc, "static for update must rebind a clause-1 variable");
+                if(flags.vc > CC_RUNTIME_VALUE && !flags.static_rebind)
                     return cc_error(p, tok.loc, "increment/decrement in constant expression");
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
-                if(operand->type.is_const)
+                if(operand->type.is_const && !flags.static_rebind)
                     return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                 err = cc_check_incdec_type(p, operand->type, tok.loc);
                 if(err) return err;
@@ -4988,11 +5032,13 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 continue;
             }
             case CC_minusminus: {
-                if(flags.vc > CC_RUNTIME_VALUE)
+                if(flags.static_rebind && !cc_static_rebind_target(p, operand))
+                    return cc_error(p, operand->loc, "static for update must rebind a clause-1 variable");
+                if(flags.vc > CC_RUNTIME_VALUE && !flags.static_rebind)
                     return cc_error(p, tok.loc, "increment/decrement in constant expression");
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
-                if(operand->type.is_const)
+                if(operand->type.is_const && !flags.static_rebind)
                     return cc_error(p, tok.loc, "cannot modify const-qualified variable");
                 err = cc_check_incdec_type(p, operand->type, tok.loc);
                 if(err) return err;
@@ -5316,7 +5362,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     case CC_TYPE_NONE:
                         goto fucs;
                     case CC_TYPE_PUSH_METHOD: {
-                        if(p->current != &p->global && p->current != p->file_scope)
+                        if(cc_scope_declarations(p->current) != &p->global && cc_scope_declarations(p->current) != p->file_scope)
                             return cc_error(p, member.loc, "push method only allowed at global scope");
                         CcExpr* tv;
                         err = cc_eval_expr(&(CcEvalCtx){.parser = p}, operand, &tv);
@@ -6017,6 +6063,152 @@ done:
     return 0;
 }
 
+// Collect one statement without resolving names or evaluating expressions.
+// This is shared by skipped static branches and replayed static-loop bodies.
+static int cc_static_statement_tokens(CcParser*, Marray(CcToken)*, SrcLoc);
+
+static int
+cc_static_collect_token(CcParser* p, Marray(CcToken)* tokens, CcToken* tok){
+    int err = cc_next_token(p, tok);
+    if(err) return err;
+    if(tok->type == CC_EOF) return cc_error(p, tok->loc, "unterminated static statement");
+    return ma_push(CcToken)(tokens, cc_allocator(p), *tok) ? CC_OOM_ERROR : 0;
+}
+
+static int
+cc_static_collect_group(CcParser* p, Marray(CcToken)* tokens, CcPunct open, CcPunct close, SrcLoc loc){
+    CcToken tok;
+    int err = cc_static_collect_token(p, tokens, &tok);
+    if(err) return err;
+    if(tok.type != CC_PUNCTUATOR || tok.punct.punct != open)
+        return cc_error(p, loc, "expected delimiter in static statement");
+    unsigned depth = 1;
+    while(depth){
+        err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+        if(tok.type != CC_PUNCTUATOR) continue;
+        if(tok.punct.punct == open) depth++;
+        else if(tok.punct.punct == close) depth--;
+    }
+    return 0;
+}
+
+static int
+cc_static_statement_tokens(CcParser* p, Marray(CcToken)* tokens, SrcLoc loc){
+    CcToken tok;
+    while(cc_is_c23_attribute_start(p)){
+        int err = cc_static_collect_group(p, tokens, '[', ']', loc);
+        if(err) return err;
+    }
+    int err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{')
+        return cc_static_collect_group(p, tokens, '{', '}', loc);
+    err = cc_static_collect_token(p, tokens, &tok);
+    if(err) return err;
+    if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
+        err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+    }
+    if(tok.type == CC_KEYWORD && (tok.kw.kw == CC_if || tok.kw.kw == CC_for
+       || tok.kw.kw == CC_while || tok.kw.kw == CC_switch)){
+        _Bool is_if = tok.kw.kw == CC_if;
+        err = cc_static_collect_group(p, tokens, '(', ')', loc);
+        if(!err) err = cc_static_statement_tokens(p, tokens, loc);
+        if(err || !is_if) return err;
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type != CC_KEYWORD || tok.kw.kw != CC_else) return 0;
+        err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+        return cc_static_statement_tokens(p, tokens, loc);
+    }
+    if(tok.type == CC_KEYWORD && tok.kw.kw == CC_do){
+        err = cc_static_statement_tokens(p, tokens, loc);
+        if(!err) err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+        if(tok.type != CC_KEYWORD || tok.kw.kw != CC_while)
+            return cc_error(p, tok.loc, "Expected 'while' after do body");
+        err = cc_static_collect_group(p, tokens, '(', ')', loc);
+        if(!err) err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+        if(tok.type != CC_PUNCTUATOR || tok.punct.punct != ';')
+            return cc_error(p, tok.loc, "expected ';' after do statement");
+        return 0;
+    }
+    if(tok.type == CC_IDENTIFIER){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+            err = cc_static_collect_token(p, tokens, &peek);
+            if(err) return err;
+            return cc_static_statement_tokens(p, tokens, loc);
+        }
+    }
+    if(tok.type == CC_KEYWORD && (tok.kw.kw == CC_case || tok.kw.kw == CC_default)){
+        unsigned depth = 0, conditional = 0;
+        for(;;){
+            err = cc_static_collect_token(p, tokens, &tok);
+            if(err) return err;
+            if(tok.type != CC_PUNCTUATOR) continue;
+            switch((uint32_t)tok.punct.punct){
+                case '(': case '[': case '{': depth++; break;
+                case ')': case ']': case '}':
+                    if(!depth) return cc_error(p, tok.loc, "expected ':' after case label");
+                    depth--;
+                    break;
+                case '?': if(!depth) conditional++; break;
+                case ':':
+                    if(!depth){
+                        if(conditional) conditional--;
+                        else return cc_static_statement_tokens(p, tokens, loc);
+                    }
+                    break;
+                default: break;
+            }
+        }
+    }
+    unsigned parens = 0, brackets = 0, braces = 0;
+    _Bool declaration = tok.type == CC_IDENTIFIER || cc_is_type_start(p, &tok);
+    _Bool assignment = 0, function_body = 0;
+    uint32_t last_punct = 0;
+    for(;;){
+        if(tok.type == CC_PUNCTUATOR){
+            switch((uint32_t)tok.punct.punct){
+                case '(': parens++; break;
+                case ')': if(!parens) return cc_error(p, tok.loc, "unbalanced static statement"); parens--; break;
+                case '[': brackets++; break;
+                case ']': if(!brackets) return cc_error(p, tok.loc, "unbalanced static statement"); brackets--; break;
+                case '=': if(!parens && !brackets && !braces) assignment = 1; break;
+                case '{':
+                    if(!parens && !brackets && !braces && declaration && !assignment && last_punct == ')')
+                        function_body = 1;
+                    braces++;
+                    break;
+                case '}':
+                    if(!braces) return cc_error(p, tok.loc, "expected ';' in static statement");
+                    braces--;
+                    if(function_body && !braces && !parens && !brackets) return 0;
+                    break;
+                case ';': if(!parens && !brackets && !braces) return 0; break;
+                default: break;
+            }
+        }
+        last_punct = tok.type == CC_PUNCTUATOR ? tok.punct.punct : 0;
+        err = cc_static_collect_token(p, tokens, &tok);
+        if(err) return err;
+    }
+}
+
+static int
+cc_skip_static_statement(CcParser* p, SrcLoc loc){
+    Marray(CcToken) tokens = {0};
+    int err = cc_static_statement_tokens(p, &tokens, loc);
+    ma_cleanup(CcToken)(&tokens, cc_allocator(p));
+    return err;
+}
+
 static
 int
 cc_skip_static_else_chain(CcParser* p){
@@ -6044,18 +6236,23 @@ cc_skip_static_else_chain(CcParser* p){
                     else if(tok.punct.punct == ')') depth--;
                 }
             }
-            err = cc_skip_braced_block(p);
+            err = cc_skip_static_statement(p, tok.loc);
             if(err) return err;
             continue;
         }
-        return cc_skip_braced_block(p);
+        return cc_skip_static_statement(p, tok.loc);
     }
 }
 
 static
 int
 cc_parse_static_if_body(CcParser* p, SrcLoc loc){
-    int err = cc_expect_punct(p, '{');
+    CcToken first;
+    int err = cc_peek(p, &first);
+    if(err) return err;
+    if(first.type != CC_PUNCTUATOR || first.punct.punct != '{')
+        return cc_parse_one(p);
+    err = cc_expect_punct(p, '{');
     if(err) return err;
     for(;;){
         CcToken peek;
@@ -6098,7 +6295,7 @@ cc_parse_static_if(CcParser* p, SrcLoc loc){
         if(err) return err;
         return cc_skip_static_else_chain(p);
     }
-    err = cc_skip_braced_block(p);
+    err = cc_skip_static_statement(p, loc);
     if(err) return err;
     err = cc_peek(p, &tok);
     if(err) return err;
@@ -6151,6 +6348,30 @@ cc_handle_static_goto(CcParser* p){
         err = cc_next_token(p, &tok);
         if(err) return err;
         if(tok.type == CC_EOF) return cc_static_goto_missing(p);
+        if(!braces && !parens && !brackets && statement_start
+           && tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
+            CcToken name, colon;
+            err = cc_peek(p, &name);
+            if(err) return err;
+            if(name.type == CC_IDENTIFIER){
+                cc_next_token(p, &name);
+                err = cc_peek(p, &colon);
+                if(err) return err;
+                if(colon.type == CC_PUNCTUATOR && colon.punct.punct == ':'){
+                    cc_next_token(p, &colon);
+                    if(name.ident.ident == target){
+                        p->static_goto_target = NULL;
+                        err = cc_unget(p, &colon);
+                        if(!err) err = cc_unget(p, &name);
+                        if(!err) err = cc_unget(p, &tok);
+                        return err;
+                    }
+                    continue;
+                }
+                err = cc_unget(p, &name);
+                if(err) return err;
+            }
+        }
         if(!braces && !parens && !brackets && statement_start && tok.type == CC_IDENTIFIER){
             CcToken peek;
             err = cc_peek(p, &peek);
@@ -6193,10 +6414,595 @@ cc_handle_static_goto(CcParser* p){
 
 static
 int
+cc_static_tokens(CcParser* p, CcPunct terminator, Marray(CcToken)* tokens, SrcLoc loc){
+    int depth = 0;
+    for(;;){
+        CcToken tok;
+        int err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF)
+            return cc_error(p, loc, "unterminated static for");
+        if(tok.type == CC_PUNCTUATOR){
+            if(!depth && tok.punct.punct == terminator)
+                return 0;
+            switch((uint32_t)tok.punct.punct){
+                case '(': case '[': case '{': depth++; break;
+                case ')': case ']': case '}':
+                    if(!depth)
+                        return cc_error(p, tok.loc, "unbalanced static for tokens");
+                    depth--;
+                    break;
+                default: break;
+            }
+        }
+        if(ma_push(CcToken)(tokens, cc_allocator(p), tok))
+            return CC_OOM_ERROR;
+    }
+}
+
+static
+int
+cc_static_replay(CcParser* p, const Marray(CcToken)* tokens){
+    if(ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.type=CC_EOF}))
+        return CC_OOM_ERROR;
+    for(size_t i = tokens->count; i; i--){
+        if(ma_push(CcToken)(&p->pending, cc_allocator(p), tokens->data[i-1]))
+            return CC_OOM_ERROR;
+    }
+    return 0;
+}
+
+static
+int
+cc_static_expression(CcParser* p, const Marray(CcToken)* tokens, CcQualType expected, CcExpr*_Nullable*_Nonnull out){
+    Marray(CcToken) saved = p->pending;
+    p->pending = (Marray(CcToken)){0};
+    CcExpr* expr = NULL;
+    int err = cc_static_replay(p, tokens);
+    if(err) goto cleanup;
+    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &expr);
+    if(err) goto cleanup;
+    CcToken tok;
+    err = cc_next_token(p, &tok);
+    if(err) goto cleanup;
+    if(tok.type != CC_EOF){
+        err = cc_error(p, tok.loc, "unexpected token in static for expression");
+        goto cleanup;
+    }
+    if(expected.bits){
+        err = cc_implicit_cast(p, expr, expected, &expr);
+        if(err) goto cleanup;
+    }
+    if(ccqt_kind(expr->type) == CC_POINTER){
+        err = cc_check_linktime_expr(p, expr, 0, 0);
+        if(err) goto cleanup;
+        err = cc_clone_expr(p, expr, 0, (SrcLoc){0}, 0, out);
+    }
+    else
+        err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, out);
+
+    cleanup:
+    if(err == CC_NOT_CONSTANT_ERROR && expr)
+        err = cc_error(p, expr->loc, "static for expression must be constexpr evaluable");
+    if(expr) cc_release_expr(p, expr);
+    ma_cleanup(CcToken)(&p->pending, cc_allocator(p));
+    p->pending = saved;
+    return err;
+}
+
+static
+int
+cc_static_update_op(CcExprKind kind, CcExprKind* binary){
+    switch((uint32_t)kind){
+        case CC_EXPR_ASSIGN: *binary = CC_EXPR_VALUE; break;
+        case CC_EXPR_ADDASSIGN: case CC_EXPR_PREINC: case CC_EXPR_POSTINC: *binary = CC_EXPR_ADD; break;
+        case CC_EXPR_SUBASSIGN: case CC_EXPR_PREDEC: case CC_EXPR_POSTDEC: *binary = CC_EXPR_SUB; break;
+        case CC_EXPR_MULASSIGN: *binary = CC_EXPR_MUL; break;
+        case CC_EXPR_DIVASSIGN: *binary = CC_EXPR_DIV; break;
+        case CC_EXPR_MODASSIGN: *binary = CC_EXPR_MOD; break;
+        case CC_EXPR_LSHIFTASSIGN: *binary = CC_EXPR_LSHIFT; break;
+        case CC_EXPR_RSHIFTASSIGN: *binary = CC_EXPR_RSHIFT; break;
+        case CC_EXPR_BITANDASSIGN: *binary = CC_EXPR_BITAND; break;
+        case CC_EXPR_BITORASSIGN: *binary = CC_EXPR_BITOR; break;
+        case CC_EXPR_BITXORASSIGN: *binary = CC_EXPR_BITXOR; break;
+        default: return 0;
+    }
+    return 1;
+}
+
+static
+int
+cc_static_update_values(CcParser* p, CcExpr* e, _Bool refresh){
+    CcExprKind binary;
+    if(cc_static_update_op(e->kind, &binary))
+        return cc_error(p, e->loc, "static for rebinding value must be constexpr evaluable");
+    if(e->kind == CC_EXPR_VARIABLE){
+        if(refresh){
+            CcVariable* var = cc_scope_lookup_var(p->static_for->bindings, e->var->name, CC_SCOPE_NO_WALK);
+            if(var) e->var = var;
+        }
+        return 0;
+    }
+    for(size_t i = 0; i < cc_expr_nvalues(e); i++){
+        int err = cc_static_update_values(p, e->values[i], refresh);
+        if(err) return err;
+    }
+    switch((uint32_t)e->kind){
+        case CC_EXPR_VALUE: case CC_EXPR_FUNCTION: case CC_EXPR_BUILTIN:
+        case CC_EXPR_DOT: case CC_EXPR_ARROW:
+            return 0;
+        case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
+            for(size_t i = 0; i < e->init_list->count; i++){
+                CcExpr* value = e->init_list->entries[i].value;
+                if(!value) continue;
+                int err = cc_static_update_values(p, value, refresh);
+                if(err) return err;
+            }
+            return 0;
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            return cc_error(p, e->loc, "static for rebinding value must be constexpr evaluable");
+        default:
+            return e->lhs ? cc_static_update_values(p, e->lhs, refresh) : 0;
+    }
+}
+
+static
+int
+cc_static_update_validate(CcParser* p, CcExpr* e){
+    if(e->kind == CC_EXPR_COMMA){
+        int err = cc_static_update_validate(p, e->lhs);
+        if(err) return err;
+        return cc_static_update_validate(p, e->values[0]);
+    }
+    CcExprKind binary;
+    if(!cc_static_update_op(e->kind, &binary))
+        return cc_error(p, e->loc, "static for requires a rebinding update");
+    if(!cc_static_rebind_target(p, e->lhs))
+        return cc_error(p, e->lhs->loc, "static for update must rebind a clause-1 variable");
+    if(cc_expr_nvalues(e)) return cc_static_update_values(p, e->values[0], 0);
+    return 0;
+}
+
+static
+int
+cc_parse_static_update(CcParser* p, const Marray(CcToken)* tokens, SrcLoc loc, CcExpr*_Nullable*_Nonnull out){
+    if(!tokens->count) return cc_error(p, loc, "static for requires a rebinding update");
+    Marray(CcToken) saved = p->pending;
+    p->pending = (Marray(CcToken)){0};
+    CcExpr* expr = NULL;
+    int err = cc_static_replay(p, tokens);
+    if(err) goto cleanup;
+    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE, .static_rebind=1}, &expr);
+    if(err) goto cleanup;
+    CcToken tok;
+    err = cc_next_token(p, &tok);
+    if(err) goto cleanup;
+    if(tok.type != CC_EOF){
+        err = cc_error(p, tok.loc, "unexpected token in static for update");
+        goto cleanup;
+    }
+    err = cc_static_update_validate(p, expr);
+    if(err) goto cleanup;
+    *out = expr;
+    expr = NULL;
+    cleanup:
+    if(expr) cc_release_expr(p, expr);
+    ma_cleanup(CcToken)(&p->pending, cc_allocator(p));
+    p->pending = saved;
+    return err;
+}
+
+static
+int
+cc_eval_static_update(CcParser* p, CcExpr* e){
+    if(e->kind == CC_EXPR_COMMA){
+        int err = cc_eval_static_update(p, e->lhs);
+        if(err) return err;
+        return cc_eval_static_update(p, e->values[0]);
+    }
+    CcVariable* old = cc_scope_lookup_var(p->static_for->bindings, e->lhs->var->name, CC_SCOPE_NO_WALK);
+    CcExprKind binary;
+    if(!cc_static_update_op(e->kind, &binary)) return CC_UNREACHABLE_ERROR;
+    CcExpr* expr = NULL;
+    CcExpr* left = NULL;
+    CcExpr* value = NULL;
+    int err;
+    if(cc_expr_nvalues(e)){
+        err = cc_static_update_values(p, e->values[0], 1);
+        if(err) goto cleanup;
+        err = cc_clone_expr(p, e->values[0], 0, e->loc, 0, &expr);
+        if(err) goto cleanup;
+    }
+    else {
+        expr = cc_int64_expr(p, e->loc, ccqt_basic(CCBT_int), 1);
+        if(!expr){ err = CC_OOM_ERROR; goto cleanup; }
+    }
+    if(binary != CC_EXPR_VALUE){
+        left = cc_make_expr(p, CC_EXPR_VARIABLE, e->loc, old->type, 0);
+        if(!left){ err = CC_OOM_ERROR; goto cleanup; }
+        left->var = old;
+        CcQualType operation = cc_expr_nvalues(e) ? e->compound.type : CCQT_NONE;
+        if(ccqt_kind(old->type) == CC_POINTER) operation = (CcQualType){.unqual=old->type.unqual};
+        else if(!cc_expr_nvalues(e)){
+            err = cc_usual_arithmetic(p, left, expr, &operation, e->loc);
+            if(err) goto cleanup;
+        }
+        err = cc_implicit_cast(p, left, operation, &left);
+        if(err) goto cleanup;
+        if(ccqt_kind(operation) != CC_POINTER){
+            err = cc_implicit_cast(p, expr, operation, &expr);
+            if(err) goto cleanup;
+        }
+        CcExpr* calculation = cc_binary_expr(p, binary, e->loc, operation, left, expr);
+        if(!calculation){ err = CC_OOM_ERROR; goto cleanup; }
+        expr = calculation;
+        left = NULL;
+    }
+    err = cc_implicit_cast(p, expr, old->type, &expr);
+    if(err) goto cleanup;
+    if(ccqt_kind(old->type) == CC_POINTER){
+        err = cc_check_linktime_expr(p, expr, 0, 0);
+        if(err) goto cleanup;
+        err = cc_clone_expr(p, expr, 0, e->loc, 0, &value);
+    }
+    else err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
+    if(err) goto cleanup;
+    CcVariable* next = Allocator_zalloc(cc_allocator(p), sizeof *next);
+    if(!next){ err = CC_OOM_ERROR; goto cleanup; }
+    *next = *old;
+    next->initializer = value;
+    next->interp_initialized = 0;
+    next->interp_val = NULL;
+    value = NULL;
+    // Emitted expressions retain variables, not maps. Replace the map entry
+    // in place unless a function retains this lexical scope as a snapshot.
+    CcScope* previous = p->static_for->bindings;
+    if(!previous->retained){
+        err = cc_scope_insert_var(cc_allocator(p), previous, next->name, next);
+        if(!err && ccqt_bt_eq(next->type, CCBT__Type))
+            err = cc_scope_insert_typedef(cc_allocator(p), previous, next->name, next->initializer->type_value, next->loc);
+        goto cleanup;
+    }
+    // Copy only this scope's maps; the parent chain remains shared.
+    CcScope* bindings = Allocator_zalloc(cc_allocator(p), sizeof *bindings);
+    if(!bindings){ err = CC_OOM_ERROR; goto cleanup; }
+    bindings->parent = p->static_for->bindings->parent;
+    const AtomMap* source_maps[] = {&previous->functions, &previous->structs,
+        &previous->unions, &previous->enums, &previous->enumerators};
+    AtomMap* target_maps[] = {&bindings->functions, &bindings->structs,
+        &bindings->unions, &bindings->enums, &bindings->enumerators};
+    for(size_t m = 0; m < sizeof source_maps / sizeof *source_maps; m++){
+        AtomMapItems entries = AM_items(source_maps[m]);
+        for(size_t i = 0; i < entries.count; i++){
+            err = AM_put(target_maps[m], cc_allocator(p), entries.data[i].atom, entries.data[i].p);
+            if(err) goto cleanup;
+        }
+    }
+    AtomMap16Items aliases = AM16_items(&previous->typedefs);
+    for(size_t i = 0; i < aliases.count; i++){
+        err = AM16_put(&bindings->typedefs, cc_allocator(p), aliases.data[i].atom, aliases.data[i].payload);
+        if(err) goto cleanup;
+    }
+    AtomMapItems items = CcAnonAM_items(&p->static_for->bindings->variables);
+    for(size_t i = 0; i < items.count; i++){
+        CcVariable* var = items.data[i].p;
+        if(var == old) var = next;
+        err = cc_scope_insert_var(cc_allocator(p), bindings, var->name, var);
+        if(!err && ccqt_bt_eq(var->type, CCBT__Type))
+            err = cc_scope_insert_typedef(cc_allocator(p), bindings, var->name, var->initializer->type_value, var->loc);
+        if(err) goto cleanup;
+    }
+    bindings->static_for_bindings = 1;
+    p->static_for->bindings = bindings;
+    p->current = bindings;
+    cleanup:
+    if(err == CC_NOT_CONSTANT_ERROR) err = cc_error(p, e->loc, "static for expression must be constexpr evaluable");
+    if(left) cc_release_expr(p, left);
+    if(expr) cc_release_expr(p, expr);
+    if(value) cc_release_expr(p, value);
+    return err;
+}
+
+static
+int
+cc_replay_static_update(CcParser* p, const Marray(CcToken)* tokens, SrcLoc loc){
+    // Split only the sequenced rebinding list, preserving commas inside a
+    // rebinding's RHS. Peel grouping parentheses so nested lists work too.
+    Marray(CcToken) part = *tokens;
+    for(;;){
+        size_t depth = 0;
+        size_t conditional = 0;
+        _Bool grouped = part.count > 1 && part.data[0].type == CC_PUNCTUATOR
+            && part.data[0].punct.punct == '('
+            && part.data[part.count-1].type == CC_PUNCTUATOR
+            && part.data[part.count-1].punct.punct == ')';
+        for(size_t i = 0; i < part.count; i++){
+            CcToken* tok = &part.data[i];
+            if(tok->type != CC_PUNCTUATOR) continue;
+            switch((uint32_t)tok->punct.punct){
+                case '(': case '[': case '{': depth++; break;
+                case ')': case ']': case '}':
+                    if(!depth) return cc_error(p, tok->loc, "unbalanced static for tokens");
+                    depth--;
+                    if(!depth && i != part.count-1) grouped = 0;
+                    break;
+                case '?': if(!depth) conditional++; break;
+                case ':': if(!depth && conditional) conditional--; break;
+                case ',':
+                    if(!depth && !conditional){
+                        Marray(CcToken) left = {.data=part.data, .count=i};
+                        Marray(CcToken) right = {.data=part.data+i+1, .count=part.count-i-1};
+                        int err = cc_replay_static_update(p, &left, loc);
+                        if(err) return err;
+                        return cc_replay_static_update(p, &right, loc);
+                    }
+                    break;
+                default: break;
+            }
+        }
+        if(!grouped) break;
+        part.data++;
+        part.count -= 2;
+    }
+    // Parsing can evaluate sizeof, type expressions, and reflection. Reparse
+    // after each preceding rebinding, not just once per iteration.
+    CcExpr* expr = NULL;
+    int err = cc_parse_static_update(p, &part, loc, &expr);
+    if(!err) err = cc_eval_static_update(p, expr);
+    if(expr) cc_release_expr(p, expr);
+    return err;
+}
+
+static
+int
+cc_parse_static_for(CcParser* p, SrcLoc loc){
+    int err = cc_expect_punct(p, '(');
+    if(err) return err;
+    err = cc_push_scope(p);
+    if(err) return err;
+    CcStaticFor loop = {.previous=p->static_for, .bindings=p->current,
+        .flow={.previous=p->static_control, .is_loop=1, .runtime_control_depth=p->runtime_control_depth}};
+    p->static_for = &loop;
+    p->static_control = &loop.flow;
+    Marray(CcToken) condition = {0}, update = {0}, body = {0};
+    CcStmtSink* init_sink = cc_push_stmt_sink(p);
+    if(!init_sink){ err = CC_OOM_ERROR; goto done; }
+    CcDeclBase base = {0};
+    err = cc_parse_declaration_specifier(p, (CcParseFlags){0}, &base);
+    if(!err && !(base.spec.bits || base.type.bits)) err = cc_error(p, loc, "static for clause-1 must be a constexpr declaration");
+    if(!err && (base.spec.sp_typedef || base.spec.sp_extern || base.spec.sp_static || base.spec.sp_thread_local))
+        err = cc_error(p, loc, "invalid storage class in static for clause-1");
+    base.spec.sp_constexpr = 1;
+    if(!err) err = cc_resolve_specifiers(p, &base);
+    if(!err) err = cc_parse_decls(p, (CcParseFlags){0}, &base);
+    if(err) goto done;
+    AtomMapItems items = CcAnonAM_items(&loop.bindings->variables);
+    if(!items.count){ err = cc_error(p, loc, "static for clause-1 must declare variables"); goto done; }
+    for(size_t i = 0; i < items.count; i++){
+        CcVariable* var = items.data[i].p;
+        if(!var->initializer){ err = cc_error(p, var->loc, "static for variable requires an initializer"); goto done; }
+        CcExpr* value = NULL;
+        if(ccqt_kind(var->type) == CC_POINTER){
+            err = cc_check_linktime_expr(p, var->initializer, 0, 0);
+            if(!err) err = cc_clone_expr(p, var->initializer, 0, (SrcLoc){0}, 0, &value);
+        }
+        else err = cc_eval_expr(&(CcEvalCtx){.parser=p}, var->initializer, &value);
+        if(err){ if(err == CC_NOT_CONSTANT_ERROR) err = cc_error(p, var->loc, "static for initializer must be constexpr evaluable"); goto done; }
+        var->initializer = value;
+        var->automatic = 0;
+        var->static_ = 1;
+        var->interp_preinit = 1;
+    }
+    cc_pop_stmt_sink(p, init_sink);
+    init_sink = NULL;
+    loop.bindings->static_for_bindings = 1;
+    err = cc_static_tokens(p, ';', &condition, loc);
+    if(!err) err = cc_static_tokens(p, ')', &update, loc);
+    // Only require an update here. Parsing it can evaluate dependent types
+    // and sizeof operands, so validate each rebinding when it is reached.
+    if(!err && !update.count) err = cc_error(p, loc, "static for requires a rebinding update");
+    if(!err) err = cc_static_statement_tokens(p, &body, loc);
+    if(err) goto done;
+    // The outer braces group a static body without introducing a real scope.
+    if(body.count && body.data[0].type == CC_PUNCTUATOR && body.data[0].punct.punct == '{'){
+        memmove(body.data, body.data+1, (body.count-2)*sizeof *body.data);
+        body.count -= 2;
+    }
+    for(size_t iteration = 0; ; iteration++){
+        if(condition.count){
+            CcExpr* value;
+            err = cc_static_expression(p, &condition, CCQT_NONE, &value);
+            if(err) break;
+            _Bool predicate = 0;
+            err = cc_require_scalar(p, &value, loc, "static for condition");
+            if(!err) err = cc_eval_truthy(&(CcEvalCtx){.parser=p}, value, &predicate);
+            cc_release_expr(p, value);
+            if(err || !predicate) break;
+        }
+        if(iteration == 1000000){ err = cc_error(p, loc, "static for iteration limit exceeded"); break; }
+        Marray(CcToken) saved = p->pending;
+        p->pending = (Marray(CcToken)){0};
+        err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.type=CC_EOF});
+        if(!err) err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.punct={.type=CC_PUNCTUATOR, .loc=loc, .punct='}'}});
+        for(size_t i = body.count; !err && i; i--) err = ma_push(CcToken)(&p->pending, cc_allocator(p), body.data[i-1]);
+        if(!err) err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.punct={.type=CC_PUNCTUATOR, .loc=loc, .punct='{'}});
+        if(err) err = CC_OOM_ERROR;
+        else err = cc_parse_static_if_body(p, loc);
+        if(!err && p->static_goto_target) err = cc_static_goto_missing(p);
+        ma_cleanup(CcToken)(&p->pending, cc_allocator(p));
+        p->pending = saved;
+        if(err || loop.flow.control == CC_STATIC_BREAK) break;
+        loop.flow.control = CC_STATIC_NEXT;
+        err = cc_replay_static_update(p, &update, loc);
+        if(err) break;
+    }
+    done:
+    if(init_sink) cc_pop_stmt_sink(p, init_sink);
+    ma_cleanup(CcToken)(&condition, cc_allocator(p));
+    ma_cleanup(CcToken)(&update, cc_allocator(p));
+    ma_cleanup(CcToken)(&body, cc_allocator(p));
+    p->static_for = loop.previous;
+    p->static_control = loop.flow.previous;
+    p->current = loop.bindings;
+    cc_pop_scope(p);
+    return err;
+}
+
+static int
+cc_static_switch_key(CcParser* p, CcQualType* type, CiUint128* key){
+    CcExpr* expr = NULL;
+    CcExpr* value = NULL;
+    int err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &expr);
+    if(err) return err;
+    _Bool is_type = ccqt_bt_eq(expr->type, CCBT__Type);
+    if(!is_type && !ccqt_is_integer(expr->type)){
+        err = cc_error(p, expr->loc, "static switch requires integer or _Type expressions");
+        goto done;
+    }
+    if(!type->bits){
+        if(is_type) *type = ccqt_basic(CCBT__Type);
+        else err = cc_integer_promote(p, cc_arithmetic_operand_type(p, expr), type, expr->loc);
+        if(err) goto done;
+    }
+    if(is_type != ccqt_bt_eq(*type, CCBT__Type)){
+        err = cc_error(p, expr->loc, "static case type does not match static switch expression");
+        goto done;
+    }
+    err = cc_implicit_cast(p, expr, *type, &expr);
+    if(!err) err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
+    if(!err) *key = is_type ? ci_uint128_from_uint64(value->type_value.bits) : cc_eval_u128(p, value);
+    if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
+        err = cc_error(p, expr->loc, "static switch expression must be constexpr evaluable");
+    done:
+    if(value) cc_release_expr(p, value);
+    cc_release_expr(p, expr);
+    return err;
+}
+
+static int
+cc_parse_static_switch(CcParser* p, SrcLoc loc){
+    int err = cc_expect_punct(p, '(');
+    if(err) return err;
+    CcQualType type = CCQT_NONE;
+    CiUint128 key;
+    err = cc_static_switch_key(p, &type, &key);
+    if(!err) err = cc_expect_punct(p, ')');
+    if(!err) err = cc_expect_punct(p, '{');
+    if(err) return err;
+    Marray(CcToken) body = {0}, emitted = {0};
+    Marray(CcStaticCase) cases = {0};
+    err = cc_static_tokens(p, '}', &body, loc);
+    if(err) goto cleanup;
+    Marray(CcToken) saved = p->pending;
+    p->pending = (Marray(CcToken)){0};
+    err = cc_static_replay(p, &body);
+    size_t selected = SIZE_MAX, fallback = SIZE_MAX;
+    while(!err){
+        CcToken tok;
+        err = cc_peek(p, &tok);
+        if(err || tok.type == CC_EOF) break;
+        if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
+            CcToken label;
+            cc_next_token(p, &tok);
+            err = cc_peek(p, &label);
+            if(err) break;
+            if(label.type == CC_KEYWORD && (label.kw.kw == CC_case || label.kw.kw == CC_default)){
+                cc_next_token(p, &label);
+                if(label.kw.kw == CC_default){
+                    if(fallback != SIZE_MAX){ err = cc_error(p, label.loc, "duplicate static default label"); break; }
+                    fallback = emitted.count;
+                }
+                else {
+                    CiUint128 value;
+                    err = cc_static_switch_key(p, &type, &value);
+                    if(err) break;
+                    for(size_t i = 0; i < cases.count; i++){
+                        if(ci_uint128_eq(cases.data[i].value, value)){
+                            err = cc_error(p, label.loc, "duplicate static case value");
+                            break;
+                        }
+                    }
+                    if(err) break;
+                    if(ma_push(CcStaticCase)(&cases, cc_allocator(p), (CcStaticCase){.value=value, .loc=label.loc})){
+                        err = CC_OOM_ERROR;
+                        break;
+                    }
+                    if(ci_uint128_eq(key, value)) selected = emitted.count;
+                }
+                err = cc_expect_punct(p, ':');
+                continue;
+            }
+            // A static named label is a marker, including at the closing brace.
+            if(label.type == CC_IDENTIFIER){
+                CcToken colon;
+                cc_next_token(p, &label);
+                err = cc_peek(p, &colon);
+                if(err) break;
+                if(colon.type == CC_PUNCTUATOR && colon.punct.punct == ':'){
+                    cc_next_token(p, &colon);
+                    if(ma_push(CcToken)(&emitted, cc_allocator(p), tok)
+                       || ma_push(CcToken)(&emitted, cc_allocator(p), label)
+                       || ma_push(CcToken)(&emitted, cc_allocator(p), colon)) err = CC_OOM_ERROR;
+                    continue;
+                }
+                err = cc_unget(p, &label);
+                if(err) break;
+            }
+            err = cc_unget(p, &tok);
+            if(err) break;
+        }
+        err = cc_static_statement_tokens(p, &emitted, loc);
+    }
+    ma_cleanup(CcToken)(&p->pending, cc_allocator(p));
+    p->pending = (Marray(CcToken)){0};
+    if(selected == SIZE_MAX) selected = fallback;
+    if(!err && selected != SIZE_MAX){
+        CcStaticControl flow = {.previous=p->static_control, .runtime_control_depth=p->runtime_control_depth};
+        p->static_control = &flow;
+        err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.type=CC_EOF});
+        if(!err) err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.punct={.type=CC_PUNCTUATOR, .loc=loc, .punct='}'}});
+        for(size_t i = emitted.count; !err && i > selected; i--)
+            err = ma_push(CcToken)(&p->pending, cc_allocator(p), emitted.data[i-1]);
+        if(!err) err = ma_push(CcToken)(&p->pending, cc_allocator(p), (CcToken){.punct={.type=CC_PUNCTUATOR, .loc=loc, .punct='{'}});
+        if(err) err = CC_OOM_ERROR;
+        else err = cc_parse_static_if_body(p, loc);
+        if(!err && p->static_goto_target) err = cc_static_goto_missing(p);
+        p->static_control = flow.previous;
+    }
+    ma_cleanup(CcToken)(&p->pending, cc_allocator(p));
+    p->pending = saved;
+    cleanup:
+    ma_cleanup(CcToken)(&body, cc_allocator(p));
+    ma_cleanup(CcToken)(&emitted, cc_allocator(p));
+    ma_cleanup(CcStaticCase)(&cases, cc_allocator(p));
+    return err;
+}
+
+static
+int
+cc_skip_static_control(CcParser* p){
+    int depth = 0;
+    for(;;){
+        CcToken tok;
+        int err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF) return cc_error(p, tok.loc, "unterminated static for body");
+        if(tok.type != CC_PUNCTUATOR) continue;
+        if(tok.punct.punct == '{') depth++;
+        else if(tok.punct.punct == '}'){
+            if(!depth) return cc_unget(p, &tok);
+            depth--;
+        }
+    }
+}
+
+static
+int
 cc_parse_one(CcParser* p){
     int err = cc_parse_one_inner(p);
     if(err) return err;
     if(p->static_goto_target) return 0;
+    if(cc_static_control_pending(p)) return 0;
     return cc_parse_local_methods(p);
 }
 
@@ -6205,6 +7011,7 @@ int
 cc_parse_one_inner(CcParser* p){
     int err;
     CcToken tok;
+    if(cc_static_control_pending(p)) return cc_skip_static_control(p);
     if(p->static_goto_target){
         err = cc_handle_static_goto(p);
         if(err) return err;
@@ -6254,13 +7061,43 @@ cc_parse_one_inner(CcParser* p){
                     return cc_parse_static_goto(p, tok.loc);
                 case CC_switch:
                     cc_next_token(p, &control_tok);
-                    return cc_unimplemented(p, control_tok.loc, "`static switch` unimplemented");
+                    return cc_parse_static_switch(p, tok.loc);
+                case CC_case:
+                case CC_default:
+                    return cc_error(p, tok.loc, "static case/default must appear directly in a static switch body");
                 case CC_for:
                     cc_next_token(p, &control_tok);
-                    return cc_unimplemented(p, control_tok.loc, "`static for` unimplemented");
+                    return cc_parse_static_for(p, tok.loc);
+                case CC_break:
+                case CC_continue: {
+                    cc_next_token(p, &control_tok);
+                    CcStaticControl* target = p->static_control;
+                    if(control_tok.kw.kw == CC_continue)
+                        while(target && !target->is_loop) target = target->previous;
+                    if(!target) return cc_error(p, tok.loc, control_tok.kw.kw == CC_break
+                        ? "static break outside static for or static switch" : "static continue outside static for");
+                    if(p->runtime_control_depth != target->runtime_control_depth)
+                        return cc_error(p, tok.loc, "static break/continue cannot cross runtime control flow");
+                    err = cc_expect_punct(p, ';');
+                    if(err) return err;
+                    target->control = control_tok.kw.kw == CC_break ? CC_STATIC_BREAK : CC_STATIC_CONTINUE;
+                    return 0;
+                }
                 default:
                     break;
             }
+        }
+        else if(control_tok.type == CC_IDENTIFIER){
+            CcToken colon;
+            cc_next_token(p, &control_tok);
+            err = cc_peek(p, &colon);
+            if(err) return err;
+            if(colon.type == CC_PUNCTUATOR && colon.punct.punct == ':'){
+                cc_next_token(p, &colon);
+                return 0; // Compile-time marker; do not emit a runtime label.
+            }
+            err = cc_unget(p, &control_tok);
+            if(err) return err;
         }
         cc_unget(p, &tok);
     }
@@ -9541,35 +10378,35 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         void* existing = NULL;
         if(name){
             if(is_union){
-                CcUnion* u = existing = cc_scope_lookup_union_tag(p->current, name, CC_SCOPE_NO_WALK);
+                CcUnion* u = existing = cc_scope_lookup_union_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
                 if(u && !u->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
                 if(!u){
                     // Register incomplete tag before parsing body so self-references resolve.
                     u = Allocator_zalloc(cc_allocator(p), sizeof *u);
                     if(!u) return CC_OOM_ERROR;
                     *u = (CcUnion){.kind = CC_UNION, .name = name, .loc = loc, .is_incomplete = 1};
-                    err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+                    err = cc_scope_insert_union_tag(cc_allocator(p), cc_scope_declarations(p->current), name, u);
                     if(err) return CC_OOM_ERROR;
                     existing = u;
                     if(p->auto_typedef){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)u}, (SrcLoc){0});
+                        err = cc_scope_insert_typedef(cc_allocator(p), cc_scope_declarations(p->current), name, (CcQualType){.bits = (uintptr_t)u}, (SrcLoc){0});
                         if(err) return err;
                     }
                 }
             }
             else {
-                CcStruct* s = existing = cc_scope_lookup_struct_tag(p->current, name, CC_SCOPE_NO_WALK);
+                CcStruct* s = existing = cc_scope_lookup_struct_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
                 if(s && !s->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
                 if(!s){
                     // Register incomplete tag before parsing body so self-references resolve.
                     s = Allocator_zalloc(cc_allocator(p), sizeof *s);
                     if(!s) return CC_OOM_ERROR;
                     *s = (CcStruct){.kind = CC_STRUCT, .name = name, .loc = loc, .is_incomplete = 1};
-                    err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+                    err = cc_scope_insert_struct_tag(cc_allocator(p), cc_scope_declarations(p->current), name, s);
                     if(err) return CC_OOM_ERROR;
                     existing = s;
                     if(p->auto_typedef){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, (CcQualType){.bits = (uintptr_t)s}, (SrcLoc){0});
+                        err = cc_scope_insert_typedef(cc_allocator(p), cc_scope_declarations(p->current), name, (CcQualType){.bits = (uintptr_t)s}, (SrcLoc){0});
                         if(err) return err;
                     }
                 }
@@ -9771,9 +10608,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             func->_Self_type = p->current_tag_type;
                             func->tokens = body_tokens;
                             func->defined = 1;
+                            func->definition_scope = cc_scope_retain(p->current);
                             if(p->current_func){
                                 func->enclosing = p->current_func;
-                                err = pa_push(&p->current->deferred_methods, cc_allocator(p), func);
+                                err = pa_push(&cc_scope_declarations(p->current)->deferred_methods, cc_allocator(p), func);
                                 if(err){ err = CC_OOM_ERROR; goto struct_err; }
                             }
                         }
@@ -9915,7 +10753,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             err = cc_compute_struct_layout(p, s, p->pragma_pack);
             if(err) return err;
             if(name && !existing){
-                err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+                err = cc_scope_insert_struct_tag(cc_allocator(p), cc_scope_declarations(p->current), name, s);
                 if(err) return CC_OOM_ERROR;
             }
             *base_type = (CcQualType){.bits = (uintptr_t)s};
@@ -9938,7 +10776,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             err = cc_compute_union_layout(p, u, p->pragma_pack);
             if(err) return err;
             if(name && !existing){
-                err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+                err = cc_scope_insert_union_tag(cc_allocator(p), cc_scope_declarations(p->current), name, u);
                 if(err) return CC_OOM_ERROR;
             }
             *base_type = (CcQualType){.bits = (uintptr_t)u};
@@ -9967,7 +10805,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .loc = loc,
                 .is_incomplete = 1,
             };
-            err = cc_scope_insert_struct_tag(cc_allocator(p), p->current, name, s);
+            err = cc_scope_insert_struct_tag(cc_allocator(p), cc_scope_declarations(p->current), name, s);
             if(err) return CC_OOM_ERROR;
         }
         *base_type = (CcQualType){.bits = (uintptr_t)s};
@@ -9983,7 +10821,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .loc = loc,
                 .is_incomplete = 1,
             };
-            err = cc_scope_insert_union_tag(cc_allocator(p), p->current, name, u);
+            err = cc_scope_insert_union_tag(cc_allocator(p), cc_scope_declarations(p->current), name, u);
             if(err) return CC_OOM_ERROR;
         }
         *base_type = (CcQualType){.bits = (uintptr_t)u};
@@ -10121,7 +10959,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         if(err) return err;
         CcEnum* e = NULL;
         if(name){
-            CcEnum* existing = cc_scope_lookup_enum_tag(p->current, name, CC_SCOPE_NO_WALK);
+            CcEnum* existing = cc_scope_lookup_enum_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
             if(existing){
                 if(existing->has_definition)
                     return cc_error(p, loc, "Redefinition of enum '%s'", name->data);
@@ -10146,7 +10984,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                 .underlying = underlying,
             };
             if(name){
-                err = cc_scope_insert_enum_tag(cc_allocator(p), p->current, name, e);
+                err = cc_scope_insert_enum_tag(cc_allocator(p), cc_scope_declarations(p->current), name, e);
                 if(err)  return CC_OOM_ERROR;
             }
         }
@@ -10172,7 +11010,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
             }
             Atom ename = tok.ident.ident;
             CcSymbol sym;
-            _Bool found = cc_scope_lookup_symbol(p->current, ename, CC_SCOPE_NO_WALK, &sym);
+            _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), ename, CC_SCOPE_NO_WALK, &sym);
             if(found){
                 if(sym.kind == CC_SYM_ENUMERATOR)
                     err = cc_error(p, tok.loc, "Redefinition of enumerator '%s'", ename->data);
@@ -10243,7 +11081,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                 .type = next_type,
                 .loc = eloc,
             };
-            err = cc_scope_insert_enumerator(cc_allocator(p), p->current, ename, enumerator);
+            err = cc_scope_insert_enumerator(cc_allocator(p), cc_scope_declarations(p->current), ename, enumerator);
             if(err){ err = CC_OOM_ERROR; goto enum_err; }
             err = pa_push(&enumerators, cc_allocator(p), enumerator);
             if(err){ err = CC_OOM_ERROR; goto enum_err; }
@@ -10297,7 +11135,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
     // No body — just a reference: enum name
     if(!name)
         return cc_error(p, loc, "expected enum name or '{'");
-    CcEnum* e = cc_scope_lookup_enum_tag(p->current, name,
+    CcEnum* e = cc_scope_lookup_enum_tag(has_fixed_underlying ? cc_scope_declarations(p->current) : p->current, name,
         has_fixed_underlying ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
     if(e && has_fixed_underlying){
         if(e->has_fixed_underlying && e->underlying.bits != underlying.bits)
@@ -10320,7 +11158,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
             .is_incomplete = !has_fixed_underlying,
             .has_fixed_underlying = has_fixed_underlying,
         };
-        err = cc_scope_insert_enum_tag(cc_allocator(p), p->current, name, e);
+        err = cc_scope_insert_enum_tag(cc_allocator(p), cc_scope_declarations(p->current), name, e);
         if(err) return CC_OOM_ERROR;
     }
     *base_type = (CcQualType){.bits = (uintptr_t)e};
@@ -11024,28 +11862,7 @@ struct CcSwitchCtx {
     Marray(CcSwitchEntry) cases; // for duplicate detection; targets unused
 };
 
-// Skip a balanced `{ ... }` block. Assumes the opening `{` has NOT
-// been consumed yet.
-static
-int
-cc_skip_braced_block(CcParser* p){
-    int err;
-    CcToken tok;
-    err = cc_expect_punct(p, '{');
-    if(err) return err;
-    int depth = 1;
-    while(depth > 0){
-        err = cc_next_token(p, &tok);
-        if(err) return err;
-        if(tok.type == CC_EOF)
-            return cc_error(p, tok.loc, "unterminated block in static if");
-        if(tok.type == CC_PUNCTUATOR){
-            if(tok.punct.punct == '{') depth++;
-            else if(tok.punct.punct == '}') depth--;
-        }
-    }
-    return 0;
-}
+static int cc_parse_statement_inner(CcParser*, CcStmtNode*_Nullable*_Nonnull);
 
 static
 int
@@ -11071,6 +11888,24 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
         p->attributes.bits |= stmt_attrs.bits;
         // Fall through
     }
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    _Bool boundary = tok.type == CC_KEYWORD && (tok.kw.kw == CC_if
+        || tok.kw.kw == CC_switch || tok.kw.kw == CC_for
+        || tok.kw.kw == CC_while || tok.kw.kw == CC_do);
+    // Include the whole statement, including conditions and both if branches.
+    // A nested static for records this depth and can use its own controls.
+    p->runtime_control_depth += boundary;
+    err = cc_parse_statement_inner(p, out);
+    p->runtime_control_depth -= boundary;
+    return err;
+}
+
+static
+int
+cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
+    int err;
+    CcToken tok;
     err = cc_next_token(p, &tok);
     if(err) return err;
     switch(tok.type){
@@ -11082,6 +11917,16 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
         }
         case CC_KEYWORD:
             switch(tok.kw.kw){
+                case CC_static: {
+                    err = cc_unget(p, &tok);
+                    if(err) return err;
+                    CcStmtSink* sink = cc_push_stmt_sink(p);
+                    if(!sink) return CC_OOM_ERROR;
+                    err = cc_parse_one(p);
+                    if(!err) err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 0, out);
+                    cc_pop_stmt_sink(p, sink);
+                    return err;
+                }
                 case CC_for: {
                     // for(init; cond; inc) body
                     err = cc_expect_punct(p, '(');
@@ -11567,7 +12412,6 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 case CC_extern:
                 case CC_inline:
                 case CC_signed:
-                case CC_static:
                 case CC_struct:
                 case CC_typeof:
                 case CC_alignas:
@@ -12062,7 +12906,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
 
                 if(param_name){
-                    if(cc_scope_lookup_var(p->current, param_name, CC_SCOPE_NO_WALK)){
+                    if(cc_scope_lookup_var(cc_scope_declarations(p->current), param_name, CC_SCOPE_NO_WALK)){
                         err = cc_error(p, param_loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
                         goto param_err;
                     }
@@ -12082,7 +12926,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(!var){ err = CC_OOM_ERROR; goto param_err; }
                 if(!param_name) param_name = nil_atom;
                 *var = (CcVariable){.name = param_name, .loc = param_loc, .type = param_type, .automatic = 1};
-                err = cc_scope_insert_var(cc_allocator(p), p->current, param_name, var);
+                err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), param_name, var);
                 if(err){ err = CC_OOM_ERROR; goto param_err; }
                 if(out_param_names){
                     Marray(CcFuncParam)* pn = &out_param_names->names;
@@ -12355,9 +13199,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             else if(tk == CC_ENUM) tag_name = ccqt_as_enum(base)->name;
         }
         if(tag_name){
-            CcQualType existing_td = cc_scope_lookup_typedef(p->current, tag_name, CC_SCOPE_NO_WALK);
+            CcQualType existing_td = cc_scope_lookup_typedef(cc_scope_declarations(p->current), tag_name, CC_SCOPE_NO_WALK);
             if(!existing_td.bits){
-                err = cc_scope_insert_typedef(cc_allocator(p), p->current, tag_name, base, (SrcLoc){0});
+                err = cc_scope_insert_typedef(cc_allocator(p), cc_scope_declarations(p->current), tag_name, base, (SrcLoc){0});
                 if(err) return err;
             }
         }
@@ -12511,7 +13355,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             _Bool eager = p->eager_parsing || p->current_func;
             CcSymbol sym;
             CcFunc* func = NULL;
-            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
             if(found){
                 switch(sym.kind){
                     case CC_SYM_FUNC:
@@ -12537,7 +13381,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 func = Allocator_zalloc(cc_allocator(p), sizeof *func);
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
-                err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
+                err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
                 if(err) return err;
             }
             func->type = ccqt_as_function(type);
@@ -12554,6 +13398,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             err = cc_merge_default_args(p, func, &param_names, 1, name_loc);
             if(err) return err;
             func->param_scope = param_names.scope;
+            func->definition_scope = cc_scope_retain(p->current);
             if(eager){
                 func->_Self_type = p->current_tag_type;
                 func->enclosing = p->current_func;
@@ -12594,7 +13439,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             err = cc_parse_local_methods(p);
             p->current = saved_scope;
             if(err) return err;
-            fl_push(&p->scratch_scopes, prototype_scope);
+            if(!prototype_scope->retained) fl_push(&p->scratch_scopes, prototype_scope);
             param_names.scope = NULL;
         }
         // For non-typedef, non-function variable declarations, insert
@@ -12613,7 +13458,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             if(declbase->spec.sp_noreturn)
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
             CcSymbol sym;
-            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
             _Bool inherited_tls = 0;
             if(!found && p->current_func && declbase->spec.sp_extern){
                 CcSymbol outer;
@@ -12626,7 +13471,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             if(found){
                 switch(sym.kind){
                     case CC_SYM_VAR:
-                        if(p->current != &p->global && p->current != p->file_scope
+                        if(cc_scope_declarations(p->current) != &p->global && cc_scope_declarations(p->current) != p->file_scope
                             && !(declbase->spec.sp_extern && (sym.var->thread_local_ || declbase->spec.sp_thread_local)))
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                         // Validate declarations before constructing their composite type.
@@ -12646,7 +13491,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                             var->type = type;
                         }
                         if(inherited_tls){
-                            err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
+                            err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
                             if(err) return err;
                         }
                         goto skip_var_alloc;
@@ -12670,7 +13515,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 .thread_local_ = declbase->spec.sp_thread_local,
                 .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
             };
-            err = cc_scope_insert_var(cc_allocator(p), p->current, name, var);
+            err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
             if(err) return err;
             skip_var_alloc:;
         }
@@ -12780,7 +13625,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
             }
             if(param_names.typed_pack_loc.bits)
                 return cc_error(p, param_names.typed_pack_loc, "typed varargs require a direct function declaration");
-            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
             if(found){
                 switch(sym.kind){
                     case CC_SYM_TYPEDEF:
@@ -12805,14 +13650,14 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 }
             }
             if(!found){
-                err = cc_scope_insert_typedef(cc_allocator(p), p->current, name, type, name_loc);
+                err = cc_scope_insert_typedef(cc_allocator(p), cc_scope_declarations(p->current), name, type, name_loc);
                 if(err) return err;
             }
         }
         else if(is_func_decl){
             CcSymbol sym;
             CcFunc* func = NULL;
-            _Bool found = cc_scope_lookup_symbol(p->current, name, CC_SCOPE_NO_WALK, &sym);
+            _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
             if(found){
                 switch(sym.kind){
                     case CC_SYM_FUNC:
@@ -12838,7 +13683,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
                 func->loc = name_loc;
-                err = cc_scope_insert_func(cc_allocator(p), p->current, name, func);
+                err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
                 if(err) return err;
             }
             func->type = ccqt_as_function(type);
@@ -12894,13 +13739,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                     CcQualType defined_type = value->type_value;
                     cc_release_expr(p, value);
                     if(defined_type.bits){
-                        err = cc_scope_insert_typedef(cc_allocator(p), p->current, var->name, defined_type, var->loc);
+                        err = cc_scope_insert_typedef(cc_allocator(p), cc_scope_declarations(p->current), var->name, defined_type, var->loc);
                         if(err) return err;
                     }
                 }
             }
             if(initializer){
-                if(var && (var->static_ || var->thread_local_)){
+                if(var && (var->static_ || var->thread_local_ || (var->constexpr_ && !var->automatic))){
                     var->interp_preinit = 1;
                     if(initializer->kind == CC_EXPR_COMPOUND_LITERAL)
                         initializer->kind = CC_EXPR_INIT_LIST;
@@ -13666,7 +14511,7 @@ static
 int
 cc_parse_local_methods(CcParser* p){
     if(!p->current_func) return 0;
-    CcScope* scope = p->current;
+    CcScope* scope = cc_scope_declarations(p->current);
     while(scope->deferred_methods.count){
         CcFunc* f = scope->deferred_methods.data[--scope->deferred_methods.count];
         int err = cc_parse_func_body(p, f);
@@ -13679,6 +14524,12 @@ static
 int
 cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     int err = 0;
+    CcScope* saved_scope = p->current;
+    if(f->definition_scope) p->current = (CcScope*)f->definition_scope;
+    CcStaticFor* saved_static_for = p->static_for;
+    p->static_for = NULL;
+    CcStaticControl* saved_static_control = p->static_control;
+    p->static_control = NULL;
     CcFunc* prev = p->current_func;
     CcQualType prev__Self = p->current_tag_type;
     uint32_t prev_loop_depth = p->loop_depth;
@@ -13740,6 +14591,9 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     ma_cleanup(CcLabelRef)(&f->label_ctx.gotos, cc_allocator(p));
     cc_pop_scope(p);
     restore_context:
+    p->current = saved_scope;
+    p->static_for = saved_static_for;
+    p->static_control = saved_static_control;
     p->current_func = prev;
     p->current_tag_type = prev__Self;
     p->loop_depth = prev_loop_depth;

@@ -254,7 +254,9 @@ Preprocessor::md
 C::md
   `static if`::md
     An `if` evaluated at compile time. The condition must be a `constexpr`
-    expression. The following braces do not start a new scope, so declarations
+    expression. Each branch may be a single statement or a braced body.
+    An `else` attaches to the nearest unmatched `if`, as with runtime `if`.
+    The braces do not start a new scope, so declarations
     and types are visible outside of the `static if`. The tokens in the branch
     not taken are not parsed, although they still need to have balanced tokens.
 
@@ -283,6 +285,15 @@ C::md
     A compile-time unconditional jump. Can only jump forward within source code and cannot
     escape enclosing braces (except in `static if`).
 
+    Targets may be ordinary labels or static labels: `static name:`.
+    Static labels are not runtime labels and cannot be jumped to by ordinary `goto`..
+    ::pre.C
+      static for(int i=0; i<3; i++){
+          static if(i==1) static goto next;
+          printf("%d\n", i);
+          static next:
+      }
+
     ::pre.C
       static if(1){
         static goto foo;
@@ -293,6 +304,96 @@ C::md
       foo:
       printf("lmao\n");
 
+  `static for`::md
+    A compile-time for-loop.
+    Its body may be a single statement or a braced body, like runtime `for`.
+    ::pre.C
+      static for(int i = 0; i < 3; i++){
+        printf("%d\n", i);
+      }
+
+      // desugars into something like:
+      constexpr i = 0;
+      printf("%d\n", i);
+      constexpr i = 1;
+      printf("%d\n", i);
+      constexpr i = 2;
+      printf("%d\n", i);
+
+    More usefully, can be used to generate things like switch labels from constexpr values.
+
+    ::pre.C
+      #pragma typedef on
+      enum Fruit { APPLES, ORANGES, PEARS };
+      const char* fruit_name(Fruit f){
+          switch(f){
+              static for(size_t i = 0; i < Fruit.enumerators; i=i+1){
+                  case Fruit.enumerator(i).value: return Fruit.enumerator(i).name.data;
+              }
+              default: return "Unknown fruit";
+          }
+      }
+      printf("%s\n", fruit_name(APPLES));
+      printf("%s\n", fruit_name((enum Fruit)4));
+
+    The clause-1 must be a constexpr declaration.
+    The expression-2 must also be constexpr evaluable or empty.
+    The expression-3 is a re-binding. It must be in the form of `var` =
+    `constexpr expression`, where `var` was declared in clause-1`. It cannot be
+    empty. As syntactic sugar, pre/post increment/decrement expressions are
+    transformed into this form. Similarly for augmented assignment.
+
+    Multiple re-bindings can be separated by commas. They are evaluated from
+    left to right, so `i++, j = i` binds `j` to the updated value of `i`.
+
+    The implementation may impose a limit on how many compile-time iterations are evaluated.
+
+    To skip an iteration of the loop, use `static continue`.
+    To end the loop early, use `static break`.
+
+    `static break` targets the innermost `static for` or `static switch`.
+    `static continue` targets the innermost `static for`.
+    They may be nested in ordinary braces and `static if`, but cannot cross
+    a runtime `if`/`else`, `switch`, `for`, `while`, or `do` statement, even
+    when its condition is constant. Use `static if` for compile-time conditions.
+    A `static for` inside a runtime statement can still use its own static
+    controls.
+
+    `static for` does not introduce a new scope. If you need a new scope per
+    iteration, use an extra set of braces. Declarations from clause-1 do not leak
+    into the surrounding scope.
+
+    Functions defined in the loop capture the current clause-1 bindings from their
+    defining iteration.
+
+  `static switch`::md
+    A compile-time switch statement.
+
+    ::pre.C
+      constexpr T = int;
+      T one(void){
+          static switch(T){
+              static case int: return 1; static break;
+              static case float: return 1.f; static break;
+              static default: static_assert(0, "unsupported type");
+          }
+      }
+    Normal switch matching and fallthrough rules apply, but the condition must
+    be a constexpr expression. Case and default labels use `static case` and
+    `static default`, leaving ordinary labels available for generating runtime
+    `switch` statements. `static case` labels have to be direct children of the
+    switch, which unfortunately doesn't allow duff's device, but this is simpler.
+
+    Braces are required. Labels are evaluated before branch bodies are parsed.
+    The braces do not introduce a scope.
+
+    Parsing starts after the selected static label and continues through
+    subsequent labels until `static break;` or the closing brace. Be aware: a
+    `return` emits a return statement, you still need a `static break`.
+
+    If no case matches and there is no default, nothing is emitted.
+    To make an unmatched condition an error, use
+    `static default: static_assert(0, "unsupported type");`.
 
   Methods::md
     Functions can be defined directly inside structs and unions. They do not

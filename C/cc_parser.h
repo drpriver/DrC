@@ -53,7 +53,8 @@ struct CcParseFlags {
         struct {
             CcValueClass vc: 2;
             uint32_t parsing_default_arg: 1,
-                     _padding: 29;
+                     static_rebind: 1,
+                     _padding: 28;
         };
     };
 };
@@ -239,6 +240,9 @@ struct CcParser {
     Marray(CcToken) pending;
     Atom _Nullable static_goto_target;
     SrcLoc static_goto_loc;
+    struct CcStaticFor* _Nullable static_for;
+    struct CcStaticControl* _Nullable static_control;
+    unsigned runtime_control_depth;
     CcAttributes attributes;
     Marray(CcPackRecord) pack_stack;
     uint16_t pragma_pack; // 0 = default (no pack), otherwise pack(N) value

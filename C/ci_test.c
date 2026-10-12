@@ -42,6 +42,107 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "fold: source location metadata", __LINE__,
+            SVI("struct S{int x;}; int f(void){return struct S.loc.line>0 && struct S.loc.file.count>0;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "fold: materialized metadata uses constant initialization", __LINE__,
+            SVI("struct S{int port;}; int consume(const struct __builtin_Field* p){return p->name.count;}"
+                "int f(void){constexpr field=struct S.field(0); return consume(&field);} return f();"),
+            .exit_code=4,
+        },
+        {
+            "fold: metadata arguments retain side effects", __LINE__,
+            SVI("struct S{int port;}; int f(void){int i=0; auto field=struct S.field(i++);"
+                "return field.name.count+i;} return f();"),
+            .exit_code=5,
+        },
+        {
+            "fold: reflected aggregate and nested name slice", __LINE__,
+            SVI("struct S{char a; int port;}; int f(void){constexpr field=struct S.field(1);"
+                "return field.offset+field.name.count+field.name.data[0];} return f();"),
+            .exit_code=120,
+        },
+        {
+            "fold: scalar type introspection", __LINE__,
+            SVI("int f(void){return int.is_integer+int.sizeof_;} return f();"),
+            .exit_code=5,
+        },
+        {
+            "fold: enum reflection", __LINE__,
+            SVI("enum E{apple=7}; int f(void){constexpr e=enum E.enumerator(0);"
+                "return e.value+e.name.count+e.name.data[0];} return f();"),
+            .exit_code=109,
+        },
+        {
+            "fold: array and pointer subobject reads", __LINE__,
+            SVI("int f(void){static constexpr int a[3]={20,21,22}; constexpr const int* p=&a[1];"
+                "return *p+a[2];} return f();"),
+            .exit_code=43,
+        },
+        {
+            "fold: arrow and bitfield reads", __LINE__,
+            SVI("struct S{unsigned a:3; int b;}; int f(void){static constexpr struct S s={5,37};"
+                "return (&s)->a+(&s)->b;} return f();"),
+            .exit_code=42,
+        },
+        {
+            "fold: constant slice bounds and elements", __LINE__,
+            SVI("int f(void){static constexpr int a[3]={20,21,22}; constexpr const int s[:]=a[1:3];"
+                "return s.count+s[0]+s[1];} return f();"),
+            .exit_code=45,
+        },
+        {
+            "fold: aggregate reads preserve index side effects", __LINE__,
+            SVI("int f(void){constexpr int a[2]={20,22}; int i=0; int x=a[i++];"
+                "return x+i;} return f();"),
+            .exit_code=21,
+        },
+        {
+            "fold: compound literal reads preserve other initializer effects", __LINE__,
+            SVI("int f(void){int i=0; int x=((struct S{int a,b;}){20,++i}).a;"
+                "return x+i;} return f();"),
+            .exit_code=21,
+        },
+        {
+            "constexpr: recursive automatic instances have distinct identities", __LINE__,
+            SVI("int f(const int* previous){ constexpr int x=42;\n"
+                "if(previous) return previous!=&x && *previous==42 && *(&x)==42;\n"
+                "return f(&x); } return f(0);"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: distinct addressed objects are initialized", __LINE__,
+            SVI("int f(void){constexpr int a=7,b=7; const int* p=&a; const int* q=&b; return p!=q && *p==7 && *q==7;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: materialized initializer retains address dependency", __LINE__,
+            SVI("struct S{int x,y;}; int f(void){constexpr struct S a={20,22}; constexpr struct S b=a; const struct S* p=&b; return p->x+p->y==42;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: runtime array indexing retains storage", __LINE__,
+            SVI("int f(int i){constexpr int a[3]={4,5,6}; return a[i];} return f(1);"),
+            .exit_code = 5,
+        },
+        {
+            "constexpr: aggregate passed by value retains initialization", __LINE__,
+            SVI("struct S{int x,y;}; int sum(struct S s){return s.x+s.y;} int f(void){constexpr struct S s={20,22}; return sum(s);} return f();"),
+            .exit_code = 42,
+        },
+        {
+            "constexpr: static local retains one identity", __LINE__,
+            SVI("const int* f(void){static constexpr int x=42; return &x;} return f()==f() && *f()==42;"),
+            .exit_code = 1,
+        },
+        {
+            "constexpr: global storage initialized without runtime assignment", __LINE__,
+            SVI("constexpr int x=42; const int* p=&x; return *p;"),
+            .exit_code = 42,
+        },
+        {
             "zero-size stack allocation is not an allocation failure", __LINE__,
             SVI("void f(void){} f(); return __builtin_alloca(0)!=0;\n"),
             .exit_code = 1,
@@ -3628,11 +3729,424 @@ TestFunction(test_interpreter){
             .exit_code = 12,
         },
         {
+            "static switch: documented type dispatch", __LINE__,
+            SVI("constexpr T=int; T one(void){static switch(T){static case int:return 1;static break;static case float:return 1.f;static break;static default:static_assert(0,\"unsupported type\");}} return one();"),
+            .exit_code = 1,
+        },
+        {
+            "static switch: fallthrough and default before match", __LINE__,
+            SVI("int x=0; static switch(2){static default:x=9;static break;static case 1:invalid();static break;static case 2:x=2;static case 3:x+=3;static break;invalid();} return x;"),
+            .exit_code = 5,
+        },
+        {
+            "static switch: unmatched condition with and without default", __LINE__,
+            SVI("int x=0; static switch(9){static case 1:invalid();} static switch(9){static default:x=2;static case 1:x+=3;} return x;"),
+            .exit_code = 5,
+        },
+        {
+            "static switch: no implicit scope and adjacent labels", __LINE__,
+            SVI("static switch(2){static case 1:static case 2:int x=7;static break;} return x;"),
+            .exit_code = 7,
+        },
+        {
+            "static switch: break and continue select their own targets", __LINE__,
+            SVI("int x=0; static for(int i=0;i<4;i++){static switch(i){static case 1:static continue;static case 2:static break;static default:x+=10;} x++;} return x;"),
+            .exit_code = 23,
+        },
+        {
+            "static switch: nested switch and for breaks stay local", __LINE__,
+            SVI("int x=0; static switch(1){static case 1:static switch(2){static case 2:x++;static break;invalid();} static for(int i=0;i<4;i++){x++;static break;} x++;static break;static default:invalid();} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static switch: continue propagates through nested switches", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++){static switch(i){static default:static switch(i){static default:x++;{static if(1) static continue;} invalid();} invalid();} invalid();} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static switch: generates ordinary runtime cases", __LINE__,
+            SVI("int x=0; switch(2){static switch(int){static case int:case 2:x=7;break;static break;static default:invalid();}} return x;"),
+            .exit_code = 7,
+        },
+        {
+            "static switch: unsigned matching and integer promotions", __LINE__,
+            SVI("int x=0; static switch((unsigned)-1){static case -1:x++;static break;} static switch((unsigned char)255){static case -1:invalid();static break;static case 255:x++;} return x;"),
+            .exit_code = 2,
+        },
+        {
+            "static switch: enum and wide integer conditions", __LINE__,
+            SVI("enum E{A=1,B=2}; int x=0; static switch(B){static case B:x++;} static switch((unsigned __int128)1<<100){static case (unsigned __int128)1<<100:x++;} return x;"),
+            .exit_code = 2,
+        },
+        {
+            "static switch: return does not stop compile-time parsing", __LINE__,
+            SVI("int f(void){static switch(1){static case 1:return 7;static case 2:typedef int T;} T x=3; return x;} return f();"),
+            .exit_code = 7,
+        },
+        {
+            "static switch: static goto composes with fallthrough", __LINE__,
+            SVI("int x=0; static switch(1){static case 1:static goto done;invalid();static case 2:static done:x=7;static break;} return x;"),
+            .exit_code = 7,
+        },
+        {
+            "static switch: captured loop binding in generated function", __LINE__,
+            SVI("static for(int i=7;i<8;i++) static switch(i){static case 7:int f(void){return i;}static break;} return f();"),
+            .exit_code = 7,
+        },
+        {
+            "static if: optional braces and else-if chain", __LINE__,
+            SVI("int x=0; static if(0) invalid(); else if(1) x=7; else invalid(); return x;"),
+            .exit_code = 7,
+        },
+        {
+            "static if: dangling else binds to nearest if", __LINE__,
+            SVI("int x=0; static if(1) static if(0) x=1; else x=2; else x=3; return x;"),
+            .exit_code = 2,
+        },
+        {
+            "static if: skip a whole runtime conditional", __LINE__,
+            SVI("int x=0; static if(0) if(unknown) invalid(); else invalid(); else x=7; return x;"),
+            .exit_code = 7,
+        },
+        {
+            "static if: skip unbraced function definition", __LINE__,
+            SVI("static if(0) int f(void){invalid();} else int f(void){return 7;} return f();"),
+            .exit_code = 7,
+        },
+        {
+            "static for: optional braces", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++) x+=i; return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: unbraced function definition retains binding", __LINE__,
+            SVI("static for(int i=7;i<8;i++) int f(void){return i;} return f();"),
+            .exit_code = 7,
+        },
+        {
+            "static for: nested unbraced static controls", __LINE__,
+            SVI("int x=0; static for(int i=0;i<4;i++) static if(i==1) static continue; else static if(i==3) static break; else x+=i; return x;"),
+            .exit_code = 2,
+        },
+        {
+            "static for: unbraced runtime conditional with else", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++) if(i==1) x+=10; else x+=i; return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: unbraced do body", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++) do x+=i; while(0); return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: unbraced case label and conditional", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++) switch(0) case 0: if(i==1) x+=10; else x+=i; return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: unbraced body of runtime if", __LINE__,
+            SVI("int x=0; if(1) static for(int i=0;i<3;i++) x+=i; else x=99; return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static labels: reusable across iterations", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++){static goto done; invalid(); static done: x+=i;} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static labels: target at end of iteration", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++){x+=i; static if(1) static goto done; invalid(); static done:} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static labels: nested loops find their own target", __LINE__,
+            SVI("int x=0; static for(int i=0;i<2;i++){static for(int j=0;j<2;j++){static goto done; invalid(); static done:x++;} static goto done; invalid(); static done:} return x;"),
+            .exit_code = 4,
+        },
+        {
             "static goto: leaves selected static if body", __LINE__,
             SVI("int x = 0;\n"
                 "static if(1){ x += 1; static goto foo; invalid(); }\n"
                 "x += 10; foo: x += 100; return x;\n"),
             .exit_code = 101,
+        },
+        {
+            "static for: snapshots iterations and restores shadowed variable", __LINE__,
+            SVI("int i=99, x=0; static for(int i=0; i<3; i++){ x=x*10+i; } return x+i;"),
+            .exit_code = 111,
+        },
+        {
+            "static for: condition and update use current bindings", __LINE__,
+            SVI("int x=0; static for(int i=1; i<10; i=i*2){ x+=i; } return x;"),
+            .exit_code = 15,
+        },
+        {
+            "static for: prefix increment", __LINE__,
+            SVI("int x=0; static for(int i=0; i<4; ++i){ x+=i; } return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: decrement", __LINE__,
+            SVI("int x=0; static for(int i=3; i>0; --i){ x+=i; } static for(int j=3; j>0; j--){ x+=j; } return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: compound assignment precedence", __LINE__,
+            SVI("int x=0; static for(int i=0; i<7; i+=1+1){ x+=i; } return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: arithmetic compound updates", __LINE__,
+            SVI("int x=0; static for(int i=8; i>0; i/=2){ x+=i; }\n"
+                "static for(int i=1; i<9; i*=2){ x+=i; }\n"
+                "static for(int i=5; i>0; i-=2){ x+=i; }\n"
+                "static for(int i=7; i>0; i%=3){ x+=i; static if(i==1){static break;} } return x;"),
+            .exit_code = 47,
+        },
+        {
+            "static for: bitwise compound updates", __LINE__,
+            SVI("int x=0; static for(int i=1; i<8; i<<=1){x+=i;}\n"
+                "static for(int i=4; i>0; i>>=1){x+=i;}\n"
+                "static for(int i=3; i>0; i&=2){x+=i; static if(i==2){static break;}}\n"
+                "static for(int i=1; i<4; i|=2){x+=i; static if(i==3){static break;}}\n"
+                "static for(int i=1; i<4; i^=2){x+=i; static if(i==3){static break;}} return x;"),
+            .exit_code = 27,
+        },
+        {
+            "static for: zero iterations skip invalid body", __LINE__,
+            SVI("static for(int i=0; i<0; i++){ invalid tokens; } return 42;"),
+            .exit_code = 42,
+        },
+        {
+            "static for: body declarations remain visible", __LINE__,
+            SVI("static for(int i=0; i<1; i++){ int visible=42; } return visible;"),
+            .exit_code = 42,
+        },
+        {
+            "static for: explicit scope per iteration and inner shadowing", __LINE__,
+            SVI("int x=0; static for(int i=0; i<3; i++){{ int local=i; x+=local; { int i=10; x+=i; } }} return x;"),
+            .exit_code = 33,
+        },
+        {
+            "static for: nested loops initialize from outer loop", __LINE__,
+            SVI("int x=0; static for(int i=0; i<3; i++){ static for(int j=i+1; j<4; j++){ x+=j; } x+=i; } return x;"),
+            .exit_code = 17,
+        },
+        {
+            "static for: nested loops shadow outer bindings", __LINE__,
+            SVI("int x=0; static for(int i=0; i<3; i++){ static for(int i=1; i<3; i++){ x+=i; } x+=i; } return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: nested independent bindings", __LINE__,
+            SVI("int x=0; static for(int i=0; i<3; i++){ static for(int j=0; j<i; j++){ x+=i*10+j; } } return x;"),
+            .exit_code = 51,
+        },
+        {
+            "static for: own controls inside runtime control flow", __LINE__,
+            SVI("int x=0;\n"
+                "if(1){static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}\n"
+                "if(0){}else{static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}\n"
+                "for(int n=0;n<1;n++){static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}\n"
+                "int n=0; while(n++<1){static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}\n"
+                "do{static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}while(0);\n"
+                "switch(0){default:{static for(int i=0;i<3;i++){static if(i==1){static continue;} x++; static if(i==2){static break;}}}} return x;"),
+            .exit_code = 12,
+        },
+        {
+            "static for: runtime boundary ends before outer static control", __LINE__,
+            SVI("int x=0; static for(int i=0;i<3;i++){if(1){static for(int j=0;j<3;j++){x++; static break;}} {static if(i==1){static break;}}} return x;"),
+            .exit_code = 2,
+        },
+        {
+            "static for: continue unwinds static if and ordinary braces", __LINE__,
+            SVI("int x=0; static for(int i=0; i<5; i++){ static if(i==2){{ static continue; invalid(); }} x+=i; } return x;"),
+            .exit_code = 8,
+        },
+        {
+            "static for: empty condition and break skip update", __LINE__,
+            SVI("int x=0; static for(int i=0; ; i=i/0){ x=i+42; static break; invalid(); } return x;"),
+            .exit_code = 42,
+        },
+        {
+            "static for: nested break affects innermost loop", __LINE__,
+            SVI("int x=0; static for(int i=0; i<3; i++){ static for(int j=0; ; j++){ x+=i; static break; } } return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: generate switch cases through enum reflection", __LINE__,
+            SVI("enum Fruit{ APPLES, ORANGES, PEARS };\n"
+                "int f(enum Fruit v){ switch(v){ static for(int i=0; i<(enum Fruit).enumerators; i++){\n"
+                "case (enum Fruit).enumerator(i).value: return i+1; } default: return 9; } }\n"
+                "return f(APPLES)+f(ORANGES)+f(PEARS)+f((enum Fruit)4);"),
+            .exit_code = 15,
+        },
+        {
+            "static for: constexpr reflected names before generated case labels", __LINE__,
+            SVI("#pragma typedef on\n"
+                "enum Fruit { APPLES, ORANGES, PEARS };\n"
+                "const char* name(Fruit f){ switch(f){\n"
+                "static for(size_t i=0; i<Fruit.enumerators; i++){{\n"
+                "constexpr e=Fruit.enumerator(i); constexpr text=e.name.data;\n"
+                "case e.value: return text; }} default: return \"Unknown\"; } }\n"
+                "return name(APPLES)[0]=='A' && name(ORANGES)[0]=='O' && name(PEARS)[0]=='P' && name((Fruit)4)[0]=='U';"),
+            .exit_code = 1,
+        },
+        {
+            "static for: compile-time array lengths", __LINE__,
+            SVI("int x=0; static for(int i=1; i<4; i++){{ int a[i]; x+=sizeof(a)/sizeof(int); }} return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: multiple clause-1 variables", __LINE__,
+            SVI("int x=0; static for(int i=0, end=4; i<end; i++){ x+=i; } return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: comma updates both clause-1 variables", __LINE__,
+            SVI("int x=0; static for(int i=0,j=10; i<j; i++,j--){x+=i*100+j;} return x==1040;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: later comma update reads new binding", __LINE__,
+            SVI("int x=0; static for(int i=0,j=0; i<3; i++,j=i){x+=i*10+j;} return x;"),
+            .exit_code = 33,
+        },
+        {
+            "static for: dependent sizeof is parsed after preceding increment", __LINE__,
+            SVI("int sum=0; static for(int i=0,j=0; i<3; i++,j=sizeof(int[6/i])/sizeof(int)){sum+=j;} return sum;"),
+            .exit_code = 9,
+        },
+        {
+            "static for: zero iterations do not evaluate update types", __LINE__,
+            SVI("static for(int i=0; i<0; i=sizeof(int[6/i])){} return 42;"),
+            .exit_code = 42,
+        },
+        {
+            "static for: break does not evaluate update types", __LINE__,
+            SVI("static for(int i=0; ; i=sizeof(int[6/i])){static break;} return 42;"),
+            .exit_code = 42,
+        },
+        {
+            "static for: sizeof update uses current iteration binding", __LINE__,
+            SVI("int sum=0; static for(int i=0,n=0; n<3; i=sizeof(int[i+1])/sizeof(int),n++){sum+=i;} return sum;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: grouped comma update reparses after each rebinding", __LINE__,
+            SVI("int sum=0; static for(int i=0,j=0; i<3; ((i++),(j=sizeof(int[i+1])/sizeof(int)))){sum+=j;} return sum;"),
+            .exit_code = 5,
+        },
+        {
+            "static for: update preserves commas in conditional operands", __LINE__,
+            SVI("int sum=0; static for(int i=0; i<5; i=i<2 ? i+1,i+2 : 5){sum+=i;} return sum;"),
+            .exit_code = 2,
+        },
+        {
+            "static for: comma update order is observable", __LINE__,
+            SVI("int x=0; static for(int i=0,j=0; i<3; j=i,i++){x+=i*10+j;} return x;"),
+            .exit_code = 31,
+        },
+        {
+            "static for: repeated rebinding within one update", __LINE__,
+            SVI("int x=0; static for(int i=0; i<5; i++,i+=1){x+=i;} return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: parenthesized update uses ordinary expression grammar", __LINE__,
+            SVI("int x=0; static for(int i=0,j=4; i<j; ((++(i)),((j)--))){x+=i+j;} return x;"),
+            .exit_code = 8,
+        },
+        {
+            "static for: constexpr comma expression in rebinding value", __LINE__,
+            SVI("int x=0; static for(int i=0; i<5; i=(i+1,i+2)){x+=i;} return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: compound update uses arithmetic type before conversion", __LINE__,
+            SVI("int x=0; static for(int i=3; i>0; i*=0.5){x+=i;} static for(unsigned char i=200; i>0; i/=300){x+=i;} return x;"),
+            .exit_code = 204,
+        },
+        {
+            "static for: type bindings sequenced through comma update", __LINE__,
+            SVI("int x=0; static for(_Type T=int,U=int; ; T=long,U=T){ static if(T==long){x=U==long; static break;} } return x;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: symbolic pointer bindings and updates", __LINE__,
+            SVI("int x=0; static for(const char* p=\"abc\"; *p; p++){x+=*p;} return x==294;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: addressable iteration snapshots", __LINE__,
+            SVI("int x=0; static for(int i=1; i<4; i++){{const int* p=&i; x+=*p;}} return x;"),
+            .exit_code = 6,
+        },
+        {
+            "static for: floating point binding", __LINE__,
+            SVI("double x=0; static for(double i=0.5; i<2; i+=0.5){x+=i;} return x==3;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: type rebinding", __LINE__,
+            SVI("int x=0; static for(_Type T=int; ; T=long){{ T value=7; x+=value; static if(T==long){static break;} }} return x;"),
+            .exit_code = 14,
+        },
+        {
+            "static for: temporary binding shadows surrounding typedef", __LINE__,
+            SVI("typedef int i; int x=0; static for(int i=0; i<3; i++){ x+=i; } i y=10; return x+y;"),
+            .exit_code = 13,
+        },
+        {
+            "static for: generated functions retain iteration bindings", __LINE__,
+            SVI("int i=99; static for(int i=7;i<9;i++){\n"
+                "static if(i==7){int first(void){return i;}}\n"
+                "static if(i==8){int second(void){return i;}}\n"
+                "} return first()*10+second();"),
+            .exit_code = 78,
+        },
+        {
+            "static for: functions retain explicit scopes after reuse", __LINE__,
+            SVI("int (*fs[3])(void); static for(int i=0;i<3;i++){{\n"
+                "int f(void){return i;} fs[i]=f;\n"
+                "}} {int i=99;} return fs[0]()*100+fs[1]()*10+fs[2]();"),
+            .exit_code = 12,
+        },
+        {
+            "static for: methods retain iteration bindings", __LINE__,
+            SVI("int x=0; static for(int i=1;i<3;i++){{struct S{int get(_Self* s){return i;}}; struct S s; x+=s.get();}} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: generated functions retain nested bindings", __LINE__,
+            SVI("static for(int i=2;i<3;i++){static for(int j=3;j<4;j++){\n"
+                "int f(void){return i*10+j;}\n"
+                "}} return f();"),
+            .exit_code = 23,
+        },
+        {
+            "static for: generated functions retain type bindings", __LINE__,
+            SVI("static for(_Type T=char;;T=int){\n"
+                "static if(T==char){int first(void){return sizeof(T);}}\n"
+                "static if(T==int){int second(void){return sizeof(T);} static break;}\n"
+                "} return first()==sizeof(char) && second()==sizeof(int);"),
+            .exit_code = 1,
+        },
+        {
+            "static for: body symbol declarations use enclosing scope", __LINE__,
+            SVI("static for(int i=0;i<1;i++){typedef int T; enum E{A=3}; struct S{T a;}; int f(void){return A;}}\n"
+                "T x=4; struct S s={x}; return s.a+f();"),
+            .exit_code = 7,
+        },
+        {
+            "static for: clause-1 tags survive rebinding", __LINE__,
+            SVI("int x=0; static for(struct S{int i;} s={0};s.i<3;s=(struct S){s.i+1}){x+=s.i;} return x;"),
+            .exit_code = 3,
+        },
+        {
+            "static for: helper function cannot capture caller loop binding", __LINE__,
+            SVI("int i=50; int f(void){ return i; } int x=0; static for(int i=0; i<3; i++){ x+=f(); } return x;"),
+            .exit_code = 150,
         },
         {
             "static goto: unselected branch has no effect", __LINE__,
@@ -15837,7 +16351,8 @@ TestFunction(test_float_folding){
     #if defined __DRC__ && defined __GLIBC__
     // fenv functions have inline gnu asm with glibc
     #else
-    CiInterpreter ci = {.parser.cpp.target = cc_targets[CC_TARGET_TEST]};
+    ArenaAllocator fold_arena = {0};
+    CiInterpreter ci = {.parser.cpp = {.target=cc_targets[CC_TARGET_TEST], .allocator=allocator_from_arena(&fold_arena)}};
     CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed, .ldbl_fmt=ci_target(&ci)->long_double_format};
     static const struct {
         CcBasicTypeKind from, to;
@@ -15977,6 +16492,16 @@ TestFunction(test_float_folding){
                     CcExpr value = {.kind = CC_EXPR_VALUE, .type = from.type, .uinteger = from.bits[0]};
                     CcExpr cast = {.kind = CC_EXPR_CAST, .type = to.type, .lhs = &value};
                     status = ci_fold_expr(&ci, &ctx, &cast, &to);
+                    // Reading an object view must not bypass the runtime
+                    // folder's rounding and exception rules.
+                    CcExpr view = {.kind=CC_EXPR_OBJECT_VIEW, .type=to.type, .lhs=&cast};
+                    CiFoldValue read;
+                    int read_status = ci_fold_expr(&ci, &ctx, &view, &read);
+                    TestExpect(int, read_status, ==, status);
+                    if(!read_status){
+                        TestExpect(uint64_t, read.bits[0], ==, to.bits[0]);
+                        TestExpect(uint64_t, read.bits[1], ==, to.bits[1]);
+                    }
                 }
                 else status = ci_fold_float_cast(&ctx, &from, &to);
                 int after_flags = fetestexcept(FE_ALL_EXCEPT);
@@ -15994,6 +16519,7 @@ TestFunction(test_float_folding){
     }
     if(fesetenv(&saved) != 0)
         EndTest("fesetenv failed");
+    ArenaAllocator_free_all(&fold_arena);
     #endif
     TESTEND();
 }

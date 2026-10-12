@@ -9656,9 +9656,224 @@ TestFunction(test_parse_errors){
             SVI("(test):1:16: error: Use of undeclared label 'nowhere'\n"),
         },
         {
+            "duplicate static cases", __LINE__,
+            SVI("static switch(1){\nstatic case 1:static break;\nstatic case 1:;\n}"),
+            SVI("(test):3:8: error: duplicate static case value\n"),
+        },
+        {
+            "duplicate static cases after conversion", __LINE__,
+            SVI("static switch((unsigned)-1){\nstatic case -1:static break;\nstatic case ~0u:;\n}"),
+            SVI("(test):3:8: error: duplicate static case value\n"),
+        },
+        {
+            "duplicate static default", __LINE__,
+            SVI("static switch(1){\nstatic default:static break;\nstatic default:;\n}"),
+            SVI("(test):3:8: error: duplicate static default label\n"),
+        },
+        {
+            "floating static switch condition", __LINE__,
+            SVI("static switch(1.5){}"),
+            SVI("(test):1:15: error: static switch requires integer or _Type expressions\n"),
+        },
+        {
+            "mismatched static case type", __LINE__,
+            SVI("static switch(1){\nstatic case\nint:;\n}"),
+            SVI("(test):3:1: error: static case type does not match static switch expression\n"),
+        },
+        {
+            "static case outside switch", __LINE__,
+            SVI("static case 1:;"),
+            SVI("(test):1:1: error: static case/default must appear directly in a static switch body\n"),
+        },
+        {
+            "static default outside switch", __LINE__,
+            SVI("static default:;"),
+            SVI("(test):1:1: error: static case/default must appear directly in a static switch body\n"),
+        },
+        {
+            "static case nested in ordinary block", __LINE__,
+            SVI("static switch(1){static case 1:{\nstatic case 2:;\n}}"),
+            SVI("(test):2:1: error: static case/default must appear directly in a static switch body\n"),
+        },
+        {
+            "static switch break cannot cross runtime if", __LINE__,
+            SVI("static switch(1){static case 1:if(1){\nstatic break;\n}}"),
+            SVI("(test):2:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue needs loop, not just switch", __LINE__,
+            SVI("static switch(1){static case 1:\nstatic continue;\n}"),
+            SVI("(test):2:1: error: static continue outside static for\n"),
+        },
+        {
+            "function cannot break enclosing static switch", __LINE__,
+            SVI("static switch(1){static case 1:void f(void){\nstatic break;\n}} f();"),
+            SVI("(test):2:1: error: static break outside static for or static switch\n"),
+        },
+        {
+            "runtime return does not skip static assertion", __LINE__,
+            SVI("int f(void){static switch(1){static case 1:return 7;\nstatic default:static_assert(0,\"fallthrough\");}} return f();"),
+            SVI("(test):2:16: error: static assertion failed: 0: \"fallthrough\"\n"),
+        },
+        {
+            "static goto cannot escape static switch", __LINE__,
+            SVI("static switch(1){static case 1:\nstatic goto done;\n} static done:;"),
+            SVI("(test):2:1: error: Forward label 'done' not found in static goto scope\n"),
+        },
+        {
+            "runtime goto cannot target a static label", __LINE__,
+            SVI("goto done; static done: ;"),
+            SVI("(test):1:1: error: Use of undeclared label 'done'\n"),
+        },
+        {
+            "static goto cannot escape iteration to static label", __LINE__,
+            SVI("static for(int i=0;i<1;i++){\nstatic goto done;\n} static done: ;"),
+            SVI("(test):2:1: error: Forward label 'done' not found in static goto scope\n"),
+        },
+        {
+            "unbraced static break cannot cross runtime if", __LINE__,
+            SVI("static for(int i=0;i<1;i++){\nif(1) static break;\n}"),
+            SVI("(test):2:7: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
             "static goto missing target at EOF", __LINE__,
             SVI("static goto missing;"),
             SVI("(test):1:1: error: Forward label 'missing' not found in static goto scope\n"),
+        },
+        {
+            "static for clause-1 variables do not leak", __LINE__,
+            SVI("static for(int i=0; i<1; i++){}\nreturn i;"),
+            SVI("(test):2:8: error: undeclared identifier 'i'\n"),
+        },
+        {
+            "static for requires declaration", __LINE__,
+            SVI("static for(; ; i++){}"),
+            SVI("(test):1:1: error: static for clause-1 must be a constexpr declaration\n"),
+        },
+        {
+            "static for requires initializer", __LINE__,
+            SVI("static for(int i; i<1; i++){}"),
+            SVI("(test):1:16: error: static for variable requires an initializer\n"),
+        },
+        {
+            "static for requires update", __LINE__,
+            SVI("static for(int i=0; i<1; ){}"),
+            SVI("(test):1:1: error: static for requires a rebinding update\n"),
+        },
+        {
+            "static for cannot update surrounding variable", __LINE__,
+            SVI("int j;\nstatic for(int i=0; i<1; j++){}"),
+            SVI("(test):2:26: error: static for update must rebind a clause-1 variable\n"),
+        },
+        {
+            "static for update requires rebinding rather than arithmetic", __LINE__,
+            SVI("static for(int i=0; i<1;\ni + 1){}"),
+            SVI("(test):2:3: error: static for requires a rebinding update\n"),
+        },
+        {
+            "static for rebinding value cannot have increment side effects", __LINE__,
+            SVI("static for(int i=0,j=0; i<1;\ni = j++){}"),
+            SVI("(test):2:6: error: static for rebinding value must be constexpr evaluable\n"),
+        },
+        {
+            "static for comma cannot update an enclosing loop binding", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nstatic for(int j=0; j<1; j++,i++){}\n}"),
+            SVI("(test):2:30: error: static for update must rebind a clause-1 variable\n"),
+        },
+        {
+            "static break cannot cross runtime if", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nif(1){\nstatic break;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime if", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nif(1){\nstatic continue;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break cannot cross runtime else", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nif(0){}else{\nstatic break;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime else", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nif(0){}else{\nstatic continue;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break cannot cross runtime for", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nfor(;;){\nstatic break;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime for", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nfor(;;){\nstatic continue;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break cannot cross runtime while", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nwhile(1){\nstatic break;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime while", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nwhile(1){\nstatic continue;\n}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break cannot cross runtime do", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\ndo{\nstatic break;\n}while(0);\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime do", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\ndo{\nstatic continue;\n}while(0);\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break cannot cross runtime switch", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nswitch(0){default:{\nstatic break;\n}}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static continue cannot cross runtime switch", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nswitch(0){default:{\nstatic continue;\n}}\n}"),
+            SVI("(test):3:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "static break outside loop", __LINE__,
+            SVI("static break;"),
+            SVI("(test):1:1: error: static break outside static for or static switch\n"),
+        },
+        {
+            "static continue outside loop", __LINE__,
+            SVI("static continue;"),
+            SVI("(test):1:1: error: static continue outside static for\n"),
+        },
+        {
+            "static for body has no implicit scope", __LINE__,
+            SVI("void f(void){ static for(int i=0; i<2; i++){\nint x;\n}}"),
+            SVI("(test):2:6: error: redefinition of 'x'\n"),
+        },
+        {
+            "static for goto cannot escape loop braces", __LINE__,
+            SVI("static for(int i=0; i<1; i++){\nstatic goto out;\n}\nout: ;"),
+            SVI("(test):2:1: error: Forward label 'out' not found in static goto scope\n"),
+        },
+        {
+            "static break in generated function cannot target defining loop", __LINE__,
+            SVI("static for(int i=0;i<1;i++){\nvoid f(void){\nstatic break;\n}}"),
+            SVI("(test):3:1: error: static break outside static for or static switch\n"),
+        },
+        {
+            "static continue in generated function cannot target defining loop", __LINE__,
+            SVI("static for(int i=0;i<1;i++){\nvoid f(void){\nstatic continue;\n}}"),
+            SVI("(test):3:1: error: static continue outside static for\n"),
+        },
+        {
+            "static break cannot cross function boundary", __LINE__,
+            SVI("void f(void){ static break; }\nstatic for(int i=0; i<1; i++){ f(); }"),
+            SVI("(test):1:15: error: static break outside static for or static switch\n"),
         },
         {
             "static goto missing target after skipped tokens", __LINE__,

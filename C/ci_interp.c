@@ -4090,7 +4090,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
             err = CI_OOM_ERROR;
             goto finally;
         }
-        err = cmd_run_capture(&cmd, envp, scratch, &output);
+        err = cmd_run_capture(&cmd, envp, scratch, &output, CMD_CAPTURE_STDOUT);
         cmd_destroy(&cmd);
         Allocator_free(scratch, envp, envp_size);
         if(err){
@@ -4684,7 +4684,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
         cmd_destroy(&cmd);
         return CI_OOM_ERROR;
     }
-    err = cmd_run_capture(&cmd, envp, scratch, &output);
+    err = cmd_run_capture(&cmd, envp, scratch, &output, CMD_CAPTURE_STDOUT);
     cmd_destroy(&cmd);
     Allocator_free(scratch, envp, envp_size);
     if(err){

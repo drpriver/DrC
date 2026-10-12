@@ -8,6 +8,19 @@
 #pragma clang assume_nonnull begin
 #endif
 
+static inline CcScope*
+cc_scope_declarations(CcScope* scope){
+    while(scope->static_for_bindings) scope = scope->parent;
+    return scope;
+}
+
+static inline CcScope*
+cc_scope_retain(CcScope* scope){
+    for(CcScope* s = scope; s && !s->retained; s = s->parent)
+        s->retained = 1;
+    return scope;
+}
+
 static
 CcVariable* _Nullable
 cc_scope_lookup_var(CcScope* scope, Atom name, int walk){
@@ -177,6 +190,8 @@ cc_scope_lookup_symbol(CcScope* scope, Atom name, int walk, CcSymbol* out){
 static inline
 void
 cc_scope_clear(CcScope* scope){
+    scope->static_for_bindings = 0;
+    scope->retained = 0;
     scope->deferred_methods.count = 0;
     AM16_clear(&scope->typedefs);
     CcAnonAM_clear(&scope->variables);

@@ -290,9 +290,11 @@ cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
     return 1;
 }
 
+enum {CMD_CAPTURE_STDOUT = 0x1, CMD_CAPTURE_STDERR = 0x2};
 static
 int
-cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* out){
+cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* out, unsigned captures){
+    if(!captures) return 1;
     if(cmd->errored) return 1;
     if(!cmd->prog.cursor) return 1;
     msb_nul_terminate(&cmd->prog);
@@ -332,8 +334,8 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         }
         STARTUPINFOA si = {
             .cb = sizeof si,
-            .hStdOutput = write_handle,
-            .hStdError = GetStdHandle(STD_ERROR_HANDLE),
+            .hStdOutput = captures & CMD_CAPTURE_STDOUT?write_handle:GetStdHandle(STD_OUTPUT_HANDLE),
+            .hStdError = captures & CMD_CAPTURE_STDERR?write_handle:GetStdHandle(STD_ERROR_HANDLE),
             .hStdInput = GetStdHandle(STD_INPUT_HANDLE),
             .dwFlags = STARTF_USESTDHANDLES,
         };
@@ -391,8 +393,14 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
             #endif
             if(err) goto actions_fail;
         }
-        err = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-        if(err) goto actions_fail;
+        if(captures & CMD_CAPTURE_STDOUT){
+            err = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+            if(err) goto actions_fail;
+        }
+        if(captures & CMD_CAPTURE_STDERR){
+            err = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+            if(err) goto actions_fail;
+        }
         err = posix_spawn_file_actions_addclose(&actions, pipefd[0]);
         if(err) goto actions_fail;
         err = posix_spawn_file_actions_addclose(&actions, pipefd[1]);

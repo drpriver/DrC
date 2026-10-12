@@ -159,7 +159,7 @@ AM16_put(AtomMap16* am, Allocator al, Atom key, uint64_t payload[_Nonnull /*stat
         i--;
         if(items[i].atom == key){
             items[i].payload[0] = payload[0];
-            items[i].payload[0] = payload[1];
+            items[i].payload[1] = payload[1];
             return 0;
         }
         idx++;

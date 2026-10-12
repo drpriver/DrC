@@ -36,6 +36,30 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("struct S{int port;}; int consume(const struct __builtin_Field* p){return p->name.count;}"
+         "int f(void){constexpr field=struct S.field(0); return consume(&field)+field.name.data[0];} return f()==116;\n")},
+    {__LINE__, SVI("int x=0; static for(int i=0;i<4;i++){static switch(i){static case 1:static continue;static case 2:static break;static default:x+=10;}x++;} return x==23;\n")},
+    {__LINE__, SVI("constexpr T=int; T f(void){static switch(T){static case int:return 7;static break;static default:static_assert(0,\"unsupported\");}} return f()==7;\n")},
+    {__LINE__, SVI("int x=0; static for(int i=0;i<3;i++) static if(i==1) static continue; else x+=i; return x==2;\n")},
+    {__LINE__, SVI("int x=0; static for(int i=0;i<3;i++){static goto done; invalid(); static done:x+=i;} return x==3;\n")},
+    {__LINE__, SVI("static for(int i=7;i<9;i++){static if(i==7){int first(void){return i;}}\n"
+         "static if(i==8){int second(void){return i;}}} return first()*10+second()==78;\n")},
+    {__LINE__, SVI("int x=0; static for(struct S{int i;} s={0};s.i<3;s=(struct S){s.i+1}){x+=s.i;} return x==3;\n")},
+    {__LINE__, SVI("int sum=0; static for(int i=0,j=0; i<3; i++,j=sizeof(int[6/i])/sizeof(int)){sum+=j;} return sum==9;\n")},
+    {__LINE__, SVI("int sum=0; static for(int i=0,j=0; i<3; ((i++),(j=sizeof(int[i+1])/sizeof(int)))){sum+=j;} return sum==5;\n")},
+    {__LINE__, SVI("int x=0; static for(int i=0,j=0; i<3; (i++,j=i)){x+=i*10+j;}\n"
+         "static for(const char* p=\"ab\"; *p; p++){x+=*p;} return x==228;\n")},
+    {__LINE__, SVI("int f(const int* previous){constexpr int x=42; const int* p=&x;\n"
+         "if(previous) return previous!=&x && *previous==42 && *p==42; return f(&x);}\n"
+         "return f(0);\n")},
+    {__LINE__, SVI("enum Fruit{A,B}; const char* name(enum Fruit f){ switch(f){\n"
+         "static for(int i=0; i<2; i++){{ constexpr e=(enum Fruit).enumerator(i);\n"
+         "constexpr text=e.name.data; case e.value: return text; }} default:return \"unknown\"; }}\n"
+         "return name(A)[0]=='A' && name(B)[0]=='B';\n")},
+    {__LINE__, SVI("int sum=0; static for(int i=0, end=4; i<end; i+=1){\n"
+         "static if(i==1){ static continue; }\n"
+         "static for(int j=0; ; j++){ sum+=i; static break; }\n"
+         "} return sum==5;\n")},
     {__LINE__, SVI("typedef int I1 __attribute__((aligned(1)));\n"
          "typedef int I2 __attribute__((aligned(2)));\n"
          "typedef int I4 __attribute__((aligned(4)));\n"

@@ -26,7 +26,8 @@ struct CcVariable {
              interp_preinit: 1,
              constexpr_: 1,
              thread_local_: 1,
-             _padding: 9,
+             constexpr_storage: 1, // lowering needs the automatic object's storage
+             _padding: 8,
              alignment: 16; // 0 means default alignment
     size_t tls_slot; // interpreter TLS slot + 1; zero until prepared
     uint32_t tls_size, tls_alignment;
