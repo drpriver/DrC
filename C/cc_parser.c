@@ -267,6 +267,7 @@ static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
 static int cc_parse_one_inner(CcParser* p);
 static int cc_skip_braced_block(CcParser* p);
+static int cc_static_goto_missing(CcParser* p);
 
 static
 int
@@ -4356,6 +4357,10 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                             goto end_block;
                         }
                         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'){
+                            if(p->static_goto_target){
+                                err = cc_static_goto_missing(p);
+                                goto end_block;
+                            }
                             cc_next_token(p, &peek); // consume '}'
                             break;
                         }
@@ -6111,9 +6116,87 @@ cc_parse_static_if(CcParser* p, SrcLoc loc){
 
 static
 int
+cc_static_goto_missing(CcParser* p){
+    Atom target = p->static_goto_target;
+    p->static_goto_target = NULL;
+    return cc_error(p, p->static_goto_loc, "Forward label '%.*s' not found in static goto scope", (int)target->length, target->data);
+}
+
+static
+int
+cc_parse_static_goto(CcParser* p, SrcLoc loc){
+    int err;
+    CcToken tok;
+    err = cc_next_token(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_IDENTIFIER)
+        return cc_error(p, tok.loc, "Expected identifier for `static goto`");
+    Atom label = tok.ident.ident;
+    err = cc_expect_punct(p, ';');
+    if(err) return err;
+    p->static_goto_target = label;
+    p->static_goto_loc = loc;
+    return 0;
+}
+
+static
+int
+cc_handle_static_goto(CcParser* p){
+    int err;
+    CcToken tok;
+    Atom target = p->static_goto_target;
+    int braces = 0, parens = 0, brackets = 0;
+    _Bool statement_start = 1;
+    for(;;){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF) return cc_static_goto_missing(p);
+        if(!braces && !parens && !brackets && statement_start && tok.type == CC_IDENTIFIER){
+            CcToken peek;
+            err = cc_peek(p, &peek);
+            if(err) return err;
+            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
+                if(tok.ident.ident == target){
+                    p->static_goto_target = NULL;
+                    err = cc_unget(p, &tok); // Preserve the label for ordinary gotos.
+                    if(err) return err;
+                    break;
+                }
+                err = cc_next_token(p, &peek);
+                if(err) return err;
+                continue;
+            }
+        }
+        if(tok.type == CC_PUNCTUATOR){
+            switch(tok.punct.punct){
+                case '{': braces++; break;
+                case '}':
+                    if(!braces)
+                        return cc_unget(p, &tok);
+                    braces--;
+                    break;
+                case '(': parens++; break;
+                case ')': if(parens) parens--; break;
+                case '[': brackets++; break;
+                case ']': if(brackets) brackets--; break;
+                default: break;
+            }
+            if(!braces && !parens && !brackets && (tok.punct.punct == ';' || tok.punct.punct == '}')){
+                statement_start = 1;
+                continue;
+            }
+        }
+        statement_start = 0;
+    }
+    return 0;
+}
+
+static
+int
 cc_parse_one(CcParser* p){
     int err = cc_parse_one_inner(p);
     if(err) return err;
+    if(p->static_goto_target) return 0;
     return cc_parse_local_methods(p);
 }
 
@@ -6122,6 +6205,11 @@ int
 cc_parse_one_inner(CcParser* p){
     int err;
     CcToken tok;
+    if(p->static_goto_target){
+        err = cc_handle_static_goto(p);
+        if(err) return err;
+        if(p->static_goto_target) return 0;
+    }
     err = cc_peek(p, &tok);
     if(err) return err;
     if(tok.type == CC_KEYWORD && tok.kw.kw == CC_asm){
@@ -6152,13 +6240,27 @@ cc_parse_one_inner(CcParser* p){
         }
     }
     if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static){
-        CcToken if_tok;
+        CcToken control_tok;
         cc_next_token(p, &tok);
-        err = cc_peek(p, &if_tok);
+        err = cc_peek(p, &control_tok);
         if(err) return err;
-        if(if_tok.type == CC_KEYWORD && if_tok.kw.kw == CC_if){
-            cc_next_token(p, &if_tok);
-            return cc_parse_static_if(p, tok.loc);
+        if(control_tok.type == CC_KEYWORD){
+            switch(control_tok.kw.kw){
+                case CC_if:
+                    cc_next_token(p, &control_tok);
+                    return cc_parse_static_if(p, tok.loc);
+                case CC_goto:
+                    cc_next_token(p, &control_tok);
+                    return cc_parse_static_goto(p, tok.loc);
+                case CC_switch:
+                    cc_next_token(p, &control_tok);
+                    return cc_unimplemented(p, control_tok.loc, "`static switch` unimplemented");
+                case CC_for:
+                    cc_next_token(p, &control_tok);
+                    return cc_unimplemented(p, control_tok.loc, "`static for` unimplemented");
+                default:
+                    break;
+            }
         }
         cc_unget(p, &tok);
     }
@@ -6229,6 +6331,10 @@ cc_parse_all(CcParser* p){
     for(;;){
         err = cc_peek(p, &tok);
         if(err) break;
+        if(p->static_goto_target && (tok.type == CC_EOF || (tok.type == CC_PUNCTUATOR && tok.punct.punct == '}'))){
+            err = cc_static_goto_missing(p);
+            break;
+        }
         if(tok.type == CC_EOF)
             break;
         err = cc_parse_one(p);
@@ -6253,6 +6359,7 @@ cc_parse_all(CcParser* p){
 static
 void
 cc_parser_discard_input(CcParser* p){
+    p->static_goto_target = NULL;
     p->pending.count = 0;
     cpp_discard_all_input(&p->cpp);
 }
@@ -11531,6 +11638,10 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         goto end_block;
                     }
                     if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'){
+                        if(p->static_goto_target){
+                            err = cc_static_goto_missing(p);
+                            goto end_block;
+                        }
                         cc_next_token(p, &peek); // consume '}'
                         break;
                     }
@@ -13598,6 +13709,11 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
             CcToken peek;
             err = cc_peek(p, &peek);
             if(err) break;
+            if(p->static_goto_target && (peek.type == CC_EOF ||
+               (peek.type == CC_PUNCTUATOR && peek.punct.punct == '}'))){
+                err = cc_static_goto_missing(p);
+                break;
+            }
             if(terminate_on_rbrace){
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace) break;
                 if(peek.type == CC_EOF){

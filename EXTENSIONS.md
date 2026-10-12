@@ -27,6 +27,7 @@
   * [`#pragma include_path`](#pragma-includepath)
 * [C](#c)
   * [`static if`](#static-if)
+  * [`static goto`](#static-goto)
   * [Methods](#methods)
   * [`.` and `-&gt;` interchangeable](#and-interchangeable)
   * [Function Uniform Call Syntax (FUCS)](#function-uniform-call-syntax-fucs)
@@ -365,11 +366,10 @@ the file that issued the pragma.
 
 ### `static if`
 
-Compile-time conditional at the language level. The condition must be a
-constant expression. Unlike `#if`, this operates on C types and
-expressions after parsing, so it works with `sizeof`, type
-queries, etc. Declarations in the taken branch are injected into the
-enclosing scope (no new scope).
+An `if` evaluated at compile time. The condition must be a `constexpr`
+expression. The following braces do not start a new scope, so declarations
+and types are visible outside of the `static if`. The tokens in the branch
+not taken are not parsed, although they still need to have balanced tokens.
 
 ```C
 static if(sizeof(void*) == 8){
@@ -393,6 +393,22 @@ else if(T == int){
 else {
     _Static_assert(0, "unsupported type");
 }
+```
+
+### `static goto`
+
+A compile-time unconditional jump. Can only jump forward within source code and cannot
+escape enclosing braces (except in `static if`).
+
+```C
+static if(1){
+  static goto foo;
+  static goto bar; // skipped
+}
+bar:
+undefined(); // skipped
+foo:
+printf("lmao\n");
 ```
 
 ### Methods

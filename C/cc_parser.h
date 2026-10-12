@@ -237,6 +237,8 @@ struct CcParser {
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
     Marray(CcToken) pending;
+    Atom _Nullable static_goto_target;
+    SrcLoc static_goto_loc;
     CcAttributes attributes;
     Marray(CcPackRecord) pack_stack;
     uint16_t pragma_pack; // 0 = default (no pack), otherwise pack(N) value

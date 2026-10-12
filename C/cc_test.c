@@ -4095,6 +4095,30 @@ TestFunction(test_parse_decls){
             .vars = { { SVI("x"), SVI("int") } },
         },
         {
+            "static goto unwinds nested static if bodies and skips else chains", __LINE__,
+            SVI("static if(1) { static if(1) { static goto done; invalid(); }\n"
+                "else { done: invalid(); } invalid(); } else { invalid(); }\n"
+                "invalid(); done: ; int kept;\n"),
+            .vars = { { SVI("kept"), SVI("int") } },
+        },
+        {
+            "static goto preserves target for ordinary goto", __LINE__,
+            SVI("goto done; static goto done; invalid(); done: ;\n"),
+        },
+        {
+            "static goto ignores ternaries bitfields and nested labels", __LINE__,
+            SVI("static goto done;\n"
+                "x = 1 ? done : invalid;\n"
+                "struct S { int done: 1; };\n"
+                "{ done: invalid(); }\n"
+                "other: invalid(); done: ; int kept;\n"),
+            .vars = { { SVI("kept"), SVI("int") } },
+        },
+        {
+            "static goto at end of static if body", __LINE__,
+            SVI("static if(1) { static goto done; } invalid(); done: ;\n"),
+        },
+        {
             "static if false branch skipped", __LINE__,
             SVI("static if(0) { int x; } \n"
                "int y;\n"),
@@ -9630,6 +9654,36 @@ TestFunction(test_parse_errors){
             "goto nowhere", __LINE__,
             SVI("void foo(void){goto nowhere;}\n"),
             SVI("(test):1:16: error: Use of undeclared label 'nowhere'\n"),
+        },
+        {
+            "static goto missing target at EOF", __LINE__,
+            SVI("static goto missing;"),
+            SVI("(test):1:1: error: Forward label 'missing' not found in static goto scope\n"),
+        },
+        {
+            "static goto missing target after skipped tokens", __LINE__,
+            SVI("static goto missing; invalid();"),
+            SVI("(test):1:1: error: Forward label 'missing' not found in static goto scope\n"),
+        },
+        {
+            "static goto cannot leave ordinary block", __LINE__,
+            SVI("{ static goto done; } done: ;"),
+            SVI("(test):1:3: error: Forward label 'done' not found in static goto scope\n"),
+        },
+        {
+            "static goto cannot leave ordinary block while scanning", __LINE__,
+            SVI("{ static goto done; invalid(); } done: ;"),
+            SVI("(test):1:3: error: Forward label 'done' not found in static goto scope\n"),
+        },
+        {
+            "static goto cannot leave function", __LINE__,
+            SVI("void f(void){ static goto done; } done: ;"),
+            SVI("(test):1:15: error: Forward label 'done' not found in static goto scope\n"),
+        },
+        {
+            "static goto cannot leave statement expression", __LINE__,
+            SVI("int x = ({ static goto done; 1; }); done: ;"),
+            SVI("(test):1:12: error: Forward label 'done' not found in static goto scope\n"),
         },
         {
             "duplicate label", __LINE__,

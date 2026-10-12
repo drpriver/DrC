@@ -3628,6 +3628,40 @@ TestFunction(test_interpreter){
             .exit_code = 12,
         },
         {
+            "static goto: leaves selected static if body", __LINE__,
+            SVI("int x = 0;\n"
+                "static if(1){ x += 1; static goto foo; invalid(); }\n"
+                "x += 10; foo: x += 100; return x;\n"),
+            .exit_code = 101,
+        },
+        {
+            "static goto: unselected branch has no effect", __LINE__,
+            SVI("int x = 0;\n"
+                "static if(0){ x += 1; static goto foo; }\n"
+                "x += 10; foo: x += 100; return x;\n"),
+            .exit_code = 110,
+        },
+        {
+            "static goto: unwinds nested static if and skips else", __LINE__,
+            SVI("int f(void){ int x = 1;\n"
+                "static if(1){ static if(1){ static goto foo; invalid(); }\n"
+                "else { foo: invalid(); } invalid(); } else { invalid(); }\n"
+                "x += 10; foo: x += 100; return x; } return f();\n"),
+            .exit_code = 101,
+        },
+        {
+            "static goto: preserves runtime goto target", __LINE__,
+            SVI("int f(void){ goto foo; static goto foo; invalid(); foo: return 42; }\n"
+                "return f();\n"),
+            .exit_code = 42,
+        },
+        {
+            "static goto: target inside selected static if", __LINE__,
+            SVI("int x = 0; static if(1){ static goto foo; invalid(); foo: x += 1; }\n"
+                "x += 10; return x;\n"),
+            .exit_code = 11,
+        },
+        {
             "flat expr: && || normalize to 0/1", __LINE__,
             SVI("int r = (5 && 7) + (0 || 3) * 10;\n"
                "return r;\n"),
