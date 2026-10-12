@@ -10886,6 +10886,18 @@ TestFunction(test_record_call_abi){
             .arm64={.hfa_type=CCBT_float, .hfa_count=3, .member_size=4, .member_offsets=0 | (4u << 6) | (8u << 12), .natural_alignment=4, .copy_alignment=8}},
         {CC_TARGET_AARCH64_MACOS, SVI("struct S { double x[4]; };"), 0, 32,
             .arm64={.hfa_type=CCBT_double, .hfa_count=4, .member_size=8, .member_offsets=0 | (8u << 6) | (16u << 12) | (24u << 18), .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S {unsigned:7;};"), 0, 4,
+            .arm64={.is_empty=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S {unsigned:7;};"), 0, 4,
+            .arm64={.is_empty=1, .gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct E {unsigned:7;}; struct S {struct E e[2]; unsigned:7;};"), 0, 12,
+            .arm64={.is_empty=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("union S {unsigned:7;};"), 1, 4,
+            .arm64={.is_empty=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct __attribute__((aligned(32))) S {unsigned:7;};"), 0, 32,
+            .arm64={.is_empty=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S {unsigned x:7;};"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
         {CC_TARGET_AARCH64_LINUX, SVI("struct S { long double x,y; };"), 0, 32,
             .arm64={.hfa_type=CCBT_long_double, .hfa_count=2, .member_size=16, .member_offsets=0 | (16u << 6), .natural_alignment=16, .copy_alignment=16}},
         {CC_TARGET_AARCH64_MACOS, SVI("struct S { long double x; double y; };"), 0, 16,
@@ -10997,6 +11009,7 @@ TestFunction(test_record_call_abi){
                     TestExpectEquals(uint8_t, s->arm64.hva_count, cases[i].arm64.hva_count);
                     TestExpectEquals(uint8_t, s->arm64.member_size, cases[i].arm64.member_size);
                     TestExpectEquals(uint8_t, s->arm64.gp_count, cases[i].arm64.gp_count);
+                    TestExpectEquals(_Bool, s->arm64.is_empty, cases[i].arm64.is_empty);
                     TestExpectEquals(uint32_t, s->arm64.natural_alignment, cases[i].arm64.natural_alignment);
                     TestExpectEquals(uint32_t, s->arm64.copy_alignment, cases[i].arm64.copy_alignment);
                     TestExpectEquals(_Bool, s->arm64.is_indirect, cases[i].arm64.is_indirect);

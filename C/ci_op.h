@@ -157,9 +157,12 @@ typedef struct CiCallDescriptor CiCallDescriptor;
 struct CiCallDescriptor {
     CcFunc* _Nonnull func;
     CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
+    CcFunction*_Nonnull native_call_type; // lowered ABI signature, excluding ignored arguments
     uint32_t nargs;
+    uint32_t native_nargs;
     uint32_t fixed_size, varargs_offset, args_size;
     uint32_t* _Nonnull arg_offsets;
+    uint32_t* _Nonnull native_arg_offsets; // ABI argument order, excluding ignored arguments
     uint32_t arg_sizes[];
 };
 
@@ -593,6 +596,7 @@ TYPEDEF_ENUM(CiInlineState, uint8_t);
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
     Marray(CiOp) code;
+    CcFunction*_Nonnull native_type; // lowered callback ABI signature
     uint32_t frame_alignment;
     CiInlineState inline_state; // 0: unvisited, 1: visiting, 2: prepared for execution
     _Bool inline_blocked; // Recursive cycle or an operation requiring its own frame.

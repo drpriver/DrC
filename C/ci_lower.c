@@ -79,6 +79,14 @@ struct CiLowerCtx {
     CiLowerDeps deps;
 };
 
+static inline
+_Bool
+ci_arg_is_ignored(CcTarget target, CcQualType type){
+    if(target != CC_TARGET_AARCH64_MACOS) return 0;
+    CcTypeKind kind = ccqt_kind(type);
+    return (kind == CC_STRUCT || kind == CC_UNION) && ccqt_as_struct(type)->arm64.is_empty;
+}
+
 static
 _Bool
 ci_bitfield_needs_bytes(CcQualType type, CcFieldPath path, uint32_t size){
@@ -3233,6 +3241,30 @@ ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
 
 static
 int
+ci_lower_native_signature(CiInterpreter* ci, Allocator al, CcFunction* type, CcFunction*_Nonnull*_Nonnull out){
+    *out = type;
+    CcTarget target = ci_target(ci)->target;
+    uint32_t total = 0, fixed = 0;
+    for(uint32_t i = 0; i < type->param_count; i++){
+        if(ci_arg_is_ignored(target, type->params[i])) continue;
+        total++;
+        if(i < type->fixed_param_count) fixed++;
+    }
+    if(total == type->param_count) return 0;
+    CcQualType* types = total ? Allocator_alloc(al, total * sizeof *types) : NULL;
+    if(total && !types) return CI_OOM_ERROR;
+    uint32_t n = 0;
+    for(uint32_t i = 0; i < type->param_count; i++)
+        if(!ci_arg_is_ignored(target, type->params[i])) types[n++] = type->params[i];
+    CcFunction* native_type = cc_intern_function(&ci->parser.type_cache, al, type->return_type, types, total, fixed, type->is_variadic, type->no_prototype);
+    if(types) Allocator_free(al, types, total * sizeof *types);
+    if(!native_type) return CI_OOM_ERROR;
+    *out = native_type;
+    return 0;
+}
+
+static
+int
 ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     int err;
     CcParser* p = &ci->parser;
@@ -3282,11 +3314,12 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         ret_size = out->size;
     }
     uint32_t temp = ctx->temp;
-    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 2 * sizeof d->arg_sizes[0]);
+    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 3 * sizeof d->arg_sizes[0]);
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
     d->nargs = nargs;
     d->arg_offsets = d->arg_sizes + nargs;
+    d->native_arg_offsets = d->arg_offsets + nargs;
     uint32_t buffer_align = 16;
     for(uint32_t i = 0; i < nargs; i++){
         uint32_t asz, align;
@@ -3308,6 +3341,9 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         d->args_size += align -1;
         d->args_size &= ~(align - 1);
         d->arg_offsets[i] = d->args_size;
+        CcQualType arg_type = i < ftype->param_count ? ftype->params[i] : e->values[i]->type;
+        if(!ci_arg_is_ignored(ci_target(ci)->target, arg_type))
+            d->native_arg_offsets[d->native_nargs++] = d->args_size;
         if(i == ftype->param_count) d->varargs_offset = d->args_size;
         uint32_t storage_size = i >= ftype->param_count && asz < 8 ? 8 : asz;
         d->args_size += storage_size;
@@ -3330,6 +3366,8 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         if(!call_type) return CI_OOM_ERROR;
         d->call_type = call_type;
     }
+    err = ci_lower_native_signature(ci, ctx->a, d->call_type, &d->native_call_type);
+    if(err) return err;
     uint32_t prefix = func ? 0 : buffer_align;
     uint32_t buffer_size = d->args_size + ctx->ptr_size-1;
     buffer_size &= ~(unsigned)(ctx->ptr_size-1);
@@ -3338,7 +3376,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     //       Allocate it on our frame for now, when we write our own ffi
     //       backend we can generate a thunk or something instead.
     if(!func || !func->defined)
-        buffer_size += nargs * ctx->ptr_size;
+        buffer_size += d->native_nargs * ctx->ptr_size;
     buffer_size += prefix;
     uint32_t args_slot;
     err = ci_alloc_slot(ctx, buffer_size, buffer_align, &args_slot);
@@ -5883,12 +5921,16 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     };
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
     if(err) goto finally;
+    uint32_t native_index = 0;
     for(size_t i = 0; i < f->params.count; i++){
         CcVariable* var = f->body_tree->decls.data[i];
         f->params.data[i].offset = (uint32_t)var->frame_offset;
+        f->params.data[i].native_index = ci_arg_is_ignored(t->target, var->type) ? UINT32_MAX : native_index++;
         err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &f->params.data[i].sz);
         if(err) goto finally;
     }
+    err = ci_lower_native_signature(ci, al, f->type, &ops->native_type);
+    if(err) goto finally;
     err = ci_lower_resolve_gotos(ci, &ctx);
     if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, al);
     finally:

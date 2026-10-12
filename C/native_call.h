@@ -14,8 +14,7 @@ typedef struct NativeCallCache NativeCallCache;
 
 static
 int
-native_call_cache_create(Allocator al, CcFunction* func_type,
-    NativeCallCache*_Nullable*_Nonnull out);
+native_call_cache_create(Allocator al, CcFunction* func_type, NativeCallCache*_Nullable*_Nonnull out);
 // ---------------------------------
 // Create a CIF cache for a function call signature.
 //
@@ -25,8 +24,8 @@ native_call_cache_create(Allocator al, CcFunction* func_type,
 //    Allocator for the cache.
 //
 // func_type:
-//    The effective function type, including promoted variadic arguments
-//    and the fixed_param_count boundary.
+//    The lowered ABI signature. Variadic arguments should already
+//    be promoted and ignored arguments are excluded.
 //
 // out:
 //    On success, receives the created cache.
@@ -62,7 +61,7 @@ native_call(NativeCallCache*, void (*fn)(void),
 //    The native function pointer to call.
 //
 // args:
-//    Array of pointers to argument values.
+//    Array of pointers to ABI argument values, excluding ignored arguments.
 //
 // rvalue:
 //    Storage for the return value.
@@ -77,7 +76,7 @@ typedef void (NativeClosureCallback)(void* rvalue, void*_Nonnull*_Nonnull args, 
 //    Write the return value here.
 //
 // args:
-//    Array of pointers to the argument values (param_count elements).
+//    Array of pointers to ABI argument values, excluding ignored arguments.
 //
 // userdata:
 //    The userdata passed to native_closure_create.
@@ -102,7 +101,7 @@ native_closure_create(Allocator al, CcFunction* func_type,
 //    Allocator for the closure's internal data.
 //
 // func_type:
-//    The function signature the closure's function pointer should have.
+//    The lowered ABI signature, excluding ignored arguments.
 //
 // cb:
 //    The callback to invoke when the closure is called.

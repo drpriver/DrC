@@ -50,6 +50,7 @@ struct CcFuncParam {
     Atom name;
     _Bool typed_pack;
     uint32_t sz, offset; // set by lowering
+    uint32_t native_index; // set by lowering; UINT32_MAX for an ignored ABI argument
     CcExpr*_Nullable default_value;
 };
 

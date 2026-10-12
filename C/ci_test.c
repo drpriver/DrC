@@ -15177,6 +15177,7 @@ TestFunction(test_ci_call_by_name){
                 int i;
                 double d;
             };
+            uint32_t size; // optional buffer-size override
         } args[MAX_ARGS];
         uint32_t nargs;
         uint32_t call_nargs; // overrides nargs when > 0, for mismatch tests
@@ -15204,6 +15205,49 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("mixed"),
             .args = {{CCBT_int, .i=3}, {CCBT_double, .d=9.5}, {CCBT_int, .i=4}},
             .expected_ret = 34,
+        },
+        {
+            "compact argv skips leading, nested and trailing empty parameters", __LINE__,
+            SVI("struct E {unsigned:7;};struct N {struct E e[2];};\n"
+                "int compact(struct E p,int a,struct N q,double b,int c,struct E r){return 100*a+10*(int)b+c;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_int, .i=3}, {CCBT_double, .d=5.}, {CCBT_int, .i=4}},
+            .expected_ret = 354,
+            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "compact argv with every parameter omitted", __LINE__,
+            SVI("struct E {unsigned:7;};int compact(struct E p,struct E q){return 42;}\n"),
+            .func_name = SVI("compact"),
+            .expected_ret = 42,
+            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "compact argv rejects extra arguments", __LINE__,
+            SVI("struct E {unsigned:7;};int compact(int a,struct E p,int b){return a+b;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}, {CCBT_int, .i=3}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': expected 2 args, got 3\n"),
+            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "compact argv reports type mismatch at the compact index", __LINE__,
+            SVI("struct E {unsigned:7;};int compact(struct E p,int a,double b){return a+(int)b;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': arg 1 type mismatch\n"),
+            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "compact argv validates the buffer after an omitted parameter", __LINE__,
+            SVI("struct E {unsigned:7;};int compact(struct E p,double b){return (int)b;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_double, .d=5., .size=4}},
+            .expect_err = _cc_runtime_error,
+            .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': arg 0 buffer too small\n"),
+            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
         },
         {
             "subtract", __LINE__,
@@ -15341,7 +15385,7 @@ TestFunction(test_ci_call_by_name){
                 break;
             ci_args[nargs++] = (CiArg){
                 .data = &tc->args[j].d,
-                .size = interp.parser.cpp.target->sizeof_[tc->args[j].kind],
+                .size = tc->args[j].size ? tc->args[j].size : interp.parser.cpp.target->sizeof_[tc->args[j].kind],
                 .type.basic.kind = tc->args[j].kind,
             };
         }

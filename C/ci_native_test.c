@@ -30,6 +30,12 @@
 #pragma clang assume_nonnull begin
 #endif
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-empty-struct"
+#pragma clang diagnostic ignored "-Wgnu-empty-initializer"
+#endif
+
 
 static CiRtAny test_any_identity(CiRtAny a){ return a; }
 static CiRtAny test_any_callback(CiRtAny (*f)(CiRtAny), CiRtAny a){ return f(a); }
@@ -366,18 +372,35 @@ static struct AbiLeadingPadding abi_leading_callback(struct AbiLeadingPadding (*
 #if (defined __clang__ && !defined __APPLE__) || defined _WIN32
 struct AbiOnlyPadding {unsigned char padding:7;};
 #else
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgnu-empty-struct"
-#endif
 struct AbiOnlyPadding {unsigned:7;};
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 #endif
 static long long abi_only_padding(long long a,long long b,long long c,long long d,long long e,struct AbiOnlyPadding p,long long tail){
     (void)p; return a+b+c+d+e+tail;
 }
+static long long abi_only_padding_callback(long long (*fn)(long long,long long,long long,long long,long long,struct AbiOnlyPadding,long long)){
+    return fn(1,2,3,4,5,(struct AbiOnlyPadding){},6);
+}
+static int abi_empty_only(struct AbiOnlyPadding p){(void)p; return 9;}
+static int abi_empty_only_callback(int (*fn)(struct AbiOnlyPadding)){
+    return fn((struct AbiOnlyPadding){});
+}
+struct AbiNestedEmpty {struct AbiOnlyPadding e[2]; unsigned:7;};
+static long long abi_nested_empty(struct AbiOnlyPadding p,long long a,long long b,long long c,long long d,long long e,long long f,long long g,long long h,long long i,struct AbiNestedEmpty q,long long tail){
+    (void)p; (void)q; return a+b+c+d+e+f+g+h+i+tail;
+}
+static long long abi_nested_empty_callback(long long (*fn)(struct AbiOnlyPadding,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct AbiNestedEmpty,long long)){
+    return fn((struct AbiOnlyPadding){},1,2,3,4,5,6,7,8,9,(struct AbiNestedEmpty){},10);
+}
+#ifndef __DRC__
+static long long abi_empty_varargs(struct AbiOnlyPadding p,int n,...){
+    (void)p;
+    va_list ap; va_start(ap,n);
+    long long sum = 0;
+    for(int i = 0; i < n; i++) sum += va_arg(ap,long long);
+    va_end(ap);
+    return sum;
+}
+#endif
 
 struct AbiThreeFloat {float x,y,z;};
 #ifndef __DRC__
@@ -589,6 +612,51 @@ TestFunction(test_interop){
             "return probe(1,2,3,4,5,(struct S){},6)==21;\n"),
         {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
         .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS, // FIXME: libffi has no padding-only NO_CLASS record type.
+    },
+    {
+        "ABI callback: padding-only record followed by a live GP argument", __LINE__,
+        SVI("struct S {unsigned:7;};long long apply(long long(*)(long long,long long,long long,long long,long long,struct S,long long));\n"
+            "long long f(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
+            "return apply(f)==21;\n"),
+        {{SV("apply"),(void*)abi_only_padding_callback}}, .exit_code=1,
+        .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS,
+    },
+    {
+        "ABI: empty argument side effects survive direct and indirect calls", __LINE__,
+        SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
+            "int count;struct S empty(void){count++;return (struct S){};}\n"
+            "long long local(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
+            "long long (*fn)(long long,long long,long long,long long,long long,struct S,long long)=probe;\n"
+            "if(probe(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
+            "fn=local;if(local(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
+            "return count==4;\n"),
+        {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
+        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+    },
+    {
+        "ABI: all arguments omitted in calls and callbacks", __LINE__,
+        SVI("struct E {unsigned:7;};int probe(struct E);int apply(int(*)(struct E));\n"
+            "int f(struct E p){return 9;}int (*fn)(struct E)=probe;\n"
+            "return probe((struct E){})==9&&fn((struct E){})==9&&apply(f)==9;\n"),
+        {{SV("probe"),(void*)abi_empty_only},{SV("apply"),(void*)abi_empty_only_callback}}, .exit_code=1,
+        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+    },
+    {
+        "ABI: nested empty records around register and stack arguments, including callback", __LINE__,
+        SVI("struct E {unsigned:7;};struct S {struct E e[2];unsigned:7;};\n"
+            "long long probe(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long);\n"
+            "long long apply(long long(*)(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long));\n"
+            "long long f(struct E p,long long a,long long b,long long c,long long d,long long e,long long g,long long h,long long i,long long j,struct S q,long long t){return a+b+c+d+e+g+h+i+j+t;}\n"
+            "return probe((struct E){},1,2,3,4,5,6,7,8,9,(struct S){},10)==55&&apply(f)==55;\n"),
+        {{SV("probe"),(void*)abi_nested_empty},{SV("apply"),(void*)abi_nested_empty_callback}}, .exit_code=1,
+        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+    },
+    {
+        "ABI: omitted empty fixed argument before variadic arguments", __LINE__,
+        SVI("struct E {unsigned:7;};long long probe(struct E,int,...);\n"
+            "return probe((struct E){},3,11LL,13LL,17LL)==41;\n"),
+        {{SV("probe"),ABI_VARARG_SYMBOL(abi_empty_varargs)}}, .exit_code=1,
+        .skip=ABI_VARARG_SKIP || CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
     },
     {
         "ABI: x87/integer union arguments, results and callbacks", __LINE__,
@@ -2091,6 +2159,10 @@ int main(int argc, char** argv){
 }
 
 #ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+#ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
 
@@ -2109,7 +2181,8 @@ TestFunction(test_native_closure_retry){
     Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
     CiInterpreter ci = {.parser.cpp = {.target = &cc_target_native, .allocator = al}};
     CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
-    CcFunc func = {.type = &type};
+    CiFuncOps ops = {.native_type = &type};
+    CcFunc func = {.type = &type, .interp_ops = &ops};
     // The third allocation registers the closure after its userdata and libffi wrapper.
     int err = ci_create_closure(&ci, &func);
     TestExpect(int, err, ==, CI_OOM_ERROR);

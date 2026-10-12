@@ -259,7 +259,8 @@ struct CcArm64Aggregate {
     uint32_t gp_count:2; // non-homogeneous direct records use 1-2 GP registers
     uint32_t copy_alignment:5; // Stage B.6: 8 or 16 bytes
     uint32_t is_indirect:1; // caller-owned copy argument; result address in x8
-    uint32_t _padding0:7;
+    uint32_t is_empty:1; // no value-bearing members; Darwin omits the argument
+    uint32_t _padding0:6;
     uint32_t natural_alignment:16; // member alignment before record adjustment
     uint32_t _padding1:16;
     uint32_t member_offsets:24; // four 6-bit byte offsets (0-48); use accessors

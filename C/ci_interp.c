@@ -599,7 +599,7 @@ ci_closure_callback(void* rvalue, void*_Nonnull*_Nonnull args, void* userdata){
     CiClosureData* cd = userdata;
     CiInterpreter* ci = cd->ci;
     CcFunc* func = cd->func;
-    CcFunction* ftype = func->type;
+    CcFunction* ftype = func->interp_ops->native_type;
     uint32_t ret_sz = cd->ret_sz;
     void* result = ret_sz ? rvalue : ci_discard_buf;
     size_t size = ret_sz ? ret_sz : sizeof ci_discard_buf;
@@ -648,7 +648,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
             }
         }
         NativeClosure* nc = NULL;
-        err = native_closure_create(al, func->type, ci_closure_callback, cd, &nc);
+        err = native_closure_create(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
         if(err){
             Allocator_free(al, cd, sizeof *cd);
             return err;
@@ -2080,11 +2080,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     return err ? err : CI_STEP_ENTER_FRAME;
                 }
                 NativeCallCache* cache;
-                cache = PM_get(&ci->ffi_cache, d->call_type);
+                cache = PM_get(&ci->ffi_cache, d->native_call_type);
                 if(!cache)
                     return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
                 void** argv = (void**)(args + ((d->args_size + 7) & ~7u));
-                for(uint32_t i = 0; i < d->nargs; i++) argv[i] = args + d->arg_offsets[i];
+                for(uint32_t i = 0; i < d->native_nargs; i++) argv[i] = args + d->native_arg_offsets[i];
                 native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
@@ -2099,11 +2099,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 if(!fn)
                     return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
                 NativeCallCache* cache;
-                cache = PM_get(&ci->ffi_cache, d->call_type);
+                cache = PM_get(&ci->ffi_cache, d->native_call_type);
                 if(!cache)
                     return ci_ice(ci, op->loc, "ffi_cache not populated for call type%s", "");
                 void** argv = (void**)(args + ((d->args_size + 7) & ~7u));
-                for(uint32_t i = 0; i < d->nargs; i++) argv[i] = args + d->arg_offsets[i];
+                for(uint32_t i = 0; i < d->native_nargs; i++) argv[i] = args + d->native_arg_offsets[i];
                 native_call(cache, fn, argv, result);
                 frame->pc++;
                 return 0;
@@ -2837,8 +2837,8 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, vo
     CcFunc* target = ci_hotswap_target(func);
     if(!target) return ci_error(ci, loc, "hotswap cycle detected");
     func = target;
-    CcFunction* ftype = func->type;
-    uint32_t nfixed = ftype->param_count;
+    CcFunction* ftype = func->interp_ops->native_type;
+    uint32_t nfixed = ftype->fixed_param_count;
     size_t varargs_size = 0;
     if(ftype->is_variadic && nargs > nfixed){
         if(!arg_sizes)
@@ -2853,10 +2853,11 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame*_Nullable caller, CcFunc* func, vo
     if(err) return err;
     frame->return_buf = result;
     frame->return_size = size;
-    // External entry points and native callbacks supply libffi-style argv.
-    for(uint32_t i = 0; i < nfixed && i < nargs; i++){
+    for(uint32_t i = 0; i < func->params.count; i++){
         CcFuncParam* param = &func->params.data[i];
-        memcpy((char*)frame->slots + param->offset, argv[i], param->sz);
+        uint32_t index = param->native_index;
+        if(index == UINT32_MAX || index >= nargs) continue;
+        memcpy((char*)frame->slots + param->offset, argv[index], param->sz);
     }
     if(varargs_size){
         char* va_buf = frame->varargs_buf;
@@ -2887,7 +2888,7 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     func = target;
     if(!func->parsed || !func->interp_ops)
         return CI_SYMBOL_UNRESOLVED;
-    CcFunction* ftype = func->type;
+    CcFunction* ftype = func->interp_ops->native_type;
     // Check arg count.
     if(nargs != ftype->param_count)
         return ci_error(ci, func->loc, "ci_call_by_name '%.*s': expected %u args, got %u",
@@ -3447,11 +3448,11 @@ ci_link_ops(CiInterpreter* ci, const CiOp* ops, size_t count){
         if(op->kind != CI_OP_CALL) continue;
         CiCallDescriptor* d = op->call.descrip;
         if(!op->call.is_indirect && d->func->defined) continue;
-        if(PM_get(&ci->ffi_cache, d->call_type)) continue;
+        if(PM_get(&ci->ffi_cache, d->native_call_type)) continue;
         NativeCallCache* cache = NULL;
-        int err = native_call_cache_create(al, d->call_type, &cache);
+        int err = native_call_cache_create(al, d->native_call_type, &cache);
         if(err) return err;
-        err = PM_put(&ci->ffi_cache, al, d->call_type, cache);
+        err = PM_put(&ci->ffi_cache, al, d->native_call_type, cache);
         if(err){
             native_call_cache_destroy(al, cache);
             return CI_OOM_ERROR;

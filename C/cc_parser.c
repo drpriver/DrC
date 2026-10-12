@@ -7964,6 +7964,32 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
 
 static
 _Bool
+cc_arm64_empty_type(CcQualType type){
+    switch(ccqt_kind(type)){
+        case CC_STRUCT: case CC_UNION:
+            return ccqt_as_struct(type)->arm64.is_empty;
+        case CC_ARRAY:{
+            const CcArray* arr = ccqt_as_array(type);
+            return !arr->is_vector && (!arr->length || cc_arm64_empty_type(arr->element));
+        }
+        default: return 0;
+    }
+}
+
+static
+_Bool
+cc_arm64_empty_record(const CcStruct* s){
+    // Unnamed bitfields occupy storage but do not carry a member value.
+    for(uint32_t i = 0; i < s->field_count; i++){
+        const CcField* f = &s->fields[i];
+        if(f->is_method || (f->is_bitfield && !f->name)) continue;
+        if(!cc_arm64_empty_type(f->type)) return 0;
+    }
+    return 1;
+}
+
+static
+_Bool
 cc_type_has_wide_vector(CcQualType type){
     switch(ccqt_kind(type)){
         case CC_ARRAY:{
@@ -7998,9 +8024,11 @@ cc_classify_record(CcParser* p, CcStruct* s, uint32_t natural_alignment){
             CcQualType type = {.bits=(uintptr_t)s};
             CcArm64Aggregate ha;
             if(cc_arm64_homogeneous(tc, type, &ha)) s->arm64 = ha;
+            s->arm64.is_empty = cc_arm64_empty_record(s);
             s->arm64.natural_alignment = natural_alignment;
             s->arm64.copy_alignment = natural_alignment <= 8 ? 8 : 16;
-            if(!s->arm64.hfa_count && !s->arm64.hva_count){
+            // Darwin omits empty arguments even when they have nonzero size.
+            if(!s->arm64.hfa_count && !s->arm64.hva_count && !(tc->target == CC_TARGET_AARCH64_MACOS && s->arm64.is_empty)){
                 s->arm64.is_indirect = s->size > 16;
                 s->arm64.gp_count = s->arm64.is_indirect ? 0 : (uint8_t)((s->size+7)/8);
             }

@@ -1018,7 +1018,6 @@ static const CcTargetConfig*_Nonnull const cc_targets[CC_TARGET_COUNT] = {
 #endif
 #define CC_TARGET_NATIVE ((CcTarget)CC_TARGET_NATIVE)
 
-
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
