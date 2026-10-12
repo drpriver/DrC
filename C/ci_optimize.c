@@ -151,10 +151,12 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
             CI_REMAP(op->zero.slot);
             break;
         case CI_OP_LOAD_BITFIELD:
+        case CI_OP_LOAD_BITFIELD_BYTES:
             CI_REMAP(op->load_bf.slot);
             CI_REMAP(op->load_bf.src);
             break;
         case CI_OP_STORE_BITFIELD:
+        case CI_OP_STORE_BITFIELD_BYTES:
             CI_REMAP(op->store_bf.slot);
             CI_REMAP(op->store_bf.src);
             break;

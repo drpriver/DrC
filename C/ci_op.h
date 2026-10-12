@@ -128,6 +128,9 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ZERO,
     CI_OP_LOAD_BITFIELD,
     CI_OP_STORE_BITFIELD,
+    // Like above, but byte-wise read/write for exotic bitfields
+    CI_OP_LOAD_BITFIELD_BYTES,
+    CI_OP_STORE_BITFIELD_BYTES,
     CI_OP_CALL,
     CI_OP_ISTRUE,
     CI_OP_JUMP,
@@ -385,7 +388,7 @@ struct CiOp {
             SrcLoc loc;
         } zero;
         struct {
-            CiOpKind kind: 8; // CI_OP_STORE_BITFIELD
+            CiOpKind kind: 8; // CI_OP_STORE_BITFIELD[_BYTES]
             uint32_t bit_offset: 8,
                      bit_width: 8,
                      is_signed: 1,
@@ -398,7 +401,7 @@ struct CiOp {
             SrcLoc loc;
         } store_bf;
         struct {
-            CiOpKind kind: 8; // CI_OP_LOAD_BITFIELD
+            CiOpKind kind: 8; // CI_OP_LOAD_BITFIELD[_BYTES]
             uint32_t bit_offset: 8,
                      bit_width: 8,
                      is_signed: 1,

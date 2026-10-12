@@ -683,6 +683,77 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "ordinary bitfields retain word ops", __LINE__,
+            SVI("int v=-7; struct B {unsigned a:4; signed b:12;} b={.a=5,.b=v};\n"
+                "b.b+=2; return b.a==5&&b.b==-5;\n"),
+            .exit_code=1,
+        },
+        {
+            "ordinary full-width int128 bitfields retain word ops", __LINE__,
+            SVI("unsigned __int128 v=(unsigned __int128)1<<100;\n"
+                "struct B {unsigned __int128 b:128;} b={v};\n"
+                "b.b+=3; return b.b==v+3;\n"),
+            .exit_code=1,
+        },
+        {
+            "short packed bitfields use bounded byte ops through anonymous members", __LINE__,
+            SVI("int v=-7; struct W {struct __attribute__((packed)) {signed b:5;}; unsigned char guard;} w={.b=v,.guard=0x5a};\n"
+                "struct W* p=&w; (v,p->b)+=2;\n"
+                "return sizeof(w)==2&&p->b==-5&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "crossing signed bitfields use byte ops in dynamic array initializers", __LINE__,
+            SVI("long long v=-0x123456789abcdefLL;\n"
+                "struct __attribute__((packed)) B {unsigned a:4; signed long long b:64;};\n"
+                "struct W {struct B b[2]; unsigned char guard;} w={.b[1]={.a=7,.b=v},.guard=0x5a};\n"
+                "struct B* p=&w.b[1]; p->b++;\n"
+                "return p->a==7&&p->b==v+1&&w.b[0].b==0&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "crossing signed int128 bitfields preserve sign and adjacent bytes", __LINE__,
+            SVI("__int128 v=-((__int128)1<<120)-17;\n"
+                "struct __attribute__((packed)) B {unsigned a:4; __int128 b:128;};\n"
+                "struct W {struct B b; unsigned char guard;} w={.b={.a=7,.b=v},.guard=0x5a};\n"
+                "w.b.b++; return w.b.a==7&&w.b.b==v+1&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "inlined packed bitfield ops relocate pointer and value slots", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned long long a:60; unsigned b:8;};\n"
+                "__forceinline unsigned adjust(struct B* p,unsigned v){p->b=v; return p->b++;}\n"
+                "struct W {struct B b; unsigned char guard;} w={.b.a=7,.guard=0x5a};\n"
+                "return adjust(&w.b,0xa5)==0xa5&&w.b.b==0xa6&&w.b.a==7&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "packed bitfields: crossing fields preserve adjacent objects", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned long long a:60; unsigned b:8;};\n"
+                "constexpr struct B c={.a=0x123456789abcdefULL,.b=0xa5};\n"
+                "static unsigned v=c.b; struct W {struct B b; unsigned char guard;} w={.guard=0x5a};\n"
+                "w.b.a=c.a; w.b.b=v; w.b.b++;\n"
+                "return sizeof(struct B)==9&&w.b.a==c.a&&w.b.b==0xa6&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "packed bitfields: full-width unaligned integer", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned a:4; unsigned long long b:64;};\n"
+                "struct W {struct B b; unsigned char guard;} w={.guard=0x5a};\n"
+                "w.b.a=7; w.b.b=0xfedcba9876543210ULL;\n"
+                "return sizeof(struct B)==9&&w.b.a==7&&w.b.b==0xfedcba9876543210ULL&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
+            "packed bitfields: full-width unaligned int128", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned a:4; unsigned __int128 b:128;};\n"
+                "struct W {struct B b; unsigned char guard;} w={.guard=0x5a};\n"
+                "unsigned __int128 value=((unsigned __int128)0xfedcba9876543210ULL<<64)|0x123456789abcdefULL;\n"
+                "w.b.a=7; w.b.b=value;\n"
+                "return sizeof(struct B)==17&&w.b.a==7&&w.b.b==value&&w.guard==0x5a;\n"),
+            .exit_code=1,
+        },
+        {
             "numeric reinterpretation: typed copies retain omitted opaque values", __LINE__,
             SVI("constexpr union U {struct P {void* p; _Type t;} p; struct B {void* p; _Type t;} b;} u={.p={}};\n"
                 "constexpr struct B value=u.b; static struct B copy=value;\n"

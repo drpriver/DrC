@@ -2588,7 +2588,7 @@ TestFunction(test_parse_decls){
                "int a[sizeof(struct Bits)];\n"
               ),
             .vars = {
-                { SVI("a"), SVI("int[8]") },
+                { SVI("a"), SVI("int[4]") },
             },
         },
         {
@@ -10349,6 +10349,36 @@ TestFunction(test_bitfield_abi){
             },
         },
         {
+            "sysv: zero-width aligns after an ordinary byte", __LINE__,
+            SVI("struct S {char x; int:0; char y;};"), SVI("S"), CC_BITFIELD_SYSV,
+            .size=5, .alignment=1,
+            .fields={{SVI("x"), .offset=0}, {{0}}, {SVI("y"), .offset=4}},
+        },
+        {
+            "sysv: packed fields cross declared storage boundaries", __LINE__,
+            SVI("struct __attribute__((packed)) S {unsigned long long a:60; unsigned b:8;};"), SVI("S"), CC_BITFIELD_SYSV,
+            .size=9, .alignment=1,
+            .fields={{SVI("a"), .offset=0, .bitwidth=60}, {SVI("b"), .offset=7, .bitwidth=8, .bitoffset=4}},
+        },
+        {
+            "sysv: packed full-width field starts mid-byte", __LINE__,
+            SVI("struct __attribute__((packed)) S {unsigned a:4; unsigned long long b:64;};"), SVI("S"), CC_BITFIELD_SYSV,
+            .size=9, .alignment=1,
+            .fields={{SVI("a"), .offset=0, .bitwidth=4}, {SVI("b"), .offset=0, .bitwidth=64, .bitoffset=4}},
+        },
+        {
+            "sysv: first bitfield shares the preceding byte's storage unit", __LINE__,
+            SVI("struct S {char x; unsigned b:1;};"), SVI("S"), CC_BITFIELD_SYSV,
+            .size=4, .alignment=4,
+            .fields={{SVI("x"), .offset=0}, {SVI("b"), .offset=0, .bitwidth=1, .bitoffset=8}},
+        },
+        {
+            "sysv: ordinary byte follows occupied bitfield bytes", __LINE__,
+            SVI("struct S {unsigned a:1; char y;};"), SVI("S"), CC_BITFIELD_SYSV,
+            .size=4, .alignment=4,
+            .fields={{SVI("a"), .offset=0, .bitwidth=1}, {SVI("y"), .offset=1}},
+        },
+        {
             "sysv: same-size different types share", __LINE__,
             SVI("struct S { int a : 3; unsigned b : 5; };\n"),
             SVI("S"), CC_BITFIELD_SYSV,
@@ -10719,6 +10749,216 @@ TestFunction(test_pragma_pack){
     TESTEND();
 }
 
+TestFunction(test_record_call_abi){
+    TESTBEGIN();
+    static const struct {
+        CcTarget target;
+        StringView input;
+        _Bool is_union;
+        uint32_t size;
+        CcSysvAggregate sysv;
+        CcArm64Aggregate arm64;
+        CcWindowsAggregate win64;
+    } cases[] = {
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { double x; int y; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct S { int x; double y; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_SSE << 3), .eightbyte_count=2, .gp_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct __attribute__((aligned(16))) S { double x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_NO_CLASS << 3), .eightbyte_count=2, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct __attribute__((aligned(16))) S { int x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_NO_CLASS << 3), .eightbyte_count=2, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { long double x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_X87 | (CC_SYSV_X87UP << 3), .eightbyte_count=2, .x87_count=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct I { long double x; }; struct S { struct I x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_X87 | (CC_SYSV_X87UP << 3), .eightbyte_count=2, .x87_count=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("union S { long double x; long double y; };"), 1, 16,
+            .sysv={.classes=CC_SYSV_X87 | (CC_SYSV_X87UP << 3), .eightbyte_count=2, .x87_count=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("union S { long double x; double y; };"), 1, 16,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("union S { long double x; long y; };"), 1, 16,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { __float128 x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3), .eightbyte_count=2, .fp_count=1, .vector_size=16}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { double _Complex x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSE << 3), .eightbyte_count=2, .fp_count=2, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { long double _Complex x; };"), 0, 32,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { __int128 x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=2}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct __attribute__((packed)) S { char x; double y; };"), 0, 9,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { unsigned __int128 x:128; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=2}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { float x; unsigned:0; };"), 0, 4,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S {float x; unsigned:1;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct S {float x; unsigned:1;};"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct __attribute__((packed)) S {unsigned long long a:60; unsigned b:8;};"), 0, 9,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=2}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct I { float x,y; }; struct S { struct I x; double y; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSE << 3), .eightbyte_count=2, .fp_count=2, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("union S { double x; long y; };"), 1, 8,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); struct S { V x; };"), 0, 16,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3), .eightbyte_count=2, .fp_count=1, .vector_size=16}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(32))); struct S { V x; };"), 0, 32,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9), .eightbyte_count=4, .fp_count=1, .vector_size=32}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(64))); struct S { V x; };"), 0, 64,
+            .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_SSEUP << 3) | (CC_SYSV_SSEUP << 6) | (CC_SYSV_SSEUP << 9) | (CC_SYSV_SSEUP << 12) | (CC_SYSV_SSEUP << 15) | (CC_SYSV_SSEUP << 18) | (CC_SYSV_SSEUP << 21), .eightbyte_count=8, .fp_count=1, .vector_size=64}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); struct S { V x[2]; };"), 0, 32,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); union S { V x; int y; };"), 1, 16,
+            .sysv={.classes=CC_SYSV_INTEGER | (CC_SYSV_SSE << 3), .eightbyte_count=2, .gp_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { double x[3]; };"), 0, 24,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S {};"), 0, 0},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { double x; int tail[]; };"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct S { double x; int tail[]; };"), 0, 8,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct F { double x; int tail[]; }; union S { struct F f; long long bits; };"), 1, 8,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct F { double x; int tail[]; }; union S { struct F f; long long bits; };"), 1, 8,
+            .sysv={.classes=CC_SYSV_MEMORY, .is_memory_class=1, .argument_on_stack=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("struct S { double x; int tail[0]; };"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_X86_64_MACOS, SVI("struct S { double x; int tail[0]; };"), 0, 8,
+            .sysv={.classes=CC_SYSV_SSE, .eightbyte_count=1, .fp_count=1, .vector_size=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct I { float x,y; }; struct S { struct I x; float y; };"), 0, 12,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=3, .member_size=4, .member_offsets=0 | (4u << 6) | (8u << 12), .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S { double x[4]; };"), 0, 32,
+            .arm64={.hfa_type=CCBT_double, .hfa_count=4, .member_size=8, .member_offsets=0 | (8u << 6) | (16u << 12) | (24u << 18), .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { long double x,y; };"), 0, 32,
+            .arm64={.hfa_type=CCBT_long_double, .hfa_count=2, .member_size=16, .member_offsets=0 | (16u << 6), .natural_alignment=16, .copy_alignment=16}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S { long double x; double y; };"), 0, 16,
+            .arm64={.hfa_type=CCBT_double, .hfa_count=2, .member_size=8, .member_offsets=0 | (8u << 6), .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { float _Complex x; };"), 0, 8,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=2, .member_size=4, .member_offsets=0 | (4u << 6), .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("union S { float x; float y[3]; };"), 1, 12,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=3, .member_size=4, .member_offsets=0 | (4u << 6) | (8u << 12), .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("union __attribute__((aligned(16))) S { float x; };"), 1, 16,
+            .arm64={.gp_count=2, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct __attribute__((aligned(32))) S { float x,y; };"), 0, 32,
+            .arm64={.is_indirect=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { float x; _Alignas(8) float y; };"), 0, 16,
+            .arm64={.gp_count=2, .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct __attribute__((packed)) S { float x,y; };"), 0, 8,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=2, .member_size=4, .member_offsets=0 | (4u << 6), .natural_alignment=1, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { float x; unsigned:0; float y; };"), 0, 8,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=2, .member_size=4, .member_offsets=0 | (4u << 6), .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { float x[5]; };"), 0, 20,
+            .arm64={.is_indirect=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { float x; float tail[]; };"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S { float x; float tail[]; };"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S {float x; int tail[0];};"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S {float x; int tail[0];};"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("struct S {float x; float tail[0];};"), 0, 4,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S {char x; int:0; char y;};"), 0, 8,
+            .arm64={.gp_count=1, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct E {}; struct S { struct E x[5]; float y; };"), 0, 4,
+            .arm64={.hfa_type=CCBT_float, .hfa_count=1, .member_size=4, .natural_alignment=4, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { double x; int y; };"), 0, 16,
+            .arm64={.gp_count=2, .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_LINUX, SVI("struct S { __int128 x; };"), 0, 16,
+            .arm64={.gp_count=2, .natural_alignment=16, .copy_alignment=16}},
+        {CC_TARGET_AARCH64_LINUX, SVI("typedef float V __attribute__((vector_size(8))); struct S { V x[3]; };"), 0, 24,
+            .arm64={.hfa_type=CCBT_INVALID, .hva_count=3, .member_size=8, .member_offsets=0 | (8u << 6) | (16u << 12), .natural_alignment=8, .copy_alignment=8}},
+        {CC_TARGET_AARCH64_MACOS, SVI("typedef float V __attribute__((vector_size(16))); typedef int W __attribute__((vector_size(16))); struct S { V x; W y; };"), 0, 32,
+            .arm64={.hfa_type=CCBT_INVALID, .hva_count=2, .member_size=16, .member_offsets=0 | (16u << 6), .natural_alignment=16, .copy_alignment=16}},
+        {CC_TARGET_AARCH64_LINUX, SVI("typedef float V __attribute__((vector_size(16))); union S { V x; V y[2]; };"), 1, 32,
+            .arm64={.hfa_type=CCBT_INVALID, .hva_count=2, .member_size=16, .member_offsets=0 | (16u << 6), .natural_alignment=16, .copy_alignment=16}},
+        {CC_TARGET_X86_64_WINDOWS_MSVC, SVI("struct S { float x; };"), 0, 4, .win64={.gp_count=1}},
+        {CC_TARGET_X86_64_WINDOWS_MINGW, SVI("union S { double x; long long y; };"), 1, 8, .win64={.gp_count=1}},
+        {CC_TARGET_X86_64_WINDOWS_MSVC, SVI("struct S { char x[3]; };"), 0, 3, .win64={.is_indirect=1}},
+        {CC_TARGET_X86_64_WINDOWS_MINGW, SVI("struct S { long long x,y; };"), 0, 16, .win64={.is_indirect=1}},
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        size_t previous_failures = TEST_stats.failures;
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        AtomTable at = {0};
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
+        MStringBuilder log = {.allocator=al};
+        MsbLogger logger = {0};
+        Environment env = {.allocator=al, .at=&at};
+        CcParser p = {.cpp={.allocator=al, .fc=fc, .at=&at, .env=&env,
+            .logger=msb_logger(&logger, &log), .target=cc_targets[cases[i].target]}};
+        p.current = &p.global;
+        fc_write_path(fc, "(test)", 6);
+        int err = fc_cache_file(fc, cases[i].input);
+        if(!err) err = cpp_define_builtin_macros(&p.cpp);
+        if(!err) err = cc_define_builtin_types(&p);
+        if(!err) err = cc_register_pragmas(&p);
+        if(!err) err = cpp_include_file_via_file_cache(&p.cpp, SV("(test)"));
+        if(!err) err = cc_parse_all(&p);
+        TestExpectEquals(int, err, 0);
+        if(err){ TestPrintf("%.*s\n", (int)log.cursor, log.data); goto done; }
+        {
+            Atom tag = AT_get_atom(&at, "S", 1);
+            CcStruct* s = cases[i].is_union
+                ? (CcStruct*)cc_scope_lookup_union_tag(&p.global, tag, CC_SCOPE_NO_WALK)
+                : cc_scope_lookup_struct_tag(&p.global, tag, CC_SCOPE_NO_WALK);
+            TestExpectTrue(void*, s);
+            if(!s) goto done;
+            TestExpectEquals(uint32_t, s->size, cases[i].size);
+            switch(cases[i].target){
+                case CC_TARGET_X86_64_LINUX:
+                case CC_TARGET_X86_64_MACOS:
+                    for(uint32_t n = 0; n < 8; n++)
+                        TestExpectEquals(uint32_t, cc_sysv_class(&s->sysv, n), cc_sysv_class(&cases[i].sysv, n));
+                    TestExpectEquals(uint8_t, s->sysv.eightbyte_count, cases[i].sysv.eightbyte_count);
+                    TestExpectEquals(uint8_t, s->sysv.gp_count, cases[i].sysv.gp_count);
+                    TestExpectEquals(uint8_t, s->sysv.fp_count, cases[i].sysv.fp_count);
+                    TestExpectEquals(uint8_t, s->sysv.x87_count, cases[i].sysv.x87_count);
+                    TestExpectEquals(uint8_t, s->sysv.vector_size, cases[i].sysv.vector_size);
+                    TestExpectEquals(_Bool, s->sysv.is_memory_class, cases[i].sysv.is_memory_class);
+                    TestExpectEquals(_Bool, s->sysv.argument_on_stack, cases[i].sysv.argument_on_stack);
+                    break;
+                case CC_TARGET_AARCH64_LINUX:
+                case CC_TARGET_AARCH64_MACOS:
+                    TestExpectEquals(uintptr_t, s->arm64.hfa_type, cases[i].arm64.hfa_type);
+                    TestExpectEquals(uint8_t, s->arm64.hfa_count, cases[i].arm64.hfa_count);
+                    TestExpectEquals(uint8_t, s->arm64.hva_count, cases[i].arm64.hva_count);
+                    TestExpectEquals(uint8_t, s->arm64.member_size, cases[i].arm64.member_size);
+                    TestExpectEquals(uint8_t, s->arm64.gp_count, cases[i].arm64.gp_count);
+                    TestExpectEquals(uint32_t, s->arm64.natural_alignment, cases[i].arm64.natural_alignment);
+                    TestExpectEquals(uint32_t, s->arm64.copy_alignment, cases[i].arm64.copy_alignment);
+                    TestExpectEquals(_Bool, s->arm64.is_indirect, cases[i].arm64.is_indirect);
+                    for(uint32_t n = 0; n < 4; n++)
+                        TestExpectEquals(uint32_t, cc_arm64_member_offset(&s->arm64, n), cc_arm64_member_offset(&cases[i].arm64, n));
+                    break;
+                case CC_TARGET_X86_64_WINDOWS_MSVC:
+                case CC_TARGET_X86_64_WINDOWS_MINGW:
+                    TestExpectEquals(_Bool, s->win64.is_indirect, cases[i].win64.is_indirect);
+                    TestExpectEquals(uint8_t, s->win64.gp_count, cases[i].win64.gp_count);
+                    break;
+                case CC_TARGET_TEST:
+                case CC_TARGET_COUNT:
+                    TestReport("unexpected ABI target");
+                    break;
+            }
+        }
+        done:
+        if(TEST_stats.failures != previous_failures)
+            TestPrintf("record ABI case %zu (%.*s): %.*s\n", i,
+                sv_p(cc_target_names[cases[i].target]), sv_p(cases[i].input));
+        ArenaAllocator_free_all(&at.arena);
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&p.cpp.synth_arena);
+        ArenaAllocator_free_all(&p.scratch_arena);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
 #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
@@ -10729,6 +10969,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_runtime_bitfields, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_record_call_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_bitfield_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_pragma_pack, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);

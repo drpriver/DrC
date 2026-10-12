@@ -80,6 +80,33 @@ struct CiLowerCtx {
 };
 
 static
+_Bool
+ci_bitfield_needs_bytes(CcQualType type, CcFieldPath path, uint32_t size){
+    for(uint32_t i = 0, count = cc_field_path_count(path); i < count; i++){
+        uint32_t index = cc_field_path_component(path, i);
+        if(ccqt_kind(type) == CC_ARRAY){
+            type = ccqt_as_array(type)->element;
+            continue;
+        }
+        CcStruct* record = ccqt_as_struct(type);
+        CcField* field = &record->fields[index];
+        if(i+1 == count){
+            return (uint32_t)field->bitoffset + field->bitwidth > size*8u
+                || (uint64_t)field->offset + size > record->size;
+        }
+        type = field->type;
+    }
+    return 1;
+}
+
+static
+_Bool
+ci_expr_bitfield_needs_bytes(const CcExpr* lv, uint32_t size){
+    while(lv->kind == CC_EXPR_COMMA) lv = lv->values[0];
+    return ci_bitfield_needs_bytes(cc_expr_field_owner(lv), lv->field_path, size);
+}
+
+static
 int
 ci_init_entry_loc(CiInterpreter* ci, CcQualType type, CcInitEntry* entry, CiFieldLoc* out){
     int err = cc_field_path_resolve(ci_target(ci), type, entry->path, &out->byte_offset);
@@ -593,7 +620,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         if(entry_loc.bit_width){
             *op = (CiOp){
                 .store_bf = {
-                    .kind = CI_OP_STORE_BITFIELD,
+                    .kind = ci_bitfield_needs_bytes(e->type, entry->path, esz) ? CI_OP_STORE_BITFIELD_BYTES : CI_OP_STORE_BITFIELD,
                     .slot = dst.slot,
                     .src = v.slot,
                     .src_size = esz,
@@ -5086,7 +5113,7 @@ ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLo
     if(err) return err;
     *op = (CiOp){
         .load_bf = {
-            .kind = CI_OP_LOAD_BITFIELD,
+            .kind = ci_expr_bitfield_needs_bytes(lv, size) ? CI_OP_LOAD_BITFIELD_BYTES : CI_OP_LOAD_BITFIELD,
             .slot = dest,
             .slot_size = size,
             .src = a.slot,
@@ -5108,7 +5135,7 @@ ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_
     if(err) return err;
     *op = (CiOp){
         .store_bf = {
-            .kind = CI_OP_STORE_BITFIELD,
+            .kind = ci_expr_bitfield_needs_bytes(lv, size) ? CI_OP_STORE_BITFIELD_BYTES : CI_OP_STORE_BITFIELD,
             .slot = a.slot,
             .src = src,
             .src_size = size,

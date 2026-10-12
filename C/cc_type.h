@@ -211,11 +211,84 @@ struct CcField {
 };
 
 // Should probably be in target, but target depends on this header.
-enum CcSysVEightByte TYPED_ENUM(uint32_t){
+enum CcSysVEightByte TYPED_ENUM(uint8_t){
+    CC_SYSV_NO_CLASS,
     CC_SYSV_SSE,
     CC_SYSV_INTEGER,
+    CC_SYSV_SSEUP,
+    CC_SYSV_X87,
+    CC_SYSV_X87UP,
+    CC_SYSV_COMPLEX_X87,
+    CC_SYSV_MEMORY,
 };
-TYPEDEF_ENUM(CcSysVEightByte, uint32_t);
+TYPEDEF_ENUM(CcSysVEightByte, uint8_t);
+
+typedef struct CcSysvAggregate CcSysvAggregate;
+struct CcSysvAggregate {
+    uint32_t classes:24; // eight 3-bit classes; use cc_sysv_class/set_class
+    uint32_t eightbyte_count:4;
+    uint32_t gp_count:2, fp_count:2; // SSEUP shares the preceding SSE register
+    uint32_t x87_count:2; // return registers only
+    // Widest SSE/SSEUP group. 32/64-byte groups require AVX/AVX-512 PCS
+    // support; unnamed arguments of those vector types are passed on the stack.
+    uint32_t vector_size:7;
+    uint32_t is_memory_class:1; // stack argument, indirect return
+    uint32_t argument_on_stack:1; // also true for X87/X87UP (direct x87 return)
+    uint32_t _padding:21;
+};
+_Static_assert(CC_SYSV_MEMORY < 8, "SysV classes must fit in 3 bits");
+_Static_assert(sizeof(CcSysvAggregate) == 8, "packed SysV aggregate metadata");
+
+static inline
+CcSysVEightByte
+cc_sysv_class(const CcSysvAggregate* abi, uint32_t index){
+    return (CcSysVEightByte)((abi->classes >> (3*index)) & 7);
+}
+
+static inline
+void
+cc_sysv_set_class(CcSysvAggregate* abi, uint32_t index, CcSysVEightByte cls){
+    uint32_t shift = 3*index;
+    abi->classes = (abi->classes & ~(7u << shift)) | ((uint32_t)cls << shift);
+}
+
+typedef struct CcArm64Aggregate CcArm64Aggregate;
+struct CcArm64Aggregate {
+    uint32_t hfa_type:6; // CcBasicTypeKind
+    uint32_t hfa_count:3, hva_count:3; // mutually exclusive; 1-4 SIMD registers
+    uint32_t member_size:5; // bytes in each homogeneous FP/vector member (0-16)
+    uint32_t gp_count:2; // non-homogeneous direct records use 1-2 GP registers
+    uint32_t copy_alignment:5; // Stage B.6: 8 or 16 bytes
+    uint32_t is_indirect:1; // caller-owned copy argument; result address in x8
+    uint32_t _padding0:7;
+    uint32_t natural_alignment:16; // member alignment before record adjustment
+    uint32_t _padding1:16;
+    uint32_t member_offsets:24; // four 6-bit byte offsets (0-48); use accessors
+    uint32_t _padding2:8;
+};
+_Static_assert(CCBT_COUNT <= 64, "HFA type must fit in 6 bits");
+_Static_assert(sizeof(CcArm64Aggregate) == 12, "packed ARM64 aggregate metadata");
+
+static inline
+uint32_t
+cc_arm64_member_offset(const CcArm64Aggregate* abi, uint32_t index){
+    return (abi->member_offsets >> (6*index)) & 63;
+}
+
+static inline
+void
+cc_arm64_set_member_offset(CcArm64Aggregate* abi, uint32_t index, uint32_t offset){
+    uint32_t shift = 6*index;
+    abi->member_offsets = (abi->member_offsets & ~(63u << shift)) | (offset << shift);
+}
+
+typedef struct CcWindowsAggregate CcWindowsAggregate;
+struct CcWindowsAggregate {
+    uint8_t is_indirect:1; // C records other than sizes 1, 2, 4, 8
+    uint8_t gp_count:1; // direct record: one positional GP argument / rax result
+    uint8_t _padding:6;
+};
+_Static_assert(sizeof(CcWindowsAggregate) == 1, "packed Windows aggregate metadata");
 
 typedef struct CcStruct CcStruct;
 struct CC_ALIGN(8) CcStruct {
@@ -228,26 +301,6 @@ struct CC_ALIGN(8) CcStruct {
                      has_fam:       1,
                      _padding:     25;
         };
-        struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
-                     has_fam:       1,
-                     _padding:     22,
-                   is_memory_class: 1;
-            CcSysVEightByte class0: 1,
-                            class1: 1;
-        } sysv;
-        struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
-                     has_fam:       1,
-                     _padding:     16,
-                     hfa_type:      6,
-                     hfa_count:     3; // 0-4, 0 means not hfa
-            _Static_assert(CCBT_COUNT <= (1<<6)-1, "");
-        } arm64;
     };
     uint32_t size;
     Atom name;
@@ -256,6 +309,11 @@ struct CC_ALIGN(8) CcStruct {
     uint32_t field_count;
     CcField* _Null_unspecified fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
+    union {
+        CcSysvAggregate sysv;
+        CcArm64Aggregate arm64;
+        CcWindowsAggregate win64;
+    };
 };
 _Static_assert(_Alignof(CcStruct)==8, "");
 
@@ -269,24 +327,6 @@ struct CC_ALIGN(8) CcUnion {
                      packed:        1,
                      _padding:     26;
         };
-        struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
-                     _padding:     23,
-                   is_memory_class: 1;
-            CcSysVEightByte class0: 1,
-                            class1: 1;
-        } sysv;
-        struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
-                     _padding:     17,
-                     hfa_type:      6,
-                     hfa_count:     3; // 0-4, 0 means not hfa
-            _Static_assert(CCBT_COUNT <= (1<<6)-1, "");
-        } arm64;
     };
     uint32_t size;
     Atom name;
@@ -295,11 +335,17 @@ struct CC_ALIGN(8) CcUnion {
     uint32_t field_count;
     CcField* _Nullable fields;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
+    union {
+        CcSysvAggregate sysv;
+        CcArm64Aggregate arm64;
+        CcWindowsAggregate win64;
+    };
 };
 _Static_assert(_Alignof(CcUnion)==8, "");
 _Static_assert(offsetof(CcUnion, size) == 4, "");
 _Static_assert(offsetof(CcStruct, size) == 4, "");
 _Static_assert(sizeof(CcUnion) == sizeof(CcStruct), "");
+_Static_assert(offsetof(CcUnion, sysv) == offsetof(CcStruct, sysv), "record ABI layout");
 
 typedef struct CcEnumerator CcEnumerator;
 struct CcEnumerator {

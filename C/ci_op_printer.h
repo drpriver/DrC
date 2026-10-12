@@ -507,14 +507,18 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, " (%u bytes)", op->zero.size);
             break;
         case CI_OP_LOAD_BITFIELD:
+        case CI_OP_LOAD_BITFIELD_BYTES:
             ci_op_print_range(out, op->load_bf.slot, op->load_bf.slot_size);
-            msb_sprintf(out, " = bits%s[%u:%u] of ",
+            msb_sprintf(out, " = bits%s%s[%u:%u] of ",
+                op->kind == CI_OP_LOAD_BITFIELD_BYTES ? ".bytes" : "",
                 op->load_bf.is_signed?".s":".u",
                 op->load_bf.bit_offset, op->load_bf.bit_offset+op->load_bf.bit_width);
             ci_op_print_deref(out, op->load_bf.src, op->load_bf.offset);
             break;
         case CI_OP_STORE_BITFIELD:
-            msb_sprintf(out, "bits%s[%u:%u] of ",
+        case CI_OP_STORE_BITFIELD_BYTES:
+            msb_sprintf(out, "bits%s%s[%u:%u] of ",
+                op->kind == CI_OP_STORE_BITFIELD_BYTES ? ".bytes" : "",
                 op->store_bf.is_signed?".s":".u",
                 op->store_bf.bit_offset, op->store_bf.bit_offset+op->store_bf.bit_width);
             ci_op_print_deref(out, op->store_bf.slot, op->store_bf.offset);

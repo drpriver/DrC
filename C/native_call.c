@@ -83,6 +83,66 @@ cctype_integer_ffi(Allocator a, uint32_t sz, uint32_t al, ffi_type*_Nonnull*_Non
 
 static
 int
+cctype_sysv_ffi(Allocator a, const CcStruct* s, ffi_type*_Nonnull*_Nonnull out){
+    const CcSysvAggregate* abi = &s->sysv;
+    if(abi->is_memory_class){
+        // libffi's public type API cannot express an unaligned field. Do not
+        // accidentally turn a small memory-class record into integer registers.
+        if(s->size <= 16) return NC_UNSUPPORTED_TYPE;
+        return cctype_integer_ffi(a, s->size, s->alignment, out);
+    }
+    if(!s->size) return NC_UNSUPPORTED_TYPE;
+    // A single x87 record has the same argument/result representation as
+    // long double. Older libffi versions mishandle x87 struct return flags.
+    if(abi->eightbyte_count == 2 && cc_sysv_class(abi, 0) == CC_SYSV_X87 && cc_sysv_class(abi, 1) == CC_SYSV_X87UP){
+        *out = &ffi_type_longdouble;
+        return NC_NO_ERROR;
+    }
+    ffi_type* elems[16];
+    uint32_t n = 0;
+    for(uint32_t i = 0; i < abi->eightbyte_count; i++){
+        CcSysVEightByte c = cc_sysv_class(abi, i);
+        uint32_t remaining = s->size-i*8;
+        if(remaining > 8) remaining = 8;
+        if(c == CC_SYSV_NO_CLASS){
+            // Preserve tail padding through explicit size/alignment. Internal
+            // holes cannot be represented by synthesizing integer members.
+            for(uint32_t j = i+1; j < abi->eightbyte_count; j++)
+                if(cc_sysv_class(abi, j) != CC_SYSV_NO_CLASS)
+                    return NC_UNSUPPORTED_TYPE;
+            break;
+        }
+        if(c != CC_SYSV_INTEGER && c != CC_SYSV_SSE)
+            return NC_UNSUPPORTED_TYPE; // SSEUP/vector/quad has no libffi type
+        while(remaining){
+            ffi_type* elem;
+            if(c == CC_SYSV_SSE){
+                if(remaining < 4) return NC_UNSUPPORTED_TYPE;
+                elem = &ffi_type_float;
+            }
+            else if(remaining >= 4) elem = &ffi_type_uint32;
+            else if(remaining >= 2) elem = &ffi_type_uint16;
+            else elem = &ffi_type_uint8;
+            elems[n++] = elem;
+            remaining -= (uint32_t)elem->size;
+        }
+    }
+    ffi_type* st = Allocator_zalloc(a, sizeof *st + sizeof(ffi_type*)*(n+1));
+    if(!st) return NC_OOM_ERROR;
+    ffi_type** elements = (ffi_type**)(st+1);
+    *st = (ffi_type){
+        .size=s->size,
+        .alignment=(unsigned short)s->alignment,
+        .type=FFI_TYPE_STRUCT,
+        .elements=elements,
+    };
+    if(n) memcpy(elements, elems, n * sizeof *elements);
+    *out = st;
+    return NC_NO_ERROR;
+}
+
+static
+int
 cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     switch(ccqt_kind(t)){
         case CC_ALIGNED: nc_unsafe_unreachable();
@@ -114,213 +174,55 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
             CcEnum* e = ccqt_as_enum(t);
             return cctype_to_ffi_type(a, e->underlying, out);
         }
-        case CC_STRUCT:{
+        case CC_STRUCT:
+        case CC_UNION:{
             CcStruct* s = ccqt_as_struct(t);
             if(s->ffi_cache){ *out = s->ffi_cache; return NC_NO_ERROR; }
+            int err;
             switch(CC_TARGET_NATIVE){
-            case CC_TARGET_AARCH64_LINUX:
-            case CC_TARGET_AARCH64_MACOS:
-                if(s->arm64.hfa_count){
-                    ffi_type* base;
-                    switch((CcBasicTypeKind)s->arm64.hfa_type){
-                        case CCBT_float:       base = &ffi_type_float; break;
-                        case CCBT_double:      base = &ffi_type_double; break;
-                        case CCBT_long_double: base = &ffi_type_longdouble; break;
-                        case CCBT_COUNT:
-                        case CCBT_INVALID:
-                        case CCBT__Any:
-                        case CCBT__Type:
-                        case CCBT_bool:
-                        case CCBT_char:
-                        case CCBT_double_complex:
-                        case CCBT_float128:
-                        case CCBT_bfloat16:
-                        case CCBT_float16:
-                        case CCBT_float_complex:
-                        case CCBT_int:
-                        case CCBT_int128:
-                        case CCBT_long:
-                        case CCBT_long_double_complex:
-                        case CCBT_float16_complex:
-                        case CCBT_char_complex:
-                        case CCBT_signed_char_complex:
-                        case CCBT_unsigned_char_complex:
-                        case CCBT_short_complex:
-                        case CCBT_unsigned_short_complex:
-                        case CCBT_int_complex:
-                        case CCBT_unsigned_complex:
-                        case CCBT_long_complex:
-                        case CCBT_unsigned_long_complex:
-                        case CCBT_long_long_complex:
-                        case CCBT_unsigned_long_long_complex:
-                        case CCBT_int128_complex:
-                        case CCBT_unsigned_int128_complex:
-                        case CCBT_long_long:
-                        case CCBT_nullptr_t:
-                        case CCBT_short:
-                        case CCBT_signed_char:
-                        case CCBT_unsigned:
-                        case CCBT_unsigned_char:
-                        case CCBT_unsigned_int128:
-                        case CCBT_unsigned_long:
-                        case CCBT_unsigned_long_long:
-                        case CCBT_unsigned_short:
-                        case CCBT_void:
-                        return NC_UNSUPPORTED_TYPE;
-                        DRP_CASES_EXHAUSTED;
+                case CC_TARGET_X86_64_LINUX:
+                case CC_TARGET_X86_64_MACOS:
+                    err = cctype_sysv_ffi(a, s, out);
+                    break;
+                case CC_TARGET_AARCH64_LINUX:
+                case CC_TARGET_AARCH64_MACOS:
+                    // libffi has no short-vector type.
+                    if(s->arm64.hva_count) return NC_UNSUPPORTED_TYPE;
+                    if(s->arm64.hfa_count){
+                        ffi_type* base;
+                        switch(s->arm64.hfa_type){
+                            case CCBT_float: base = &ffi_type_float; break;
+                            case CCBT_double: base = &ffi_type_double; break;
+                            case CCBT_long_double: base = &ffi_type_longdouble; break;
+                            default: return NC_UNSUPPORTED_TYPE;
+                        }
+                        uint32_t n = s->arm64.hfa_count;
+                        ffi_type* st = Allocator_zalloc(a, sizeof *st + sizeof(ffi_type*)*(n+1));
+                        if(!st) return NC_OOM_ERROR;
+                        ffi_type** elements = (ffi_type**)(st+1);
+                        *st = (ffi_type){
+                            .size=s->size,
+                            .alignment=(unsigned short)s->alignment,
+                            .type=FFI_TYPE_STRUCT,
+                            .elements=elements
+                        };
+                        for(uint32_t i = 0; i < n; i++) elements[i] = base;
+                        *out = st;
+                        err = NC_NO_ERROR;
                     }
-                    uint32_t n = s->arm64.hfa_count;
-                    ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
-                    if(!st) return NC_OOM_ERROR;
-                    ffi_type** elements = (ffi_type**)(st + 1);
-                    *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
-                    for(uint32_t i = 0; i < n; i++) elements[i] = base;
-                    elements[n] = NULL;
-                    s->ffi_cache = st;
-                    *out = st;
-                    return NC_NO_ERROR;
-                }
-                break;
-            case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS:
-                if(!s->sysv.is_memory_class && (s->sysv.class0 == CC_SYSV_SSE || (s->size > 8 && s->sysv.class1 == CC_SYSV_SSE))){
-                    uint32_t sz = s->size;
-                    uint32_t eb0 = sz > 8 ? 8 : sz;
-                    uint32_t eb1 = sz > 8 ? sz - 8 : 0;
-                    uint32_t n0 = eb0 / 4;
-                    uint32_t n1 = eb1 / 4;
-                    ffi_type* t0 = s->sysv.class0 == CC_SYSV_SSE ? &ffi_type_float : &ffi_type_uint32;
-                    ffi_type* t1 = s->sysv.class1 == CC_SYSV_SSE ? &ffi_type_float : &ffi_type_uint32;
-                    uint32_t total = n0 + n1;
-                    ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (total + 1));
-                    if(!st) return NC_OOM_ERROR;
-                    ffi_type** elements = (ffi_type**)(st + 1);
-                    *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
-                    for(uint32_t i = 0; i < n0; i++) elements[i] = t0;
-                    for(uint32_t i = 0; i < n1; i++) elements[n0 + i] = t1;
-                    elements[total] = NULL;
-                    s->ffi_cache = st;
-                    *out = st;
-                    return NC_NO_ERROR;
-                }
-                break;
-            case CC_TARGET_X86_64_WINDOWS_MSVC:
-            case CC_TARGET_X86_64_WINDOWS_MINGW:
-            case CC_TARGET_TEST:
-            case CC_TARGET_COUNT:
-                break;
+                    else err = cctype_integer_ffi(a, s->size, s->alignment, out);
+                    break;
+                case CC_TARGET_X86_64_WINDOWS_MSVC:
+                case CC_TARGET_X86_64_WINDOWS_MINGW:
+                case CC_TARGET_TEST:
+                    err = cctype_integer_ffi(a, s->size, s->alignment, out);
+                    break;
+                case CC_TARGET_COUNT:
+                    return NC_UNSUPPORTED_TYPE;
             }
-            {
-                int err = cctype_integer_ffi(a, s->size, s->alignment, out);
-                if(err) return err;
-                s->ffi_cache = *out;
-                return NC_NO_ERROR;
-            }
-        }
-        case CC_UNION:{
-            CcUnion* u = ccqt_as_union(t);
-            if(u->ffi_cache){ *out = u->ffi_cache; return NC_NO_ERROR; }
-            switch(CC_TARGET_NATIVE){
-            case CC_TARGET_AARCH64_LINUX:
-            case CC_TARGET_AARCH64_MACOS:
-                if(u->arm64.hfa_count){
-                    ffi_type* base;
-                    switch((CcBasicTypeKind)u->arm64.hfa_type){
-                        case CCBT_float:       base = &ffi_type_float; break;
-                        case CCBT_double:      base = &ffi_type_double; break;
-                        case CCBT_long_double: base = &ffi_type_longdouble; break;
-                        case CCBT_COUNT:
-                        case CCBT_INVALID:
-                        case CCBT__Any:
-                        case CCBT__Type:
-                        case CCBT_bool:
-                        case CCBT_char:
-                        case CCBT_double_complex:
-                        case CCBT_float128:
-                        case CCBT_bfloat16:
-                        case CCBT_float16:
-                        case CCBT_float_complex:
-                        case CCBT_int:
-                        case CCBT_int128:
-                        case CCBT_long:
-                        case CCBT_long_double_complex:
-                        case CCBT_float16_complex:
-                        case CCBT_char_complex:
-                        case CCBT_signed_char_complex:
-                        case CCBT_unsigned_char_complex:
-                        case CCBT_short_complex:
-                        case CCBT_unsigned_short_complex:
-                        case CCBT_int_complex:
-                        case CCBT_unsigned_complex:
-                        case CCBT_long_complex:
-                        case CCBT_unsigned_long_complex:
-                        case CCBT_long_long_complex:
-                        case CCBT_unsigned_long_long_complex:
-                        case CCBT_int128_complex:
-                        case CCBT_unsigned_int128_complex:
-                        case CCBT_long_long:
-                        case CCBT_nullptr_t:
-                        case CCBT_short:
-                        case CCBT_signed_char:
-                        case CCBT_unsigned:
-                        case CCBT_unsigned_char:
-                        case CCBT_unsigned_int128:
-                        case CCBT_unsigned_long:
-                        case CCBT_unsigned_long_long:
-                        case CCBT_unsigned_short:
-                        case CCBT_void:
-                        return NC_UNSUPPORTED_TYPE;
-                        DRP_CASES_EXHAUSTED;
-                    }
-                    uint32_t n = u->arm64.hfa_count;
-                    ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (n + 1));
-                    if(!st) return NC_OOM_ERROR;
-                    ffi_type** elements = (ffi_type**)(st + 1);
-                    *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
-                    for(uint32_t i = 0; i < n; i++) elements[i] = base;
-                    elements[n] = NULL;
-                    u->ffi_cache = st;
-                    *out = st;
-                    return NC_NO_ERROR;
-                }
-                break;
-            case CC_TARGET_X86_64_LINUX:
-            case CC_TARGET_X86_64_MACOS:
-                if(!u->sysv.is_memory_class
-                    && (u->sysv.class0 == CC_SYSV_SSE || (u->size > 8 && u->sysv.class1 == CC_SYSV_SSE)))
-                {
-                    uint32_t sz = u->size;
-                    uint32_t eb0 = sz > 8 ? 8 : sz;
-                    uint32_t eb1 = sz > 8 ? sz - 8 : 0;
-                    uint32_t n0 = eb0 / 4;
-                    uint32_t n1 = eb1 / 4;
-                    ffi_type* t0 = u->sysv.class0 == CC_SYSV_SSE ? &ffi_type_float : &ffi_type_uint32;
-                    ffi_type* t1 = u->sysv.class1 == CC_SYSV_SSE ? &ffi_type_float : &ffi_type_uint32;
-                    uint32_t total = n0 + n1;
-                    ffi_type* st = Allocator_zalloc(a, sizeof(ffi_type) + sizeof(ffi_type*) * (total + 1));
-                    if(!st) return NC_OOM_ERROR;
-                    ffi_type** elements = (ffi_type**)(st + 1);
-                    *st = (ffi_type){.size = 0, .alignment = 0, .type = FFI_TYPE_STRUCT, .elements = elements};
-                    for(uint32_t i = 0; i < n0; i++) elements[i] = t0;
-                    for(uint32_t i = 0; i < n1; i++) elements[n0 + i] = t1;
-                    elements[total] = NULL;
-                    u->ffi_cache = st;
-                    *out = st;
-                    return NC_NO_ERROR;
-                }
-                break;
-            case CC_TARGET_X86_64_WINDOWS_MSVC:
-            case CC_TARGET_X86_64_WINDOWS_MINGW:
-            case CC_TARGET_TEST:
-            case CC_TARGET_COUNT:
-                break;
-            }
-            {
-                int err = cctype_integer_ffi(a, u->size, u->alignment, out);
-                if(err) return err;
-                u->ffi_cache = *out;
-                return NC_NO_ERROR;
-            }
+            if(err) return err;
+            s->ffi_cache = *out;
+            return NC_NO_ERROR;
         }
         case CC_BASIC:
             switch(ccqt_basic_kind(t)){
@@ -432,6 +334,87 @@ cctype_to_ffi_type(Allocator a, CcQualType t, ffi_type*_Nonnull*_Nonnull out){
     return NC_UNSUPPORTED_TYPE;
 }
 
+// Older SysV libffi closure decoders advance a register for NO_CLASS padding.
+// Use an eight-byte view for a record with a padding-only second eightbyte
+// when it is actually in registers. Spilled arguments must retain all 16 bytes.
+static
+_Bool
+native_sysv_arg_demand(CcQualType type, uint32_t* gp, uint32_t* fp){
+    *gp = *fp = 0;
+    while(ccqt_kind(type) == CC_ENUM) type = ccqt_as_enum(type)->underlying;
+    switch(ccqt_kind(type)){
+        case CC_STRUCT:
+        case CC_UNION:{
+            const CcSysvAggregate* abi = &ccqt_as_struct(type)->sysv;
+            *gp = abi->gp_count;
+            *fp = abi->fp_count;
+            return !abi->argument_on_stack;
+        }
+        case CC_BASIC:{
+            CcBasicTypeKind k = ccqt_basic_kind(type);
+            if(k == CCBT_void) return 1;
+            if(k == CCBT_long_double || k == CCBT_long_double_complex)
+                return 0; // native SysV long double uses x87, never argument registers
+            if(k == CCBT_double_complex){ *fp = 2; return 1; }
+            if(ccbt_is_float(k) || k == CCBT_float_complex || k == CCBT_float16_complex){
+                *fp = 1;
+                return 1;
+            }
+            uint32_t size = cc_target_native.sizeof_[k];
+            if(size > 16) return 0;
+            *gp = (size+7)/8;
+            return 1;
+        }
+        case CC_BLOCK_POINTER:
+        case CC_POINTER:
+        case CC_FUNCTION:
+            *gp = 1;
+            return 1;
+        case CC_SLICE:
+            *gp = 2;
+            return 1;
+        case CC_ARRAY: return 0; // native vector arguments are currently unsupported
+        case CC_ENUM:
+        case CC_ALIGNED: nc_unsafe_unreachable();
+    }
+    return 0;
+}
+
+static
+void
+native_sysv_register_view(CcQualType type, ffi_type*_Nonnull*_Nonnull ft, ffi_type* view){
+    CcTypeKind kind = ccqt_kind(type);
+    if(kind != CC_STRUCT && kind != CC_UNION)
+        return;
+    const CcStruct* s = ccqt_as_struct(type);
+    if(s->size != 16 || s->sysv.eightbyte_count != 2 || cc_sysv_class(&s->sysv, 1) != CC_SYSV_NO_CLASS)
+        return;
+    *view = **ft;
+    view->size = 8;
+    *ft = view;
+}
+
+static
+void
+native_ffi_signature_views(CcFunction* type, ffi_type*_Nonnull*_Nonnull rtype, ffi_type*_Nonnull*_Nonnull args, ffi_type* views){
+    if(CC_TARGET_NATIVE != CC_TARGET_X86_64_LINUX && CC_TARGET_NATIVE != CC_TARGET_X86_64_MACOS)
+        return;
+    uint32_t gp_used = 0,
+             fp_used = 0;
+    CcTypeKind ret_kind = ccqt_kind(type->return_type);
+    if(ret_kind == CC_STRUCT || ret_kind == CC_UNION)
+        gp_used = ccqt_as_struct(type->return_type)->sysv.is_memory_class ? 1 : 0;
+    native_sysv_register_view(type->return_type, rtype, &views[type->param_count]);
+    for(uint32_t i = 0; i < type->param_count; i++){
+        uint32_t gp, fp;
+        if(!native_sysv_arg_demand(type->params[i], &gp, &fp) || gp_used+gp > 6 || fp_used+fp > 8)
+            continue;
+        gp_used += gp;
+        fp_used += fp;
+        native_sysv_register_view(type->params[i], &args[i], &views[i]);
+    }
+}
+
 struct NativeCallCache {
     ffi_cif cif;
     uint32_t nparams;
@@ -444,7 +427,8 @@ native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nu
     *out = NULL;
     uint32_t fixed = func_type->fixed_param_count;
     uint32_t total = func_type->param_count;
-    NativeCallCache* c = Allocator_zalloc(a, sizeof *c + total * sizeof *c->arg_types);
+    size_t alloc_size = sizeof(NativeCallCache) + total * sizeof(ffi_type*) + ((size_t)total+1)*sizeof(ffi_type);
+    NativeCallCache* c = Allocator_zalloc(a, alloc_size);
     if(!c) return NC_OOM_ERROR;
     c->nparams = total;
     ffi_type* rtype;
@@ -454,6 +438,7 @@ native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nu
         err = cctype_to_ffi_type(a, func_type->params[i], &c->arg_types[i]);
         if(err) goto fail;
     }
+    native_ffi_signature_views(func_type, &rtype, c->arg_types, (ffi_type*)(c->arg_types+total));
     ffi_status s;
     if(total > fixed)
         s = ffi_prep_cif_var(&c->cif, FFI_DEFAULT_ABI, fixed, total, rtype, c->arg_types);
@@ -463,7 +448,7 @@ native_call_cache_create(Allocator a, CcFunction* func_type, NativeCallCache*_Nu
     *out = c;
     return NC_NO_ERROR;
     fail:
-    Allocator_free(a, c, sizeof *c + total * sizeof *c->arg_types);
+    Allocator_free(a, c, alloc_size);
     return err;
 }
 
@@ -490,7 +475,7 @@ native_call_cache_destroy(Allocator a, NativeCallCache* c){
     // FIXME: this doesn't free allocated types
     // but also, no one calls this function so it kind of doesn't matter and in
     // practice the users just use an arena?
-    Allocator_free(a, c, sizeof *c + c->nparams * sizeof *c->arg_types);
+    Allocator_free(a, c, sizeof *c + c->nparams * sizeof *c->arg_types + ((size_t)c->nparams+1)*sizeof(ffi_type));
 }
 
 struct NativeClosure {
@@ -516,7 +501,8 @@ int
 native_closure_create(Allocator a, CcFunction* func_type, NativeClosureCallback* cb, void*_Nullable userdata, NativeClosure*_Nullable*_Nonnull out){
     *out = NULL;
     uint32_t nparams = func_type->param_count;
-    NativeClosure* nc = Allocator_zalloc(a, sizeof *nc + nparams * sizeof *nc->arg_types);
+    size_t alloc_size = sizeof(NativeClosure) + nparams * sizeof(ffi_type*) + ((size_t)nparams+1)*sizeof(ffi_type);
+    NativeClosure* nc = Allocator_zalloc(a, alloc_size);
     if(!nc) return NC_OOM_ERROR;
     nc->nparams = nparams;
     nc->cb = cb;
@@ -528,6 +514,7 @@ native_closure_create(Allocator a, CcFunction* func_type, NativeClosureCallback*
         err = cctype_to_ffi_type(a, func_type->params[i], &nc->arg_types[i]);
         if(err) goto fail;
     }
+    native_ffi_signature_views(func_type, &rtype, nc->arg_types, (ffi_type*)(nc->arg_types+nparams));
     ffi_status s = ffi_prep_cif(&nc->cif, FFI_DEFAULT_ABI, nparams, rtype, nc->arg_types);
     if(s != FFI_OK){ err = NC_UNSUPPORTED_TYPE; goto fail; }
     nc->closure = ffi_closure_alloc(sizeof(ffi_closure), (void**)&nc->fn);
@@ -541,7 +528,7 @@ native_closure_create(Allocator a, CcFunction* func_type, NativeClosureCallback*
     *out = nc;
     return NC_NO_ERROR;
     fail:
-    Allocator_free(a, nc, sizeof *nc + nparams * sizeof nc->arg_types[0]);
+    Allocator_free(a, nc, alloc_size);
     return err;
 }
 
@@ -554,7 +541,7 @@ static
 void
 native_closure_destroy(Allocator a, NativeClosure* closure){
     ffi_closure_free(closure->closure);
-    Allocator_free(a, closure, sizeof *closure + closure->nparams * sizeof *closure->arg_types);
+    Allocator_free(a, closure, sizeof *closure + closure->nparams * sizeof *closure->arg_types + ((size_t)closure->nparams+1)*sizeof(ffi_type));
 }
 #else
 

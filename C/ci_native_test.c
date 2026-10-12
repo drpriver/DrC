@@ -24,6 +24,7 @@
 #include "cc_target.h"
 #include "ci_interp.h"
 #include <fenv.h>
+#include <stdarg.h>
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -68,6 +69,26 @@ static float test_float_callback(float (*f)(float), float x){ return f(x); }
 static double test_double_identity(double x){ return x; }
 static long double test_long_double_identity(long double x){ return x; }
 static long double test_long_double_callback(long double (*f)(long double), long double x){ return f(x); }
+struct LongDoubleRecord { long double x; };
+static struct LongDoubleRecord test_ld_record(struct LongDoubleRecord x){ x.x += 1.L; return x; }
+static struct LongDoubleRecord test_ld_record_callback(struct LongDoubleRecord (*f)(struct LongDoubleRecord), struct LongDoubleRecord x){ return f(x); }
+#if defined(__GNUC__) || defined(__clang__)
+struct __attribute__((aligned(16))) PaddedDoubleRecord { double x; };
+static struct PaddedDoubleRecord test_padded_record(struct PaddedDoubleRecord x, long a, double b){ x.x += a+b; return x; }
+static struct PaddedDoubleRecord test_padded_record_callback(struct PaddedDoubleRecord (*f)(struct PaddedDoubleRecord), struct PaddedDoubleRecord x){ return f(x); }
+static struct PaddedDoubleRecord test_padded_record_spill(double a, double b, double c, double d, double e, double f, double g, double h, struct PaddedDoubleRecord x, struct PaddedDoubleRecord y, double tail){
+    (void)b; (void)c; (void)d; (void)e; (void)f; (void)g;
+    x.x += a+h+y.x+tail;
+    return x;
+}
+struct __attribute__((aligned(16))) PaddedIntRecord { long long x; };
+static struct PaddedIntRecord test_padded_int_record(struct PaddedIntRecord x, long long a, double b){ x.x += a+(long long)b; return x; }
+static struct PaddedIntRecord test_padded_int_record_spill(long long a, long long b, long long c, long long d, long long e, long long f, struct PaddedIntRecord x, struct PaddedIntRecord y, long long tail){
+    (void)b; (void)c; (void)d; (void)e;
+    x.x += a+f+y.x+tail;
+    return x;
+}
+#endif
 static int test_double_to_int(double x){ return (int)x; }
 static double test_int_to_double(int x){ return (double)x; }
 
@@ -96,6 +117,52 @@ struct NestedRectStruct { struct { double x, y; } origin; struct { double w, h; 
 struct FiveFloatStruct { float a, b, c, d, e; };
 struct IntDoubleStruct { int x; double y; };
 struct FloatFloatIntStruct { float a, b; int c; };
+
+struct MixRecord { long long i; double d; };
+struct ReverseMixRecord { double d; long long i; };
+struct BigRecord { long long a,b,c; };
+static struct MixRecord test_mix_return(struct MixRecord x){ x.i+=3; x.d+=4.; return x; }
+static struct ReverseMixRecord test_reverse_mix_return(struct ReverseMixRecord x){ x.i+=3; x.d+=4.; return x; }
+static struct MixRecord test_mix_callback(struct MixRecord (*fn)(struct MixRecord), struct MixRecord x){ return fn(x); }
+static struct ReverseMixRecord test_reverse_mix_callback(struct ReverseMixRecord (*fn)(struct ReverseMixRecord), struct ReverseMixRecord x){ return fn(x); }
+static double test_mix_gp_spill(long long a,long long b,long long c,long long d,long long e,long long f,struct MixRecord x,long long tail,double fp){
+    return a+b+c+d+e+f+x.i+x.d+tail+fp;
+}
+static double test_mix_fp_spill(double a,double b,double c,double d,double e,double f,double g,double h,struct MixRecord x,long long tail,double fp){
+    return a+b+c+d+e+f+g+h+x.i+x.d+tail+fp;
+}
+static double test_hfa_spill(double a,double b,double c,double d,double e,double f,double g,struct TwoDoubleStruct x,double tail){
+    return a+b+c+d+e+f+g+x.x+x.y+tail;
+}
+static struct BigRecord test_hidden_return(long long a,long long b,long long c,long long d,long long e,struct MixRecord x,long long tail,double fp){
+    return (struct BigRecord){a+b+c+d+e+x.i, (long long)(x.d+fp), tail};
+}
+static struct BigRecord test_hidden_callback(struct BigRecord (*fn)(struct MixRecord),struct MixRecord x){ return fn(x); }
+#ifndef __DRC__
+// FIXME: interpreted variadic closures are unsupported.
+static struct MixRecord test_mix_varargs(int spill,...){
+    va_list ap;
+    va_start(ap,spill);
+    long long sum=0;
+    if(spill){
+        for(int i=0;i<6;i++) sum+=va_arg(ap,long long);
+        for(int i=0;i<8;i++) sum+=(long long)va_arg(ap,double);
+    }
+    struct MixRecord x=va_arg(ap,struct MixRecord);
+    struct ReverseMixRecord y=va_arg(ap,struct ReverseMixRecord);
+    long long tail=va_arg(ap,long long);
+    double fp=va_arg(ap,double);
+    va_end(ap);
+    sum+=x.i+(long long)x.d+y.i+(long long)y.d+tail+(long long)fp;
+    return (struct MixRecord){sum,2.*sum};
+}
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+struct __attribute__((packed)) PackedBitsRecord { unsigned long long a:60; unsigned b:8; };
+static struct PackedBitsRecord test_packed_bits_record(struct PackedBitsRecord x){ x.a+=1; x.b+=2; return x; }
+struct ZeroWidthRecord {char x; int:0; char y;};
+static struct ZeroWidthRecord test_zero_width_record(struct ZeroWidthRecord x){ x.x+=1; x.y+=2; return x; }
+#endif
 
 static int test_small_struct(struct SmallStruct s){ return s.x; }
 static int test_two_int_struct(struct TwoIntStruct s){ return s.x + s.y; }
@@ -455,6 +522,158 @@ TestFunction(test_interop){
             {{SV("i2d"), (void*)test_int_to_double},},
             .exit_code = 7,
         },
+        {
+            "long double record: native argument and result", __LINE__,
+            SV("struct S { long double x; }; struct S bump(struct S);\n"
+               "struct S x={__LDBL_MANT_DIG__>53 ? 0x1p60L : 0x1p50L};\n"
+               "return bump(x).x-x.x==1.L;\n"),
+            {{SV("bump"), (void*)test_ld_record}},
+            .exit_code = 1,
+        },
+        {
+            "long double record: native callback argument and result", __LINE__,
+            SV("struct S { long double x; }; struct S apply(struct S(*)(struct S),struct S);\n"
+               "struct S bump(struct S x){x.x+=1.L; return x;}\n"
+               "struct S x={__LDBL_MANT_DIG__>53 ? 0x1p60L : 0x1p50L};\n"
+               "return apply(bump,x).x-x.x==1.L;\n"),
+            {{SV("apply"), (void*)test_ld_record_callback}},
+            .exit_code = 1,
+        },
+        #if defined(__GNUC__) || defined(__clang__)
+        {
+            "padded FP record: native argument and result", __LINE__,
+            SV("struct __attribute__((aligned(16))) S { double x; };\n"
+               "struct S bump(struct S,long,double); struct S x={3.};\n"
+               "return bump(x,4,5.).x==12.;\n"),
+            {{SV("bump"), (void*)test_padded_record}},
+            .exit_code = 1,
+        },
+        {
+            "padded FP record: native callback argument and result", __LINE__,
+            SV("struct __attribute__((aligned(16))) S { double x; };\n"
+               "struct S apply(struct S(*)(struct S),struct S);\n"
+               "struct S bump(struct S x){x.x+=2.; return x;} struct S x={3.};\n"
+               "return apply(bump,x).x==5.;\n"),
+            {{SV("apply"), (void*)test_padded_record_callback}},
+            .exit_code = 1,
+        },
+        {
+            "padded FP records: spilled arguments keep their full size", __LINE__,
+            SV("struct __attribute__((aligned(16))) S { double x; };\n"
+               "struct S bump(double,double,double,double,double,double,double,double,struct S,struct S,double);\n"
+               "struct S x={3.}, y={4.}; return bump(1.,2.,3.,4.,5.,6.,7.,8.,x,y,5.).x==21.;\n"),
+            {{SV("bump"), (void*)test_padded_record_spill}},
+            .exit_code = 1,
+        },
+        {
+            "padded integer record: padding consumes no register", __LINE__,
+            SV("struct __attribute__((aligned(16))) S { long long x; };\n"
+               "struct S bump(struct S,long long,double); struct S x={3};\n"
+               "return bump(x,4,5.).x==12;\n"),
+            {{SV("bump"), (void*)test_padded_int_record}},
+            .exit_code = 1,
+        },
+        {
+            "padded integer records: spilled arguments keep their full size", __LINE__,
+            SV("struct __attribute__((aligned(16))) S { long long x; };\n"
+               "struct S bump(long long,long long,long long,long long,long long,long long,struct S,struct S,long long);\n"
+               "struct S x={3}, y={4}; return bump(1,2,3,4,5,6,x,y,5).x==19;\n"),
+            {{SV("bump"), (void*)test_padded_int_record_spill}},
+            .exit_code = 1,
+        },
+        #endif
+        {
+            "mixed INTEGER/SSE record: argument and return", __LINE__,
+            SV("struct S {long long i; double d;}; struct S bump(struct S);\n"
+               "struct S x=bump((struct S){7,8.}); return x.i==10&&x.d==12.;\n"),
+            {{SV("bump"), (void*)test_mix_return}}, .exit_code=1,
+        },
+        {
+            "mixed SSE/INTEGER record: argument and return", __LINE__,
+            SV("struct S {double d; long long i;}; struct S bump(struct S);\n"
+               "struct S x=bump((struct S){8.,7}); return x.i==10&&x.d==12.;\n"),
+            {{SV("bump"), (void*)test_reverse_mix_return}}, .exit_code=1,
+        },
+        {
+            "mixed INTEGER/SSE record: callback return", __LINE__,
+            SV("struct S {long long i; double d;}; struct S apply(struct S(*)(struct S),struct S);\n"
+               "struct S bump(struct S x){x.i+=3; x.d+=4.; return x;}\n"
+               "struct S x=apply(bump,(struct S){7,8.}); return x.i==10&&x.d==12.;\n"),
+            {{SV("apply"), (void*)test_mix_callback}}, .exit_code=1,
+        },
+        {
+            "mixed SSE/INTEGER record: callback return", __LINE__,
+            SV("struct S {double d; long long i;}; struct S apply(struct S(*)(struct S),struct S);\n"
+               "struct S bump(struct S x){x.i+=3; x.d+=4.; return x;}\n"
+               "struct S x=apply(bump,(struct S){8.,7}); return x.i==10&&x.d==12.;\n"),
+            {{SV("apply"), (void*)test_reverse_mix_callback}}, .exit_code=1,
+        },
+        {
+            "mixed record: GP exhaustion rolls back SIMD allocation", __LINE__,
+            SV("struct S {long long i; double d;};\n"
+               "double probe(long long,long long,long long,long long,long long,long long,struct S,long long,double);\n"
+               "return probe(1,2,3,4,5,6,(struct S){7,8.},9,10.)==55.;\n"),
+            {{SV("probe"), (void*)test_mix_gp_spill}}, .exit_code=1,
+        },
+        {
+            "mixed record: SIMD exhaustion rolls back GP allocation", __LINE__,
+            SV("struct S {long long i; double d;};\n"
+               "double probe(double,double,double,double,double,double,double,double,struct S,long long,double);\n"
+               "return probe(1.,2.,3.,4.,5.,6.,7.,8.,(struct S){7,8.},9,10.)==70.;\n"),
+            {{SV("probe"), (void*)test_mix_fp_spill}}, .exit_code=1,
+        },
+        {
+            "HFA exhaustion: following FP argument also spills", __LINE__,
+            SV("struct S {double x,y;};\n"
+               "double probe(double,double,double,double,double,double,double,struct S,double);\n"
+               "return probe(1.,2.,3.,4.,5.,6.,7.,(struct S){8.,9.},10.)==55.;\n"),
+            {{SV("probe"), (void*)test_hfa_spill}}, .exit_code=1,
+        },
+        {
+            "hidden result pointer: register exhaustion with mixed record", __LINE__,
+            SV("struct S {long long i; double d;}; struct B {long long a,b,c;};\n"
+               "struct B probe(long long,long long,long long,long long,long long,struct S,long long,double);\n"
+               "struct B b=probe(1,2,3,4,5,(struct S){6,7.},8,9.); return b.a==21&&b.b==16&&b.c==8;\n"),
+            {{SV("probe"), (void*)test_hidden_return}}, .exit_code=1,
+        },
+        {
+            "hidden result pointer: callback with mixed record", __LINE__,
+            SV("struct S {long long i; double d;}; struct B {long long a,b,c;};\n"
+               "struct B apply(struct B(*)(struct S),struct S);\n"
+               "struct B make(struct S x){return (struct B){x.i,(long long)x.d,13};}\n"
+               "struct B b=apply(make,(struct S){6,7.}); return b.a==6&&b.b==7&&b.c==13;\n"),
+            {{SV("apply"), (void*)test_hidden_callback}}, .exit_code=1,
+        },
+        #ifndef __DRC__
+        {
+            "native variadic mixed records in registers", __LINE__,
+            SV("struct S {long long i; double d;}; struct R {double d;long long i;}; struct S probe(int,...);\n"
+               "struct S x=probe(0,(struct S){7,8.},(struct R){9.,10},11LL,12.); return x.i==57&&x.d==114.;\n"),
+            {{SV("probe"), (void*)test_mix_varargs}}, .exit_code=1,
+        },
+        {
+            "native variadic mixed records after register exhaustion", __LINE__,
+            SV("struct S {long long i; double d;}; struct R {double d;long long i;}; struct S probe(int,...);\n"
+               "struct S x=probe(1,1LL,2LL,3LL,4LL,5LL,6LL,1.,2.,3.,4.,5.,6.,7.,8.,"
+               "(struct S){7,8.},(struct R){9.,10},11LL,12.); return x.i==114&&x.d==228.;\n"),
+            {{SV("probe"), (void*)test_mix_varargs}}, .exit_code=1,
+        },
+        #endif
+        #if defined(__GNUC__) || defined(__clang__)
+        {
+            "packed crossing bitfields: native argument and result", __LINE__,
+            SV("struct __attribute__((packed)) S {unsigned long long a:60;unsigned b:8;}; struct S bump(struct S);\n"
+               "struct S x=bump((struct S){0x123456789abcdefULL,0xa5});"
+               "return sizeof(x)==9&&x.a==0x123456789abcdf0ULL&&x.b==0xa7;\n"),
+            {{SV("bump"), (void*)test_packed_bits_record}}, .exit_code=1,
+        },
+        {
+            "zero-width bitfield: native argument and result", __LINE__,
+            SV("struct S {char x;int:0;char y;}; struct S bump(struct S);\n"
+               "struct S x=bump((struct S){3,4}); return x.x==4&&x.y==6;\n"),
+            {{SV("bump"), (void*)test_zero_width_record}}, .exit_code=1,
+        },
+        #endif
         // ---- Many arguments (register spill) ----
         {
             "8 int args", __LINE__,

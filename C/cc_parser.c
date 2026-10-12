@@ -7644,24 +7644,49 @@ cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32
     return 0;
 }
 
-static _Bool cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, CcSysVEightByte cls[_Nonnull 2]);
-static CcBasicTypeKind cc_arm64_hfa_check(const CcTargetConfig* tc, CcQualType type, CcBasicTypeKind base, uint32_t* count);
+static
+CcSysVEightByte
+cc_sysv_merge(CcSysVEightByte a, CcSysVEightByte b){
+    if(a == b || b == CC_SYSV_NO_CLASS) return a;
+    if(a == CC_SYSV_NO_CLASS) return b;
+    if(a == CC_SYSV_MEMORY || b == CC_SYSV_MEMORY) return CC_SYSV_MEMORY;
+    if(a == CC_SYSV_INTEGER || b == CC_SYSV_INTEGER) return CC_SYSV_INTEGER;
+    if(a == CC_SYSV_X87 || a == CC_SYSV_X87UP || a == CC_SYSV_COMPLEX_X87)
+        return CC_SYSV_MEMORY;
+    if(b == CC_SYSV_X87 || b == CC_SYSV_X87UP || b == CC_SYSV_COMPLEX_X87)
+        return CC_SYSV_MEMORY;
+    return CC_SYSV_SSE;
+}
 
 static
 _Bool
-cc_sysv_classify_fields(const CcTargetConfig* tc, const CcField* _Null_unspecified fields, uint32_t count, uint32_t base, CcSysVEightByte cls[_Nonnull 2]){
+cc_sysv_mark(CcSysVEightByte cls[_Nonnull 8], uint32_t off, uint32_t size, CcSysVEightByte c){
+    if(off > 64 || size > 64-off) return 1;
+    if(!size) return 0;
+    for(uint32_t i = off/8; i <= (off+size-1)/8; i++)
+        cls[i] = cc_sysv_merge(cls[i], c);
+    return 0;
+}
+
+static _Bool cc_sysv_classify_type(const CcTargetConfig*, CcQualType, uint32_t, CcSysVEightByte[_Nonnull 8]);
+
+static
+_Bool
+cc_sysv_classify_fields(const CcTargetConfig* tc, const CcField* _Null_unspecified fields, uint32_t count, uint32_t base, CcSysVEightByte cls[_Nonnull 8]){
     for(uint32_t i = 0; i < count; i++){
         const CcField* f = &fields[i];
         if(f->is_method) continue;
         if(f->is_bitfield){
-            if(f->bitoffset) continue;
-            uint32_t offset = base + f->offset;
-            CcQualType bt = f->type;
-            if(ccqt_kind(bt) == CC_ENUM) bt = ccqt_as_enum(bt)->underlying;
-            CcBasicTypeKind bk = ccqt_basic_kind(bt);
-            if(offset % tc->alignof_[bk]) return 1;
-            uint32_t eb = offset / 8;
-            if(eb < 2) cls[eb] = CC_SYSV_INTEGER;
+            // Classify occupied bits, not the declared storage unit.
+            // Packed fields can cross eightbytes.
+            // Zero-width fields contribute nothing.
+            if(!f->bitwidth) continue;
+            if(tc->os == CC_OS_MACOS && !f->name) continue;
+            uint64_t first = ((uint64_t)base + f->offset)*8 + f->bitoffset;
+            uint64_t end = first + f->bitwidth;
+            if(end > 64*8) return 1;
+            if(cc_sysv_mark(cls, (uint32_t)(first/8), (uint32_t)((end+7)/8-first/8), CC_SYSV_INTEGER))
+                return 1;
             continue;
         }
         if(cc_sysv_classify_type(tc, f->type, base + f->offset, cls))
@@ -7672,40 +7697,41 @@ cc_sysv_classify_fields(const CcTargetConfig* tc, const CcField* _Null_unspecifi
 
 static
 _Bool
-cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, CcSysVEightByte cls[_Nonnull 2]){
+cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, CcSysVEightByte cls[_Nonnull 8]){
     switch(ccqt_kind(type)){
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC:{
             CcBasicTypeKind bk = ccqt_basic_kind(type);
-            uint32_t al = tc->alignof_[bk];
-            if(off % al) return 1;
-            if(bk == CCBT_long_double || bk == CCBT_float128 || bk == CCBT_long_double_complex)
-                return 1;
-            CcSysVEightByte c;
-            if(ccbt_is_float(bk) || bk == CCBT_float16_complex || bk == CCBT_float_complex || bk == CCBT_double_complex)
-                c = CC_SYSV_SSE;
-            else
-                c = CC_SYSV_INTEGER;
             uint32_t sz = tc->sizeof_[bk];
-            uint32_t eb_lo = off / 8;
-            uint32_t eb_hi = (off + sz - 1) / 8;
-            for(uint32_t eb = eb_lo; eb <= eb_hi && eb < 2; eb++)
-                if(c == CC_SYSV_INTEGER) cls[eb] = CC_SYSV_INTEGER;
-            return 0;
+            if(off % tc->alignof_[bk]) return 1;
+            if(bk == CCBT_long_double && tc->long_double_format == CC_LONG_DOUBLE_X87)
+                return cc_sysv_mark(cls, off, 8, CC_SYSV_X87) || cc_sysv_mark(cls, off+8, 8, CC_SYSV_X87UP);
+            // COMPLEX_X87 is a scalar class. A record containing one is larger
+            // than two eightbytes and fails aggregate post-merge cleanup.
+            if(bk == CCBT_long_double_complex && tc->long_double_format == CC_LONG_DOUBLE_X87)
+                return 1;
+            if(bk == CCBT_float128 || (bk == CCBT_long_double && tc->long_double_format == CC_LONG_DOUBLE_BINARY128))
+                return cc_sysv_mark(cls, off, 8, CC_SYSV_SSE) || cc_sysv_mark(cls, off+8, 8, CC_SYSV_SSEUP);
+            if(bk == CCBT_long_double_complex && tc->long_double_format == CC_LONG_DOUBLE_BINARY128){
+                for(uint32_t i = 0; i < 2; i++)
+                    if(cc_sysv_mark(cls, off+16*i, 8, CC_SYSV_SSE) || cc_sysv_mark(cls, off+16*i+8, 8, CC_SYSV_SSEUP))
+                        return 1;
+                return 0;
+            }
+            CcSysVEightByte c = ccbt_is_float(bk)
+                || bk == CCBT_float16_complex
+                || bk == CCBT_float_complex
+                || bk == CCBT_double_complex
+                || bk == CCBT_long_double_complex ?
+                CC_SYSV_SSE : CC_SYSV_INTEGER;
+            return cc_sysv_mark(cls, off, sz, c);
         }
         case CC_BLOCK_POINTER:
         case CC_POINTER:
         case CC_FUNCTION:
+        case CC_SLICE:
             if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
-            if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
-            return 0;
-        case CC_SLICE: // XXX: idk if this is right.
-            if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
-            if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
-            off += 8;
-            if(off % tc->alignof_[CCBT_nullptr_t]) return 1;
-            if(off / 8 < 2) cls[off / 8] = CC_SYSV_INTEGER;
-            return 0;
+            return cc_sysv_mark(cls, off, tc->sizeof_[CCBT_nullptr_t] * (ccqt_kind(type) == CC_SLICE ? 2 : 1), CC_SYSV_INTEGER);
         case CC_ENUM:
             return cc_sysv_classify_type(tc, ccqt_as_enum(type)->underlying, off, cls);
         case CC_STRUCT:
@@ -7714,78 +7740,240 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             return cc_sysv_classify_fields(tc, ccqt_as_union(type)->fields, ccqt_as_union(type)->field_count, off, cls);
         case CC_ARRAY:{
             CcArray* arr = ccqt_as_array(type);
-            if(arr->is_incomplete) return 0;
-            if(arr->is_vector) return 1; // TODO: vector classification
-            uint32_t elem_sz;
-            if(cc_type_sizeof_complete(tc, arr->element, &elem_sz)) return 1;
-            for(uint32_t i = 0; i < (uint32_t)arr->length; i++){
-                if(cc_sysv_classify_type(tc, arr->element, off + i * elem_sz, cls))
-                    return 1;
+            if(arr->is_vector){
+                uint32_t sz = arr->vector_size;
+                if((sz != 8 && sz != 16 && sz != 32 && sz != 64) || off % sz) return 1;
+                if(cc_sysv_mark(cls, off, 8, CC_SYSV_SSE)) return 1;
+                for(uint32_t i = 8; i < sz; i += 8)
+                    if(cc_sysv_mark(cls, off+i, 8, CC_SYSV_SSEUP)) return 1;
+                return 0;
             }
+            // Clang and GCC disagree on what FAMs do,
+            // so follow GCC on Linux (ignore FAMs) and Clang on AppleOS (MEMORY).
+            if(arr->is_incomplete) return tc->os == CC_OS_MACOS;
+            uint32_t sz, elem_sz;
+            if(cc_type_sizeof_complete(tc, type, &sz) || off > 64 || sz > 64-off || cc_type_sizeof_complete(tc, arr->element, &elem_sz))
+                return 1;
+            if(!elem_sz) return 0;
+            for(size_t i = 0; i < arr->length; i++)
+                if(cc_sysv_classify_type(tc, arr->element, off+(uint32_t)i*elem_sz, cls))
+                    return 1;
             return 0;
         }
     }
-    return 0;
+    return 1;
 }
 
 static
-CcBasicTypeKind
-cc_arm64_hfa_check(const CcTargetConfig* tc, CcQualType type, CcBasicTypeKind base, uint32_t* count){
+void
+cc_sysv_classify_record(const CcTargetConfig* tc, const CcField* _Null_unspecified fields, uint32_t count, uint32_t size, CcSysvAggregate* out){
+    *out = (CcSysvAggregate){0};
+    CcSysVEightByte classes[8] = {0};
+    if(size > 64) goto memory;
+    out->eightbyte_count = (uint8_t)((size+7)/8);
+    if(cc_sysv_classify_fields(tc, fields, count, 0, classes))
+        goto memory;
+    for(uint32_t i = 0; i < out->eightbyte_count; i++){
+        CcSysVEightByte c = classes[i];
+        if(c == CC_SYSV_MEMORY)
+            goto memory;
+        if(c == CC_SYSV_X87UP && (!i || classes[i-1] != CC_SYSV_X87))
+            goto memory;
+    }
+    if(size > 16){
+        if(classes[0] != CC_SYSV_SSE)
+            goto memory;
+        for(uint32_t i = 1; i < out->eightbyte_count; i++)
+            if(classes[i] != CC_SYSV_SSEUP)
+                goto memory;
+    }
+    for(uint32_t i = 0; i < out->eightbyte_count; i++){
+        CcSysVEightByte c = classes[i];
+        if(c == CC_SYSV_SSEUP && (!i || (classes[i-1] != CC_SYSV_SSE && classes[i-1] != CC_SYSV_SSEUP)))
+            c = classes[i] = CC_SYSV_SSE;
+        if(c == CC_SYSV_INTEGER)
+            out->gp_count++;
+        else if(c == CC_SYSV_SSE){
+            out->fp_count++;
+            uint32_t width = 8;
+            for(uint32_t j = i+1; j < out->eightbyte_count && classes[j] == CC_SYSV_SSEUP; j++)
+                width += 8;
+            if(width > out->vector_size)
+                out->vector_size = (uint8_t)width;
+        }
+        else if(c == CC_SYSV_X87)
+            out->x87_count++;
+    }
+    for(uint32_t i = 0; i < out->eightbyte_count; i++)
+        cc_sysv_set_class(out, i, classes[i]);
+    out->argument_on_stack = out->x87_count != 0;
+    return;
+    memory:
+    *out = (CcSysvAggregate){.is_memory_class=1, .argument_on_stack=1};
+    cc_sysv_set_class(out, 0, CC_SYSV_MEMORY);
+}
+
+static _Bool cc_arm64_homogeneous(const CcTargetConfig*, CcQualType, CcArm64Aggregate*);
+
+static
+_Bool
+cc_arm64_homogeneous_append(CcArm64Aggregate* dst, const CcArm64Aggregate* src, uint32_t off){
+    uint32_t dn = dst->hfa_count + dst->hva_count;
+    uint32_t sn = src->hfa_count + src->hva_count;
+    if(!sn) return 1;
+    if(dn && (dst->hfa_type != src->hfa_type || dst->member_size != src->member_size || !!dst->hva_count != !!src->hva_count))
+        return 0;
+    if(dn+sn > 4)
+        return 0;
+    dst->hfa_type = src->hfa_type;
+    dst->member_size = src->member_size;
+    for(uint32_t i = 0; i < sn; i++){
+        uint32_t offset = off + cc_arm64_member_offset(src, i);
+        if(offset > 48)
+            return 0;
+        cc_arm64_set_member_offset(dst, dn+i, offset);
+    }
+    if(src->hva_count) dst->hva_count = (uint8_t)(dn+sn);
+    else dst->hfa_count = (uint8_t)(dn+sn);
+    return 1;
+}
+
+static
+_Bool
+cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate* out){
+    *out = (CcArm64Aggregate){0};
     switch(ccqt_kind(type)){
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC:{
             CcBasicTypeKind bk = ccqt_basic_kind(type);
-            CcBasicTypeKind effective = bk;
             uint32_t n = 1;
-            if(bk == CCBT_float16_complex){ effective = CCBT_float16; n = 2; }
-            else if(bk == CCBT_float_complex){ effective = CCBT_float; n = 2; }
-            else if(bk == CCBT_double_complex){ effective = CCBT_double; n = 2; }
-            else if(bk == CCBT_long_double_complex){ effective = CCBT_long_double; n = 2; }
-            else if(!ccbt_is_float(bk)) return CCBT_INVALID;
-            if(base == CCBT_INVALID) base = effective;
-            else if(base != effective) return CCBT_INVALID;
-            *count += n;
-            return base;
+            if(bk == CCBT_float16_complex){ bk = CCBT_float16; n = 2; }
+            else if(bk == CCBT_float_complex){ bk = CCBT_float; n = 2; }
+            else if(bk == CCBT_double_complex){ bk = CCBT_double; n = 2; }
+            else if(bk == CCBT_long_double_complex){ bk = CCBT_long_double; n = 2; }
+            else if(!ccbt_is_float(bk)) return 0;
+            // These are the same ABI fundamental type despite distinct C types.
+            if(bk == CCBT_bfloat16)
+                bk = CCBT_float16;
+            if(bk == CCBT_long_double && tc->long_double_format == CC_LONG_DOUBLE_BINARY64)
+                bk = CCBT_double;
+            if(bk == CCBT_float128 && tc->long_double_format == CC_LONG_DOUBLE_BINARY128)
+                bk = CCBT_long_double;
+            out->hfa_type = bk;
+            out->hfa_count = (uint8_t)n;
+            out->member_size = tc->sizeof_[bk];
+            if(n == 2) cc_arm64_set_member_offset(out, 1, out->member_size);
+            return 1;
+        }
+        case CC_ARRAY:{
+            CcArray* arr = ccqt_as_array(type);
+            if(arr->is_vector){
+                if(arr->vector_size != 8 && arr->vector_size != 16) return 0;
+                out->hva_count = 1;
+                out->hfa_type = CCBT_INVALID;
+                out->member_size = (uint8_t)arr->vector_size;
+                return 1;
+            }
+            if(arr->is_incomplete || arr->is_vla)
+                return 0;
+            // Zero-length array members disqualify Clang HFAs. 
+            // GCC also rejects arrays whose element type is not homogeneous.
+            if(!arr->length && tc->os == CC_OS_MACOS)
+                return 0;
+            CcArm64Aggregate elem;
+            uint32_t stride;
+            if(!cc_arm64_homogeneous(tc, arr->element, &elem) || cc_type_sizeof_complete(tc, arr->element, &stride))
+                return 0;
+            if(!arr->length) return 1;
+            if(!stride)
+                return 1;
+            if(arr->length > 4)
+                return 0;
+            for(size_t i = 0; i < arr->length; i++)
+                if(!cc_arm64_homogeneous_append(out, &elem, (uint32_t)i*stride))
+                    return 0;
+            break;
+        }
+        case CC_STRUCT:
+        case CC_UNION:{
+            CcStruct* s = ccqt_as_struct(type);
+            if(s->is_incomplete)
+                return 0;
+            for(uint32_t i = 0; i < s->field_count; i++){
+                CcField* f = &s->fields[i];
+                if(f->is_method || (f->is_bitfield && !f->bitwidth))
+                    continue;
+                if(f->is_bitfield)
+                    return 0;
+                CcArm64Aggregate member;
+                if(!cc_arm64_homogeneous(tc, f->type, &member))
+                    return 0;
+                if(ccqt_kind(type) == CC_STRUCT){
+                    if(!cc_arm64_homogeneous_append(out, &member, f->offset))
+                        return 0;
+                }
+                else {
+                    uint32_t n = member.hfa_count + member.hva_count;
+                    uint32_t prev = out->hfa_count + out->hva_count;
+                    if(!n) continue;
+                    if(prev && (out->hfa_type != member.hfa_type || out->member_size != member.member_size || !!out->hva_count != !!member.hva_count))
+                        return 0;
+                    if(n > prev) *out = member;
+                }
+            }
+            break;
         }
         case CC_BLOCK_POINTER:
         case CC_POINTER:
         case CC_FUNCTION:
         case CC_ENUM:
         case CC_SLICE:
-            return CCBT_INVALID;
-        case CC_STRUCT:{
-            CcStruct* s = ccqt_as_struct(type);
-            for(uint32_t i = 0; i < s->field_count; i++){
-                if(s->fields[i].is_method) continue;
-                if(s->fields[i].is_bitfield) return CCBT_INVALID;
-                base = cc_arm64_hfa_check(tc, s->fields[i].type, base, count);
-                if(base == CCBT_INVALID) return CCBT_INVALID;
-            }
-            return base;
-        }
-        case CC_UNION:{
-            CcUnion* u = ccqt_as_union(type);
-            for(uint32_t i = 0; i < u->field_count; i++){
-                if(u->fields[i].is_method) continue;
-                if(u->fields[i].is_bitfield) return CCBT_INVALID;
-                uint32_t dummy = 0;
-                base = cc_arm64_hfa_check(tc, u->fields[i].type, base, &dummy);
-                if(base == CCBT_INVALID) return CCBT_INVALID;
-            }
-            *count += u->size / tc->sizeof_[base];
-            return base;
-        }
-        case CC_ARRAY:{
-            CcArray* arr = ccqt_as_array(type);
-            if(arr->is_incomplete) return base;
-            uint32_t elem_count = 0;
-            base = cc_arm64_hfa_check(tc, arr->element, base, &elem_count);
-            if(base == CCBT_INVALID) return CCBT_INVALID;
-            *count += elem_count * (uint32_t)arr->length;
-            return base;
-        }
+            return 0;
     }
-    return CCBT_INVALID;
+    uint32_t size;
+    if(cc_type_sizeof_complete(tc, type, &size))
+        return 0;
+    uint32_t n = out->hfa_count + out->hva_count;
+    if(size != n*out->member_size) return 0;
+    for(uint32_t i = 0; i < n; i++)
+        if(cc_arm64_member_offset(out, i) != i*out->member_size)
+            return 0;
+    return 1;
+}
+
+static
+void
+cc_classify_record(CcParser* p, CcStruct* s, uint32_t natural_alignment){
+    const CcTargetConfig* tc = cc_target(p);
+    switch(tc->target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS:
+            cc_sysv_classify_record(tc, s->fields, s->field_count, s->size, &s->sysv);
+            break;
+        case CC_TARGET_AARCH64_LINUX:
+        case CC_TARGET_AARCH64_MACOS:{
+            s->arm64 = (CcArm64Aggregate){0};
+            CcQualType type = {.bits=(uintptr_t)s};
+            CcArm64Aggregate ha;
+            if(cc_arm64_homogeneous(tc, type, &ha)) s->arm64 = ha;
+            s->arm64.natural_alignment = natural_alignment;
+            s->arm64.copy_alignment = natural_alignment <= 8 ? 8 : 16;
+            if(!s->arm64.hfa_count && !s->arm64.hva_count){
+                s->arm64.is_indirect = s->size > 16;
+                s->arm64.gp_count = s->arm64.is_indirect ? 0 : (uint8_t)((s->size+7)/8);
+            }
+            break;
+        }
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
+            s->win64 = (CcWindowsAggregate){0};
+            s->win64.is_indirect = s->size != 0 && s->size != 1 && s->size != 2 && s->size != 4 && s->size != 8;
+            s->win64.gp_count = s->size && !s->win64.is_indirect ? 1 : 0;
+            break;
+        case CC_TARGET_TEST:
+        case CC_TARGET_COUNT:
+            break;
+    }
 }
 
 static
@@ -7861,34 +8049,53 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             if(bw == 0){
                 if(bitfield_offset > 0){
                     offset = bitfield_storage_end;
-                    bitfield_offset = 0;
-                    bitfield_storage_end = 0;
-                    bitfield_type = (CcQualType){0};
                 }
+                if(bf_abi == CC_BITFIELD_SYSV){
+                    uint32_t zero_align;
+                    err = cc_alignof_as_uint(p, f->type, f->loc, &zero_align);
+                    if(err) return err;
+                    err = cc_align_to(p, f->loc, offset, zero_align, &offset);
+                    if(err) return err;
+                    if(cc_target(p)->arch == CC_ARCH_ARM64 && zero_align > max_align)
+                        max_align = zero_align;
+                }
+                bitfield_offset = 0;
+                bitfield_storage_end = 0;
+                bitfield_type = (CcQualType){0};
                 f->offset = offset;
                 f->bitoffset = 0;
+                continue;
+            }
+            if(bf_abi == CC_BITFIELD_SYSV){
+                uint64_t pos = bitfield_offset ?  (uint64_t)bitfield_storage_start*8 + bitfield_offset : (uint64_t)offset*8;
+                _Bool packed = s->packed || pack_value > 0;
+                uint64_t align_bits = (uint64_t)field_align*8;
+                if(f->alignment) pos = (pos+align_bits-1) & ~(align_bits-1);
+                uint64_t start = packed ? pos/8*8 : pos/align_bits*align_bits;
+                if(!packed && pos-start+bw > storage_bits){
+                    pos = (pos+align_bits-1) & ~(align_bits-1);
+                    start = pos;
+                }
+                uint64_t end = (pos+bw+7)/8;
+                if(end > UINT32_MAX)
+                    return cc_error(p, f->loc, "object size exceeds 32-bit layout limit");
+                f->offset = (uint32_t)(start/8);
+                f->bitoffset = (uint32_t)(pos-start);
+                bitfield_storage_start = (uint32_t)(pos/8);
+                bitfield_offset = (uint32_t)(pos%8+bw);
+                bitfield_storage_end = (uint32_t)end;
+                // On AAPCS64 even unnamed fields contribute member alignment.
+                if((f->name || cc_target(p)->arch == CC_ARCH_ARM64) && field_align > max_align)
+                    max_align = field_align;
                 continue;
             }
             _Bool fits;
             uint32_t f_offset = 0, f_bitoffset = 0;
             CcQualType ft = f->type;
             while(ccqt_kind(ft) == CC_ENUM) ft = ccqt_as_enum(ft)->underlying;
-            if(bf_abi == CC_BITFIELD_MSVC){
-                fits = bitfield_type.bits == ft.bits && bitfield_offset + bw <= storage_bits;
-                f_offset = bitfield_storage_start;
-                f_bitoffset = bitfield_offset;
-            }
-            else if(!bitfield_storage_end){
-                fits = 0;
-            }
-            else {
-                uint64_t abs_bit = (uint64_t)bitfield_storage_start * char_bit + bitfield_offset;
-                uint32_t su_start = (uint32_t)(((abs_bit / char_bit) / field_align) * field_align);
-                uint32_t bit_in_su = (uint32_t)(abs_bit - (uint64_t)su_start * char_bit);
-                fits = bit_in_su + bw <= field_size * char_bit;
-                f_offset = su_start;
-                f_bitoffset = bit_in_su;
-            }
+            fits = bitfield_type.bits == ft.bits && bitfield_offset + bw <= storage_bits;
+            f_offset = bitfield_storage_start;
+            f_bitoffset = bitfield_offset;
             if(fits){
                 f->offset = f_offset;
                 f->bitoffset = f_bitoffset;
@@ -7933,51 +8140,13 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     }
     if(bitfield_offset > 0)
         offset = bitfield_storage_end;
+    uint32_t natural_alignment = max_align;
     if(s->alignment > max_align)
         max_align = s->alignment;
     s->alignment = max_align;
     err = cc_align_to(p, s->loc, offset, max_align, &s->size);
     if(err) return err;
-    const CcTargetConfig* tc = cc_target(p);
-    switch(tc->target){
-        case CC_TARGET_X86_64_LINUX:
-        case CC_TARGET_X86_64_MACOS:{
-            if(s->size > 16){
-                s->sysv.is_memory_class = 1;
-                break;
-            }
-            CcSysVEightByte cls[2] = {CC_SYSV_SSE, CC_SYSV_SSE};
-            if(cc_sysv_classify_fields(tc, s->fields, s->field_count, 0, cls)){
-                s->sysv.is_memory_class = 1;
-                break;
-            }
-            s->sysv.class0 = cls[0];
-            s->sysv.class1 = cls[1];
-            break;
-        }
-        case CC_TARGET_AARCH64_LINUX:
-        case CC_TARGET_AARCH64_MACOS:{
-            if(s->size > 64 || s->alignment > 16) break;
-            CcBasicTypeKind hfa_base = CCBT_INVALID;
-            uint32_t hfa_count = 0;
-            for(uint32_t i = 0; i < s->field_count; i++){
-                if(s->fields[i].is_method) continue;
-                if(s->fields[i].is_bitfield){ hfa_base = CCBT_INVALID; break; }
-                hfa_base = cc_arm64_hfa_check(tc, s->fields[i].type, hfa_base, &hfa_count);
-                if(hfa_base == CCBT_INVALID) break;
-            }
-            if(hfa_base != CCBT_INVALID && hfa_count >= 1 && hfa_count <= 4){
-                s->arm64.hfa_type = (uint32_t)hfa_base;
-                s->arm64.hfa_count = hfa_count;
-            }
-            break;
-        }
-        case CC_TARGET_X86_64_WINDOWS_MSVC:
-        case CC_TARGET_X86_64_WINDOWS_MINGW:
-        case CC_TARGET_TEST:
-        case CC_TARGET_COUNT:
-            break;
-    }
+    cc_classify_record(p, s, natural_alignment);
     return 0;
 }
 
@@ -8021,54 +8190,13 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         }
         if(field_align > max_align) max_align = field_align;
     }
+    uint32_t natural_alignment = max_align;
     if(u->alignment > max_align)
         max_align = u->alignment;
     u->alignment = max_align;
     err = cc_align_to(p, u->loc, max_size, max_align, &u->size);
     if(err) return err;
-    const CcTargetConfig* tc = cc_target(p);
-    switch(tc->target){
-        case CC_TARGET_X86_64_LINUX:
-        case CC_TARGET_X86_64_MACOS:{
-            if(u->size > 16){
-                u->sysv.is_memory_class = 1;
-                break;
-            }
-            CcSysVEightByte cls[2] = {CC_SYSV_SSE, CC_SYSV_SSE};
-            if(cc_sysv_classify_fields(tc, u->fields, u->field_count, 0, cls)){
-                u->sysv.is_memory_class = 1;
-                break;
-            }
-            u->sysv.class0 = cls[0];
-            u->sysv.class1 = cls[1];
-            break;
-        }
-        case CC_TARGET_AARCH64_LINUX:
-        case CC_TARGET_AARCH64_MACOS:{
-            if(u->size > 64 || u->alignment > 16) break;
-            CcBasicTypeKind hfa_base = CCBT_INVALID;
-            for(uint32_t i = 0; i < u->field_count; i++){
-                if(u->fields[i].is_method) continue;
-                if(u->fields[i].is_bitfield){ hfa_base = CCBT_INVALID; break; }
-                uint32_t dummy = 0;
-                hfa_base = cc_arm64_hfa_check(tc, u->fields[i].type, hfa_base, &dummy);
-                if(hfa_base == CCBT_INVALID) break;
-            }
-            if(hfa_base != CCBT_INVALID){
-                uint32_t hfa_count = u->size / tc->sizeof_[hfa_base];
-                if(hfa_count >= 1 && hfa_count <= 4){
-                    u->arm64.hfa_type = (uint32_t)hfa_base;
-                    u->arm64.hfa_count = hfa_count;
-                }
-            }
-            break;
-        }
-        case CC_TARGET_X86_64_WINDOWS_MSVC:
-        case CC_TARGET_X86_64_WINDOWS_MINGW:
-        case CC_TARGET_TEST:
-        case CC_TARGET_COUNT:
-            break;
-    }
+    cc_classify_record(p, (CcStruct*)u, natural_alignment);
     return 0;
 }
 
