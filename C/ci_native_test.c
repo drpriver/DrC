@@ -662,9 +662,15 @@ TestFunction(test_interop){
         #if defined(__GNUC__) || defined(__clang__)
         {
             "packed crossing bitfields: native argument and result", __LINE__,
+            #ifdef _WIN32
+            SV("struct __attribute__((packed)) S {unsigned long long a:60;unsigned b:8;}; struct S bump(struct S);\n"
+               "struct S x=bump((struct S){0x123456789abcdefULL,0xa5});"
+               "return sizeof(x)==12&&x.a==0x123456789abcdf0ULL&&x.b==0xa7;\n"),
+            #else
             SV("struct __attribute__((packed)) S {unsigned long long a:60;unsigned b:8;}; struct S bump(struct S);\n"
                "struct S x=bump((struct S){0x123456789abcdefULL,0xa5});"
                "return sizeof(x)==9&&x.a==0x123456789abcdf0ULL&&x.b==0xa7;\n"),
+            #endif
             {{SV("bump"), (void*)test_packed_bits_record}}, .exit_code=1,
         },
         {
