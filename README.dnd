@@ -156,13 +156,17 @@ Slices::md
     int a[] = {1,2,3,4};
     // You can use named arguments to call with an array or slice
     printf("sum(a) = %d\n", sum(.vals=a));
-Static If::md
-  Include or exclude statements/decls based on compile time expressions.
+Static If/Static Goto/Static For/Static Switch::md
+  Compile-time control flow, selecting which code
+  is generated based on compile-time expressions.
   ::pre.C
     static if(__shell("date")[0] == 'W'){
       enum {IT_IS_WEDNESDAY=1};
     }
     printf("IT_IS_WEDNESDAY: %d\n", IT_IS_WEDNESDAY); // only compiles on wednesday
+  See [the static control sample.]
+  ::links
+    the static control sample. = Samples/Extensions/static-control.c
 
 Procmacros::md
   Register a C function as a macro, call it as a macro, outputs get turned into

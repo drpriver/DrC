@@ -12,7 +12,7 @@
 * [Native Threads](#native-threads)
 * [First Class Types](#first-class-types)
 * [Slices](#slices)
-* [Static If](#static-if)
+* [Static If/Static Goto/Static For/Static Switch](#static-if-static-goto-static-for-static-switch)
 * [Procmacros](#procmacros)
 * [Methods and FUCS](#methods-and-fucs)
 * [Named Arguments](#named-arguments)
@@ -45,7 +45,7 @@ Major Features Include:
 * [Native Threads](#native-threads)
 * [REPL mode](#repl-mode)
 * [First Class Types](#first-class-types)
-* [Static If](#static-if)
+* [Static If](static-if)
 * [Procmacros](#procmacros)
 * [Methods and FUCS](#methods-and-fucs)
 * [Named Arguments](#named-arguments)
@@ -220,9 +220,10 @@ int a[] = {1,2,3,4};
 printf("sum(a) = %d\n", sum(.vals=a));
 ```
 
-## Static If
+## Static If/Static Goto/Static For/Static Switch
 
-Include or exclude statements/decls based on compile time expressions.
+Compile-time control flow, selecting which code
+is generated based on compile-time expressions.
 
 ```C
 static if(__shell("date")[0] == 'W'){
@@ -230,6 +231,9 @@ static if(__shell("date")[0] == 'W'){
 }
 printf("IT_IS_WEDNESDAY: %d\n", IT_IS_WEDNESDAY); // only compiles on wednesday
 ```
+
+
+See [the static control sample.](Samples/Extensions/static-control.c)
 
 ## Procmacros
 
