@@ -65,6 +65,8 @@ jobs:
           retention-days: 7
   windows-x64:
     if: github.event_name != 'schedule'
+    env:
+      ASAN_OPTIONS: detect_leaks=0${{ matrix.cc != 'cl' && ':log_path=asan' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +158,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: windows-clang-diagnostics-${{ matrix.os }}-${{ matrix.cc }}
-          path: Bin/diagnostics/
+          path: |
+            Bin/diagnostics/
+            asan.*
           if-no-files-found: warn
       - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe --no-sanitize -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
   macos:
