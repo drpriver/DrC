@@ -373,9 +373,15 @@ static struct AbiPacked64 abi_packed64_callback(struct AbiPacked64 (*fn)(struct 
 #define ABI_PACKED_SYMBOL(name) NULL
 #define ABI_PACKED_SKIP 1
 #endif
+#if defined __APPLE__ && defined __x86_64__
+// libffi cannot express a leading NO_CLASS hole
+#define ABI_LEADING_SYMBOL(name) NULL
+#else
+#define ABI_LEADING_SYMBOL(name) (void*)name
 struct AbiLeadingPadding {unsigned long long:64; double x;};
 static struct AbiLeadingPadding abi_leading_bump(struct AbiLeadingPadding x){x.x+=1.; return x;}
 static struct AbiLeadingPadding abi_leading_callback(struct AbiLeadingPadding (*fn)(struct AbiLeadingPadding),struct AbiLeadingPadding x){return fn(x);}
+#endif
 // A named dummy forces GCC's INTEGER classification when Linux fixtures are
 // compiled with Clang, which otherwise ignores the unnamed bitfield.
 #if (defined __clang__ && !defined __APPLE__) || defined _WIN32
@@ -625,7 +631,7 @@ TestFunction(test_interop){
         "ABI: leading padding eightbyte in native arguments, results and callbacks", __LINE__,
         SVI("struct S {unsigned long long:64;double x;};struct S bump(struct S);struct S apply(struct S(*)(struct S),struct S);\n"
             "struct S f(struct S s){s.x+=2.;return s;}struct S s={9.};s=bump(s);s=apply(f,s);return s.x==12.;\n"),
-        {{SV("bump"),(void*)abi_leading_bump},{SV("apply"),(void*)abi_leading_callback}}, .exit_code=1,
+        {{SV("bump"),ABI_LEADING_SYMBOL(abi_leading_bump)},{SV("apply"),ABI_LEADING_SYMBOL(abi_leading_callback)}}, .exit_code=1,
         .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS, // FIXME: libffi cannot express a leading NO_CLASS hole.
     },
     {

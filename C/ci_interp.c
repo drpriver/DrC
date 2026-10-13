@@ -143,6 +143,31 @@ static void cc_release_expr(CcParser* p, CcExpr* e);
 static CppFuncMacroFn ci_shell, ci_procmacro_expand;
 
 typedef struct { _Alignas(16) char bytes[16]; } CiAtomic16;
+// The error lock stays held until ci_finish_error flushes the diagnostic.
+LOG_PRINTF(3, 4)
+static
+MStringBuilder*
+ci_start_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
+    LOCK_T_lock(&ci->error_lock);
+    va_list va;
+    va_start(va, fmt);
+    cpp_include_backtrace(&ci->parser.cpp, LOG_PRINT_ERROR);
+    cpp_msg_preamble(&ci->parser.cpp, loc, "error");
+    MStringBuilder* sb = &ci->parser.cpp.logger->buff;
+    msb_vsprintf(sb, fmt, va);
+    va_end(va);
+    return sb;
+}
+
+static
+int
+ci_finish_error(CiInterpreter* ci, SrcLoc loc){
+    log_flush(ci->parser.cpp.logger, LOG_PRINT_ERROR);
+    cpp_msg_postamble(&ci->parser.cpp, loc, LOG_PRINT_ERROR);
+    LOCK_T_unlock(&ci->error_lock);
+    return CI_RUNTIME_ERROR;
+}
+
 static
 int
 ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
@@ -156,6 +181,20 @@ ci_error(CiInterpreter* ci, SrcLoc loc, const char* fmt, ...){
 }
 #define ci_unimplemented(p, loc, msg) (ci_error(p, loc, "UNIMPLEMENTED: " msg " at %s:%d", __FILE__, __LINE__), CI_UNIMPLEMENTED_ERROR)
 #define ci_unreachable(p, loc, msg) (ci_error(p, loc, "UNREACHABLE: " msg " at %s:%d", __FILE__, __LINE__), CI_UNREACHABLE_ERROR)
+
+static
+void
+ci_log_native_signature_error(CiInterpreter* ci, SrcLoc loc, const char* operation, CcFunc*_Nullable func, CcFunction* type){
+    MStringBuilder* signature;
+    if(func){
+        StringView name = func->name ? (StringView){func->name->length, func->name->data} : SV("(anonymous)");
+        signature = ci_start_error(ci, loc, "unsupported native %s signature for '%.*s': ", operation, sv_p(name));
+    }
+    else
+        signature = ci_start_error(ci, loc, "unsupported indirect native %s signature: ", operation);
+    cc_print_type(signature, (CcQualType){.bits = (uintptr_t)type});
+    ci_finish_error(ci, loc);
+}
 
 // Only use this when it is absolutely impossible, prefer ci_ice() above
 // if it could be a bug.
@@ -651,6 +690,8 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         err = native_closure_create(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
         if(err){
             Allocator_free(al, cd, sizeof *cd);
+            if(err == CI_UNIMPLEMENTED_ERROR)
+                ci_log_native_signature_error(ci, func->loc, "callback", func, func->interp_ops->native_type);
             return err;
         }
         entry = native_closure_fn(nc);
@@ -3451,7 +3492,11 @@ ci_link_ops(CiInterpreter* ci, const CiOp* ops, size_t count){
         if(PM_get(&ci->ffi_cache, d->native_call_type)) continue;
         NativeCallCache* cache = NULL;
         int err = native_call_cache_create(al, d->native_call_type, &cache);
-        if(err) return err;
+        if(err){
+            if(err == CI_UNIMPLEMENTED_ERROR)
+                ci_log_native_signature_error(ci, op->call.loc, "call", op->call.is_indirect ? NULL : d->func, d->native_call_type);
+            return err;
+        }
         err = PM_put(&ci->ffi_cache, al, d->native_call_type, cache);
         if(err){
             native_call_cache_destroy(al, cache);
