@@ -11824,9 +11824,37 @@ cc_stmt_scope_vars(CcParser* p, CcStmtNode* stmt){
     return 0;
 }
 
+static inline
+void
+cc_stmt_summarize_flow(CcStmtNode* n){
+    switch(n->kind){
+        case CC_STMT_RETURN: case CC_STMT_BREAK: case CC_STMT_CONTINUE: case CC_STMT_GOTO:
+            n->no_fallthrough = 1;
+            break;
+        case CC_STMT_COMPOUND:
+            n->no_fallthrough = 0;
+            for(uint32_t i = 0; i < n->count; i++){
+                CcStmtNode* child = n->stmts[i];
+                if(!n->no_fallthrough || child->has_jump_target)
+                    n->no_fallthrough = child->no_fallthrough;
+            }
+            break;
+        case CC_STMT_IF:
+            n->no_fallthrough = n->stmts[0] && n->stmts[1]
+                && n->stmts[0]->no_fallthrough && n->stmts[1]->no_fallthrough;
+            break;
+        case CC_STMT_LABEL: case CC_STMT_CASE: case CC_STMT_DEFAULT:
+            n->no_fallthrough = n->stmts[0] && n->stmts[0]->no_fallthrough;
+            break;
+        default: n->no_fallthrough = 0; break;
+    }
+}
+
+
 static
 int
 cc_sink_push(CcParser* p, CcStmtNode* n){
+    cc_stmt_summarize_flow(n);
     int err;
     if(!p->stmt_sink){
         SrcLoc loc = n->loc;
@@ -11856,6 +11884,7 @@ cc_finalize_stmt_list(CcParser* p, SrcLoc loc, Parray(CcStmtNode)* list, _Bool a
         n->stmts[i] = list->data[i];
         n->has_jump_target |= n->stmts[i]->has_jump_target;
     }
+    cc_stmt_summarize_flow(n);
     list->count = 0;
     *out = n;
     return 0;
@@ -11906,8 +11935,10 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     err = cc_parse_statement_inner(p, out);
     p->runtime_control_depth -= boundary;
     // Counts include targets nested in expressions, not just child statements.
-    if(!err && *out) 
+    if(!err && *out){
         (*out)->has_jump_target |= p->stmt_jump_targets != jump_targets;
+        cc_stmt_summarize_flow((CcStmtNode*)*out);
+    }
     return err;
 }
 

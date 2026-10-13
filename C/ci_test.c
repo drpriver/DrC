@@ -42,6 +42,84 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "lower: compound immediate simplifications", __LINE__,
+            SVI("unsigned f(unsigned x){x+=0;x-=0;x*=1;x/=1;x|=0;x^=0;x&=~0u;x<<=0;x>>=0;return x;}"
+                "unsigned q(unsigned x){return x/=8;} unsigned r(unsigned x){return x%=8;}"
+                "unsigned m(unsigned x){return x*=8;} int s(int x){x/=8;return x;}"
+                "int t(int x){x%=8;return x;} unsigned z(unsigned x){x*=0;return x;}"
+                "unsigned o(unsigned x){x|=~0u;return x;}"
+                "unsigned a[2]={9,17}; unsigned* p=a; *p++/=8; *p%=8;"
+                "_Atomic unsigned atom=8; atom+=0; atom/=8;"
+                "return f(~0u)==~0u && q(~0u)==0x1fffffffu && r(~0u)==7"
+                " && m(~0u)==0xfffffff8u && s(-9)==-1 && t(-9)==-1 && z(7)==0"
+                " && o(7)==~0u && a[0]==1 && a[1]==1 && p==a+1 && atom==1;"),
+            .exit_code=1,
+        },
+        {
+            "lower: discarded bitfield compound results", __LINE__,
+            SVI("struct S{unsigned u:3; signed s:3; _Bool b:1;};"
+                "struct S a[2]={{7,-4,1},{2,3,0}}; struct S* p=a;"
+                "p++->u+=2; a[0].s-=1; a[0].b+=1; a[1].s*=2;"
+                "int n=(a[1].u+=7);"
+                "return p==a+1 && a[0].u==1 && a[0].s==3 && a[0].b==1"
+                " && a[1].s==-2 && n==1 && a[1].u==1;"),
+            .exit_code=1,
+        },
+        {
+            "lower: logical constants preserve effects and destinations", __LINE__,
+            SVI("int unavailable(void); int n=0; int tick(void){return ++n;}"
+                "int a=tick()&&0; int b=tick()||1; int c=1&&tick(); int d=0||tick();"
+                "int e=tick()&&1; int f=tick()||0;"
+                "int x=2; x=x&&1; int y=0; y=y||1;"
+                "int g=0&&tick(); int h=1||tick();"
+                "0&&unavailable(); 1||unavailable();"
+                "return n==6 && a==0 && b==1 && c==1 && d==1 && e==1 && f==1"
+                " && x==1 && y==1 && g==0 && h==1;"),
+            .exit_code=1,
+        },
+        {
+            "lower: equal ternary arms and effect summaries", __LINE__,
+            SVI("int n=0; int tick(void){return ++n;} int x=tick()?7:7;"
+                "unsigned __int128 y=tick()?((unsigned __int128)1<<100):((unsigned __int128)1<<100);"
+                "int a=2,b=3; a&&(b+1); a?(b*2):(b-1); tick()&&(a+b);"
+                "a&&(tick(),b); (a-a)&&tick(); a?tick():tick();"
+                "return n==5 && x==7 && y==((unsigned __int128)1<<100);"),
+            .exit_code=1,
+        },
+        {
+            "lower: unreachable siblings and terminating if arms", __LINE__,
+            SVI("int unavailable(void);"
+                "int f(int x){if(x){return 1;unavailable();}else return 2;unavailable();}"
+                "int g(void){goto in;unavailable();{in:return 3;}unavailable();}"
+                "int h(void){int n=0;for(int i=0;i<3;i++){n++;continue;unavailable();}"
+                "while(1){break;unavailable();}return n;}"
+                "int j(int x){switch(x){case 1:return 4;unavailable();case 2:return 5;default:return 6;}}"
+                "int k(void){goto in;({in:;});return 7;}"
+                "return f(1)==1 && f(0)==2 && g()==3 && h()==3 && j(1)==4"
+                " && j(2)==5 && j(9)==6 && k()==7;"),
+            .exit_code=1,
+        },
+        {
+            "lower: promoted ranges and non-preserving casts", __LINE__,
+            SVI("int a(unsigned char x){return x>=0 && x<=255 && x<256 && x!=300 && !(x==300); }"
+                "int b(signed char x){return x>=-128 && x<=127 && x>-129 && x<128;}"
+                "int c(int x){return (unsigned char)x==0;}"
+                "int d(int x){return (unsigned)x>255u;}"
+                "int e(unsigned x){return (int)x<0;}"
+                "int n=0; unsigned char byte=3; int z=((n++,byte)<0);"
+                "return a(0)&&a(255)&&b(-128)&&b(127)&&c(256)&&!c(257)"
+                " && d(-1)&&e(~0u)&&n==1&&!z;"),
+            .exit_code=1,
+        },
+        {
+            "lower: signed and unsigned bitfield ranges", __LINE__,
+            SVI("struct S{unsigned u:3; signed s:3; signed bit:1;};"
+                "int f(struct S x){return x.u>=0 && x.u<=7 && x.u<8 && x.u!=9"
+                " && x.s>=-4 && x.s<=3 && x.s<4 && x.bit>=-1 && x.bit<=0;}"
+                "return f((struct S){7,-4,-1}) && f((struct S){0,3,0});"),
+            .exit_code=1,
+        },
+        {
             "lower: memory displacements and pointer snapshots", __LINE__,
             SVI("int read(int* p){return *(p+3);} int neg(int* p){return *(p-1);}"
                 "struct BigOffset{int a,b,c;};"
@@ -16540,18 +16618,19 @@ TestFunction(test_alu_chain_lowering){
         ci_lower_deps_cleanup(&deps, al);
     }
     // Check the emitted operation, not just the result of executing it.
+    enum {EXPECT_OPERAND = -1, EXPECT_CONSTANT = -2};
     static const struct {
         CcExprKind kind;
         uint64_t constant;
         _Bool constant_left;
-        int expected; // -1: reuse operand, -2: constant, otherwise CiAluOp
+        int expected; // EXPECT_OPERAND, EXPECT_CONSTANT, or a CiAluOp
         uint64_t immediate;
     } simple[] = {
-        {CC_EXPR_ADD, 0, 0, -1}, {CC_EXPR_SUB, 0, 0, -1},
-        {CC_EXPR_MUL, 1, 0, -1}, {CC_EXPR_DIV, 1, 0, -1},
-        {CC_EXPR_BITOR, 0, 0, -1}, {CC_EXPR_BITXOR, 0, 0, -1},
-        {CC_EXPR_BITAND, UINT64_MAX, 0, -1},
-        {CC_EXPR_LSHIFT, 0, 0, -1}, {CC_EXPR_RSHIFT, 0, 0, -1},
+        {CC_EXPR_ADD, 0, 0, EXPECT_OPERAND}, {CC_EXPR_SUB, 0, 0, EXPECT_OPERAND},
+        {CC_EXPR_MUL, 1, 0, EXPECT_OPERAND}, {CC_EXPR_DIV, 1, 0, EXPECT_OPERAND},
+        {CC_EXPR_BITOR, 0, 0, EXPECT_OPERAND}, {CC_EXPR_BITXOR, 0, 0, EXPECT_OPERAND},
+        {CC_EXPR_BITAND, UINT64_MAX, 0, EXPECT_OPERAND},
+        {CC_EXPR_LSHIFT, 0, 0, EXPECT_OPERAND}, {CC_EXPR_RSHIFT, 0, 0, EXPECT_OPERAND},
         {CC_EXPR_ADD, 3, 1, CI_ALU_ADD, 3},
         {CC_EXPR_MUL, 7, 1, CI_ALU_MUL, 7},
         {CC_EXPR_BITAND, 7, 1, CI_ALU_AND, 7},
@@ -16560,9 +16639,9 @@ TestFunction(test_alu_chain_lowering){
         {CC_EXPR_MUL, 8, 1, CI_ALU_SHL, 3},
         {CC_EXPR_DIV, 8, 0, CI_ALU_SHR, 3},
         {CC_EXPR_MOD, 8, 0, CI_ALU_AND, 7},
-        {CC_EXPR_MUL, 0, 0, -2, 0}, {CC_EXPR_BITAND, 0, 1, -2, 0},
-        {CC_EXPR_BITOR, UINT64_MAX, 0, -2, UINT64_MAX},
-        {CC_EXPR_MOD, 1, 0, -2, 0},
+        {CC_EXPR_MUL, 0, 0, EXPECT_CONSTANT, 0}, {CC_EXPR_BITAND, 0, 1, EXPECT_CONSTANT, 0},
+        {CC_EXPR_BITOR, UINT64_MAX, 0, EXPECT_CONSTANT, UINT64_MAX},
+        {CC_EXPR_MOD, 1, 0, EXPECT_CONSTANT, 0},
     };
     static int simple_idx = 0;
     for(size_t job = test_atomic_increment(&simple_idx); job < arrlen(types)*arrlen(simple); job = test_atomic_increment(&simple_idx)){
@@ -16587,11 +16666,11 @@ TestFunction(test_alu_chain_lowering){
         }
         if(t < 2) immediate = (uint32_t)immediate;
         if(!err){
-            TestExpect(size_t, code.ops.count, ==, expected == -1 ? 0 : 1);
-            if(expected == -1) TestExpect(uint32_t, code.value_slot, ==, 0);
+            TestExpect(size_t, code.ops.count, ==, expected == EXPECT_OPERAND ? 0 : 1);
+            if(expected == EXPECT_OPERAND) TestExpect(uint32_t, code.value_slot, ==, 0);
             else if(code.ops.count == 1){
                 CiOp* op = &code.ops.data[0];
-                if(expected == -2){
+                if(expected == EXPECT_CONSTANT){
                     TestExpect(int, op->kind, ==, CI_OP_CONST);
                     TestExpect(uint64_t, ci_read_uint(op->constant.immediate, code.value_size), ==, immediate);
                 }
@@ -16604,6 +16683,47 @@ TestFunction(test_alu_chain_lowering){
         }
         ci_lowered_expr_cleanup(&code, al);
         ci_lower_deps_cleanup(&deps, al);
+    }
+    // Compound assignments use the same rules, including when their value is discarded.
+    for(size_t t = 0; t < arrlen(types); t++) for(size_t c = 0; c < arrlen(simple); c++){
+        CcQualType type = ccqt_basic(types[t]);
+        CcVariable var = {.type=type, .automatic=1};
+        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var, .is_lvalue=1};
+        CcExpr value = {.kind=CC_EXPR_VALUE, .type=type, .uinteger=simple[c].constant};
+        CcExprKind kind = (CcExprKind)(simple[c].kind-CC_EXPR_ADD+CC_EXPR_ADDASSIGN);
+        CcExpr* expr = cc_binary_expr(&ci.parser, kind, (SrcLoc){0}, type, &ref, &value);
+        if(!expr){ TestReport("allocating compound simplification failed"); goto cleanup; }
+        int expected = simple[c].expected;
+        uint64_t immediate = simple[c].immediate;
+        if(!(t % 2) && simple[c].constant == 8
+            && (simple[c].kind == CC_EXPR_DIV || simple[c].kind == CC_EXPR_MOD)){
+            expected = simple[c].kind == CC_EXPR_DIV ? CI_ALU_DIV : CI_ALU_MOD;
+            immediate = 8;
+        }
+        if(t < 2) immediate = (uint32_t)immediate;
+        for(unsigned discard = 0; discard < 2; discard++){
+            CiLoweredExpr code = {.frame_size=8};
+            CiLowerCtx ctx = {.a=al, .out=&code.ops, .temp=8, .frame_size=&code.frame_size};
+            CiLowerVal result;
+            int err = discard ? ci_lower_expr_discard(&ci, &ctx, expr)
+                : ci_lower_expr(&ci, &ctx, expr, CI_NO_SLOT, &result);
+            TestExpect(int, err, ==, 0);
+            TestExpect(size_t, code.ops.count, ==, expected == EXPECT_OPERAND ? 0 : 1);
+            if(code.ops.count == 1){
+                CiOp* op = &code.ops.data[0];
+                if(expected == EXPECT_CONSTANT){
+                    TestExpect(int, op->kind, ==, CI_OP_CONST);
+                    TestExpect(uint64_t, ci_read_uint(op->constant.immediate, t < 2 ? 4 : 8), ==, immediate);
+                }
+                else {
+                    TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
+                    TestExpect(int, op->alu_imm.op, ==, expected);
+                    TestExpect(uint64_t, op->alu_imm.immediate, ==, immediate);
+                }
+            }
+            ci_lowered_expr_cleanup(&code, al);
+            ci_lower_deps_cleanup(&ctx.deps, al);
+        }
     }
     // Pointer offsets use the pointee size and preserve mixed add/sub signs.
     static int pointer_idx = 0;

@@ -36,6 +36,8 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int f(int x,int y){x&&(y+1);x?(y&&x):(y||x);"
+         "x&&(y++,x);return x?7:7;}return f(2,3)==7;\n")},
     {__LINE__, SVI("struct S{int port;}; int consume(const struct __builtin_Field* p){return p->name.count;}"
          "int f(void){constexpr field=struct S.field(0); return consume(&field)+field.name.data[0];} return f()==116;\n")},
     {__LINE__, SVI("int x=0; static for(int i=0;i<4;i++){static switch(i){static case 1:static continue;static case 2:static break;static default:x+=10;}x++;} return x==23;\n")},
