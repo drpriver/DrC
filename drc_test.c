@@ -280,10 +280,10 @@ TestFunction(test_samples){
         },
         { __LINE__, CSVI("Samples/Extensions/moremacros.c"),
             CSVI(
-                "Samples/Extensions/moremacros.c:5:2: info: hello" EOL
-                "Samples/Extensions/moremacros.c:6:2: warning: #warning warning" EOL
-                "Samples/Extensions/moremacros.c:7:1: \"hi from print\"" EOL
-                "Samples/Extensions/moremacros.c:9:9: info: FOO defined" EOL
+                "Samples/Extensions/moremacros.c:5:2: info: hello" "\n"
+                "Samples/Extensions/moremacros.c:6:2: warning: #warning warning" "\n"
+                "Samples/Extensions/moremacros.c:7:1: \"hi from print\"" "\n"
+                "Samples/Extensions/moremacros.c:9:9: info: FOO defined" "\n"
             ),
             .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/__get.c"), .syntax_only = 1},
@@ -312,8 +312,8 @@ TestFunction(test_samples){
         { __LINE__, CSVI("Samples/Extensions/methods.c"), .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/procmacro-if.c"),
             CSVI(
-                "Samples/Extensions/procmacro-if.c:6:2: info: void* is a pointer" EOL
-                "Samples/Extensions/procmacro-if.c:16:2: info: int is not a pointer" EOL
+                "Samples/Extensions/procmacro-if.c:6:2: info: void* is a pointer" "\n"
+                "Samples/Extensions/procmacro-if.c:16:2: info: int is not a pointer" "\n"
             ),
             .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/procmacro.c"), .syntax_only = 1},
