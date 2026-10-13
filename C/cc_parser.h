@@ -264,6 +264,7 @@ struct CcParser {
     struct CcSwitchCtx* _Nullable switch_ctx;
     CcLabelCtx toplevel_label_ctx;
     CcStmtSink* _Null_unspecified stmt_sink;
+    uint64_t stmt_jump_targets; // monotonic counter for subtree entry annotations
     AtomMap(uintptr_t) builtins;
     AtomMap(uintptr_t) type_intro;
 

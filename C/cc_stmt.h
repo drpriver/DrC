@@ -35,7 +35,8 @@ TYPEDEF_ENUM(CcStmtKind, uint32_t);
 // Statement tree representation (abstract)
 typedef struct CcStmtNode CcStmtNode;
 struct CcStmtNode {
-    CcStmtKind kind;
+    CcStmtKind kind: 31; // much of this is padding
+    uint32_t has_jump_target:1; // subtree contains a runtime label, case, or default
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
     Parray(CcVariable) decls; // variables scoped to this statement

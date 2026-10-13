@@ -42,6 +42,156 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "lower: memory displacements and pointer snapshots", __LINE__,
+            SVI("int read(int* p){return *(p+3);} int neg(int* p){return *(p-1);}"
+                "struct BigOffset{int a,b,c;};"
+                "unsigned long long address(struct BigOffset* p){return (unsigned long long)&(*(p+357913941ULL)).c;}"
+                "int a[6]={1,2,3,4,5,6};"
+                "int* p=a; *(p+2)=(p=a+3,19);"
+                "struct S{int x,y;}; struct S v[3]={{1,2},{3,4},{5,6}};"
+                "struct S* q=v; (q+1)->y=(q=v+2,23);"
+                "return read(a)==4 && neg(a+1)==1 && a[2]==19 && a[5]==6 && v[1].y==23 && v[2].y==6"
+                " && address((struct BigOffset*)4096)==4294971396ULL;"),
+            .exit_code=1,
+        },
+        {
+            "lower: integer conversion chains", __LINE__,
+            SVI("int a(int x){return (int)(long long)x;}"
+                "unsigned b(unsigned x){return (unsigned)(long long)x;}"
+                "int c(int x){return (int)(unsigned char)x;}"
+                "long long d(int x){return (long long)(unsigned)x;}"
+                "int e(int x){return (int)(float)x;}"
+                "return a(-7)==-7 && b(0xffffffffu)==0xffffffffu && c(256)==0"
+                " && d(-1)==4294967295LL && e(16777217)==16777216;"),
+            .exit_code=1,
+        },
+        {
+            "lower: boolean ternaries and result destinations", __LINE__,
+            SVI("long long a(double c){return c?1LL:0LL;}"
+                "unsigned __int128 b(int c){return c?(unsigned __int128)0:1;}"
+                "int f(int x){int y; y=(x<3)?1:0; return y;}"
+                "int n=0; int v=(n++?1:0);"
+                "return a(0.5)==1 && a(-0.0)==0 && b(7)==0 && b(0)==1 && f(2)==1"
+                " && f(4)==0 && v==0 && n==1;"),
+            .exit_code=1,
+        },
+        {
+            "lower: comparisons at type limits preserve effects", __LINE__,
+            SVI("int a(unsigned x){return x<0u;} int b(unsigned x){return 0u<=x;}"
+                "int c(unsigned long long x){return x<=0xffffffffffffffffULL;}"
+                "int d(int x){return x>2147483647;} int e(int x){return x>=(-2147483647-1);}"
+                "unsigned n=0; int v=(n++<0u); if(n++>=0u) n++;"
+                "return !a(8) && b(9) && c(0) && !d(7) && e(-8) && v==0 && n==3;"),
+            .exit_code=1,
+        },
+        {
+            "lower: constant dead bodies need no dependencies", __LINE__,
+            SVI("int unavailable(void); int f(void){int n=0; if(0) unavailable();"
+                "else n++; while(0) unavailable(); for(n++;0;unavailable()) unavailable();"
+                "if(1)n++;else unavailable(); return n;} return f()==3;"),
+            .exit_code=1,
+        },
+        {
+            "lower: retain labels in constant dead bodies", __LINE__,
+            SVI("int a(void){int x=0; goto in; if(0){in:x=7;} return x;}"
+                "int b(void){int x=0; goto in; while(0){in:x=8;} return x;}"
+                "int c(void){int x=0; goto in; for(;0;){in:x=9;} return x;}"
+                "int d(void){int x=0; goto in; if(1)x=1;else {in:x=10;} return x;}"
+                "return a()==7 && b()==8 && c()==9 && d()==10;"),
+            .exit_code=1,
+        },
+        {
+            "lower: retain cases and labels inside statement expressions", __LINE__,
+            SVI("int f(int x){switch(x){if(0){case 1:return 7; default:return 9;}} return 0;}"
+                "int g(void){int x=0; goto in; if(0){({in: x=8;});} return x;}"
+                "int h(void){int x=0; goto in; for(;0;({in:x=9;})){} return x;}"
+                "return f(1)==7 && f(2)==9 && g()==8 && h()==9;"),
+            .exit_code=1,
+        },
+        {
+            "lower: integer identities and constant lhs", __LINE__,
+            SVI("unsigned f(unsigned x){return (((((x+3-3)*1)/1)|0)^0)&~0u;}"
+                "int g(int x){return 3+(2+x)*1;}"
+                "unsigned long long h(unsigned long long x){return (x<<0)>>0;}"
+                "int n=0; int r=(n+++0)*1;"
+                "return f(0x80000001u)==0x80000001u && g(7)==12"
+                " && h(0x8000000000000001ULL)==0x8000000000000001ULL && r==0 && n==1;"),
+            .exit_code=1,
+        },
+        {
+            "lower: absorbing constants preserve effects", __LINE__,
+            SVI("int n=0; int tick(void){return ++n;}"
+                "unsigned a=tick()*0u; unsigned b=0u&tick(); unsigned c=tick()|~0u;"
+                "int d=tick()%1; unsigned e=~0u|tick();"
+                "return a==0 && b==0 && c==~0u && d==0 && e==~0u && n==5;"),
+            .exit_code=1,
+        },
+        {
+            "lower: powers of two and signed division", __LINE__,
+            SVI("unsigned q(unsigned n){return n/8;} unsigned r(unsigned n){return n%8;}"
+                "unsigned long long q64(unsigned long long n){return n/(1ULL<<63);}"
+                "unsigned long long r64(unsigned long long n){return n%(1ULL<<63);}"
+                "int s(int n){return n/8;} int t(int n){return n%8;}"
+                "unsigned m(unsigned n){return 8u*n;}"
+                "return q(~0u)==0x1fffffffu && r(~0u)==7 && q64(~0ULL)==1"
+                " && r64(~0ULL)==0x7fffffffffffffffULL && s(-9)==-1 && t(-9)==-1"
+                " && m(0xffffffffu)==0xfffffff8u;"),
+            .exit_code=1,
+        },
+        {
+            "lower: unary pairs and booleans", __LINE__,
+            SVI("int a(int n){return -(-n);} int b(int n){return ~~n;}"
+                "int c(double n){return !!n;} int d(int n){return !!!n;}"
+                "int e(int n){return (n<3)==1;} int f(int n){return (n<3)!=0;}"
+                "int g(int n){return (n<3)==0;} int h(int n){return (n<3)!=1;}"
+                "int n=0; int v=!!n++;"
+                "return a(-123)==-123 && b(-123)==-123 && c(0.5)==1 && c(-0.0)==0"
+                " && d(0)==1 && d(7)==0 && e(2)==1 && e(4)==0 && f(2)==1"
+                " && g(2)==0 && g(4)==1 && h(2)==0 && v==0 && n==1;"),
+            .exit_code=1,
+        },
+        {
+            "fold: ALU constant chains", __LINE__,
+            SVI("int a(int n){return n-2+5-1;} int b(int n){return n+2-5+1;}"
+                "unsigned m(unsigned n){return n*0xffffffffu*3u;}"
+                "unsigned bits(unsigned n){return ((n&255u&63u)|(n|16u|32u))^(n^1u^3u);}"
+                "int mixed(int n){return (n+2)*3+4;}"
+                "int effects(void){int n=2; int r=n++*3*0; return r==0&&n==3;}"
+                "return a(7)==9 && b(7)==5 && m(2)==0xfffffffau"
+                " && bits(128)==(176u^130u) && mixed(2)==16 && effects();"),
+            .exit_code=1,
+        },
+        {
+            "fold: pointer offset chains", __LINE__,
+            SVI("int* a(int* p){return p-2+5-1;} int* b(int* p){return 3+(2+p)-1;}"
+                "int* c(int* p){return p+(-2)+3;}"
+                "char* cast(int* p){return (char*)(p+1)+2+3;}"
+                "int* effect(int* p,int* n){return p+((*n)++,1)+2-1;}"
+                "int v[10]={0}; int n=0;"
+                "return a(v+2)==v+4 && b(v)==v+4 && c(v+2)==v+3"
+                " && cast(v)==(char*)v+sizeof(int)+5 && effect(v,&n)==v+2 && n==1"
+                " && (a(v+2)-v)==4;"),
+            .exit_code=1,
+        },
+        {
+            "fold: integer addition chains", __LINE__,
+            SVI("int f(int n){return n+1+1+1;}"
+                "unsigned g(unsigned n){return n+0xffffffffu+2u;}"
+                "unsigned long long h(unsigned long long n){return n+0xffffffffffffffffULL+2ULL;}"
+                "int i=0; return f(i++)==3 && i==1 && g(7)==8 && h(7)==8;"),
+            .exit_code=1,
+        },
+        {
+            "fold: addition chains retain conversions and effects", __LINE__,
+            SVI("int f(int n){return (unsigned char)(n+1)+1+1;}"
+                "int g(int n){int i=0; int r=n+(i++,1)+(i++,1)+1; return r==n+3 && i==2;}"
+                "long long h(int n){return (long long)(n+1)+1+1;}"
+                "double d(double n){return n+1.0+1.0;}"
+                "return f(255)==2 && g(4) && h(2147483646)==2147483649LL"
+                " && d(9007199254740992.0)==9007199254740992.0;"),
+            .exit_code=1,
+        },
+        {
             "fold: source location metadata", __LINE__,
             SVI("struct S{int x;}; int f(void){return struct S.loc.line>0 && struct S.loc.file.count>0;} return f();"),
             .exit_code=1,
@@ -15977,6 +16127,7 @@ TestFunction(test_ci_call_by_name){
     TESTEND();
 }
 TestFunction(test_float_folding);
+TestFunction(test_alu_chain_lowering);
 TestFunction(test_lower_deps);
 TestFunction(test_static_blobs);
 TestFunction(test_symbolic_pointer_limits);
@@ -15992,8 +16143,9 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_lower_deps, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_static_blobs, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_alu_chain_lowering, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTest(test_lower_deps);
+    RegisterTest(test_static_blobs);
     RegisterTestFlags(test_symbolic_pointer_limits, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
@@ -16045,8 +16197,8 @@ TestFunction(test_symbolic_pointer_limits){
         {"positive offset addition overflow", INT64_MAX, 0, 1, 0, CCBT_char, _cc_overflow_error},
         {"negative offset addition overflow", INT64_MIN, 0, -1, 0, CCBT_char, _cc_overflow_error},
     };
-    static int indexes[CC_TARGET_COUNT+1] = {0};
-    for(size_t target = 0; target <= CC_TARGET_COUNT; target++){
+    static int idx = 0;
+    for(size_t target = test_atomic_increment(&idx); target <= CC_TARGET_COUNT; target = test_atomic_increment(&idx)){
         {
             ArenaAllocator arena = {0};
             CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
@@ -16073,7 +16225,7 @@ TestFunction(test_symbolic_pointer_limits){
             ArenaAllocator_free_all(&arena);
             ArenaAllocator_free_all(&p.scratch_arena);
         }
-        for(size_t i = test_atomic_increment(indexes+target); i < arrlen(cases); i = test_atomic_increment(indexes+target)){
+        for(size_t i = 0; i < arrlen(cases); i++){
             ArenaAllocator arena = {0};
             Allocator al = allocator_from_arena(&arena);
             CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
@@ -16343,6 +16495,152 @@ TestFunction(test_lower_deps){
         recording_free_all(&ta.recorder);
         recording_cleanup(&ta.recorder);
     }
+    TESTEND();
+}
+
+TestFunction(test_alu_chain_lowering){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    CiInterpreter ci = {.parser.cpp = {.target=cc_targets[CC_TARGET_TEST], .allocator=al}};
+    CcBasicTypeKind types[] = {CCBT_int, CCBT_unsigned, CCBT_long_long, CCBT_unsigned_long_long};
+    static const struct { CcExprKind kind; CiAluOp op; uint64_t immediate; } cases[] = {
+        {CC_EXPR_ADD, CI_ALU_ADD, 128}, {CC_EXPR_SUB, CI_ALU_SUB, 128},
+        {CC_EXPR_MUL, CI_ALU_MUL, 1}, {CC_EXPR_BITAND, CI_ALU_AND, 1},
+        {CC_EXPR_BITOR, CI_ALU_OR, 1}, {CC_EXPR_BITXOR, CI_ALU_XOR, 0},
+    };
+    static int chain_idx = 0;
+    for(size_t job = test_atomic_increment(&chain_idx); job < arrlen(types)*arrlen(cases); job = test_atomic_increment(&chain_idx)){
+        size_t t = job / arrlen(cases), c = job % arrlen(cases);
+        CcQualType type = ccqt_basic(types[t]);
+        CcVariable var = {.type=type, .automatic=1};
+        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
+        CcExpr one = {.kind=CC_EXPR_VALUE, .type=type, .integer=1};
+        CcExpr* expr = &ref;
+        for(unsigned i = 0; i < 128; i++){
+            expr = cc_binary_expr(&ci.parser, cases[c].kind, (SrcLoc){0}, type, expr, &one);
+            if(!expr){ TestReport("allocating addition chain failed"); goto cleanup; }
+        }
+        CiLoweredExpr code = {.frame_size=8};
+        CiLowerDeps deps = {0};
+        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
+        TestExpect(int, err, ==, 0);
+        if(!err){
+            _Bool identity = cases[c].kind == CC_EXPR_MUL || cases[c].kind == CC_EXPR_BITXOR;
+            TestExpect(size_t, code.ops.count, ==, identity ? 0 : 1);
+            if(identity) TestExpect(uint32_t, code.value_slot, ==, 0);
+            else if(code.ops.count == 1){
+                CiOp* op = &code.ops.data[0];
+                TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
+                TestExpect(int, op->alu_imm.op, ==, cases[c].op);
+                TestExpect(uint64_t, op->alu_imm.immediate, ==, cases[c].immediate);
+            }
+        }
+        ci_lowered_expr_cleanup(&code, al);
+        ci_lower_deps_cleanup(&deps, al);
+    }
+    // Check the emitted operation, not just the result of executing it.
+    static const struct {
+        CcExprKind kind;
+        uint64_t constant;
+        _Bool constant_left;
+        int expected; // -1: reuse operand, -2: constant, otherwise CiAluOp
+        uint64_t immediate;
+    } simple[] = {
+        {CC_EXPR_ADD, 0, 0, -1}, {CC_EXPR_SUB, 0, 0, -1},
+        {CC_EXPR_MUL, 1, 0, -1}, {CC_EXPR_DIV, 1, 0, -1},
+        {CC_EXPR_BITOR, 0, 0, -1}, {CC_EXPR_BITXOR, 0, 0, -1},
+        {CC_EXPR_BITAND, UINT64_MAX, 0, -1},
+        {CC_EXPR_LSHIFT, 0, 0, -1}, {CC_EXPR_RSHIFT, 0, 0, -1},
+        {CC_EXPR_ADD, 3, 1, CI_ALU_ADD, 3},
+        {CC_EXPR_MUL, 7, 1, CI_ALU_MUL, 7},
+        {CC_EXPR_BITAND, 7, 1, CI_ALU_AND, 7},
+        {CC_EXPR_BITOR, 7, 1, CI_ALU_OR, 7},
+        {CC_EXPR_BITXOR, 7, 1, CI_ALU_XOR, 7},
+        {CC_EXPR_MUL, 8, 1, CI_ALU_SHL, 3},
+        {CC_EXPR_DIV, 8, 0, CI_ALU_SHR, 3},
+        {CC_EXPR_MOD, 8, 0, CI_ALU_AND, 7},
+        {CC_EXPR_MUL, 0, 0, -2, 0}, {CC_EXPR_BITAND, 0, 1, -2, 0},
+        {CC_EXPR_BITOR, UINT64_MAX, 0, -2, UINT64_MAX},
+        {CC_EXPR_MOD, 1, 0, -2, 0},
+    };
+    static int simple_idx = 0;
+    for(size_t job = test_atomic_increment(&simple_idx); job < arrlen(types)*arrlen(simple); job = test_atomic_increment(&simple_idx)){
+        size_t t = job / arrlen(simple), c = job % arrlen(simple);
+        CcQualType type = ccqt_basic(types[t]);
+        CcVariable var = {.type=type, .automatic=1};
+        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
+        CcExpr value = {.kind=CC_EXPR_VALUE, .type=type, .uinteger=simple[c].constant};
+        CcExpr* expr = cc_binary_expr(&ci.parser, simple[c].kind, (SrcLoc){0}, type,
+            simple[c].constant_left ? &value : &ref, simple[c].constant_left ? &ref : &value);
+        if(!expr){ TestReport("allocating ALU simplification failed"); goto cleanup; }
+        CiLoweredExpr code = {.frame_size=8};
+        CiLowerDeps deps = {0};
+        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
+        TestExpect(int, err, ==, 0);
+        int expected = simple[c].expected;
+        uint64_t immediate = simple[c].immediate;
+        if(!(t % 2) && simple[c].constant == 8
+            && (simple[c].kind == CC_EXPR_DIV || simple[c].kind == CC_EXPR_MOD)){
+            expected = simple[c].kind == CC_EXPR_DIV ? CI_ALU_DIV : CI_ALU_MOD;
+            immediate = 8;
+        }
+        if(t < 2) immediate = (uint32_t)immediate;
+        if(!err){
+            TestExpect(size_t, code.ops.count, ==, expected == -1 ? 0 : 1);
+            if(expected == -1) TestExpect(uint32_t, code.value_slot, ==, 0);
+            else if(code.ops.count == 1){
+                CiOp* op = &code.ops.data[0];
+                if(expected == -2){
+                    TestExpect(int, op->kind, ==, CI_OP_CONST);
+                    TestExpect(uint64_t, ci_read_uint(op->constant.immediate, code.value_size), ==, immediate);
+                }
+                else {
+                    TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
+                    TestExpect(int, op->alu_imm.op, ==, expected);
+                    TestExpect(uint64_t, op->alu_imm.immediate, ==, immediate);
+                }
+            }
+        }
+        ci_lowered_expr_cleanup(&code, al);
+        ci_lower_deps_cleanup(&deps, al);
+    }
+    // Pointer offsets use the pointee size and preserve mixed add/sub signs.
+    static int pointer_idx = 0;
+    for(unsigned job = test_atomic_increment(&pointer_idx); job < 2; job = test_atomic_increment(&pointer_idx)){
+        unsigned width = (job+1)*4;
+        CcTargetConfig target = *cc_targets[CC_TARGET_TEST];
+        target.sizeof_[CCBT_nullptr_t] = (uint8_t)width;
+        target.size_type = width == 4 ? CCBT_unsigned : CCBT_unsigned_long_long;
+        ci.parser.cpp.target = &target;
+        CcPointer pointer = {.kind=CC_POINTER, .pointee=ccqt_basic(CCBT_int)};
+        CcQualType type = {.bits=(uintptr_t)&pointer};
+        CcVariable var = {.type=type, .automatic=1};
+        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
+        CcExpr one = {.kind=CC_EXPR_VALUE, .type=ccqt_basic(target.size_type), .integer=1};
+        CcExpr* expr = &ref;
+        for(unsigned i = 0; i < 129; i++){
+            expr = cc_binary_expr(&ci.parser, i % 2 ? CC_EXPR_SUB : CC_EXPR_ADD,
+                (SrcLoc){0}, type, expr, &one);
+            if(!expr){ TestReport("allocating pointer chain failed"); goto cleanup; }
+        }
+        CiLoweredExpr code = {.frame_size=8};
+        CiLowerDeps deps = {0};
+        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
+        TestExpect(int, err, ==, 0);
+        if(!err){
+            TestExpect(size_t, code.ops.count, ==, 1);
+            if(code.ops.count == 1){
+                TestExpect(int, code.ops.data[0].kind, ==, width == 4 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
+                TestExpect(int, code.ops.data[0].alu_imm.op, ==, CI_ALU_ADD);
+                TestExpect(uint64_t, code.ops.data[0].alu_imm.immediate, ==, target.sizeof_[CCBT_int]);
+            }
+        }
+        ci_lowered_expr_cleanup(&code, al);
+        ci_lower_deps_cleanup(&deps, al);
+    }
+    cleanup:
+    ArenaAllocator_free_all(&arena);
     TESTEND();
 }
 

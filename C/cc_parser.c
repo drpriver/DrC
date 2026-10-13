@@ -11750,6 +11750,10 @@ cc_stmt_node(CcParser* p, CcStmtKind k, SrcLoc loc, uint32_t count){
     n->kind = k;
     n->count = count;
     n->loc = loc;
+    if(k == CC_STMT_LABEL || k == CC_STMT_CASE || k == CC_STMT_DEFAULT){
+        n->has_jump_target = 1;
+        p->stmt_jump_targets++;
+    }
     return n;
 }
 
@@ -11848,8 +11852,10 @@ cc_finalize_stmt_list(CcParser* p, SrcLoc loc, Parray(CcStmtNode)* list, _Bool a
     }
     CcStmtNode* n = cc_stmt_node(p, CC_STMT_COMPOUND, loc, (uint32_t)list->count);
     if(!n) return CC_OOM_ERROR;
-    for(size_t i = 0; i < list->count; i++)
+    for(size_t i = 0; i < list->count; i++){
         n->stmts[i] = list->data[i];
+        n->has_jump_target |= n->stmts[i]->has_jump_target;
+    }
     list->count = 0;
     *out = n;
     return 0;
@@ -11867,6 +11873,7 @@ static int cc_parse_statement_inner(CcParser*, CcStmtNode*_Nullable*_Nonnull);
 static
 int
 cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
+    uint64_t jump_targets = p->stmt_jump_targets;
     int err;
     CcToken tok;
     if(cc_is_c23_attribute_start(p)){
@@ -11898,6 +11905,9 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     p->runtime_control_depth += boundary;
     err = cc_parse_statement_inner(p, out);
     p->runtime_control_depth -= boundary;
+    // Counts include targets nested in expressions, not just child statements.
+    if(!err && *out) 
+        (*out)->has_jump_target |= p->stmt_jump_targets != jump_targets;
     return err;
 }
 
