@@ -1018,6 +1018,30 @@ TestFunction(test_interpreter){
             .exit_code=1,
         },
         {
+            "whole-byte packed bitfields preserve signs and neighboring bytes", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned char guard; signed long long a:8;"
+                "unsigned long long b:16; unsigned long long c:32; signed long long d:64; unsigned char tail;};\n"
+                "int f(long long x){struct B b={0x5a,x,0x1234,0x89abcdefu,x,0xa5}; struct B* p=&b;\n"
+                "if(p->a!=-7 || p->d!=-7) return 0;\n"
+                "p->a+=2; unsigned old=p->b++; p->c=0x123456789ull; p->d-=3;\n"
+                "int assigned=(p->a=255);\n"
+                "return assigned==-1 && old==0x1234 && p->a==-1 && p->b==0x1235"
+                " && p->c==0x23456789u && p->d==-10 && b.guard==0x5a && b.tail==0xa5;}\n"
+                "return f(-7);\n"),
+            .exit_code=1,
+        },
+        {
+            "whole-byte bitfields extend into int128", __LINE__,
+            SVI("struct __attribute__((packed)) B {unsigned char guard; __int128 s:64;"
+                "unsigned __int128 u:64; unsigned char tail;};\n"
+                "int f(__int128 x){struct B b={0x5a,x,~0ull,0xa5}; struct B* p=&b;\n"
+                "__int128 s=p->s; unsigned __int128 u=p->u; p->s+=2; p->u-=1;\n"
+                "return s==-7 && u==(unsigned __int128)~0ull && p->s==-5"
+                " && p->u==(unsigned __int128)(~0ull-1) && p->guard==0x5a && p->tail==0xa5;}\n"
+                "return f(-7);\n"),
+            .exit_code=1,
+        },
+        {
             "ordinary full-width int128 bitfields retain word ops", __LINE__,
             SVI("unsigned __int128 v=(unsigned __int128)1<<100;\n"
                 "struct B {unsigned __int128 b:128;} b={v};\n"

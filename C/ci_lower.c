@@ -183,6 +183,7 @@ static int ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint3
 static int ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out);
 static int ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size);
 static int ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size);
+static int ci_lower_whole_byte_bitfield(CiLowerCtx*, CiOp*);
 // Width identifies the floating format, not its padded storage size.
 static uint32_t ci_float_width(CcQualType t, CcLongDoubleFormat fmt){
     if(!ccqt_is_basic(t)) return 0;
@@ -803,6 +804,8 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
                     .loc = value->loc,
                 }
             };
+            err = ci_lower_whole_byte_bitfield(ctx, op);
+            if(err) return err;
         }
         else {
             *op = (CiOp){
@@ -5898,6 +5901,60 @@ ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAd
 
 static
 int
+ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
+    _Bool load = op->kind == CI_OP_LOAD_BITFIELD || op->kind == CI_OP_LOAD_BITFIELD_BYTES;
+    CiOp field = *op;
+    uint32_t width = load ? field.load_bf.bit_width : field.store_bf.bit_width;
+    uint32_t bit_offset = load ? field.load_bf.bit_offset : field.store_bf.bit_offset;
+    if(bit_offset % 8 || (width != 8 && width != 16 && width != 32 && width != 64))
+        return 0;
+    uint32_t bytes = width / 8;
+    uint32_t size = load ? field.load_bf.slot_size : field.store_bf.src_size;
+    uint32_t offset = load ? field.load_bf.offset : field.store_bf.offset;
+    uint32_t alignment = load ? field.load_bf.align_log2 : field.store_bf.align_log2;
+    uint32_t byte_offset = bit_offset / 8;
+    if(bytes > size || byte_offset > UINT32_MAX - offset) return 0;
+    alignment = ci_offset_alignment(alignment, byte_offset);
+    if(load){
+        *op = (CiOp){.load = {
+            .kind = CI_OP_LOAD, 
+            .slot = field.load_bf.slot, 
+            .slot_size = bytes,
+            .src = field.load_bf.src, 
+            .offset = offset + byte_offset,
+            .align_log2 = alignment, 
+            .loc = field.load_bf.loc,
+        }};
+        if(bytes < size){
+            int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){.convert = {
+                .kind = CI_OP_CONVERT, 
+                .slot = field.load_bf.slot, 
+                .slot_size = size,
+                .src = field.load_bf.slot, 
+                .src_size = bytes,
+                .is_unsigned = !field.load_bf.is_signed, 
+                .loc = field.load_bf.loc,
+            }};
+        }
+    }
+    else {
+        *op = (CiOp){.store = {
+            .kind = CI_OP_STORE, 
+            .slot = field.store_bf.slot,
+            .src = field.store_bf.src, 
+            .src_size = bytes,
+            .offset = offset + byte_offset, 
+            .align_log2 = alignment,
+            .loc = field.store_bf.loc,
+        }};
+    }
+    return 0;
+}
+
+static
+int
 ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size){
     (void)ci;
     CiOp* op;
@@ -5916,7 +5973,7 @@ ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLo
             .loc = lv->loc,
         }
     };
-    return 0;
+    return ci_lower_whole_byte_bitfield(ctx, op);
 }
 
 static
@@ -5937,7 +5994,7 @@ ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_
             .loc = lv->loc,
         }
     };
-    return 0;
+    return ci_lower_whole_byte_bitfield(ctx, op);
 }
 
 static
