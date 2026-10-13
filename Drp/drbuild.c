@@ -585,7 +585,7 @@ static TypeInfoAtomMap TI_AM_MA_Atom = {
     .type = &TI_MA_Atom.type_info,
 };
 
-static int maybe_recompile_this(BuildCtx*, int, char*_Null_unspecified*_Nonnull);
+static int maybe_recompile_this(BuildCtx*, int, char*_Null_unspecified*_Nonnull, _Bool);
 static int list_targets(BuildCtx* ctx, BuildTarget* tgt);
 static int print_ctx(BuildCtx* ctx, BuildTarget* tgt);
 static int compile_commands(BuildCtx* ctx, BuildTarget* tgt);
@@ -1285,6 +1285,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     _Bool no_tsan = 0;
     _Bool debug_symbols = 0;
     _Bool no_rebuild = 0;
+    _Bool force_rebuild = 0;
     BuildTargetSettings before_ap = ctx->target;
     // cast is because each branch has to be valid even if unevaluated.
     #define BARGDEST(x) _Generic(x, \
@@ -1477,6 +1478,12 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .hidden = 1,
         },
         {
+            .name = SV("--force-rebuild"),
+            .dest = BARGDEST(&force_rebuild),
+            .help = "Force a rebuild of the build program.",
+            .hidden = 1,
+        },
+        {
             .name = SV("--time"),
             .dest = BARGDEST(&ctx->measure_time),
             .help = "Time the build",
@@ -1628,8 +1635,18 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         ctx->target.compiler_flavor = b_guess_compiler_flavor(ctx->target.cc);
     if(!ctx->build_compiler_flavor)
         ctx->build_compiler_flavor = b_guess_compiler_flavor(ctx->build_cc);
-    if(!no_rebuild){
-        err = maybe_recompile_this(ctx, argc, argv);
+    if(force_rebuild){
+        for(int i = 1; i < argc; i++){
+            if(strcmp(argv[i], "--force-rebuild") == 0){
+                if(i != argc-1)
+                    memmove(argv+i, argv+i+1, (argc-i-1)* sizeof(char*));
+                argv[--argc] = NULL;
+                break;
+            }
+        }
+    }
+    if(!no_rebuild || force_rebuild){
+        err = maybe_recompile_this(ctx, argc, argv, force_rebuild);
         if(err) goto fail;
     }
 
@@ -2378,7 +2395,7 @@ parse_makefile_text(BuildCtx* ctx, CStringView text){
 
 static
 int
-parse_depfile(BuildCtx* ctx, const char* filename){
+parse_depfile(BuildCtx* ctx, const char* filename, BuildTarget* _Nullable target){
     int e = 0;
     b_loglvl(BLOG_DEBUG, ctx, "parsing '%s'\n", filename);
     MStringBuilder sb = {.allocator=allocator_from_arena(&ctx->tmp_aa)};
@@ -2387,20 +2404,30 @@ parse_depfile(BuildCtx* ctx, const char* filename){
     CStringView text = msb_borrow_csv(&sb);
     StringView fn = {strlen(filename), filename};
     if(sv_endswith(fn, SV(".deps.json"))){
-        StringView base = path_basename(fn, BUILD_OS == OS_WINDOWS);
-        size_t name_len = base.length - (sizeof ".deps.json" - 1);
-        StringView name = {name_len, base.text};
-        const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe")) && !sv_endswith(name, SV(".obj"))) ? ".exe" : "";
-        Atom target_name = b_atomize_f(ctx, "%s/%.*s%s", ctx->build_dir->data, (int)name_len, base.text, ext);
-        BuildTarget* target = b_get_targeta(ctx, target_name);
         if(target)
-            parse_vs_json_text(ctx, text, target);
+            parse_vs_json_text(ctx, text, (BuildTarget*)target);
     }
     else
         parse_makefile_text(ctx, text);
     finally:
     msb_destroy(&sb);
     return e;
+}
+
+static
+int
+parse_build_depfile(BuildCtx* ctx, const char* filename){
+    BuildTarget* target = NULL;
+    StringView fn = {strlen(filename), filename};
+    if(sv_endswith(fn, SV(".deps.json"))){
+        StringView name = path_basename(fn, BUILD_OS == OS_WINDOWS);
+        name.length -= sizeof ".deps.json" - 1;
+        _Bool is_obj = sv_endswith(name, SV(".obj"));
+        const char* ext = (BUILD_OS == OS_WINDOWS && !sv_endswith(name, SV(".exe")) && !is_obj) ? ".exe" : "";
+        Atom target_name = b_atomize_f(ctx, "%s/%.*s%s", is_obj ? ctx->obj_dir->data : ctx->bin_dir->data, (int)name.length, name.text, ext);
+        target = b_get_targeta(ctx, target_name);
+    }
+    return parse_depfile(ctx, filename, target);
 }
 
 static
@@ -2426,7 +2453,7 @@ b_parse_depfiles(BuildCtx* ctx){
         if(!err){
             for(size_t i = 0; i < path_c; i++){
                 char* path = paths[i];
-                parse_depfile(ctx, path);
+                parse_build_depfile(ctx, path);
             }
         }
         #ifndef _WIN32
@@ -2463,7 +2490,7 @@ b_parse_depfiles(BuildCtx* ctx){
                 cs = msb16_borrow_csv(&pattern);
                 msb_reset(&path);
                 msb_write_utf16(&path, cs.text, cs.length);
-                parse_depfile(ctx, msb_borrow_csv(&path).text);
+                parse_build_depfile(ctx, msb_borrow_csv(&path).text);
             } while(FindNextFileW(h, &fd));
             FindClose(h);
             #else
@@ -2833,7 +2860,7 @@ b_execute_targets(BuildCtx* ctx){
 
 static
 int
-maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull argv){
+maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull argv, _Bool should_recompile){
     if(!ctx->src_path || ctx->src_path == nil_atom){
         b_loglvl(BLOG_WARN, ctx, "Unable to check to recompile this as src path is unknown\n");
         return 0;
@@ -2892,28 +2919,29 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
         b_argf(ctx, build, "-DDEFAULT_BUILD_COMPILER=\"%s\"", ctx->build_cc->data);
         if(cmd->errored) return 1;
     }
-    _Bool should_recompile = 0;
-    if(depfile != nil_atom){
-        err = parse_depfile(ctx, depfile->data);
-        if(err){
-            err = 0;
-            should_recompile = 1;
-        }
-    }
-    BuildFileInfo* fi = b_file_info(ctx, ctx->exe_path->data, ctx->exe_path->length);
-    if(fi->exists){
-        MARRAY_FOR_EACH_VALUE(Atom, d, build->dependencies){
-            BuildFileInfo* di = b_file_info(ctx, d->data, d->length);
-            if(!di->exists) continue;
-            if(!di->valid) continue;
-            if(b_cmp_mtime(&fi->mtime, &di->mtime) < 0){
+    if(!should_recompile){
+        if(depfile != nil_atom){
+            err = parse_depfile(ctx, depfile->data, build);
+            if(err){
+                err = 0;
                 should_recompile = 1;
-                break;
             }
         }
-    }
-    else {
-        should_recompile = 1;
+        BuildFileInfo* fi = b_file_info(ctx, ctx->exe_path->data, ctx->exe_path->length);
+        if(fi->exists){
+            MARRAY_FOR_EACH_VALUE(Atom, d, build->dependencies){
+                BuildFileInfo* di = b_file_info(ctx, d->data, d->length);
+                if(!di->exists) continue;
+                if(!di->valid) continue;
+                if(b_cmp_mtime(&fi->mtime, &di->mtime) < 0){
+                    should_recompile = 1;
+                    break;
+                }
+            }
+        }
+        else {
+            should_recompile = 1;
+        }
     }
     if(!should_recompile) return 0;
     err = b_move_file(ctx, progpath->data, old->data);
