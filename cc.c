@@ -543,7 +543,7 @@ int main(int argc, char** argv, char** envp){
             ssize_t n = gi_get_input(&gi);
             if(n < 0) break; // ctrl-d
             StringView line = {n, gi.buff};
-            line = stripped(line);
+            line = sv_stripped(line);
             if(!sv_startswith(line, SV("/*"))){ // comment, not command
                 if(repl_builtin_command(&cc_interp.parser, line))
                     continue;
@@ -644,11 +644,11 @@ static
 _Bool
 repl_builtin_command(CcParser* parser, StringView input){
     Logger* l = parser->cpp.logger;
-    input = stripped(input);
+    input = sv_stripped(input);
     if(!input.length) return 0;
     if(!sv_startswith(input, SV("/"))) return 0;
     input = sv_slice(input, 1, input.length);
-    input = stripped(input);
+    input = sv_stripped(input);
     if(!input.length)
         input = SV("help");
     if(sv_iequals(input, SV("quit")) || sv_iequals(input, SV("exit")) || sv_iequals(input, SV("q"))){
@@ -694,7 +694,7 @@ repl_builtin_command(CcParser* parser, StringView input){
     StringView tail = {0};
     sv_split1(input, ' ', &input, &tail);
     if(sv_iequals(input, SV("dis")) || sv_iequals(input, SV("disasm")) || sv_iequals(input, SV("disassemble"))){
-        input = stripped(tail);
+        input = sv_stripped(tail);
         if(!input.length)
             return 1;
         Atom a = AT_get_atom(parser->cpp.at, input.text, input.length);
@@ -707,7 +707,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         return 1;
     }
     if(sv_iequals(input, SV("save"))){
-        input = stripped(tail);
+        input = sv_stripped(tail);
         if(!input.length)
             return 1;
         MStringBuilder sb = {.allocator=MALLOCATOR};
@@ -737,10 +737,10 @@ repl_builtin_command(CcParser* parser, StringView input){
     }
     if(!sv_iequals(input, SV("dump")) && !sv_iequals(input, SV("d")))
         return 1;
-    input = stripped(tail);
+    input = sv_stripped(tail);
     StringView re = {0};
     sv_split1(input, ' ', &input, &tail);
-    re = stripped(tail);
+    re = sv_stripped(tail);
     if(sv_iequals(input, SV("all")))
         dump = DUMP_ALL;
     else if(sv_iequals(input, SV("symbols")))
@@ -763,7 +763,7 @@ repl_builtin_command(CcParser* parser, StringView input){
         dump = DUMP_MACROS;
     else {
         dump = DUMP_ALL;
-        re = stripped(input);
+        re = sv_stripped(input);
     }
     if(dump & DUMP_STRUCTS){
         AtomMapItems mi = AM_items(&scope->structs);

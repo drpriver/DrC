@@ -2956,7 +2956,7 @@ b_get_git_hash(BuildCtx* ctx){
         b_loglvl(BLOG_WARN, ctx, "Unable to read '.git/HEAD'\n");
         goto finally;
     }
-    StringView txt = stripped(msb_borrow_sv(&headsb));
+    StringView txt = sv_stripped(msb_borrow_sv(&headsb));
     if(sv_startswith(txt, SV("ref: "))){
         txt = sv_slice(txt, 5, txt.length);
         msb_write_literal(&pathsb, ".git/");
@@ -2967,7 +2967,7 @@ b_get_git_hash(BuildCtx* ctx){
             b_loglvl(BLOG_WARN, ctx, "Unable to read '%s'\n", path.text);
             goto finally;
         }
-        txt = stripped(msb_borrow_sv(&refsb));
+        txt = sv_stripped(msb_borrow_sv(&refsb));
     }
     result = b_atomize2(ctx, txt.text, txt.length);
 

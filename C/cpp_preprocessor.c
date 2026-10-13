@@ -2357,13 +2357,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
             leading = 0;
             msb_write_str(&sb, tok.txt.text, tok.txt.length);
         }
-        StringView msg = msb_borrow_sv(&sb);
+        StringView msg = sv_rstripped(msb_borrow_sv(&sb));
         if(is_error){
             int e = cpp_error(cpp, directive_loc, "#error %.*s", sv_p(msg));
             msb_destroy(&sb);
             return e;
         }
-        cpp_warn(cpp, directive_loc, "#warning %.*s", sv_p(msg));
+        cpp_warn(cpp, directive_loc, "%s%.*s", msg.length ? "#warning " : "#warning", sv_p(msg));
         msb_destroy(&sb);
     }
     else if(sv_equals(tok.txt, SV("pragma"))){

@@ -162,12 +162,15 @@ sv_slice(StringView s, size_t lo, size_t hi){
 
 force_inline
 void
-lstrip(StringView* sv){
+sv_lstrip(StringView* sv){
     while(sv->length){
         switch(sv->text[0]){
             case ' ':
             case '\n':
             case '\t':
+            case '\r':
+            case '\f':
+            case '\v':
                 sv->length--;
                 sv->text++;
                 continue;
@@ -179,12 +182,15 @@ lstrip(StringView* sv){
 
 force_inline
 void
-rstrip(StringView* sv){
+sv_rstrip(StringView* sv){
     while(sv->length){
         switch(sv->text[sv->length-1]){
             case ' ':
             case '\n':
             case '\t':
+            case '\r':
+            case '\f':
+            case '\v':
                 sv->length--;
                 continue;
             default:
@@ -195,7 +201,7 @@ rstrip(StringView* sv){
 
 force_inline
 void
-lstripc(StringView* sv){
+sv_lstripc(StringView* sv){
     while(sv->length){
         switch(sv->text[0]){
             case ' ':
@@ -213,18 +219,48 @@ lstripc(StringView* sv){
 
 force_inline
 StringView
-stripped(StringView sv){
-    lstrip(&sv);
-    rstrip(&sv);
+sv_stripped(StringView sv){
+    sv_lstrip(&sv);
+    sv_rstrip(&sv);
     return sv;
 }
 
 force_inline
 StringView
-stripped2(const char* txt, size_t len){
+sv_lstripped(StringView sv){
+    sv_lstrip(&sv);
+    return sv;
+}
+
+force_inline
+StringView
+sv_rstripped(StringView sv){
+    sv_rstrip(&sv);
+    return sv;
+}
+
+force_inline
+StringView
+sv_stripped2(const char* txt, size_t len){
     StringView sv = {len, txt};
-    lstrip(&sv);
-    rstrip(&sv);
+    sv_lstrip(&sv);
+    sv_rstrip(&sv);
+    return sv;
+}
+
+force_inline
+StringView
+sv_lstripped2(const char* txt, size_t len){
+    StringView sv = {len, txt};
+    sv_lstrip(&sv);
+    return sv;
+}
+
+force_inline
+StringView
+sv_rstripped2(const char* txt, size_t len){
+    StringView sv = {len, txt};
+    sv_rstrip(&sv);
     return sv;
 }
 
