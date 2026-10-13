@@ -49,6 +49,18 @@ struct CiBackpatchTarget {
 #include "../Drp/Marray.h"
 #endif
 
+typedef struct CiFoldValue CiFoldValue;
+struct CiFoldValue {
+    uint32_t sz;
+    CcQualType type;
+    uint64_t bits[2];
+};
+#ifndef MARRAY_CIFOLDVALUE
+#define MARRAY_CIFOLDVALUE
+#define MARRAY_T CiFoldValue
+#include "../Drp/Marray.h"
+#endif
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -61,6 +73,7 @@ struct CiLowerSwitch {
 };
 
 typedef struct CiLowerCtx CiLowerCtx;
+typedef struct CiFoldCache CiFoldCache;
 struct CiLowerCtx {
     Allocator a;
     Marray(CiOp)* out;
@@ -77,6 +90,7 @@ struct CiLowerCtx {
     _Bool static_initializer;
     CcLongDoubleFormat ldbl_fmt;
     CiLowerDeps deps;
+    CiFoldCache* _Nullable fold_cache;
 };
 
 static inline
@@ -212,15 +226,25 @@ static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target)
 static int ci_lower_resolve_gotos(CiInterpreter*, CiLowerCtx*);
 static int ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b);
 
-typedef struct CiFoldValue CiFoldValue;
-struct CiFoldValue {
-    uint32_t sz;
-    CcQualType type;
-    uint64_t bits[2];
+struct CiFoldCache {
+    // 1 means not foldable (also used while evaluating); otherwise value index + 2.
+    PointerMap(CcExpr, uintptr_t) expressions;
+    Marray(CiFoldValue) values;
 };
+
+static
+void
+ci_fold_cache_cleanup(CiFoldCache* cache, Allocator al){
+    if(cache->expressions.cap)
+        Allocator_free(al, cache->expressions.data, PM_alloc_size(cache->expressions.cap));
+    ma_cleanup(CiFoldValue)(&cache->values, al);
+    *cache = (CiFoldCache){0};
+}
+
 enum {FOLD_FAIL=-1};
 // return 0 on success, positive error code on real error, FOLD_FAIL on fold fail
 static int ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded);
+static int ci_fold_expr_uncached(CiInterpreter*, CiLowerCtx*, CcExpr*, CiFoldValue*);
 static uint64_t ci_fold_offset(CiLowerCtx* ctx, const CiFoldValue* index, uint32_t elem_sz);
 static int ci_fold_condition(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* truth);
 static int ci_fold_read_inputs(CiInterpreter*, CiLowerCtx*, CcExpr*, unsigned);
@@ -229,8 +253,6 @@ static size_t cc_expr_nvalues(CcExpr*);
 
 static int ci_constexpr_uses_stmt(CiInterpreter*, CiLowerCtx*, CcStmtNode*_Nullable, Parray(CcVariable)*);
 
-// Successful folding consumes values without accessing the source object's
-// storage. Unfolded accesses conservatively keep its normal initialization.
 static
 int
 ci_constexpr_uses_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool address, Parray(CcVariable)* storage){
@@ -779,7 +801,6 @@ ci_convert_scalar(CiLowerCtx* ctx, CiLowerVal v, CcQualType from, CcQualType to,
     return 0;
 }
 
-// Preserve the lvalue and rhs across conversions and across atomic retries.
 static
 int
 ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e,
@@ -2440,7 +2461,11 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             CcExpr* value = NULL;
             err = cc_eval_linktime_expr(&ci->parser, e, &value);
             if(!err){
+                // The evaluator owns this temporary tree and may reuse its addresses.
+                CiFoldCache* cache = ctx->fold_cache;
+                ctx->fold_cache = NULL;
                 if(out) err = ci_lower_expr(ci, ctx, value, dest, (CiLowerVal*)out);
+                ctx->fold_cache = cache;
                 cc_release_expr(&ci->parser, value);
                 return err;
             }
@@ -3026,10 +3051,6 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     return 0;
 }
 
-// Lower __builtin_{add,sub,mul}_overflow(a, b, &res) into a CI_OP_CHECKED plus
-// a store of the truncated result through the result pointer. The expression's
-// value is the 1-byte overflow bool; out is null in statement context, where
-// the flag is discarded but the store still happens.
 static
 int
 ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
@@ -4924,7 +4945,6 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
     return ci_error(ci, e->loc, "unsupported va operation");
 }
 
-// Lower an expression for side effects only.
 static
 int
 ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
@@ -5809,8 +5829,6 @@ ci_lower_branch_leaf(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool whe
     return 0;
 }
 
-// Until patched, branch targets form a list of instruction indices plus one.
-// Using indices keeps the list valid when the opcode array grows.
 static
 void
 ci_patch_branches(CiLowerCtx* ctx, uint32_t chain, uint32_t target){
@@ -6021,6 +6039,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     f->frame_size = 0;
     AtomMap(uintptr_t) labels = {0};
     const CcTargetConfig* t = ci_target(ci);
+    CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
         .a = al,
         .out = &ops->code,
@@ -6030,6 +6049,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
+        .fold_cache = &fold_cache,
     };
     Parray(CcVariable) storage = {0};
     err = ci_constexpr_uses_stmt(ci, &ctx, f->body_tree, &storage);
@@ -6050,6 +6070,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     err = ci_lower_resolve_gotos(ci, &ctx);
     if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, al);
     finally:
+    ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
     if(labels.data)
@@ -6084,6 +6105,7 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         memcpy(old_labels.data, labels->data, AM_alloc_size(labels->cap));
     }
     const CcTargetConfig* t = ci_target(ci);
+    CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
         .a = ci_allocator(ci),
         .out = ops,
@@ -6093,6 +6115,7 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
+        .fold_cache = &fold_cache,
     };
     for(size_t i = *lowered; i < nodes->count; i++){
         Parray(CcVariable) storage = {0};
@@ -6106,6 +6129,7 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
     if(!err)
         err = ci_lower_resolve_gotos(ci, &ctx);
     if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, ctx.a);
+    ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, ctx.a);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, ctx.a);
     if(err){
@@ -6171,6 +6195,7 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     Allocator al = ci_allocator(ci);
     AtomMap(uintptr_t) labels = {0};
     const CcTargetConfig* t = ci_target(ci);
+    CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
         .a = al,
         .out = &code->ops,
@@ -6180,6 +6205,7 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
+        .fold_cache = &fold_cache,
     };
     CiLowerVal value = {0};
     _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
@@ -6193,6 +6219,7 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     code->frame_alignment = ctx.frame_alignment > 16 ? ctx.frame_alignment : 16;
     code->value_slot = value.slot;
     code->value_size = value.size;
+    ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
     if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
@@ -6240,8 +6267,6 @@ ci_static_fold_ctx(CiInterpreter* ci){
     };
 }
 
-// Static initialization uses normal target rounding, while the optimizer's
-// folder deliberately leaves inexact conversions to the runtime.
 static
 int
 ci_static_float_cast(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
@@ -6492,8 +6517,6 @@ ci_static_float_binary(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
     return 0;
 }
 
-// The parser decides initializer admissibility. This folder computes accepted
-// constant values using static initialization's floating-point rounding rules.
 static
 int
 ci_static_fold(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
@@ -6624,6 +6647,8 @@ int
 ci_initializer_fold(CiInterpreter* ci, CcExpr* e, CiFoldValue* out, CiLowerCtx* _Nullable runtime_ctx){
     if(!runtime_ctx) return ci_static_fold(ci, e, out);
     CiLowerCtx ctx = *runtime_ctx;
+    // Static helpers can pass synthesized expressions with shorter lifetimes.
+    ctx.fold_cache = NULL;
     int err = ci_fold_expr(ci, &ctx, e, out);
     return err == FOLD_FAIL ? _cc_not_constant_error : err;
 }
@@ -6689,7 +6714,6 @@ ci_static_discard(CiInterpreter* ci, CcExpr* e, CiLowerCtx* _Nullable runtime_ct
     return err;
 }
 
-// Extract an address without resolving its symbol or losing its addend.
 static
 int
 ci_static_read_address(CiInterpreter* ci, CcExpr* e, CiStaticReloc* out, CiLowerCtx* _Nullable runtime_ctx){
@@ -6875,7 +6899,6 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
     return 0;
 }
 
-// A later designator replaces both the previous bytes and their relocations.
 static
 void
 ci_static_forget_relocs(CiStaticBuffer* data, uint32_t offset, uint32_t size){
@@ -6889,8 +6912,6 @@ ci_static_forget_relocs(CiStaticBuffer* data, uint32_t offset, uint32_t size){
     data->relocs.count = count;
 }
 
-// Copy only requested bits. A symbol can be copied only as a complete
-// relocation; it must never be interpreted as bytes at compile time.
 static
 int
 ci_static_copy_range(CiInterpreter* ci, CiStaticBuffer* data, const CiStaticBuffer* source,
@@ -6917,8 +6938,6 @@ ci_static_copy_range(CiInterpreter* ci, CiStaticBuffer* data, const CiStaticBuff
     return 0;
 }
 
-// Resolve initializer writes backwards within the requested range. Scratch
-// space scales with the selection, rather than the backing object.
 static
 int
 ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
@@ -7907,9 +7926,6 @@ ci_fold_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* fold
     return ctx->static_initializer ? ci_static_fold(ci, e, folded) : ci_fold_expr(ci, ctx, e, folded);
 }
 
-// Object-view resolution uses the link-time evaluator. Before using it while
-// optimizing runtime code, check computations with the runtime folder instead:
-// in particular, do not discard effects or round inexact floating expressions.
 static int
 ci_fold_read_inputs(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, unsigned depth){
     if(depth >= 256 || e->type.is_volatile || e->type.is_atomic) return FOLD_FAIL;
@@ -7982,6 +7998,38 @@ ci_fold_read(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* result)
 static
 int
 ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
+    CiFoldCache* cache = ctx->fold_cache;
+    if(!cache || ctx->static_initializer)
+        return ci_fold_expr_uncached(ci, ctx, e, folded);
+    uintptr_t entry = (uintptr_t)PM_get(&cache->expressions, e);
+    if(entry){
+        if(entry == 1) return FOLD_FAIL;
+        *folded = cache->values.data[entry-2];
+        return 0;
+    }
+    int err;
+    err = PM_put(&cache->expressions, ctx->a, e, (void*)(uintptr_t)1);
+    if(err) return CI_OOM_ERROR;
+    err = ci_fold_expr_uncached(ci, ctx, e, folded);
+    if(err == FOLD_FAIL) return FOLD_FAIL;
+    if(err) goto error;
+    err = ma_push(CiFoldValue)(&cache->values, ctx->a, *folded);
+    if(err) goto oom;
+    entry = cache->values.count + 1;
+    err = PM_put(&cache->expressions, ctx->a, e, (void*)entry);
+    if(err) goto oom;
+    return 0;
+    oom:
+    err = CI_OOM_ERROR;
+    error:
+    // clear the cached FOLD_FAIL
+    PM_del(&cache->expressions, e);
+    return err;
+}
+
+static
+int
+ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
     if(ccqt_kind(e->type) == CC_ARRAY) return FOLD_FAIL;
     if(e->kind != CC_EXPR_VALUE){
         if(e->type.is_atomic || e->type.is_volatile) return FOLD_FAIL;
