@@ -485,26 +485,31 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->load.slot, op->load.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->load.src, op->load.offset);
+            msb_sprintf(out, " (align %u)", 1u << op->load.align_log2);
             break;
         case CI_OP_STORE_IMM:
             ci_op_print_deref(out, op->store_imm.slot, op->store_imm.offset);
             msb_sprintf(out, " = 0x%llx (%u bytes)", (unsigned long long)op->store_imm.immediate, op->store_imm.size);
+            msb_sprintf(out, " (align %u)", 1u << op->store_imm.align_log2);
             break;
         case CI_OP_STORE:
             ci_op_print_deref(out, op->store.slot, op->store.offset);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->store.src, op->store.src_size);
+            msb_sprintf(out, " (align %u)", 1u << op->store.align_log2);
             break;
         case CI_OP_MEMCOPY:
             ci_op_print_deref(out, op->memcopy.slot, op->memcopy.offset);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->memcopy.src, op->memcopy.src_offset);
             msb_sprintf(out, " (%u bytes)", op->memcopy.size);
+            msb_sprintf(out, " (dst align %u, src align %u)", 1u << op->memcopy.dst_align_log2, 1u << op->memcopy.src_align_log2);
             break;
         case CI_OP_ZERO:
             msb_write_literal(out, "zero ");
             ci_op_print_deref(out, op->zero.slot, op->zero.offset);
             msb_sprintf(out, " (%u bytes)", op->zero.size);
+            msb_sprintf(out, " (align %u)", 1u << op->zero.align_log2);
             break;
         case CI_OP_LOAD_BITFIELD:
         case CI_OP_LOAD_BITFIELD_BYTES:
@@ -514,6 +519,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 op->load_bf.is_signed?".s":".u",
                 op->load_bf.bit_offset, op->load_bf.bit_offset+op->load_bf.bit_width);
             ci_op_print_deref(out, op->load_bf.src, op->load_bf.offset);
+            msb_sprintf(out, " (align %u)", 1u << op->load_bf.align_log2);
             break;
         case CI_OP_STORE_BITFIELD:
         case CI_OP_STORE_BITFIELD_BYTES:
@@ -524,6 +530,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_deref(out, op->store_bf.slot, op->store_bf.offset);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->store_bf.src, op->store_bf.src_size);
+            msb_sprintf(out, " (align %u)", 1u << op->store_bf.align_log2);
             break;
         case CI_OP_CALL:{
             CiCallDescriptor* d = op->call.descrip;

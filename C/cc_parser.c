@@ -1784,6 +1784,16 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
 static
 int
 cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    if(t.is_atomic){
+        uint32_t alignment;
+        int err = cc_alignof_as_uint(p, t, loc, &alignment);
+        if(err) return err;
+        CcExpr* node = cc_value_expr(p, loc, ccqt_basic(cc_target(p)->size_type));
+        if(!node) return CC_OOM_ERROR;
+        node->uinteger = alignment;
+        *out = node;
+        return 0;
+    }
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         uint32_t natural;
         int err = cc_alignof_as_uint(p, ccqt_unaligned(t), loc, &natural);
@@ -1917,6 +1927,19 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
 static
 int
 cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
+    if(t.is_atomic){
+        t.is_atomic = 0;
+        int err = cc_alignof_as_uint(p, t, loc, out);
+        if(err) return err;
+        uint32_t size;
+        err = cc_sizeof_as_uint(p, t, loc, &size);
+        if(err) return err;
+        // The supported native atomic widths require size alignment, even
+        // when an aggregate's non-atomic version has weaker alignment.
+        if(size && size <= 16 && !(size & (size - 1)) && size > *out)
+            *out = size;
+        return 0;
+    }
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         uint32_t natural;
         int err = cc_alignof_as_uint(p, ccqt_unaligned(t), loc, &natural);

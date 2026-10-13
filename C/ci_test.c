@@ -7985,6 +7985,42 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "atomic aggregate alignment and containing layout", __LINE__,
+            SVI("struct S8 { int x, y; }; struct S16 { long long x, y; };\n"
+                "struct Outer { char c; _Atomic(struct S8) a; };\n"
+                "_Atomic(struct S8) a[2] = {{1,2},{3,4}};\n"
+                "struct Outer o = {0, {5,6}};\n"
+                "_Thread_local _Atomic(struct S16) tls = {7,8};\n"
+                "struct S8 b = a[1], c = o.a; struct S16 d = tls;\n"
+                "return _Alignof(_Atomic(struct S8)) == 8 && _Alignof(_Atomic(struct S16)) == 16\n"
+                " && _Alignof(struct Outer) == 8 && sizeof(struct Outer) == 16\n"
+                " && (unsigned long long)&o.a % 8 == 0 && (unsigned long long)&tls % 16 == 0\n"
+                " && b.x == 3 && c.y == 6 && d.y == 8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "atomic casts from opaque byte and void pointers", __LINE__,
+            SVI("int load(void* p){return __atomic_load_n((int*)p,0);}\n"
+                "void store(char* p){__atomic_store_n((int*)p,7,0);}\n"
+                "int add(char* p){return __atomic_fetch_add((int*)p,2,0);}\n"
+                "int cas(void* p){int old=9;return __atomic_compare_exchange_n((int*)p,&old,11,0,0,0);}\n"
+                "int typed(char* p){return *(_Atomic int*)p;}\n"
+                "int x=3; store((char*)&x);\n"
+                "return load(&x)==7 && add((char*)&x)==7 && cas(&x) && typed((char*)&x)==11;\n"),
+            .exit_code = 1,
+        },
+        {
+            "explicit atomic pointer casts establish alignment", __LINE__,
+            SVI("int f(int mode){\n"
+                "struct __attribute__((packed)) P { char c; int x; } p;\n"
+                "int x=0;\n"
+                "if(mode==1) return __atomic_load_n((int*)(void*)&p.x,0);\n"
+                "if(mode==2) return __atomic_load_n((int*)((char*)&x+1),0);\n"
+                "if(mode==3) return __atomic_load_n((int*)1,0);\n"
+                "return 7;}\nreturn f(0);\n"),
+            .exit_code = 7,
+        },
+        {
             "atomic type: struct whole-object load", __LINE__,
             SVI("struct S { int x, y; };\n"
                "_Atomic(struct S) a = {1, 2};\n"
@@ -13644,6 +13680,41 @@ TestFunction(test_interpreter_runtime_errors){
             "complex literal fails during lowering", __LINE__,
             SVI("float _Complex z=1.0fi;\n"),
             SVI("(test):1:23: error: complex expression lowering is not supported\n"),
+            .lowering_error = 1,
+        },
+        {
+            "packed atomic load fails during lowering", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\nreturn p.x;"),
+            SVI("(test):3:9: error: underaligned atomic access requires 4-byte alignment\n"),
+            .lowering_error = 1,
+        },
+        {
+            "packed atomic builtin fails during lowering", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; int x; };\n"
+                "struct P p;\nreturn __atomic_load_n(&p.x, 0);"),
+            SVI("(test):3:8: error: underaligned atomic access requires 4-byte alignment\n"),
+            .lowering_error = 1,
+        },
+        {
+            "packed atomic store fails during lowering", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\np.x=1;"),
+            SVI("(test):3:2: error: underaligned atomic access requires 4-byte alignment\n"),
+            .lowering_error = 1,
+        },
+        {
+            "packed atomic rmw fails during lowering", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\np.x+=1;"),
+            SVI("(test):3:2: error: underaligned atomic access requires 4-byte alignment\n"),
+            .lowering_error = 1,
+        },
+        {
+            "packed atomic cas fails during lowering", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; int x; };\n"
+                "struct P p; int expected=0;\n__atomic_compare_exchange_n(&p.x,&expected,1,0,0,0);"),
+            SVI("(test):3:1: error: underaligned atomic access requires 4-byte alignment\n"),
             .lowering_error = 1,
         },
         {
