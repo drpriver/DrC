@@ -3846,7 +3846,9 @@ cpp_release_scratch_idxes(CppPreprocessor *cpp, Marray(size_t) *scratch){
 
 
 static CppObjMacroFn cpp_builtin_file,
+                     cpp_builtin_file_id,
                      cpp_builtin_line,
+                     cpp_builtin_column,
                      cpp_builtin_counter,
                      cpp_builtin_filename,
                      cpp_builtin_dir,
@@ -5212,7 +5214,9 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         StringView name; CppObjMacroFn* fn;
     } obj_builtins[] = {
         {SVI("__FILE__"), cpp_builtin_file},
+        {SVI("__FILE_ID__"), cpp_builtin_file_id},
         {SVI("__LINE__"), cpp_builtin_line},
+        {SVI("__COLUMN__"), cpp_builtin_column},
         {SVI("__COUNTER__"), cpp_builtin_counter},
         {SVI("__FILE_NAME__"), cpp_builtin_filename},
         {SVI("__DIR__"), cpp_builtin_dir},
@@ -5307,6 +5311,31 @@ cpp_builtin_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
         .txt = {a->length, a->data},
         .loc = loc,
         .type = CPP_STRING,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+
+static
+int
+cpp_builtin_file_id(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+    (void)ctx;
+    uint64_t file_id = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        file_id = e->file_id;
+    }
+    else {
+        file_id = loc.file_id;
+    }
+    Atom a = cpp_atomizef(cpp, "%llu", (unsigned long long)file_id);
+    if(!a) return CPP_OOM_ERROR;
+    CppToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_NUMBER,
     };
     int err = cpp_push_tok(cpp, outtoks, tok);
     return err;
@@ -5415,6 +5444,30 @@ cpp_builtin_line(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
         line = (unsigned)loc.line;
     }
     Atom a = cpp_atomizef(cpp, "%u", line);
+    if(!a) return CPP_OOM_ERROR;
+    CppToken tok = {
+        .txt = {a->length, a->data},
+        .loc = loc,
+        .type = CPP_NUMBER,
+    };
+    int err = cpp_push_tok(cpp, outtoks, tok);
+    return err;
+}
+static
+int
+cpp_builtin_column(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
+    (void)ctx;
+    unsigned column = 0;
+    if(loc.is_actually_a_pointer){
+        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
+        while(e->parent)
+            e = e->parent;
+        column = (unsigned)e->column;
+    }
+    else {
+        column = (unsigned)loc.column;
+    }
+    Atom a = cpp_atomizef(cpp, "%u", column);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},

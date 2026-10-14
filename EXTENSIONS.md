@@ -24,6 +24,8 @@
   * [`__let(binding, body)`](#letbinding-body)
   * [`__where(name)`](#wherename)
   * [`__RAND__`](#rand)
+  * [`__COLUMN__`](#column)
+  * [`__FILE_ID__`](#fileid)
   * [`#pragma include_path`](#pragma-includepath)
 * [C](#c)
   * [`_Defer`](#defer)
@@ -347,8 +349,26 @@ definition is active.
 
 ### `__RAND__`
 
-`__RAND__` (also spelled `__RANDOM__`) expands to a
-random integer.
+`__RAND__` (also spelled `__RANDOM__`) expands to a random integer.
+
+### `__COLUMN__`
+
+This is like `__LINE__`, but expanding to the 1-indexed column number.
+
+### `__FILE_ID__`
+
+`__FILE_ID__` expands to an integer that identifying the current source file.
+Within a single translation unit, the same file has the same ID and different
+files will have different IDs. Across translation units there is no guarantee
+and in the current implementation *will* collide.
+
+
+Combined with `__LINE__`, this can generate unique names that are less opaque
+than with `__COUNTER__`.
+
+```C
+#define unique(prefix) __ident(__format("%s_F%d_L%d", #prefix, __FILE_ID__, __LINE__))
+```
 
 ### `#pragma include_path`
 

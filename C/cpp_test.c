@@ -894,6 +894,8 @@ TestFunction(test_builtin_macros){
         {"type builtin redef empty", SV("#define __int64\n__int64"), SV("\n"), __LINE__, 0},
         {"type builtin redef function", SV("#define __int64(x) x + 1\n__int64(2)"), SV("\n2 + 1"), __LINE__, 0},
         {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
+        {"__COLUMN__", SV("__COLUMN__"), SV("1"), __LINE__, 0},
+        {"__FILE_ID__", SV("__FILE_ID__"), SV("0"), __LINE__, 0}, // just happens to be 0, could change
         {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 0},
         {"__COUNTER__", SV("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SV("0\n1\n2\n3 4"), __LINE__, 0},
         {"counter paste", SV("#define C(x,y) x##y\n"

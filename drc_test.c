@@ -305,6 +305,13 @@ TestFunction(test_samples){
                 "My favorite type is void *" EOL),
         },
         { __LINE__, CSVI("Samples/Extensions/defblock.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/defer.c"),
+            CSVI(
+                "hello!" EOL
+                "finishing" EOL
+                "goodbye!" EOL
+            ),
+        },
         { __LINE__, CSVI("Samples/Extensions/enum_strings.c"), .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/fucs.c"), .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/json_parse.c"), .syntax_only = 1},

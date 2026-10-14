@@ -236,8 +236,22 @@ Preprocessor::md
     definition is active.
 
   `__RAND__`::md
-    `__RAND__` (also spelled `__RANDOM__`) expands to a
-    random integer.
+    `__RAND__` (also spelled `__RANDOM__`) expands to a random integer.
+
+  `__COLUMN__`::md
+    This is like `__LINE__`, but expanding to the 1-indexed column number.
+
+  `__FILE_ID__`::md
+    `__FILE_ID__` expands to an integer that identifying the current source file.
+    Within a single translation unit, the same file has the same ID and different
+    files will have different IDs. Across translation units there is no guarantee
+    and in the current implementation *will* collide.
+
+    Combined with `__LINE__`, this can generate unique names that are less opaque
+    than with `__COUNTER__`.
+
+    ::pre.C
+      #define unique(prefix) __ident(__format("%s_F%d_L%d", #prefix, __FILE_ID__, __LINE__))
 
   `#pragma include_path`::md
     Add a path to the given include search path. If two strings are given, the
