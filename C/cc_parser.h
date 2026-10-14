@@ -259,8 +259,11 @@ struct CcParser {
     FreeList(CcExpr) exprs[3];
     #endif
     ArenaAllocator scratch_arena;
-    uint32_t loop_depth;
-    uint32_t switch_depth;
+    uint32_t loop_depth,
+             switch_depth;
+    CcDeferContext defer_context,
+                break_defer_context,
+                continue_defer_context;
     struct CcSwitchCtx* _Nullable switch_ctx;
     CcLabelCtx toplevel_label_ctx;
     CcStmtSink* _Null_unspecified stmt_sink;

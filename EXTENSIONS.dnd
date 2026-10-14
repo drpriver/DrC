@@ -252,6 +252,16 @@ Preprocessor::md
       #pragma include_path "-iquote" "." // add directory of this file
 
 C::md
+  `_Defer`::md
+    From upcoming C2Y proposals.
+    ::pre.C
+      int read_first_char_from_file(const char* path){
+          FILE* f = fopen(path, "r");
+          if(!f) return -1;
+          defer fclose(f);
+          return fgetc(f);
+      }
+
   `static if`::md
     An `if` evaluated at compile time. The condition must be a `constexpr`
     expression. Each branch may be a single statement or a braced body.

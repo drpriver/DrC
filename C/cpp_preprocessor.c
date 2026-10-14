@@ -4822,6 +4822,10 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                 "#define ckd_sub(result, a, b) __builtin_sub_overflow(a, b, result)\n"
                                 "#define ckd_mul(result, a, b) __builtin_mul_overflow(a, b, result)\n"
                             )},
+        {SVI("stddefer.h"), SVI("#pragma once\n"
+                                "#define __STDC_VERSION_STDDEFER_H__ 202602L\n"
+                                "#define defer _Defer\n"
+                            )},
         {SVI("stdcountof.h"), SVI("#pragma once\n"
                                 "#define __STDC_VERSION_STDCOUNTOF_H__ 202603L\n"
                                 "#define countof _Countof\n"
@@ -5229,6 +5233,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
     err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"drc 0.0.1\"")}}, 1);
     if(err) return err;
     err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
+    if(err) return err;
+    err = cpp_define_obj_macro(cpp, SV("__STDC_DEFER_TS25755__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("2")}}, 1);
     if(err) return err;
     static const struct {
         StringView name; CppFuncMacroFn* fn; size_t nparams; _Bool variadic, no_expand;

@@ -36,6 +36,9 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int n=0; int f(int b){_Defer {int i=0;again:n++;if(++i<2)goto again;}"
+         "if(b)return 3;return 4;} { _Defer n+=10; for(int i=0;i<3;i++)_Defer n++; }"
+         "return f(1)==3&&f(0)==4&&n==17;\n")},
     {__LINE__, SVI("int f(int x,int y){x&&(y+1);x?(y&&x):(y||x);"
          "x&&(y++,x);return x?7:7;}return f(2,3)==7;\n")},
     {__LINE__, SVI("struct S{int port;}; int consume(const struct __builtin_Field* p){return p->name.count;}"

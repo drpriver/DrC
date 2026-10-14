@@ -29,11 +29,27 @@ enum CcStmtKind TYPED_ENUM(uint32_t){
     CC_STMT_CONTINUE,
     CC_STMT_GOTO,
     CC_STMT_LABEL,
+    CC_STMT_DEFER,
 };
 TYPEDEF_ENUM(CcStmtKind, uint32_t);
 
-// Statement tree representation (abstract)
 typedef struct CcStmtNode CcStmtNode;
+typedef struct CcDefer CcDefer;
+struct CcDefer {
+    CcDefer* _Nullable prev;
+    CcStmtNode* _Nullable body; // borrowed from CC_STMT_DEFER
+};
+typedef struct CcDeferContext CcDeferContext;
+struct CcDeferContext {
+    CcDefer* _Nullable active,
+           * _Nullable deferred_body;
+};
+_Static_assert(sizeof(CcDeferContext) == 2*sizeof(uint64_t), "");
+typedef struct CcCleanupRange CcCleanupRange;
+struct CcCleanupRange {
+    CcDefer* _Nullable first,
+           * _Nullable stop; // exclusive
+};
 struct CcStmtNode {
     CcStmtKind kind: 30; // much of this is padding
     uint32_t no_fallthrough:1; // conservative
@@ -52,16 +68,26 @@ struct CcStmtNode {
     // CC_STMT_SWITCH:   exprs[0] = expr, stmts[0] = body
     // CC_STMT_CASE:     case_value = folded constant, stmts[0] = stmt
     // CC_STMT_DEFAULT:  stmts[0] = stmt
-    // CC_STMT_RETURN:   exprs[0] = expr
-    // CC_STMT_BREAK:
-    // CC_STMT_CONTINUE:
-    // CC_STMT_GOTO:     label
+    // CC_STMT_RETURN:   return_.expr, return_.first (all active cleanups)
+    // CC_STMT_BREAK:    cleanup
+    // CC_STMT_CONTINUE: cleanup
+    // CC_STMT_GOTO:     goto_.label, goto_.cleanup (nullable)
     // CC_STMT_LABEL:    label, stmts[0] = stmt
+    // CC_STMT_DEFER:    stmts[0] = deferred body (owned, emitted via cleanup)
     union {
         CcExpr* expr; // CC_STMT_EXPR
         CcExpr* _Null_unspecified exprs[2];
         Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
         uint64_t case_value; // CC_STMT_CASE
+        CcCleanupRange cleanup; // CC_STMT_NULL/COMPOUND/BREAK/CONTINUE only
+        struct {
+            CcExpr* _Nullable expr; // also exprs[0]
+            CcDefer* _Nullable first; // returns always unwind to NULL
+        } return_;
+        struct {
+            Atom label;
+            CcCleanupRange* _Nullable cleanup;
+        } goto_;
     };
     CcStmtNode* _Null_unspecified stmts[];
 };

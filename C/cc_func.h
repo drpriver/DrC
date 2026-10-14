@@ -21,17 +21,16 @@
 // Label validation outlives statement trees discarded by sizeof, typeof, etc.
 typedef struct CcLabelRef CcLabelRef;
 struct CcLabelRef {
-    union {
-        struct {
-            Atom _Nonnull label;
-            SrcLoc loc;
-        };
-        uint64_t data[2];
-    };
+    Atom _Nonnull label;
+    SrcLoc loc;
+    CcDeferContext defer_context;
+    CcCleanupRange* _Nullable cleanup;
 };
-_Static_assert(sizeof(CcLabelRef) == 2*sizeof(uint64_t), "");
+#ifndef MARRAY_CCLABELREF
+#define MARRAY_CCLABELREF
 #define MARRAY_T CcLabelRef
 #include "../Drp/Marray.h"
+#endif
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -56,9 +55,40 @@ struct CcFuncParam {
 
 typedef struct CcLabelCtx CcLabelCtx;
 struct CcLabelCtx {
-    AtomMap16(CcLabelRef) labels;
+    AtomMap16(CcDeferContext) labels;
     Marray(CcLabelRef) gotos;
 };
+
+static inline
+int
+cc_lctx_put_defer(CcLabelCtx* ctx, Allocator allocator, Atom label, const CcDeferContext* defer_context){
+    // AM16 reserves an all-zero payload for deletion. Bias the first pointer
+    // so labels outside any defer remain present.
+    uint64_t payload[2] = {
+        (uintptr_t)defer_context->active + 1,
+        (uintptr_t)defer_context->deferred_body,
+    };
+    return AM16_put(&ctx->labels, allocator, label, payload);
+}
+
+static inline
+_Bool
+cc_lctx_has_defer(const CcLabelCtx* ctx, Atom label){
+    return AM16_get(&ctx->labels, label) != NULL;
+}
+
+// Returns false for an unknown label, leaving out untouched.
+static inline
+_Bool
+cc_lctx_get_defer(const CcLabelCtx* ctx, Atom label, CcDeferContext* out){
+    const uint64_t* payload = AM16_get(&ctx->labels, label);
+    if(!payload) return 0;
+    *out = (CcDeferContext){
+        .active = (CcDefer*)(uintptr_t)(payload[0] - 1),
+        .deferred_body = (CcDefer*)(uintptr_t)payload[1],
+    };
+    return 1;
+}
 
 typedef struct CcFunc CcFunc;
 struct CcFunc {

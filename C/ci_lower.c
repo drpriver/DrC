@@ -377,11 +377,42 @@ ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
 
 static
 int
+ci_lower_cleanups(CiInterpreter* ci, CiLowerCtx* ctx, CcCleanupRange range){
+    for(CcDefer* d = range.first; d != range.stop; d = d->prev){
+        AtomMap(uintptr_t) labels = {0};
+        AtomMap(uintptr_t)* saved_labels = ctx->labels;
+        Marray(CiBackpatchTarget) saved_patches = ctx->backpatches;
+        CiLowerSwitch* saved_switch = ctx->sw;
+        ctx->labels = &labels;
+        ctx->backpatches = (Marray(CiBackpatchTarget)){0};
+        ctx->sw = NULL;
+        int err = ci_lower_stmt(ci, ctx, d->body);
+        if(err) goto cleanup;
+        err = ci_lower_resolve_gotos(ci, ctx);
+        cleanup:
+        ma_cleanup(CiBackpatchTarget)(&ctx->backpatches, ctx->a);
+        if(labels.data) Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap));
+        ctx->labels = saved_labels;
+        ctx->backpatches = saved_patches;
+        ctx->sw = saved_switch;
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
     if(!n) return 0;
     uint32_t temp = ctx->temp;
     int err = ci_layout_decls(ci, ctx, (CcStmtNode*_Nonnull)n);
-    if(!err) err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
+    if(err) goto cleanup;
+    err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
+    if(err) goto cleanup;
+    if(!n->no_fallthrough && (n->kind == CC_STMT_COMPOUND || n->kind == CC_STMT_NULL))
+        err = ci_lower_cleanups(ci, ctx, n->cleanup);
+
+    cleanup:
     ctx->temp = temp;
     return err;
 }
@@ -392,6 +423,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
     int err;
     switch(n->kind){
         case CC_STMT_NULL:
+        case CC_STMT_DEFER:
             return 0;
         case CC_STMT_EXPR:
             if(n->exprs[0]->kind == CC_EXPR_ASSIGN && n->exprs[0]->lhs->kind == CC_EXPR_VARIABLE){
@@ -638,6 +670,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_RETURN:{
             CcExpr* e = n->exprs[0];
+            CcCleanupRange cleanup = {n->return_.first, NULL};
             CiOp* op;
             if(e && ccqt_bt_eq(e->type, CCBT_void)){
                 err = ci_lower_expr_discard(ci, ctx, e);
@@ -647,6 +680,16 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 CiLowerVal v;
                 err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
                 if(err) return err;
+                if(cleanup.first){
+                    uint32_t saved;
+                    err = ci_alloc_slot(ctx, v.size, 16, &saved);
+                    if(err) return err;
+                    err = ci_emit_copy(ctx, saved, v.slot, v.size, n->loc);
+                    if(err) return err;
+                    err = ci_lower_cleanups(ci, ctx, cleanup);
+                    if(err) return err;
+                    v.slot = saved;
+                }
                 err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
@@ -659,6 +702,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 };
                 return 0;
             }
+            err = ci_lower_cleanups(ci, ctx, cleanup);
+            if(err) return err;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
@@ -671,6 +716,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_BREAK:
         case CC_STMT_CONTINUE:{
+            err = ci_lower_cleanups(ci, ctx, n->cleanup);
+            if(err) return err;
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -690,6 +737,10 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             return 0;
         }
         case CC_STMT_GOTO:{
+            if(n->goto_.cleanup){
+                err = ci_lower_cleanups(ci, ctx, *n->goto_.cleanup);
+                if(err) return err;
+            }
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -2631,8 +2682,16 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             if(err) return err;
             out->slot = dest;
             uint32_t temp = ctx->temp;
+            // A caller-supplied destination can be an enclosing variable.
+            // Preserve the expression value privately until cleanup finishes;
+            // the enclosing assignment must take effect after that cleanup.
+            uint32_t result = dest;
+            if(size && body->cleanup.first != body->cleanup.stop){
+                err = ci_alloc_slot(ctx, size, 16, &result);
+                if(err) return err;
+            }
             err = ci_layout_decls(ci, ctx, body);
-            if(err){ ctx->temp = temp; return err; }
+            if(err) goto statement_expression_end;
             uint32_t count = body->count;
             CcExpr*_Nullable value = NULL;
             if(count && body->stmts[count-1]->kind == CC_STMT_EXPR
@@ -2642,10 +2701,18 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             }
             for(uint32_t i = 0; i < count; i++){
                 err = ci_lower_stmt(ci, ctx, body->stmts[i]);
-                if(err) break;
+                if(err) goto statement_expression_end;
             }
-            if(!err && value)
-                err = ci_lower_expr(ci, ctx, (CcExpr*_Nonnull)value, dest, out);
+            if(value){
+                err = ci_lower_expr(ci, ctx, (CcExpr*_Nonnull)value, result, out);
+                if(err) goto statement_expression_end;
+            }
+            err = ci_lower_cleanups(ci, ctx, body->cleanup);
+            if(err) goto statement_expression_end;
+            if(value && result != dest)
+                err = ci_emit_copy(ctx, dest, result, size, e->loc);
+            statement_expression_end:
+            out->slot = dest;
             ctx->temp = temp;
             return err;
         }
@@ -5917,35 +5984,35 @@ ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
     alignment = ci_offset_alignment(alignment, byte_offset);
     if(load){
         *op = (CiOp){.load = {
-            .kind = CI_OP_LOAD, 
-            .slot = field.load_bf.slot, 
+            .kind = CI_OP_LOAD,
+            .slot = field.load_bf.slot,
             .slot_size = bytes,
-            .src = field.load_bf.src, 
+            .src = field.load_bf.src,
             .offset = offset + byte_offset,
-            .align_log2 = alignment, 
+            .align_log2 = alignment,
             .loc = field.load_bf.loc,
         }};
         if(bytes < size){
             int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.convert = {
-                .kind = CI_OP_CONVERT, 
-                .slot = field.load_bf.slot, 
+                .kind = CI_OP_CONVERT,
+                .slot = field.load_bf.slot,
                 .slot_size = size,
-                .src = field.load_bf.slot, 
+                .src = field.load_bf.slot,
                 .src_size = bytes,
-                .is_unsigned = !field.load_bf.is_signed, 
+                .is_unsigned = !field.load_bf.is_signed,
                 .loc = field.load_bf.loc,
             }};
         }
     }
     else {
         *op = (CiOp){.store = {
-            .kind = CI_OP_STORE, 
+            .kind = CI_OP_STORE,
             .slot = field.store_bf.slot,
-            .src = field.store_bf.src, 
+            .src = field.store_bf.src,
             .src_size = bytes,
-            .offset = offset + byte_offset, 
+            .offset = offset + byte_offset,
             .align_log2 = alignment,
             .loc = field.store_bf.loc,
         }};
@@ -6905,9 +6972,11 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     };
     Parray(CcVariable) storage = {0};
     err = ci_constexpr_uses_stmt(ci, &ctx, f->body_tree, &storage);
-    if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    if(err) goto finally;
+    err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    if(err) goto finally;
     pa_cleanup(&storage, al);
-    if(!err) err = ci_lower_stmt(ci, &ctx, f->body_tree);
+    err = ci_lower_stmt(ci, &ctx, f->body_tree);
     if(err) goto finally;
     uint32_t native_index = 0;
     for(size_t i = 0; i < f->params.count; i++){
@@ -6920,8 +6989,10 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     err = ci_lower_native_signature(ci, al, f->type, &ops->native_type);
     if(err) goto finally;
     err = ci_lower_resolve_gotos(ci, &ctx);
-    if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, al);
+    if(err) goto finally;
+    err = ci_lower_deps_merge(deps, &ctx.deps, al);
     finally:
+    pa_cleanup(&storage, al);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
@@ -6969,18 +7040,21 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .ldbl_fmt = t->long_double_format,
         .fold_cache = &fold_cache,
     };
+    Parray(CcVariable) storage = {0};
     for(size_t i = *lowered; i < nodes->count; i++){
-        Parray(CcVariable) storage = {0};
         err = ci_constexpr_uses_stmt(ci, &ctx, nodes->data[i], &storage);
-        if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+        if(err) goto cleanup;
+        err = ci_constexpr_dependencies(ci, &ctx, &storage);
+        if(err) goto cleanup;
         pa_cleanup(&storage, al);
-        if(err) break;
         err = ci_lower_stmt(ci, &ctx, nodes->data[i]);
-        if(err) break;
+        if(err) goto cleanup;
     }
-    if(!err)
-        err = ci_lower_resolve_gotos(ci, &ctx);
-    if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, ctx.a);
+    err = ci_lower_resolve_gotos(ci, &ctx);
+    if(err) goto cleanup;
+    err = ci_lower_deps_merge(deps, &ctx.deps, ctx.a);
+    cleanup:
+    pa_cleanup(&storage, al);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, ctx.a);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, ctx.a);
@@ -7063,14 +7137,21 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
     Parray(CcVariable) storage = {0};
     int err = ci_constexpr_uses_expr(ci, &ctx, expr, 0, &storage);
-    if(!err) err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    if(err) goto cleanup;
+    err = ci_constexpr_dependencies(ci, &ctx, &storage);
+    if(err) goto cleanup;
     pa_cleanup(&storage, al);
-    if(!err) err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
-    if(!err) err = ci_lower_resolve_gotos(ci, &ctx);
-    if(!err) err = ci_lower_deps_merge(deps, &ctx.deps, al);
+    err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
+    if(err) goto cleanup;
+    err = ci_lower_resolve_gotos(ci, &ctx);
+    if(err) goto cleanup;
+    err = ci_lower_deps_merge(deps, &ctx.deps, al);
+    if(err) goto cleanup;
     code->frame_alignment = ctx.frame_alignment > 16 ? ctx.frame_alignment : 16;
     code->value_slot = value.slot;
     code->value_size = value.size;
+    cleanup:
+    pa_cleanup(&storage, al);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);

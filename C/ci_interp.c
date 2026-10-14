@@ -4849,9 +4849,13 @@ int
 ci_eval_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, CcExpr*_Nonnull expr, void*_Nonnull result, size_t size){
     CiLoweredExpr code = {0};
     int err = ci_lower_standalone_expr(ci, expr, &code, &ci->deps);
-    if(!err) err = ci_resolve_deps(ci, &ci->deps);
-    if(!err) err = ci_optimize_code(ci, &code.ops, &code.frame_size, 0, NULL, NULL);
-    if(!err) err = ci_run_lowered_expr(ci, parent, &code, expr->loc, result, size);
+    if(err) goto cleanup;
+    err = ci_resolve_deps(ci, &ci->deps);
+    if(err) goto cleanup;
+    err = ci_optimize_code(ci, &code.ops, &code.frame_size, 0, NULL, NULL);
+    if(err) goto cleanup;
+    err = ci_run_lowered_expr(ci, parent, &code, expr->loc, result, size);
+    cleanup:
     ci_lowered_expr_cleanup(&code, ci_allocator(ci));
     return err;
 }

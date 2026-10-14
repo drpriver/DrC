@@ -6267,6 +6267,111 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "defer rejects skipped registration", __LINE__,
+            SVI("goto end; _Defer ; end:;"),
+            SVI("(test):1:1: error: jump enters the scope of a defer statement\n"),
+        },
+        {
+            "defer rejects entry into cleanup", __LINE__,
+            SVI("goto end; _Defer {end:;}"),
+            SVI("(test):1:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "defer rejects exit from cleanup", __LINE__,
+            SVI("_Defer {\ngoto end;\n} end:;"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "defer rejects return", __LINE__,
+            SVI("int f(void){ _Defer {\nreturn 1;\n} return 0;}"),
+            SVI("(test):2:1: error: return exits a deferred block\n"),
+        },
+        {
+            "defer rejects return hidden in a statement expression", __LINE__,
+            SVI("int f(void){_Defer ({\nreturn 1;\n0;});return 0;}"),
+            SVI("(test):2:1: error: return exits a deferred block\n"),
+        },
+        {
+            "defer rejects return hidden in a discarded statement expression", __LINE__,
+            SVI("int f(void){_Defer {sizeof(({\nreturn 1;\n0;}));}return 0;}"),
+            SVI("(test):2:1: error: return exits a deferred block\n"),
+        },
+        {
+            "defer rejects escaping break", __LINE__,
+            SVI("while(1) { _Defer {\nbreak;\n} }"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "defer rejects escaping continue", __LINE__,
+            SVI("while(1) { _Defer {\ncontinue;\n} }"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "defer rejects switch entry", __LINE__,
+            SVI("switch(1){_Defer ;\ncase 1:; }"),
+            SVI("(test):2:1: error: jump enters the scope of a defer statement\n"),
+        },
+        {
+            "defer rejects direct label", __LINE__,
+            SVI("_Defer label:;"),
+            SVI("(test):1:8: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
+            "defer checks discarded statement expressions", __LINE__,
+            SVI("sizeof(({\ngoto end; _Defer ; end: 1;}));"),
+            SVI("(test):2:1: error: jump enters the scope of a defer statement\n"),
+        },
+        {
+            "defer rejects sibling scope entry at equal depth", __LINE__,
+            SVI("{_Defer ;\ngoto end;\n} {_Defer ;end:;}"),
+            SVI("(test):2:1: error: jump enters the scope of a defer statement\n"),
+        },
+        {
+            "defer rejects switch into cleanup", __LINE__,
+            SVI("switch(1){_Defer {\ncase 1:;\n}}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "defer rejects direct case", __LINE__,
+            SVI("switch(1){\n_Defer case 1:;\n}"),
+            SVI("(test):2:8: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
+            "defer body has its own lexical scope", __LINE__,
+            SVI("_Defer if(sizeof(enum E{A})) ;\nint x=A;"),
+            SVI("(test):2:7: error: undeclared identifier 'A'\n"),
+        },
+        {
+            "defer rejects attributed direct label", __LINE__,
+            SVI("_Defer [[maybe_unused]] label:;"),
+            SVI("(test):1:25: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
+            "defer requires a statement", __LINE__,
+            SVI("_Defer"),
+            SVI("(test):1:1: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
+            "defer attributes still require a statement", __LINE__,
+            SVI("_Defer [[maybe_unused]]\n"),
+            SVI("(test):2:1: error: expected statement in deferred block\n"),
+        },
+        {
+            "defer blocks escaping static control", __LINE__,
+            SVI("static for(int i=0;i<2;i++){_Defer {\nstatic break;\n}}"),
+            SVI("(test):2:1: error: static break/continue cannot cross runtime control flow\n"),
+        },
+        {
+            "defer blocks escaping bare static goto", __LINE__,
+            SVI("_Defer static goto end; end:;"),
+            SVI("(test):1:8: error: Forward label 'end' not found in static goto scope\n"),
+        },
+        {
+            "defer rejects attributed label on another defer", __LINE__,
+            SVI("_Defer [[maybe_unused]] label: _Defer ;"),
+            SVI("(test):1:25: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
             "complex rejects void", __LINE__, SVI("_Complex void z;"),
             SVI("(test):1:1: error: invalid scalar type for _Complex\n"),
         },

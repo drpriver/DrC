@@ -888,6 +888,10 @@ void
 _cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
     msb_write_nchar(sb, ' ', indent*2);
     switch(s->kind){
+    case CC_STMT_DEFER:
+        msb_write_literal(sb, "_Defer\n");
+        _cc_print_statement(sb, s->stmts[0], indent+1);
+        return;
     case CC_STMT_NULL:       // ;
         msb_write_char(sb, ';');
         return;

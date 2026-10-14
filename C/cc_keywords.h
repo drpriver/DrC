@@ -27,6 +27,7 @@
 
 #define CCKWS5(X) \
     X(__asm, asm) \
+    X(defer, _Defer) \
     X(break, break) \
     X(false, false) \
     X(float, float) \
@@ -39,6 +40,7 @@
     X(_Self, _Self) \
 
 #define CCKWS6(X) \
+    X(_Defer, _Defer) \
     X(__bf16, __bf16) \
     X(double, double) \
     X(extern, extern) \

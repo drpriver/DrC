@@ -82,6 +82,7 @@ enum CcKeyword TYPED_ENUM(uint32_t){
     CC_extern,
     CC_inline,
     CC_return,
+    CC__Defer,
     CC_signed,
     CC_sizeof,
     CC_static,

@@ -42,6 +42,121 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "defer: labels without cleanup survive map growth", __LINE__,
+            SVI("int f(void){int n=0;goto a;a:n++;goto b;b:n++;goto c;c:n++;"
+                "goto d;d:n++;goto e;e:n++;goto g;g:n++;return n;}return f()==6;"),
+            .exit_code=1,
+        },
+        {
+            "defer: keyword alias without header", __LINE__,
+            SVI("static_assert(__STDC_DEFER_TS25755__==2); int n=0; {defer n++;} return n;"),
+            .exit_code=1,
+        },
+        {
+            "defer: ordering, nesting and live values", __LINE__,
+            SVI("int n=0; int x=1; { _Defer n=n*10+x; _Defer { _Defer n=n*10+3; n=n*10+2; } x=4; } return n==234;"),
+            .exit_code=1,
+        },
+        {
+            "defer: return values survive cleanup", __LINE__,
+            SVI("struct S{int a,b;}; int n; int f(void){int x=7; _Defer {x=9;n++;} return x;}"
+                "struct S g(void){struct S s={3,4}; _Defer {s.a=8;s.b=9;n++;} return s;}"
+                "struct S s=g(); return f()==7 && s.a==3 && s.b==4 && n==2;"),
+            .exit_code=1,
+        },
+        {
+            "defer: secondary blocks and loop exits", __LINE__,
+            SVI("int n=0; if(1) _Defer n++; else _Defer n+=100;"
+                "for(int i=0;i<3;i++) _Defer n+=2;"
+                "for(int i=0;i<4;i++){_Defer n+=3; if(i==0) continue; if(i==2) break;}"
+                "while(n<18) _Defer n++; do _Defer n++; while(n<20); return n==20;"),
+            .exit_code=1,
+        },
+        {
+            "defer: goto scope suffix and skipped blocks", __LINE__,
+            SVI("int n=0,i=0; { _Defer n+=100; again: _Defer n++; if(++i<3) goto again; goto out; }"
+                "out: goto done; { _Defer n+=1000; } done: return n==103;"),
+            .exit_code=1,
+        },
+        {
+            "defer: repeated cleanup copies with internal labels", __LINE__,
+            SVI("int n; int f(int b){ _Defer {int i=0; next: n++; if(++i<2) goto next;"
+                "for(int j=0;j<3;j++){if(j==1) continue; if(j==2) break; n++;}}"
+                "if(b) return 4; return 5;} return f(1)==4 && f(0)==5 && n==6;"),
+            .exit_code=1,
+        },
+        {
+            "defer: statement expression result and discarded trees", __LINE__,
+            SVI("int n=0; int x=({int v=7; _Defer {v=9;n++;} v;});"
+                "sizeof(({_Defer n+=100; goto end; end: 1;}));"
+                "return x==7 && n==1;"),
+            .exit_code=1,
+        },
+        {
+            "defer: statement expression assignment follows cleanup", __LINE__,
+            SVI("int f(void){int x=1; x=({_Defer x=9; 7;});"
+                "struct S{int a,b;}; struct S s={1,2};"
+                "s=({_Defer {s.a=8;s.b=9;} (struct S){3,4};});"
+                "return x==7 && s.a==3 && s.b==4;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "defer: return inside a return's statement expression", __LINE__,
+            SVI("int trace; int f(int early){int x=7;"
+                "_Defer {trace=trace*10+1;x=90;}"
+                "return ({_Defer {trace=trace*10+2;x=80;} if(early)return x; x+1;});}"
+                "int a=f(1);if(a!=7||trace!=21)return 0;"
+                "trace=0;int b=f(0);return b==8&&trace==21;"),
+            .exit_code=1,
+        },
+        {
+            "inline: nested return bypasses outer expression and runs defers once", __LINE__,
+            SVI("int trace; __attribute__((always_inline)) int f(int early){int x=7;"
+                "_Defer {trace=trace*10+1;x=90;}"
+                "return 100+({_Defer {trace=trace*10+2;x=80;} if(early)return x; x+1;});}"
+                "int probe(void){int a=f(1);if(a!=7||trace!=21)return 0;"
+                "trace=0;int b=f(0);return b==108&&trace==21;}return probe();"),
+            .exit_code=1,
+        },
+        {
+            "defer: switch and nested function contexts", __LINE__,
+            SVI("int n=0; { _Defer n+=10; int f(void){_Defer n++;return 3;}"
+                "switch(f()){case 3:{_Defer n+=2;break;} default: n=100;} } return n==13;"),
+            .exit_code=1,
+        },
+        {
+            "defer: fallthrough, void returns and unreachable defers", __LINE__,
+            SVI("int n; void f(int b){_Defer n++; if(b) return; _Defer n+=2;}"
+                "int g(void){return 7; _Defer n+=100;} f(1);f(0);return g()==7 && n==4;"),
+            .exit_code=1,
+        },
+        {
+            "defer: delayed condition and recursive bare defers", __LINE__,
+            SVI("int n=0,b=0; {_Defer if(b) n++; _Defer _Defer n+=2; b=1;} return n==3;"),
+            .exit_code=1,
+        },
+        {
+            "defer: goto remains inside active scope", __LINE__,
+            SVI("int n=0,i=0; {_Defer n++; again: if(++i<3)goto again;} return n==1 && i==3;"),
+            .exit_code=1,
+        },
+        {
+            "defer: static iterations have distinct cleanup scopes", __LINE__,
+            SVI("int n=0; static for(int i=0;i<3;i++){{_Defer n=n*10+i;}} return n==12;"),
+            .exit_code=1,
+        },
+        {
+            "defer: static grouping retains the enclosing scope", __LINE__,
+            SVI("int n=0; {static for(int i=0;i<3;i++){_Defer n=n*10+i;}} return n==210;"),
+            .exit_code=1,
+        },
+        {
+            "defer: static token collection handles deferred statements", __LINE__,
+            SVI("int n=0; static if(0) _Defer {unknown();} else n++;"
+                "{static for(int i=0;i<3;i++) _Defer {n=n*10+i;}} return n==1210;"),
+            .exit_code=1,
+        },
+        {
             "lower: compound immediate simplifications", __LINE__,
             SVI("unsigned f(unsigned x){x+=0;x-=0;x*=1;x/=1;x|=0;x^=0;x&=~0u;x<<=0;x>>=0;return x;}"
                 "unsigned q(unsigned x){return x/=8;} unsigned r(unsigned x){return x%=8;}"
@@ -412,6 +527,26 @@ TestFunction(test_interpreter){
                 "__forceinline double half(double x){if(x<0)return -x;return x/2;}\n"
                 "int probe(void){int a=choose(-2)+1,b=choose(0)+2,c=choose(4)+3;\n"
                 "return a==-4&&b==13&&c==12&&half(-6)==6&&half(8)==4;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "inline: non-trivial defer preserves cleanup order and aggregate returns", __LINE__,
+            SVI("struct Result {int a,b;};\n"
+                "__attribute__((always_inline)) struct Result finish(int early,int* trace){\n"
+                "struct Result result={7,11};\n"
+                "_Defer {int i=0; _Defer *trace=*trace*10+4;\n"
+                "again: if(i++<2){*trace=*trace*10+1;goto again;}\n"
+                "switch(early){case 1:*trace=*trace*10+2;break;default:*trace=*trace*10+3;break;}\n"
+                "result.a=90;result.b=91;}\n"
+                "_Defer *trace=*trace*10+5;\n"
+                "if(early)return result;result.a+=2;return result;}\n"
+                "int probe(void){int trace=0;{_Defer trace=trace*10+6;\n"
+                "struct Result a=finish(1,&trace);\n"
+                "if(a.a!=7||a.b!=11||trace!=51124)return 0;\n"
+                "trace=0;struct Result b=finish(0,&trace);\n"
+                "if(b.a!=9||b.b!=11||trace!=51134)return 0;\n"
+                "trace=0;finish(1,&trace);if(trace!=51124)return 0;\n"
+                "}return trace==511246;}return probe();\n"),
             .exit_code = 1,
         },
         {
@@ -14709,6 +14844,14 @@ TestFunction(test_interpreter_builtin_headers){
                "int old = atomic_fetch_add(&x, 5);\n"
                "return old * 10 + atomic_load(&x);\n"),
             .exit_code = 27,
+        },
+        {
+            "defer: header and feature macros", __LINE__,
+            SVI("#include <stddefer.h>\n"
+                "static_assert(__STDC_DEFER_TS25755__==2);"
+                "static_assert(__STDC_VERSION_STDDEFER_H__==202602L);"
+                "int n=0; {defer n++;} return n;"),
+            .exit_code=1,
         },
         {
             "stdatomic: bitwise fetch operations return old value", __LINE__,

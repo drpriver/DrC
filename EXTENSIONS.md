@@ -26,6 +26,7 @@
   * [`__RAND__`](#rand)
   * [`#pragma include_path`](#pragma-includepath)
 * [C](#c)
+  * [`_Defer`](#defer)
   * [`static if`](#static-if)
   * [`static goto`](#static-goto)
   * [`static for`](#static-for)
@@ -365,6 +366,19 @@ the file that issued the pragma.
 ```
 
 ## C
+
+### `_Defer`
+
+From upcoming C2Y proposals.
+
+```C
+int read_first_char_from_file(const char* path){
+    FILE* f = fopen(path, "r");
+    if(!f) return -1;
+    defer fclose(f);
+    return fgetc(f);
+}
+```
 
 ### `static if`
 
