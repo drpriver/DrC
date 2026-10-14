@@ -13823,6 +13823,204 @@ TestFunction(test_interpreter){
     TESTEND();
 }
 
+TestFunction(test_embed){
+    TESTBEGIN();
+    ArenaAllocator arena = {0};
+    Allocator al = allocator_from_arena(&arena);
+    static struct tc {
+        const char* name; int line;
+        StringView program;
+        int exit_code;
+    } testcases[] = {
+        {
+            "embed: GNU offset and base64 blob lifetime", __LINE__,
+            SVI("constexpr unsigned char a[]={\n#embed \".\" gnu::base64(\"AQIDBP8ABwg=\")\n};"
+                "static_assert(sizeof(a)==8 && a[4]==255 && a[5]==0 && a[7]==8);"
+                "unsigned char b[2][3]={_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")};"
+                "unsigned char c[]={\n#embed \"embed.bin\" limit(3) gnu::offset(4)\n};"
+                "return b[1][0]==255 && b[1][1]==0 && b[1][2]==8 && sizeof(c)==3 && c[0]==255 && c[1]==0 && c[2]==7;"),
+            .exit_code=1,
+        },
+        {
+            "embed: directives, inline spelling and boundary operators", __LINE__,
+            SVI("unsigned char a[]={\n#embed \"embed.bin\"\n};"
+                "int b[]={10 * _Embed(\"\\\"embed.bin\\\" limit(3)\") + 20};"
+                "int f(int a,int b,int c){return a+b+c;}"
+                "return sizeof(a)==8 && a[0]==1 && a[4]==255 && a[7]==8 && "
+                "b[0]==10 && b[1]==2 && b[2]==23 && f(_Embed(\"\\\"embed.bin\\\" limit(3)\"))==6;"),
+            .exit_code=1,
+        },
+        {
+            "embed: blob overrides, constexpr reads, nested arrays and conversions", __LINE__,
+            SVI("constexpr unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[3]=99};"
+                "static_assert(sizeof(a)==8 && a[2]==3 && a[3]==99 && a[4]==255);"
+                "unsigned char b[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "double d[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "bool bits[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return b[1][0]==255 && b[1][1]==0 && d[4]==255.0 && !bits[5] && bits[4];"),
+            .exit_code=1,
+        },
+        {
+            "embed: parameters, empty expansion and comma expression", __LINE__,
+            SVI("#define FILE \"embed.bin\"\n#define N 3\n"
+                "int a[]={_Embed(\"FILE __limit__(N) prefix(9,) suffix(,10)\")};"
+                "int b[]={_Embed(\"FILE limit(0) prefix(bad) suffix(bad) if_empty(42)\")};"
+                "int c=(_Embed(\"FILE\"));"
+                "return sizeof(a)/sizeof(*a)==5 && a[0]==9 && a[4]==10 && b[0]==42 && c==8;"),
+            .exit_code=1,
+        },
+        {
+            "embed: local copies, static storage and signed bytes", __LINE__,
+            SVI("int f(int x){unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[2]=x};"
+                "static unsigned char s[]={_Embed(\"\\\"embed.bin\\\"\"),[4]=42};"
+                "signed char c[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return a[1]==2 && a[2]==x && a[4]==255 && s[4]==42 && s[6]==7 && c[4]==-1;}"
+                "return f(33) && f(44);"), .exit_code=1,
+        },
+        {
+            "embed: aggregate copies and nested constexpr access", __LINE__,
+            SVI("struct S{unsigned char a[8];int x;};"
+                "constexpr struct S s={{_Embed(\"\\\"embed.bin\\\"\")},42};"
+                "static_assert(s.a[4]==255 && s.a[5]==0);"
+                "constexpr unsigned char m[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "static_assert(m[1][0]==255 && m[0][2]==3);"
+                "struct S t=s; const unsigned char row[4]=m[1];"
+                "return t.a[4]==255 && t.x==42 && row[0]==255 && row[3]==8;"), .exit_code=1,
+        },
+        {
+            "embed: brace elision across mixed struct members", __LINE__,
+            SVI("struct S{int lead;unsigned char a[2];int middle;"
+                "struct {unsigned char b[2];bool zero;} inner;short tail[2];int end;};"
+                "constexpr struct S s={99,\n#embed \"embed.bin\"\n,42};"
+                "static_assert(s.lead==99 && s.a[0]==1 && s.a[1]==2 && s.middle==3);"
+                "static_assert(s.inner.b[0]==4 && s.inner.b[1]==255 && !s.inner.zero);"
+                "static_assert(s.tail[0]==7 && s.tail[1]==8 && s.end==42);"
+                "int f(int n){struct S t={n,_Embed(\"\\\"embed.bin\\\"\"),42};"
+                "return t.lead==n && t.a[0]==1 && t.a[1]==2 && t.middle==3 && "
+                "t.inner.b[0]==4 && t.inner.b[1]==255 && !t.inner.zero && "
+                "t.tail[0]==7 && t.tail[1]==8 && t.end==42;}"
+                "return f(17) && f(23);"), .exit_code=1,
+        },
+        {
+            "embed: brace elision across an array of structs", __LINE__,
+            SVI("struct S{unsigned char bytes[3];int last;};"
+                "constexpr struct S a[2]={\n#embed \"embed.bin\"\n};"
+                "static_assert(a[0].bytes[0]==1 && a[0].bytes[1]==2 && a[0].bytes[2]==3 && a[0].last==4);"
+                "static_assert(a[1].bytes[0]==255 && a[1].bytes[1]==0 && a[1].bytes[2]==7 && a[1].last==8);"
+                "static struct S b[2]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return b[0].bytes[0]==1 && b[0].bytes[1]==2 && b[0].bytes[2]==3 && b[0].last==4 && "
+                "b[1].bytes[0]==255 && b[1].bytes[1]==0 && b[1].bytes[2]==7 && b[1].last==8;"), .exit_code=1,
+        },
+        {
+            "embed: large resource stays compact", __LINE__,
+            SVI("constexpr unsigned char a[]={_Embed(\"\\\"large.bin\\\"\")};"
+                "static_assert(sizeof(a)==4096 && a[1023]==255 && a[2048]==0);"
+                "return a[4095]==255 && a[4094]==254;"),
+            .exit_code=1,
+        },
+    };
+    int err;
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i];
+        _Bool ok = 0;
+        err = 0;
+        TEST_stats.executed++;
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
+        if(!fc){
+            TestReport("setup failure");
+            ArenaAllocator_free_all(&arena);
+            return TEST_stats;
+        }
+        MStringBuilder log_sb = {.allocator=al};
+        MsbLogger logger_ = {0};
+        Logger* logger = msb_logger(&logger_, &log_sb);
+        AtomTable at = {0};
+        Environment env = {.allocator = al, .at=&at};
+        CiInterpreter interp = {
+            .poison_frame_slots = 1,
+            .exit_code = -1,
+            .parser = {
+                .cpp = {
+                    .allocator = al,
+                    .fc = fc,
+                    .at = &at,
+                    .logger = logger,
+                    .env = &env,
+                    .target = cc_targets[CC_TARGET_TEST],
+                },
+                .current = &interp.parser.global,
+            },
+            .top_frame = {
+                .return_buf = &interp.exit_code,
+                .return_size = sizeof interp.exit_code,
+            },
+        };
+        LOCK_T_init(&interp.error_lock);
+        LOCK_T_init(&interp.atom_lock);
+        LOCK_T_init(&interp.resolve_lock);
+        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+        err = fc_cache_file(fc, tc->program);
+        if(err){TestReport("setup failure"); goto finally;}
+        fc_write_path(fc, __FILE__ "/../embed.bin", sizeof __FILE__ "/../embed.bin"-1);
+        err = fc_cache_file(fc, SV("\1\2\3\4\xff\0\7\10"));
+        if(err){TestReport("setup failure"); goto finally;}
+        char bytes[4096];
+        for(size_t j = 0; j < sizeof bytes; j++) bytes[j] = (char)j;
+        fc_write_path(fc, __FILE__ "/../large.bin", sizeof __FILE__ "/../large.bin"-1);
+        err = fc_cache_file(fc, (StringView){sizeof bytes, bytes});
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cpp_define_builtin_macros(&interp.parser.cpp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_define_builtin_types(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = cc_register_pragmas(&interp.parser);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_pragmas(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+
+        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
+        if(err) {TestReport("failed to include"); goto finally;}
+        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
+
+        err = cc_parse_all(&interp.parser);
+        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = ci_resolve_refs(&interp);
+        if(err){TestPrintf("%s:%d: failed to link: %s\n", __FILE__, tc->line, _cc_error_names[err]); goto finally;}
+
+        CiInterpFrame* frame = &interp.top_frame;
+        err = ci_prepare_toplevel(&interp);
+        if(err) goto finally;
+        while(frame->pc < frame->op_count){
+            err = ci_interp_step(&interp, frame);
+            if(err) goto finally;
+        }
+        TEST_stats.executed++;
+        if(interp.exit_code != tc->exit_code){
+            TEST_stats.failures++;
+            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
+        }
+        else
+            ok = 1;
+
+        finally:
+        if(log_sb.cursor && !log_sb.errored && !ok){
+            StringView sv = msb_borrow_sv(&log_sb);
+            TestPrintf("%.*s\n", sv_p(sv));
+        }
+        if(err) TEST_stats.failures++;
+        ci_tls_cleanup(&interp);
+        ArenaAllocator_free_all(&interp.bt.arena);
+        ArenaAllocator_free_all(&at.arena);
+        ArenaAllocator_free_all(&arena);
+        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
+        ArenaAllocator_free_all(&interp.parser.scratch_arena);
+    }
+    TESTEND();
+}
+
 TestFunction(test_interpreter_runtime_errors){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -16453,6 +16651,7 @@ int main(int argc, char** argv){
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_embed, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interpreter_runtime_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interpreter_builtin_headers, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

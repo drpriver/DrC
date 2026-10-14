@@ -267,6 +267,16 @@ fc_is_file(FileCache* fc){
 static
 int
 fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
+    ByteView bytes;
+    int err = fc_read_bytes(fc, &bytes, file_id);
+    if(err) return err;
+    *outdata = (StringView){bytes.n_bytes, bytes.buff};
+    return FC_OK;
+}
+
+static
+int
+fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     int result = FC_ERROR_NOT_FOUND;
     #ifdef _WIN32
     HANDLE fh = INVALID_HANDLE_VALUE;
@@ -276,7 +286,7 @@ fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
         if(f->data_cached){
-            *outdata = (StringView){f->data.n_bytes, f->data.buff};
+            *outdata = (ByteView){f->data.n_bytes, f->data.buff};
             result = FC_OK;
             goto finally;
         }
@@ -342,7 +352,7 @@ fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
     f->data_cached = 1;
     f->data.buff = data;
     f->data.n_bytes = nread;
-    *outdata = (StringView){f->data.n_bytes, f->data.buff};
+    *outdata = (ByteView){f->data.n_bytes, f->data.buff};
     result = FC_OK;
     #else
     fd = open(f->path.text, O_RDONLY);
@@ -407,7 +417,7 @@ fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
     f->data_cached = 1;
     f->data.buff = data;
     f->data.n_bytes = nread;
-    *outdata = (StringView){f->data.n_bytes, f->data.buff};
+    *outdata = (ByteView){f->data.n_bytes, f->data.buff};
     result = FC_OK;
     #endif
     finally:

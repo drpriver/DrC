@@ -74,7 +74,7 @@ cc_lex_string_mode(StringView txt, CcToken (*out)[MAX_TEST_TOKENS], int* count, 
             if(err){ result = 1; goto finally; }
             err = ma_push(CppToken)(&pp, a, tok);
             if(err){ result = 1; goto finally; }
-            if(tok.type == CPP_EOF) break;
+            if(tok.type == CPP_END_OF_INPUT) break;
         }
         cursor = pp.data;
         end = pp.data + pp.count;
@@ -175,6 +175,7 @@ static
 const char*
 cc_type_name(CcTokenType t){
     switch(t){
+        case CC_EMBED: return "EMBED";
         case CC_EOF: return "EOF";
         case CC_KEYWORD: return "KEYWORD";
         case CC_IDENTIFIER: return "IDENTIFIER";
@@ -192,6 +193,8 @@ _Bool
 cc_tok_matches(CcToken got, CcToken exp){
     if(got.type != exp.type) return 0;
     switch(got.type){
+        case CC_EMBED:
+            return got.embed.bytes.n_bytes == exp.embed.bytes.n_bytes && !memcmp(got.embed.bytes.buff, exp.embed.bytes.buff, got.embed.bytes.n_bytes);
         case CC_EOF: return 1;
         case CC_KEYWORD: return got.kw.kw == exp.kw.kw;
         case CC_IDENTIFIER: {
@@ -1199,7 +1202,7 @@ TestFunction(test_long_double_macros){
             CppToken tok;
             err = cpp_next_pp_token(&cpp, &tok);
             TestExpectFalse(int, err);
-            if(err || tok.type == CPP_EOF) break;
+            if(err || tok.type == CPP_END_OF_INPUT) break;
             if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
             if(properties.cursor) msb_write_char(&properties, ' ');
             msb_write_str(&properties, tok.txt.text, tok.txt.length);

@@ -2,6 +2,7 @@
 
 ## Table of Contents
 * [Preprocessor](#preprocessor)
+  * [`_Embed(string-literal)`](#embedstring-literal)
   * [GNU Extensions](#gnu-extensions)
     * [Named variadics](#named-variadics)
     * [`, ## __VA_ARGS__`](#vaargs)
@@ -75,6 +76,28 @@ also has its own fun extensions to make programming in C more fun and
 ergonomic.
 
 ## Preprocessor
+
+### `_Embed(string-literal)`
+
+`_Embed()` is an inline spelling of C23 `#embed`, similar to how
+`_Pragma()` is to `#pragma`. This allows it to be used in macros.
+
+```C
+const unsigned char data[] = {
+    #embed "data.bin"
+};
+#define EMBED(...) _Embed(#__VA_ARGS__)
+const unsigned char moardata[] = {EMBED("data.bin" limit(16))};
+```
+
+
+Resources larger than 4 MiB are unsupported, regardless
+of `limit`, including `limit(0)`. The author dislikes `#embed`
+so this is his protest against it.
+
+
+We also support gnu's `offset(n)` and `base64("...")` vendor-prefixed
+parameters. See their documentation for how that works.
 
 ### GNU Extensions
 

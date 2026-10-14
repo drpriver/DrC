@@ -36,6 +36,9 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("unsigned char a[]={\n#embed __FILE__ limit(8)\n};"
+         "int f(int n){unsigned char b[]={_Embed(\"__FILE__ limit(8)\"),[2]=n};return b[2];}"
+         "return f(7)==7 && sizeof(a)==8;\n")},
     {__LINE__, SVI("int n=0; int f(int b){_Defer {int i=0;again:n++;if(++i<2)goto again;}"
          "if(b)return 3;return 4;} { _Defer n+=10; for(int i=0;i<3;i++)_Defer n++; }"
          "return f(1)==3&&f(0)==4&&n==17;\n")},

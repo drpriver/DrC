@@ -508,6 +508,9 @@ static
 void
 cc_print_expr(MStringBuilder*sb, CcExpr* e){
     switch(e->kind){
+        case CC_EXPR_BLOB:
+            msb_sprintf(sb, "<blob: %zu bytes>", e->blob.n_bytes);
+            return;
         case CC_EXPR_VALUE:
             if(e->str.length && e->text){
                 uint32_t sz = 1;

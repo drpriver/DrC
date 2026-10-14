@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include "../Drp/ByteBuffer.h"
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
@@ -20,6 +21,7 @@ enum CcTokenType TYPED_ENUM(uint32_t) {
     CC_CONSTANT,
     CC_STRING_LITERAL,
     CC_PUNCTUATOR,
+    CC_EMBED,
 };
 TYPEDEF_ENUM(CcTokenType, uint32_t);
 
@@ -244,6 +246,13 @@ struct CcToken {
             };
             uint64_t _pad3;
         } str;
+        struct {
+            CcTokenType type: 8;
+            uint32_t _bitpadding: 24;
+            uint32_t _pad;
+            SrcLoc loc;
+            ByteView bytes;
+        } embed;
         struct {
             CcTokenType type: 8;
             CcPunct punct: 24;

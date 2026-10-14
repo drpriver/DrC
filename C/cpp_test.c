@@ -26,6 +26,7 @@
 #endif
 
 static int cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok);
+static void cpp_write_token(MStringBuilder*, CppToken);
 enum {SKIP = 1};
 
 // Helper to run preprocessor on a string and collect output tokens as a string
@@ -84,13 +85,13 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
             result = 1;
             goto finally;
         }
-        if(tok.type == CPP_EOF) break;
+        if(tok.type == CPP_END_OF_INPUT) break;
         if(tok.type == CPP_WHITESPACE)
             msb_write_char(&sb, ' ');
         else if(tok.type == CPP_NEWLINE)
             msb_write_char(&sb, '\n');
         else
-            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+            cpp_write_token(&sb, tok);
     }
     StringView s = msb_detach_sv(&sb);
     *out = s;
@@ -166,15 +167,16 @@ cpp_expand_with_files(
                 result = 1;
                 goto finally;
             }
-            if(tok.type == CPP_EOF) break;
+            if(tok.type == CPP_END_OF_INPUT) break;
             if(tok.type == CPP_WHITESPACE)
                 msb_write_char(&sb, ' ');
             else if(tok.type == CPP_NEWLINE)
                 msb_write_char(&sb, '\n');
             else
-                msb_write_str(&sb, tok.txt.text, tok.txt.length);
+                cpp_write_token(&sb, tok);
         }
-        *out = msb_detach_sv(&sb);
+        if(sb.cursor) *out = msb_detach_sv(&sb);
+        else { *out = (StringView){0}; msb_destroy(&sb); }
     }
     finally:
     if(log_sb.cursor){
@@ -224,7 +226,7 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err) break;
-        if(tok.type == CPP_EOF) break;
+        if(tok.type == CPP_END_OF_INPUT) break;
     }
 
     finally:;
@@ -277,7 +279,7 @@ cpp_expand_string_expect_message(StringView txt, StringView* err_out){
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err) break;
-        if(tok.type == CPP_EOF) break;
+        if(tok.type == CPP_END_OF_INPUT) break;
     }
 
     finally:;
@@ -907,7 +909,7 @@ TestFunction(test_builtin_macros){
         {"multiple", SV("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SV("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
         {"indirect", SV("#define L1 L2\n#define L2 __LINE__\nL1"), SV("\n\n3"), __LINE__, 0},
         {"__FILE_NAME__", SV("__FILE_NAME__"), SV("\"(test)\""), __LINE__, 0},
-        {"__INCLUDE_LEVEL__", SV("__INCLUDE_LEVEL__"), SV("1"), __LINE__, 0},
+        {"__INCLUDE_LEVEL__", SV("__INCLUDE_LEVEL__"), SV("0"), __LINE__, 0},
         {"__DATE__", SV("__DATE__"), SV("\"Jan 01 1900\""), __LINE__, 0},
         {"__TIME__", SV("__TIME__"), SV("\"01:02:03\""), __LINE__, 0},
 
@@ -1179,6 +1181,11 @@ TestFunction(test_messages){
             "__print", __LINE__,
             SV("__print(hello)\n"),
             SV("(test):1:1: hello\n"),
+        },
+        {
+            "__print packed embed", __LINE__,
+            SV("__print(_Embed(\"__FILE__ limit(8)\"))\n"),
+            SV("(test):1:1: 95,95,112,114,105,110,116,40\n"),
         },
         {
             "__PRINT", __LINE__,
@@ -2154,6 +2161,292 @@ TestFunction(test_include){
     TESTEND();
 }
 
+TestFunction(test_include_eof){
+    TESTBEGIN();
+    struct { StringView main, inner, expected; } cases[] = {
+        {SV("#include \"sub/inner.h\""), SV("#include \"depth.h\""), SV("2")},
+        {SV("#include \"sub/inner.h\"\nLEVEL"), SV("#define LEVEL __INCLUDE_LEVEL__\nLEVEL"), SV("10")},
+        {SV("#include \"sub/inner.h\"\n)"), SV("#define ID(x) x\nID(__BASE_FILE__"), SV("\"src/main.c\"")},
+        {SV("#include \"sub/inner.h\""), SV("__INCLUDE_LEVEL__"), SV("1")},
+        {SV("#include \"sub/inner.h\"\n)"), SV("#define ID(x) x\nID(__INCLUDE_LEVEL__"), SV("0")},
+        {SV("#include \"sub/inner.h\"\n)"), SV("#define LEVEL __INCLUDE_LEVEL__\n#define ID(x) x\nID(LEVEL"), SV("0")},
+        {SV("#include \"sub/inner.h\"\n\"once\")\n#include \"sub/inner.h\"\nAFTER"), SV("OK\n_Pragma("), SV("OKAFTER")},
+        {SV("#include \"sub/inner.h\"\n\"include_path \\\".\\\"\")\n#include <local.h>"), SV("_Pragma("), SV("OK")},
+        {SV("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SV("OK\n#pragma once"), SV("OKAFTER")},
+        {SV("#include \"sub/inner.h\"\n#include <local.h>"), SV("#pragma include_path \".\""), SV("OK")},
+        {SV("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SV("#ifndef GUARD\n#define GUARD\nOK\n#endif"), SV("OKAFTER")},
+        {SV("#include \"sub/inner.h\"\nV"), SV("#define V OK"), SV("OK")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#pragma once"), SV("AFTER")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#if 1\nOK\n#endif"), SV("OKAFTER")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#if 0\nBAD\n#endif"), SV("AFTER")},
+        {SV("#include \"sub/inner.h\"\n(7)"), SV("#define F(x) x\nF"), SV("7")},
+        {SV("#include \"sub/inner.h\"\n7)"), SV("#define F(x) x\nF("), SV("7")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("/* empty */"), SV("AFTER")},
+        {SV("#include \"sub/inner.h\""), SV("OK\n"), SV("OK")},
+        {SV("#define H \"sub/inner.h\"\n#include H"), SV("OK\n"), SV("OK")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#define H \"local.h\"\n#include H"), SV("OKAFTER")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#include \"local.h\""), SV("OKAFTER")},
+        {SV("#include <chain.h>"), SV(""), SV("OK")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#embed \"data\" limit(2)"), SV("1,2AFTER")},
+        {SV("#include \"sub/inner.h\"\nAFTER"), SV("_Embed(\"\\\"data\\\"\")"), SV("1,2,3,4AFTER")},
+        {SV("#include \"sub/inner.h\"\nE"), SV("#define E _Embed(\"\\\"data\\\"\")\n"), SV("9")},
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        IncludeTestFile files[] = {
+            {SV("src/main.c"), cases[i].main},
+            {SV("src/sub/inner.h"), cases[i].inner},
+            {SV("src/sub/local.h"), SV("OK\n")},
+            {SV("src/sub/depth.h"), SV("__INCLUDE_LEVEL__")},
+            {SV("src/local.h"), SV("WRONG\n")},
+            {SV("inc1/chain.h"), SV("#if !__has_include_next(<chain.h>)\n#error next header missing\n#endif\n#define NEXT <chain.h>\n#include_next NEXT")},
+            {SV("inc2/chain.h"), SV("OK\n")},
+            {SV("src/sub/data"), SV("\1\2\3\4")},
+            {SV("src/data"), SV("\11")},
+        };
+        StringView paths[] = {SV("inc0"), SV("inc1"), SV("inc2")};
+        StringView result = {0};
+        int err = cpp_expand_with_files(files, arrlen(files), paths, arrlen(paths), NULL, 0, &result, __FILE__, __func__, __LINE__);
+        TestExpectFalse(int, err);
+        if(err){
+            TestPrintf("source boundary case %zu failed\n", i);
+            continue;
+        }
+        MStringBuilder compact = {.allocator=MALLOCATOR};
+        for(size_t j = 0; j < result.length; j++)
+            if(result.text[j] != '\n' && result.text[j] != ' ')
+                msb_write_char(&compact, result.text[j]);
+        TestExpectEqualsSv(cases[i].expected, msb_borrow_sv(&compact));
+        msb_destroy(&compact);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    TESTEND();
+}
+
+TestFunction(test_embed){
+    TESTBEGIN();
+    struct { StringView source, expected; } cases[] = {
+        {SV("#embed \"data\" gnu::offset(2) limit(3)"), SV("3,255,0")},
+        {SV("#embed \"data\" limit(2) __gnu__::__offset__(1+2)"), SV("255,0")},
+        {SV("#embed \"data\" gnu::offset(6) if_empty(42)"), SV("42")},
+        {SV("#embed \"data\" gnu::offset(9223372036854775807) if_empty(42)"), SV("42")},
+        {SV("#embed \".\" gnu::base64(\"AQID/wAI\") prefix(9,) suffix(,10)"), SV("9,1,2,3,255,0,8,10")},
+        {SV("#embed \".\" __gnu__::__base64__(\"A\" \"Q=\" \"=\")"), SV("1")},
+        {SV("#embed \".\" gnu::base64(\"AQI=\")"), SV("1,2")},
+        {SV("#embed \".\" gnu::base64(\"\") if_empty(42)"), SV("42")},
+        {SV("#define B \"AQID\"\n#embed \".\" gnu::base64(B)"), SV("\n1,2,3")},
+        {SV("_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")"), SV("1,2,3,255,0,8")},
+        {SV("#if __has_embed(\"data\" gnu::offset(5)) == 1 && __has_embed(\"data\" gnu::offset(6)) == 2\nyes\n#endif\n"), SV("\nyes\n\n")},
+        {SV("#if __has_embed(\".\" gnu::base64(\"AQ==\")) == 1 && __has_embed(\".\" gnu::base64(\"\")) == 2\nyes\n#endif\n"), SV("\nyes\n\n")},
+        {SV("#if __has_embed(\"wrong\" gnu::base64(\"AQ==\")) == 0 && __has_embed(\".\" gnu::base64(\"\") limit(0)) == 0\nyes\n#endif\n"), SV("\nyes\n\n")},
+        {SV("_Embed(\"\\\"empty\\\" if_empty(\\\"\\\\n\\\\\\\"\\\\\\\\\\\")\")"), SV("\"\\n\\\"\\\\\"")},
+        {SV("#embed \"data\"\n"), SV("1,2,3,255,0,8\n")},
+        {SV("#embed \"data\""), SV("1,2,3,255,0,8")},
+        {SV("_Embed(\"\\\"data\\\" limit(2) prefix(9,) suffix(,10)\")"), SV("9,1,2,10")},
+        {SV("_Embed(\"\\\"data\\\" limit (1 + 1)\")"), SV("1,2")},
+        {SV("_Embed(\"\\\"data\\\"\")"), SV("1,2,3,255,0,8")},
+        {SV("#define E \"\\\"data\\\" limit(2)\"\n_Embed( E )"), SV("\n1,2")},
+        {SV("#define EMBED(...) _Embed(#__VA_ARGS__)\nEMBED(\"data\" limit(2) prefix(9,))"), SV("\n9,1,2")},
+        {SV("#define F \"data\"\n#define N 2\n_Embed(\"F limit(N)\")"), SV("\n\n1,2")},
+        {SV("_Embed(\nL\"<data> limit(2)\"\n)"), SV("1,2")},
+        {SV("#define data wrong\n#embed <data> limit(2)\n"), SV("\n1,2\n")},
+        {SV("#define F \"data\"\n#embed F __limit__(2) prefix(9,) suffix(,10)\n"), SV("\n9,1,2,10\n")},
+        {SV("_Embed(\"\\\"data\\\" limit(0) prefix(bad) suffix(bad) if_empty(42)\")"), SV("42")},
+        {SV("_Embed(\"\\\"empty\\\" prefix(bad) suffix(bad)\")"), SV("")},
+        {SV("#if __has_embed(\"data\") == __STDC_EMBED_FOUND__ && __has_embed(\"empty\") == __STDC_EMBED_EMPTY__\nyes\n#endif\n"), SV("\nyes\n\n")},
+        {SV("#if __has_embed(\"data\" limit(0)) == 2 && __has_embed(\"missing\") == 0 && __has_embed(\"data\" vendor::unknown(1)) == 0\nyes\n#endif\n"), SV("\nyes\n\n")},
+        {SV("#define F \"data\"\n#if __has_embed(F limit(1)) == 1\nyes\n#endif\n"), SV("\n\nyes\n\n")},
+        {SV("#if 0\n#embed \"missing\"\n#endif\nok"), SV("\n\n\nok")},
+        {SV("#define S(...) #__VA_ARGS__\n#define X(...) S(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n\"1,2,3,255,0,8\"")},
+        {SV("#define F(a,b,c,d,e,f) b+c+d\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n2+3+255")},
+        {SV("#define F(a,b,c,d,e,f) a##b e##f\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n12 08")},
+        {SV("#define S(x) #x\nS(_Embed(E))"), SV("\n\"_Embed(E)\"")},
+    };
+    static int case_idx = 0;
+    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(cases); i = test_atomic_increment(&case_idx)){
+        IncludeTestFile files[] = {
+            {SV("test/main.c"), cases[i].source},
+            {SV("test/data"), SV("\1\2\3\xff\0\10")},
+            {SV("test/empty"), SV("")},
+        };
+        StringView path = SV("test"), result = {0};
+        int err = cpp_expand_with_files(files, arrlen(files), &path, 1, NULL, 0, &result, __FILE__, __func__, __LINE__);
+        TestExpectFalse(int, err);
+        if(err) goto embed_case_cleanup;
+        test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
+        embed_case_cleanup:
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+    }
+    StringView bad[] = {
+        SV("#embed \".\" gnu::base64()"),
+        SV("#embed \".\" gnu::base64(123)"),
+        SV("#embed \".\" gnu::base64(L\"AQ==\")"),
+        SV("#embed \"wrong\" gnu::base64(\"AQ==\")"),
+        SV("#embed <.> gnu::base64(\"AQ==\")"),
+        SV("#embed \".\" gnu::base64(\"AQ==\") limit(0)"),
+        SV("#embed \".\" gnu::offset(0) gnu::base64(\"AQ==\")"),
+        SV("#embed \".\" gnu::base64(\"AQ==\") gnu::base64(\"AQ==\")"),
+        SV("#embed __FILE__ gnu::offset(0) __gnu__::__offset__(1)"),
+        SV("#embed __FILE__ gnu::offset(-1)"),
+        SV("#embed __FILE__ gnu::offset(defined(X))"),
+        SV("#embed \".\" gnu::base64(\"AQ=\")"),
+        SV("#embed \".\" gnu::base64(\"AR==\")"),
+        SV("#embed \".\" gnu::base64(\"AQJ=\")"),
+        SV("#embed \".\" gnu::base64(\"AQ==AQ==\")"),
+        SV("#embed \".\" gnu::base64(\"!!!!\")"),
+        SV("#embed \".\" gnu::base64(\"\\x41Q==\")"),
+        SV("#if __has_embed(\".\" gnu::base64(\"AR==\"))\n#endif"),
+        SV("_Embed()"),
+        SV("_Embed(123)"),
+        SV("_Embed(\"\\\"data\\\"\" \"limit(1)\")"),
+        SV("_Embed(\"data\" limit(1))"),
+        SV("#embed \"missing\"\n"),
+        SV("_Embed(\"\\\"missing\\\" limit(0)\")"),
+        SV("_Embed(\"__FILE__ limit(-1)\")"),
+        SV("_Embed(\"__FILE__ limit()\")"),
+        SV("_Embed(\"__FILE__ limit(1 2)\")"),
+        SV("_Embed(\"__FILE__ limit(1, 2)\")"),
+        SV("_Embed(\"__FILE__ limit(defined(X))\")"),
+        SV("_Embed(\"__FILE__ limit(1) __limit__(2)\")"),
+        SV("_Embed(\"__FILE__ prefix([)\"))"),
+        SV("_Embed(\"__FILE__ unknown(1)\")"),
+        SV("_Embed(\"__FILE__ suffix\")"),
+    };
+    static int bad_idx = 0;
+    for(size_t i = test_atomic_increment(&bad_idx); i < arrlen(bad); i = test_atomic_increment(&bad_idx)){
+        StringView log = {0};
+        int err = cpp_expand_string_expect_error(bad[i], &log);
+        TestExpectFalse(int, err);
+        TestExpectTrue(size_t, log.length);
+        if(log.text) Allocator_free(MALLOCATOR, log.text, log.length);
+    }
+    TESTEND();
+}
+
+TestFunction(test_embed_file_queries){
+    TESTBEGIN();
+    StringView cases[] = {
+        SV("#if __has_embed(\"metadata\") != 1\n#error probe loaded data\n#endif\n"),
+        SV("#if __has_embed(\"metadata\" limit(0)) != 2\n#error zero limit loaded data\n#endif\n"),
+        SV("#embed \"metadata\" limit(0)\n"),
+        SV("#embed \"" __FILE__ "\" limit(4)\n"),
+        SV("#if __has_embed(\"oversized\") != 0 || __has_embed(\"oversized\" limit(1)) != 0 || __has_embed(\"oversized\" limit(0)) != 0\n#error oversized resource accepted\n#endif\n"),
+        SV("#embed \"oversized\"\n"),
+        SV("#embed \"oversized\" limit(0)\n"),
+        SV("_Embed(\"\\\"oversized\\\" limit(1)\")"),
+        SV("_Embed(\"\\\"metadata\\\" limit(4)\")"),
+        SV("#if __has_embed(\"metadata\" gnu::offset(4194303)) != 1 || __has_embed(\"metadata\" gnu::offset(4194304)) != 2\n#error offset loaded data\n#endif\n"),
+        SV("#if __has_embed(\"oversized\" gnu::offset(4194305)) != 0\n#error offset bypassed size limit\n#endif\n"),
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        ArenaAllocator arena = {0};
+        Allocator a = allocator_from_arena(&arena);
+        FileCache* fc = fc_create(a, FC_FLAGS_NONE);
+        AtomTable at = {0};
+        Environment env = {.allocator=a, .at=&at};
+        MStringBuilder log = {.allocator=a};
+        MsbLogger logger = {0};
+        CppPreprocessor cpp = {.allocator=a, .fc=fc, .at=&at,
+            .env=&env, .target=&cc_target_test, .logger=msb_logger(&logger, &log)};
+        fc_write_path(fc, "main.c", 6);
+        TestExpectEquals(int, fc_cache_file(fc, cases[i]), 0);
+        fc_write_path(fc, "metadata", 8);
+        uint32_t id;
+        TestExpectEquals(int, fc_intern_path(fc, &id), 0);
+        CachedFile* f = &fc->map.data[id];
+        f->exists = f->is_file = f->size_cached = 1;
+        f->data_size = 4 * 1024 * 1024;
+        if(i == 8){
+            char* data = Allocator_alloc(a, f->data_size);
+            memset(data, 1, f->data_size);
+            f->data_cached = 1;
+            f->data.buff = data;
+            f->data.n_bytes = f->data_size;
+        }
+        fc_write_path(fc, "oversized", 9);
+        TestExpectEquals(int, fc_intern_path(fc, &id), 0);
+        f = &fc->map.data[id];
+        f->exists = f->is_file = f->size_cached = 1;
+        f->data_size = 4 * 1024 * 1024 + 1;
+        fc->may_read_real_files = i == 3;
+        TestExpectEquals(int, cpp_define_builtin_macros(&cpp), 0);
+        TestExpectEquals(int, ma_push(CppFrame)(&cpp.frames, a,
+            ((CppFrame){.file_id=0, .txt=cases[i], .line=1, .column=1})), 0);
+        int err;
+        CppToken tok;
+        MStringBuilder output = {.allocator=a};
+        for(;;){
+            err = cpp_next_pp_token(&cpp, &tok);
+            if(err) break;
+            if(tok.type == CPP_END_OF_INPUT) break;
+            cpp_write_token(&output, tok);
+        }
+        if(i >= 5 && i <= 7){
+            TestExpectTrue(int, err);
+            msb_nul_terminate(&log);
+            TestExpectTrue(int, strstr(log.data, "4 MiB") != NULL);
+        }
+        else TestExpectFalse(int, err);
+        if(i == 8) TestExpectEqualsSv(SV("1,1,1,1"), msb_borrow_sv(&output));
+        if(i == 3){
+            fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+            TestExpectEquals(int, fc_intern_path(fc, &id), 0);
+            TestExpectTrue(int, fc->map.data[id].data_cached);
+            StringView full;
+            fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
+            TestExpectEquals(int, fc_read_file(fc, &full, &id), 0);
+            TestExpectTrue(size_t, full.length > 8);
+            TestExpectEquals(size_t, fc->map.data[id].data.n_bytes, full.length);
+            MStringBuilder expected = {.allocator=a};
+            for(size_t j = 0; j < 4; j++)
+                msb_sprintf(&expected, "%u%s", (unsigned)(unsigned char)full.text[j], j == 3 ? "\n" : ",");
+            TestExpectEqualsSv(msb_borrow_sv(&expected), msb_borrow_sv(&output));
+        }
+        ArenaAllocator_free_all(&cpp.synth_arena);
+        ArenaAllocator_free_all(&at.arena);
+        ArenaAllocator_free_all(&arena);
+    }
+    TESTEND();
+}
+
+TestFunction(test_embed_base64_size){
+    TESTBEGIN();
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < 3; i = test_atomic_increment(&idx)){
+        size_t size = 4*1024*1024-1+i;
+        size_t encoded_size = (size+2)/3*4;
+        char* encoded = Allocator_alloc(MALLOCATOR, encoded_size);
+        TestExpectTrue(void*, encoded);
+        if(!encoded) return TEST_stats;
+        memset(encoded, 'A', encoded_size);
+        size_t padding = (3-size%3)%3;
+        memset(encoded+encoded_size-padding, '=', padding);
+        MStringBuilder source = {.allocator=MALLOCATOR};
+        msb_write_literal(&source, "#if __has_embed(\".\" gnu::base64(\"");
+        msb_write_str(&source, encoded, encoded_size);
+        msb_sprintf(&source, "\")) != %d\n#error incorrect base64 size limit\n#endif\n", size > 4*1024*1024 ? 0 : 1);
+        StringView result = {0};
+        int err = cpp_expand_string(msb_borrow_sv(&source), &result, __FILE__, __func__, __LINE__);
+        TestExpectFalse(int, err);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(size > 4*1024*1024){
+            msb_reset(&source);
+            msb_write_literal(&source, "#embed \".\" gnu::base64(\"");
+            msb_write_str(&source, encoded, encoded_size);
+            msb_write_literal(&source, "\")\n");
+            StringView log = {0};
+            err = cpp_expand_string_expect_error(msb_borrow_sv(&source), &log);
+            TestExpectFalse(int, err);
+            TestExpectTrue(size_t, log.length);
+            if(log.text) Allocator_free(MALLOCATOR, log.text, log.length);
+        }
+        msb_destroy(&source);
+        Allocator_free(MALLOCATOR, encoded, encoded_size);
+    }
+    TESTEND();
+}
+
 TestFunction(test_framework_include){
     TESTBEGIN();
     // #include <Foo/Bar.h> resolves to {fwdir}/Foo.framework/Headers/Bar.h.
@@ -2261,6 +2554,10 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_erroneous_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_if_eval, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_include, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_embed, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_include_eof, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_embed_file_queries, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_embed_base64_size, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_framework_include, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR

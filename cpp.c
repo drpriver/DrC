@@ -12,6 +12,7 @@
 #include "Drp/term_util.h"
 #include "Drp/file_cache.h"
 #include "Drp/file_util.h"
+#include "Drp/msb_sprintf.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "cpp_args.h"
@@ -148,7 +149,7 @@ int main(int argc, char** argv, char** envp){
     for(;;){
         err = cpp_next_pp_token(&cpp, &tok);
         if(err) return err;
-        if(tok.type == CPP_EOF) break;
+        if(tok.type == CPP_END_OF_INPUT) break;
         if(tok.type == CPP_NEWLINE){
             if(blank_line) continue;
             blank_line = 1;
@@ -161,7 +162,10 @@ int main(int argc, char** argv, char** envp){
         }
         else {
             blank_line = 0;
-            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+            if(tok.type == CPP_EMBED)
+                msb_sprintf(&sb, "<_Embed: %zu bytes>", tok.bytes.n_bytes);
+            else
+                msb_write_str(&sb, tok.txt.text, tok.txt.length);
         }
     }
     if(output.length){

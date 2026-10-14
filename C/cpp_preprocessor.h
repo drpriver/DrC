@@ -122,7 +122,8 @@ struct CppFrame {
         } loc;
     };
     StringView txt;
-    CppIncludePosition include_position; // where we are in the include lookup, for include_next and related.
+    CppIncludePosition include_position;
+    uint32_t include_depth; // zero for the main input file
 };
 
 typedef struct CppPoundIf CppPoundIf;
@@ -204,6 +205,7 @@ struct CppPreprocessor {
     Marray(Atom)     include_guard_macros; // parallel to above
     const CcTargetConfig* target;
     SrcLoc eof_loc; // location of EOF in the base file
+    uint32_t base_file_id;
 };
 
 static
@@ -291,7 +293,7 @@ static void cpp_msg_preamble(CppPreprocessor* cpp, SrcLoc loc, const char* prefi
 static void cpp_include_backtrace(CppPreprocessor* cpp, LogLevel level);
 static void cpp_msg_postamble(CppPreprocessor* cpp, SrcLoc loc, LogLevel level);
 static void cpp_msg(CppPreprocessor* cpp, SrcLoc loc, LogLevel level, const char* prefix, const char* fmt, va_list va);
-static int cpp_add_search_path_from_pragma(CppPreprocessor* cpp, CppToken tok, size_t include_path_idx);
+static int cpp_add_search_path_from_pragma(CppPreprocessor* cpp, uint32_t source_file, CppToken tok, size_t include_path_idx);
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

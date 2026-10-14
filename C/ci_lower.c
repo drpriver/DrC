@@ -298,8 +298,12 @@ ci_constexpr_uses_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool addr
         if(err) return err;
     }
     switch((uint32_t)e->kind){
-        case CC_EXPR_VALUE: case CC_EXPR_FUNCTION: case CC_EXPR_BUILTIN:
-        case CC_EXPR_DOT: case CC_EXPR_ARROW:
+        case CC_EXPR_BLOB:
+        case CC_EXPR_VALUE:
+        case CC_EXPR_FUNCTION:
+        case CC_EXPR_BUILTIN:
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
             return 0;
         case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
             for(size_t i = 0; i < e->init_list->count; i++){
@@ -1417,6 +1421,7 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     switch(e->kind){
         case CC_EXPR_FUNCTION:
             return ci_lower_cast_operand(ci, ctx, e, dest, out);
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:{
             if(ccqt_kind(e->type) == CC_ARRAY){
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
@@ -1437,8 +1442,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
                         .immsize = 8,
                         .slot = aslot,
                         .immediate = {
-                            (uint64_t)e->text,
-                            e->str.length,
+                            (uint64_t)cc_expr_array_data(e),
+                            cc_expr_array_count(e),
                         },
                         .loc = e->loc,
                     },
@@ -4062,6 +4067,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     if(ci_frame_lvalue(ci, lhs, &off))
         return 0; // the rhs loads directly into the slot
     switch((uint32_t)rhs->kind){
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
             if(ccqt_kind(rhs->type) == CC_ARRAY)
                 break;
@@ -5413,7 +5419,10 @@ ci_expr_discardable(CiLowerCtx* ctx, CcExpr* e, _Bool* safe){
     CcExpr* children[3];
     unsigned count = 0;
     switch((uint32_t)e->kind){
-        case CC_EXPR_VALUE: case CC_EXPR_VARIABLE: case CC_EXPR_FUNCTION:
+        case CC_EXPR_BLOB:
+        case CC_EXPR_VALUE:
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_FUNCTION:
             break;
         case CC_EXPR_NEG: case CC_EXPR_POS: case CC_EXPR_BITNOT:
         case CC_EXPR_LOGNOT: case CC_EXPR_DEREF: case CC_EXPR_ADDR:
@@ -5468,6 +5477,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_OBJECT_VIEW:
             return ci_lower_expr_discard(ci, ctx, e->lhs);
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
             return 0;
         case CC_EXPR_VARIABLE:
@@ -5827,6 +5837,7 @@ ci_pointer_alignment(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* e, uint32
             return ci_pointer_alignment(ci, ctx, e->values[0], out);
         case CC_EXPR_OBJECT_VIEW:
             return ci_pointer_alignment(ci, ctx, e->lhs, out);
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
             // Literal pointer bits need not satisfy the pointee's alignment.
             *out = 0;
@@ -6167,6 +6178,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
         return 0;
     }
     switch((uint32_t)lv->kind){
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:{
             if(ccqt_kind(lv->type) != CC_ARRAY)
                 break; // not an lvalue; materialized below
@@ -6185,8 +6197,8 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
                     .immsize = ctx->ptr_size,
                     .slot = aslot,
                     .immediate = {
-                        (uint64_t)lv->text,
-                        lv->str.length,
+                        (uint64_t)cc_expr_array_data(lv),
+                        cc_expr_array_count(lv),
                     },
                     .loc = lv->loc,
                 },
@@ -7693,10 +7705,11 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
             out->kind = CI_STATIC_RELOC_FUNC;
             out->func = e->func;
             return 0;
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
             if(ccqt_kind(e->type) == CC_ARRAY){
                 out->kind = CI_STATIC_RELOC_LITERAL;
-                out->literal = e->text;
+                out->literal = cc_expr_array_data(e);
                 return 0;
             }
             if(!lvalue && (ccqt_kind(e->type) == CC_POINTER || ccqt_bt_eq(e->type, CCBT_nullptr_t))){
@@ -8010,13 +8023,13 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
         Allocator_free(al, pending, size);
         return err;
     }
-    if(e->kind == CC_EXPR_VALUE && ccqt_kind(e->type) == CC_ARRAY && e->text){
+    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_kind(e->type) == CC_ARRAY && cc_expr_array_data(e)){
         uint32_t elem_size;
         err = cc_sizeof_as_uint(p, ccqt_as_array(e->type)->element, e->loc, &elem_size);
         if(err) return err;
-        uint64_t length = (uint64_t)e->str.length*elem_size;
+        uint64_t length = (uint64_t)cc_expr_array_count(e)*elem_size;
         for(uint32_t i = 0; i < size; i++)
-            if((uint64_t)start+i < length) data->bytes[offset+i] |= e->text[start+i] & mask[i];
+            if((uint64_t)start+i < length) data->bytes[offset+i] |= cc_expr_array_data(e)[start+i] & mask[i];
         return 0;
     }
     unsigned char bytes[16] = {0};
@@ -8217,12 +8230,12 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
         }
         return 0;
     }
-    if(e->kind == CC_EXPR_VALUE && ccqt_kind(e->type) == CC_ARRAY && e->text){
+    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_kind(e->type) == CC_ARRAY && cc_expr_array_data(e)){
         uint32_t elem_size;
         err = cc_sizeof_as_uint(p, ccqt_as_array(e->type)->element, e->loc, &elem_size);
         if(err) return err;
-        uint64_t bytes = (uint64_t)e->str.length * elem_size;
-        memcpy(data->bytes + offset, e->text, bytes < size ? (size_t)bytes : size);
+        uint64_t bytes = (uint64_t)cc_expr_array_count(e) * elem_size;
+        memcpy(data->bytes + offset, cc_expr_array_data(e), bytes < size ? (size_t)bytes : size);
         return 0;
     }
     CiFoldValue folded;
@@ -8864,7 +8877,10 @@ ci_fold_read_inputs(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, unsigned dept
     if(depth >= 256 || e->type.is_volatile || e->type.is_atomic) return FOLD_FAIL;
     int err;
     switch((uint32_t)e->kind){
-        case CC_EXPR_VALUE: case CC_EXPR_FUNCTION: return 0;
+        case CC_EXPR_BLOB:
+        case CC_EXPR_VALUE:
+        case CC_EXPR_FUNCTION:
+            return 0;
         case CC_EXPR_VARIABLE:
             if(!ci_foldable_variable(e)) return FOLD_FAIL;
             return ci_fold_read_inputs(ci, ctx, e->var->initializer, depth+1);
@@ -8987,6 +9003,7 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
     CiUint128 zero = ci_uint128_from_uint64(0), u = zero;
     _Bool truth;
     switch((uint32_t)e->kind){
+        case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
             memcpy(result.bits, e->data, sz);
             *folded = result;

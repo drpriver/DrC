@@ -14,6 +14,11 @@ struct ByteBuffer {
     size_t n_bytes;
     void* buff;
 };
+typedef struct ByteView ByteView;
+struct ByteView {
+    size_t n_bytes;
+    const void* buff;
+};
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

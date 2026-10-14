@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stddef.h>
+#include "ByteBuffer.h"
 #include "cstring_view.h"
 #include "MStringBuilder.h"
 #include "Allocators/allocator.h"
@@ -56,6 +57,8 @@ static int fc_is_file(FileCache*);
 // Returns FC_OK on success, FC_ERROR_* on failure.
 // On success, file_id receives the index of the file in the cache.
 static int fc_read_file(FileCache*, StringView* data, uint32_t* file_id);
+// Same operation, with a binary view of the cached contents.
+static int fc_read_bytes(FileCache*, ByteView* data, uint32_t* file_id);
 // Attempts to obtain the file's size.
 // Might be cached and so there is a possible race condition, but usually that is ok.
 // Returns FC_OK on success, FC_ERROR_* on failure.

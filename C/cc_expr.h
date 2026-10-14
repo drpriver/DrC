@@ -5,6 +5,7 @@
 //
 #include <stdint.h>
 #include <stddef.h>
+#include "../Drp/ByteBuffer.h"
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "cc_type.h"
@@ -26,6 +27,7 @@
 
 enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_VALUE, // Literals, sizeof, alignof, etc. get desugared to this
+    CC_EXPR_BLOB,
     CC_EXPR_SIZEOF_VMT, // sizeof of vla
     CC_EXPR_VARIABLE, // Reference to a variable, eagerly resolved
     CC_EXPR_FUNCTION, // Reference to a function, eagerly resolved
@@ -552,6 +554,7 @@ struct CcExpr {
         float float_;
         double double_;
         const char* text;
+        ByteView blob; // CC_EXPR_BLOB
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;
@@ -568,6 +571,18 @@ struct CcExpr {
     };
     CcExpr*_Nonnull values[];
 };
+static inline
+const unsigned char*
+cc_expr_array_data(const CcExpr* e){
+    return e->kind == CC_EXPR_BLOB ? e->blob.buff : (const unsigned char*)e->text;
+}
+
+static inline
+size_t
+cc_expr_array_count(const CcExpr* e){
+    return e->kind == CC_EXPR_BLOB ? e->blob.n_bytes : e->str.length;
+}
+
 static inline
 CcQualType
 cc_expr_field_owner(const CcExpr* e){

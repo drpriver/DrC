@@ -14,6 +14,23 @@ also has its own fun extensions to make programming in C more fun and
 ergonomic.
 
 Preprocessor::md
+  `_Embed(string-literal)`::md
+    `_Embed()` is an inline spelling of C23 `#embed`, similar to how
+    `_Pragma()` is to `#pragma`. This allows it to be used in macros.
+    ::pre.C
+      const unsigned char data[] = {
+          #embed "data.bin"
+      };
+      #define EMBED(...) _Embed(#__VA_ARGS__)
+      const unsigned char moardata[] = {EMBED("data.bin" limit(16))};
+
+    Resources larger than 4 MiB are unsupported, regardless
+    of `limit`, including `limit(0)`. The author dislikes `#embed` 
+    so this is his protest against it.
+
+    We also support gnu's `offset(n)` and `base64("...")` vendor-prefixed
+    parameters. See their documentation for how that works.
+
   GNU Extensions::md
     Technically extensions, but these are commonly implemented for gnu
     compatibility.

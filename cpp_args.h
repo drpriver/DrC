@@ -189,7 +189,7 @@ cpp_apply_cli_defines(CppPreprocessor* cpp){
         for(;;){
             err = cpp_next_pp_token(cpp, &tok);
             if(err) return err;
-            if(tok.type == CPP_EOF) break;
+            if(tok.type == CPP_END_OF_INPUT) break;
         }
     }
     return err;
