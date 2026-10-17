@@ -214,6 +214,10 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
             CI_REMAP(op->alloca.slot);
             CI_REMAP(op->alloca.src);
             break;
+        case CI_OP_CLEAR_CACHE:
+            CI_REMAP(op->clear_cache.begin);
+            CI_REMAP(op->clear_cache.end);
+            break;
         case CI_OP_BSWAP:
             CI_REMAP(op->bswap.slot);
             CI_REMAP(op->bswap.src);

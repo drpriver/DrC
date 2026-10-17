@@ -120,6 +120,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_va_arg,
     CC__builtin_va_copy,
     CC__builtin_expect,
+    CC__builtin___clear_cache,
     CC__builtin_unreachable,
     CC__builtin_trap,
     CC__builtin_debugtrap,

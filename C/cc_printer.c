@@ -657,8 +657,11 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(sb, "backtrace()"); break;
                 case CC_BUILTIN_CAPTURE_BACKTRACE:
                 case CC_BUILTIN_SYMBOLICATE:
+                case CC_BUILTIN_CLEAR_CACHE:
                     if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE)
                         msb_write_literal(sb, "__builtin_capture_backtrace(");
+                    else if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
+                        msb_write_literal(sb, "__builtin___clear_cache(");
                     else msb_write_literal(sb, "__builtin_symbolicate(");
                     cc_print_expr(sb, e->values[0]);
                     msb_write_literal(sb, ", ");

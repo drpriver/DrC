@@ -241,6 +241,7 @@ static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e
 static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_clear_cache(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
 static int ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
@@ -2858,6 +2859,8 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             return 0;
         }
         case CC_EXPR_BUILTIN:{
+            if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
+                return ci_lower_clear_cache(ci, ctx, e);
             if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
                 return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, dest, out);
             CiOp* op;
@@ -3049,6 +3052,36 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         err = ci_emit_copy(ctx, dest, result, out->size, e->loc);
         if(err) return err;
     }
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_clear_cache(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
+    if(ci_target(ci)->arch == CC_ARCH_x86_64){
+        // No cache maintenance on x86, but both operands must still be evaluated.
+        int err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+        if(err) return err;
+        return ci_lower_expr_discard(ci, ctx, e->values[1]);
+    }
+    uint32_t temp = ctx->temp;
+    CiLowerVal begin, end;
+    int err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &begin);
+    if(err) return err;
+    err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &end);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .clear_cache = {
+            .kind = CI_OP_CLEAR_CACHE,
+            .begin = begin.slot,
+            .end = end.slot,
+            .loc = e->loc,
+        },
+    };
     ctx->temp = temp;
     return 0;
 }
@@ -5747,6 +5780,8 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_VA:
             return ci_lower_va(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_BUILTIN:{
+            if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
+                return ci_lower_clear_cache(ci, ctx, e);
             if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
                 return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, CI_NO_SLOT, NULL);
             CiOp* op;

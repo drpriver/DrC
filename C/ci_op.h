@@ -146,6 +146,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ATOMIC_RMW,
     CI_OP_ATOMIC_CAS,
     CI_OP_FENCE,
+    CI_OP_CLEAR_CACHE,
     CI_OP_ALLOCA,
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
@@ -495,6 +496,14 @@ struct CiOp {
             uint64_t pad[2];
             SrcLoc loc;
         } fence;
+        struct {
+            CiOpKind kind: 8; // CI_OP_CLEAR_CACHE
+            uint32_t _bitpad: 24;
+            uint32_t _pad;
+            uint32_t begin, end;
+            uint64_t pad;
+            SrcLoc loc;
+        } clear_cache;
         struct {
             CiOpKind kind: 8; // CI_OP_CALL
             uint32_t is_indirect: 1, _pad:23;

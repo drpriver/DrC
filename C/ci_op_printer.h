@@ -640,6 +640,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
         case CI_OP_FENCE:
             msb_sprintf(out, "%s fence %s", op->fence.is_signal?"signal":"atomic", ci_op_memory_order(op->fence.memorder));
             break;
+        case CI_OP_CLEAR_CACHE:
+            msb_sprintf(out, "clear_cache([%u], [%u])", op->clear_cache.begin, op->clear_cache.end);
+            break;
         case CI_OP_ALLOCA:
             msb_sprintf(out, "[%u] = alloca([%u])", op->alloca.slot, op->alloca.src);
             break;

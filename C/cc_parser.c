@@ -4269,6 +4269,11 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     err = cc_pointer_of(p, p->builtin_src_loc, &second);
                     if(err) return err;
                     ret = ccqt_basic(CCBT_void);
+                    goto parse_trace;
+                case CC__builtin___clear_cache:
+                    op = CC_BUILTIN_CLEAR_CACHE;
+                    first = second = p->void_star;
+                    ret = ccqt_basic(CCBT_void);
 
                     parse_trace:;
                     CcExpr *first_arg = NULL, *second_arg = NULL;
@@ -8399,6 +8404,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_BUILTIN:
             return e->builtin.op == CC_BUILTIN_COMPLEX
                 || e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE
+                || e->builtin.op == CC_BUILTIN_CLEAR_CACHE
                 || e->builtin.op == CC_BUILTIN_SYMBOLICATE ? 2 : 0;
         case CC_EXPR_ADD:
         case CC_EXPR_SUB:
@@ -15802,6 +15808,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_va_arg"),   CC__builtin_va_arg},
             {SVI("__builtin_va_copy"),  CC__builtin_va_copy},
             {SVI("__builtin_expect"),  CC__builtin_expect},
+            {SVI("__builtin___clear_cache"), CC__builtin___clear_cache},
             {SVI("__builtin_unreachable"), CC__builtin_unreachable},
             {SVI("__builtin_trap"), CC__builtin_trap},
             {SVI("__builtin_debugtrap"), CC__builtin_debugtrap},

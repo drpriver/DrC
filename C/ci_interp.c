@@ -1451,7 +1451,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 ru = (uint64_t)ci_read_int(s2, 8);
             }
             uint64_t res;
-            switch((CiCmpOp)(op->cmp.op)){
+            switch(op->cmp.op){
                 case CI_CMP_EQ: res = lu == ru; break;
                 case CI_CMP_NE: res = lu != ru; break;
                 case CI_CMP_LT: res = is_unsigned ? (lu < ru) : ((int64_t)lu < (int64_t)ru); break;
@@ -2622,6 +2622,19 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             }
             frame->pc++;
             return 0;
+        case CI_OP_CLEAR_CACHE: {
+            char *begin, *end;
+            CI_INLINE_MEMCPY(&begin, (char*)frame->slots + op->clear_cache.begin, sizeof begin);
+            CI_INLINE_MEMCPY(&end, (char*)frame->slots + op->clear_cache.end, sizeof end);
+            #ifdef _WIN32
+            if(!FlushInstructionCache(GetCurrentProcess(), begin, (SIZE_T)((uintptr_t)end - (uintptr_t)begin)))
+                return ci_error(ci, op->loc, "__builtin___clear_cache failed");
+            #else
+            __builtin___clear_cache(begin, end);
+            #endif
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_ALLOCA:{
             size_t sz;
             void* dest = (char*)frame->slots + op->alloca.slot;
@@ -2674,7 +2687,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     return ci_unimplemented(ci, op->loc, "complex expression lowering");
                 case CC_BUILTIN_CAPTURE_BACKTRACE:
                 case CC_BUILTIN_SYMBOLICATE:
-                    return ci_unreachable(ci, op->loc, "unlowered backtrace builtin");
+                case CC_BUILTIN_CLEAR_CACHE:
+                    return ci_unreachable(ci, op->loc, "unlowered builtin");
                 DRP_CASES_EXHAUSTED;
             }
         }

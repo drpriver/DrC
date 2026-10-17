@@ -9856,6 +9856,34 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "clear cache: feature detection, void type, and operand side effects", __LINE__,
+            SVI("#if !__has_builtin(__builtin___clear_cache)\n#error missing clear_cache builtin\n#endif\n"
+                "char buf[32]; char *begin=buf, *end=buf+16;\n"
+                "_Static_assert(typeof(__builtin___clear_cache(begin, end)) == void);\n"
+                "__builtin___clear_cache(begin++, end++);\n"
+                "int result=(__builtin___clear_cache(begin++, end++), 7);\n"
+                "return result==7 && begin==buf+2 && end==buf+18;\n"),
+            .exit_code = 1,
+        },
+        {
+            "clear cache: inline arguments and empty ranges", __LINE__,
+            SVI("int starts, ends; char buf[32];\n"
+                "char* start(void){starts++;return buf;}\n"
+                "char* end(void){ends++;return buf+sizeof buf;}\n"
+                "inline void flush(char *a, char *b){__builtin___clear_cache(a,b);}\n"
+                "flush(start(),end());\n"
+                "__builtin___clear_cache(buf,buf);\n"
+                "return starts==1 && ends==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "clear cache: x86 lowering emits no instructions for pure operands", __LINE__,
+            SVI("__builtin___clear_cache(nullptr, nullptr);\n"),
+            .exit_code = -1,
+            .no_toplevel_ops = 1,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
             "backtrace: bounded capture, zero capacity, and discarded result", __LINE__,
             SVI("void *entries[2] = {nullptr, nullptr};\n"
                 "int f(int depth){if(depth) return f(depth-1); return __builtin_capture_backtrace(entries, 1);}\n"
@@ -16319,6 +16347,18 @@ TestFunction(test_interpreter_runtime_errors){
             "backtrace: symbolication needs an output", __LINE__,
             SVI("__builtin_symbolicate(nullptr, nullptr);\n"),
             SVI("(test):1:1: error: __builtin_symbolicate output must not be NULL\n"),
+        },
+        {
+            "clear cache: requires two operands", __LINE__,
+            SVI("__builtin___clear_cache(nullptr);\n"),
+            SVI("(test):1:32: error: Expected ','\n"),
+            .parser_error = 1,
+        },
+        {
+            "clear cache: rejects extra operands", __LINE__,
+            SVI("__builtin___clear_cache(nullptr, nullptr, nullptr);\n"),
+            SVI("(test):1:41: error: Expected ')'\n"),
+            .parser_error = 1,
         },
         {
             "complex literal fails during lowering", __LINE__,
