@@ -11899,6 +11899,104 @@ TestFunction(test_interpreter){
             .exit_code = 4,
         },
         {
+            "for declaration condition: initialization repeats and increment sees value", __LINE__,
+            SVI("int calls=0;int get(int i){calls++;return i<3?i+1:0;}\n"
+                "int f(void){int sum=0,inc=0;for(int i=0;int x=get(i);++i,inc+=x)sum+=x;\n"
+                "int x=10;return sum==6&&inc==6&&calls==4&&x==10;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "for declaration condition: continue and break", __LINE__,
+            SVI("int calls=0;int get(int i){calls++;return i+1;}\n"
+                "int f(void){int sum=0,inc=0;for(int i=0;int x=get(i);++i,inc+=x){\n"
+                "defer sum+=x;if(x==1)continue;if(x==3)break;}\n"
+                "return sum==6&&inc==3&&calls==3;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "for declaration condition: initially false and empty clauses", __LINE__,
+            SVI("int calls=0;int get(void){return calls++==0?0:1;}\n"
+                "int f(void){int body=0,inc=0;for(;int x=get();++inc)++body;\n"
+                "for(;int x=get();){body+=x;break;}\n"
+                "return body==1&&inc==0&&calls==2;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "for expression condition: compound literal side effects repeat", __LINE__,
+            SVI("int f(void){int n=0,sum=0;for(;(int[]){++n}[0]<4;)sum+=n;return n==4&&sum==6;}return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "for declaration condition: pointer and multiple declarators", __LINE__,
+            SVI("int f(void){int a[3]={2,3,4};int sum=0;\n"
+                "for(int i=0;int* p=i<3?&a[i]:nullptr;++i)sum+=*p;\n"
+                "for(int i=0;int x=i+1,y=i<2?x:0;++i)sum+=x+y;return sum;}return f();\n"),
+            .exit_code = 15,
+        },
+        {
+            "selection headers: uninitialized declarations and output parameters", __LINE__,
+            SVI("int initialize(int* x,float* y){*x=7;*y=3;return 1;}\n"
+                "int f(void){if(int x; float y; initialize(&x,&y)) return x+(int)y; else return 0;}\n"
+                "return f();\n"),
+            .exit_code = 10,
+        },
+        {
+            "selection headers: assignment condition initializes object once", __LINE__,
+            SVI("int calls=0,value=0; int get(void){calls++;return value;}\n"
+                "int f(void){if(int x; x=get()) return x; else return x+10;}\n"
+                "int zero=f(); if(zero!=10 || calls!=1)return 0;\n"
+                "value=7; int nonzero=f(); return nonzero==7 && calls==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "selection headers: scope, else and implicit final declaration", __LINE__,
+            SVI("int f(void){int x=40; int n=0;\n"
+                "if(int x=2; int y=x+3) n=x+y;\n"
+                "if(int x=0) n=100; else if(int y=x+4; y==4) n+=y;\n"
+                "int y=1; return x+n+y;} return f();\n"),
+            .exit_code = 52,
+        },
+        {
+            "selection headers: ordered expressions and multiple declarators", __LINE__,
+            SVI("int f(void){int n=0; if(++n; int a=++n,b=++n; n+=a; int c=n+b) return n*10+c; return 0;}\n"
+                "return f();\n"),
+            .exit_code = 58,
+        },
+        {
+            "selection headers: last declarator supplies the condition", __LINE__,
+            SVI("int f(void){if(int x=1,y=0) return 99; else return x+y;} return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "selection headers: switch declarations and initializer runs once", __LINE__,
+            SVI("int f(void){int calls=0,n=0;\n"
+                "switch(int x=++calls; int y=x+1; y){case 2:n=x+y;break;default:return 99;}\n"
+                "switch(int x=2; int y=x+1){case 3:n+=y;break;default:return 98;}\n"
+                "int x=10;return calls+n+x;} return f();\n"),
+            .exit_code = 17,
+        },
+        {
+            "selection headers: typedefs, inference, pointer and trailing semicolon", __LINE__,
+            SVI("int f(void){int n=4; if(typedef int I; I x=2; auto p=&n) *p+=x;\n"
+                "if(int x=1;) n+=x; if(n+=1;) n+=1; return n;} return f();\n"),
+            .exit_code = 9,
+        },
+        {
+            "selection headers: aggregate initializer and condition side effects", __LINE__,
+            SVI("int f(void){int count=0;\n"
+                "if(struct S{int x,y;} s={2,3}; ++count; s.x+s.y==5){count+=s.y;}\n"
+                "switch(int a=++count; a++){case 5:return a+count;default:return 99;}} return f();\n"),
+            .exit_code = 11,
+        },
+        {
+            "selection headers: loop transfers and deferred cleanup", __LINE__,
+            SVI("int f(void){int sum=0; for(int i=0;i<4;i++){\n"
+                "if(int x=i+1; x<3){defer sum+=x;continue;}\n"
+                "switch(int x=i; x){case 2:sum+=x;break;default:sum+=10;}\n"
+                "} return sum;} return f();\n"),
+            .exit_code = 15,
+        },
+        {
             "static_assert with arithmetic", __LINE__,
             SVI("_Static_assert(3 * 4 == 12, \"mul\");\n"
                "_Static_assert(10 / 2 == 5, \"div\");\n"

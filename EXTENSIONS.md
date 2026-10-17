@@ -30,6 +30,7 @@
   * [`#pragma include_path`](#pragma-includepath)
 * [C](#c)
   * [`_Defer`](#defer)
+  * [`if()`/`switch()`/`for()` declarations](#if-switch-for-declarations)
   * [`static if`](#static-if)
   * [`static goto`](#static-goto)
   * [`static for`](#static-for)
@@ -435,6 +436,32 @@ int read_first_char_from_file(const char* path){
     if(!f) return -1;
     defer fclose(f);
     return fgetc(f);
+}
+```
+
+### `if()`/`switch()`/`for()` declarations
+
+C2Y adds the ability to declare variables in the condition of an `if()`
+or `switch()`. We extend this grammar to allow any number of semi-colon
+separated declarations. This allows you to declare variables
+of different types.
+
+```C
+int initialize(int *, float *);
+if(int x; float f; initialize(&x, &f)){
+    // use x and f
+}
+// x and y are not in scope here.
+```
+
+
+We also allow the second clause of a `for()` statement to be a declaration,
+like C++ does.
+
+```C
+struct Node * next(int);
+for(int i = 0; Node *node = next(i); i++){
+    // use node
 }
 ```
 

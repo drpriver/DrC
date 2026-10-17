@@ -25,7 +25,7 @@ Preprocessor::md
       const unsigned char moardata[] = {EMBED("data.bin" limit(16))};
 
     Resources larger than 4 MiB are unsupported, regardless
-    of `limit`, including `limit(0)`. The author dislikes `#embed` 
+    of `limit`, including `limit(0)`. The author dislikes `#embed`
     so this is his protest against it.
 
     We also support gnu's `offset(n)` and `base64("...")` vendor-prefixed
@@ -301,7 +301,24 @@ C::md
           defer fclose(f);
           return fgetc(f);
       }
-
+  `if()`/`switch()`/`for()` declarations::md
+    C2Y adds the ability to declare variables in the condition of an `if()`
+    or `switch()`. We extend this grammar to allow any number of semi-colon
+    separated declarations. This allows you to declare variables
+    of different types.
+    ::pre.C
+      int initialize(int *, float *);
+      if(int x; float f; initialize(&x, &f)){
+          // use x and f
+      }
+      // x and y are not in scope here.
+    We also allow the second clause of a `for()` statement to be a declaration,
+    like C++ does.
+    ::pre.C
+      struct Node * next(int);
+      for(int i = 0; Node *node = next(i); i++){
+          // use node
+      }
   `static if`::md
     An `if` evaluated at compile time. The condition must be a `constexpr`
     expression. Each branch may be a single statement or a braced body.
@@ -501,7 +518,7 @@ C::md
           void increment(_Self* self) { self.x++; }
       };
     A method-only block may add new methods to an already complete type, just
-    as `push_method` does. 
+    as `push_method` does.
     ::pre.C
       // Redeclare the type without data fields to add a method
       // to the type.

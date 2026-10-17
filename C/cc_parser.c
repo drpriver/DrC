@@ -299,8 +299,13 @@ struct CcDeclBase {
     uint16_t alignment; // from _Alignas or prefix __attribute__((aligned))
 };
 
+typedef struct CcParsedDecls CcParsedDecls;
+struct CcParsedDecls {
+    CcVariable* _Nullable last_object;
+    CcFunc* _Nullable function_definition;
+};
+static int cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out);
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
-static int cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase);
 static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
 static int cc_parse_one_inner(CcParser* p);
@@ -7216,7 +7221,14 @@ cc_parse_static_for(CcParser* p, SrcLoc loc){
     base.spec.sp_constexpr = 1;
     err = cc_resolve_specifiers(p, &base);
     if(err) goto done;
-    err = cc_parse_decls(p, (CcParseFlags){0}, &base);
+    CcParsedDecls decls;
+    err = cc_parse_decls(p, (CcParseFlags){0}, &base, &decls);
+    if(err) goto done;
+    if(decls.function_definition){
+        err = cc_error(p, loc, "static for clause-1 must declare variables");
+        goto done;
+    }
+    err = cc_expect_punct(p, CC_semi);
     if(err) goto done;
     AtomMapItems items = CcAnonAM_items(&loop.bindings->variables);
     if(!items.count){
@@ -7622,9 +7634,10 @@ cc_parse_one_inner(CcParser* p){
         }
         err = cc_resolve_specifiers(p, &b);
         if(err) return err;
-        err = cc_parse_decls(p, (CcParseFlags){0}, &b);
+        CcParsedDecls decls;
+        err = cc_parse_decls(p, (CcParseFlags){0}, &b, &decls);
         if(err) return err;
-        return 0;
+        return decls.function_definition ? 0 : cc_expect_punct(p, CC_semi);
     }
 
     err = cc_peek(p, &tok);
@@ -7638,7 +7651,6 @@ cc_parse_one_inner(CcParser* p){
         case CC_PUNCTUATOR:
         case CC_STRING_LITERAL:
         case CC_KEYWORD:
-            Ldefault:;
             break;
     }
     {
@@ -12817,6 +12829,242 @@ cc_parse_control_body(CcParser* p, _Bool loop, CcStmtNode*_Nullable*_Nonnull out
 
 static
 int
+cc_parse_for_condition(CcParser* p, SrcLoc loc, CcExpr*_Nullable*_Nonnull out){
+    *out = NULL;
+    CcStmtSink* sink = cc_push_stmt_sink(p);
+    if(!sink) return CC_OOM_ERROR;
+    CcExpr* expr = NULL;
+    CcStmtNode* body = NULL;
+    CcDeclBase base = {0};
+    int err = cc_parse_declaration_specifier(p, (CcParseFlags){0}, &base);
+    if(err) goto cleanup;
+    if(base.spec.bits || base.type.bits){
+        err = cc_resolve_specifiers(p, &base);
+        if(err) goto cleanup;
+        CcParsedDecls decls;
+        err = cc_parse_decls(p, (CcParseFlags){0}, &base, &decls);
+        if(err) goto cleanup;
+        if(decls.function_definition){
+            err = cc_error(p, decls.function_definition->loc, "function definition is not allowed in a for condition");
+            goto cleanup;
+        }
+        err = cc_expect_punct(p, CC_semi);
+        if(err) goto cleanup;
+        CcVariable* last = decls.last_object;
+        if(!last || !last->initializer){
+            err = cc_error(p, loc, "implicit condition requires an initialized object");
+            goto cleanup;
+        }
+        expr = cc_make_expr(p, CC_EXPR_VARIABLE, last->loc, last->type, 0);
+        if(!expr){
+            err = CC_OOM_ERROR;
+            goto cleanup;
+        }
+        expr->is_lvalue = 1;
+        expr->var = last;
+    }
+    else {
+        err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &expr);
+        if(err) goto cleanup;
+        err = cc_expect_punct(p, ';');
+        if(err) goto cleanup;
+    }
+    err = cc_require_scalar(p, &expr, loc, "'for' condition");
+    if(err) goto cleanup;
+    if(sink->stmts.count){
+        CcQualType type = expr->type;
+        CcStmtNode* value = cc_stmt_node(p, CC_STMT_EXPR, loc, 0);
+        if(!value){
+            err = CC_OOM_ERROR;
+            goto cleanup;
+        }
+        value->exprs[0] = expr;
+        expr = NULL;
+        err = cc_sink_push(p, value);
+        if(err) goto cleanup;
+        err = cc_finalize_stmt_list(p, loc, &sink->stmts, 1, &body);
+        if(err) goto cleanup;
+        // Keep initialization in the condition
+        expr = cc_make_expr(p, CC_EXPR_STATEMENT_EXPRESSION, loc, type, 0);
+        if(!expr){
+            err = CC_OOM_ERROR;
+            goto cleanup;
+        }
+        expr->stmt_body = body;
+        body = NULL;
+    }
+    *out = expr;
+    expr = NULL;
+    cleanup:
+    if(expr) cc_release_expr(p, expr);
+    cc_free_stmt_tree(p, body);
+    cc_pop_stmt_sink(p, sink);
+    return err;
+}
+
+static
+int
+cc_parse_selection_header(CcParser* p, const char* statement, CcExpr*_Nullable*_Nonnull out){
+    *out = NULL;
+    int err = cc_expect_punct(p, '(');
+    if(err) return err;
+    for(;;){
+        CcDeclBase base = {0};
+        err = cc_parse_declaration_specifier(p, (CcParseFlags){0}, &base);
+        if(err) return err;
+        CcParsedDecls decls = {0};
+        CcExpr* expr = NULL;
+        _Bool declaration = base.spec.bits || base.type.bits;
+        if(declaration){
+            err = cc_resolve_specifiers(p, &base);
+            if(err) return err;
+            err = cc_parse_decls(p, (CcParseFlags){0}, &base, &decls);
+            if(err) return err;
+            if(decls.function_definition)
+                return cc_error(p, decls.function_definition->loc, "function definition is not allowed inside '%s' parentheses", statement);
+        }
+        else {
+            err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &expr);
+            if(err) return err;
+            if(!expr) return cc_error(p, base.loc, "expected condition inside '%s' parentheses", statement);
+        }
+        CcToken tok;
+        err = cc_peek(p, &tok);
+        if(err) goto expr_error;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';'){
+            err = cc_next_token(p, &tok);
+            if(err) goto expr_error;
+            err = cc_peek(p, &tok);
+            if(err) goto expr_error;
+        }
+        else if(!(tok.type == CC_PUNCTUATOR && tok.punct.punct == ')')){
+            err = cc_error(p, tok.loc, "expected ';' or ')' inside '%s' parentheses", statement);
+            goto expr_error;
+        }
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ')'){
+            if(declaration){
+                CcVariable* last = decls.last_object;
+                if(!last || !last->initializer)
+                    return cc_error(p, tok.loc, "implicit condition requires an initialized object");
+                expr = cc_make_expr(p, CC_EXPR_VARIABLE, last->loc, last->type, 0);
+                if(!expr) return CC_OOM_ERROR;
+                expr->is_lvalue = 1;
+                expr->var = last;
+            }
+            err = cc_next_token(p, &tok);
+            if(err) goto expr_error;
+            *out = expr;
+            return 0;
+        }
+        if(expr){
+            CcStmtNode* stmt = cc_stmt_node(p, CC_STMT_EXPR, expr->loc, 0);
+            if(!stmt){
+                err = CC_OOM_ERROR;
+                goto expr_error;
+            }
+            stmt->exprs[0] = expr;
+            err = cc_sink_push(p, stmt);
+            if(err) return err;
+        }
+        continue;
+        expr_error:
+        if(expr) cc_release_expr(p, expr);
+        return err;
+    }
+}
+
+static
+int
+cc_parse_selection(CcParser* p, CcToken tok, CcStmtNode*_Nullable*_Nonnull out){
+    int err = cc_push_scope(p);
+    if(err) return err;
+    CcStmtSink* sink = cc_push_stmt_sink(p);
+    if(!sink){
+        cc_pop_scope(p);
+        return CC_OOM_ERROR;
+    }
+    CcExpr* cond = NULL;
+    CcStmtNode* node = NULL;
+    CcStmtNode* wrapper = NULL;
+    _Bool is_switch = tok.kw.kw == CC_switch;
+    err = cc_parse_selection_header(p, is_switch ? "switch" : "if", &cond);
+    if(err) goto cleanup;
+    if(!is_switch){
+        err = cc_require_scalar(p, &cond, tok.loc, "'if' condition");
+        if(err) goto cleanup;
+    }
+    else {
+        CcQualType st = cond->type;
+        if(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+        if(!ccqt_is_basic(st) || (!ccbt_is_integer(ccqt_basic_kind(st)) && ccqt_basic_kind(st) != CCBT__Type)){
+            err = cc_error(p, tok.loc, "switch requires integer or _Type expression");
+            goto cleanup;
+        }
+        if(ccqt_basic_kind(st) == CCBT_int128 || ccqt_basic_kind(st) == CCBT_unsigned_int128){
+            err = cc_error(p, tok.loc, "__int128 is not supported in switch");
+            goto cleanup;
+        }
+        if(ccqt_basic_kind(st) != CCBT__Type){
+            CcQualType promoted;
+            err = cc_integer_promote(p, cc_arithmetic_operand_type(p, cond), &promoted, tok.loc);
+            if(err) goto cleanup;
+            err = cc_implicit_cast(p, cond, promoted, &cond);
+            if(err) goto cleanup;
+        }
+    }
+    node = cc_stmt_node(p, is_switch ? CC_STMT_SWITCH : CC_STMT_IF, tok.loc, is_switch ? 1 : 2);
+    if(!node){
+        err = CC_OOM_ERROR;
+        goto cleanup;
+    }
+    node->exprs[0] = cond;
+    cond = NULL;
+    if(is_switch){
+        CcSwitchCtx ctx = {.type = node->exprs[0]->type, .defer_context = p->defer_context};
+        CcSwitchCtx* prev_ctx = p->switch_ctx;
+        p->switch_ctx = &ctx;
+        p->loop_depth++;
+        p->switch_depth++;
+        err = cc_parse_control_body(p, 0, &node->stmts[0]);
+        p->switch_depth--;
+        p->loop_depth--;
+        p->switch_ctx = prev_ctx;
+        ma_cleanup(CcSwitchEntry)(&ctx.cases, cc_allocator(p));
+        if(err) goto cleanup;
+    }
+    else {
+        err = cc_parse_scoped_statement(p, 0, &node->stmts[0]);
+        if(err) goto cleanup;
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) goto cleanup;
+        if(peek.type == CC_KEYWORD && peek.kw.kw == CC_else){
+            err = cc_next_token(p, &peek);
+            if(err) goto cleanup;
+            err = cc_parse_scoped_statement(p, 0, &node->stmts[1]);
+            if(err) goto cleanup;
+        }
+    }
+    err = cc_sink_push(p, node);
+    node = NULL; // The sink owns it, including on failure.
+    if(err) goto cleanup;
+    err = cc_finalize_stmt_list(p, tok.loc, &sink->stmts, 1, &wrapper);
+    if(err) goto cleanup;
+    err = cc_stmt_scope_vars(p, wrapper);
+    if(err) goto cleanup;
+    *out = wrapper;
+    wrapper = NULL;
+    cleanup:
+    if(cond) cc_release_expr(p, cond);
+    cc_free_stmt_tree(p, node);
+    cc_free_stmt_tree(p, wrapper);
+    cc_pop_stmt_sink(p, sink);
+    cc_pop_scope(p);
+    return err;
+}
+
+static
+int
 cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     uint64_t jump_targets = p->stmt_jump_targets;
     int err;
@@ -12990,11 +13238,17 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                             err = cc_parse_declaration_specifier(p, (CcParseFlags){0}, &b);
                             if(err) goto init_done;
                             if(b.spec.bits || b.type.bits){
-                                // Declaration init: cc_parse_decls handles
-                                // multiple declarators and consumes the ';'
+                                // Declaration init, including multiple declarators.
                                 err = cc_resolve_specifiers(p, &b);
                                 if(err) goto init_done;
-                                err = cc_parse_decls(p, (CcParseFlags){0}, &b);
+                                CcParsedDecls decls;
+                                err = cc_parse_decls(p, (CcParseFlags){0}, &b, &decls);
+                                if(err) goto init_done;
+                                if(decls.function_definition){
+                                    err = cc_error(p, decls.function_definition->loc, "function definition is not allowed in a for initializer");
+                                    goto init_done;
+                                }
+                                err = cc_expect_punct(p, CC_semi);
                                 if(err) goto init_done;
                             }
                             else {
@@ -13029,12 +13283,11 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                         err = cc_peek(p, &peek);
                         if(err) goto for_end;
                         if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
-                            err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &cond_expr);
-                            if(err) goto for_end;
-                            err = cc_require_scalar(p, &cond_expr, tok.loc, "'for' condition");
-                            if(err) goto for_end;
+                            err = cc_parse_for_condition(p, tok.loc, &cond_expr);
                         }
-                        err = cc_expect_punct(p, ';');
+                        else {
+                            err = cc_next_token(p, &peek); // consume ';'
+                        }
                         if(err) goto for_end;
                     }
                     // Parse inc
@@ -13165,53 +13418,9 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     cc_free_stmt_tree(p, body);
                     return err;
                 }
-                case CC_if: {
-                    // if(cond) then-body [else else-body]
-                    err = cc_expect_punct(p, '(');
-                    if(err) return err;
-                    CcExpr* cond;
-                    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &cond);
-                    if(err) return err;
-                    err = cc_require_scalar(p, &cond, tok.loc, "'if' condition");
-                    if(err) goto if_condition_error;
-                    err = cc_expect_punct(p, ')');
-                    if(err) goto if_condition_error;
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_IF, tok.loc, 2);
-                    if(!node){
-                        err = CC_OOM_ERROR;
-                        goto if_condition_error;
-                    }
-                    node->exprs[0] = cond;
-                    CcStmtNode*_Nullable then = NULL;
-                    err = cc_parse_scoped_statement(p, 0, &then);
-                    if(err){
-                        cc_free_stmt_tree(p, node);
-                        return err;
-                    }
-                    node->stmts[0] = then;
-                    // Check for else
-                    CcToken peek;
-                    err = cc_peek(p, &peek);
-                    if(err){
-                        cc_free_stmt_tree(p, node);
-                        return err;
-                    }
-                    if(peek.type == CC_KEYWORD && peek.kw.kw == CC_else){
-                        cc_next_token(p, &peek); // consume 'else'
-                        CcStmtNode*_Nullable els = NULL;
-                        err = cc_parse_scoped_statement(p, 0, &els);
-                        if(err){
-                            cc_free_stmt_tree(p, node);
-                            return err;
-                        }
-                        node->stmts[1] = els;
-                    }
-                    *out = node;
-                    return 0;
-                    if_condition_error:
-                    cc_release_expr(p, cond);
-                    return err;
-                }
+                case CC_if:
+                case CC_switch:
+                    return cc_parse_selection(p, tok, out);
                 case CC_break: {
                     if(!p->loop_depth)
                         return cc_error(p, tok.loc, "'break' statement not in loop or switch statement");
@@ -13235,72 +13444,6 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     CcStmtNode* node = cc_stmt_node(p, CC_STMT_CONTINUE, tok.loc, 0);
                     if(!node) return CC_OOM_ERROR;
                     node->cleanup = (CcCleanupRange){p->defer_context.active, p->continue_defer_context.active};
-                    *out = node;
-                    return 0;
-                }
-                case CC_switch: {
-                    // switch(expr) { case V: ... default: ... }
-                    err = cc_expect_punct(p, '(');
-                    if(err) return err;
-                    CcExpr* switch_expr;
-                    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &switch_expr);
-                    if(err) return err;
-                    {
-                        CcQualType st = switch_expr->type;
-                        if(!ccqt_is_basic(st) && ccqt_kind(st) == CC_ENUM)
-                            st = ccqt_as_enum(st)->underlying;
-                        if(!ccqt_is_basic(st) || (!ccbt_is_integer(ccqt_basic_kind(st)) && ccqt_basic_kind(st) != CCBT__Type)){
-                            cc_release_expr(p, switch_expr);
-                            return cc_error(p, tok.loc, "switch requires integer or _Type expression");
-                        }
-                        if(ccqt_basic_kind(st) == CCBT_int128 || ccqt_basic_kind(st) == CCBT_unsigned_int128){
-                            cc_release_expr(p, switch_expr);
-                            return cc_error(p, tok.loc, "__int128 is not supported in switch");
-                        }
-                        if(ccqt_basic_kind(st) != CCBT__Type){
-                            CcQualType promoted;
-                            err = cc_integer_promote(p, cc_arithmetic_operand_type(p, switch_expr), &promoted, tok.loc);
-                            if(err){
-                                cc_release_expr(p, switch_expr);
-                                return err;
-                            }
-                            err = cc_implicit_cast(p, switch_expr, promoted, &switch_expr);
-                            if(err){
-                                cc_release_expr(p, switch_expr);
-                                return err;
-                            }
-                        }
-                    }
-                    err = cc_expect_punct(p, ')');
-                    if(err){
-                        cc_release_expr(p, switch_expr);
-                        return err;
-                    }
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_SWITCH, tok.loc, 1);
-                    if(!node){
-                        cc_release_expr(p, switch_expr);
-                        return CC_OOM_ERROR;
-                    }
-                    node->exprs[0] = switch_expr;
-                    // Parse switch body
-                    {
-                        CcSwitchCtx ctx = {.type = switch_expr->type, .defer_context = p->defer_context};
-                        CcSwitchCtx* prev_ctx = p->switch_ctx;
-                        p->switch_ctx = &ctx;
-                        p->loop_depth++; // for break
-                        p->switch_depth++;
-                        CcStmtNode*_Nullable body = NULL;
-                        err = cc_parse_control_body(p, 0, &body);
-                        p->switch_depth--;
-                        p->loop_depth--;
-                        p->switch_ctx = prev_ctx;
-                        ma_cleanup(CcSwitchEntry)(&ctx.cases, cc_allocator(p));
-                        if(err){
-                            cc_free_stmt_tree(p, node);
-                            return err;
-                        }
-                        node->stmts[0] = body;
-                    }
                     *out = node;
                     return 0;
                 }
@@ -14279,7 +14422,8 @@ cc_check_pack_decl(CcParser* p, CcFunc* func, CcParsedParams* params, CcQualType
 
 static
 int
-cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
+cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out){
+    *out = (CcParsedDecls){0};
     int err = 0;
     CcToken tok;
     CcAttributes decl_attributes = p->attributes;
@@ -14528,6 +14672,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                 func->_Self_type = p->current_tag_type;
                 func->tokens = body_tokens;
             }
+            out->function_definition = func;
             return 0;
         }
         // There is no function body to inherit this prototype scope.
@@ -14704,14 +14849,16 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
         else if(declbase->spec.sp_infer_type){
             return cc_error(p, tok.loc, "type-inferred declaration requires initializer");
         }
-        if(tok.type == CC_EOF)
+        if(tok.type == CC_EOF || (tok.type == CC_PUNCTUATOR && (tok.punct.punct == ';' || tok.punct.punct == ')'))){
+            err = cc_unget(p, &tok);
+            if(err) return err;
             stop = 1;
-        else if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ';')
-            stop = 1;
+        }
         else if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ','){
         }
         else
             return cc_error(p, tok.loc, "Expected ',' or ';'");
+        out->last_object = var;
         if(!name){
             if(stop) break;
             continue;

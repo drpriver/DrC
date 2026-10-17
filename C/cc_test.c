@@ -6980,6 +6980,91 @@ TestFunction(test_parse_errors){
             SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
         },
         {
+            "for condition declaration still requires its semicolon", __LINE__,
+            SVI("for(;int x=1) {}\n"),
+            SVI("(test):1:13: error: Expected ';'\n"),
+        },
+        {
+            "ordinary declaration cannot end at a closing parenthesis", __LINE__,
+            SVI("int x)\n"),
+            SVI("(test):1:6: error: Expected ';'\n"),
+        },
+        {
+            "selection header rejects function definitions", __LINE__,
+            SVI("if(int f(void){return 1;}; f()) {}\n"),
+            SVI("(test):1:8: error: function definition is not allowed inside 'if' parentheses\n"),
+        },
+        {
+            "for condition rejects function definitions", __LINE__,
+            SVI("for(;int f(void){return 1;};) {}\n"),
+            SVI("(test):1:10: error: function definition is not allowed in a for condition\n"),
+        },
+        {
+            "for initializer rejects function definitions", __LINE__,
+            SVI("for(int f(void){return 1;};1;) {}\n"),
+            SVI("(test):1:9: error: function definition is not allowed in a for initializer\n"),
+        },
+        {
+            "for condition declaration requires initializer", __LINE__,
+            SVI("for(;int x;) {}\n"),
+            SVI("(test):1:1: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "for condition declaration requires object", __LINE__,
+            SVI("for(;typedef int T;) {}\n"),
+            SVI("(test):1:1: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "for condition declaration does not escape", __LINE__,
+            SVI("for(;int x=0;) {}\nx;\n"),
+            SVI("(test):2:1: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "for condition declaration requires scalar", __LINE__,
+            SVI("for(;struct S{int x;} s={1};) {}\n"),
+            SVI("(test):1:1: error: 'for' condition requires scalar type\n"),
+        },
+        {
+            "if header names do not escape", __LINE__,
+            SVI("if(int x=1) {} else {}\nx;\n"),
+            SVI("(test):2:1: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "switch header names do not escape", __LINE__,
+            SVI("switch(int x=1){default:break;}\nx;\n"),
+            SVI("(test):2:1: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "selection header final function declaration is not a condition", __LINE__,
+            SVI("if(int f(void)) {}\n"),
+            SVI("(test):1:15: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "switch header condition retains integer constraint", __LINE__,
+            SVI("switch(float x=1) {}\n"),
+            SVI("(test):1:1: error: switch requires integer or _Type expression\n"),
+        },
+        {
+            "selection header implicit condition requires initializer", __LINE__,
+            SVI("if(int x) {}\n"),
+            SVI("(test):1:9: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "selection header implicit condition requires object", __LINE__,
+            SVI("if(typedef int T) {}\n"),
+            SVI("(test):1:17: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "selection header rejects final uninitialized declarator", __LINE__,
+            SVI("switch(int x=1,y) {}\n"),
+            SVI("(test):1:17: error: implicit condition requires an initialized object\n"),
+        },
+        {
+            "selection header condition retains scalar constraint", __LINE__,
+            SVI("if(struct S{int n;} s={1}) {}\n"),
+            SVI("(test):1:1: error: 'if' condition requires scalar type\n"),
+        },
+        {
             "static_assert expression fails in unevaluated operand", __LINE__,
             SVI("typeof(static_assert(0, \"bad\"))* p;\n"),
             SVI("(test):1:8: error: static assertion failed: 0: \"bad\"\n"),
