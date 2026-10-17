@@ -45,6 +45,72 @@ TestFunction(test_interpreter){
         _Bool no_toplevel_ops;
     } testcases[] = {
         {
+            "interlocked 128-bit CAS commits its result after comparand writeback", __LINE__,
+            SVI("int f(void){_Alignas(16) volatile long long p[2]={1,2};"
+                "union U{long long words[2];unsigned char ok;} e={.words={0,2}};"
+                "e.ok=_InterlockedCompareExchange128(p,4,3,e.words);"
+                "return e.ok==0 && p[0]==1 && p[1]==2;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "constant object views retain the last byte of a crossing packed bitfield", __LINE__,
+            SVI("struct __attribute__((packed)) B{unsigned a:7,b:32;};"
+                "constexpr union U{struct B b;unsigned char bytes[5];} u={.b={0,0xffffffffu}};"
+                "static unsigned char tail=u.bytes[4];return tail==127;"),
+            .exit_code=1,
+        },
+        {
+            "interlocked 128-bit CAS accepts aligned storage through its pointer parameter", __LINE__,
+            SVI("int cas(volatile long long* p,long long* expected){return _InterlockedCompareExchange128(p,4,3,expected);}"
+                "int f(void){_Alignas(16) volatile long long p[2]={1,2};long long e[2]={1,2};"
+                "return cas(p,e)&&p[0]==3&&p[1]==4;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "bitfield compound assignment retains its evaluated address", __LINE__,
+            SVI("struct S{unsigned b:32;}; int change(struct S** p,struct S* q){*p=q;return 1;}"
+                "int f(void){struct S a={3},b={7};struct S* p=&a; p->b+=change(&p,&b);"
+                "return (a.b==4&&b.b==7)||(a.b==3&&b.b==8);} return f();"),
+            .exit_code=1,
+        },
+        {
+            "runtime call results survive a second runtime call", __LINE__,
+            SVI("int f(void){return __compile(\"\",\"\")!=__compile(\"\",\"\");} return f();"),
+            .exit_code=1,
+        },
+        {
+            "va_end evaluates its argument", __LINE__,
+            SVI("int f(int n,...){__builtin_va_list ap; __builtin_va_start(ap,n);"
+                "int hits=0; __builtin_va_end(*(hits++,&ap)); return hits;} return f(0);"),
+            .exit_code=1,
+        },
+        {
+            "slice assignment preserves a lower bound borrowed from its count", __LINE__,
+            SVI("int f(void){int a[4]={}; int s[:]=a; s=s[s.count:];"
+                "return s.count==0 && s.data==a+4;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "atomic add-fetch snapshots a delta aliasing the atomic object", __LINE__,
+            SVI("int f(void){int x=3; int r=__atomic_add_fetch(&x,x,5);"
+                "return r==6 && x==6;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "compare-exchange reads expected after evaluating desired", __LINE__,
+            SVI("int change(int* p){*p=1;return 7;}"
+                "int f(void){int x=1,e=0; int ok=__atomic_compare_exchange_n(&x,&e,change(&e),0,5,5);"
+                "return ok && x==7 && e==1;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "compare-exchange commits its flag after expected writeback", __LINE__,
+            SVI("int f(void){unsigned char x=1; _Bool flag=0;"
+                "flag=__atomic_compare_exchange_n(&x,(unsigned char*)&flag,2,0,5,5);"
+                "return !flag && x==1;} return f();"),
+            .exit_code=1,
+        },
+        {
             "overflow assignment commits its flag after the result store", __LINE__,
             SVI("int f(void){_Bool flag=1;\n"
                 "flag=__builtin_add_overflow(1,0,(unsigned char*)&flag);\n"

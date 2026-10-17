@@ -2980,6 +2980,13 @@ ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_o
         args[0] = e->values[0];
         args[1] = e->values[1];
     }
+    uint32_t result_size = 0;
+    if(out){
+        int err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+        result_size = out->size;
+    }
     uint32_t temp = ctx->temp;
     uint32_t slots[3] = {0};
     for(uint32_t i = 0; i < nargs; i++){
@@ -2987,13 +2994,6 @@ ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_o
         int err = ci_lower_expr(ci, ctx, args[i], CI_NO_SLOT, &v);
         if(err) return err;
         slots[i] = v.slot;
-    }
-    uint32_t result_size = 0;
-    if(out){
-        int err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
-        if(err) return err;
-        out->slot = dest;
-        result_size = out->size;
     }
     CiOp* op;
     int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
@@ -4371,7 +4371,9 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     uint32_t alignment;
     err = ci_pointer_alignment(ci, ctx, e->lhs, &alignment);
     if(err) return err;
-    if((UINT32_C(1) << alignment) < sz)
+    // This intrinsic's long long* type only advertises 8-byte alignment;
+    // its contract requires the caller to provide 16-byte-aligned storage.
+    if(aop != CC_ATOMIC_INTERLOCKED_COMPARE_EXCHANGE128 && (UINT32_C(1) << alignment) < sz)
         return ci_error(ci, e->loc, "underaligned atomic access requires %u-byte alignment", sz);
     if(out){
         // the result slot survives; everything else is scratch
@@ -4573,17 +4575,6 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             uint32_t eslot;
             err = ci_alloc_slot(ctx, sz, sz, &eslot);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .load = {
-                    .kind = CI_OP_LOAD,
-                    .slot = eslot,
-                    .slot_size = sz,
-                    .src = ep.slot,
-                    .loc = e->loc,
-                }
-            };
             CiLowerVal dv;
             err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &dv);
             if(err) return err;
@@ -4610,11 +4601,14 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 err = ci_lower_atomic_operand(ci, ctx, e->values[1], &dv, sz, e->loc);
                 if(err) return err;
             }
-            uint32_t ok = dest;
-            if(!out){
-                err = ci_alloc_slot(ctx, 1, 1, &ok);
-                if(err) return err;
-            }
+            // Read the expected object only after all argument expressions.
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){.load = {.kind = CI_OP_LOAD, .slot = eslot,
+                .slot_size = sz, .src = ep.slot, .loc = e->loc}};
+            uint32_t ok;
+            err = ci_alloc_slot(ctx, 1, 1, &ok);
+            if(err) return err;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
@@ -4644,7 +4638,11 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            if(out) out->canonical = 1;
+            if(out){
+                err = ci_emit_copy(ctx, dest, ok, 1, e->loc);
+                if(err) return err;
+                out->canonical = 1;
+            }
             break;
         }
         case CC_ATOMIC_FETCH_ADD:
@@ -4704,6 +4702,11 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             err = ci_lower_atomic_operand(ci, ctx, e->values[0], &v, sz, e->loc);
             if(err) return err;
             _Bool want_new = aop == CC_ATOMIC_ADD_FETCH || aop == CC_ATOMIC_SUB_FETCH;
+            if(out && want_new){
+                // The RMW may modify storage borrowed by the delta.
+                err = ci_preserve_value(ci, ctx, e->values[0], &v);
+                if(err) return err;
+            }
             uint32_t old = dest;
             if(!out || want_new){
                 err = ci_alloc_slot(ctx, sz, sz, &old);
@@ -4873,11 +4876,9 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            uint32_t ok = dest;
-            if(!out){
-                err = ci_alloc_slot(ctx, 1, 1, &ok);
-                if(err) return err;
-            }
+            uint32_t ok;
+            err = ci_alloc_slot(ctx, 1, 1, &ok);
+            if(err) return err;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
@@ -4904,7 +4905,11 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            if(out) out->canonical = 1;
+            if(out){
+                err = ci_emit_copy(ctx, dest, ok, 1, e->loc);
+                if(err) return err;
+                out->canonical = 1;
+            }
             break;
         }
         case CC_ATOMIC_THREAD_FENCE:
@@ -5157,16 +5162,19 @@ ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiL
         if(err) return err;
     }
 
-    // count = hi - lo  →  dest[0:8]
+    uint32_t result;
+    err = ci_alloc_slot(ctx, size, ptr_size, &result);
+    if(err) return err;
+    // count = hi - lo
     if(lo_is_zero)
-        err = ci_emit_copy(ctx, dest, hi_slot, size_size, e->loc);
+        err = ci_emit_copy(ctx, result, hi_slot, size_size, e->loc);
     else
-        err = ci_emit_alu(ctx, CI_ALU_SUB, dest, hi_slot, lo_slot, size_size, e->loc);
+        err = ci_emit_alu(ctx, CI_ALU_SUB, result, hi_slot, lo_slot, size_size, e->loc);
     if(err) return err;
 
     // data = base_ptr + lo*elem_sz  →  dest[8:16]
     if(lo_is_zero){
-        err = ci_emit_copy(ctx, dest + ptr_size, base_ptr, size_size, e->loc);
+        err = ci_emit_copy(ctx, result + ptr_size, base_ptr, size_size, e->loc);
         if(err) return err;
     }
     else {
@@ -5180,10 +5188,11 @@ ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiL
             err = ci_emit_alu(ctx, CI_ALU_MUL, scaled, lo_slot, es, size_size, e->loc);
             if(err) return err;
         }
-        err = ci_emit_alu(ctx, CI_ALU_ADD, dest + size_size, base_ptr, scaled, size_size, e->loc);
+        err = ci_emit_alu(ctx, CI_ALU_ADD, result + size_size, base_ptr, scaled, size_size, e->loc);
         if(err) return err;
     }
-
+    err = ci_emit_copy(ctx, dest, result, size, e->loc);
+    if(err) return err;
     ctx->temp = temp;
     return 0;
 }
@@ -5213,7 +5222,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         return 0;
     }
     case CC_VA_END:
-        return 0;
+        return ci_lower_expr_discard(ci, ctx, e->lhs);
     case CC_VA_ARG:{
         CcParser* p = &ci->parser;
         uint32_t size, align;
@@ -5910,6 +5919,8 @@ ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAd
     if(lv->kind == CC_EXPR_ARROW){
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, lv->values[0], CI_NO_SLOT, &v);
+        if(err) return err;
+        err = ci_preserve_value(ci, ctx, lv->values[0], &v);
         if(err) return err;
         out->slot = v.slot;
         out->disp = (uint32_t)cc_expr_field_offset(ci_target(ci), lv);
@@ -7882,7 +7893,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
             uint32_t sz;
             err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &sz);
             if(err) break;
-            uint64_t end = loc.byte_offset + sz;
+            uint64_t end = loc.byte_offset + (loc.bit_width ? (loc.bit_offset + loc.bit_width + 7u) / 8u : sz);
             if(loc.byte_offset >= (uint64_t)start+size || end <= start) continue;
             uint32_t lo = loc.byte_offset > start ? (uint32_t)loc.byte_offset : start;
             uint32_t hi = end < (uint64_t)start+size ? (uint32_t)end : start+size;
