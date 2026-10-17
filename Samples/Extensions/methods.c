@@ -6,6 +6,18 @@
 struct DA {
     int* data;
     size_t count, capacity;
+    int push(_Self* self, int value); // forward decl
+    void clear(_Self*self){ // inline impl
+        self.count = 0;
+    }
+    void destroy(_Self* self){
+        if(self.data) free(self.data);
+        memset(self, 0, sizeof *self);
+    }
+};
+
+struct DA {
+    // separate impl
     int push(_Self* self, int value){
         if(self.count >= self.capacity){
             size_t cap = self.capacity?2*self.capacity:2;
@@ -17,19 +29,16 @@ struct DA {
         self.data[self.count++] = value;
         return 0;
     }
+};
+
+struct DA {
+    // adds a new method
     void dump(const _Self* self){
         printf("[");
         for(size_t i = 0; i < self.count; i++){
             printf(i ?", %d":"%d", self.data[i]);
         }
         printf("]\n");
-    }
-    void clear(_Self*self){
-        self.count = 0;
-    }
-    void destroy(_Self* self){
-        if(self.data) free(self.data);
-        memset(self, 0, sizeof *self);
     }
 };
 
