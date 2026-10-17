@@ -15918,6 +15918,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__hotswap"), CC__hotswap},
             {SVI("__compile"), CC__compile},
         };
+        if(AM_reserve(&p->builtins, al, sizeof builtins / sizeof builtins[0])) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
             if(!a) return CC_OOM_ERROR;
@@ -15983,6 +15984,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("element_type"), CC_TYPE_ELEMENT_TYPE},
             {SVI("underlying_type"), CC_TYPE_UNDERLYING_TYPE},
         };
+        if(AM_reserve(&p->type_intro, al, sizeof typeintro / sizeof typeintro[0])) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
             Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);
             if(!a) return CC_OOM_ERROR;
@@ -15993,21 +15995,21 @@ cc_define_builtin_types(CcParser* p){
     // Register __builtin_ libc functions
     {
         struct b {StringView name; CcQualType ret; int nargs; CcQualType params[3]; _Bool variadic; _Bool printf_like;} builtins[] = {
-            {SVI("memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
-            {SVI("memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("malloc"), p->void_star, 1, {{.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("calloc"), p->void_star, 2, {{.basic.kind=t->size_type},{.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
-            {SVI("bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
-            {SVI("snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t->size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
-            {SVI("printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
-            {SVI("fabsf"), {.basic.kind=CCBT_float}, 1, {{.basic.kind=CCBT_float}}},
-            {SVI("fabs"), {.basic.kind=CCBT_double}, 1, {{.basic.kind=CCBT_double}}},
-            {SVI("fabsl"), {.basic.kind=CCBT_long_double}, 1, {{.basic.kind=CCBT_long_double}}},
+            {SVI("__builtin_memcpy"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_memcmp"), {.basic.kind=CCBT_int}, 3, {p->const_void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_strcmp"), {.basic.kind=CCBT_int}, 2, {p->const_char_star, p->const_char_star}, .variadic=0},
+            {SVI("__builtin_memmove"), p->void_star, 3, {p->void_star, p->const_void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_memset"), p->void_star, 3, {p->void_star, {.basic.kind=CCBT_int}, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_malloc"), p->void_star, 1, {{.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_realloc"), p->void_star, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_calloc"), p->void_star, 2, {{.basic.kind=t->size_type},{.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_free"), {.basic.kind=CCBT_void}, 1, {p->void_star}, .variadic=0},
+            {SVI("__builtin_bzero"), {.basic.kind=CCBT_void}, 2, {p->void_star, {.basic.kind=t->size_type}}, .variadic=0},
+            {SVI("__builtin_snprintf"), {.basic.kind=CCBT_int}, 3, {p->char_star, {.basic.kind=t->size_type}, p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("__builtin_printf"), {.basic.kind=CCBT_int}, 1, {p->const_char_star}, .variadic=1, .printf_like=1},
+            {SVI("__builtin_fabsf"), {.basic.kind=CCBT_float}, 1, {{.basic.kind=CCBT_float}}},
+            {SVI("__builtin_fabs"), {.basic.kind=CCBT_double}, 1, {{.basic.kind=CCBT_double}}},
+            {SVI("__builtin_fabsl"), {.basic.kind=CCBT_long_double}, 1, {{.basic.kind=CCBT_long_double}}},
         };
         for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
             struct b* b = &builtins[i];
@@ -16015,9 +16017,10 @@ cc_define_builtin_types(CcParser* p){
             if(!ftype) return CC_OOM_ERROR;
             CcFunc* func = Allocator_zalloc(al, sizeof *func);
             if(!func) return CC_OOM_ERROR;
-            Atom key = cpp_atomizef(&p->cpp, "__builtin_%.*s", (int)b->name.length, b->name.text);
+            Atom key = AT_atomize(p->cpp.at, b->name.text, b->name.length);
             if(!key) return CC_OOM_ERROR;
-            Atom name = AT_atomize(p->cpp.at, b->name.text, b->name.length);
+            enum {PREFIX_LENGTH = sizeof "__builtin_" - 1};
+            Atom name = AT_atomize(p->cpp.at, b->name.text + PREFIX_LENGTH, b->name.length - PREFIX_LENGTH);
             if(!name) return CC_OOM_ERROR;
             func->name = name;
             func->type = ftype;

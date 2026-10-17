@@ -60,6 +60,50 @@ size_t
 AM_alloc_size(size_t cap){
     return (sizeof(Atom)+sizeof(void*))*cap + 2*cap*sizeof(uint32_t);
 }
+
+// Reserve room for at least capacity entries. Growing also removes deleted entries.
+warn_unused
+static inline
+int
+AM_reserve(AtomMap* am, Allocator al, size_t capacity){
+    if(capacity <= am->cap) return 0;
+    uint32_t old_cap = am->cap;
+    size_t new_cap = old_cap?old_cap:4;
+    while(new_cap < capacity){
+        if(new_cap > UINT32_MAX/4) return 1;
+        new_cap *= 2;
+    }
+    if(new_cap > SIZE_MAX/(sizeof(Atom)+sizeof(void*)+2*sizeof(uint32_t))) return 1;
+    size_t old_size = AM_alloc_size(old_cap);
+    size_t new_size = AM_alloc_size(new_cap);
+    uint32_t count = am->count;
+    void* data = Allocator_realloc(al, am->data, old_size, new_size);
+    if(!data) return 1;
+    const void** items = data;
+    uint32_t* idxes = (uint32_t*)(void*)(new_cap*(sizeof(Atom)+(sizeof(void*)))+(char*)(data));
+    memset(idxes, 0, sizeof(uint32_t)*2*new_cap);
+    uint32_t new_count = 0;
+    for(uint32_t i = 0; i < count; i++){
+        if(!items[i*2+1]) continue;
+        Atom k = items[i*2];
+        if(i != new_count){
+            items[new_count*2] = k;
+            items[new_count*2+1] = items[i*2+1];
+        }
+        uint32_t hash = k->hash;
+        uint32_t idx = fast_reduce32(hash, (uint32_t)(2*new_cap));
+        while(idxes[idx]){
+            idx++;
+            if(idx >= 2*new_cap) idx = 0;
+        }
+        idxes[idx] = ++new_count;
+    }
+    am->count = new_count;
+    am->data = data;
+    am->cap = (uint32_t)new_cap;
+    return 0;
+}
+
 // There is no `AM_cleanup()` to force you to think about the lifetime of the pointer to items.
 static inline
 void
@@ -118,35 +162,7 @@ AM_put(AtomMap* am, Allocator al, Atom key, const void*_Nullable value_){
         #pragma warning(pop)
     #endif
     if(am->count >= am->cap){
-        uint32_t old_cap = am->cap;
-        uint32_t old_size = (uint32_t)AM_alloc_size(old_cap);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (uint32_t)AM_alloc_size(new_cap);
-        uint32_t count = am->count;
-        void* data = Allocator_realloc(al, am->data, old_size, new_size);
-        if(!data) return 1;
-        const void** items = data;
-        uint32_t* idxes = (uint32_t*)(void*)(new_cap*(sizeof(Atom)+(sizeof(void*)))+(char*)(data));
-        memset(idxes, 0, sizeof(uint32_t)*2*new_cap);
-        uint32_t new_count = 0;
-        for(uint32_t i = 0; i < count; i++){
-            if(!items[i*2+1]) continue;
-            Atom k = items[i*2];
-            if(i != new_count){
-                items[new_count*2] = k;
-                items[new_count*2+1] = items[i*2+1];
-            }
-            uint32_t hash = k->hash;
-            uint32_t idx = fast_reduce32(hash, 2*new_cap);
-            while(idxes[idx]){
-                idx++;
-                if(idx >= 2*new_cap) idx = 0;
-            }
-            idxes[idx] = ++new_count;
-        }
-        am->count = new_count;
-        am->data = data;
-        am->cap = new_cap;
+        if(AM_reserve(am, al, (size_t)am->cap + 1)) return 1;
     }
     uint32_t hash = key->hash;
     uint32_t cap = am->cap;
@@ -175,60 +191,35 @@ AM_put(AtomMap* am, Allocator al, Atom key, const void*_Nullable value_){
     }
 }
 
-/*
+// Returns the value slot, inserting a NULL value for a new key.
+// Resizing invalids the return value.
+// Returns NULL on allocation failure.
 static inline
-void*_Nullable
+void* _Nullable* _Nullable
 AM_getsert(AtomMap* am, Allocator al, Atom key){
-    if(am->count >= am->cap){
-        uint32_t old_cap = am->cap;
-        uint32_t old_size = (sizeof(Atom)+sizeof(void*))*old_cap + 2*old_cap*sizeof(uint32_t);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (sizeof(Atom)+sizeof(void*))*new_cap + 2*new_cap*sizeof(uint32_t);
-        uint32_t count = am->count;
-        void* data = Allocator_realloc(al, am->data, old_size, new_size);
-        if(!data) return NULL;
-        void** items = data;
-        uint32_t* idxes = (uint32_t*)(void*)(new_cap*(sizeof(Atom)+(sizeof(void*)))+(char*)(data));
-        memset(idxes, 0, sizeof(uint32_t)*2*new_cap);
-        for(uint32_t i = 0; i < count; i++){
-            Atom k = items[i*2];
-            uint32_t hash = k->hash;
-            uint32_t idx = fast_reduce32(hash, 2*new_cap);
-            while(idxes[idx]){
-                idx++;
-                if(idx >= 2*new_cap) idx = 0;
-            }
-            idxes[idx] = i+1;
-        }
-        am->data = data;
-        am->cap = new_cap;
-    }
-    uint32_t hash = key->hash;
-    uint32_t cap = am->cap;
-    uint32_t idx = fast_reduce32(hash, 2*cap);
-    void* data = am->data;
-    void** items = data;
-    uint32_t* idxes = (uint32_t*)(void*)(cap*(sizeof(Atom)+(sizeof(void*)))+(char*)(data));
+    if(!am->cap && AM_reserve(am, al, 4)) return NULL;
     for(;;){
-        uint32_t i = idxes[idx];
-        if(!i){
-            i = am->count++;
-            // const-wash
-            items[2*i] = (void*)(uintptr_t)key;
-            idxes[idx] = i+1;
-            return &items[2*i+1];
+        uint32_t cap = am->cap;
+        uint32_t idx = fast_reduce32(key->hash, 2*cap);
+        void** items = am->data;
+        uint32_t* idxes = (uint32_t*)(void*)(cap*(sizeof(Atom)+sizeof(void*))+(char*)am->data);
+        while(idxes[idx]){
+            uint32_t i = idxes[idx]-1;
+            if(items[2*i] == (const void*)key) return &items[2*i+1];
+            idx++;
+            if(idx >= 2*cap) idx = 0;
         }
-        i--;
-        Atom a = items[2*i];
-        if(a == key){
-            return &items[2*i+1];
-            return 0;
+        if(am->count >= cap){
+            if(AM_reserve(am, al, (size_t)cap + 1)) return NULL;
+            continue;
         }
-        idx++;
-        if(idx >= 2*cap) idx = 0;
+        uint32_t i = am->count++;
+        items[2*i] = (void*)(uintptr_t)key;
+        items[2*i+1] = NULL;
+        idxes[idx] = i+1;
+        return &items[2*i+1];
     }
 }
-*/
 
 static inline
 void*_Nullable

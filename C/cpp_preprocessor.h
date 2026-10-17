@@ -82,8 +82,7 @@ struct CppMacro {
             uint64_t no_expand_args:   1;
             uint64_t _reserved:        4;
             uint64_t is_disabled:      1;
-            uint64_t may_redef:        1;
-            uint64_t _padding:         6;
+            uint64_t _padding:         7;
             uint64_t nparams:          16;
             uint64_t nreplace:         32;
         };
@@ -226,7 +225,7 @@ cpp_undef_macro(CppPreprocessor* cpp, StringView name);
 
 static
 int
-cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks);
+cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks);
 
 static
 int

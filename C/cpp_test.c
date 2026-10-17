@@ -966,9 +966,6 @@ TestFunction(test_builtin_macros){
         const char* name; StringView inp, exp; int line; _Bool disabled;
     } test_cases[] = {
         {"__FILE__", SVI("__FILE__"), SVI("\"(test)\""), __LINE__, 0},
-        {"type builtin redef", SVI("#define __int64 long long\n__int64"), SVI("\nlong long"), __LINE__, 0},
-        {"type builtin redef empty", SVI("#define __int64\n__int64"), SVI("\n"), __LINE__, 0},
-        {"type builtin redef function", SVI("#define __int64(x) x + 1\n__int64(2)"), SVI("\n2 + 1"), __LINE__, 0},
         {"__LINE__", SVI("__LINE__"), SVI("1"), __LINE__, 0},
         {"line after leading continuation", SVI("\\\n__LINE__"), SVI("2"), __LINE__, 0},
         {"line after leading CRLF continuation", SVI("\\\r\n__LINE__"), SVI("2"), __LINE__, 0},
@@ -1411,7 +1408,9 @@ TestFunction(test_messages){
                 "(test):3:1: args\n")},
         {"type builtin replacement can redefine again", __LINE__,
             SVI("#define __int64 1\n#define __int64 2\n__print(__int64)\n"),
-            SVI("(test):2:9: warning: Macro (__int64) redefined with a different definition\n"
+            SVI("(test):1:9: warning: Macro (__int64) redefined with a different definition\n"
+                "(test):0:0: info: ... previously defined here\n"
+                "(test):2:9: warning: Macro (__int64) redefined with a different definition\n"
                 "(test):1:9: info: ... previously defined here\n"
                 "(test):3:1: 2\n")},
         {"identical definitions remain silent", __LINE__,

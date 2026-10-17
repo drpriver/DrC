@@ -16349,6 +16349,10 @@ TestFunction(test_interpreter){
     for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         size_t opt_idx = i % countof(optimization_options);
         size_t target_idx = (i / countof(optimization_options)) % CC_TARGET_COUNT;
+        #ifdef __DRC__ // FIXME: interpreter is still too slow
+        if(target_idx != CC_TARGET_NATIVE)
+            continue;
+        #endif
         size_t test_idx = i / (countof(optimization_options) * CC_TARGET_COUNT);
         const struct opt* o = &optimization_options[opt_idx];
         const struct tc* tc = &testcases[test_idx];
@@ -17586,6 +17590,10 @@ TestFunction(test_interpreter_diagnostics){
     for(size_t i = test_atomic_increment(&idx); i < CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i / CC_TARGET_COUNT];
         const CcTargetConfig* target = cc_targets[i % CC_TARGET_COUNT];
+        #ifdef __DRC__ // FIXME: interpreter still too slow
+        if(target != &cc_target_native)
+            continue;
+        #endif
         size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;

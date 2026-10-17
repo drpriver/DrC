@@ -68,7 +68,11 @@ AT_get_atom(AtomTable* at, const char* txt, size_t len);
 
 static inline
 Atom _Nullable
-AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
+AT_get_atom_hashed(AtomTable* at, const char* txt, size_t len, uint32_t hash);
+
+static inline
+Atom _Nullable
+AT_raw_atomize_hashed(AtomTable* at, const char* txt, size_t len, uint32_t hash){
     if(!len) return nil_atom;
     if(len + 1 > UINT32_MAX/2) return NULL;
     Atom_* atom = ArenaAllocator_alloc(&at->arena, 1+len+sizeof *atom);
@@ -77,16 +81,27 @@ AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
     atom->length = (uint32_t)len;
     memcpy(atom->data, txt, len);
     atom->data[len] = 0;
-    atom->hash = hash_align1(txt, len);
+    atom->hash = hash;
     return atom;
 }
 
 static inline
 Atom _Nullable
+AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
+    if(!len) return nil_atom;
+    if(len + 1 > UINT32_MAX/2) return NULL;
+    return AT_raw_atomize_hashed(at, txt, len, hash_align1(txt, len));
+}
+
+static inline
+Atom _Nullable
 AT_atomize(AtomTable* at, const char* txt, size_t len){
-    Atom atom = AT_get_atom(at, txt, len);
+    if(!len) return nil_atom;
+    if(len + 1 > UINT32_MAX/2) return NULL;
+    uint32_t hash = hash_align1(txt, len);
+    Atom atom = AT_get_atom_hashed(at, txt, len, hash);
     if(atom) return atom;
-    if(!atom) atom = AT_raw_atomize(at, txt, len);
+    atom = AT_raw_atomize_hashed(at, txt, len, hash);
     if(!atom) return NULL;
     int err = AT_store_atom(at, atom);
     if(err){
@@ -97,12 +112,19 @@ AT_atomize(AtomTable* at, const char* txt, size_t len){
     return atom;
 }
 
+// Reserve slots, including the nil atom's slot. Existing atoms keep their identity.
 static inline
 int
-AT_grow_table(AtomTable* at){
+AT_reserve(AtomTable* at, size_t capacity){
+    if(capacity <= at->cap) return 0;
     size_t count = at->count;
     size_t old_cap = at->cap;
-    size_t new_cap = old_cap?old_cap*2:64;
+    size_t new_cap = old_cap?old_cap:64;
+    while(new_cap < capacity){
+        if(new_cap > UINT32_MAX/4) return 1;
+        new_cap *= 2;
+    }
+    if(new_cap > SIZE_MAX/(2*sizeof(uint32_t)+sizeof(Atom))) return 1;
     size_t new_size = sizeof(uint32_t)*new_cap*2+new_cap*sizeof(Atom);
     size_t old_size = sizeof(uint32_t)*old_cap*2+old_cap*sizeof(Atom);
     void* new_data = ArenaAllocator_realloc(&at->arena, at->data, old_size, new_size);
@@ -127,6 +149,12 @@ AT_grow_table(AtomTable* at){
     at->cap = new_cap;
     at->data = new_data;
     return 0;
+}
+
+static inline
+int
+AT_grow_table(AtomTable* at){
+    return AT_reserve(at, at->cap + 1);
 }
 
 static inline
@@ -159,11 +187,10 @@ AT_store_atom(AtomTable* at, Atom atom){
 
 static inline
 Atom _Nullable
-AT_get_atom(AtomTable* at, const char* txt, size_t len){
+AT_get_atom_hashed(AtomTable* at, const char* txt, size_t len, uint32_t hash){
     if(!len) return nil_atom;
     if(!at->count) return NULL;
     uint32_t* idxes = (uint32_t*)(void*)(sizeof(Atom)*at->cap+(char*)at->data);
-    uint32_t hash = hash_align1(txt, len);
     uint32_t idx = fast_reduce32(hash, (uint32_t)at->cap*2);
     Atom* atoms = at->data;
     for(;;){
@@ -176,6 +203,14 @@ AT_get_atom(AtomTable* at, const char* txt, size_t len){
         idx++;
         if(idx >= at->cap*2) idx = 0;
     }
+}
+
+static inline
+Atom _Nullable
+AT_get_atom(AtomTable* at, const char* txt, size_t len){
+    if(!len) return nil_atom;
+    if(!at->count) return NULL;
+    return AT_get_atom_hashed(at, txt, len, hash_align1(txt, len));
 }
 
 #ifdef __clang__

@@ -114,22 +114,19 @@ int
 cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t nparams, CppMacro*_Nullable*_Nonnull outmacro){
     Atom key = AT_atomize(cpp->at, name.text, name.length);
     if(!key) return CPP_OOM_ERROR;
-    CppMacro* macro = AM_get(&cpp->macros, key);
-    if(macro && !macro->may_redef)
+    void** slot = AM_getsert(&cpp->macros, cpp->allocator, key);
+    if(!slot) return CPP_OOM_ERROR;
+    CppMacro* macro = *slot;
+    if(macro)
         return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
-    CppMacro* old_macro = macro;
     size_t size = sizeof *macro + sizeof(CppToken)*ntoks + sizeof(Atom)*nparams;
     macro = Allocator_zalloc(cpp->allocator, size);
     if(!macro) return CPP_OOM_ERROR;
     macro->nreplace = ntoks;
     macro->nparams = nparams;
-    int err = AM_put(&cpp->macros, cpp->allocator, key, macro);
-    if(err) Allocator_free(cpp->allocator, macro, size);
-    else {
-        if(old_macro) cpp_free_macro(cpp, old_macro);
-        *outmacro = macro;
-    }
-    return err?CPP_OOM_ERROR:0;
+    *slot = macro;
+    *outmacro = macro;
+    return 0;
 }
 
 static
@@ -180,7 +177,7 @@ cpp_undef_macro(CppPreprocessor* cpp, StringView name){
 
 static
 int
-cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, CppToken*_Null_unspecified toks, size_t ntoks){
+cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks){
     CppMacro* macro;
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
     if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
@@ -4174,131 +4171,213 @@ static CppPragmaFn cpp_builtin_pragma_once,
 static
 int
 cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKind kind){
-    CppToken toks[7];
-    size_t ntoks = 0;
     switch(kind){
-        case CCBT_signed_char:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("signed")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
-            break;
-        case CCBT_unsigned_char:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
-            break;
-        case CCBT_short:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("short")};
-            break;
-        case CCBT_unsigned_short:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("short")};
-            break;
-        case CCBT_int:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_unsigned:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_long:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_unsigned_long:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_long_long:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_unsigned_long_long:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("int")};
-            break;
-        case CCBT_long_double:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
-            break;
-        case CCBT_int128:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__int128")};
-            break;
-        case CCBT_unsigned_int128:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("unsigned")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__int128")};
-            break;
-        case CCBT_char:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("char")};
-            break;
-        case CCBT_void:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("void")};
-            break;
-        case CCBT_bool:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Bool")};
-            break;
-        case CCBT_float:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("float")};
-            break;
-        case CCBT_double:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
-            break;
-        case CCBT_bfloat16:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("__bf16")};
-            break;
-        case CCBT_float16:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float16")};
-            break;
-        case CCBT_float128:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float128")};
-            break;
-        case CCBT_float16_complex:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Float16")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Complex")};
-            break;
-        case CCBT_float_complex:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("float")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Complex")};
-            break;
-        case CCBT_double_complex:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Complex")};
-            break;
-        case CCBT_long_double_complex:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("long")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("double")};
-            toks[ntoks++] = (CppToken){.type=CPP_WHITESPACE, .txt=SV(" ")};
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Complex")};
-            break;
-        case CCBT_nullptr_t:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("nullptr_t")};
-            break;
-        case CCBT__Type:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Type")};
-            break;
-        case CCBT__Any:
-            toks[ntoks++] = (CppToken){.type=CPP_IDENTIFIER, .txt=SV("_Any")};
-            break;
+        case CCBT_signed_char: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("signed")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("char")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned_char: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("char")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_short: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("short")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned_short: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("short")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_int: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_long: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned_long: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_long_long: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned_long_long: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("int")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_long_double: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("double")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_int128: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("__int128")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_unsigned_int128: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("unsigned")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("__int128")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_char: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("char")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_void: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("void")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_bool: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Bool")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_float: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("float")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_double: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("double")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_bfloat16: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("__bf16")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_float16: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Float16")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_float128: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Float128")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_float16_complex: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Float16")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_float_complex: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("float")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_double_complex: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("double")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_long_double_complex: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("long")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("double")},
+                {.type=CPP_WHITESPACE, .txt=SVI(" ")},
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT_nullptr_t: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("nullptr_t")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT__Type: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Type")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
+        case CCBT__Any: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("_Any")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+        }
         case CCBT_INVALID:
         case CCBT_char_complex:
         case CCBT_signed_char_complex:
@@ -4316,12 +4395,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
         case CCBT_COUNT:
             return CPP_UNIMPLEMENTED_ERROR;
     }
-    int err = cpp_define_obj_macro(cpp, name, toks, ntoks);
-    if(err) return err;
-    Atom key = AT_get_atom(cpp->at, name.text, name.length);
-    CppMacro* macro = AM_get(&cpp->macros, key);
-    macro->may_redef = 1;
-    return 0;
+    return CPP_UNIMPLEMENTED_ERROR;
 }
 
 static
@@ -4394,10 +4468,54 @@ cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
 }
 static
 int
-cpp_def_int(CppPreprocessor* cpp, StringView name, int val){
-    Atom a = cpp_atomizef(cpp, "%d", val);
-    if(!a) return CPP_OOM_ERROR;
-    return cpp_def_num(cpp, name, (StringView){a->length, a->data});
+cpp_def_target_int(CppPreprocessor* cpp, StringView name, int val){
+    _Bool negative = val < 0;
+    unsigned magnitude = negative ? 0u - (unsigned)val : (unsigned)val;
+    StringView digits;
+    switch(magnitude){
+        #define DIGITS(n) case n: digits = SV(#n); break
+        DIGITS(0);
+        DIGITS(1);
+        DIGITS(2);
+        DIGITS(3);
+        DIGITS(4);
+        DIGITS(5);
+        DIGITS(6);
+        DIGITS(7);
+        DIGITS(8);
+        DIGITS(15);
+        DIGITS(16);
+        DIGITS(17);
+        DIGITS(18);
+        DIGITS(21);
+        DIGITS(24);
+        DIGITS(32);
+        DIGITS(33);
+        DIGITS(36);
+        DIGITS(37);
+        DIGITS(38);
+        DIGITS(53);
+        DIGITS(64);
+        DIGITS(113);
+        DIGITS(125);
+        DIGITS(128);
+        DIGITS(307);
+        DIGITS(308);
+        DIGITS(1021);
+        DIGITS(1024);
+        DIGITS(4931);
+        DIGITS(4932);
+        DIGITS(16381);
+        DIGITS(16384);
+        #undef DIGITS
+        default: return CPP_UNREACHABLE_ERROR;
+    }
+    // A minus sign is a separate preprocessing token, not part of the number.
+    CppToken toks[] = {
+        {.type=CPP_PUNCTUATOR, .punct='-', .txt=SV("-"), .loc={.line=1, .column=1}},
+        {.type=CPP_NUMBER, .txt=digits, .loc={.line=1, .column=1 + negative}},
+    };
+    return cpp_define_obj_macro(cpp, name, toks + !negative, 1 + negative);
 }
 
 static
@@ -4414,8 +4532,13 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         err = cpp_def_num(cpp, SV(name), (StringView){strlen(val), val}); \
         if(err) return err; \
     } while(0)
+    #define DEFFLOAT(name, val) do { \
+        err = cpp_define_obj_macro(cpp, SV(name), \
+            (CppToken[]){{.type=CPP_NUMBER, .txt=SV(val), .loc={.line=1, .column=1}}}, 1); \
+        if(err) return err; \
+    } while(0)
     #define DEFINT(name, val) do { \
-        err = cpp_def_int(cpp, SV(name), (int)(val)); \
+        err = cpp_def_target_int(cpp, SV(name), (int)(val)); \
         if(err) return err; \
     } while(0)
     #define DEFTYPE(name, kind) do { \
@@ -4531,45 +4654,33 @@ cpp_define_target_macros(CppPreprocessor* cpp){
 
     // __*_MAX__ macros
     {
-        Atom smax[CCBT_COUNT] = {0};
-        Atom umax[CCBT_COUNT] = {0};
-        smax[CCBT_signed_char]         = cpp_atomizef(cpp, "127");
-        if(!smax[CCBT_signed_char]) return CPP_OOM_ERROR;
-        smax[CCBT_short]               = cpp_atomizef(cpp, "32767");
-        if(!smax[CCBT_short]) return CPP_OOM_ERROR;
-        smax[CCBT_int]                 = cpp_atomizef(cpp, "2147483647");
-        if(!smax[CCBT_int]) return CPP_OOM_ERROR;
-        if(t->sizeof_[CCBT_long] == 8)
-            smax[CCBT_long]            = cpp_atomizef(cpp, "9223372036854775807%s", ccbt_literal_suffix(CCBT_long));
-        else
-            smax[CCBT_long]            = cpp_atomizef(cpp, "2147483647%s", ccbt_literal_suffix(CCBT_long));
-        if(!smax[CCBT_long]) return CPP_OOM_ERROR;
-        smax[CCBT_long_long]           = cpp_atomizef(cpp, "9223372036854775807%s", ccbt_literal_suffix(CCBT_long_long));
-        if(!smax[CCBT_long_long]) return CPP_OOM_ERROR;
-        umax[CCBT_unsigned_char]       = cpp_atomizef(cpp, "255");
-        if(!umax[CCBT_unsigned_char]) return CPP_OOM_ERROR;
-        umax[CCBT_unsigned_short]      = cpp_atomizef(cpp, "65535");
-        if(!umax[CCBT_unsigned_short]) return CPP_OOM_ERROR;
-        umax[CCBT_unsigned]            = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned));
-        if(!umax[CCBT_unsigned]) return CPP_OOM_ERROR;
-        if(t->sizeof_[CCBT_unsigned_long] == 8)
-            umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "18446744073709551615%s", ccbt_literal_suffix(CCBT_unsigned_long));
-        else
-            umax[CCBT_unsigned_long]   = cpp_atomizef(cpp, "4294967295%s", ccbt_literal_suffix(CCBT_unsigned_long));
-        if(!umax[CCBT_unsigned_long]) return CPP_OOM_ERROR;
-        umax[CCBT_unsigned_long_long]  = cpp_atomizef(cpp, "18446744073709551615%s", ccbt_literal_suffix(CCBT_unsigned_long_long));
-        if(!umax[CCBT_unsigned_long_long]) return CPP_OOM_ERROR;
+        static const StringView smax[CCBT_COUNT] = {
+            [CCBT_signed_char] = SVI("127"),
+            [CCBT_short] = SVI("32767"),
+            [CCBT_int] = SVI("2147483647"),
+            [CCBT_long] = SVI("9223372036854775807L"),
+            [CCBT_long_long] = SVI("9223372036854775807LL"),
+        };
+        static const StringView umax[CCBT_COUNT] = {
+            [CCBT_unsigned_char] = SVI("255"),
+            [CCBT_unsigned_short] = SVI("65535"),
+            [CCBT_unsigned] = SVI("4294967295U"),
+            [CCBT_unsigned_long] = SVI("18446744073709551615UL"),
+            [CCBT_unsigned_long_long] = SVI("18446744073709551615ULL"),
+        };
 
         #define DEFSMAX(name, kind) do { \
-            Atom _a = smax[kind]; \
+            StringView _value = (kind) == CCBT_long && t->sizeof_[CCBT_long] == 4 \
+                ? SV("2147483647L") : smax[kind]; \
             err = cpp_define_obj_macro(cpp, SV(name), \
-                (CppToken[]){{.type=CPP_NUMBER, .txt={_a->length, _a->data}}}, 1); \
+                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1); \
             if(err) return err; \
         } while(0)
         #define DEFUMAX(name, kind) do { \
-            Atom _a = umax[kind]; \
+            StringView _value = (kind) == CCBT_unsigned_long && t->sizeof_[CCBT_unsigned_long] == 4 \
+                ? SV("4294967295UL") : umax[kind]; \
             err = cpp_define_obj_macro(cpp, SV(name), \
-                (CppToken[]){{.type=CPP_NUMBER, .txt={_a->length, _a->data}}}, 1); \
+                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1); \
             if(err) return err; \
         } while(0)
 
@@ -4663,10 +4774,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
 
     // Floating-point property macros
     // float
-    DEFNUM("__FLT_MAX__",        "3.40282346638528859811704183484516925440e+38F");
-    DEFNUM("__FLT_MIN__",        "1.17549435082228750796873653722224567781e-38F");
-    DEFNUM("__FLT_EPSILON__",    "1.19209289550781250000000000000000000000e-7F");
-    DEFNUM("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613128e-45F");
+    DEFFLOAT("__FLT_MAX__",        "3.40282346638528859811704183484516925440e+38F");
+    DEFFLOAT("__FLT_MIN__",        "1.17549435082228750796873653722224567781e-38F");
+    DEFFLOAT("__FLT_EPSILON__",    "1.19209289550781250000000000000000000000e-7F");
+    DEFFLOAT("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613128e-45F");
     DEFINT("__FLT_MANT_DIG__",   24);
     DEFINT("__FLT_DIG__",        6);
     DEFINT("__FLT_MIN_EXP__",    -125);
@@ -4679,10 +4790,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__FLT_RADIX__", 2);
     DEFINT("__FLT_ROUNDS__", 1); // round to nearest
     // double
-    DEFNUM("__DBL_MAX__",        "1.7976931348623157e+308");
-    DEFNUM("__DBL_MIN__",        "2.2250738585072014e-308");
-    DEFNUM("__DBL_EPSILON__",    "2.2204460492503131e-16");
-    DEFNUM("__DBL_DENORM_MIN__", "4.9406564584124654e-324");
+    DEFFLOAT("__DBL_MAX__",        "1.7976931348623157e+308");
+    DEFFLOAT("__DBL_MIN__",        "2.2250738585072014e-308");
+    DEFFLOAT("__DBL_EPSILON__",    "2.2204460492503131e-16");
+    DEFFLOAT("__DBL_DENORM_MIN__", "4.9406564584124654e-324");
     DEFINT("__DBL_MANT_DIG__",   53);
     DEFINT("__DBL_DIG__",        15);
     DEFINT("__DBL_MIN_EXP__",    -1021);
@@ -4696,10 +4807,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     switch(t->long_double_format){
         DRP_CASES_EXHAUSTED;
         case CC_LONG_DOUBLE_BINARY64:
-            DEFNUM("__LDBL_MAX__",        "1.7976931348623157e+308L");
-            DEFNUM("__LDBL_MIN__",        "2.2250738585072014e-308L");
-            DEFNUM("__LDBL_EPSILON__",    "2.2204460492503131e-16L");
-            DEFNUM("__LDBL_DENORM_MIN__", "4.9406564584124654e-324L");
+            DEFFLOAT("__LDBL_MAX__",        "1.7976931348623157e+308L");
+            DEFFLOAT("__LDBL_MIN__",        "2.2250738585072014e-308L");
+            DEFFLOAT("__LDBL_EPSILON__",    "2.2204460492503131e-16L");
+            DEFFLOAT("__LDBL_DENORM_MIN__", "4.9406564584124654e-324L");
             DEFINT("__LDBL_MANT_DIG__",   53);
             DEFINT("__LDBL_DIG__",        15);
             DEFINT("__LDBL_MIN_EXP__",    -1021);
@@ -4709,10 +4820,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             DEFINT("__DECIMAL_DIG__", 17);
             break;
         case CC_LONG_DOUBLE_X87:
-            DEFNUM("__LDBL_MAX__",        "1.18973149535723176502126385303097021e+4932L");
-            DEFNUM("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
-            DEFNUM("__LDBL_EPSILON__",    "1.08420217248550443400745280086994171e-19L");
-            DEFNUM("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
+            DEFFLOAT("__LDBL_MAX__",        "1.18973149535723176502126385303097021e+4932L");
+            DEFFLOAT("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
+            DEFFLOAT("__LDBL_EPSILON__",    "1.08420217248550443400745280086994171e-19L");
+            DEFFLOAT("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
             DEFINT("__LDBL_MANT_DIG__",   64);
             DEFINT("__LDBL_DIG__",        18);
             DEFINT("__LDBL_MIN_EXP__",    -16381);
@@ -4722,10 +4833,10 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             DEFINT("__DECIMAL_DIG__", 21);
             break;
         case CC_LONG_DOUBLE_BINARY128:
-            DEFNUM("__LDBL_MAX__",        "1.18973149535723176508575932662800702e+4932L");
-            DEFNUM("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
-            DEFNUM("__LDBL_EPSILON__",    "1.92592994438723585305597794258492732e-34L");
-            DEFNUM("__LDBL_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966L");
+            DEFFLOAT("__LDBL_MAX__",        "1.18973149535723176508575932662800702e+4932L");
+            DEFFLOAT("__LDBL_MIN__",        "3.36210314311209350626267781732175260e-4932L");
+            DEFFLOAT("__LDBL_EPSILON__",    "1.92592994438723585305597794258492732e-34L");
+            DEFFLOAT("__LDBL_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966L");
             DEFINT("__LDBL_MANT_DIG__",   113);
             DEFINT("__LDBL_DIG__",        33);
             DEFINT("__LDBL_MIN_EXP__",    -16381);
@@ -4833,6 +4944,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
 
     #undef DEF1
     #undef DEFNUM
+    #undef DEFFLOAT
     #undef DEFINT
     #undef DEFTYPE
     return 0;
@@ -5506,6 +5618,8 @@ static
 int
 cpp_define_builtin_macros(CppPreprocessor* cpp){
     int err;
+    if(AT_reserve(cpp->at, 1024)) return CPP_OOM_ERROR;
+    if(AM_reserve(&cpp->macros, cpp->allocator, 512)) return CPP_OOM_ERROR;
     static const struct {
         StringView name; CppObjMacroFn* fn;
     } obj_builtins[] = {
