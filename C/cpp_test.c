@@ -335,6 +335,8 @@ TestFunction(test_func_macros){
         {"paste_multiline_arg",SV("#define X(a) x##a\nint X(\n        asd);"), SV("\nint xasd;"), __LINE__},
         {"va_args",SV("#define VA(...) __VA_ARGS__\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
         {"gnu_va_args",SV("#define VA(args...) args\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
+        {"gnu_va_args_space_before_ellipsis", SV("#define VA(args ...) args\nVA(a, b)"), SV("\na, b"), __LINE__},
+        {"gnu_va_args_comments_before_ellipsis", SV("#define VA(args /* one */ /* two */ ...) args\nVA(a, b)"), SV("\na, b"), __LINE__},
         {"va_args_empty",SV("#define VA(...) [__VA_ARGS__]\nVA()"),SV("\n[]"),__LINE__},
         {"gnu_va_args_empty",SV("#define VA(args...) [args]\nVA()"),SV("\n[]"),__LINE__},
         {"va_opt_nonempty",SV("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT(1, 2)"),SV("\nprefix , 1, 2 suffix"),__LINE__},
@@ -455,6 +457,10 @@ TestFunction(test_func_macros){
         {"va_arg_expr", SV("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SV("\nc"), __LINE__},
         {"va_arg_expand", SV("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SV("\n\n42"), __LINE__},
         {"identical func redef", SV("#define F(a, b) a + b\n#define F(a, b) a + b\nF(1, 2)"), SV("\n\n1 + 2"), __LINE__},
+        {"identical func redef with leading comment", SV(
+            "#define F(x) /* comment */ x\n#define F(x) x\nF(1)"), SV("\n\n1"), __LINE__},
+        {"identical func redef with adjacent comments", SV(
+            "#define F(x)/**//**/x\n#define F(x) x\nF(1)"), SV("\n\n1"), __LINE__},
         {"va_opt_paste_right", SV(
             "#define F(...) x ## __VA_OPT__(y)\n"
             "F(1)\n"
@@ -1138,6 +1144,7 @@ TestFunction(test_builtin_macros){
         {"defifndef comment before name", SV("#defifndef /* comment */ HELLO hello\nHELLO"), SV("\nhello"), __LINE__, 0},
         {"defblock func", SV("#defblock ADD(x, y)\nx + y\n#endblock\nADD(3, 4)"), SV("\n3 + 4"), __LINE__, 0},
         {"defblock variadic", SV("#defblock LOG(fmt, ...)\nfmt __VA_ARGS__\n#endblock\nLOG(hello, world)"), SV("\nhello world"), __LINE__, 0},
+        {"defblock named variadic with comments", SV("#defblock VA(args /* one */ /* two */ ...)\nargs\n#endblock\nVA(a, b)"), SV("\na, b"), __LINE__, 0},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){

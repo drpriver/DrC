@@ -1807,8 +1807,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 // GCC extension: name... (named varargs)
                 {
                     CppToken peek;
+                    do {
                     err = cpp_next_raw_token(cpp, &peek);
                     if(err) goto finish_func_macro;
+                    } while(peek.type == CPP_WHITESPACE);
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
                         named_variadic = tok.txt;
@@ -1830,7 +1832,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_func_macro;
-            if(tok.type == CPP_WHITESPACE){
+            while(tok.type == CPP_WHITESPACE){
                 err = cpp_next_raw_token(cpp, &tok);
                 if(err) goto finish_func_macro;
             }
@@ -2139,8 +2141,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 {
                     CppToken peek;
+                    do {
                     err = cpp_next_raw_token(cpp, &peek);
                     if(err) goto finish_defblock;
+                    } while(peek.type == CPP_WHITESPACE);
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
                         named_variadic = tok.txt;
