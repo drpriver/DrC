@@ -525,21 +525,27 @@ cpp_decode_literal_char(CppPreprocessor* cpp, SrcLoc loc, StringView s, size_t* 
                 for(int n = 1; n < 3 && i < s.length && s.text[i] >= '0' && s.text[i] <= '7'; n++)
                     cp = (cp << 3) | (uint32_t)(s.text[i++] - '0');
                 break;
-            case 'x': case 'u': case 'U': {
-                *numeric = esc == 'x';
+            case 'o': case 'x': case 'u': case 'U': {
+                *numeric = esc == 'x' || esc == 'o';
+                _Bool delimited = esc != 'U' && i < s.length && s.text[i] == '{';
+                if(esc == 'o' && !delimited)
+                    return cpp_error(cpp, loc, "Invalid \\%c escape", esc);
+                if(delimited) i++;
                 size_t start = i;
-                size_t limit = esc == 'u' ? 4 : esc == 'U' ? 8 : s.length - i;
+                size_t limit = delimited ? s.length - i : esc == 'u' ? 4 : esc == 'U' ? 8 : s.length - i;
+                uint32_t base = esc == 'o' ? 8 : 16;
                 cp = 0;
                 while(i < s.length && i - start < limit){
                     int d = cpp_hex_digit((unsigned char)s.text[i]);
-                    if(d < 0) break;
-                    if(cp > (UINT32_MAX - (uint32_t)d) / 16)
+                    if(d < 0 || (uint32_t)d >= base) break;
+                    if(cp > (UINT32_MAX - (uint32_t)d) / base)
                         return cpp_error(cpp, loc, "Escape sequence out of range");
-                    cp = cp * 16 + (uint32_t)d;
+                    cp = cp * base + (uint32_t)d;
                     i++;
                 }
-                if(i == start || (esc != 'x' && i - start != limit))
+                if(i == start || (delimited ? i == s.length || s.text[i] != '}' : esc != 'x' && i - start != limit))
                     return cpp_error(cpp, loc, "Invalid \\%c escape", esc);
+                if(delimited) i++;
                 break;
             }
             default: return cpp_error(cpp, loc, "Unknown escape sequence \\%c", esc);
@@ -7953,6 +7959,10 @@ cpp_eval_parse_number_typed(CppPreprocessor* cpp, CppToken tok, CppEvalValue* re
         err = parse_binary(s, len, &v);
         if(err) return cpp_error(cpp, tok.loc, "Invalid binary digit in number");
     }
+    else if(len > 2 && s[0] == '0' && (s[1] == 'o' || s[1] == 'O')){
+        err = parse_octal_inner(s+2, len-2, &v);
+        if(err) return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
+    }
     else if(len > 1 && s[0] == '0'){
         err = parse_octal_inner(s+1, len-1, &v);
         if(err) return cpp_error(cpp, tok.loc, "Invalid octal digit in number");
@@ -8656,8 +8666,16 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
     // Strip digit separators into a stack buffer
     char buf[256];
     size_t buf_len = 0;
+    _Bool prefixed_octal = len >= 2 && s[0] == '0' && (s[1] == 'o' || s[1] == 'O');
+    if(prefixed_octal && len == 2)
+        return cpp_error(cpp, cpptok->loc, "Invalid octal digit in number");
     for(size_t i = 0; i < len; i++){
-        if(s[i] == '\'') continue;
+        if(s[i] == '\''){
+            if(prefixed_octal
+            && (i <= 2 || i+1 == len || s[i-1] < '0' || s[i-1] > '7' || s[i+1] < '0' || s[i+1] > '7'))
+                return cpp_error(cpp, cpptok->loc, "Invalid digit separator in number");
+            continue;
+        }
         if(buf_len >= sizeof buf - 1)
             return cpp_error(cpp, cpptok->loc, "Number literal too long");
         buf[buf_len++] = s[i];
@@ -8739,7 +8757,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
             base = 2; start = 2;
         }
         else if(buf_len > 1 && buf[0] == '0'){
-            base = 8; start = 1;
+            base = 8; start = prefixed_octal ? 2 : 1;
         }
         CiUint128 v = ci_uint128_from_uint64(0);
         CiUint128 max = ci_uint128_sub(v, ci_uint128_from_uint64(1));
@@ -8777,7 +8795,8 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         if(err) return cpp_error(cpp, cpptok->loc, "Invalid binary digit in number");
     }
     else if(buf_len > 1 && buf[0] == '0'){
-        err = parse_octal_inner(buf+1, buf_len-1, &v);
+        size_t start = prefixed_octal ? 2 : 1;
+        err = parse_octal_inner(buf+start, buf_len-start, &v);
         if(err) return cpp_error(cpp, cpptok->loc, "Invalid octal digit in number");
     }
     else{

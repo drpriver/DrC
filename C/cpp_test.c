@@ -108,12 +108,14 @@ cpp_expand_string(StringView txt, StringView* out, const char* file, const char*
 }
 typedef struct { StringView path; StringView content; } IncludeTestFile;
 
-static int
+static
+int
 cpp_expand_with_files(
-        IncludeTestFile* files, size_t nfiles,
-        StringView* _Nullable Ipaths, size_t nIpaths,
-        StringView* _Nullable Fpaths, size_t nFpaths,
-        StringView* out, const char* file, const char* func, int line){
+    const IncludeTestFile* files, size_t nfiles,
+    const StringView* _Nullable Ipaths, size_t nIpaths,
+    const StringView* _Nullable Fpaths, size_t nFpaths,
+    StringView* out, const char* file, const char* func, int line
+){
     int result = 0;
     ArenaAllocator aa = {0};
     Allocator a = allocator_from_arena(&aa);
@@ -298,190 +300,190 @@ cpp_expand_string_expect_message(StringView txt, StringView* err_out){
 
 TestFunction(test_func_macros){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
-        {"simple_func_macro",SV("#define F(x) x*x\nF(2)"), SV("\n2*2"), __LINE__},
-        {"counter argument cached", SV("#define F(x) x x\nF(__COUNTER__) __COUNTER__"), SV("\n0 0 1"), __LINE__},
-        {"counter unused and raw", SV("#define F(x) #x\n#define DROP(x)\nF(__COUNTER__) DROP(__COUNTER__) __COUNTER__"), SV("\n\n\"__COUNTER__\"  0"), __LINE__},
-        {"counter va opt cached", SV("#define F(...) __VA_OPT__(__VA_ARGS__ __VA_ARGS__)\nF(__COUNTER__) __COUNTER__"), SV("\n0 0 1"), __LINE__},
-        {"empty variadic forms", SV("#define E\n#define F(...) [__VA_OPT__(yes)]\nF() F( ) F(\n) F(E) F(,)"), SV("\n\n[] [] [] [] [yes]"), __LINE__},
-        {"empty paste operands", SV("#define C(a,b) a##b\nC(,) C(,word) C(word,)"), SV("\n word word"), __LINE__},
-        {"suppressed token through argument", SV("#define F(x) x\n#define A F(A)\nF(A) A"), SV("\n\nA A"), __LINE__},
-        {"pasted token rescanned", SV("#define C(a,b) a##b\n#define AB 7\n#define I(x) x\nC(A,B) I(C(A,B))"), SV("\n\n\n7 7"), __LINE__},
-        {"counter expression paths", SV("#define F(x) (x==x)\n#if F(__COUNTER__)\nyes\n#endif\n__CALC__(F(__COUNTER__)) __COUNTER__"), SV("\n\nyes\n\n1 2"), __LINE__},
-        {"comment_before_macro_name", SV("#define /* comment */ F(x) x\nF(2)"), SV("\n2"), __LINE__},
-        {"uninvoked_macro_before_define", SV(
-            "#define F(x) x\nF\n#define A 1\nA"), SV("\nF\n\n1"), __LINE__},
-        {"uninvoked_macro_before_conditional", SV(
+        {"simple_func_macro",SVI("#define F(x) x*x\nF(2)"), SVI("\n2*2"), __LINE__},
+        {"counter argument cached", SVI("#define F(x) x x\nF(__COUNTER__) __COUNTER__"), SVI("\n0 0 1"), __LINE__},
+        {"counter unused and raw", SVI("#define F(x) #x\n#define DROP(x)\nF(__COUNTER__) DROP(__COUNTER__) __COUNTER__"), SVI("\n\n\"__COUNTER__\"  0"), __LINE__},
+        {"counter va opt cached", SVI("#define F(...) __VA_OPT__(__VA_ARGS__ __VA_ARGS__)\nF(__COUNTER__) __COUNTER__"), SVI("\n0 0 1"), __LINE__},
+        {"empty variadic forms", SVI("#define E\n#define F(...) [__VA_OPT__(yes)]\nF() F( ) F(\n) F(E) F(,)"), SVI("\n\n[] [] [] [] [yes]"), __LINE__},
+        {"empty paste operands", SVI("#define C(a,b) a##b\nC(,) C(,word) C(word,)"), SVI("\n word word"), __LINE__},
+        {"suppressed token through argument", SVI("#define F(x) x\n#define A F(A)\nF(A) A"), SVI("\n\nA A"), __LINE__},
+        {"pasted token rescanned", SVI("#define C(a,b) a##b\n#define AB 7\n#define I(x) x\nC(A,B) I(C(A,B))"), SVI("\n\n\n7 7"), __LINE__},
+        {"counter expression paths", SVI("#define F(x) (x==x)\n#if F(__COUNTER__)\nyes\n#endif\n__CALC__(F(__COUNTER__)) __COUNTER__"), SVI("\n\nyes\n\n1 2"), __LINE__},
+        {"comment_before_macro_name", SVI("#define /* comment */ F(x) x\nF(2)"), SVI("\n2"), __LINE__},
+        {"uninvoked_macro_before_define", SVI(
+            "#define F(x) x\nF\n#define A 1\nA"), SVI("\nF\n\n1"), __LINE__},
+        {"uninvoked_macro_before_conditional", SVI(
             "#define F(x) x\nF\n#if 0\nskipped\n#endif\nkept"),
-            SV("\nF\n\n\n\nkept"), __LINE__},
-        {"no_space_after_rparen",SV("#define F(x)x*x\nF(2)"), SV("\n2*2"), __LINE__},
-        {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
-        {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
-        {"object hash preserves whitespace", SV(
+            SVI("\nF\n\n\n\nkept"), __LINE__},
+        {"no_space_after_rparen",SVI("#define F(x)x*x\nF(2)"), SVI("\n2*2"), __LINE__},
+        {"multi_param_macro",SVI("#define ADD(a,b) a+b\nADD(1, 2)"), SVI("\n1+2"), __LINE__},
+        {"stringify",SVI("#define STR(x) #x\nSTR(hello)"), SVI("\n\"hello\""), __LINE__},
+        {"object hash preserves whitespace", SVI(
             "#define HASH # word\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
-            "EXPAND(HASH)"), SV("\n\n\n\"# word\""), __LINE__},
-        {"object digraph hash preserves whitespace", SV(
+            "EXPAND(HASH)"), SVI("\n\n\n\"# word\""), __LINE__},
+        {"object digraph hash preserves whitespace", SVI(
             "#define HASH %: word\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
-            "EXPAND(HASH)"), SV("\n\n\n\"%: word\""), __LINE__},
-        {"stringify_with_spaces",SV("#define STR(x) #x\nSTR(hello world)"),SV("\n\"hello world\""),__LINE__},
-        {"stringify_digraphs", SV("#define STR(x) #x\nSTR(<: :> <% %> %: %:%:)"),
-            SV("\n\"<: :> <% %> %: %:%:\""), __LINE__},
-        {"stringify_pasted_digraph", SV(
+            "EXPAND(HASH)"), SVI("\n\n\n\"%: word\""), __LINE__},
+        {"stringify_with_spaces",SVI("#define STR(x) #x\nSTR(hello world)"),SVI("\n\"hello world\""),__LINE__},
+        {"stringify_digraphs", SVI("#define STR(x) #x\nSTR(<: :> <% %> %: %:%:)"),
+            SVI("\n\"<: :> <% %> %: %:%:\""), __LINE__},
+        {"stringify_pasted_digraph", SVI(
             "#define CAT(a,b) a##b\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
-            "EXPAND(CAT(<,:))"), SV("\n\n\n\"<:\""), __LINE__},
-        {"digraph_macro_operators", SV(
+            "EXPAND(CAT(<,:))"), SVI("\n\n\n\"<:\""), __LINE__},
+        {"digraph_macro_operators", SVI(
             "%:define CAT(a,b) a %:%: b\n%:define STR(x) %:x\nCAT(a,b) STR(word)"),
-            SV("\n\nab \"word\""), __LINE__},
-        {"stringify_uninvoked_function_macro", SV(
+            SVI("\n\nab \"word\""), __LINE__},
+        {"stringify_uninvoked_function_macro", SVI(
             "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
-            "EXPAND(F word)"), SV("\n\n\n\"F word\""), __LINE__},
-        {"stringify_uninvoked_function_macro_newline", SV(
+            "EXPAND(F word)"), SVI("\n\n\n\"F word\""), __LINE__},
+        {"stringify_uninvoked_function_macro_newline", SVI(
             "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
-            "EXPAND(F\nword)"), SV("\n\n\n\"F word\""), __LINE__},
-        {"token_paste",SV("#define PASTE(a,b) a##b\nPASTE(foo, bar)"), SV("\nfoobar"), __LINE__},
-        {"token_paste_3",SV("#define PASTE3(a,b,c) a##b##c\nPASTE3(x,y,z)"),SV("\nxyz"),__LINE__},
-        {"paste_empty_left",SV("#define PASTE(a,b) a##b\nPASTE(,bar)"),SV("\nbar"), __LINE__},
-        {"paste_empty_right",SV("#define PASTE(a,b) a##b\nPASTE(foo,)"),SV("\nfoo"), __LINE__},
-        {"paste_va_opt_leading_space", SV("#define F(...) a ## __VA_OPT__( b)\nF(1)"), SV("\nab"), __LINE__},
-        {"paste_va_opt_trailing_space", SV("#define F(...) __VA_OPT__(a ) ## b\nF(1)"), SV("\nab"), __LINE__},
-        {"paste_multiline_arg",SV("#define X(a) x##a\nint X(\n        asd);"), SV("\nint xasd;"), __LINE__},
-        {"va_args",SV("#define VA(...) __VA_ARGS__\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
-        {"gnu_va_args",SV("#define VA(args...) args\nVA(a, b, c)"),SV("\na, b, c"),__LINE__},
-        {"gnu_va_args_space_before_ellipsis", SV("#define VA(args ...) args\nVA(a, b)"), SV("\na, b"), __LINE__},
-        {"gnu_va_args_comments_before_ellipsis", SV("#define VA(args /* one */ /* two */ ...) args\nVA(a, b)"), SV("\na, b"), __LINE__},
-        {"va_args_empty",SV("#define VA(...) [__VA_ARGS__]\nVA()"),SV("\n[]"),__LINE__},
-        {"gnu_va_args_empty",SV("#define VA(args...) [args]\nVA()"),SV("\n[]"),__LINE__},
-        {"va_opt_nonempty",SV("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT(1, 2)"),SV("\nprefix , 1, 2 suffix"),__LINE__},
-        {"va_opt_empty",SV("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT()"),SV("\nprefix  suffix"),__LINE__},
-        {"gnu_va_opt_nonempty",SV("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT(1, 2)"),SV("\nprefix , 1, 2 suffix"),__LINE__},
-        {"gnu_va_opt_empty",SV("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT()"),SV("\nprefix  suffix"),__LINE__},
-        {"nested_expansion",SV(
+            "EXPAND(F\nword)"), SVI("\n\n\n\"F word\""), __LINE__},
+        {"token_paste",SVI("#define PASTE(a,b) a##b\nPASTE(foo, bar)"), SVI("\nfoobar"), __LINE__},
+        {"token_paste_3",SVI("#define PASTE3(a,b,c) a##b##c\nPASTE3(x,y,z)"),SVI("\nxyz"),__LINE__},
+        {"paste_empty_left",SVI("#define PASTE(a,b) a##b\nPASTE(,bar)"),SVI("\nbar"), __LINE__},
+        {"paste_empty_right",SVI("#define PASTE(a,b) a##b\nPASTE(foo,)"),SVI("\nfoo"), __LINE__},
+        {"paste_va_opt_leading_space", SVI("#define F(...) a ## __VA_OPT__( b)\nF(1)"), SVI("\nab"), __LINE__},
+        {"paste_va_opt_trailing_space", SVI("#define F(...) __VA_OPT__(a ) ## b\nF(1)"), SVI("\nab"), __LINE__},
+        {"paste_multiline_arg",SVI("#define X(a) x##a\nint X(\n        asd);"), SVI("\nint xasd;"), __LINE__},
+        {"va_args",SVI("#define VA(...) __VA_ARGS__\nVA(a, b, c)"),SVI("\na, b, c"),__LINE__},
+        {"gnu_va_args",SVI("#define VA(args...) args\nVA(a, b, c)"),SVI("\na, b, c"),__LINE__},
+        {"gnu_va_args_space_before_ellipsis", SVI("#define VA(args ...) args\nVA(a, b)"), SVI("\na, b"), __LINE__},
+        {"gnu_va_args_comments_before_ellipsis", SVI("#define VA(args /* one */ /* two */ ...) args\nVA(a, b)"), SVI("\na, b"), __LINE__},
+        {"va_args_empty",SVI("#define VA(...) [__VA_ARGS__]\nVA()"),SVI("\n[]"),__LINE__},
+        {"gnu_va_args_empty",SVI("#define VA(args...) [args]\nVA()"),SVI("\n[]"),__LINE__},
+        {"va_opt_nonempty",SVI("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT(1, 2)"),SVI("\nprefix , 1, 2 suffix"),__LINE__},
+        {"va_opt_empty",SVI("#define VA_OPT(...) prefix __VA_OPT__(, __VA_ARGS__) suffix\nVA_OPT()"),SVI("\nprefix  suffix"),__LINE__},
+        {"gnu_va_opt_nonempty",SVI("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT(1, 2)"),SVI("\nprefix , 1, 2 suffix"),__LINE__},
+        {"gnu_va_opt_empty",SVI("#define VA_OPT(args...) prefix __VA_OPT__(, args) suffix\nVA_OPT()"),SVI("\nprefix  suffix"),__LINE__},
+        {"nested_expansion",SVI(
             "#define F(x) x*x\n"
             "#define IDENT(x) x\n"
-            "IDENT(F(3))"),SV("\n\n3*3"), __LINE__},
-        {"indirect_stringify",SV(
+            "IDENT(F(3))"),SVI("\n\n3*3"), __LINE__},
+        {"indirect_stringify",SVI(
             "#define STR(x) #x\n"
             "#define XSTR(x) STR(x)\n"
             "#define VALUE 42\n"
-            "XSTR(VALUE)"),SV("\n\n\n\"42\""), __LINE__},
-        {"direct_stringify_no_expand",SV(
+            "XSTR(VALUE)"),SVI("\n\n\n\"42\""), __LINE__},
+        {"direct_stringify_no_expand",SVI(
             "#define STR(x) #x\n"
             "#define VALUE 42\n"
-            "STR(VALUE)"),SV("\n\n\"VALUE\""), __LINE__},
-        {"empty_macro_in_arg",SV(
+            "STR(VALUE)"),SVI("\n\n\"VALUE\""), __LINE__},
+        {"empty_macro_in_arg",SVI(
         "#define EMPTY() \n"
         "#define IDENT(x) x\n"
-        "IDENT(EMPTY())test"),SV("\n\ntest"), __LINE__},
-        {"empty_argument_in_nested_call", SV(
-            "#define F(x) [x]\n#define ID(x) x\nID(F())"), SV("\n\n[]"), __LINE__},
-        {"zero_parameter_nested_call_with_space", SV(
-            "#define F() yes\n#define ID(x) x\nID(F( ))"), SV("\n\nyes"), __LINE__},
-        {"zero_parameter_nested_call_with_newline", SV(
-            "#define F() yes\n#define ID(x) x\nID(F(\n))"), SV("\n\nyes"), __LINE__},
-        {"zero_parameter_call_with_space", SV(
-            "#define F() yes\nF( )"), SV("\nyes"), __LINE__},
-        {"zero_parameter_call_with_comment", SV(
-            "#define F() yes\nF(/* empty */)"), SV("\nyes"), __LINE__},
-        {"stringify_va_args",SV("#define LOG(...) #__VA_ARGS__\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
-        {"gnu_stringify_va_args",SV("#define LOG(args...) #args\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
-        {"variadic_with_named_param", SV(
+        "IDENT(EMPTY())test"),SVI("\n\ntest"), __LINE__},
+        {"empty_argument_in_nested_call", SVI(
+            "#define F(x) [x]\n#define ID(x) x\nID(F())"), SVI("\n\n[]"), __LINE__},
+        {"zero_parameter_nested_call_with_space", SVI(
+            "#define F() yes\n#define ID(x) x\nID(F( ))"), SVI("\n\nyes"), __LINE__},
+        {"zero_parameter_nested_call_with_newline", SVI(
+            "#define F() yes\n#define ID(x) x\nID(F(\n))"), SVI("\n\nyes"), __LINE__},
+        {"zero_parameter_call_with_space", SVI(
+            "#define F() yes\nF( )"), SVI("\nyes"), __LINE__},
+        {"zero_parameter_call_with_comment", SVI(
+            "#define F() yes\nF(/* empty */)"), SVI("\nyes"), __LINE__},
+        {"stringify_va_args",SVI("#define LOG(...) #__VA_ARGS__\nLOG(hello, world)"),SVI("\n\"hello, world\""),__LINE__},
+        {"gnu_stringify_va_args",SVI("#define LOG(args...) #args\nLOG(hello, world)"),SVI("\n\"hello, world\""),__LINE__},
+        {"variadic_with_named_param", SVI(
         "#define FOO(x, ...) x __VA_ARGS__\n"
-        "FOO(1)"), SV("\n1 "), __LINE__},
-        {"gnu_variadic_with_named_param", SV(
+        "FOO(1)"), SVI("\n1 "), __LINE__},
+        {"gnu_variadic_with_named_param", SVI(
         "#define FOO(x, args...) x args\n"
-        "FOO(1)"), SV("\n1 "), __LINE__},
-        {"variadic_with_named_param_and_args", SV("#define FOO(x, ...) x __VA_ARGS__\nFOO(1, 2, 3)"), SV("\n1 2, 3"), __LINE__},
-        {"variadic_with_named_param_va_opt", SV("#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1)"), SV("\n1 "), __LINE__},
-        {"variadic_with_named_param_va_opt_nonempty", SV( "#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1, 2, 3)"),SV("\n1 , 2, 3"), __LINE__},
-        {"gnu_variadic_with_named_param_and_args", SV("#define FOO(x, args...) x args\nFOO(1, 2, 3)"), SV("\n1 2, 3"), __LINE__},
-        {"gnu_variadic_with_named_param_va_opt", SV("#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1)"), SV("\n1 "), __LINE__},
-        {"gnu_variadic_with_named_param_va_opt_nonempty", SV( "#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1, 2, 3)"),SV("\n1 , 2, 3"), __LINE__},
+        "FOO(1)"), SVI("\n1 "), __LINE__},
+        {"variadic_with_named_param_and_args", SVI("#define FOO(x, ...) x __VA_ARGS__\nFOO(1, 2, 3)"), SVI("\n1 2, 3"), __LINE__},
+        {"variadic_with_named_param_va_opt", SVI("#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1)"), SVI("\n1 "), __LINE__},
+        {"variadic_with_named_param_va_opt_nonempty", SVI( "#define FOO(x, ...) x __VA_OPT__(, __VA_ARGS__)\nFOO(1, 2, 3)"),SVI("\n1 , 2, 3"), __LINE__},
+        {"gnu_variadic_with_named_param_and_args", SVI("#define FOO(x, args...) x args\nFOO(1, 2, 3)"), SVI("\n1 2, 3"), __LINE__},
+        {"gnu_variadic_with_named_param_va_opt", SVI("#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1)"), SVI("\n1 "), __LINE__},
+        {"gnu_variadic_with_named_param_va_opt_nonempty", SVI( "#define FOO(x, args...) x __VA_OPT__(, args)\nFOO(1, 2, 3)"),SVI("\n1 , 2, 3"), __LINE__},
         // __VA_OPT__ emptiness is determined after expansion (C23 6.10.4.1)
-        {"va_opt_expands_to_empty", SV(
+        {"va_opt_expands_to_empty", SVI(
             "#define EMPTY\n"
             "#define F(...) __VA_OPT__(yes)no\n"
-            "F(EMPTY)"), SV("\n\nno"), __LINE__},
-        {"va_opt_expands_to_nonempty", SV(
+            "F(EMPTY)"), SVI("\n\nno"), __LINE__},
+        {"va_opt_expands_to_nonempty", SVI(
             "#define ONE 1\n"
             "#define F(...) __VA_OPT__(yes)no\n"
-            "F(ONE)"), SV("\n\nyesno"), __LINE__},
+            "F(ONE)"), SVI("\n\nyesno"), __LINE__},
         // param used both raw (## adjacent) and expanded in same replacement
-        {"param_raw_and_expanded", SV(
+        {"param_raw_and_expanded", SVI(
             "#define X 1\n"
             "#define F(a) a a ## 2\n"
-            "F(X)"), SV("\n\n1 X2"), __LINE__},
+            "F(X)"), SVI("\n\n1 X2"), __LINE__},
         // __VA_OPT__ with nested parens in content
-        {"va_opt_nested_parens", SV(
+        {"va_opt_nested_parens", SVI(
             "#define F(...) __VA_OPT__((a, b))\n"
-            "F(x)"), SV("\n(a, b)"), __LINE__},
+            "F(x)"), SVI("\n(a, b)"), __LINE__},
         // multiple __VA_OPT__ in one replacement list
-        {"va_opt_multiple", SV(
+        {"va_opt_multiple", SVI(
             "#define F(...) [__VA_OPT__(L)] [__VA_OPT__(R)]\n"
             "F(x)\n"
-            "F()"), SV("\n[L] [R]\n[] []"), __LINE__},
+            "F()"), SVI("\n[L] [R]\n[] []"), __LINE__},
         // __VA_OPT__ as left operand of ##
-        {"va_opt_paste_left", SV(
+        {"va_opt_paste_left", SVI(
             "#define F(...) __VA_OPT__(x) ## y\n"
             "F(1)\n"
-            "F()"), SV("\nxy\ny"), __LINE__},
-        {"va_opt_empty_paste_after_prefix", SV(
+            "F()"), SVI("\nxy\ny"), __LINE__},
+        {"va_opt_empty_paste_after_prefix", SVI(
             "#define F(...) prefix __VA_OPT__(x) ## y\n"
-            "F()"), SV("\nprefix y"), __LINE__},
-        {"va_opt_empty_content_paste_after_prefix", SV(
+            "F()"), SVI("\nprefix y"), __LINE__},
+        {"va_opt_empty_content_paste_after_prefix", SVI(
             "#define F(...) prefix __VA_OPT__() ## y\n"
-            "F(1)"), SV("\nprefix y"), __LINE__},
-        {"va_opt_empty_paste_after_punctuator", SV(
+            "F(1)"), SVI("\nprefix y"), __LINE__},
+        {"va_opt_empty_paste_after_punctuator", SVI(
             "#define F(...) +__VA_OPT__(x) ## y\n"
-            "F()"), SV("\n+y"), __LINE__},
+            "F()"), SVI("\n+y"), __LINE__},
         // empty __VA_OPT__ content with non-empty VA_ARGS
-        {"va_opt_empty_content", SV(
+        {"va_opt_empty_content", SVI(
             "#define F(...) a __VA_OPT__() b\n"
-            "F(x)"), SV("\na  b"), __LINE__},
+            "F(x)"), SVI("\na  b"), __LINE__},
         // # __VA_OPT__ with ## inside content
-        {"stringify_va_opt_with_paste", SV(
+        {"stringify_va_opt_with_paste", SVI(
             "#define F(...) #__VA_OPT__(a ## b)\n"
             "F(x)\n"
-            "F()"), SV("\n\"ab\"\n\"\""), __LINE__},
+            "F()"), SVI("\n\"ab\"\n\"\""), __LINE__},
         // extensions
         // __VA_COUNT__
-        {"va_count_basic", SV("#define F(...) __VA_COUNT__\nF(a, b, c)"), SV("\n3"), __LINE__},
-        {"va_count_one", SV("#define F(...) __VA_COUNT__\nF(a)"), SV("\n1"), __LINE__},
-        {"va_count_empty", SV("#define F(...) __VA_COUNT__\nF()"), SV("\n0"), __LINE__},
-        {"va_count_whitespace", SV("#define F(...) __VA_COUNT__\nF( )"), SV("\n0"), __LINE__},
-        {"va_count_comment", SV("#define F(...) __VA_COUNT__\nF(/* empty */)"), SV("\n0"), __LINE__},
-        {"va_count_whitespace_stringify", SV("#define F(...) #__VA_COUNT__\nF( )"), SV("\n\"0\""), __LINE__},
-        {"va_count_whitespace_paste", SV("#define F(...) func ## __VA_COUNT__\nF(\n)"), SV("\nfunc0"), __LINE__},
-        {"va_count_explicit_empty_arguments", SV("#define F(...) __VA_COUNT__\nF( , )"), SV("\n2"), __LINE__},
-        {"va_count_named", SV("#define F(x, ...) __VA_COUNT__\nF(1, 2, 3)"), SV("\n2"), __LINE__},
-        {"va_count_named_empty", SV("#define F(x, ...) __VA_COUNT__\nF(1)"), SV("\n0"), __LINE__},
-        {"va_count_paste", SV("#define F(...) func ## __VA_COUNT__\nF(a, b)"), SV("\nfunc2"), __LINE__},
-        {"va_count_stringify", SV("#define F(...) #__VA_COUNT__\nF(a, b)"), SV("\n\"2\""), __LINE__},
-        {"va_count_overloading", SV("#define F1() 1\n#define F2() 2\n#define CAT(a, b) CAT2(a, b)\n#define CAT2(a, b) a##b\n#define F(...) CAT(F, __VA_COUNT__)()\nF(a)\nF(a,b)\nF(a,b,c)"),
-                                 SV("\n\n\n\n\n1\n2\nF3()"), __LINE__},
+        {"va_count_basic", SVI("#define F(...) __VA_COUNT__\nF(a, b, c)"), SVI("\n3"), __LINE__},
+        {"va_count_one", SVI("#define F(...) __VA_COUNT__\nF(a)"), SVI("\n1"), __LINE__},
+        {"va_count_empty", SVI("#define F(...) __VA_COUNT__\nF()"), SVI("\n0"), __LINE__},
+        {"va_count_whitespace", SVI("#define F(...) __VA_COUNT__\nF( )"), SVI("\n0"), __LINE__},
+        {"va_count_comment", SVI("#define F(...) __VA_COUNT__\nF(/* empty */)"), SVI("\n0"), __LINE__},
+        {"va_count_whitespace_stringify", SVI("#define F(...) #__VA_COUNT__\nF( )"), SVI("\n\"0\""), __LINE__},
+        {"va_count_whitespace_paste", SVI("#define F(...) func ## __VA_COUNT__\nF(\n)"), SVI("\nfunc0"), __LINE__},
+        {"va_count_explicit_empty_arguments", SVI("#define F(...) __VA_COUNT__\nF( , )"), SVI("\n2"), __LINE__},
+        {"va_count_named", SVI("#define F(x, ...) __VA_COUNT__\nF(1, 2, 3)"), SVI("\n2"), __LINE__},
+        {"va_count_named_empty", SVI("#define F(x, ...) __VA_COUNT__\nF(1)"), SVI("\n0"), __LINE__},
+        {"va_count_paste", SVI("#define F(...) func ## __VA_COUNT__\nF(a, b)"), SVI("\nfunc2"), __LINE__},
+        {"va_count_stringify", SVI("#define F(...) #__VA_COUNT__\nF(a, b)"), SVI("\n\"2\""), __LINE__},
+        {"va_count_overloading", SVI("#define F1() 1\n#define F2() 2\n#define CAT(a, b) CAT2(a, b)\n#define CAT2(a, b) a##b\n#define F(...) CAT(F, __VA_COUNT__)()\nF(a)\nF(a,b)\nF(a,b,c)"),
+                                 SVI("\n\n\n\n\n1\n2\nF3()"), __LINE__},
         // __VA_ARG__
-        {"va_arg_basic", SV("#define F(...) __VA_ARG__(0)\nF(a, b, c)"), SV("\na"), __LINE__},
-        {"va_arg_second", SV("#define F(...) __VA_ARG__(1)\nF(a, b, c)"), SV("\nb"), __LINE__},
-        {"va_arg_last", SV("#define F(...) __VA_ARG__(2)\nF(a, b, c)"), SV("\nc"), __LINE__},
-        {"va_arg_named", SV("#define F(x, ...) __VA_ARG__(0)\nF(1, 2, 3)"), SV("\n2"), __LINE__},
-        {"va_arg_named2", SV("#define F(x, ...) __VA_ARG__(1)\nF(1, 2, 3)"), SV("\n3"), __LINE__},
-        {"va_arg_stringify", SV("#define F(...) #__VA_ARG__(1)\nF(a, b, c)"), SV("\n\"b\""), __LINE__},
-        {"va_arg_paste", SV("#define F(...) prefix ## __VA_ARG__(0)\nF(1, 2)"), SV("\nprefix1"), __LINE__},
-        {"va_arg_expr", SV("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SV("\nc"), __LINE__},
-        {"va_arg_expand", SV("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SV("\n\n42"), __LINE__},
-        {"identical func redef", SV("#define F(a, b) a + b\n#define F(a, b) a + b\nF(1, 2)"), SV("\n\n1 + 2"), __LINE__},
-        {"identical func redef with leading comment", SV(
-            "#define F(x) /* comment */ x\n#define F(x) x\nF(1)"), SV("\n\n1"), __LINE__},
-        {"identical func redef with adjacent comments", SV(
-            "#define F(x)/**//**/x\n#define F(x) x\nF(1)"), SV("\n\n1"), __LINE__},
-        {"va_opt_paste_right", SV(
+        {"va_arg_basic", SVI("#define F(...) __VA_ARG__(0)\nF(a, b, c)"), SVI("\na"), __LINE__},
+        {"va_arg_second", SVI("#define F(...) __VA_ARG__(1)\nF(a, b, c)"), SVI("\nb"), __LINE__},
+        {"va_arg_last", SVI("#define F(...) __VA_ARG__(2)\nF(a, b, c)"), SVI("\nc"), __LINE__},
+        {"va_arg_named", SVI("#define F(x, ...) __VA_ARG__(0)\nF(1, 2, 3)"), SVI("\n2"), __LINE__},
+        {"va_arg_named2", SVI("#define F(x, ...) __VA_ARG__(1)\nF(1, 2, 3)"), SVI("\n3"), __LINE__},
+        {"va_arg_stringify", SVI("#define F(...) #__VA_ARG__(1)\nF(a, b, c)"), SVI("\n\"b\""), __LINE__},
+        {"va_arg_paste", SVI("#define F(...) prefix ## __VA_ARG__(0)\nF(1, 2)"), SVI("\nprefix1"), __LINE__},
+        {"va_arg_expr", SVI("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SVI("\nc"), __LINE__},
+        {"va_arg_expand", SVI("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SVI("\n\n42"), __LINE__},
+        {"identical func redef", SVI("#define F(a, b) a + b\n#define F(a, b) a + b\nF(1, 2)"), SVI("\n\n1 + 2"), __LINE__},
+        {"identical func redef with leading comment", SVI(
+            "#define F(x) /* comment */ x\n#define F(x) x\nF(1)"), SVI("\n\n1"), __LINE__},
+        {"identical func redef with adjacent comments", SVI(
+            "#define F(x)/**//**/x\n#define F(x) x\nF(1)"), SVI("\n\n1"), __LINE__},
+        {"va_opt_paste_right", SVI(
             "#define F(...) x ## __VA_OPT__(y)\n"
             "F(1)\n"
-            "F()"), SV("\nxy\nx"), __LINE__},
+            "F()"), SVI("\nxy\nx"), __LINE__},
         // __RAND__
         // deterministic seed, so this is ok.
-        {"__RAND__", SV("__RAND__"), SV("1364989054"), __LINE__},
+        {"__RAND__", SVI("__RAND__"), SVI("1364989054"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -501,20 +503,20 @@ TestFunction(test_func_macros){
 }
 TestFunction(test_func_macros_extensions){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         // ## __VA_ARGS
-        {"gnu comma keeps explicitly empty argument", SV("#define F(x,...) f(x,##__VA_ARGS__)\nF(1) F(1,)"), SV("\nf(1) f(1,)"), __LINE__},
-        {"gnu comma argument expansion cached", SV("#define F(...) __VA_ARGS__ ,##__VA_ARGS__\nF(__COUNTER__)"), SV("\n0 ,0"), __LINE__},
-        {"gnu comma expansion cached before ordinary use", SV("#define F(...) ,##__VA_ARGS__ __VA_ARGS__\nF(__COUNTER__)"), SV("\n,0 0"), __LINE__},
-        {"gnu named comma keeps explicitly empty argument", SV("#define F(x,args...) f(x,##args)\nF(1) F(1,)"), SV("\nf(1) f(1,)"), __LINE__},
-        {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
-        {"gnu va args comma2",SV("#define F(...) f(1, ## __VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
-        {"gnu va args nocomma",SV("#define F(...) f(1 ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
-        {"gnu gnu va args comma",SV("#define F(args...) f(1, ##args)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
-        {"gnu gnu va args comma2",SV("#define F(args...) f(1, ## args)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
-        {"gnu gnu va args nocomma",SV("#define F(args...) f(1 ##args)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
+        {"gnu comma keeps explicitly empty argument", SVI("#define F(x,...) f(x,##__VA_ARGS__)\nF(1) F(1,)"), SVI("\nf(1) f(1,)"), __LINE__},
+        {"gnu comma argument expansion cached", SVI("#define F(...) __VA_ARGS__ ,##__VA_ARGS__\nF(__COUNTER__)"), SVI("\n0 ,0"), __LINE__},
+        {"gnu comma expansion cached before ordinary use", SVI("#define F(...) ,##__VA_ARGS__ __VA_ARGS__\nF(__COUNTER__)"), SVI("\n,0 0"), __LINE__},
+        {"gnu named comma keeps explicitly empty argument", SVI("#define F(x,args...) f(x,##args)\nF(1) F(1,)"), SVI("\nf(1) f(1,)"), __LINE__},
+        {"gnu va args comma",SVI("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SVI("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu va args comma2",SVI("#define F(...) f(1, ## __VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SVI("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu va args nocomma",SVI("#define F(...) f(1 ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SVI("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
+        {"gnu gnu va args comma",SVI("#define F(args...) f(1, ##args)\nF(2)\nF(2,3)\nF()"), SVI("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu gnu va args comma2",SVI("#define F(args...) f(1, ## args)\nF(2)\nF(2,3)\nF()"), SVI("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
+        {"gnu gnu va args nocomma",SVI("#define F(args...) f(1 ##args)\nF(2)\nF(2, 3)\nF()"), SVI("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -535,25 +537,25 @@ TestFunction(test_func_macros_extensions){
 
 TestFunction(test_obj_macros){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
-        {"recursive_self_reference", SV("#define X X\nX"), SV("\nX"), __LINE__},
-        {"mutual_recursion", SV(
+        {"recursive_self_reference", SVI("#define X X\nX"), SVI("\nX"), __LINE__},
+        {"mutual_recursion", SVI(
         "#define A B*B\n"
         "#define B C*C\n"
         "#define C A*A\n"
-        "A"), SV("\n\n\nA*A*A*A*A*A*A*A"), __LINE__},
-        {"empty_obj_macro", SV("#define Z\nZ"), SV("\n"), __LINE__},
-        {"self_ref", SV("#define Y Y\nY"), SV("\nY"), __LINE__},
-        {"parens_macro", SV("#define PARENS ()\nPARENS"), SV("\n()"), __LINE__},
+        "A"), SVI("\n\n\nA*A*A*A*A*A*A*A"), __LINE__},
+        {"empty_obj_macro", SVI("#define Z\nZ"), SVI("\n"), __LINE__},
+        {"self_ref", SVI("#define Y Y\nY"), SVI("\nY"), __LINE__},
+        {"parens_macro", SVI("#define PARENS ()\nPARENS"), SVI("\n()"), __LINE__},
         // ## in object-like macros should paste during expansion
-        {"obj_paste_simple", SV("#define AB a ## b\nAB"), SV("\nab"), __LINE__},
-        {"obj_paste_hash", SV("#define HH # ## #\nHH"), SV("\n##"), __LINE__},
-        {"obj_paste_multi", SV("#define XYZ x ## y ## z\nXYZ"), SV("\nxyz"), __LINE__},
-        {"identical obj redef", SV("#define X 42\n#define X 42\nX"), SV("\n\n42"), __LINE__},
-        {"standalone trailing backslash", SV(" \\"), SV(" \\"), __LINE__},
-        {"backslash after identifier at eof", SV("word\\"), SV("word\\"), __LINE__},
+        {"obj_paste_simple", SVI("#define AB a ## b\nAB"), SVI("\nab"), __LINE__},
+        {"obj_paste_hash", SVI("#define HH # ## #\nHH"), SVI("\n##"), __LINE__},
+        {"obj_paste_multi", SVI("#define XYZ x ## y ## z\nXYZ"), SVI("\nxyz"), __LINE__},
+        {"identical obj redef", SVI("#define X 42\n#define X 42\nX"), SVI("\n\n42"), __LINE__},
+        {"standalone trailing backslash", SVI(" \\"), SVI(" \\"), __LINE__},
+        {"backslash after identifier at eof", SVI("word\\"), SVI("word\\"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -626,24 +628,24 @@ TestFunction(test_c23){
     TESTBEGIN();
     StringView result;
     int err;
-    struct {
+    static const struct {
         const char* name;
         int line;
         StringView input, output;
     } test_cases[] = {
         {
             "Example 1", __LINE__,
-            SV(
+            SVI(
             "#define LPAREN() (\n"
             "#define G(Q) 42\n"
             "#define F(R, X, ...) __VA_OPT__(G R X) )\n"
             "int x = F(LPAREN(), 0, <:-);\n" // replaced by int x = 42;
             ),
-            SV("\n\n\nint x = 42;\n")
+            SVI("\n\n\nint x = 42;\n")
         },
         {
             "Example 2", __LINE__,
-            SV(
+            SVI(
                 "#define F(...) f(0 __VA_OPT__(,) __VA_ARGS__)\n"
                 "#define G(X, ...) f(0, X __VA_OPT__(,) __VA_ARGS__)\n"
                 "#define SDEF(sname, ...) S sname __VA_OPT__(= {__VA_ARGS__ })\n"
@@ -671,7 +673,7 @@ TestFunction(test_c23){
                 "#define H5C(X) H5B(X)\n"
                 "H5C(H5A())\n" // replaced by ab
             ),
-            SV(
+            SVI(
                 "\n\n\n\n"
                 "f(0 , a, b, c)\n" // F(a, b, c)"
                 "f(0  )\n" // F()
@@ -694,39 +696,39 @@ TestFunction(test_c23){
         },
         {
             "Unnamed Example", __LINE__,
-            SV( "#define hash_hash # ## #\n"
+            SVI( "#define hash_hash # ## #\n"
                 "#define mkstr(a) # a\n"
                 "#define in_between(a) mkstr(a)\n"
                 "#define join(c, d) in_between(c hash_hash d)\n"
                 "join(x, y)"),
-            SV("\n\n\n\n\"x ## y\""),
+            SVI("\n\n\n\n\"x ## y\""),
         },
 
         {
             "Ambiguous Example", __LINE__,
-            SV("#define f(a) a*g\n"
+            SVI("#define f(a) a*g\n"
                "#define g(a) f(a)\n"
                "f(2)(9)"),
             // standard says either of these are allowed,
             // but actual compilers produce the second one
-            // SV("\n\n2*f(9)"),
-            SV("\n\n2*9*g"),
+            // SVI("\n\n2*f(9)"),
+            SVI("\n\n2*9*g"),
         },
         // 6.10.5.6
         {
             "example 1", __LINE__,
-            SV( "#define TABSIZE 100\n"
+            SVI( "#define TABSIZE 100\n"
                 "int table[TABSIZE];\n"),
-            SV("\nint table[100];\n"),
+            SVI("\nint table[100];\n"),
         },
         {
             "example 2 (extended)", __LINE__,
-            SV("#define max(a, b) ((a) > (b) ? (a): (b))\nmax(1,2)\n"),
-            SV("\n((1) > (2) ? (1): (2))\n"),
+            SVI("#define max(a, b) ((a) > (b) ? (a): (b))\nmax(1,2)\n"),
+            SVI("\n((1) > (2) ? (1): (2))\n"),
         },
         {
             "Redef etc. (example 3)", __LINE__,
-            SV( "#define x 3\n"
+            SVI( "#define x 3\n"
                 "#define f(a) f(x * (a))\n"
                 "#undef x\n"
                 "#define x 2\n"
@@ -745,7 +747,7 @@ TestFunction(test_c23){
                 "(f)^m(m);\n"
                 "p() i[q()] = { q(1), r(2,3), r(4,), r(,5), r(,) };\n"
                 "char c[2][6] = { str(hello), str() };\n"),
-            SV( "\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+            SVI( "\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
                 "f(2 * (y+1)) + f(2 * (f(2 * (z[0])))) % f(2 * (0)) + t(1);\n"
                 "f(2 * (2+(3,4)-0,1)) | f(2 * (~ 5)) & f(2 * (0,1))^m(0,1);\n"
                 "int i[] = { 1, 23, 4, 5,  };\n"
@@ -753,7 +755,7 @@ TestFunction(test_c23){
         },
         {
             "example 4", __LINE__,
-            SV( "#define str(s) # s\n"
+            SVI( "#define str(s) # s\n"
                 "#define xstr(s) str(s)\n"
                 "#define debug(s, t) printf(\"x\" # s \"= %d, x\" # t \"= %s\", \\\n"
                 " x ## s, x ## t)\n"
@@ -768,7 +770,7 @@ TestFunction(test_c23){
                 "xstr(INCFILE(2).h)\n"
                 "glue(HIGH, LOW);\n"
                 "xglue(HIGH, LOW)\n"),
-            SV( "\n\n\n\n\n\n\n\n"
+            SVI( "\n\n\n\n\n\n\n\n"
                 "printf(\"x\" \"1\" \"= %d, x\" \"2\" \"= %s\", x1, x2);\n"
                 "fputs(\"strncmp(\\\"abc\\\\0d\\\", \\\"abc\\\", ’\\4’) == 0\" \": @\", s);\n"
                 "\"vers2.h\"\n"
@@ -777,36 +779,36 @@ TestFunction(test_c23){
         },
         {
             "placeholders example (example 5)", __LINE__,
-            SV( "#define t(x,y,z) x ## y ## z\n"
+            SVI( "#define t(x,y,z) x ## y ## z\n"
                 "int j[] = { t(1,2,3), t(,4,5), t(6,,7), t(8,9,),\n"
                 "t(10,,), t(,11,), t(,,12), t(,,) };\n"),
-            SV( "\n"
+            SVI( "\n"
                 "int j[] = { 123, 45, 67, 89,\n"
                 "10, 11, 12,  };\n"),
         },
         {
             "redefs (example 6)", __LINE__,
-            SV( "#define OBJ_LIKE (1-1)\n"
+            SVI( "#define OBJ_LIKE (1-1)\n"
                 "#define OBJ_LIKE /* white space */ (1-1) /* other */\n"
                 "#define FUNC_LIKE(a) ( a )\n"
                 "#define FUNC_LIKE( a ) ( /* note the white space */ \\\n"
                 "a /* other stuff on this line\n"
                 "*/)\n"),
-            SV("\n\n\n\n"),
+            SVI("\n\n\n\n"),
         },
         {
             "redefs2", __LINE__,
-            SV( "#define OBJ_LIKE (/**/ 1-1)\n"
+            SVI( "#define OBJ_LIKE (/**/ 1-1)\n"
                 "#define OBJ_LIKE /* white space */ ( 1-1) /* other */\n"
                 "#define FUNC_LIKE(a) ( a/* */)\n"
                 "#define FUNC_LIKE( a ) ( /* note the white space */ \\\n"
                 "a /* other stuff on this line\n"
                 "*/)\n"),
-            SV("\n\n\n\n"),
+            SVI("\n\n\n\n"),
         },
         {
             "6.10.5 example 7", __LINE__,
-            SV( "#define debug(...) fprintf(stderr, __VA_ARGS__)\n"
+            SVI( "#define debug(...) fprintf(stderr, __VA_ARGS__)\n"
                 "#define showlist(...) puts(#__VA_ARGS__)\n"
                 "#define report(test, ...) ((test)?puts(#test):\\\n"
                 " printf(__VA_ARGS__))\n"
@@ -814,7 +816,7 @@ TestFunction(test_c23){
                 "debug(\"X = %d\\n\", x);\n"
                 "showlist(The first, second, and third items.);\n"
                 "report(x>y, \"x is %d but y is %d\", x, y);\n"),
-            SV( "\n\n\n"
+            SVI( "\n\n\n"
                 "fprintf(stderr, \"Flag\");\n"
                 "fprintf(stderr, \"X = %d\\n\", x);\n"
                 "puts(\"The first, second, and third items.\");\n"
@@ -843,93 +845,93 @@ TestFunction(test_torture){
     TESTBEGIN();
     StringView result;
     int err;
-    struct {
+    static const struct {
         const char* name; int line;
         StringView in, out;
     } test_cases[] = {
         {
             "", __LINE__,
-            SV("#define S(x) #x\n"
+            SVI("#define S(x) #x\n"
                "S(\"hello\\\\\")\n"),
-            SV("\n"
+            SVI("\n"
                "\"\\\"hello\\\\\\\\\\\"\"\n"),
         },
         {
             "", __LINE__,
-            SV("#define a b\n"
+            SVI("#define a b\n"
                "#define M(x) x x##y\n"
                "M(a)\n"),
-            SV("\n"
+            SVI("\n"
                "\n"
                "b ay\n")
         },
         {
             "", __LINE__,
-            SV("#define CAT(a,b) a##b\n"
+            SVI("#define CAT(a,b) a##b\n"
                "#define FOO BAR\n"
                "CAT(FO,O)\n"),
-            SV("\n"
+            SVI("\n"
                "\n"
                "BAR\n"),
         },
         {
             "", __LINE__,
-            SV("#define FOO(a,b) a b\n"
+            SVI("#define FOO(a,b) a b\n"
                "FOO((x,y),z)\n"),
-            SV("\n"
+            SVI("\n"
                "(x,y) z\n"),
         },
         {
             "", __LINE__,
-            SV("#define CAT(a,b,c,d) a##b##c##d\n"
+            SVI("#define CAT(a,b,c,d) a##b##c##d\n"
                "CAT(1, e, -, 2)\n"),
-            SV("\n"
+            SVI("\n"
                "1e-2\n")
         },
         {
             "", __LINE__,
-            SV("#define L (\n"
+            SVI("#define L (\n"
                "#define M() 1\n"
                "M L )\n"),
-            SV("\n"
+            SVI("\n"
                "\n"
                "M ( )\n")
         },
         {
             "", __LINE__,
-            SV( "#define M() 1\n"
+            SVI( "#define M() 1\n"
                "M\n"),
-            SV("\n"
+            SVI("\n"
                "M\n")
         },
         {
             "stringify strips leading/trailing whitespace", __LINE__,
-            SV("#define S(x) #x\n"
+            SVI("#define S(x) #x\n"
                "#define REDIRECT(name, alias) name __asm__(S(alias))\n"
                "REDIRECT(sscanf,\n"
                "         __isoc99_sscanf)\n"),
-            SV("\n"
+            SVI("\n"
                "\n"
                "sscanf __asm__(\"__isoc99_sscanf\")\n"),
         },
         {
             "", __LINE__,
-            SV("#define M(...) __VA_OPT__(yes)no\n"
+            SVI("#define M(...) __VA_OPT__(yes)no\n"
                "M()\n"
                "M(a)\n"
                "M( )\n"),
-            SV("\n"
+            SVI("\n"
                "no\n"
                "yesno\n"
                "no\n"),
         },
         {
             "", __LINE__,
-            SV("#define M(x, ...) __VA_OPT__(yes)no\n"
+            SVI("#define M(x, ...) __VA_OPT__(yes)no\n"
                "M(1)\n"
                "M(1, a)\n"
                "M(1, )\n"),
-            SV("\n"
+            SVI("\n"
                "no\n"
                "yesno\n"
                "no\n"),
@@ -960,267 +962,267 @@ TestFunction(test_torture){
 
 TestFunction(test_builtin_macros){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; StringView inp, exp; int line; _Bool disabled;
     } test_cases[] = {
-        {"__FILE__", SV("__FILE__"), SV("\"(test)\""), __LINE__, 0},
-        {"type builtin redef", SV("#define __int64 long long\n__int64"), SV("\nlong long"), __LINE__, 0},
-        {"type builtin redef empty", SV("#define __int64\n__int64"), SV("\n"), __LINE__, 0},
-        {"type builtin redef function", SV("#define __int64(x) x + 1\n__int64(2)"), SV("\n2 + 1"), __LINE__, 0},
-        {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
-        {"line after leading continuation", SV("\\\n__LINE__"), SV("2"), __LINE__, 0},
-        {"line after leading CRLF continuation", SV("\\\r\n__LINE__"), SV("2"), __LINE__, 0},
-        {"line after continuation at line start", SV("\n\\\n__LINE__"), SV("\n3"), __LINE__, 0},
-        {"__COLUMN__", SV("__COLUMN__"), SV("1"), __LINE__, 0},
-        {"__FILE_ID__", SV("__FILE_ID__"), SV("0"), __LINE__, 0}, // just happens to be 0, could change
-        {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 0},
-        {"__COUNTER__", SV("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SV("0\n1\n2\n3 4"), __LINE__, 0},
-        {"counter paste", SV("#define C(x,y) x##y\n"
+        {"__FILE__", SVI("__FILE__"), SVI("\"(test)\""), __LINE__, 0},
+        {"type builtin redef", SVI("#define __int64 long long\n__int64"), SVI("\nlong long"), __LINE__, 0},
+        {"type builtin redef empty", SVI("#define __int64\n__int64"), SVI("\n"), __LINE__, 0},
+        {"type builtin redef function", SVI("#define __int64(x) x + 1\n__int64(2)"), SVI("\n2 + 1"), __LINE__, 0},
+        {"__LINE__", SVI("__LINE__"), SVI("1"), __LINE__, 0},
+        {"line after leading continuation", SVI("\\\n__LINE__"), SVI("2"), __LINE__, 0},
+        {"line after leading CRLF continuation", SVI("\\\r\n__LINE__"), SVI("2"), __LINE__, 0},
+        {"line after continuation at line start", SVI("\n\\\n__LINE__"), SVI("\n3"), __LINE__, 0},
+        {"__COLUMN__", SVI("__COLUMN__"), SVI("1"), __LINE__, 0},
+        {"__FILE_ID__", SVI("__FILE_ID__"), SVI("0"), __LINE__, 0}, // just happens to be 0, could change
+        {"__LI\\NE__", SVI("__LI\\\nNE__"), SVI("1"), __LINE__, 0},
+        {"__COUNTER__", SVI("__COUNTER__\n__COUNTER__\n__COUNTER__\n__COUNTER__ __COUNTER__"), SVI("0\n1\n2\n3 4"), __LINE__, 0},
+        {"counter paste", SVI("#define C(x,y) x##y\n"
                              "#define E(x) x\n"
                              "#define C2(x,y) E(C(x, y))\n"
                              "C(__COUNTER__, __COUNTER__)\n"
                              "C2(__COUNTER__,__COUNTER__)\n"
-                             "E(C(__COUNTER__, __COUNTER__))"), SV("\n\n\n__COUNTER____COUNTER__\n01\n__COUNTER____COUNTER__"), __LINE__, 0},
-        {"multiple", SV("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SV("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
-        {"indirect", SV("#define L1 L2\n#define L2 __LINE__\nL1"), SV("\n\n3"), __LINE__, 0},
-        {"__FILE_NAME__", SV("__FILE_NAME__"), SV("\"(test)\""), __LINE__, 0},
-        {"__INCLUDE_LEVEL__", SV("__INCLUDE_LEVEL__"), SV("0"), __LINE__, 0},
-        {"__DATE__", SV("__DATE__"), SV("\"Jan 01 1900\""), __LINE__, 0},
-        {"__TIME__", SV("__TIME__"), SV("\"01:02:03\""), __LINE__, 0},
+                             "E(C(__COUNTER__, __COUNTER__))"), SVI("\n\n\n__COUNTER____COUNTER__\n01\n__COUNTER____COUNTER__"), __LINE__, 0},
+        {"multiple", SVI("__FILE__\n__LINE__\n__LINE__\n__FILE__"), SVI("\"(test)\"\n2\n3\n\"(test)\""), __LINE__, 0},
+        {"indirect", SVI("#define L1 L2\n#define L2 __LINE__\nL1"), SVI("\n\n3"), __LINE__, 0},
+        {"__FILE_NAME__", SVI("__FILE_NAME__"), SVI("\"(test)\""), __LINE__, 0},
+        {"__INCLUDE_LEVEL__", SVI("__INCLUDE_LEVEL__"), SVI("0"), __LINE__, 0},
+        {"__DATE__", SVI("__DATE__"), SVI("\"Jan 01 1900\""), __LINE__, 0},
+        {"__TIME__", SVI("__TIME__"), SVI("\"01:02:03\""), __LINE__, 0},
 
         // extensions
-        {"__CALC__", SV("__CALC__(1+1)"), SV("2"), __LINE__, 0},
-        {"negative predefined exponents", SV(
+        {"__CALC__", SVI("__CALC__(1+1)"), SVI("2"), __LINE__, 0},
+        {"negative predefined exponents", SVI(
             "__CALC__(__FLT_MIN_EXP__ == -125) "
             "__CALC__(__DBL_MIN_10_EXP__ == -307) "
-            "__CALC__(__LDBL_MIN_EXP__ < 0)"), SV("1 1 1"), __LINE__, 0},
-        {"predefined minimum expression", SV(
-            "__CALC__(__SIG_ATOMIC_MIN__ == (-__SIG_ATOMIC_MAX__-1))"), SV("1"), __LINE__, 0},
-        {"predefined expression in if", SV(
+            "__CALC__(__LDBL_MIN_EXP__ < 0)"), SVI("1 1 1"), __LINE__, 0},
+        {"predefined minimum expression", SVI(
+            "__CALC__(__SIG_ATOMIC_MIN__ == (-__SIG_ATOMIC_MAX__-1))"), SVI("1"), __LINE__, 0},
+        {"predefined expression in if", SVI(
             "#if __FLT_MIN_EXP__ < 0 && __SIG_ATOMIC_MIN__ < 0\nyes\n#endif"),
-            SV("\nyes\n"), __LINE__, 0},
-        {"calc multiline defined", SV("__CALC__(defined\n__CALC__)"), SV("1"), __LINE__, 0},
-        {"calc multiline macro call", SV("#define F(x) x\n__CALC__(F\n(7))"), SV("\n7"), __LINE__, 0},
-        {"calc multiline has_include", SV("__CALC__(__has_include(\n\"missing-newline-test.h\"\n))"), SV("0"), __LINE__, 0},
-        {"pragma newline after empty macro", SV("#define EMPTY\n_Pragma(EMPTY\n\"unknown_pragma\")ok"), SV("\nok"), __LINE__, 0},
-        {"pragma multiline name", SV("__pragma(\nunknown_pragma\n)ok"), SV("ok"), __LINE__, 0},
-        {"__CALC__", SV("__CALC__(defined __CALC__)"), SV("1"), __LINE__, 0},
-        {"__calc", SV("__calc(3*4/3)"), SV("4"), __LINE__, 0},
-        {"__calc", SV("__calc(3-4)"), SV("-1"), __LINE__, 0},
-        {"__calc int64min", SV("__calc(-9223372036854775807 - 1)"), SV("(-9223372036854775807ll-1)"), __LINE__, 0},
-        {"calc signed negative result", SV("__CALC__(__CALC__(-2147483648) < 0)"), SV("1"), __LINE__, 0},
-        {"calc signed positive result", SV("__CALC__(__CALC__(2147483648) > -1)"), SV("1"), __LINE__, 0},
-        {"calc signed minimum result", SV("__CALC__(__CALC__(-9223372036854775807 - 1) < 0)"), SV("1"), __LINE__, 0},
-        {"calc small unsigned result", SV("__CALC__(__CALC__(1u) < -1)"), SV("1"), __LINE__, 0},
-        {"calc maximum unsigned result", SV("__CALC__(__CALC__(18446744073709551615u) / 2)"),
-            SV("9223372036854775807llu"), __LINE__, 0},
-        {"__MIXIN__", SV("__MIXIN__(\"3\")"), SV("3"), __LINE__, 0},
-        {"__MIXIN__", SV("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SV("3"), __LINE__, 0},
-        {"__mixin", SV("#define S(x) #x\n__mixin(S(1)\"+1\")"), SV("\n1+1"), __LINE__, 0},
-        {"__env", SV("__env(\"wolo\")"), SV("\"woo\""), __LINE__, 0},
-        {"__ENV__", SV("__ENV__(\"foobar\")"), SV(""), __LINE__, 0},
-        {"__if", SV("__if(1, 2, 3)"), SV("2"), __LINE__, 0},
-        {"__if", SV("__if(1, , __calc(1/0))"), SV(""), __LINE__, 0},
-        {"__IF__", SV("#define X 1\n__IF__(X, 3, __calc(1/0))"), SV("\n3"), __LINE__, 0},
-        {"__ident", SV("__ident(\"this is an ident\")"), SV("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
-        {"__FORMAT__", SV("__format(\"%d = %s\", 10, \"hello world\")"), SV("\"10 = hello world\""), __LINE__, 0},
-        {"__FORMAT__", SV("__format(\"%d = %d\", - - -10, +-+-+-4)"), SV("\"-10 = -4\""), __LINE__, 0},
-        {"format integer expression", SV("__format(\"%d:%d\", (2 + 3) * 4, 1 << 5)"), SV("\"20:32\""), __LINE__, 0},
-        {"format integer defined", SV("#define X 42\n__FORMAT__(\"%d:%d\", defined(X) + X, defined(missing))"), SV("\n\"43:0\""), __LINE__, 0},
-        {"format integer lazy evaluation", SV("__format(\"%d:%d\", 0 && (1 / 0), 1 ? 7 : (1 / 0))"), SV("\"0:7\""), __LINE__, 0},
-        {"format integer limits", SV("__format(\"%d:%d\", -9223372036854775807LL - 1, -1ULL)"), SV("\"-9223372036854775808:18446744073709551615\""), __LINE__, 0},
-        {"format expanded format and nested args", SV("#define F \"%d:%s\"\n#define ADD(a,b) ((a)+(b))\n__format(F, ADD(2, 3), __format(\"%d\", 3 * 4))"), SV("\n\n\"5:12\""), __LINE__, 0},
-        {"format octal integer", SV("__format(\"%d\", 010)"), SV("\"8\""), __LINE__, 0},
-        {"format integer suffix", SV("__format(\"%d\", 42ULL)"), SV("\"42\""), __LINE__, 0},
-        {"format string identifiers", SV("__format(\"%s\", hello world)"), SV("\"helloworld\""), __LINE__, 0},
-        {"format string pp number spellings", SV("__format(\"%s\", 010 42ULL 1'024 1e+foo)"), SV("\"01042ULL1'0241e+foo\""), __LINE__, 0},
-        {"format string mixed tokens and whitespace", SV("__format(\"%s\", item \t\n /* gap */ 42 \"\\n\\\"\")"), SV("\"item42\\012\\\"\""), __LINE__, 0},
-        {"format string expanded arguments", SV("#define LABEL item\n#define VALUE 0x2a\n__format(\"%s:%s:%d\", LABEL VALUE, next 7, 8)"), SV("\n\n\"item0x2a:next7:8\""), __LINE__, 0},
-        {"format separated integer", SV("__format(\"%d\", 1'024)"), SV("\"1024\""), __LINE__, 0},
-        {"format signed suffixed octal", SV("__format(\"%d\", - - -010L)"), SV("\"-8\""), __LINE__, 0},
-        {"__set/__get basic", SV("__set(x, 42)\n__get(x)"), SV("\n42"), __LINE__, 0},
-        {"__get unset", SV("__get(x)"), SV(""), __LINE__, 0},
-        {"__set overwrite", SV("__set(x, 1)\n__set(x, 2)\n__get(x)"), SV("\n\n2"), __LINE__, 0},
-        {"__set multiple tokens", SV("__set(stuff, a b c)\n__get(stuff)"), SV("\na b c"), __LINE__, 0},
-        {"__set with calc", SV("__set(n, 0)\n__set(n, __calc(__get(n) + 1))\n__get(n)"), SV("\n\n1"), __LINE__, 0},
-        {"__set empty", SV("__set(e)\n__get(e)"), SV("\n"), __LINE__, 0},
-        {"__set count fields", SV(
+            SVI("\nyes\n"), __LINE__, 0},
+        {"calc multiline defined", SVI("__CALC__(defined\n__CALC__)"), SVI("1"), __LINE__, 0},
+        {"calc multiline macro call", SVI("#define F(x) x\n__CALC__(F\n(7))"), SVI("\n7"), __LINE__, 0},
+        {"calc multiline has_include", SVI("__CALC__(__has_include(\n\"missing-newline-test.h\"\n))"), SVI("0"), __LINE__, 0},
+        {"pragma newline after empty macro", SVI("#define EMPTY\n_Pragma(EMPTY\n\"unknown_pragma\")ok"), SVI("\nok"), __LINE__, 0},
+        {"pragma multiline name", SVI("__pragma(\nunknown_pragma\n)ok"), SVI("ok"), __LINE__, 0},
+        {"__CALC__", SVI("__CALC__(defined __CALC__)"), SVI("1"), __LINE__, 0},
+        {"__calc", SVI("__calc(3*4/3)"), SVI("4"), __LINE__, 0},
+        {"__calc", SVI("__calc(3-4)"), SVI("-1"), __LINE__, 0},
+        {"__calc int64min", SVI("__calc(-9223372036854775807 - 1)"), SVI("(-9223372036854775807ll-1)"), __LINE__, 0},
+        {"calc signed negative result", SVI("__CALC__(__CALC__(-2147483648) < 0)"), SVI("1"), __LINE__, 0},
+        {"calc signed positive result", SVI("__CALC__(__CALC__(2147483648) > -1)"), SVI("1"), __LINE__, 0},
+        {"calc signed minimum result", SVI("__CALC__(__CALC__(-9223372036854775807 - 1) < 0)"), SVI("1"), __LINE__, 0},
+        {"calc small unsigned result", SVI("__CALC__(__CALC__(1u) < -1)"), SVI("1"), __LINE__, 0},
+        {"calc maximum unsigned result", SVI("__CALC__(__CALC__(18446744073709551615u) / 2)"),
+            SVI("9223372036854775807llu"), __LINE__, 0},
+        {"__MIXIN__", SVI("__MIXIN__(\"3\")"), SVI("3"), __LINE__, 0},
+        {"__MIXIN__", SVI("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SVI("3"), __LINE__, 0},
+        {"__mixin", SVI("#define S(x) #x\n__mixin(S(1)\"+1\")"), SVI("\n1+1"), __LINE__, 0},
+        {"__env", SVI("__env(\"wolo\")"), SVI("\"woo\""), __LINE__, 0},
+        {"__ENV__", SVI("__ENV__(\"foobar\")"), SVI(""), __LINE__, 0},
+        {"__if", SVI("__if(1, 2, 3)"), SVI("2"), __LINE__, 0},
+        {"__if", SVI("__if(1, , __calc(1/0))"), SVI(""), __LINE__, 0},
+        {"__IF__", SVI("#define X 1\n__IF__(X, 3, __calc(1/0))"), SVI("\n3"), __LINE__, 0},
+        {"__ident", SVI("__ident(\"this is an ident\")"), SVI("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
+        {"__FORMAT__", SVI("__format(\"%d = %s\", 10, \"hello world\")"), SVI("\"10 = hello world\""), __LINE__, 0},
+        {"__FORMAT__", SVI("__format(\"%d = %d\", - - -10, +-+-+-4)"), SVI("\"-10 = -4\""), __LINE__, 0},
+        {"format integer expression", SVI("__format(\"%d:%d\", (2 + 3) * 4, 1 << 5)"), SVI("\"20:32\""), __LINE__, 0},
+        {"format integer defined", SVI("#define X 42\n__FORMAT__(\"%d:%d\", defined(X) + X, defined(missing))"), SVI("\n\"43:0\""), __LINE__, 0},
+        {"format integer lazy evaluation", SVI("__format(\"%d:%d\", 0 && (1 / 0), 1 ? 7 : (1 / 0))"), SVI("\"0:7\""), __LINE__, 0},
+        {"format integer limits", SVI("__format(\"%d:%d\", -9223372036854775807LL - 1, -1ULL)"), SVI("\"-9223372036854775808:18446744073709551615\""), __LINE__, 0},
+        {"format expanded format and nested args", SVI("#define F \"%d:%s\"\n#define ADD(a,b) ((a)+(b))\n__format(F, ADD(2, 3), __format(\"%d\", 3 * 4))"), SVI("\n\n\"5:12\""), __LINE__, 0},
+        {"format octal integer", SVI("__format(\"%d\", 010)"), SVI("\"8\""), __LINE__, 0},
+        {"format integer suffix", SVI("__format(\"%d\", 42ULL)"), SVI("\"42\""), __LINE__, 0},
+        {"format string identifiers", SVI("__format(\"%s\", hello world)"), SVI("\"helloworld\""), __LINE__, 0},
+        {"format string pp number spellings", SVI("__format(\"%s\", 010 42ULL 1'024 1e+foo)"), SVI("\"01042ULL1'0241e+foo\""), __LINE__, 0},
+        {"format string mixed tokens and whitespace", SVI("__format(\"%s\", item \t\n /* gap */ 42 \"\\n\\\"\")"), SVI("\"item42\\012\\\"\""), __LINE__, 0},
+        {"format string expanded arguments", SVI("#define LABEL item\n#define VALUE 0x2a\n__format(\"%s:%s:%d\", LABEL VALUE, next 7, 8)"), SVI("\n\n\"item0x2a:next7:8\""), __LINE__, 0},
+        {"format separated integer", SVI("__format(\"%d\", 1'024)"), SVI("\"1024\""), __LINE__, 0},
+        {"format signed suffixed octal", SVI("__format(\"%d\", - - -010L)"), SVI("\"-8\""), __LINE__, 0},
+        {"__set/__get basic", SVI("__set(x, 42)\n__get(x)"), SVI("\n42"), __LINE__, 0},
+        {"__get unset", SVI("__get(x)"), SVI(""), __LINE__, 0},
+        {"__set overwrite", SVI("__set(x, 1)\n__set(x, 2)\n__get(x)"), SVI("\n\n2"), __LINE__, 0},
+        {"__set multiple tokens", SVI("__set(stuff, a b c)\n__get(stuff)"), SVI("\na b c"), __LINE__, 0},
+        {"__set with calc", SVI("__set(n, 0)\n__set(n, __calc(__get(n) + 1))\n__get(n)"), SVI("\n\n1"), __LINE__, 0},
+        {"__set empty", SVI("__set(e)\n__get(e)"), SVI("\n"), __LINE__, 0},
+        {"__set count fields", SVI(
             "#define FIELD(type, name) type name; __set(n, __calc(__get(n) + 1))\n"
             "__set(n, 0)\n"
             "FIELD(int, x)\n"
             "FIELD(float, y)\n"
             "FIELD(char*, name)\n"
-            "__get(n)"), SV(
+            "__get(n)"), SVI(
             "\n"
             "\n"
             "int x; \n"
             "float y; \n"
             "char* name; \n"
             "3"), __LINE__, 0},
-        {"__set accumulate", SV(
+        {"__set accumulate", SVI(
             "__set(init_calls, )\n"
             "#define REG(fn) __set(init_calls, __get(init_calls) fn();)\n"
             "REG(init_a)\n"
             "REG(init_b)\n"
             "REG(init_c)\n"
-            "__get(init_calls)"), SV(
+            "__get(init_calls)"), SVI(
             "\n"
             "\n"
             "\n"
             "\n"
             "\n"
             "init_a(); init_b(); init_c();"), __LINE__, 0},
-        {"__append accumulate", SV(
+        {"__append accumulate", SVI(
             "#define REG2(fn) __append(calls, fn(); )\n"
             "REG2(init_a)\n"
             "REG2(init_b)\n"
             "REG2(init_c)\n"
-            "__get(calls)"), SV(
+            "__get(calls)"), SVI(
             "\n"
             "\n"
             "\n"
             "\n"
             "init_a();init_b();init_c();"), __LINE__, 0},
-        {"__set with __if", SV(
+        {"__set with __if", SVI(
             "__set(x, 1)\n"
-            "__if(__get(x), yes, no)"), SV(
+            "__if(__get(x), yes, no)"), SVI(
             "\n"
             "yes"), __LINE__, 0},
-        {"__set with __format", SV(
+        {"__set with __format", SVI(
             "__set(count, 3)\n"
-            "__format(\"count=%d\", __get(count))"), SV(
+            "__format(\"count=%d\", __get(count))"), SVI(
             "\n"
             "\"count=3\""), __LINE__, 0},
-        {"__set enum strings", SV(
+        {"__set enum strings", SVI(
             "__set(n, 0)\n"
             "__set(strs, )\n"
             "#define EV(name) name = __get(n), __set(strs, __get(strs) [name] = #name,) __set(n, __calc(__get(n) + 1))\n"
             "enum { EV(RED) EV(GREEN) EV(BLUE) };\n"
-            "const char* names[] = { __get(strs) };"), SV(
+            "const char* names[] = { __get(strs) };"), SVI(
             "\n"
             "\n"
             "\n"
             "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
             "const char* names[] = { [RED] = \"RED\", [GREEN] = \"GREEN\", [BLUE] = \"BLUE\", };"), __LINE__, 0},
-        {"__for negative indices", SV(
+        {"__for negative indices", SVI(
             "#define P(n) __CALC__((n) * (n))\n"
-            "__for(-2, 1, P)"), SV("\n4 1 0"), __LINE__, 0},
-        {"__for minimum index signed evaluation", SV(
+            "__for(-2, 1, P)"), SVI("\n4 1 0"), __LINE__, 0},
+        {"__for minimum index signed evaluation", SVI(
             "#define P(i) __format(\"%d:%d\", (i) < 0, (i) / 2)\n"
             "__for(-9223372036854775807 - 1, -9223372036854775807, P)"),
-            SV("\n\"1:-4611686018427387904\""), __LINE__, 0},
-        {"__for minimum index", SV(
+            SVI("\n\"1:-4611686018427387904\""), __LINE__, 0},
+        {"__for minimum index", SVI(
             "#define P(n) __CALC__((n) == (-9223372036854775807 - 1))\n"
             "__for(-9223372036854775807 - 1, -9223372036854775807, P)"),
-            SV("\n1"), __LINE__, 0},
-        {"__for negative stringify", SV(
+            SVI("\n1"), __LINE__, 0},
+        {"__for negative stringify", SVI(
             "#define P(n) #n\n__for(-2, 1, P)"),
-            SV("\n\"-2\" \"-1\" \"0\""), __LINE__, 0},
-        {"__for basic", SV(
+            SVI("\n\"-2\" \"-1\" \"0\""), __LINE__, 0},
+        {"__for basic", SVI(
             "#define DECL(i) int x##i;\n"
-            "__for(0, 3, DECL)"), SV(
+            "__for(0, 3, DECL)"), SVI(
             "\n"
             "int x0; int x1; int x2;"), __LINE__, 0},
-        {"__for expr", SV(
+        {"__for expr", SVI(
             "#define P(i) i\n"
-            "__for(1+1, 5, P)"), SV(
+            "__for(1+1, 5, P)"), SVI(
             "\n"
             "2 3 4"), __LINE__, 0},
-        {"__for empty", SV(
+        {"__for empty", SVI(
             "#define P(i) i\n"
-            "__for(3, 3, P)"), SV(
+            "__for(3, 3, P)"), SVI(
             "\n"
             ""), __LINE__, 0},
-        {"__for accumulate", SV(
+        {"__for accumulate", SVI(
             "#define ACC(i) __append(items, i,)\n"
             "__for(0, 4, ACC)\n"
-            "int arr[] = {__get(items)};"), SV(
+            "int arr[] = {__get(items)};"), SVI(
             "\n"
             "   \n"
             "int arr[] = {0,1,2,3,};"), __LINE__, 0},
-        {"__for stringify", SV(
+        {"__for stringify", SVI(
             "#define ENTRY(i) [i] = #i,\n"
-            "const char* t[] = { __for(0, 3, ENTRY) };"), SV(
+            "const char* t[] = { __for(0, 3, ENTRY) };"), SVI(
             "\n"
             "const char* t[] = { [0] = \"0\", [1] = \"1\", [2] = \"2\", };"), __LINE__, 0},
-        {"__map basic", SV(
+        {"__map basic", SVI(
             "#define DBL(x) (x*2)\n"
-            "__map(DBL, 1, 2, 3)"), SV(
+            "__map(DBL, 1, 2, 3)"), SVI(
             "\n"
             "(1*2) (2*2) (3*2)"), __LINE__, 0},
-        {"__map stringify", SV(
+        {"__map stringify", SVI(
             "#define S(x) #x,\n"
-            "const char* names[] = { __map(S, foo, bar, baz) };"), SV(
+            "const char* names[] = { __map(S, foo, bar, baz) };"), SVI(
             "\n"
             "const char* names[] = { \"foo\", \"bar\", \"baz\", };"), __LINE__, 0},
-        {"__map paste", SV(
+        {"__map paste", SVI(
             "#define DECL(name) int name##_val;\n"
-            "__map(DECL, alpha, beta)"), SV(
+            "__map(DECL, alpha, beta)"), SVI(
             "\n"
             "int alpha_val; int beta_val;"), __LINE__, 0},
-        {"__map single", SV(
+        {"__map single", SVI(
             "#define ID(x) x\n"
-            "__map(ID, hello)"), SV(
+            "__map(ID, hello)"), SVI(
             "\n"
             "hello"), __LINE__, 0},
-        {"__map multi-token", SV(
+        {"__map multi-token", SVI(
             "#define PARENS(x) (x)\n"
-            "__map(PARENS, a + b, c * d)"), SV(
+            "__map(PARENS, a + b, c * d)"), SVI(
             "\n"
             "(a + b) (c * d)"), __LINE__, 0},
-        {"__map tuple", SV(
+        {"__map tuple", SVI(
             "#define UNPACK(...) __VA_ARGS__\n"
             "#define STRIP(x) UNPACK x\n"
-            "__map(STRIP, (a + b), (c * d))"), SV(
+            "__map(STRIP, (a + b), (c * d))"), SVI(
             "\n\n"
             "a + b c * d"), __LINE__, 0},
-        {"__let obj", SV(
-            "__let(X, 42, X + X)"), SV(
+        {"__let obj", SVI(
+            "__let(X, 42, X + X)"), SVI(
             "42 + 42"), __LINE__, 0},
-        {"__let fn", SV(
-            "__let(DBL(x), x * 2, DBL(5))"), SV(
+        {"__let fn", SVI(
+            "__let(DBL(x), x * 2, DBL(5))"), SVI(
             "5 * 2"), __LINE__, 0},
-        {"__let scoped", SV(
-            "__let(TMP, hello, TMP)\nTMP"), SV(
+        {"__let scoped", SVI(
+            "__let(TMP, hello, TMP)\nTMP"), SVI(
             "hello\nTMP"), __LINE__, 0},
-        {"__let paste", SV(
-            "__let(MK(prefix), prefix##_init, MK(foo) MK(bar))"), SV(
+        {"__let paste", SVI(
+            "__let(MK(prefix), prefix##_init, MK(foo) MK(bar))"), SVI(
             "foo_init bar_init"), __LINE__, 0},
-        {"__let stringify", SV(
-            "__let(S(x), #x, S(hello))"), SV(
+        {"__let stringify", SVI(
+            "__let(S(x), #x, S(hello))"), SVI(
             "\"hello\""), __LINE__, 0},
-        {"__let curry map", SV(
-            "__let(PAIR(x), make_pair(ctx, x), __map(PAIR, a, b, c))"), SV(
+        {"__let curry map", SVI(
+            "__let(PAIR(x), make_pair(ctx, x), __map(PAIR, a, b, c))"), SVI(
             "make_pair(ctx, a) make_pair(ctx, b) make_pair(ctx, c)"), __LINE__, 0},
-        {"__let multi param", SV(
-            "__let(ADD(a, b), a + b, ADD(1, 2))"), SV(
+        {"__let multi param", SVI(
+            "__let(ADD(a, b), a + b, ADD(1, 2))"), SVI(
             "1 + 2"), __LINE__, 0},
-        {"__let newline before parameter list", SV(
-            "__let(ADD\n(a, b), a + b, ADD(1, 2))"), SV("1 + 2"), __LINE__, 0},
-        {"__let newline after parameter comma", SV(
-            "__let(ADD(a,\nb), a + b, ADD(1, 2))"), SV("1 + 2"), __LINE__, 0},
-        {"__let multiline stringify", SV("__let(S(x), #\nx, S(word))"), SV("\"word\""), __LINE__, 0},
-        {"__let multiline paste", SV("__let(C(a,b), a ##\nb, C(x,y))"), SV("xy"), __LINE__, 0},
-        {"__append enum strings", SV(
+        {"__let newline before parameter list", SVI(
+            "__let(ADD\n(a, b), a + b, ADD(1, 2))"), SVI("1 + 2"), __LINE__, 0},
+        {"__let newline after parameter comma", SVI(
+            "__let(ADD(a,\nb), a + b, ADD(1, 2))"), SVI("1 + 2"), __LINE__, 0},
+        {"__let multiline stringify", SVI("__let(S(x), #\nx, S(word))"), SVI("\"word\""), __LINE__, 0},
+        {"__let multiline paste", SVI("__let(C(a,b), a ##\nb, C(x,y))"), SVI("xy"), __LINE__, 0},
+        {"__append enum strings", SVI(
             "__set(n2, 0)\n"
             "#define EV2(name) name = __get(n2), __append(strs2, [name] = #name,) __set(n2, __calc(__get(n2) + 1))\n"
             "enum { EV2(RED) EV2(GREEN) EV2(BLUE) };\n"
-            "const char* names[] = { __get(strs2) };"), SV(
+            "const char* names[] = { __get(strs2) };"), SVI(
             "\n"
             "\n"
             "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
             "const char* names[] = { [RED] = \"RED\",[GREEN] = \"GREEN\",[BLUE] = \"BLUE\", };"), __LINE__, 0},
-        {"__BASE_FILE__", SV("__BASE_FILE__"), SV("\"(test)\""), __LINE__, 0},
-        {"__TIMESTAMP__", SV("__TIMESTAMP__"), SV("\"??? ??? ?? ??:??:?? ????\""), __LINE__, 0},
-        {"__format", SV("__format(\"%d + %d = %d\", 1, 2, 3)"), SV("\"1 + 2 = 3\""), __LINE__, 0},
-        {"defblock obj", SV("#defblock HELLO\nhello world\n#endblock\nHELLO"), SV("\nhello world"), __LINE__, 0},
-        {"defblock object hash whitespace", SV("#defblock H\n# word\n#endblock\n#define S(x) #x\n#define E(x) S(x)\nE(H)"), SV("\n\n\n\"# word\""), __LINE__, 0},
-        {"defblock inline object hash whitespace", SV("#defblock H\na # word\n#endblock\n#define S(x) #x\n#define E(x) S(x)\nE(H)"), SV("\n\n\n\"a # word\""), __LINE__, 0},
-        {"defblock comment before name", SV("#defblock /* comment */ HELLO\nhello world\n#endblock\nHELLO"), SV("\nhello world"), __LINE__, 0},
-        {"defifndef comment before name", SV("#defifndef /* comment */ HELLO hello\nHELLO"), SV("\nhello"), __LINE__, 0},
-        {"defblock func", SV("#defblock ADD(x, y)\nx + y\n#endblock\nADD(3, 4)"), SV("\n3 + 4"), __LINE__, 0},
-        {"defblock variadic", SV("#defblock LOG(fmt, ...)\nfmt __VA_ARGS__\n#endblock\nLOG(hello, world)"), SV("\nhello world"), __LINE__, 0},
-        {"defblock named variadic with comments", SV("#defblock VA(args /* one */ /* two */ ...)\nargs\n#endblock\nVA(a, b)"), SV("\na, b"), __LINE__, 0},
+        {"__BASE_FILE__", SVI("__BASE_FILE__"), SVI("\"(test)\""), __LINE__, 0},
+        {"__TIMESTAMP__", SVI("__TIMESTAMP__"), SVI("\"??? ??? ?? ??:??:?? ????\""), __LINE__, 0},
+        {"__format", SVI("__format(\"%d + %d = %d\", 1, 2, 3)"), SVI("\"1 + 2 = 3\""), __LINE__, 0},
+        {"defblock obj", SVI("#defblock HELLO\nhello world\n#endblock\nHELLO"), SVI("\nhello world"), __LINE__, 0},
+        {"defblock object hash whitespace", SVI("#defblock H\n# word\n#endblock\n#define S(x) #x\n#define E(x) S(x)\nE(H)"), SVI("\n\n\n\"# word\""), __LINE__, 0},
+        {"defblock inline object hash whitespace", SVI("#defblock H\na # word\n#endblock\n#define S(x) #x\n#define E(x) S(x)\nE(H)"), SVI("\n\n\n\"a # word\""), __LINE__, 0},
+        {"defblock comment before name", SVI("#defblock /* comment */ HELLO\nhello world\n#endblock\nHELLO"), SVI("\nhello world"), __LINE__, 0},
+        {"defifndef comment before name", SVI("#defifndef /* comment */ HELLO hello\nHELLO"), SVI("\nhello"), __LINE__, 0},
+        {"defblock func", SVI("#defblock ADD(x, y)\nx + y\n#endblock\nADD(3, 4)"), SVI("\n3 + 4"), __LINE__, 0},
+        {"defblock variadic", SVI("#defblock LOG(fmt, ...)\nfmt __VA_ARGS__\n#endblock\nLOG(hello, world)"), SVI("\nhello world"), __LINE__, 0},
+        {"defblock named variadic with comments", SVI("#defblock VA(args /* one */ /* two */ ...)\nargs\n#endblock\nVA(a, b)"), SVI("\na, b"), __LINE__, 0},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -1242,10 +1244,10 @@ TestFunction(test_builtin_macros){
 
 TestFunction(test_va_opt_error_propagation){
     TESTBEGIN();
-    StringView inputs[] = {
-        SV("#define B(x) x\n#define F(...) __VA_OPT__(yes)\nF(B(1,2))"),
-        SV("#define B(x) x\n#define F(...) #__VA_OPT__(yes)\nF(B(1,2))"),
-        SV("#define B(x) x\n#define F(...) prefix ## __VA_OPT__(yes)\nF(B(1,2))"),
+    static const StringView inputs[] = {
+        SVI("#define B(x) x\n#define F(...) __VA_OPT__(yes)\nF(B(1,2))"),
+        SVI("#define B(x) x\n#define F(...) #__VA_OPT__(yes)\nF(B(1,2))"),
+        SVI("#define B(x) x\n#define F(...) prefix ## __VA_OPT__(yes)\nF(B(1,2))"),
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(inputs); i = test_atomic_increment(&idx)){
@@ -1261,59 +1263,59 @@ TestFunction(test_va_opt_error_propagation){
 
 TestFunction(test_error_locations){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
         {"va_arg whitespace-only arguments", __LINE__,
-            SV("#define F(...) __VA_ARG__(0)\nF( )"),
-            SV("(test):1:16: error: __VA_ARG__ index out of range\n"
+            SVI("#define F(...) __VA_ARG__(0)\nF( )"),
+            SVI("(test):1:16: error: __VA_ARG__ index out of range\n"
                "(test):2:1: ... expanded from here\n")},
         {"indirect too many args", __LINE__,
-            SV("#define F(x) x\n"
+            SVI("#define F(x) x\n"
                "#define M F(1,2)\n"
                "M"),
-            SV("(test):2:14: error: Too many arguments to function-like macro F()\n"
+            SVI("(test):2:14: error: Too many arguments to function-like macro F()\n"
                "(test):3:1: ... expanded from here\n")},
         {"bad token paste", __LINE__,
-            SV("#define P(a,b) a##b\n"
+            SVI("#define P(a,b) a##b\n"
                "P(+,-)"),
-            SV("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
+            SVI("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
                "(test):2:1: ... expanded from here\n")},
         {"identifier pasted with backslash", __LINE__,
-            SV("#define C(a,b) a##b\nC(word,\\)"),
-            SV("(test):1:17: error: pasting \"word\" and \"\\\" does not give a valid preprocessing token\n"
+            SVI("#define C(a,b) a##b\nC(word,\\)"),
+            SVI("(test):1:17: error: pasting \"word\" and \"\\\" does not give a valid preprocessing token\n"
                "(test):2:1: ... expanded from here\n")},
         {"number pasted with backslash", __LINE__,
-            SV("#define C(a,b) a##b\nC(1,\\)"),
-            SV("(test):1:17: error: pasting \"1\" and \"\\\" does not give a valid preprocessing token\n"
+            SVI("#define C(a,b) a##b\nC(1,\\)"),
+            SVI("(test):1:17: error: pasting \"1\" and \"\\\" does not give a valid preprocessing token\n"
                "(test):2:1: ... expanded from here\n")},
         {"indirect too few args", __LINE__,
-            SV("#define F(x,y) x y\n"
+            SVI("#define F(x,y) x y\n"
                "#define M F(1)\n"
                "M"),
-            SV("(test):2:13: error: Too few arguments to function-like macro F()\n"
+            SVI("(test):2:13: error: Too few arguments to function-like macro F()\n"
                "(test):3:1: ... expanded from here\n")},
         {"multi-level bad paste", __LINE__,
-            SV("#define P(a,b) a##b\n"
+            SVI("#define P(a,b) a##b\n"
                "#define Q(a,b) P(a,b)\n"
                "#define R(a,b) Q(a,b)\n"
                "R(+,-)"),
-            SV("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
+            SVI("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
                "(test):2:16: ... expanded from here\n"
                "(test):3:16: ... expanded from here\n"
                "(test):4:1: ... expanded from here\n")},
         {"error from pasted macro name", __LINE__,
-            SV("#define FF(x) x\n"
+            SVI("#define FF(x) x\n"
                "#define C(a,b) a##b\n"
                "C(F,F)(1,2)"),
-            SV("(test):3:9: error: Too many arguments to function-like macro FF()\n")},
+            SVI("(test):3:9: error: Too many arguments to function-like macro FF()\n")},
         {
             "error from pasted macro name chained", __LINE__,
-            SV("#define FF(x) x\n"
+            SVI("#define FF(x) x\n"
                "#define C(a,b) a##b\n"
                "#define M C(F,F)(1,2)\n"
                "M"),
-            SV("(test):3:19: error: Too many arguments to function-like macro FF()\n"
+            SVI("(test):3:19: error: Too many arguments to function-like macro FF()\n"
                "(test):4:1: ... expanded from here\n"),
         },
     };
@@ -1334,49 +1336,49 @@ TestFunction(test_error_locations){
 
 TestFunction(test_messages){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
         {
             "#warning", __LINE__,
-            SV("#warning hello\n"),
-            SV("(test):1:2: warning: #warning hello\n"),
+            SVI("#warning hello\n"),
+            SVI("(test):1:2: warning: #warning hello\n"),
         },
         {
             "__print", __LINE__,
-            SV("__print(hello)\n"),
-            SV("(test):1:1: hello\n"),
+            SVI("__print(hello)\n"),
+            SVI("(test):1:1: hello\n"),
         },
         {
             "__print packed embed", __LINE__,
-            SV("__print(_Embed(\"__FILE__ limit(8)\"))\n"),
-            SV("(test):1:1: 95,95,112,114,105,110,116,40\n"),
+            SVI("__print(_Embed(\"__FILE__ limit(8)\"))\n"),
+            SVI("(test):1:1: 95,95,112,114,105,110,116,40\n"),
         },
         {
             "__PRINT", __LINE__,
-            SV("__PRINT__(hello)\n"),
-            SV("(test):1:1: hello\n"),
+            SVI("__PRINT__(hello)\n"),
+            SVI("(test):1:1: hello\n"),
         },
         {
             "__where", __LINE__,
-            SV("#define FOO BAR\n"
+            SVI("#define FOO BAR\n"
                "__where(FOO)\n"),
-            SV("(test):1:9: info: FOO defined\n"),
+            SVI("(test):1:9: info: FOO defined\n"),
         },
         {"__where multiline", __LINE__,
-            SV("#define FOO BAR\n__where(\nFOO\n)"),
-            SV("(test):1:9: info: FOO defined\n")},
+            SVI("#define FOO BAR\n__where(\nFOO\n)"),
+            SVI("(test):1:9: info: FOO defined\n")},
         {
             "__WHERE__", __LINE__,
-            SV("#define FOO BAR\n"
+            SVI("#define FOO BAR\n"
                "__WHERE__(FOO)\n"),
-            SV("(test):1:9: info: FOO defined\n"),
+            SVI("(test):1:9: info: FOO defined\n"),
         },
         {
             "__where - missing", __LINE__,
-            SV("#define FOO BAR\n"
+            SVI("#define FOO BAR\n"
                "__where(foo)\n"),
-            SV("(test):2:1: warning: __where__: 'foo' is not defined\n"),
+            SVI("(test):2:1: warning: __where__: 'foo' is not defined\n"),
         },
     };
     static int idx = 0;
@@ -1396,17 +1398,17 @@ TestFunction(test_messages){
 
 TestFunction(test_condition){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; _Bool disabled; StringView inp, exp;
     } test_cases[] = {
         {"#if", __LINE__, 0,
-            SV("#if 1\n"
+            SVI("#if 1\n"
                     "Foo\n"
                     "#endif"),
-            SV("\nFoo\n")
+            SVI("\nFoo\n")
         },
         {"unsigned arithmetic and conversions", __LINE__, 0,
-            SV("#if -1 < 1U || !(0xffffffffffffffff > 0)\n#error comparison\n#endif\n"
+            SVI("#if -1 < 1U || !(0xffffffffffffffff > 0)\n#error comparison\n#endif\n"
                "#if (0xffffffffffffffffU + 1) != 0 || (0U - 1) != 0xffffffffffffffff\n#error wrap\n#endif\n"
                "#if (0xffffffffffffffffU * 2) != 0xfffffffffffffffeU\n#error multiply\n#endif\n"
                "#if (0xffffffffffffffffU / 2) != 0x7fffffffffffffff || (0xffffffffffffffffU % 2) != 1\n#error division\n#endif\n"
@@ -1418,94 +1420,94 @@ TestFunction(test_condition){
                "#if (1 ? -1 : (1U < 2)) >= 0 || (1 ? -1 : (1 << 1U)) >= 0\n#error skipped_signed_type\n#endif\n"
                "#if ~(0U) != 0xffffffffffffffffU || (+1uL - 2) < 0 || (1ui64 - 2) < 0\n#error suffix\n#endif\n"
                "ok"),
-            SV("\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n"
+            SVI("\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n"
                "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "ok")},
         {"ifdef (defined)", __LINE__, 0,
-            SV("#define FOO\n"
+            SVI("#define FOO\n"
                "#ifdef FOO\n"
                "Foo\n"
                "#endif"),
-            SV("\n\nFoo\n")
+            SVI("\n\nFoo\n")
         },
         {"ifdef (undefined)", __LINE__, 0,
-            SV("#define FOO\n"
+            SVI("#define FOO\n"
                "#ifdef foo\n"
                "Foo\n"
                "#endif"),
-            SV("\n\n\n")
+            SVI("\n\n\n")
         },
         {"ifndef (undefined)", __LINE__, 0,
-            SV("#define FOO\n"
+            SVI("#define FOO\n"
                "#ifndef foo\n"
                "Foo\n"
                "#endif"),
-            SV("\n\nFoo\n")
+            SVI("\n\nFoo\n")
         },
         {"ifndef (defined)", __LINE__, 0,
-            SV("#define FOO\n"
+            SVI("#define FOO\n"
                "#ifndef FOO\n"
                "Foo\n"
                "#endif // ifndef FOO"),
-            SV("\n\n\n")
+            SVI("\n\n\n")
         },
         // #ifdef / #else
         {"ifdef else (true branch)", __LINE__, 0,
-            SV("#define X\n"
+            SVI("#define X\n"
                "#ifdef X\n"
                "yes\n"
                "#else\n"
                "no\n"
                "#endif"),
-            SV("\n\nyes\n\n\n")
+            SVI("\n\nyes\n\n\n")
         },
         {"ifdef else (false branch)", __LINE__, 0,
-            SV("#ifdef X\n"
+            SVI("#ifdef X\n"
                "yes\n"
                "#else\n"
                "no\n"
                "#endif"),
-            SV("\n\n\nno\n")
+            SVI("\n\n\nno\n")
         },
         // #ifndef / #else
         {"ifndef else (true branch)", __LINE__, 0,
-            SV("#ifndef X\n"
+            SVI("#ifndef X\n"
                "yes\n"
                "#else\n"
                "no\n"
                "#endif"),
-            SV("\nyes\n\n\n")
+            SVI("\nyes\n\n\n")
         },
         {"ifndef else (false branch)", __LINE__, 0,
-            SV("#define X\n"
+            SVI("#define X\n"
                "#ifndef X\n"
                "yes\n"
                "#else\n"
                "no\n"
                "#endif"),
-            SV("\n\n\n\nno\n")
+            SVI("\n\n\n\nno\n")
         },
         // Nested conditionals
         {"nested ifdef both true", __LINE__, 0,
-            SV("#define A\n"
+            SVI("#define A\n"
                "#define B\n"
                "#ifdef A\n"
                "#ifdef B\n"
                "both\n"
                "#endif\n"
                "#endif"),
-            SV("\n\n\n\nboth\n\n")
+            SVI("\n\n\n\nboth\n\n")
         },
         {"nested ifdef outer false", __LINE__, 0,
-            SV("#define B\n"
+            SVI("#define B\n"
                "#ifdef A\n"
                "#ifdef B\n"
                "inner\n"
                "#endif\n"
                "#endif"),
-            SV("\n\n\n\n\n")
+            SVI("\n\n\n\n\n")
         },
         {"nested ifdef inner false", __LINE__, 0,
-            SV("#define A\n"
+            SVI("#define A\n"
                "#ifdef A\n"
                "#ifdef B\n"
                "inner\n"
@@ -1514,39 +1516,39 @@ TestFunction(test_condition){
                "#endif\n"
                "after_inner\n"
                "#endif"),
-            SV("\n\n\n\n\nelse_inner\n\nafter_inner\n")
+            SVI("\n\n\n\n\nelse_inner\n\nafter_inner\n")
         },
         // No macro expansion in false branches
         {"no expand in false", __LINE__, 0,
-            SV("#define X error_if_expanded\n"
+            SVI("#define X error_if_expanded\n"
                "#ifdef NOPE\n"
                "X\n"
                "#endif"),
-            SV("\n\n\n")
+            SVI("\n\n\n")
         },
         // #define inside conditional branches
         {"define in true branch", __LINE__, 0,
-            SV("#ifdef NOPE\n"
+            SVI("#ifdef NOPE\n"
                "#define X bad\n"
                "#else\n"
                "#define X good\n"
                "#endif\n"
                "X"),
-            SV("\n\n\n\n\ngood")
+            SVI("\n\n\n\n\ngood")
         },
         {"define in false branch ignored", __LINE__, 0,
-            SV("#define A\n"
+            SVI("#define A\n"
                "#ifdef A\n"
                "#define X yes\n"
                "#else\n"
                "#define X no\n"
                "#endif\n"
                "X"),
-            SV("\n\n\n\n\n\nyes")
+            SVI("\n\n\n\n\n\nyes")
         },
         // #undef inside conditional
         {"undef in true branch", __LINE__, 0,
-            SV("#define X hello\n"
+            SVI("#define X hello\n"
                "#ifdef X\n"
                "#undef X\n"
                "#endif\n"
@@ -1555,41 +1557,41 @@ TestFunction(test_condition){
                "#else\n"
                "undefined\n"
                "#endif"),
-            SV("\n\n\n\n\n\n\nundefined\n")
+            SVI("\n\n\n\n\n\n\nundefined\n")
         },
         // #elifdef
         {"elifdef first true", __LINE__, 0,
-            SV("#define A A\n"
+            SVI("#define A A\n"
                "#define B B\n"
                "#ifdef A\n"
                "A\n"
                "#elifdef B\n"
                "B\n"
                "#endif"),
-            SV("\n\n\nA\n\n\n")
+            SVI("\n\n\nA\n\n\n")
         },
         {"elifdef second true", __LINE__, 0,
-            SV("#define B B\n"
+            SVI("#define B B\n"
                "#ifdef A\n"
                "A\n"
                "#elifdef B\n"
                "B\n"
                "#endif"),
-            SV("\n\n\n\nB\n")
+            SVI("\n\n\n\nB\n")
         },
         {"elifdef neither", __LINE__, 0,
-            SV("#ifdef A\n"
+            SVI("#ifdef A\n"
                "A\n"
                "#elifdef B\n"
                "B\n"
                "#else\n"
                "neither\n"
                "#endif"),
-            SV("\n\n\n\n\nneither\n")
+            SVI("\n\n\n\n\nneither\n")
         },
         // #elifndef
         {"elifndef activates", __LINE__, 0,
-            SV("#define A A\n"
+            SVI("#define A A\n"
                "#ifdef A\n"
                "#ifdef NOPE\n"
                "nope\n"
@@ -1597,20 +1599,20 @@ TestFunction(test_condition){
                "yes\n"
                "#endif\n"
                "#endif"),
-            SV("\n\n\n\n\nyes\n\n")
+            SVI("\n\n\n\n\nyes\n\n")
         },
         {"elifndef skipped when true_taken", __LINE__, 0,
-            SV("#define A A\n"
+            SVI("#define A A\n"
                "#ifdef A\n"
                "A\n"
                "#elifndef WHATEVER\n"
                "no\n"
                "#endif"),
-            SV("\n\nA\n\n\n")
+            SVI("\n\nA\n\n\n")
         },
         // Deeply nested in false branch
         {"deep nesting in false branch", __LINE__, 0,
-            SV("#ifdef NOPE\n"
+            SVI("#ifdef NOPE\n"
                "#ifdef ALSO_NOPE\n"
                "#ifdef DEEP\n"
                "deep\n"
@@ -1621,24 +1623,24 @@ TestFunction(test_condition){
                "#else\n"
                "outer_else\n"
                "#endif"),
-            SV("\n\n\n\n\n\n\n\n\nouter_else\n")
+            SVI("\n\n\n\n\n\n\n\n\nouter_else\n")
         },
         // Empty branches
         {"empty true branch", __LINE__, 0,
-            SV("#define X X\n"
+            SVI("#define X X\n"
                "#ifdef X\n"
                "#endif"),
-            SV("\n\n")
+            SVI("\n\n")
         },
         {"empty false branch", __LINE__, 0,
-            SV("#ifdef X\n"
+            SVI("#ifdef X\n"
                "#else\n"
                "#endif"),
-            SV("\n\n")
+            SVI("\n\n")
         },
         // Multiple elif chain
         {"elifdef chain", __LINE__, 0,
-            SV("#define C C\n"
+            SVI("#define C C\n"
                "#ifdef A\n"
                "A\n"
                "#elifdef B\n"
@@ -1650,19 +1652,19 @@ TestFunction(test_condition){
                "#else\n"
                "none\n"
                "#endif"),
-            SV("\n\n\n\n\n\nC\n\n\n\n\n")
+            SVI("\n\n\n\n\n\nC\n\n\n\n\n")
         },
         // Include guard pattern
         {"include guard pattern", __LINE__, 0,
-            SV("#ifndef GUARD_H\n"
+            SVI("#ifndef GUARD_H\n"
                "#define GUARD_H\n"
                "content\n"
                "#endif"),
-            SV("\n\ncontent\n")
+            SVI("\n\ncontent\n")
         },
         // Only first matching elifdef activates
         {"elifdef only first match", __LINE__, 0,
-            SV("#define B B\n"
+            SVI("#define B B\n"
                "#define C C\n"
                "#ifdef A\n"
                "A\n"
@@ -1671,36 +1673,36 @@ TestFunction(test_condition){
                "#elifdef C\n"
                "C\n"
                "#endif"),
-            SV("\n\n\n\n\nB\n\n\n")
+            SVI("\n\n\n\n\nB\n\n\n")
         },
         // elifndef direct (not nested)
         {"elifndef direct", __LINE__, 0,
-            SV("#ifdef NOPE\n"
+            SVI("#ifdef NOPE\n"
                "nope\n"
                "#elifndef ALSO_NOPE\n"
                "yes\n"
                "#endif"),
-            SV("\n\n\nyes\n")
+            SVI("\n\n\nyes\n")
         },
         // Macro expansion resumes after #endif
         {"expansion after endif", __LINE__, 0,
-            SV("#define X hello\n"
+            SVI("#define X hello\n"
                "#ifdef NOPE\n"
                "skipped\n"
                "#endif\n"
                "X"),
-            SV("\n\n\n\nhello")
+            SVI("\n\n\n\nhello")
         },
         // Null directive (# on a line by itself) in false branch
         {"null directive in false branch", __LINE__, 0,
-            SV("#ifdef NOPE\n"
+            SVI("#ifdef NOPE\n"
                "#\n"
                "#endif"),
-            SV("\n\n")
+            SVI("\n\n")
         },
         // Adjacent independent conditionals
         {"adjacent conditionals", __LINE__, 0,
-            SV("#define A\n"
+            SVI("#define A\n"
                "#ifdef A\n"
                "first\n"
                "#endif\n"
@@ -1709,11 +1711,11 @@ TestFunction(test_condition){
                "#else\n"
                "not_second\n"
                "#endif"),
-            SV("\n\nfirst\n\n\n\n\nnot_second\n")
+            SVI("\n\nfirst\n\n\n\n\nnot_second\n")
         },
         {
             "Weird c23 pseudo macros", __LINE__, 0,
-            SV( "#ifdef __has_include\n"
+            SVI( "#ifdef __has_include\n"
                 "__has_include\n"
                 "#endif\n"
                 "#ifdef __has_embed\n"
@@ -1722,28 +1724,28 @@ TestFunction(test_condition){
                 "#ifdef __has_c_attribute\n"
                 "__has_c_attribute\n"
                 "#endif\n"),
-            SV("\n__has_include\n\n\n__has_embed\n\n\n__has_c_attribute\n\n")
+            SVI("\n__has_include\n\n\n__has_embed\n\n\n__has_c_attribute\n\n")
         },
         {
             "__has_include", __LINE__, SKIP,
-            SV("#if __has_include(__FILE__)\n"
+            SVI("#if __has_include(__FILE__)\n"
                "yes\n"
                "#endif"),
-            SV("\nyes\n"),
+            SVI("\nyes\n"),
         },
         // Skipped as we should capture the output, this is wrong test
         {"warning directive", __LINE__, SKIP,
-            SV("#warning test warning\nafter"),
-            SV("\nafter")},
+            SVI("#warning test warning\nafter"),
+            SVI("\nafter")},
         {"error in false branch", __LINE__, 0,
-            SV("#if 0\n#error should not fire\n#endif\nok"),
-            SV("\n\n\nok")},
+            SVI("#if 0\n#error should not fire\n#endif\nok"),
+            SVI("\n\n\nok")},
         {"line directive", __LINE__, 0,
-            SV("#line 100\nvalue"),
-            SV("\nvalue")},
+            SVI("#line 100\nvalue"),
+            SVI("\nvalue")},
         {"line directive with file", __LINE__, 0,
-            SV("#line 100 \"fake.c\"\nvalue"),
-            SV("\nvalue")},
+            SVI("#line 100 \"fake.c\"\nvalue"),
+            SVI("\nvalue")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -1764,280 +1766,280 @@ TestFunction(test_condition){
 }
 TestFunction(test_erroneous_condition){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
         {"defblock duplicate parameters", __LINE__,
-            SV("#defblock F(x, x)\nx\n#endblock\n"),
-            SV("(test):1:16: error: Duplicate macro param name\n")},
+            SVI("#defblock F(x, x)\nx\n#endblock\n"),
+            SVI("(test):1:16: error: Duplicate macro param name\n")},
         {"nested va opt in unused macro", __LINE__,
-            SV("#define F(...) __VA_OPT__(__VA_OPT__(x))\n"),
-            SV("(test):1:27: error: Nested __VA_OPT__ is not allowed\n")},
+            SVI("#define F(...) __VA_OPT__(__VA_OPT__(x))\n"),
+            SVI("(test):1:27: error: Nested __VA_OPT__ is not allowed\n")},
         {"va opt in object macro", __LINE__,
-            SV("#define X __VA_OPT__(x)\n"),
-            SV("(test):1:11: error: __VA_OPT__ requires a variadic macro\n")},
+            SVI("#define X __VA_OPT__(x)\n"),
+            SVI("(test):1:11: error: __VA_OPT__ requires a variadic macro\n")},
         {"va opt without parentheses", __LINE__,
-            SV("#define F(...) __VA_OPT__ x\n"),
-            SV("(test):1:16: error: Expected '(' after __VA_OPT__\n")},
+            SVI("#define F(...) __VA_OPT__ x\n"),
+            SVI("(test):1:16: error: Expected '(' after __VA_OPT__\n")},
         {"unterminated va opt in unused macro", __LINE__,
-            SV("#define F(...) __VA_OPT__(x\n"),
-            SV("(test):1:16: error: Unterminated __VA_OPT__\n")},
+            SVI("#define F(...) __VA_OPT__(x\n"),
+            SVI("(test):1:16: error: Unterminated __VA_OPT__\n")},
         {"va opt in nonvariadic macro", __LINE__,
-            SV("#define F(x) __VA_OPT__(x)\n"),
-            SV("(test):1:14: error: __VA_OPT__ requires a variadic macro\n")},
+            SVI("#define F(x) __VA_OPT__(x)\n"),
+            SVI("(test):1:14: error: __VA_OPT__ requires a variadic macro\n")},
         {"empty has include header", __LINE__,
-            SV("#if __has_include(\"\")\n#endif"),
-            SV("(test):1:5: error: Empty header name in __has_include\n")},
+            SVI("#if __has_include(\"\")\n#endif"),
+            SVI("(test):1:5: error: Empty header name in __has_include\n")},
         {"empty angle has include header", __LINE__,
-            SV("#if __has_include(<>)\n#endif"),
-            SV("(test):1:5: error: Empty header name in __has_include\n")},
+            SVI("#if __has_include(<>)\n#endif"),
+            SVI("(test):1:5: error: Empty header name in __has_include\n")},
         {"empty expanded quoted has include header", __LINE__,
-            SV("#define H \"\"\n#if __has_include(H)\n#endif"),
-            SV("(test):2:5: error: Empty header name in __has_include\n")},
+            SVI("#define H \"\"\n#if __has_include(H)\n#endif"),
+            SVI("(test):2:5: error: Empty header name in __has_include\n")},
         {"empty expanded has include header", __LINE__,
-            SV("#define H <>\n#if __has_include(H)\n#endif"),
-            SV("(test):2:5: error: Empty header name in __has_include\n")},
+            SVI("#define H <>\n#if __has_include(H)\n#endif"),
+            SVI("(test):2:5: error: Empty header name in __has_include\n")},
         {"named varargs redefinition changes substitution", __LINE__,
-            SV("#define F(args...) args\n#define F(other...) args\n"),
-            SV("(test):2:25: error: Duplicate function-like macro (F) with different definitions\n"
+            SVI("#define F(args...) args\n#define F(other...) args\n"),
+            SVI("(test):2:25: error: Duplicate function-like macro (F) with different definitions\n"
                "(test):1:9: error: ... previously defined here\n")},
         {"defblock duplicate named variadic parameter", __LINE__,
-            SV("#defblock F(x, x...)\nx\n#endblock\n"),
-            SV("(test):1:16: error: Duplicate macro param name\n")},
+            SVI("#defblock F(x, x...)\nx\n#endblock\n"),
+            SVI("(test):1:16: error: Duplicate macro param name\n")},
         {"let duplicate parameters", __LINE__,
-            SV("__let(F(x,x), x, F(1,2))"),
-            SV("(test):1:11: error: Duplicate macro param name\n")},
+            SVI("__let(F(x,x), x, F(1,2))"),
+            SVI("(test):1:11: error: Duplicate macro param name\n")},
         {"let function signature trailing tokens", __LINE__,
-            SV("__let(F() junk, 1, F())"),
-            SV("(test):1:11: error: Unexpected token after __let macro signature\n")},
+            SVI("__let(F() junk, 1, F())"),
+            SVI("(test):1:11: error: Unexpected token after __let macro signature\n")},
         {"let object signature trailing tokens", __LINE__,
-            SV("__let(X junk, 1, X)"),
-            SV("(test):1:9: error: Unexpected token after __let macro signature\n")},
+            SVI("__let(X junk, 1, X)"),
+            SVI("(test):1:9: error: Unexpected token after __let macro signature\n")},
         {"get multiple identifiers with unknown first key", __LINE__,
-            SV("__set(key, 7) __get(missing key)"),
-            SV("(test):1:29: error: Only one identifier as key to __get\n")},
+            SVI("__set(key, 7) __get(missing key)"),
+            SVI("(test):1:29: error: Only one identifier as key to __get\n")},
         {"format empty integer argument", __LINE__,
-            SV("__format(\"%d%d\", , 2)"),
-            SV("(test):1:1: error: Missing integer argument to format\n")},
+            SVI("__format(\"%d%d\", , 2)"),
+            SVI("(test):1:1: error: Missing integer argument to format\n")},
         {"format string rejects punctuation", __LINE__,
-            SV("__format(\"%s\", name + 1)"),
-            SV("(test):1:21: error: Invalid arg to format (expected string, identifier, or pp-number)\n")},
+            SVI("__format(\"%s\", name + 1)"),
+            SVI("(test):1:21: error: Invalid arg to format (expected string, identifier, or pp-number)\n")},
         {"format trailing minus", __LINE__,
-            SV("__format(\"%d\", 1-)"),
-            SV("(test):0:0: error: Unexpected end of #if expression\n")},
+            SVI("__format(\"%d\", 1-)"),
+            SVI("(test):0:0: error: Unexpected end of #if expression\n")},
         {"format postfix increment", __LINE__,
-            SV("__format(\"%d\", 1++)"),
-            SV("(test):1:17: error: Unexpected token after #if expression\n")},
+            SVI("__format(\"%d\", 1++)"),
+            SVI("(test):1:17: error: Unexpected token after #if expression\n")},
         {"format invalid octal", __LINE__,
-            SV("__format(\"%d\", 08)"),
-            SV("(test):1:16: error: Invalid octal digit in number\n")},
+            SVI("__format(\"%d\", 08)"),
+            SVI("(test):1:16: error: Invalid octal digit in number\n")},
         {"expanded has include trailing tokens", __LINE__,
-            SV("#define H \"missing.h\" junk\n#if __has_include(H)\n#endif"),
-            SV("(test):2:5: error: Unexpected token after header name in __has_include\n")},
+            SVI("#define H \"missing.h\" junk\n#if __has_include(H)\n#endif"),
+            SVI("(test):2:5: error: Unexpected token after header name in __has_include\n")},
         {"expanded angle has include trailing tokens", __LINE__,
-            SV("#define H <missing.h> junk\n#if __has_include(H)\n#endif"),
-            SV("(test):2:5: error: Unexpected token after header name in __has_include\n")},
+            SVI("#define H <missing.h> junk\n#if __has_include(H)\n#endif"),
+            SVI("(test):2:5: error: Unexpected token after header name in __has_include\n")},
         {"duplicate unsigned suffix", __LINE__,
-            SV("#if 1uU\n#endif"),
-            SV("(test):1:5: error: Invalid integer suffix\n")},
+            SVI("#if 1uU\n#endif"),
+            SVI("(test):1:5: error: Invalid integer suffix\n")},
         {"interleaved long suffix", __LINE__,
-            SV("#if 1lUl\n#endif"),
-            SV("(test):1:5: error: Invalid integer suffix\n")},
+            SVI("#if 1lUl\n#endif"),
+            SVI("(test):1:5: error: Invalid integer suffix\n")},
         {"separator before suffix", __LINE__,
-            SV("#if 1'u\n#endif"),
-            SV("(test):1:5: error: Invalid digit separator in number\n")},
+            SVI("#if 1'u\n#endif"),
+            SVI("(test):1:5: error: Invalid digit separator in number\n")},
         {"separator after hex prefix", __LINE__,
-            SV("#if 0x'ff\n#endif"),
-            SV("(test):1:5: error: Invalid digit separator in number\n")},
+            SVI("#if 0x'ff\n#endif"),
+            SVI("(test):1:5: error: Invalid digit separator in number\n")},
         {"defblock leading paste", __LINE__,
-            SV("#defblock F(x)\n## x\n#endblock\n"),
-            SV("(test):2:1: error: '##' cannot appear at start of replacement list\n")},
+            SVI("#defblock F(x)\n## x\n#endblock\n"),
+            SVI("(test):2:1: error: '##' cannot appear at start of replacement list\n")},
         {"defblock trailing paste", __LINE__,
-            SV("#defblock F\nx ##\n#endblock\n"),
-            SV("(test):2:3: error: '##' cannot appear at end of replacement list\n")},
+            SVI("#defblock F\nx ##\n#endblock\n"),
+            SVI("(test):2:3: error: '##' cannot appear at end of replacement list\n")},
         {"unused macro invalid stringification", __LINE__,
-            SV("#define F(x) #other\n"),
-            SV("(test):1:14: error: '#' is not followed by a macro parameter\n")},
+            SVI("#define F(x) #other\n"),
+            SVI("(test):1:14: error: '#' is not followed by a macro parameter\n")},
         {"unused defblock invalid stringification", __LINE__,
-            SV("#defblock F(x)\n#other\n#endblock\n"),
-            SV("(test):2:1: error: '#' is not followed by a macro parameter\n")},
+            SVI("#defblock F(x)\n#other\n#endblock\n"),
+            SVI("(test):2:1: error: '#' is not followed by a macro parameter\n")},
         {"unused let invalid stringification", __LINE__,
-            SV("__let(F(x), #other, unused)"),
-            SV("(test):1:13: error: '#' is not followed by a macro parameter\n")},
+            SVI("__let(F(x), #other, unused)"),
+            SVI("(test):1:13: error: '#' is not followed by a macro parameter\n")},
         {"unused let leading paste", __LINE__,
-            SV("__let(F(x), ## x, unused)"),
-            SV("(test):1:13: error: '##' cannot appear at start of replacement list\n")},
+            SVI("__let(F(x), ## x, unused)"),
+            SVI("(test):1:13: error: '##' cannot appear at start of replacement list\n")},
         {"unterminated active if", __LINE__,
-            SV("#if 1\nyes"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+            SVI("#if 1\nyes"), SVI("(test):1:2: error: Unterminated conditional directive\n")},
         {"unterminated active if at eof", __LINE__,
-            SV("#if 1"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+            SVI("#if 1"), SVI("(test):1:2: error: Unterminated conditional directive\n")},
         {"unterminated active else", __LINE__,
-            SV("#if 0\n#else\nyes\n"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+            SVI("#if 0\n#else\nyes\n"), SVI("(test):1:2: error: Unterminated conditional directive\n")},
         {"unterminated outer active if", __LINE__,
-            SV("#if 1\n#if 0\n#endif\n"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+            SVI("#if 1\n#if 0\n#endif\n"), SVI("(test):1:2: error: Unterminated conditional directive\n")},
         {"endif without if", __LINE__,
-            SV("#endif"), SV("(test):1:2: error: #endif outside of #if (or similar construct)\n")},
+            SVI("#endif"), SVI("(test):1:2: error: #endif outside of #if (or similar construct)\n")},
         {"else without if", __LINE__,
-            SV("#else"), SV("(test):1:2: error: #else outside of #if (or similar construct)\n")},
+            SVI("#else"), SVI("(test):1:2: error: #else outside of #if (or similar construct)\n")},
         {"elif without if", __LINE__,
-            SV("#elif 1"), SV("(test):1:2: error: #elif outside of #if (or similar construct)\n")},
+            SVI("#elif 1"), SVI("(test):1:2: error: #elif outside of #if (or similar construct)\n")},
         {"elifdef without if", __LINE__,
-            SV("#elifdef X"), SV("(test):1:2: error: #elifdef outside of #if (or similar construct)\n")},
+            SVI("#elifdef X"), SVI("(test):1:2: error: #elifdef outside of #if (or similar construct)\n")},
         {"elifndef without if", __LINE__,
-            SV("#elifndef X"), SV("(test):1:2: error: #elifndef outside of #if (or similar construct)\n")},
+            SVI("#elifndef X"), SVI("(test):1:2: error: #elifndef outside of #if (or similar construct)\n")},
         {"duplicate else", __LINE__,
-            SV("#ifdef X\n"
+            SVI("#ifdef X\n"
                "#else\n"
                "#else\n"
                "#endif"),
-            SV("(test):3:2: error: another #else\n")},
+            SVI("(test):3:2: error: another #else\n")},
         {"elif after else", __LINE__,
-            SV("#ifdef X\n"
+            SVI("#ifdef X\n"
                "#else\n"
                "#elif 1\n"
                "#endif"),
-            SV("(test):3:2: error: #elif after #else\n")},
+            SVI("(test):3:2: error: #elif after #else\n")},
         {"elifdef after else", __LINE__,
-            SV("#define Y\n"
+            SVI("#define Y\n"
                "#ifdef X\n"
                "#else\n"
                "#elifdef Y\n"
                "#endif"),
-            SV("(test):4:2: error: #elifdef after #else\n")},
+            SVI("(test):4:2: error: #elifdef after #else\n")},
         {"elifndef after else", __LINE__,
-            SV("#define Y\n"
+            SVI("#define Y\n"
                "#ifdef X\n"
                "#else\n"
                "#elifndef Y\n"
                "#endif"),
-            SV("(test):4:2: error: #elifndef after #else\n")},
+            SVI("(test):4:2: error: #elifndef after #else\n")},
         {"duplicate else (active branch)", __LINE__,
-            SV("#define X\n"
+            SVI("#define X\n"
                "#ifdef X\n"
                "#else\n"
                "#else\n"
                "#endif"),
-            SV("(test):4:2: error: another #else\n")},
+            SVI("(test):4:2: error: another #else\n")},
         {"elif after else (active branch)", __LINE__,
-            SV("#define X\n"
+            SVI("#define X\n"
                "#ifndef X\n"
                "skip\n"
                "#else\n"
                "#elif 1\n"
                "#endif"),
-            SV("(test):5:2: error: #elif after #else\n")},
+            SVI("(test):5:2: error: #elif after #else\n")},
         {"unterminated if", __LINE__,
-            SV("#ifdef X\n"
+            SVI("#ifdef X\n"
                "stuff"),
-            SV("(test):1:2: error: Unterminated conditional directive\n")},
+            SVI("(test):1:2: error: Unterminated conditional directive\n")},
         {"unterminated nested if", __LINE__,
-            SV("#define A\n"
+            SVI("#define A\n"
                "#ifdef A\n"
                "#ifdef B\n"
                "stuff"),
-            SV("(test):3:2: error: Unterminated conditional directive\n")},
+            SVI("(test):3:2: error: Unterminated conditional directive\n")},
         {"if eval bad msvc suffix i7", __LINE__,
-            SV("#if 42i7\n#endif"),
-            SV("(test):1:5: error: Invalid digit in number\n")},
+            SVI("#if 42i7\n#endif"),
+            SVI("(test):1:5: error: Invalid digit in number\n")},
         {"decimal trailing apostrophe", __LINE__,
-            SV("#if 1'\n#endif"),
-            SV("(test):1:6: error: Unterminated character literal\n")},
+            SVI("#if 1'\n#endif"),
+            SVI("(test):1:6: error: Unterminated character literal\n")},
         {"apostrophe before arithmetic", __LINE__,
-            SV("#if 1' + 2\n#endif"),
-            SV("(test):1:6: error: Unterminated character literal\n")},
+            SVI("#if 1' + 2\n#endif"),
+            SVI("(test):1:6: error: Unterminated character literal\n")},
         {"hex trailing apostrophe", __LINE__,
-            SV("#if 0x1'\n#endif"),
-            SV("(test):1:8: error: Unterminated character literal\n")},
+            SVI("#if 0x1'\n#endif"),
+            SVI("(test):1:8: error: Unterminated character literal\n")},
         {"if eval bad msvc suffix bare i", __LINE__,
-            SV("#if 42i\n#endif"),
-            SV("(test):1:5: error: Invalid digit in number\n")},
+            SVI("#if 42i\n#endif"),
+            SVI("(test):1:5: error: Invalid digit in number\n")},
         {"char constant too long", __LINE__,
-            SV("#if 'ABCDE'\n#endif"),
-            SV("(test):1:5: error: Character constant too long\n")},
+            SVI("#if 'ABCDE'\n#endif"),
+            SVI("(test):1:5: error: Character constant too long\n")},
         // Overflow / UB checks
         {"if trailing number", __LINE__,
-            SV("#if 1 2\n#endif"),
-            SV("(test):1:7: error: Unexpected token after #if expression\n")},
+            SVI("#if 1 2\n#endif"),
+            SVI("(test):1:7: error: Unexpected token after #if expression\n")},
         {"if unmatched closing paren", __LINE__,
-            SV("#if 1)\n#endif"),
-            SV("(test):1:6: error: Unexpected token after #if expression\n")},
+            SVI("#if 1)\n#endif"),
+            SVI("(test):1:6: error: Unexpected token after #if expression\n")},
         {"short circuit still checks syntax", __LINE__,
-            SV("#if 1 || (2 + )\n#endif"),
-            SV("(test):1:15: error: Unexpected punctuator in #if expression\n")},
+            SVI("#if 1 || (2 + )\n#endif"),
+            SVI("(test):1:15: error: Unexpected punctuator in #if expression\n")},
         {"short circuit still evaluates selected operand", __LINE__,
-            SV("#if 0 || 1 / 0\n#endif"),
-            SV("(test):1:12: error: Division by zero in #if\n")},
+            SVI("#if 0 || 1 / 0\n#endif"),
+            SVI("(test):1:12: error: Division by zero in #if\n")},
         {"ternary still evaluates selected arm", __LINE__,
-            SV("#if 1 ? 1 / 0 : 1\n#endif"),
-            SV("(test):1:11: error: Division by zero in #if\n")},
+            SVI("#if 1 ? 1 / 0 : 1\n#endif"),
+            SVI("(test):1:11: error: Division by zero in #if\n")},
         {"add overflow", __LINE__,
-            SV("#if 9223372036854775807 + 1\n#endif"),
-            SV("(test):1:25: error: overflow in add in #if\n")},
+            SVI("#if 9223372036854775807 + 1\n#endif"),
+            SVI("(test):1:25: error: overflow in add in #if\n")},
         {"sub overflow", __LINE__,
-            SV("#if -9223372036854775807 - 2\n#endif"),
-            SV("(test):1:26: error: overflow in sub in #if\n")},
+            SVI("#if -9223372036854775807 - 2\n#endif"),
+            SVI("(test):1:26: error: overflow in sub in #if\n")},
         {"mul overflow", __LINE__,
-            SV("#if 9223372036854775807 * 2\n#endif"),
-            SV("(test):1:25: error: overflow in mul in #if\n")},
+            SVI("#if 9223372036854775807 * 2\n#endif"),
+            SVI("(test):1:25: error: overflow in mul in #if\n")},
         {"div overflow", __LINE__,
-            SV("#if (-9223372036854775807 - 1) / -1\n#endif"),
-            SV("(test):1:32: error: overflow in div in #if\n")},
+            SVI("#if (-9223372036854775807 - 1) / -1\n#endif"),
+            SVI("(test):1:32: error: overflow in div in #if\n")},
         {"div by zero", __LINE__,
-            SV("#if 1 / 0\n#endif"),
-            SV("(test):1:7: error: Division by zero in #if\n")},
+            SVI("#if 1 / 0\n#endif"),
+            SVI("(test):1:7: error: Division by zero in #if\n")},
         {"mod overflow", __LINE__,
-            SV("#if (-9223372036854775807 - 1) % -1\n#endif"),
-            SV("(test):1:32: error: overflow in mod in #if\n")},
+            SVI("#if (-9223372036854775807 - 1) % -1\n#endif"),
+            SVI("(test):1:32: error: overflow in mod in #if\n")},
         {"mod by zero", __LINE__,
-            SV("#if 1 % 0\n#endif"),
-            SV("(test):1:7: error: Modulo by zero in #if\n")},
+            SVI("#if 1 % 0\n#endif"),
+            SVI("(test):1:7: error: Modulo by zero in #if\n")},
         {"lshift negative amount", __LINE__,
-            SV("#if 1 << -1\n#endif"),
-            SV("(test):1:7: error: shift amount out of range in #if\n")},
+            SVI("#if 1 << -1\n#endif"),
+            SVI("(test):1:7: error: shift amount out of range in #if\n")},
         {"lshift too large", __LINE__,
-            SV("#if 1 << 64\n#endif"),
-            SV("(test):1:7: error: shift amount out of range in #if\n")},
+            SVI("#if 1 << 64\n#endif"),
+            SVI("(test):1:7: error: shift amount out of range in #if\n")},
         {"rshift negative amount", __LINE__,
-            SV("#if 1 >> -1\n#endif"),
-            SV("(test):1:7: error: shift amount out of range in #if\n")},
+            SVI("#if 1 >> -1\n#endif"),
+            SVI("(test):1:7: error: shift amount out of range in #if\n")},
         {"rshift too large", __LINE__,
-            SV("#if 1 >> 64\n#endif"),
-            SV("(test):1:7: error: shift amount out of range in #if\n")},
+            SVI("#if 1 >> 64\n#endif"),
+            SVI("(test):1:7: error: shift amount out of range in #if\n")},
         {"negate INT64_MIN", __LINE__,
-            SV("#if -(-9223372036854775807 - 1)\n#endif"),
-            SV("(test):1:5: error: overflow in negation in #if\n")},
+            SVI("#if -(-9223372036854775807 - 1)\n#endif"),
+            SVI("(test):1:5: error: overflow in negation in #if\n")},
         {"error directive", __LINE__,
-            SV("#error this is an error message"),
-            SV("(test):1:2: error: #error this is an error message\n")},
+            SVI("#error this is an error message"),
+            SVI("(test):1:2: error: #error this is an error message\n")},
         {"error directive empty", __LINE__,
-            SV("#error\n"),
-            SV("(test):1:2: error: #error \n")},
+            SVI("#error\n"),
+            SVI("(test):1:2: error: #error \n")},
         {"obj macro redef different", __LINE__,
-            SV("#define X 1\n#define X 2\n"),
-            SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
+            SVI("#define X 1\n#define X 2\n"),
+            SVI("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
                "(test):1:9: error: ... previously defined here\n")},
         {"named variadic parameter duplicates fixed parameter", __LINE__,
-            SV("#define F(x, x...) x\n"),
-            SV("(test):1:14: error: Duplicate macro param name\n")},
+            SVI("#define F(x, x...) x\n"),
+            SVI("(test):1:14: error: Duplicate macro param name\n")},
         {"duplicate fixed macro parameters", __LINE__,
-            SV("#define F(x, x) x\n"),
-            SV("(test):1:14: error: Duplicate macro param name\n")},
+            SVI("#define F(x, x) x\n"),
+            SVI("(test):1:14: error: Duplicate macro param name\n")},
         {"named variadic parameter duplicates later fixed parameter", __LINE__,
-            SV("#define F(a, b, b...) b\n"),
-            SV("(test):1:17: error: Duplicate macro param name\n")},
+            SVI("#define F(a, b, b...) b\n"),
+            SVI("(test):1:17: error: Duplicate macro param name\n")},
         {"type builtin replacement cannot redef again", __LINE__,
-            SV("#define __int64 1\n#define __int64 2\n"),
-            SV("(test):2:18: error: Duplicate object-like macro (__int64) with different definitions (0 different content)\n"
+            SVI("#define __int64 1\n#define __int64 2\n"),
+            SVI("(test):2:18: error: Duplicate object-like macro (__int64) with different definitions (0 different content)\n"
                "(test):1:9: error: ... previously defined here\n")},
         {
             "func macro redef different body", __LINE__,
-            SV("#define F(a) a\n#define F(a) a + 1\n"),
-            SV("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
+            SVI("#define F(a) a\n#define F(a) a + 1\n"),
+            SVI("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
                "(test):1:9: error: ... previously defined here\n")},
         {
             "func macro redef different params", __LINE__,
-            SV("#define F(a, b) a\n#define F(a) a\n"),
-            SV("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
+            SVI("#define F(a, b) a\n#define F(a) a\n"),
+            SVI("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
                "(test):1:9: error: ... previously defined here\n"),
         },
     };
@@ -2058,358 +2060,362 @@ TestFunction(test_erroneous_condition){
 
 TestFunction(test_if_eval){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; _Bool disabled; StringView inp, exp;
     } test_cases[] = {
         {"if 0", __LINE__, 0,
-            SV("#if 0\nyes\n#endif"), SV("\n\n")},
+            SVI("#if 0\nyes\n#endif"), SVI("\n\n")},
         {"if 1", __LINE__, 0,
-            SV("#if 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1\nyes\n#endif"), SVI("\nyes\n")},
         {"if 42", __LINE__, 0,
-            SV("#if 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42\nyes\n#endif"), SVI("\nyes\n")},
         {"comment_before_ifdef_name", __LINE__, 0,
-            SV("#define X\n#ifdef /* comment */ X\nyes\n#endif"), SV("\n\nyes\n")},
+            SVI("#define X\n#ifdef /* comment */ X\nyes\n#endif"), SVI("\n\nyes\n")},
         {"comment_before_ifndef_name", __LINE__, 0,
-            SV("#ifndef /* comment */ X\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#ifndef /* comment */ X\nyes\n#endif"), SVI("\nyes\n")},
         {"comment_before_undef_name", __LINE__, 0,
-            SV("#define X\n#undef /* comment */ X\n#ifndef X\nyes\n#endif"), SV("\n\n\nyes\n")},
+            SVI("#define X\n#undef /* comment */ X\n#ifndef X\nyes\n#endif"), SVI("\n\n\nyes\n")},
         {"comment_before_active_elifdef_name", __LINE__, 0,
-            SV("#if 1\nyes\n#elifdef /* comment */ X\nno\n#endif"), SV("\nyes\n\n\n")},
+            SVI("#if 1\nyes\n#elifdef /* comment */ X\nno\n#endif"), SVI("\nyes\n\n\n")},
         {"comment_before_inactive_elifdef_name", __LINE__, 0,
-            SV("#define X\n#if 0\nno\n#elifdef /* comment */ X\nyes\n#endif"), SV("\n\n\n\nyes\n")},
+            SVI("#define X\n#if 0\nno\n#elifdef /* comment */ X\nyes\n#endif"), SVI("\n\n\n\nyes\n")},
         {"comment_before_active_elifndef_name", __LINE__, 0,
-            SV("#if 1\nyes\n#elifndef /* comment */ X\nno\n#endif"), SV("\nyes\n\n\n")},
+            SVI("#if 1\nyes\n#elifndef /* comment */ X\nno\n#endif"), SVI("\nyes\n\n\n")},
         {"comment_before_inactive_elifndef_name", __LINE__, 0,
-            SV("#if 0\nno\n#elifndef /* comment */ X\nyes\n#endif"), SV("\n\n\nyes\n")},
+            SVI("#if 0\nno\n#elifndef /* comment */ X\nyes\n#endif"), SVI("\n\n\nyes\n")},
         {"zero_parameter_condition_call_with_space", __LINE__, 0,
-            SV("#define F() 1\n#if F( )\nyes\n#endif"), SV("\n\nyes\n")},
+            SVI("#define F() 1\n#if F( )\nyes\n#endif"), SVI("\n\nyes\n")},
         {"decimal digit separators", __LINE__, 0,
-            SV("#if 1'000 == 1000\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1'000 == 1000\nyes\n#endif"), SVI("\nyes\n")},
         {"hex digit separators and unsigned suffix", __LINE__, 0,
-            SV("#if 0xffff'ffff'ffff'ffffU == ~0U\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xffff'ffff'ffff'ffffU == ~0U\nyes\n#endif"), SVI("\nyes\n")},
         {"binary digit separators", __LINE__, 0,
-            SV("#if 0b1010'0101 == 165\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0b1010'0101 == 165\nyes\n#endif"), SVI("\nyes\n")},
         {"octal digit separators", __LINE__, 0,
-            SV("#if 0'777 == 511\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0'777 == 511\nyes\n#endif"), SVI("\nyes\n")},
+        {"prefixed octal", __LINE__, 0,
+            SVI("#if 0o755 == 493 && 0O7'55ULL == 493\nyes\n#endif"), SVI("\nyes\n")},
+        {"delimited escapes", __LINE__, 0,
+            SVI("#if '\\o{123}' == 83 && '\\x{41}' == 65 && U'\\u{1F600}' == 0x1F600\nyes\n#endif"), SVI("\nyes\n")},
         {"hex 0x10", __LINE__, 0,
-            SV("#if 0x10 == 16\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0x10 == 16\nyes\n#endif"), SVI("\nyes\n")},
         {"hex leading zeroes", __LINE__, 0,
-            SV("#if 0x000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0x000000000000000000000000000000001 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"octal leading zeroes", __LINE__, 0,
-            SV("#if 000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 000000000000000000000000000000001 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"binary leading zeroes", __LINE__, 0,
-            SV("#if 0b000000000000000000000000000000000"
-               "0000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0b000000000000000000000000000000000"
+               "0000000000000000000000000000000001 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"hex 0xFF", __LINE__, 0,
-            SV("#if 0xFF == 255\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xFF == 255\nyes\n#endif"), SVI("\nyes\n")},
         {"hex 0XA", __LINE__, 0,
-            SV("#if 0XA == 10\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0XA == 10\nyes\n#endif"), SVI("\nyes\n")},
         {"octal 077", __LINE__, 0,
-            SV("#if 077 == 63\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 077 == 63\nyes\n#endif"), SVI("\nyes\n")},
         {"octal 010", __LINE__, 0,
-            SV("#if 010 == 8\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 010 == 8\nyes\n#endif"), SVI("\nyes\n")},
         {"binary 0b101", __LINE__, 0,
-            SV("#if 0b101 == 5\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0b101 == 5\nyes\n#endif"), SVI("\nyes\n")},
         {"binary 0B1111", __LINE__, 0,
-            SV("#if 0B1111 == 15\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0B1111 == 15\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix U", __LINE__, 0,
-            SV("#if 42U == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42U == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix L", __LINE__, 0,
-            SV("#if 42L == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42L == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix LL", __LINE__, 0,
-            SV("#if 42LL == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42LL == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix ULL", __LINE__, 0,
-            SV("#if 42ULL == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42ULL == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix uLL", __LINE__, 0,
-            SV("#if 42uLL == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42uLL == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix LLU", __LINE__, 0,
-            SV("#if 100LLU == 100\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 100LLU == 100\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix i128", __LINE__, 0,
-            SV("#if 42i128 == 42ui128 && 1lll == 1ULLL && 2LLLU == 2I128\nYES\n#endif"), SV("\nYES\n")},
+            SVI("#if 42i128 == 42ui128 && 1lll == 1ULLL && 2LLLU == 2I128\nYES\n#endif"), SVI("\nYES\n")},
         {"suffix i8", __LINE__, 0,
-            SV("#if 42i8 == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42i8 == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix i16", __LINE__, 0,
-            SV("#if 1000i16 == 1000\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1000i16 == 1000\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix i32", __LINE__, 0,
-            SV("#if 100000i32 == 100000\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 100000i32 == 100000\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix i64", __LINE__, 0,
-            SV("#if 9223372036854775807i64 == 9223372036854775807\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 9223372036854775807i64 == 9223372036854775807\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix ui8", __LINE__, 0,
-            SV("#if 255ui8 == 255\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 255ui8 == 255\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix ui16", __LINE__, 0,
-            SV("#if 65535ui16 == 65535\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 65535ui16 == 65535\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix ui32", __LINE__, 0,
-            SV("#if 0xFFFFFFFFui32 == 0xFFFFFFFF\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xFFFFFFFFui32 == 0xFFFFFFFF\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix ui64", __LINE__, 0,
-            SV("#if 0xFFFFFFFFFFFFFFFFui64 == 0xFFFFFFFFFFFFFFFF\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xFFFFFFFFFFFFFFFFui64 == 0xFFFFFFFFFFFFFFFF\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix hex i32", __LINE__, 0,
-            SV("#if 0xDeAdBeEfi32 == 0xDeAdBeEf\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xDeAdBeEfi32 == 0xDeAdBeEf\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix octal i32", __LINE__, 0,
-            SV("#if 077i32 == 63\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 077i32 == 63\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix I64 uppercase", __LINE__, 0,
-            SV("#if 42I64 == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42I64 == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"suffix Ui32 mixed case", __LINE__, 0,
-            SV("#if 42Ui32 == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42Ui32 == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"char 'A'", __LINE__, 0,
-            SV("#if 'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 'A' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char '0'", __LINE__, 0,
-            SV("#if '0' == 48\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '0' == 48\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\n'", __LINE__, 0,
-            SV("#if '\\n' == 10\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\n' == 10\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\t'", __LINE__, 0,
-            SV("#if '\\t' == 9\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\t' == 9\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\0'", __LINE__, 0,
-            SV("#if '\\0' == 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\0' == 0\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\x41'", __LINE__, 0,
-            SV("#if '\\x41' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\x41' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\\\' backslash", __LINE__, 0,
-            SV("#if '\\\\' == 92\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\\\' == 92\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\'' escaped quote", __LINE__, 0,
-            SV("#if '\\'' == 39\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\'' == 39\nyes\n#endif"), SVI("\nyes\n")},
         {"char L'A'", __LINE__, 0,
-            SV("#if L'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if L'A' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char u'A'", __LINE__, 0,
-            SV("#if u'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if u'A' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char U'A'", __LINE__, 0,
-            SV("#if U'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if U'A' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char u8'A'", __LINE__, 0,
-            SV("#if u8'A' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if u8'A' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\u0041'", __LINE__, 0,
-            SV("#if '\\u0041' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\u0041' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"char '\\U00000041'", __LINE__, 0,
-            SV("#if '\\U00000041' == 65\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if '\\U00000041' == 65\nyes\n#endif"), SVI("\nyes\n")},
         {"unary !", __LINE__, 0,
-            SV("#if !0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if !0\nyes\n#endif"), SVI("\nyes\n")},
         {"unary ! truthy", __LINE__, 0,
-            SV("#if !1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if !1\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"unary ! nonzero", __LINE__, 0,
-            SV("#if !42\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if !42\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"unary ~", __LINE__, 0,
-            SV("#if (~0 & 0xFF) == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (~0 & 0xFF) == 0xFF\nyes\n#endif"), SVI("\nyes\n")},
         {"unary +", __LINE__, 0,
-            SV("#if +1 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if +1 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"unary -", __LINE__, 0,
-            SV("#if -1 < 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if -1 < 0\nyes\n#endif"), SVI("\nyes\n")},
         {"unary - value", __LINE__, 0,
-            SV("#if -5 + 5 == 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if -5 + 5 == 0\nyes\n#endif"), SVI("\nyes\n")},
         {"add", __LINE__, 0,
-            SV("#if 1 + 2 == 3\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 + 2 == 3\nyes\n#endif"), SVI("\nyes\n")},
         {"sub", __LINE__, 0,
-            SV("#if 10 - 3 == 7\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 10 - 3 == 7\nyes\n#endif"), SVI("\nyes\n")},
         {"mul", __LINE__, 0,
-            SV("#if 6 * 7 == 42\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 6 * 7 == 42\nyes\n#endif"), SVI("\nyes\n")},
         {"div", __LINE__, 0,
-            SV("#if 42 / 6 == 7\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 42 / 6 == 7\nyes\n#endif"), SVI("\nyes\n")},
         {"mod", __LINE__, 0,
-            SV("#if 17 % 5 == 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 17 % 5 == 2\nyes\n#endif"), SVI("\nyes\n")},
         {"left shift", __LINE__, 0,
-            SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 << 4 == 16\nyes\n#endif"), SVI("\nyes\n")},
         {"right shift", __LINE__, 0,
-            SV("#if 256 >> 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 256 >> 4 == 16\nyes\n#endif"), SVI("\nyes\n")},
         {"less than true", __LINE__, 0,
-            SV("#if 1 < 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 < 2\nyes\n#endif"), SVI("\nyes\n")},
         {"less than false", __LINE__, 0,
-            SV("#if 2 < 1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 2 < 1\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"greater than", __LINE__, 0,
-            SV("#if 3 > 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 3 > 2\nyes\n#endif"), SVI("\nyes\n")},
         {"less equal", __LINE__, 0,
-            SV("#if 2 <= 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 2 <= 2\nyes\n#endif"), SVI("\nyes\n")},
         {"greater equal", __LINE__, 0,
-            SV("#if 3 >= 3\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 3 >= 3\nyes\n#endif"), SVI("\nyes\n")},
         {"equal true", __LINE__, 0,
-            SV("#if 5 == 5\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 5 == 5\nyes\n#endif"), SVI("\nyes\n")},
         {"equal false", __LINE__, 0,
-            SV("#if 5 == 6\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 5 == 6\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"not equal true", __LINE__, 0,
-            SV("#if 5 != 6\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 5 != 6\nyes\n#endif"), SVI("\nyes\n")},
         {"not equal false", __LINE__, 0,
-            SV("#if 5 != 5\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 5 != 5\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"bitwise and", __LINE__, 0,
-            SV("#if (0xF0 & 0x0F) == 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0xF0 & 0x0F) == 0\nyes\n#endif"), SVI("\nyes\n")},
         {"bitwise and 2", __LINE__, 0,
-            SV("#if (0xFF & 0x0F) == 0x0F\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0xFF & 0x0F) == 0x0F\nyes\n#endif"), SVI("\nyes\n")},
         {"bitwise or", __LINE__, 0,
-            SV("#if (0xF0 | 0x0F) == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0xF0 | 0x0F) == 0xFF\nyes\n#endif"), SVI("\nyes\n")},
         {"bitwise xor", __LINE__, 0,
-            SV("#if (0xFF ^ 0x0F) == 0xF0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0xFF ^ 0x0F) == 0xF0\nyes\n#endif"), SVI("\nyes\n")},
         {"logical and tt", __LINE__, 0,
-            SV("#if 1 && 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 && 1\nyes\n#endif"), SVI("\nyes\n")},
         {"logical and tf", __LINE__, 0,
-            SV("#if 1 && 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 1 && 0\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"logical and ft", __LINE__, 0,
-            SV("#if 0 && 1\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 0 && 1\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"logical or ff", __LINE__, 0,
-            SV("#if 0 || 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 0 || 0\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"logical or tf", __LINE__, 0,
-            SV("#if 1 || 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 || 0\nyes\n#endif"), SVI("\nyes\n")},
         {"logical or ft", __LINE__, 0,
-            SV("#if 0 || 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0 || 1\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary true", __LINE__, 0,
-            SV("#if (1 ? 2 : 3) == 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 ? 2 : 3) == 2\nyes\n#endif"), SVI("\nyes\n")},
         {"short circuit and", __LINE__, 0,
-            SV("#if 0 && 1 / 0\nno\n#else\nyes\n#endif"), SV("\n\n\nyes\n")},
+            SVI("#if 0 && 1 / 0\nno\n#else\nyes\n#endif"), SVI("\n\n\nyes\n")},
         {"short circuit or", __LINE__, 0,
-            SV("#if 1 || 1 % 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 || 1 % 0\nyes\n#endif"), SVI("\nyes\n")},
         {"standalone cpp leaves compiler queries undefined", __LINE__, 0,
-            SV("#if defined(__has_builtin) || defined(__has_feature) || defined(__has_extension)\n#error compiler query defined\n#endif\n"
+            SVI("#if defined(__has_builtin) || defined(__has_feature) || defined(__has_extension)\n#error compiler query defined\n#endif\n"
                "__has_feature(c_atomic) __has_extension(c_atomic)"),
-            SV("\n\n\n__has_feature(c_atomic) __has_extension(c_atomic)")},
+            SVI("\n\n\n__has_feature(c_atomic) __has_extension(c_atomic)")},
         {"short circuit ternary true", __LINE__, 0,
-            SV("#if 1 ? 1 : 1 / 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 ? 1 : 1 / 0\nyes\n#endif"), SVI("\nyes\n")},
         {"short circuit ternary false", __LINE__, 0,
-            SV("#if 0 ? 1 / 0 : 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0 ? 1 / 0 : 1\nyes\n#endif"), SVI("\nyes\n")},
         {"short circuit nested operations", __LINE__, 0,
-            SV("#if 1 || ((1 << -1) + (1 >> 64) + (9223372036854775807 + 1) + (-9223372036854775807 - 2) + (9223372036854775807 * 2) + -(-9223372036854775807 - 1))\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 || ((1 << -1) + (1 >> 64) + (9223372036854775807 + 1) + (-9223372036854775807 - 2) + (9223372036854775807 * 2) + -(-9223372036854775807 - 1))\nyes\n#endif"), SVI("\nyes\n")},
         {"short circuit nested ternary", __LINE__, 0,
-            SV("#if 0 ? (1 ? 1 / 0 : 2 % 0) : 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0 ? (1 ? 1 / 0 : 2 % 0) : 1\nyes\n#endif"), SVI("\nyes\n")},
         {"short circuit resumes evaluation", __LINE__, 0,
-            SV("#if (0 && 1 / 0) || 2 == 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0 && 1 / 0) || 2 == 2\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary false", __LINE__, 0,
-            SV("#if (0 ? 2 : 3) == 3\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0 ? 2 : 3) == 3\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary nested", __LINE__, 0,
-            SV("#if (1 ? 1 ? 10 : 20 : 30) == 10\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 ? 1 ? 10 : 20 : 30) == 10\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary nested false", __LINE__, 0,
-            SV("#if (0 ? 10 : 1 ? 20 : 30) == 20\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0 ? 10 : 1 ? 20 : 30) == 20\nyes\n#endif"), SVI("\nyes\n")},
         {"parens override prec", __LINE__, 0,
-            SV("#if (1 + 2) * 3 == 9\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 + 2) * 3 == 9\nyes\n#endif"), SVI("\nyes\n")},
         {"nested parens", __LINE__, 0,
-            SV("#if ((2 + 3) * (4 - 1)) == 15\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if ((2 + 3) * (4 - 1)) == 15\nyes\n#endif"), SVI("\nyes\n")},
         {"defined && defined", __LINE__, 0,
-            SV("#define FOO\n#define BAR\n#if defined(FOO) && defined(BAR)\nyes\n#endif"),
-            SV("\n\n\nyes\n")},
+            SVI("#define FOO\n#define BAR\n#if defined(FOO) && defined(BAR)\nyes\n#endif"),
+            SVI("\n\n\nyes\n")},
         {"defined && !defined", __LINE__, 0,
-            SV("#define FOO\n#if defined(FOO) && !defined(BAR)\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define FOO\n#if defined(FOO) && !defined(BAR)\nyes\n#endif"),
+            SVI("\n\nyes\n")},
         {"defined || defined", __LINE__, 0,
-            SV("#define FOO\n#if defined(FOO) || defined(BAR)\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define FOO\n#if defined(FOO) || defined(BAR)\nyes\n#endif"),
+            SVI("\n\nyes\n")},
         {"macro value in if", __LINE__, 0,
-            SV("#define X 42\n#if X == 42\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define X 42\n#if X == 42\nyes\n#endif"),
+            SVI("\n\nyes\n")},
         {"macro expr in if", __LINE__, 0,
-            SV("#define A 10\n#define B 20\n#if A + B == 30\nyes\n#endif"),
-            SV("\n\n\nyes\n")},
+            SVI("#define A 10\n#define B 20\n#if A + B == 30\nyes\n#endif"),
+            SVI("\n\n\nyes\n")},
         {"elif expression", __LINE__, 0,
-            SV("#if 0\nno\n#elif 2 + 2 == 4\nyes\n#endif"),
-            SV("\n\n\nyes\n")},
+            SVI("#if 0\nno\n#elif 2 + 2 == 4\nyes\n#endif"),
+            SVI("\n\n\nyes\n")},
         {"elif chain", __LINE__, 0,
-            SV("#if 0\na\n#elif 0\nb\n#elif 1\nc\n#elif 1\nd\n#endif"),
-            SV("\n\n\n\n\nc\n\n\n")},
+            SVI("#if 0\na\n#elif 0\nb\n#elif 1\nc\n#elif 1\nd\n#endif"),
+            SVI("\n\n\n\n\nc\n\n\n")},
         {"undefined macro is 0", __LINE__, 0,
-            SV("#if UNDEFINED\nyes\n#else\nno\n#endif"),
-            SV("\n\n\nno\n")},
+            SVI("#if UNDEFINED\nyes\n#else\nno\n#endif"),
+            SVI("\n\n\nno\n")},
         {"undefined macro == 0", __LINE__, 0,
-            SV("#if UNDEFINED == 0\nyes\n#endif"),
-            SV("\nyes\n")},
+            SVI("#if UNDEFINED == 0\nyes\n#endif"),
+            SVI("\nyes\n")},
         {"self reference through argument in condition", __LINE__, 0,
-            SV("#define A (1 + A)\n#define ID(x) x\n#if ID(A) == 1\nyes\n#endif"),
-            SV("\n\n\nyes\n")},
+            SVI("#define A (1 + A)\n#define ID(x) x\n#if ID(A) == 1\nyes\n#endif"),
+            SVI("\n\n\nyes\n")},
         {"indirect self reference through argument in condition", __LINE__, 0,
-            SV("#define A B\n#define B (1 + A)\n#define ID(x) x\n#if ID(A) == 1\nyes\n#endif"),
-            SV("\n\n\n\nyes\n")},
+            SVI("#define A B\n#define B (1 + A)\n#define ID(x) x\n#if ID(A) == 1\nyes\n#endif"),
+            SVI("\n\n\n\nyes\n")},
         {"true keyword", __LINE__, 0,
-            SV("#if true\nyes\n#endif"),
-            SV("\nyes\n")},
+            SVI("#if true\nyes\n#endif"),
+            SVI("\nyes\n")},
         {"true macro in condition", __LINE__, 0,
-            SV("#define true 0\n#if !true\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define true 0\n#if !true\nyes\n#endif"),
+            SVI("\n\nyes\n")},
         {"true function macro in condition", __LINE__, 0,
-            SV("#define true(x) x\n#if true(1)\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define true(x) x\n#if true(1)\nyes\n#endif"),
+            SVI("\n\nyes\n")},
 
         {"prec: + vs *", __LINE__, 0,
-            SV("#if 1 + 2 * 3 == 7\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 + 2 * 3 == 7\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: * vs + reversed", __LINE__, 0,
-            SV("#if 2 * 3 + 1 == 7\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 2 * 3 + 1 == 7\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: - vs *", __LINE__, 0,
-            SV("#if 10 - 2 * 3 == 4\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 10 - 2 * 3 == 4\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: - vs /", __LINE__, 0,
-            SV("#if 10 - 6 / 2 == 7\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 10 - 6 / 2 == 7\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: % vs +", __LINE__, 0,
-            SV("#if 10 + 7 % 3 == 11\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 10 + 7 % 3 == 11\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: << vs +", __LINE__, 0,
-            SV("#if 1 << 2 + 1 == 8\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 << 2 + 1 == 8\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: << vs ==", __LINE__, 0,
-            SV("#if 1 << 4 == 16\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 << 4 == 16\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: >> vs +", __LINE__, 0,
-            SV("#if 32 >> 2 + 1 == 4\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 32 >> 2 + 1 == 4\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: < vs ==", __LINE__, 0,
-            SV("#if (1 < 2) == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 < 2) == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: == vs &", __LINE__, 0,
-            SV("#if 3 & 1 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 3 & 1 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: == vs & explicit", __LINE__, 0,
-            SV("#if (3 & 1) == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (3 & 1) == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: & vs ^", __LINE__, 0,
-            SV("#if (0xF & 0x3 ^ 0x1) == 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0xF & 0x3 ^ 0x1) == 2\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: ^ vs |", __LINE__, 0,
-            SV("#if (1 | 2 ^ 3) == 1 | (2 ^ 3)\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 | 2 ^ 3) == 1 | (2 ^ 3)\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: | vs &&", __LINE__, 0,
-            SV("#if 1 | 0 && 0 | 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 | 0 && 0 | 1\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: && vs ||", __LINE__, 0,
-            SV("#if 1 || 0 && 0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 || 0 && 0\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: || && classic", __LINE__, 0,
-            SV("#if 0 || 1 && 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0 || 1 && 1\nyes\n#endif"), SVI("\nyes\n")},
         {"prec: && || false path", __LINE__, 0,
-            SV("#if 0 && 0 || 0\nyes\n#else\nno\n#endif"), SV("\n\n\nno\n")},
+            SVI("#if 0 && 0 || 0\nyes\n#else\nno\n#endif"), SVI("\n\n\nno\n")},
         {"prec: || vs ?:", __LINE__, 0,
-            SV("#if (1 || 0 ? 10 : 20) == 10\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 || 0 ? 10 : 20) == 10\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary right-assoc", __LINE__, 0,
-            SV("#if (1 ? 2 : 3 ? 4 : 5) == 2\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 ? 2 : 3 ? 4 : 5) == 2\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary right-assoc 2", __LINE__, 0,
-            SV("#if (0 ? 2 : 1 ? 4 : 5) == 4\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0 ? 2 : 1 ? 4 : 5) == 4\nyes\n#endif"), SVI("\nyes\n")},
         {"ternary right-assoc 3", __LINE__, 0,
-            SV("#if (0 ? 2 : 0 ? 4 : 5) == 5\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (0 ? 2 : 0 ? 4 : 5) == 5\nyes\n#endif"), SVI("\nyes\n")},
         {"left-assoc sub", __LINE__, 0,
-            SV("#if 10 - 3 - 2 == 5\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 10 - 3 - 2 == 5\nyes\n#endif"), SVI("\nyes\n")},
         {"left-assoc div", __LINE__, 0,
-            SV("#if 100 / 10 / 2 == 5\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 100 / 10 / 2 == 5\nyes\n#endif"), SVI("\nyes\n")},
         {"left-assoc mod", __LINE__, 0,
-            SV("#if 17 % 10 % 4 == 3\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 17 % 10 % 4 == 3\nyes\n#endif"), SVI("\nyes\n")},
         {"left-assoc shift", __LINE__, 0,
-            SV("#if 1 << 2 << 3 == 32\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 << 2 << 3 == 32\nyes\n#endif"), SVI("\nyes\n")},
         {"complex expr 1", __LINE__, 0,
-            SV("#if 2 + 3 * 4 - 6 / 2 == 11\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 2 + 3 * 4 - 6 / 2 == 11\nyes\n#endif"), SVI("\nyes\n")},
         {"complex expr 2", __LINE__, 0,
-            SV("#if (1 << 8) - 1 == 255\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (1 << 8) - 1 == 255\nyes\n#endif"), SVI("\nyes\n")},
         {"complex expr 3", __LINE__, 0,
-            SV("#if 0xFF & 0x0F | 0xF0 == 0xFF\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 0xFF & 0x0F | 0xF0 == 0xFF\nyes\n#endif"), SVI("\nyes\n")},
         {"complex expr 4", __LINE__, 0,
-            SV("#if 1 + 2 > 2 && 3 * 4 == 12\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 + 2 > 2 && 3 * 4 == 12\nyes\n#endif"), SVI("\nyes\n")},
         {"unary in expr", __LINE__, 0,
-            SV("#if -1 + 2 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if -1 + 2 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"double negation", __LINE__, 0,
-            SV("#if !!42 == 1\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if !!42 == 1\nyes\n#endif"), SVI("\nyes\n")},
         {"not in logical", __LINE__, 0,
-            SV("#if !0 && !0\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if !0 && !0\nyes\n#endif"), SVI("\nyes\n")},
         {"complement and mask", __LINE__, 0,
-            SV("#if (~0xF0 & 0xFF) == 0x0F\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if (~0xF0 & 0xFF) == 0x0F\nyes\n#endif"), SVI("\nyes\n")},
         {"cmp chain", __LINE__, 0,
-            SV("#if 1 < 2 && 2 > 1 && 3 <= 3 && 3 >= 3 && 4 == 4 && 4 != 5\nyes\n#endif"),
-            SV("\nyes\n")},
+            SVI("#if 1 < 2 && 2 > 1 && 3 <= 3 && 3 >= 3 && 4 == 4 && 4 != 5\nyes\n#endif"),
+            SVI("\nyes\n")},
         {"ternary chain", __LINE__, 0,
-            SV("#if (0 ? 1 : 0 ? 2 : 0 ? 3 : 4) == 4\nyes\n#endif"),
-            SV("\nyes\n")},
+            SVI("#if (0 ? 1 : 0 ? 2 : 0 ? 3 : 4) == 4\nyes\n#endif"),
+            SVI("\nyes\n")},
         {"shift vs compare", __LINE__, 0,
-            SV("#if 1 << 4 > 10\nyes\n#endif"), SV("\nyes\n")},
+            SVI("#if 1 << 4 > 10\nyes\n#endif"), SVI("\nyes\n")},
         {"complex defined", __LINE__, 0,
-            SV("#define A\n#define B\n#define C\n"
+            SVI("#define A\n#define B\n#define C\n"
                "#if defined(A) && (defined(B) || defined(D)) && !defined(E)\nyes\n#endif"),
-            SV("\n\n\n\nyes\n")},
+            SVI("\n\n\n\nyes\n")},
         {"bitwise chain", __LINE__, 0,
-            SV("#if ((0x0F & 0xFF) ^ 0x05 | 0x10) == 0x1A\nyes\n#endif"),
-            SV("\nyes\n")},
+            SVI("#if ((0x0F & 0xFF) ^ 0x05 | 0x10) == 0x1A\nyes\n#endif"),
+            SVI("\nyes\n")},
         {"defined no parens", __LINE__, 0,
-            SV("#define X\n#if defined X\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define X\n#if defined X\nyes\n#endif"),
+            SVI("\n\nyes\n")},
         {"defined no parens undef", __LINE__, 0,
-            SV("#if defined NOPE\nyes\n#else\nno\n#endif"),
-            SV("\n\n\nno\n")},
+            SVI("#if defined NOPE\nyes\n#else\nno\n#endif"),
+            SVI("\n\n\nno\n")},
         {"has_c_attribute unknown", __LINE__, 0,
-            SV("#if __has_c_attribute(nonexistent_fake_attr)\nyes\n#else\nno\n#endif"),
-            SV("\n\n\nno\n")},
+            SVI("#if __has_c_attribute(nonexistent_fake_attr)\nyes\n#else\nno\n#endif"),
+            SVI("\n\n\nno\n")},
         {"defined in ternary", __LINE__, 0,
-            SV("#define X\n#if defined(X) ? 1 : 0\nyes\n#endif"),
-            SV("\n\nyes\n")},
+            SVI("#define X\n#if defined(X) ? 1 : 0\nyes\n#endif"),
+            SVI("\n\nyes\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -2431,7 +2437,7 @@ TestFunction(test_if_eval){
 
 TestFunction(test_include){
     TESTBEGIN();
-    struct {
+    static const struct {
         const char* name; int line; int disabled;
         StringView path0; StringView content0;
         StringView path1; StringView content1;
@@ -2439,107 +2445,107 @@ TestFunction(test_include){
         StringView expected;
     } test_cases[] = {
         {"basic quoted include", __LINE__, 0,
-            SV("test/main.c"),   SV("#include \"header.h\"\nMAIN_BODY"),
-            SV("test/header.h"), SV("#define MAIN_BODY hello\n"),
-            {0}, SV("\n\nhello")},
+            SVI("test/main.c"),   SVI("#include \"header.h\"\nMAIN_BODY"),
+            SVI("test/header.h"), SVI("#define MAIN_BODY hello\n"),
+            {0}, SVI("\n\nhello")},
         {"multiline pragma include path", __LINE__, 0,
-            SV("main.c"), SV("__pragma(\ninclude_path\n\"-I\"\n\"inc\"\n)\n#include <header.h>\n"),
-            SV("inc/header.h"), SV("ok"),
-            {0}, SV("\n\nok")},
+            SVI("main.c"), SVI("__pragma(\ninclude_path\n\"-I\"\n\"inc\"\n)\n#include <header.h>\n"),
+            SVI("inc/header.h"), SVI("ok"),
+            {0}, SVI("\n\nok")},
         {"angle bracket with -I path", __LINE__, 0,
-            SV("src/main.c"), SV("#include <sys.h>\nVALUE"),
-            SV("inc/sys.h"),  SV("#define VALUE 42\n"),
-            SV("inc"), SV("\n\n42")},
+            SVI("src/main.c"), SVI("#include <sys.h>\nVALUE"),
+            SVI("inc/sys.h"),  SVI("#define VALUE 42\n"),
+            SVI("inc"), SVI("\n\n42")},
         {"pragma once prevents double inclusion", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#pragma once\n#define VAL ok\n"),
-            {0}, SV("\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#pragma once\n#define VAL ok\n"),
+            {0}, SVI("\n\n\n\nok")},
         {"macro-expanded include", __LINE__, 0,
-            SV("test/main.c"),   SV("#define HDR \"header.h\"\n#include HDR\nRESULT"),
-            SV("test/header.h"), SV("#define RESULT yes\n"),
-            {0}, SV("\n\n\nyes")},
+            SVI("test/main.c"),   SVI("#define HDR \"header.h\"\n#include HDR\nRESULT"),
+            SVI("test/header.h"), SVI("#define RESULT yes\n"),
+            {0}, SVI("\n\n\nyes")},
         {"absolute include", __LINE__, 0,
-            SV("src/main.c"), SV("#include \"/virtual/absolute.h\"\n"),
-            SV("/virtual/absolute.h"), SV("OK"), {0}, SV("\nOK")},
+            SVI("src/main.c"), SVI("#include \"/virtual/absolute.h\"\n"),
+            SVI("/virtual/absolute.h"), SVI("OK"), {0}, SVI("\nOK")},
         {"absolute has include", __LINE__, 0,
-            SV("src/main.c"), SV("#if __has_include(\"/virtual/absolute.h\")\nOK\n#endif\n"),
-            SV("/virtual/absolute.h"), SV(""), {0}, SV("\nOK\n\n")},
+            SVI("src/main.c"), SVI("#if __has_include(\"/virtual/absolute.h\")\nOK\n#endif\n"),
+            SVI("/virtual/absolute.h"), SVI(""), {0}, SVI("\nOK\n\n")},
         {"macro expanded fallback candidates", __LINE__, 0,
-            SV("src/main.c"), SV("#define HEADERS \"missing.h\" \"good.h\"\n#include_oneof HEADERS\n"),
-            SV("src/good.h"), SV("OK"), {0}, SV("\n\nOK")},
+            SVI("src/main.c"), SVI("#define HEADERS \"missing.h\" \"good.h\"\n#include_oneof HEADERS\n"),
+            SVI("src/good.h"), SVI("OK"), {0}, SVI("\n\nOK")},
         {"macro candidate after literal fallback", __LINE__, 0,
-            SV("src/main.c"), SV("#define HEADER \"good.h\"\n#include_oneof \"missing.h\" HEADER\n"),
-            SV("src/good.h"), SV("OK"), {0}, SV("\n\nOK")},
+            SVI("src/main.c"), SVI("#define HEADER \"good.h\"\n#include_oneof \"missing.h\" HEADER\n"),
+            SVI("src/good.h"), SVI("OK"), {0}, SVI("\n\nOK")},
         {"angle macro candidate after angle fallback", __LINE__, 0,
-            SV("src/main.c"), SV("#define HEADER <good.h>\n#include <missing.h> HEADER\n"),
-            SV("inc/good.h"), SV("OK"), SV("inc"), SV("\n\nOK")},
+            SVI("src/main.c"), SVI("#define HEADER <good.h>\n#include <missing.h> HEADER\n"),
+            SVI("inc/good.h"), SVI("OK"), SVI("inc"), SVI("\n\nOK")},
         {"include path pragma dot in current directory", __LINE__, 0,
-            SV("main.c"), SV("#pragma include_path \"-I\" \".\"\n#include <good.h>\n"),
-            SV("good.h"), SV("OK"), {0}, SV("\n\nOK")},
+            SVI("main.c"), SVI("#pragma include_path \"-I\" \".\"\n#include <good.h>\n"),
+            SVI("good.h"), SVI("OK"), {0}, SVI("\n\nOK")},
         {"_Pragma once prevents double inclusion", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("_Pragma(\"once\")\n#define VAL ok\n"),
-            {0}, SV("\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("_Pragma(\"once\")\n#define VAL ok\n"),
+            {0}, SVI("\n\n\n\nok")},
         {"__pragma once prevents double inclusion", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("__pragma(once)\n#define VAL ok\n"),
-            {0}, SV("\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("__pragma(once)\n#define VAL ok\n"),
+            {0}, SVI("\n\n\n\nok")},
         {"include guard prevents double inclusion", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
-            {0}, SV("\n\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
+            {0}, SVI("\n\n\n\n\nok")},
         {"include guard with trailing comment", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif // HDR_H\n"),
-            {0}, SV("\n\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif // HDR_H\n"),
+            {0}, SVI("\n\n\n\n\nok")},
         {"include guard with #else invalidates guard", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#else\n#endif\n"),
-            {0}, SV("\n\n\n\n\n\n\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#else\n#endif\n"),
+            {0}, SVI("\n\n\n\n\n\n\n\n\n\nok")},
         {"content after #endif invalidates guard", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\nint x;\n"),
-            {0}, SV("\n\n\n\nint x;\n\n\n\n\nint x;\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\nint x;\n"),
+            {0}, SVI("\n\n\n\nint x;\n\n\n\n\nint x;\nok")},
         {"undef guard allows re-include", __LINE__, 0,
-            SV("test/main.c"), SV("#include \"hdr.h\"\n#undef HDR_H\n#undef VAL\n#include \"hdr.h\"\nVAL"),
-            SV("test/hdr.h"),  SV("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
-            {0}, SV("\n\n\n\n\n\n\n\n\n\nok")},
+            SVI("test/main.c"), SVI("#include \"hdr.h\"\n#undef HDR_H\n#undef VAL\n#include \"hdr.h\"\nVAL"),
+            SVI("test/hdr.h"),  SVI("#ifndef HDR_H\n#define HDR_H\n#define VAL ok\n#endif\n"),
+            {0}, SVI("\n\n\n\n\n\n\n\n\n\nok")},
         {"include_oneof finds second candidate", __LINE__, 0,
-            SV("test/main.c"),   SV("#include_oneof <nonexistent.h> \"header.h\"\nRESULT"),
-            SV("test/header.h"), SV("#define RESULT found\n"),
-            {0}, SV("\n\nfound")},
+            SVI("test/main.c"),   SVI("#include_oneof <nonexistent.h> \"header.h\"\nRESULT"),
+            SVI("test/header.h"), SVI("#define RESULT found\n"),
+            {0}, SVI("\n\nfound")},
         {"include with fallback candidates", __LINE__, 0,
-            SV("test/main.c"),   SV("#include <no1.h> <no2.h> \"header.h\"\nRESULT"),
-            SV("test/header.h"), SV("#define RESULT fallback\n"),
-            {0}, SV("\n\nfallback")},
+            SVI("test/main.c"),   SVI("#include <no1.h> <no2.h> \"header.h\"\nRESULT"),
+            SVI("test/header.h"), SVI("#define RESULT fallback\n"),
+            {0}, SVI("\n\nfallback")},
         {"include_oneof first candidate found", __LINE__, 0,
-            SV("test/main.c"),   SV("#include_oneof \"header.h\" <nonexistent.h>\nRESULT"),
-            SV("test/header.h"), SV("#define RESULT first\n"),
-            {0}, SV("\n\nfirst")},
+            SVI("test/main.c"),   SVI("#include_oneof \"header.h\" <nonexistent.h>\nRESULT"),
+            SVI("test/header.h"), SVI("#define RESULT first\n"),
+            {0}, SVI("\n\nfirst")},
         {"has_include quoted same dir", __LINE__, 0,
-            SV("test/main.c"),   SV("#if __has_include(\"header.h\")\n"
+            SVI("test/main.c"),   SVI("#if __has_include(\"header.h\")\n"
                                      "found\n"
                                      "#else\n"
                                      "not_found\n"
                                      "#endif"),
-            SV("test/header.h"), SV(""),
-            {0}, SV("\nfound\n\n\n")},
+            SVI("test/header.h"), SVI(""),
+            {0}, SVI("\nfound\n\n\n")},
         {"has_include not found", __LINE__, 0,
-            SV("test/main.c"),   SV("#if __has_include(\"nonexistent.h\")\n"
+            SVI("test/main.c"),   SVI("#if __has_include(\"nonexistent.h\")\n"
                                      "found\n"
                                      "#else\n"
                                      "not_found\n"
                                      "#endif"),
-            SV("test/other.h"),  SV(""),
-            {0}, SV("\n\n\nnot_found\n")},
+            SVI("test/other.h"),  SVI(""),
+            {0}, SVI("\n\n\nnot_found\n")},
         {"pragma once prevents double include", __LINE__, 0,
-            SV("test/main.c"),   SV("#include \"header.h\"\n#include \"header.h\"\nDONE"),
-            SV("test/header.h"), SV("#pragma once\n#define DONE ok\n"),
-            {0}, SV("\n\n\n\nok")},
+            SVI("test/main.c"),   SVI("#include \"header.h\"\n#include \"header.h\"\nDONE"),
+            SVI("test/header.h"), SVI("#pragma once\n#define DONE ok\n"),
+            {0}, SVI("\n\n\n\nok")},
         {"include guard prevents double include", __LINE__, 0,
-            SV("test/main.c"),   SV("#include \"header.h\"\n#include \"header.h\"\nVAL"),
-            SV("test/header.h"), SV("#ifndef GUARD_H\n#define GUARD_H\n#define VAL 42\n#endif\n"),
-            {0}, SV("\n\n\n\n\n42")},
+            SVI("test/main.c"),   SVI("#include \"header.h\"\n#include \"header.h\"\nVAL"),
+            SVI("test/header.h"), SVI("#ifndef GUARD_H\n#define GUARD_H\n#define VAL 42\n#endif\n"),
+            {0}, SVI("\n\n\n\n\n42")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -2570,35 +2576,35 @@ TestFunction(test_include){
 
 TestFunction(test_include_eof){
     TESTBEGIN();
-    struct { StringView main, inner, expected; } cases[] = {
-        {SV("#pragma include_path \"-iquote\" \"quote\"\n#include \"sub/inner.h\"\n"), SV("#include_next \"only.h\"\n"), SV("QUOTE")},
-        {SV("#include <Wrap/a.h>\n"), SV(""), SV("WRAPNEXT")},
-        {SV("#include \"sub/inner.h\""), SV("#include \"depth.h\""), SV("2")},
-        {SV("#include \"sub/inner.h\"\nLEVEL"), SV("#define LEVEL __INCLUDE_LEVEL__\nLEVEL"), SV("10")},
-        {SV("#include \"sub/inner.h\"\n)"), SV("#define ID(x) x\nID(__BASE_FILE__"), SV("\"src/main.c\"")},
-        {SV("#include \"sub/inner.h\""), SV("__INCLUDE_LEVEL__"), SV("1")},
-        {SV("#include \"sub/inner.h\"\n)"), SV("#define ID(x) x\nID(__INCLUDE_LEVEL__"), SV("0")},
-        {SV("#include \"sub/inner.h\"\n)"), SV("#define LEVEL __INCLUDE_LEVEL__\n#define ID(x) x\nID(LEVEL"), SV("0")},
-        {SV("#include \"sub/inner.h\"\n\"once\")\n#include \"sub/inner.h\"\nAFTER"), SV("OK\n_Pragma("), SV("OKAFTER")},
-        {SV("#include \"sub/inner.h\"\n\"include_path \\\".\\\"\")\n#include <local.h>"), SV("_Pragma("), SV("OK")},
-        {SV("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SV("OK\n#pragma once"), SV("OKAFTER")},
-        {SV("#include \"sub/inner.h\"\n#include <local.h>"), SV("#pragma include_path \".\""), SV("OK")},
-        {SV("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SV("#ifndef GUARD\n#define GUARD\nOK\n#endif"), SV("OKAFTER")},
-        {SV("#include \"sub/inner.h\"\nV"), SV("#define V OK"), SV("OK")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#pragma once"), SV("AFTER")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#if 1\nOK\n#endif"), SV("OKAFTER")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#if 0\nBAD\n#endif"), SV("AFTER")},
-        {SV("#include \"sub/inner.h\"\n(7)"), SV("#define F(x) x\nF"), SV("7")},
-        {SV("#include \"sub/inner.h\"\n7)"), SV("#define F(x) x\nF("), SV("7")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("/* empty */"), SV("AFTER")},
-        {SV("#include \"sub/inner.h\""), SV("OK\n"), SV("OK")},
-        {SV("#define H \"sub/inner.h\"\n#include H"), SV("OK\n"), SV("OK")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#define H \"local.h\"\n#include H"), SV("OKAFTER")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#include \"local.h\""), SV("OKAFTER")},
-        {SV("#include <chain.h>"), SV(""), SV("OK")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("#embed \"data\" limit(2)"), SV("1,2AFTER")},
-        {SV("#include \"sub/inner.h\"\nAFTER"), SV("_Embed(\"\\\"data\\\"\")"), SV("1,2,3,4AFTER")},
-        {SV("#include \"sub/inner.h\"\nE"), SV("#define E _Embed(\"\\\"data\\\"\")\n"), SV("9")},
+    static const struct { StringView main, inner, expected; } cases[] = {
+        {SVI("#pragma include_path \"-iquote\" \"quote\"\n#include \"sub/inner.h\"\n"), SVI("#include_next \"only.h\"\n"), SVI("QUOTE")},
+        {SVI("#include <Wrap/a.h>\n"), SVI(""), SVI("WRAPNEXT")},
+        {SVI("#include \"sub/inner.h\""), SVI("#include \"depth.h\""), SVI("2")},
+        {SVI("#include \"sub/inner.h\"\nLEVEL"), SVI("#define LEVEL __INCLUDE_LEVEL__\nLEVEL"), SVI("10")},
+        {SVI("#include \"sub/inner.h\"\n)"), SVI("#define ID(x) x\nID(__BASE_FILE__"), SVI("\"src/main.c\"")},
+        {SVI("#include \"sub/inner.h\""), SVI("__INCLUDE_LEVEL__"), SVI("1")},
+        {SVI("#include \"sub/inner.h\"\n)"), SVI("#define ID(x) x\nID(__INCLUDE_LEVEL__"), SVI("0")},
+        {SVI("#include \"sub/inner.h\"\n)"), SVI("#define LEVEL __INCLUDE_LEVEL__\n#define ID(x) x\nID(LEVEL"), SVI("0")},
+        {SVI("#include \"sub/inner.h\"\n\"once\")\n#include \"sub/inner.h\"\nAFTER"), SVI("OK\n_Pragma("), SVI("OKAFTER")},
+        {SVI("#include \"sub/inner.h\"\n\"include_path \\\".\\\"\")\n#include <local.h>"), SVI("_Pragma("), SVI("OK")},
+        {SVI("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SVI("OK\n#pragma once"), SVI("OKAFTER")},
+        {SVI("#include \"sub/inner.h\"\n#include <local.h>"), SVI("#pragma include_path \".\""), SVI("OK")},
+        {SVI("#include \"sub/inner.h\"\n#include \"sub/inner.h\"\nAFTER"), SVI("#ifndef GUARD\n#define GUARD\nOK\n#endif"), SVI("OKAFTER")},
+        {SVI("#include \"sub/inner.h\"\nV"), SVI("#define V OK"), SVI("OK")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#pragma once"), SVI("AFTER")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#if 1\nOK\n#endif"), SVI("OKAFTER")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#if 0\nBAD\n#endif"), SVI("AFTER")},
+        {SVI("#include \"sub/inner.h\"\n(7)"), SVI("#define F(x) x\nF"), SVI("7")},
+        {SVI("#include \"sub/inner.h\"\n7)"), SVI("#define F(x) x\nF("), SVI("7")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("/* empty */"), SVI("AFTER")},
+        {SVI("#include \"sub/inner.h\""), SVI("OK\n"), SVI("OK")},
+        {SVI("#define H \"sub/inner.h\"\n#include H"), SVI("OK\n"), SVI("OK")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#define H \"local.h\"\n#include H"), SVI("OKAFTER")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#include \"local.h\""), SVI("OKAFTER")},
+        {SVI("#include <chain.h>"), SVI(""), SVI("OK")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("#embed \"data\" limit(2)"), SVI("1,2AFTER")},
+        {SVI("#include \"sub/inner.h\"\nAFTER"), SVI("_Embed(\"\\\"data\\\"\")"), SVI("1,2,3,4AFTER")},
+        {SVI("#include \"sub/inner.h\"\nE"), SVI("#define E _Embed(\"\\\"data\\\"\")\n"), SVI("9")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
@@ -2638,42 +2644,42 @@ TestFunction(test_include_eof){
 
 TestFunction(test_embed){
     TESTBEGIN();
-    struct { StringView source, expected; } cases[] = {
-        {SV("#embed \"data\" gnu::offset(2) limit(3)"), SV("3,255,0")},
-        {SV("#embed \"data\" limit(2) __gnu__::__offset__(1+2)"), SV("255,0")},
-        {SV("#embed \"data\" gnu::offset(6) if_empty(42)"), SV("42")},
-        {SV("#embed \"data\" gnu::offset(9223372036854775807) if_empty(42)"), SV("42")},
-        {SV("#embed \".\" gnu::base64(\"AQID/wAI\") prefix(9,) suffix(,10)"), SV("9,1,2,3,255,0,8,10")},
-        {SV("#embed \".\" __gnu__::__base64__(\"A\" \"Q=\" \"=\")"), SV("1")},
-        {SV("#embed \".\" gnu::base64(\"AQI=\")"), SV("1,2")},
-        {SV("#embed \".\" gnu::base64(\"\") if_empty(42)"), SV("42")},
-        {SV("#define B \"AQID\"\n#embed \".\" gnu::base64(B)"), SV("\n1,2,3")},
-        {SV("_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")"), SV("1,2,3,255,0,8")},
-        {SV("#if __has_embed(\"data\" gnu::offset(5)) == 1 && __has_embed(\"data\" gnu::offset(6)) == 2\nyes\n#endif\n"), SV("\nyes\n\n")},
-        {SV("#if __has_embed(\".\" gnu::base64(\"AQ==\")) == 1 && __has_embed(\".\" gnu::base64(\"\")) == 2\nyes\n#endif\n"), SV("\nyes\n\n")},
-        {SV("#if __has_embed(\"wrong\" gnu::base64(\"AQ==\")) == 0 && __has_embed(\".\" gnu::base64(\"\") limit(0)) == 0\nyes\n#endif\n"), SV("\nyes\n\n")},
-        {SV("_Embed(\"\\\"empty\\\" if_empty(\\\"\\\\n\\\\\\\"\\\\\\\\\\\")\")"), SV("\"\\n\\\"\\\\\"")},
-        {SV("#embed \"data\"\n"), SV("1,2,3,255,0,8\n")},
-        {SV("#embed \"data\""), SV("1,2,3,255,0,8")},
-        {SV("_Embed(\"\\\"data\\\" limit(2) prefix(9,) suffix(,10)\")"), SV("9,1,2,10")},
-        {SV("_Embed(\"\\\"data\\\" limit (1 + 1)\")"), SV("1,2")},
-        {SV("_Embed(\"\\\"data\\\"\")"), SV("1,2,3,255,0,8")},
-        {SV("#define E \"\\\"data\\\" limit(2)\"\n_Embed( E )"), SV("\n1,2")},
-        {SV("#define EMBED(...) _Embed(#__VA_ARGS__)\nEMBED(\"data\" limit(2) prefix(9,))"), SV("\n9,1,2")},
-        {SV("#define F \"data\"\n#define N 2\n_Embed(\"F limit(N)\")"), SV("\n\n1,2")},
-        {SV("_Embed(\nL\"<data> limit(2)\"\n)"), SV("1,2")},
-        {SV("#define data wrong\n#embed <data> limit(2)\n"), SV("\n1,2\n")},
-        {SV("#define F \"data\"\n#embed F __limit__(2) prefix(9,) suffix(,10)\n"), SV("\n9,1,2,10\n")},
-        {SV("_Embed(\"\\\"data\\\" limit(0) prefix(bad) suffix(bad) if_empty(42)\")"), SV("42")},
-        {SV("_Embed(\"\\\"empty\\\" prefix(bad) suffix(bad)\")"), SV("")},
-        {SV("#if __has_embed(\"data\") == __STDC_EMBED_FOUND__ && __has_embed(\"empty\") == __STDC_EMBED_EMPTY__\nyes\n#endif\n"), SV("\nyes\n\n")},
-        {SV("#if __has_embed(\"data\" limit(0)) == 2 && __has_embed(\"missing\") == 0 && __has_embed(\"data\" vendor::unknown(1)) == 0\nyes\n#endif\n"), SV("\nyes\n\n")},
-        {SV("#define F \"data\"\n#if __has_embed(F limit(1)) == 1\nyes\n#endif\n"), SV("\n\nyes\n\n")},
-        {SV("#if 0\n#embed \"missing\"\n#endif\nok"), SV("\n\n\nok")},
-        {SV("#define S(...) #__VA_ARGS__\n#define X(...) S(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n\"1,2,3,255,0,8\"")},
-        {SV("#define F(a,b,c,d,e,f) b+c+d\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n2+3+255")},
-        {SV("#define F(a,b,c,d,e,f) a##b e##f\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SV("\n\n12 08")},
-        {SV("#define S(x) #x\nS(_Embed(E))"), SV("\n\"_Embed(E)\"")},
+    static const struct { StringView source, expected; } cases[] = {
+        {SVI("#embed \"data\" gnu::offset(2) limit(3)"), SVI("3,255,0")},
+        {SVI("#embed \"data\" limit(2) __gnu__::__offset__(1+2)"), SVI("255,0")},
+        {SVI("#embed \"data\" gnu::offset(6) if_empty(42)"), SVI("42")},
+        {SVI("#embed \"data\" gnu::offset(9223372036854775807) if_empty(42)"), SVI("42")},
+        {SVI("#embed \".\" gnu::base64(\"AQID/wAI\") prefix(9,) suffix(,10)"), SVI("9,1,2,3,255,0,8,10")},
+        {SVI("#embed \".\" __gnu__::__base64__(\"A\" \"Q=\" \"=\")"), SVI("1")},
+        {SVI("#embed \".\" gnu::base64(\"AQI=\")"), SVI("1,2")},
+        {SVI("#embed \".\" gnu::base64(\"\") if_empty(42)"), SVI("42")},
+        {SVI("#define B \"AQID\"\n#embed \".\" gnu::base64(B)"), SVI("\n1,2,3")},
+        {SVI("_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")"), SVI("1,2,3,255,0,8")},
+        {SVI("#if __has_embed(\"data\" gnu::offset(5)) == 1 && __has_embed(\"data\" gnu::offset(6)) == 2\nyes\n#endif\n"), SVI("\nyes\n\n")},
+        {SVI("#if __has_embed(\".\" gnu::base64(\"AQ==\")) == 1 && __has_embed(\".\" gnu::base64(\"\")) == 2\nyes\n#endif\n"), SVI("\nyes\n\n")},
+        {SVI("#if __has_embed(\"wrong\" gnu::base64(\"AQ==\")) == 0 && __has_embed(\".\" gnu::base64(\"\") limit(0)) == 0\nyes\n#endif\n"), SVI("\nyes\n\n")},
+        {SVI("_Embed(\"\\\"empty\\\" if_empty(\\\"\\\\n\\\\\\\"\\\\\\\\\\\")\")"), SVI("\"\\n\\\"\\\\\"")},
+        {SVI("#embed \"data\"\n"), SVI("1,2,3,255,0,8\n")},
+        {SVI("#embed \"data\""), SVI("1,2,3,255,0,8")},
+        {SVI("_Embed(\"\\\"data\\\" limit(2) prefix(9,) suffix(,10)\")"), SVI("9,1,2,10")},
+        {SVI("_Embed(\"\\\"data\\\" limit (1 + 1)\")"), SVI("1,2")},
+        {SVI("_Embed(\"\\\"data\\\"\")"), SVI("1,2,3,255,0,8")},
+        {SVI("#define E \"\\\"data\\\" limit(2)\"\n_Embed( E )"), SVI("\n1,2")},
+        {SVI("#define EMBED(...) _Embed(#__VA_ARGS__)\nEMBED(\"data\" limit(2) prefix(9,))"), SVI("\n9,1,2")},
+        {SVI("#define F \"data\"\n#define N 2\n_Embed(\"F limit(N)\")"), SVI("\n\n1,2")},
+        {SVI("_Embed(\nL\"<data> limit(2)\"\n)"), SVI("1,2")},
+        {SVI("#define data wrong\n#embed <data> limit(2)\n"), SVI("\n1,2\n")},
+        {SVI("#define F \"data\"\n#embed F __limit__(2) prefix(9,) suffix(,10)\n"), SVI("\n9,1,2,10\n")},
+        {SVI("_Embed(\"\\\"data\\\" limit(0) prefix(bad) suffix(bad) if_empty(42)\")"), SVI("42")},
+        {SVI("_Embed(\"\\\"empty\\\" prefix(bad) suffix(bad)\")"), SVI("")},
+        {SVI("#if __has_embed(\"data\") == __STDC_EMBED_FOUND__ && __has_embed(\"empty\") == __STDC_EMBED_EMPTY__\nyes\n#endif\n"), SVI("\nyes\n\n")},
+        {SVI("#if __has_embed(\"data\" limit(0)) == 2 && __has_embed(\"missing\") == 0 && __has_embed(\"data\" vendor::unknown(1)) == 0\nyes\n#endif\n"), SVI("\nyes\n\n")},
+        {SVI("#define F \"data\"\n#if __has_embed(F limit(1)) == 1\nyes\n#endif\n"), SVI("\n\nyes\n\n")},
+        {SVI("#if 0\n#embed \"missing\"\n#endif\nok"), SVI("\n\n\nok")},
+        {SVI("#define S(...) #__VA_ARGS__\n#define X(...) S(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SVI("\n\n\"1,2,3,255,0,8\"")},
+        {SVI("#define F(a,b,c,d,e,f) b+c+d\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SVI("\n\n2+3+255")},
+        {SVI("#define F(a,b,c,d,e,f) a##b e##f\n#define X(...) F(__VA_ARGS__)\nX(_Embed(\"\\\"data\\\"\"))"), SVI("\n\n12 08")},
+        {SVI("#define S(x) #x\nS(_Embed(E))"), SVI("\n\"_Embed(E)\"")},
     };
     static int case_idx = 0;
     for(size_t i = test_atomic_increment(&case_idx); i < countof(cases); i = test_atomic_increment(&case_idx)){
@@ -2690,40 +2696,40 @@ TestFunction(test_embed){
         embed_case_cleanup:
         if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
     }
-    StringView bad[] = {
-        SV("#embed \".\" gnu::base64()"),
-        SV("#embed \".\" gnu::base64(123)"),
-        SV("#embed \".\" gnu::base64(L\"AQ==\")"),
-        SV("#embed \"wrong\" gnu::base64(\"AQ==\")"),
-        SV("#embed <.> gnu::base64(\"AQ==\")"),
-        SV("#embed \".\" gnu::base64(\"AQ==\") limit(0)"),
-        SV("#embed \".\" gnu::offset(0) gnu::base64(\"AQ==\")"),
-        SV("#embed \".\" gnu::base64(\"AQ==\") gnu::base64(\"AQ==\")"),
-        SV("#embed __FILE__ gnu::offset(0) __gnu__::__offset__(1)"),
-        SV("#embed __FILE__ gnu::offset(-1)"),
-        SV("#embed __FILE__ gnu::offset(defined(X))"),
-        SV("#embed \".\" gnu::base64(\"AQ=\")"),
-        SV("#embed \".\" gnu::base64(\"AR==\")"),
-        SV("#embed \".\" gnu::base64(\"AQJ=\")"),
-        SV("#embed \".\" gnu::base64(\"AQ==AQ==\")"),
-        SV("#embed \".\" gnu::base64(\"!!!!\")"),
-        SV("#embed \".\" gnu::base64(\"\\x41Q==\")"),
-        SV("#if __has_embed(\".\" gnu::base64(\"AR==\"))\n#endif"),
-        SV("_Embed()"),
-        SV("_Embed(123)"),
-        SV("_Embed(\"\\\"data\\\"\" \"limit(1)\")"),
-        SV("_Embed(\"data\" limit(1))"),
-        SV("#embed \"missing\"\n"),
-        SV("_Embed(\"\\\"missing\\\" limit(0)\")"),
-        SV("_Embed(\"__FILE__ limit(-1)\")"),
-        SV("_Embed(\"__FILE__ limit()\")"),
-        SV("_Embed(\"__FILE__ limit(1 2)\")"),
-        SV("_Embed(\"__FILE__ limit(1, 2)\")"),
-        SV("_Embed(\"__FILE__ limit(defined(X))\")"),
-        SV("_Embed(\"__FILE__ limit(1) __limit__(2)\")"),
-        SV("_Embed(\"__FILE__ prefix([)\"))"),
-        SV("_Embed(\"__FILE__ unknown(1)\")"),
-        SV("_Embed(\"__FILE__ suffix\")"),
+    static const StringView bad[] = {
+        SVI("#embed \".\" gnu::base64()"),
+        SVI("#embed \".\" gnu::base64(123)"),
+        SVI("#embed \".\" gnu::base64(L\"AQ==\")"),
+        SVI("#embed \"wrong\" gnu::base64(\"AQ==\")"),
+        SVI("#embed <.> gnu::base64(\"AQ==\")"),
+        SVI("#embed \".\" gnu::base64(\"AQ==\") limit(0)"),
+        SVI("#embed \".\" gnu::offset(0) gnu::base64(\"AQ==\")"),
+        SVI("#embed \".\" gnu::base64(\"AQ==\") gnu::base64(\"AQ==\")"),
+        SVI("#embed __FILE__ gnu::offset(0) __gnu__::__offset__(1)"),
+        SVI("#embed __FILE__ gnu::offset(-1)"),
+        SVI("#embed __FILE__ gnu::offset(defined(X))"),
+        SVI("#embed \".\" gnu::base64(\"AQ=\")"),
+        SVI("#embed \".\" gnu::base64(\"AR==\")"),
+        SVI("#embed \".\" gnu::base64(\"AQJ=\")"),
+        SVI("#embed \".\" gnu::base64(\"AQ==AQ==\")"),
+        SVI("#embed \".\" gnu::base64(\"!!!!\")"),
+        SVI("#embed \".\" gnu::base64(\"\\x41Q==\")"),
+        SVI("#if __has_embed(\".\" gnu::base64(\"AR==\"))\n#endif"),
+        SVI("_Embed()"),
+        SVI("_Embed(123)"),
+        SVI("_Embed(\"\\\"data\\\"\" \"limit(1)\")"),
+        SVI("_Embed(\"data\" limit(1))"),
+        SVI("#embed \"missing\"\n"),
+        SVI("_Embed(\"\\\"missing\\\" limit(0)\")"),
+        SVI("_Embed(\"__FILE__ limit(-1)\")"),
+        SVI("_Embed(\"__FILE__ limit()\")"),
+        SVI("_Embed(\"__FILE__ limit(1 2)\")"),
+        SVI("_Embed(\"__FILE__ limit(1, 2)\")"),
+        SVI("_Embed(\"__FILE__ limit(defined(X))\")"),
+        SVI("_Embed(\"__FILE__ limit(1) __limit__(2)\")"),
+        SVI("_Embed(\"__FILE__ prefix([)\"))"),
+        SVI("_Embed(\"__FILE__ unknown(1)\")"),
+        SVI("_Embed(\"__FILE__ suffix\")"),
     };
     static int bad_idx = 0;
     for(size_t i = test_atomic_increment(&bad_idx); i < countof(bad); i = test_atomic_increment(&bad_idx)){
@@ -2738,18 +2744,18 @@ TestFunction(test_embed){
 
 TestFunction(test_embed_file_queries){
     TESTBEGIN();
-    StringView cases[] = {
-        SV("#if __has_embed(\"metadata\") != 1\n#error probe loaded data\n#endif\n"),
-        SV("#if __has_embed(\"metadata\" limit(0)) != 2\n#error zero limit loaded data\n#endif\n"),
-        SV("#embed \"metadata\" limit(0)\n"),
-        SV("#embed \"" __FILE__ "\" limit(4)\n"),
-        SV("#if __has_embed(\"oversized\") != 0 || __has_embed(\"oversized\" limit(1)) != 0 || __has_embed(\"oversized\" limit(0)) != 0\n#error oversized resource accepted\n#endif\n"),
-        SV("#embed \"oversized\"\n"),
-        SV("#embed \"oversized\" limit(0)\n"),
-        SV("_Embed(\"\\\"oversized\\\" limit(1)\")"),
-        SV("_Embed(\"\\\"metadata\\\" limit(4)\")"),
-        SV("#if __has_embed(\"metadata\" gnu::offset(4194303)) != 1 || __has_embed(\"metadata\" gnu::offset(4194304)) != 2\n#error offset loaded data\n#endif\n"),
-        SV("#if __has_embed(\"oversized\" gnu::offset(4194305)) != 0\n#error offset bypassed size limit\n#endif\n"),
+    static const StringView cases[] = {
+        SVI("#if __has_embed(\"metadata\") != 1\n#error probe loaded data\n#endif\n"),
+        SVI("#if __has_embed(\"metadata\" limit(0)) != 2\n#error zero limit loaded data\n#endif\n"),
+        SVI("#embed \"metadata\" limit(0)\n"),
+        SVI("#embed \"" __FILE__ "\" limit(4)\n"),
+        SVI("#if __has_embed(\"oversized\") != 0 || __has_embed(\"oversized\" limit(1)) != 0 || __has_embed(\"oversized\" limit(0)) != 0\n#error oversized resource accepted\n#endif\n"),
+        SVI("#embed \"oversized\"\n"),
+        SVI("#embed \"oversized\" limit(0)\n"),
+        SVI("_Embed(\"\\\"oversized\\\" limit(1)\")"),
+        SVI("_Embed(\"\\\"metadata\\\" limit(4)\")"),
+        SVI("#if __has_embed(\"metadata\" gnu::offset(4194303)) != 1 || __has_embed(\"metadata\" gnu::offset(4194304)) != 2\n#error offset loaded data\n#endif\n"),
+        SVI("#if __has_embed(\"oversized\" gnu::offset(4194305)) != 0\n#error offset bypassed size limit\n#endif\n"),
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
@@ -2865,7 +2871,7 @@ TestFunction(test_framework_include){
     // #include <Foo/Bar.h> resolves to {fwdir}/Foo.framework/Headers/Bar.h.
     // A multi-component subpath <Foo/sub/Bar.h> must resolve to
     // {fwdir}/Foo.framework/Headers/sub/Bar.h (e.g. <IOKit/hidsystem/IOLLEvent.h>).
-    struct {
+    static const struct {
         const char* name; int line; int disabled;
         StringView main_src;
         StringView hdr_path; StringView hdr_content;
@@ -2873,17 +2879,17 @@ TestFunction(test_framework_include){
         _Bool empty_path;
     } test_cases[] = {
         {"empty framework search directory", __LINE__, 0,
-            SV("#include <Local/header.h>\n"),
-            SV("Local.framework/Headers/header.h"), SV("LOCAL"),
-            SV("\nLOCAL"), 1},
+            SVI("#include <Local/header.h>\n"),
+            SVI("Local.framework/Headers/header.h"), SVI("LOCAL"),
+            SVI("\nLOCAL"), 1},
         {"single-component framework include", __LINE__, 0,
-            SV("#include <Cocoa/Cocoa.h>\nVALUE"),
-            SV("frameworks/Cocoa.framework/Headers/Cocoa.h"), SV("#define VALUE single\n"),
-            SV("\n\nsingle")},
+            SVI("#include <Cocoa/Cocoa.h>\nVALUE"),
+            SVI("frameworks/Cocoa.framework/Headers/Cocoa.h"), SVI("#define VALUE single\n"),
+            SVI("\n\nsingle")},
         {"multi-component framework subpath", __LINE__, 0,
-            SV("#include <IOKit/hidsystem/IOLLEvent.h>\nVALUE"),
-            SV("frameworks/IOKit.framework/Headers/hidsystem/IOLLEvent.h"), SV("#define VALUE nested\n"),
-            SV("\n\nnested")},
+            SVI("#include <IOKit/hidsystem/IOLLEvent.h>\nVALUE"),
+            SVI("frameworks/IOKit.framework/Headers/hidsystem/IOLLEvent.h"), SVI("#define VALUE nested\n"),
+            SVI("\n\nnested")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -2914,28 +2920,28 @@ TestFunction(test_framework_include){
 
 TestFunction(test_literal_boundaries){
     TESTBEGIN();
-    struct {
+    static const struct {
         IncludeTestFile files[2];
         StringView expected;
     } cases[] = {
-        {{{SV("dir\"/file\".c"), SV("__FILE__ __FILE_NAME__ __DIR__ __BASE_FILE__")},
-          {SV("unused.h"), SV("")}},
-         SV("\"dir\\\"/file\\\".c\" \"file\\\".c\" \"dir\\\"\" \"dir\\\"/file\\\".c\"")},
-        {{{SV("C:\\new\\test.c"), SV("__FILE__ __BASE_FILE__")},
-          {SV("unused.h"), SV("")}},
-         SV("\"C:\\\\new\\\\test.c\" \"C:\\\\new\\\\test.c\"")},
-        {{{SV("main.c"), SV("#pragma include_path u8\"in\\143\"\n#include <header.h>\n")},
-          {SV("inc/header.h"), SV("OK\n")}},
-         SV("\n\nOK\n")},
-        {{{SV("main.c"), SV("_Pragma(\"include_path \\\"in\\\\143\\\"\")\n#include <header.h>\n")},
-          {SV("inc/header.h"), SV("OK\n")}},
-         SV("\n\nOK\n")},
-        {{{SV("main.c"), SV("#pragma framework_path L\"fra\\155eworks\"\n#include <Foo/header.h>\n")},
-          {SV("frameworks/Foo.framework/Headers/header.h"), SV("OK\n")}},
-         SV("\n\nOK\n")},
-        {{{SV("main.c"), SV("#include \"once.h\"\n#include \"once.h\"\n")},
-          {SV("once.h"), SV("_Pragma(L\"once\")\nOK\n")}},
-         SV("\n\nOK\n\n")},
+        {{{SVI("dir\"/file\".c"), SVI("__FILE__ __FILE_NAME__ __DIR__ __BASE_FILE__")},
+          {SVI("unused.h"), SVI("")}},
+         SVI("\"dir\\\"/file\\\".c\" \"file\\\".c\" \"dir\\\"\" \"dir\\\"/file\\\".c\"")},
+        {{{SVI("C:\\new\\test.c"), SVI("__FILE__ __BASE_FILE__")},
+          {SVI("unused.h"), SVI("")}},
+         SVI("\"C:\\\\new\\\\test.c\" \"C:\\\\new\\\\test.c\"")},
+        {{{SVI("main.c"), SVI("#pragma include_path u8\"in\\143\"\n#include <header.h>\n")},
+          {SVI("inc/header.h"), SVI("OK\n")}},
+         SVI("\n\nOK\n")},
+        {{{SVI("main.c"), SVI("_Pragma(\"include_path \\\"in\\\\143\\\"\")\n#include <header.h>\n")},
+          {SVI("inc/header.h"), SVI("OK\n")}},
+         SVI("\n\nOK\n")},
+        {{{SVI("main.c"), SVI("#pragma framework_path L\"fra\\155eworks\"\n#include <Foo/header.h>\n")},
+          {SVI("frameworks/Foo.framework/Headers/header.h"), SVI("OK\n")}},
+         SVI("\n\nOK\n")},
+        {{{SVI("main.c"), SVI("#include \"once.h\"\n#include \"once.h\"\n")},
+          {SVI("once.h"), SVI("_Pragma(L\"once\")\nOK\n")}},
+         SVI("\n\nOK\n\n")},
     };
     for(size_t i = 0; i < countof(cases); i++){
         StringView result = {0};
