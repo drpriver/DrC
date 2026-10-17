@@ -1371,14 +1371,14 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
             if(cpp_match_char(f, ':')){
                 // %:%:
                 if(cpp_match_2char(f, '%', ':')){
-                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("##"), .punct='##', .loc = loc};
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("%:%:"), .punct='##', .loc = loc};
                     return 0;
                 }
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("#"), .punct='#', .loc = loc};
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("%:"), .punct='#', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '>')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("}"), .punct='}', .loc = loc};
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("%>"), .punct='}', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '='))
@@ -1424,11 +1424,11 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
             return 0;
         case '<':
             if(cpp_match_char(f, ':')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("["), .punct='[', .loc = loc};
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("<:"), .punct='[', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '%')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("{"), .punct='{', .loc = loc};
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("<%"), .punct='{', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, '<')){
@@ -1478,7 +1478,7 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
             return 0;
         case ':':
             if(cpp_match_char(f, '>')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("]"), .punct=']', .loc = loc};
+                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV(":>"), .punct=']', .loc = loc};
                 return 0;
             }
             if(cpp_match_char(f, ':'))

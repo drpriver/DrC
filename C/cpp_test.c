@@ -306,6 +306,14 @@ TestFunction(test_func_macros){
         {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
         {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
         {"stringify_with_spaces",SV("#define STR(x) #x\nSTR(hello world)"),SV("\n\"hello world\""),__LINE__},
+        {"stringify_digraphs", SV("#define STR(x) #x\nSTR(<: :> <% %> %: %:%:)"),
+            SV("\n\"<: :> <% %> %: %:%:\""), __LINE__},
+        {"stringify_pasted_digraph", SV(
+            "#define CAT(a,b) a##b\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
+            "EXPAND(CAT(<,:))"), SV("\n\n\n\"<:\""), __LINE__},
+        {"digraph_macro_operators", SV(
+            "%:define CAT(a,b) a %:%: b\n%:define STR(x) %:x\nCAT(a,b) STR(word)"),
+            SV("\n\nab \"word\""), __LINE__},
         {"stringify_uninvoked_function_macro", SV(
             "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
             "EXPAND(F word)"), SV("\n\n\n\"F word\""), __LINE__},
