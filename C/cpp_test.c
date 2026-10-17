@@ -1894,6 +1894,13 @@ TestFunction(test_if_eval){
             SV("#if 0'777 == 511\nyes\n#endif"), SV("\nyes\n")},
         {"hex 0x10", __LINE__, 0,
             SV("#if 0x10 == 16\nyes\n#endif"), SV("\nyes\n")},
+        {"hex leading zeroes", __LINE__, 0,
+            SV("#if 0x000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"octal leading zeroes", __LINE__, 0,
+            SV("#if 000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
+        {"binary leading zeroes", __LINE__, 0,
+            SV("#if 0b000000000000000000000000000000000"
+               "0000000000000000000000000000000001 == 1\nyes\n#endif"), SV("\nyes\n")},
         {"hex 0xFF", __LINE__, 0,
             SV("#if 0xFF == 255\nyes\n#endif"), SV("\nyes\n")},
         {"hex 0XA", __LINE__, 0,

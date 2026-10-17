@@ -185,6 +185,10 @@ parse_uint64(const char* str, size_t length, uint64_t* result){
     }
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     // UINT64_MAX is 18,446,744,073,709,551,615 (20 characters)
     if(length > 20)
         return PARSENUMBER_OVERFLOWED_VALUE;
@@ -235,6 +239,10 @@ parse_int64(const char* str, size_t length, int64_t* result){
     }
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     // INT64_MAX is 9223372036854775807 (19 characters)
     if(length > 19)
         return PARSENUMBER_OVERFLOWED_VALUE;
@@ -288,6 +296,10 @@ parse_uint32(const char*str, size_t length, uint32_t* result){
     }
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     // UINT32_MAX is 10 characters
     if(length > 10)
         return PARSENUMBER_OVERFLOWED_VALUE;
@@ -337,6 +349,10 @@ parse_int32(const char*str, size_t length, int32_t* result){
     }
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     // INT32_max is 10 chars
     if(length > 10)
         return PARSENUMBER_OVERFLOWED_VALUE;
@@ -392,6 +408,10 @@ warn_unused
 ParseNumberError
 parse_hex_inner(const char* str, size_t length, uint64_t* result){
     *result = 0;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     if(length > sizeof(*result)*2)
         return PARSENUMBER_OVERFLOWED_VALUE;
     uint64_t value = 0;
@@ -471,6 +491,10 @@ parse_binary_inner(const char* str, size_t length, uint64_t* result){
     *result = 0;
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     if(length > 64)
         return PARSENUMBER_OVERFLOWED_VALUE;
     unsigned long long mask = 1llu << 63;
@@ -519,6 +543,10 @@ parse_octal_inner(const char* str, size_t length, uint64_t* result){
     *result = 0;
     if(!length)
         return PARSENUMBER_UNEXPECTED_END;
+    while(length > 1 && *str == '0'){
+        str++;
+        length--;
+    }
     // UINT64_MAX is 1777777777777777777777 in octal (22 digits)
     if(length > 22)
         return PARSENUMBER_OVERFLOWED_VALUE;
