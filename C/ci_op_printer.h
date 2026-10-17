@@ -594,10 +594,15 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             if(op->switch_.table){
                 for(size_t i = 0; i < op->switch_.table->count; i++){
                     CcSwitchEntry e = op->switch_.table->data[i];
-                    if(op->switch_.is_unsigned)
-                        msb_sprintf(out, "%llu=>0x%x, ", (unsigned long long)e.value, e.target);
-                    else
-                        msb_sprintf(out, "%lld=>0x%x, ", (long long)e.value, e.target);
+                    if(op->switch_.is_unsigned){
+                        msb_sprintf(out, "%llu", (unsigned long long)e.low);
+                        if(e.low != e.high) msb_sprintf(out, "...%llu", (unsigned long long)e.high);
+                    }
+                    else {
+                        msb_sprintf(out, "%lld", (long long)e.low);
+                        if(e.low != e.high) msb_sprintf(out, "...%lld", (long long)e.high);
+                    }
+                    msb_sprintf(out, "=>0x%x, ", e.target);
                 }
             }
             msb_sprintf(out, "default=>0x%x}", op->switch_.jump);

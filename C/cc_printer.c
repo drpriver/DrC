@@ -963,7 +963,10 @@ _cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
         _cc_print_statement(sb, s->stmts[0], indent+1);
         return;
     case CC_STMT_CASE:       // case expr:
-        msb_sprintf(sb, "case %llu:\n", (unsigned long long)s->case_value);
+        msb_sprintf(sb, "case %llu", (unsigned long long)s->case_.low);
+        if(s->case_.low != s->case_.high)
+            msb_sprintf(sb, " ... %llu", (unsigned long long)s->case_.high);
+        msb_write_literal(sb, ":\n");
         if(s->stmts[0]) _cc_print_statement(sb, s->stmts[0], indent+1);
         return;
     case CC_STMT_DEFAULT:    // default:

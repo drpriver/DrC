@@ -2362,17 +2362,19 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             size_t count = op->switch_.table->count;
             const CcSwitchEntry* table = op->switch_.table->data;
             if(op->switch_.is_dense){
-                uint64_t index = val - table[0].value;
+                uint64_t index = val - table[0].low;
                 frame->pc = index < count ? table[index].target : op->switch_.jump;
                 return 0;
             }
-            // Binary search for matching case
+            // Binary search the disjoint intervals in signed or unsigned order.
+            uint64_t sign = op->switch_.is_unsigned ? 0 : UINT64_C(1) << 63;
+            val ^= sign;
             size_t lo = 0, hi = count;
             while(lo < hi){
                 size_t mid = lo + (hi - lo) / 2;
-                if(table[mid].value < val)
+                if((table[mid].high ^ sign) < val)
                     lo = mid + 1;
-                else if(table[mid].value > val)
+                else if((table[mid].low ^ sign) > val)
                     hi = mid;
                 else {
                     frame->pc = table[mid].target;

@@ -8470,6 +8470,51 @@ TestFunction(test_parse_errors){
             SVI("(test):1:27: error: duplicate case value '1'\n"),
         },
         {
+            "case range overlaps scalar", __LINE__,
+            SVI("switch(1){case 3:;\ncase 1 ... 5:;}"),
+            SVI("(test):2:1: error: overlapping case values\n"),
+        },
+        {
+            "scalar overlaps case range", __LINE__,
+            SVI("switch(1){case 1 ... 5:;\ncase 3:;}"),
+            SVI("(test):2:1: error: overlapping case values\n"),
+        },
+        {
+            "case ranges overlap at endpoint", __LINE__,
+            SVI("switch(1){case -5 ... 2:;\ncase 2 ... 9:;}"),
+            SVI("(test):2:1: error: overlapping case values\n"),
+        },
+        {
+            "case range cannot wrap to unsigned", __LINE__,
+            SVI("switch(1u){\ncase -1 ... 2:;}"),
+            SVI("(test):2:1: error: case range values must be representable in the switch type\n"),
+        },
+        {
+            "case range cannot narrow", __LINE__,
+            SVI("switch(1){\ncase 0 ... 4294967295u:;}"),
+            SVI("(test):2:1: error: case range values must be representable in the switch type\n"),
+        },
+        {
+            "case range cannot truncate wide endpoints", __LINE__,
+            SVI("switch(1){\ncase 0 ... ((unsigned __int128)1<<100):;}"),
+            SVI("(test):2:1: error: case range values must be representable in the switch type\n"),
+        },
+        {
+            "case range requires integer endpoints", __LINE__,
+            SVI("switch(1){\ncase 0 ... 2.0:;}"),
+            SVI("(test):2:1: error: case range endpoints must be constant integer expressions\n"),
+        },
+        {
+            "case range requires constant endpoints", __LINE__,
+            SVI("int n=2;switch(1){\ncase 0 ... n:;}"),
+            SVI("(test):2:12: error: expression 'n' is not a constant expression\n"),
+        },
+        {
+            "case range rejects type switch", __LINE__,
+            SVI("_Type t=int;switch(t){\ncase int ... float:;}"),
+            SVI("(test):2:1: error: case ranges require an integer switch expression\n"),
+        },
+        {
             "switch duplicate cases are checked after unsigned conversion", __LINE__,
             SVI("switch(1u){case -1: break; case 4294967295u: break;}\n"),
             SVI("(test):1:28: error: duplicate case value '4294967295'\n"),
@@ -10253,6 +10298,36 @@ TestFunction(test_parse_errors){
             "duplicate static cases", __LINE__,
             SVI("static switch(1){\nstatic case 1:static break;\nstatic case 1:;\n}"),
             SVI("(test):3:8: error: duplicate static case value\n"),
+        },
+        {
+            "static scalar overlaps range", __LINE__,
+            SVI("static switch(1){static case -2 ... 2:;\nstatic case 0:;}"),
+            SVI("(test):2:8: error: overlapping static case values\n"),
+        },
+        {
+            "static range overlaps scalar", __LINE__,
+            SVI("static switch(1){static case 0:;\nstatic case -2 ... 2:;}"),
+            SVI("(test):2:8: error: overlapping static case values\n"),
+        },
+        {
+            "static ranges overlap at endpoint", __LINE__,
+            SVI("static switch(1){static case -2 ... 2:;\nstatic case 2 ... 4:;}"),
+            SVI("(test):2:8: error: overlapping static case values\n"),
+        },
+        {
+            "static range cannot change values on conversion", __LINE__,
+            SVI("static switch(1u){\nstatic case -1 ... 2:;}"),
+            SVI("(test):2:8: error: case range values must be representable in the switch type\n"),
+        },
+        {
+            "static range rejects type switch", __LINE__,
+            SVI("static switch(int){\nstatic case int ... float:;}"),
+            SVI("(test):2:8: error: case ranges require an integer switch expression\n"),
+        },
+        {
+            "static range requires integer endpoints", __LINE__,
+            SVI("static switch(1){\nstatic case 0 ... 2.0:;}"),
+            SVI("(test):2:8: error: case range endpoints must be constant integer expressions\n"),
         },
         {
             "duplicate static cases after conversion", __LINE__,

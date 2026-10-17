@@ -631,36 +631,29 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 size_t scratch_sz = sw.entries.count * sizeof(CcSwitchEntry);
                 void* scratch = Allocator_alloc(ctx->a, scratch_sz);
                 if(!scratch){ err = CI_OOM_ERROR; goto switch_cleanup; }
-                drp_merge_sort(scratch, sw.entries.data, sw.entries.count, sizeof(CcSwitchEntry), NULL, ci_cmp_switch_entry);
+                drp_merge_sort(scratch, sw.entries.data, sw.entries.count, sizeof(CcSwitchEntry), &is_unsigned, ci_cmp_switch_entry);
                 Allocator_free(ctx->a, scratch, scratch_sz);
             }
-            // Check for duplicate case values
+            // Check for overlaps in the controlling type's order.
+            uint64_t sign = is_unsigned ? 0 : UINT64_C(1) << 63;
             for(size_t i = 1; i < sw.entries.count; i++){
-                if(sw.entries.data[i].value == sw.entries.data[i-1].value){
-                    err = ci_error(ci, n->loc, "duplicate case value '%lld'", (long long)sw.entries.data[i].value);
+                if((sw.entries.data[i].low ^ sign) <= (sw.entries.data[i-1].high ^ sign)){
+                    err = ci_error(ci, n->loc, "overlapping case values%s", "");
                     goto switch_cleanup;
                 }
             }
-            size_t first = 0;
             size_t count = sw.entries.count;
-            // Find first signed value
-            if(count && !is_unsigned && !(sw.entries.data[0].value >> 63) && (sw.entries.data[count-1].value >> 63)){
-                while(!(sw.entries.data[first].value >> 63)) first++;
+            _Bool is_dense = count && sw.entries.data[count-1].low - sw.entries.data[0].low == count-1;
+            for(size_t i = 0; is_dense && i < count; i++){
+                if(sw.entries.data[i].low != sw.entries.data[i].high) is_dense = 0;
             }
-            size_t last = first ? first-1 : count ? count-1 : 0;
-            _Bool is_dense = count && sw.entries.data[last].value - sw.entries.data[first].value == count-1;
             // Copy the sorted entries into the op's out-of-line table
             {
                 size_t table_size = sizeof(CiSwitchTable) + sw.entries.count * sizeof(CcSwitchEntry);
                 CiSwitchTable* table = Allocator_alloc(ctx->a, table_size);
                 if(!table){ err = CI_OOM_ERROR; goto switch_cleanup; }
                 table->count = sw.entries.count;
-                if(is_dense && first){
-                    // Rotate dense signed ranges into signed order.
-                    memcpy(table->data, sw.entries.data + first, (count-first) * sizeof(CcSwitchEntry));
-                    memcpy(table->data + count-first, sw.entries.data, first * sizeof(CcSwitchEntry));
-                }
-                else if(sw.entries.count)
+                if(sw.entries.count)
                     memcpy(table->data, sw.entries.data, sw.entries.count * sizeof(CcSwitchEntry));
                 uint32_t break_target = (uint32_t)ctx->out->count;
                 CiOp* swop = &ctx->out->data[sw_idx];
@@ -676,9 +669,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_CASE:{
             if(!ctx->sw)
                 return ci_ice(ci, n->loc, "case label outside of switch in lowering%s", "");
-            CcSwitchEntry entry = {.value = n->case_value, .target = (uint32_t)ctx->out->count};
-            err = ma_push(CcSwitchEntry)(&ctx->sw->entries, ctx->a, entry);
-            if(err) return CI_OOM_ERROR;
+            if(!n->case_empty){
+                CcSwitchEntry entry = {.low = n->case_.low, .high = n->case_.high, .target = (uint32_t)ctx->out->count};
+                err = ma_push(CcSwitchEntry)(&ctx->sw->entries, ctx->a, entry);
+                if(err) return CI_OOM_ERROR;
+            }
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
         case CC_STMT_DEFAULT:{
@@ -6785,11 +6780,11 @@ ci_backpatch_break_continue(CiLowerCtx* ctx, size_t start, uint32_t break_target
 static
 int
 ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b){
-    (void)ctx;
+    uint64_t sign = *(const _Bool*)ctx ? 0 : UINT64_C(1) << 63;
     const CcSwitchEntry* ea = a;
     const CcSwitchEntry* eb = b;
-    if(ea->value < eb->value) return -1;
-    if(ea->value > eb->value) return 1;
+    if((ea->low ^ sign) < (eb->low ^ sign)) return -1;
+    if((ea->low ^ sign) > (eb->low ^ sign)) return 1;
     return 0;
 }
 

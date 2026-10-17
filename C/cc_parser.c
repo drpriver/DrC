@@ -133,6 +133,7 @@ cc_static_rebind_target(CcParser* p, CcExpr* e){
 static int cc_eval_expr(CcEvalCtx*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_integer(CcEvalCtx*, CcExpr*, int64_t*);
 static CiUint128 cc_eval_u128(CcParser*, CcExpr*);
+static int cc_eval_case_range(CcParser*, SrcLoc, CcQualType, CcExpr*, CcExpr*, CiUint128*, CiUint128*, _Bool*);
 static int cc_eval_truthy(CcEvalCtx*, CcExpr*, _Bool*);
 static int cc_check_linktime_expr(CcParser*, CcExpr*, _Bool, unsigned);
 static _Bool cc_assign_lookup(CcPunct punct, CcExprKind* kind);
@@ -232,7 +233,7 @@ struct CcStmtSink {
 #endif
 
 typedef struct CcStaticCase CcStaticCase;
-struct CcStaticCase { CiUint128 value; SrcLoc loc; };
+struct CcStaticCase { CiUint128 value, high; SrcLoc loc; _Bool empty; };
 #define MARRAY_T CcStaticCase
 #include "../Drp/Marray.h"
 #ifdef __clang__
@@ -7346,11 +7347,24 @@ cc_parse_static_for(CcParser* p, SrcLoc loc){
 
 static
 int
-cc_static_switch_key(CcParser* p, CcQualType* type, CiUint128* key){
+cc_static_switch_key(CcParser* p, CcQualType* type, CiUint128* key, CcStaticCase*_Nullable range){
     CcExpr* expr = NULL;
     CcExpr* value = NULL;
     int err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &expr);
     if(err) return err;
+    if(range){
+        CcToken next;
+        err = cc_peek(p, &next);
+        if(err) goto done;
+        if(next.type == CC_PUNCTUATOR && next.punct.punct == CC_ellipsis){
+            CcExpr* high = NULL;
+            err = cc_next_token(p, &next);
+            if(!err) err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &high);
+            if(!err) err = cc_eval_case_range(p, range->loc, *type, expr, high, key, &range->high, &range->empty);
+            if(high) cc_release_expr(p, high);
+            goto done;
+        }
+    }
     _Bool is_type = ccqt_bt_eq(expr->type, CCBT__Type);
     if(!is_type && !ccqt_is_integer(expr->type)){
         err = cc_error(p, expr->loc, "static switch requires integer or _Type expressions");
@@ -7370,6 +7384,7 @@ cc_static_switch_key(CcParser* p, CcQualType* type, CiUint128* key){
     err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
     if(err) goto evaluation_done;
     *key = is_type ? ci_uint128_from_uint64(value->type_value.bits) : cc_eval_u128(p, value);
+    if(range) range->high = *key;
     evaluation_done:
     if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
         err = cc_error(p, expr->loc, "static switch expression must be constexpr evaluable");
@@ -7386,7 +7401,7 @@ cc_parse_static_switch(CcParser* p, SrcLoc loc){
     if(err) return err;
     CcQualType type = CCQT_NONE;
     CiUint128 key;
-    err = cc_static_switch_key(p, &type, &key);
+    err = cc_static_switch_key(p, &type, &key, NULL);
     if(err) return err;
     err = cc_expect_punct(p, ')');
     if(err) return err;
@@ -7400,6 +7415,10 @@ cc_parse_static_switch(CcParser* p, SrcLoc loc){
     p->pending = (Marray(CcToken)){0};
     err = cc_static_replay(p, &body);
     size_t selected = SIZE_MAX, fallback = SIZE_MAX;
+    // Sign-extended keys become monotonically ordered after flipping the sign bit.
+    _Bool uns = ccqt_bt_eq(type, CCBT__Type) || ccqt_is_unsigned(type, !cc_target(p)->char_is_signed);
+    CiUint128 sign = uns ? ci_uint128_from_uint64(0) : ci_uint128_shl(ci_uint128_from_uint64(1), 127);
+    CiUint128 ordered_key = ci_uint128_xor(key, sign);
     while(!err){
         CcToken tok;
         err = cc_peek(p, &tok);
@@ -7419,21 +7438,30 @@ cc_parse_static_switch(CcParser* p, SrcLoc loc){
                     fallback = emitted.count;
                 }
                 else {
-                    CiUint128 value;
-                    err = cc_static_switch_key(p, &type, &value);
+                    CcStaticCase entry = {.loc=label.loc};
+                    err = cc_static_switch_key(p, &type, &entry.value, &entry);
                     if(err) break;
-                    for(size_t i = 0; i < cases.count; i++){
-                        if(ci_uint128_eq(cases.data[i].value, value)){
-                            err = cc_error(p, label.loc, "duplicate static case value");
+                    if(!entry.empty){
+                        CiUint128 low = ci_uint128_xor(entry.value, sign);
+                        CiUint128 high = ci_uint128_xor(entry.high, sign);
+                        for(size_t i = 0; i < cases.count; i++){
+                            CcStaticCase prev = cases.data[i];
+                            if(ci_uint128_le(low, ci_uint128_xor(prev.high, sign)) && ci_uint128_le(ci_uint128_xor(prev.value, sign), high)){
+                                err = cc_error(p, label.loc, "%s", 
+                                    ci_uint128_eq(entry.value, entry.high) && ci_uint128_eq(prev.value, prev.high) ?
+                                    "duplicate static case value" : "overlapping static case values"
+                                );
+                                break;
+                            }
+                        }
+                        if(err) break;
+                        if(ma_push(CcStaticCase)(&cases, cc_allocator(p), entry)){
+                            err = CC_OOM_ERROR;
                             break;
                         }
+                        if(ci_uint128_le(low, ordered_key) && ci_uint128_le(ordered_key, high))
+                            selected = emitted.count;
                     }
-                    if(err) break;
-                    if(ma_push(CcStaticCase)(&cases, cc_allocator(p), (CcStaticCase){.value=value, .loc=label.loc})){
-                        err = CC_OOM_ERROR;
-                        break;
-                    }
-                    if(ci_uint128_eq(key, value)) selected = emitted.count;
                 }
                 err = cc_expect_punct(p, ':');
                 continue;
@@ -12813,6 +12841,57 @@ struct CcControl {
 
 static
 int
+cc_eval_case_range(CcParser* p, SrcLoc loc, CcQualType type, CcExpr* low, CcExpr* high, CiUint128* lo, CiUint128* hi, _Bool* empty){
+    if(ccqt_bt_eq(type, CCBT__Type))
+        return cc_error(p, loc, "case ranges require an integer switch expression");
+    CcExpr* exprs[2] = {low, high};
+    CcExpr* values[2] = {NULL, NULL};
+    CiUint128 bits[2];
+    _Bool negative[2];
+    int err = 0;
+    for(unsigned i = 0; i < 2; i++){
+        if(!ccqt_is_integer(exprs[i]->type)) 
+            err = CC_NOT_CONSTANT_ERROR;
+        else 
+            err = cc_eval_expr(&(CcEvalCtx){.parser=p}, exprs[i], &values[i]);
+        if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
+            err = cc_error(p, loc, "case range endpoints must be constant integer expressions");
+        if(err) goto done;
+        bits[i] = cc_eval_u128(p, values[i]);
+        negative[i] = !ccqt_is_unsigned(values[i]->type, !cc_target(p)->char_is_signed) && (ci_uint128_hi(bits[i]) >> 63);
+    }
+    // Compare mathematical values without applying the usual arithmetic conversions.
+    *empty = negative[0] != negative[1] ? negative[1] : ci_uint128_gt(bits[0], bits[1]);
+    if(*empty){
+        cc_warn(p, loc, "empty case range");
+        *lo = ci_uint128_from_uint64(1);
+        *hi = ci_uint128_from_uint64(0);
+        goto done;
+    }
+    for(unsigned i = 0; i < 2; i++){
+        CcExpr* converted = NULL;
+        err = cc_implicit_cast(p, values[i], type, &values[i]);
+        if(err) goto done;
+        err = cc_eval_expr(&(CcEvalCtx){.parser=p}, values[i], &converted);
+        if(err) goto done;
+        CiUint128 after = cc_eval_u128(p, converted);
+        _Bool after_negative = !ccqt_is_unsigned(type, !cc_target(p)->char_is_signed) && (ci_uint128_hi(after) >> 63);
+        cc_release_expr(p, converted);
+        if(!ci_uint128_eq(bits[i], after) || negative[i] != after_negative){
+            err = cc_error(p, loc, "case range values must be representable in the switch type");
+            goto done;
+        }
+    }
+    *lo = bits[0];
+    *hi = bits[1];
+    done:
+    for(unsigned i = 0; i < 2; i++)
+        if(values[i]) cc_release_expr(p, values[i]);
+    return err;
+}
+
+static
+int
 cc_parse_label(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     CcToken tok;
     int err = cc_peek(p, &tok);
@@ -12865,13 +12944,35 @@ cc_parse_label(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     CcExpr* case_expr;
     err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &case_expr);
     if(err) return err;
-    err = cc_expect_punct(p, ':');
+    CcToken next;
+    CcExpr* high_expr = NULL;
+    err = cc_peek(p, &next);
+    if(!err && next.type == CC_PUNCTUATOR && next.punct.punct == CC_ellipsis){
+        err = cc_next_token(p, &next);
+        if(!err) err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &high_expr);
+    }
     if(err){
         cc_release_expr(p, case_expr);
         return err;
     }
-    uint64_t case_val;
-    if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
+    err = cc_expect_punct(p, ':');
+    if(err){
+        cc_release_expr(p, case_expr);
+        if(high_expr) cc_release_expr(p, high_expr);
+        return err;
+    }
+    uint64_t case_val, case_high = 0;
+    _Bool empty = 0, range = high_expr != NULL;
+    if(high_expr){
+        CiUint128 low, high;
+        err = cc_eval_case_range(p, tok.loc, p->switch_ctx->type, case_expr, high_expr, &low, &high, &empty);
+        cc_release_expr(p, case_expr);
+        cc_release_expr(p, high_expr);
+        if(err) return err;
+        case_val = ci_uint128_lo(low);
+        case_high = ci_uint128_lo(high);
+    }
+    else if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
         CcExpr* case_val_expr;
         err = cc_eval_expr(&(CcEvalCtx){.parser = p}, case_expr, &case_val_expr);
         if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
@@ -12900,16 +13001,27 @@ cc_parse_label(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
             return cc_error(p, tok.loc, "case label must be a constant integer expression");
         case_val = (uint64_t)case_i;
     }
-    for(size_t i = 0; i < p->switch_ctx->cases.count; i++){
-        if(p->switch_ctx->cases.data[i].value == case_val)
-            return cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)case_val);
+    if(!range) case_high = case_val;
+    _Bool uns = ccqt_bt_eq(p->switch_ctx->type, CCBT__Type) || ccqt_is_unsigned(p->switch_ctx->type, !cc_target(p)->char_is_signed);
+    uint64_t sign = uns ? 0 : UINT64_C(1) << 63;
+    if(!empty){
+        for(size_t i = 0; i < p->switch_ctx->cases.count; i++){
+            CcSwitchEntry prev = p->switch_ctx->cases.data[i];
+            if((case_val ^ sign) <= (prev.high ^ sign) && (prev.low ^ sign) <= (case_high ^ sign)){
+                if(!range && prev.low == prev.high)
+                    return cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)case_val);
+                return cc_error(p, tok.loc, "overlapping case values");
+            }
+        }
+        CcSwitchEntry entry = {.low = case_val, .high = case_high};
+        err = ma_push(CcSwitchEntry)(&p->switch_ctx->cases, cc_allocator(p), entry);
+        if(err) return CC_OOM_ERROR;
     }
-    CcSwitchEntry entry = {.value = case_val};
-    err = ma_push(CcSwitchEntry)(&p->switch_ctx->cases, cc_allocator(p), entry);
-    if(err) return CC_OOM_ERROR;
     CcStmtNode* node = cc_stmt_node(p, CC_STMT_CASE, tok.loc, 1);
     if(!node) return CC_OOM_ERROR;
-    node->case_value = case_val;
+    node->case_.low = case_val;
+    node->case_.high = case_high;
+    node->case_empty = empty;
     *out = node;
     return 0;
 }

@@ -187,6 +187,12 @@ static struct OomTestCase {
          "constexpr struct B c={1,ONE}; static int complement=~c.bits;\n"
          "_Any boxed=+b.small; return !(b.small < -1)&&~b.bits==-2"
          "&&complement==-2&&boxed.type==int&&boxed.as(int)==1;\n")},
+    {__LINE__, SVI("int n=0;static switch((__int128)-1){static case -2 ... 2u:n++;static break;}"
+         "static switch(~(unsigned __int128)0){static case ((unsigned __int128)1<<100) ... ~(unsigned __int128)0:n++;}"
+         "static switch(1){static case 1:n++;static case 10 ... 2:n++;}return n==4;\n")},
+    {__LINE__, SVI("__forceinline int f(int n){switch(n){case -2 ... (unsigned __int128)2:return 1;"
+         "case 10 ... 20:return 2;default:return 0;}} return f(-1)==1&&f(15)==2&&f(30)==0;\n")},
+    {__LINE__, SVI("int n=0;switch(1){case 1:n++;case 10 ... 2:n++;}return n==2;\n")},
     {__LINE__, SVI("enum W:unsigned __int128 {HIGH=((unsigned __int128)1<<100)+7};\n"
          "unsigned x=4294967295u; switch(x){case -1: break; default: return 0;}\n"
          "int y=7; switch(y){case HIGH: break; default: return 0;}\n"

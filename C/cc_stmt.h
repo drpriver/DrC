@@ -56,7 +56,8 @@ struct CcStmtNode {
     uint32_t jump_levels:     8, // BREAK/CONTINUE: enclosing loops/switches, target included
              no_fallthrough:  1, // conservative
              has_jump_target: 1, // subtree contains a runtime label, case, or default
-             _bit_padding:   14; // free real estate
+             case_empty:      1, // CC_STMT_CASE: no dispatch entry, but retain the body
+             _bit_padding:   13; // free real estate
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
     Parray(CcVariable) decls; // variables scoped to this statement
@@ -69,7 +70,7 @@ struct CcStmtNode {
     // CC_STMT_FOR:      exprs[0] = cond, exprs[1] = inc,
     //                   stmts[0] = init, stmts[1] = body
     // CC_STMT_SWITCH:   exprs[0] = expr, stmts[0] = body
-    // CC_STMT_CASE:     case_value = folded constant, stmts[0] = stmt
+    // CC_STMT_CASE:     case_ = inclusive folded bounds, stmts[0] = stmt
     // CC_STMT_DEFAULT:  stmts[0] = stmt
     // CC_STMT_RETURN:   return_.expr, return_.first (all active cleanups)
     // CC_STMT_BREAK:    cleanup
@@ -81,7 +82,9 @@ struct CcStmtNode {
         CcExpr* expr; // CC_STMT_EXPR
         CcExpr* _Null_unspecified exprs[2];
         Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
-        uint64_t case_value; // CC_STMT_CASE
+        struct {
+            uint64_t low, high;
+        } case_;
         CcCleanupRange cleanup; // CC_STMT_NULL/COMPOUND/BREAK/CONTINUE only
         struct {
             CcExpr* _Nullable expr; // also exprs[0]
@@ -98,7 +101,7 @@ _Static_assert(offsetof(CcStmtNode, count) == sizeof(uint32_t), "");
 
 typedef struct CcSwitchEntry CcSwitchEntry;
 struct CcSwitchEntry {
-    uint64_t value;
+    uint64_t low, high; // inclusive range
     uint32_t target;
 };
 

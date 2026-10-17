@@ -4457,6 +4457,46 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "switch: inclusive ranges and signed dispatch", __LINE__,
+            SVI("__forceinline int f(int n){switch(n){"
+                "case -10 ... 10ul:return 1;case -20 ... -15:return 2;"
+                "case 20 ... 20:return 3;case 30:return 4;default:return 0;}}"
+                "return f(-21)==0&&f(-20)==2&&f(-15)==2&&f(-14)==0"
+                "&&f(-11)==0&&f(-10)==1&&f(0)==1&&f(10)==1&&f(11)==0"
+                "&&f(20)==3&&f(21)==0&&f(30)==4;"),
+            .exit_code = 1,
+        },
+        {
+            "switch: full width ranges stay compact", __LINE__,
+            SVI("int u(unsigned long long n){switch(n){case 0 ... ~0ull:return 1;}return 0;}"
+                "int s(long long n){switch(n){case (-9223372036854775807ll-1) ... 9223372036854775807ll:return 1;}return 0;}"
+                "return u(0)&&u(~0ull)&&u(1ull<<63)&&s(-1)&&s(0)"
+                "&&s(-9223372036854775807ll-1)&&s(9223372036854775807ll);"),
+            .exit_code = 1,
+        },
+        {
+            "switch: empty ranges preserve fallthrough", __LINE__,
+            SVI("int f(int n){int r=0;switch(n){case 1:r++;"
+                "case 10 ... 2:r+=2;case 3:r+=4;break;default:r=8;}return r;}"
+                "return f(1)==7&&f(3)==4&&f(2)==8&&f(10)==8;"),
+            .exit_code = 1,
+        },
+        {
+            "switch: ranges evaluate selector once and nest", __LINE__,
+            SVI("int n=0,r=0;switch(++n){case 1 ... 5:"
+                "switch(n){case 0 ... 2:r=7;break;}r++;break;default:r=0;}"
+                "switch(100){case -5 ... 5:r=0;}return n==1&&r==8;"),
+            .exit_code = 1,
+        },
+        {
+            "switch: wide endpoints and unsigned high ranges", __LINE__,
+            SVI("int f(unsigned long long n){switch(n){case 0:return 1;"
+                "case ((unsigned __int128)1<<63) ... ~0ull:return 2;default:return 0;}}"
+                "int g(int n){switch(n){case (__int128)-2 ... (unsigned __int128)2:return 1;default:return 0;}}"
+                "return f(0)==1&&f(1)==0&&f(1ull<<63)==2&&f(~0ull)==2&&g(-2)&&g(2)&&!g(3);"),
+            .exit_code = 1,
+        },
+        {
             "switch: unsigned case converts to signed controlling type", __LINE__,
             SVI("int x=-1;\n"
                 "switch(x){case 4294967295u: return 1; default: return 0;}\n"),
@@ -4691,6 +4731,34 @@ TestFunction(test_interpreter){
             "static switch: documented type dispatch", __LINE__,
             SVI("constexpr T=int; T one(void){static switch(T){static case int:return 1;static break;static case float:return 1.f;static break;static default:static_assert(0,\"unsupported type\");}} return one();"),
             .exit_code = 1,
+        },
+        {
+            "static switch: inclusive ranges and mixed signed endpoints", __LINE__,
+            SVI("int n=0;static for(int i=-3;i<=3;i++){static switch(i){"
+                "static case -2 ... 2u:n++;static break;static default:n+=10;}}return n;"),
+            .exit_code = 25,
+        },
+        {
+            "static switch: empty ranges preserve fallthrough", __LINE__,
+            SVI("int n=0;static switch(1){static case 1:n++;static case 10 ... 2:n+=2;static break;}"
+                "static switch(3){static case 10 ... 2:invalid();static break;static default:n+=4;}"
+                "static switch(3){static case 10 ... 2:invalid();}return n;"),
+            .exit_code = 7,
+        },
+        {
+            "static switch: full width unsigned and signed ranges", __LINE__,
+            SVI("int n=0;constexpr unsigned __int128 top=~(unsigned __int128)0;"
+                "static switch(top){static case 0 ... top:n++;static break;static default:invalid();}"
+                "static switch((__int128)-1){static case -((__int128)1<<126) ... ((unsigned __int128)1<<126):n++;static break;}"
+                "static switch((unsigned __int128)1<<100){static case 0 ... 10:invalid();static break;"
+                "static case ((unsigned __int128)1<<100) ... top:n++;}return n;"),
+            .exit_code = 3,
+        },
+        {
+            "static switch: nested ranges and singleton", __LINE__,
+            SVI("int n=0;static switch(2){static default:invalid();static break;"
+                "static case 1 ... 3:static switch(2){static case 2 ... 2:n=7;static break;}static break;}return n;"),
+            .exit_code = 7,
         },
         {
             "static switch: fallthrough and default before match", __LINE__,
