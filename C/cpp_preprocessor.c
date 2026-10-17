@@ -4316,15 +4316,32 @@ cpp_def_1(CppPreprocessor* cpp, StringView name){
 }
 static
 int
-cpp_def_int(CppPreprocessor* cpp, StringView name, int val){
-    Atom a = cpp_atomizef(cpp, "%d", val);
-    if(!a) return CPP_OOM_ERROR;
-    return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt={a->length, a->data}}}, 1);
+cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
+    // predefined values can be a sequence of tokens.
+    CppTokens* replacement = cpp_get_scratch(cpp);
+    if(!replacement) return CPP_OOM_ERROR;
+    CppFrame frame = {.txt=num, .line=1, .column=1};
+    int err;
+    for(;;){
+        CppToken tok;
+        err = cpp_tokenize_from_frame(cpp, &frame, &tok);
+        if(err) break;
+        if(cpp_token_is_end(tok)){
+            err = cpp_define_obj_macro(cpp, name, replacement->data, replacement->count);
+            break;
+        }
+        err = cpp_push_tok(cpp, replacement, tok);
+        if(err) break;
+    }
+    cpp_release_scratch(cpp, replacement);
+    return err;
 }
 static
 int
-cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
-    return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt=num}}, 1);
+cpp_def_int(CppPreprocessor* cpp, StringView name, int val){
+    Atom a = cpp_atomizef(cpp, "%d", val);
+    if(!a) return CPP_OOM_ERROR;
+    return cpp_def_num(cpp, name, (StringView){a->length, a->data});
 }
 
 static
@@ -4342,9 +4359,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         if(err) return err; \
     } while(0)
     #define DEFINT(name, val) do { \
-        Atom _da = cpp_atomizef(cpp, "%d", (int)(val)); \
-        if(!_da) return CPP_OOM_ERROR; \
-        err = cpp_define_obj_macro(cpp, SV(name), (CppToken[]){{.type=CPP_NUMBER, .txt={_da->length, _da->data}}}, 1); \
+        err = cpp_def_int(cpp, SV(name), (int)(val)); \
         if(err) return err; \
     } while(0)
     #define DEFTYPE(name, kind) do { \
@@ -6295,7 +6310,8 @@ cpp_builtin_for(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     if(range > 0xffff)
         return cpp_error(cpp, loc, "__for iterations limited to %d iterations, would've done %lld iterations", 0xffff, (long long)range);
     for(int64_t i = start_val; i < end_val; i++){
-        Atom num = cpp_atomizef(cpp, "%lld", (long long)i);
+        uint64_t magnitude = i < 0 ? (uint64_t)0 - (uint64_t)i : (uint64_t)i;
+        Atom num = cpp_atomizef(cpp, "%llu", (unsigned long long)magnitude);
         if(!num) return CPP_OOM_ERROR;
         CppToken num_tok = {
             .txt = {num->length, num->data},
@@ -6313,6 +6329,11 @@ cpp_builtin_for(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         if(err) return err;
         err = cpp_push_tok(cpp, outtoks, lparen);
         if(err) return err;
+        if(i < 0){
+            CppToken minus = {.type = CPP_PUNCTUATOR, .punct = '-', .loc = loc, .txt = SV("-")};
+            err = cpp_push_tok(cpp, outtoks, minus);
+            if(err) return err;
+        }
         err = cpp_push_tok(cpp, outtoks, num_tok);
         if(err) return err;
         err = cpp_push_tok(cpp, outtoks, rparen);

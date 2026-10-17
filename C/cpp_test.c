@@ -978,6 +978,15 @@ TestFunction(test_builtin_macros){
 
         // extensions
         {"__CALC__", SV("__CALC__(1+1)"), SV("2"), __LINE__, 0},
+        {"negative predefined exponents", SV(
+            "__CALC__(__FLT_MIN_EXP__ == -125) "
+            "__CALC__(__DBL_MIN_10_EXP__ == -307) "
+            "__CALC__(__LDBL_MIN_EXP__ < 0)"), SV("1 1 1"), __LINE__, 0},
+        {"predefined minimum expression", SV(
+            "__CALC__(__SIG_ATOMIC_MIN__ == (-__SIG_ATOMIC_MAX__-1))"), SV("1"), __LINE__, 0},
+        {"predefined expression in if", SV(
+            "#if __FLT_MIN_EXP__ < 0 && __SIG_ATOMIC_MIN__ < 0\nyes\n#endif"),
+            SV("\nyes\n"), __LINE__, 0},
         {"calc multiline defined", SV("__CALC__(defined\n__CALC__)"), SV("1"), __LINE__, 0},
         {"calc multiline macro call", SV("#define F(x) x\n__CALC__(F\n(7))"), SV("\n7"), __LINE__, 0},
         {"calc multiline has_include", SV("__CALC__(__has_include(\n\"missing-newline-test.h\"\n))"), SV("0"), __LINE__, 0},
@@ -1061,6 +1070,16 @@ TestFunction(test_builtin_macros){
             "\n"
             "enum { RED = 0,   GREEN = 1,   BLUE = 2,   };\n"
             "const char* names[] = { [RED] = \"RED\", [GREEN] = \"GREEN\", [BLUE] = \"BLUE\", };"), __LINE__, 0},
+        {"__for negative indices", SV(
+            "#define P(n) __CALC__((n) * (n))\n"
+            "__for(-2, 1, P)"), SV("\n4 1 0"), __LINE__, 0},
+        {"__for minimum index", SV(
+            "#define P(n) __CALC__((n) == (-9223372036854775807 - 1))\n"
+            "__for(-9223372036854775807 - 1, -9223372036854775807, P)"),
+            SV("\n1"), __LINE__, 0},
+        {"__for negative stringify", SV(
+            "#define P(n) #n\n__for(-2, 1, P)"),
+            SV("\n\"-2\" \"-1\" \"0\""), __LINE__, 0},
         {"__for basic", SV(
             "#define DECL(i) int x##i;\n"
             "__for(0, 3, DECL)"), SV(

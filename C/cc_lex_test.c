@@ -1145,17 +1145,17 @@ TestFunction(test_long_double_macros){
         [CC_LONG_DOUBLE_BINARY64] = {
             {{0x7fefffffffffffffULL, 0}, {0x0010000000000000ULL, 0},
              {0x3cb0000000000000ULL, 0}, {1, 0}},
-            SV("53 15 -1021 1024 -307 308 1 1 1 17"),
+            SV("53 15 - 1021 1024 - 307 308 1 1 1 17"),
         },
         [CC_LONG_DOUBLE_X87] = {
             {{0xffffffffffffffffULL, 0x7ffe}, {0x8000000000000000ULL, 1},
              {0x8000000000000000ULL, 0x3fc0}, {1, 0}},
-            SV("64 18 -16381 16384 -4931 4932 1 1 1 21"),
+            SV("64 18 - 16381 16384 - 4931 4932 1 1 1 21"),
         },
         [CC_LONG_DOUBLE_BINARY128] = {
             {{0xffffffffffffffffULL, 0x7ffeffffffffffffULL}, {0, 0x0001000000000000ULL},
              {0, 0x3f8f000000000000ULL}, {1, 0}},
-            SV("113 33 -16381 16384 -4931 4932 1 1 1 36"),
+            SV("113 33 - 16381 16384 - 4931 4932 1 1 1 36"),
         },
     };
     StringView source = SV(
