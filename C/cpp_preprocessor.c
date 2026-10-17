@@ -3357,7 +3357,7 @@ cpp_get_param_arg(const CppMacro *macro, const CppTokens *args, const Marray(siz
 
 static
 int
-cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_close_paren, SrcLocExp* expansion_parent){
+cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t after_va_opt, SrcLoc loc, size_t *out_content_start, size_t *out_content_count, size_t *out_close_paren, SrcLocExp* expansion_parent){
     size_t k = after_va_opt;
     while(k < nreplace && repl[k].type == CPP_WHITESPACE) k++;
     if(k >= nreplace || repl[k].type != CPP_PUNCTUATOR || repl[k].punct != '('){
@@ -3379,6 +3379,13 @@ cpp_parse_va_opt_content(CppPreprocessor *cpp, const CppToken *repl, size_t nrep
         return cpp_error(cpp, eloc, "unterminated __VA_OPT__");
     }
     *out_close_paren = k;
+    size_t start = *out_content_start;
+    while(start < k && repl[start].type == CPP_WHITESPACE)
+        start++;
+    while(k > start && repl[k-1].type == CPP_WHITESPACE)
+        k--;
+    *out_content_start = start;
+    *out_content_count = k - start;
     return 0;
 }
 
@@ -3469,14 +3476,14 @@ cpp_substitute_and_paste(
 
             // # __VA_OPT__(content)
             if(j < nreplace && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
-                size_t cstart, cparen;
-                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen, expansion_parent);
+                size_t cstart, ccount, cparen;
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &ccount, &cparen, expansion_parent);
                 if(err) return err;
                 CppToken stringified;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     CppTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, 1, expansion_parent);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, temp, 1, expansion_parent);
                     if(err){
                         cpp_release_scratch(cpp, temp);
                         return err;
@@ -3615,13 +3622,13 @@ cpp_substitute_and_paste(
 
             if(repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
                 // Right operand is __VA_OPT__
-                size_t cstart, cparen;
-                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &cparen, expansion_parent);
+                size_t cstart, ccount, cparen;
+                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &ccount, &cparen, expansion_parent);
                 if(err) return err;
                 if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                     CppTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, temp, raw_only, expansion_parent);
+                    err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, temp, raw_only, expansion_parent);
                     if(err) goto finally_paste_va_opt;
                     right = (temp->count == 0)
                         ? (CppToken){.type = CPP_PLACEMARKER, .loc = repl[j].loc}
@@ -3735,11 +3742,11 @@ cpp_substitute_and_paste(
 
         // __VA_OPT__
         if(t.type == CPP_IDENTIFIER && sv_equals(t.txt, SV("__VA_OPT__"))){
-            size_t cstart, cparen;
-            err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &cparen, expansion_parent);
+            size_t cstart, ccount, cparen;
+            err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &ccount, &cparen, expansion_parent);
             if(err) return err;
             if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
-                err = cpp_substitute_and_paste(cpp, repl+cstart, cparen-cstart, macro, args, arg_seps, expanded_args, out, raw_only, expansion_parent);
+                err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, out, raw_only, expansion_parent);
                 if(err) return err;
             }
             i = cparen;
