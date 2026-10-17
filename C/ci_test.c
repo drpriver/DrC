@@ -16383,6 +16383,7 @@ TestFunction(test_interpreter){
     };
     int err;
     static int idx = 0;
+    AtomTable at = {0};
     for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         size_t opt_idx = i % countof(optimization_options);
         size_t target_idx = (i / countof(optimization_options)) % CC_TARGET_COUNT;
@@ -16409,7 +16410,6 @@ TestFunction(test_interpreter){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
@@ -16505,11 +16505,11 @@ TestFunction(test_interpreter){
                 sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
     }
+    ArenaAllocator_free_all(&at.arena);
     TESTEND();
 }
 
@@ -17636,6 +17636,7 @@ TestFunction(test_interpreter_diagnostics){
     };
     int err;
     static int idx = 0;
+    AtomTable at = {0};
     for(size_t i = test_atomic_increment(&idx); i < CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i / CC_TARGET_COUNT];
         const CcTargetConfig* target = cc_targets[i % CC_TARGET_COUNT];
@@ -17654,7 +17655,6 @@ TestFunction(test_interpreter_diagnostics){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
@@ -17734,11 +17734,11 @@ TestFunction(test_interpreter_diagnostics){
             TestPrintf("%s:%d: %s [target=%.*s]\n", __FILE__, tc->line, tc->name, sv_p(cc_target_names[target->target]));
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
     }
+    ArenaAllocator_free_all(&at.arena);
     TESTEND();
 }
 
@@ -17814,6 +17814,7 @@ TestFunction(test_ci_call_main){
     };
     int err;
     static int idx = 0;
+    AtomTable at = {0};
     for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         const struct opt* o = &optimization_options[i % countof(optimization_options)];
         struct tc* tc = &testcases[i / (countof(optimization_options) * CC_TARGET_COUNT)];
@@ -17830,7 +17831,6 @@ TestFunction(test_ci_call_main){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
@@ -17914,11 +17914,11 @@ TestFunction(test_ci_call_main){
                 sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
     }
+    ArenaAllocator_free_all(&at.arena);
     TESTEND();
 }
 
@@ -18074,6 +18074,7 @@ TestFunction(test_ci_call_by_name){
     };
     int err;
     static int idx = 0;
+    AtomTable at = {0};
     for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         const struct opt* o = &optimization_options[i % countof(optimization_options)];
         struct tc* tc = &testcases[i / (countof(optimization_options) * CC_TARGET_COUNT)];
@@ -18091,7 +18092,6 @@ TestFunction(test_ci_call_by_name){
         MStringBuilder log_sb = {.allocator=al};
         MsbLogger logger_ = {0};
         Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
@@ -18190,11 +18190,11 @@ TestFunction(test_ci_call_by_name){
                 sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
         ArenaAllocator_free_all(&arena);
         ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
         ArenaAllocator_free_all(&interp.parser.scratch_arena);
     }
+    ArenaAllocator_free_all(&at.arena);
     TESTEND();
 }
 
