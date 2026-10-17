@@ -1197,7 +1197,7 @@ native_capture_allocate(NcClosure* closure, NcCaptureHandle* out){
         return NC_MAP_ERROR_UNSUPPORTED;
     LOCK_T_lock(&NC_CAPTURE_ALLOCATOR.lock);
     NcCaptureTable* table = NC_CAPTURE_ALLOCATOR.table;
-    for(; table && table->used == NC_CAPTURE_SLOT_COUNT; table = table->next){
+    for(; table && table->used == NC_CAPTURE_SLOT_COUNT - 1; table = table->next){
     }
     if(!table){
         table = Allocator_zalloc(MALLOCATOR, sizeof *table);
@@ -1210,6 +1210,9 @@ native_capture_allocate(NcClosure* closure, NcCaptureHandle* out){
             Allocator_free(MALLOCATOR, table, sizeof *table);
             goto unlock;
         }
+        // Reserve the first trampoline so funcsan doesn't
+        // fault trying to probe.
+        table->occupied[0] = 1;
         table->next = NC_CAPTURE_ALLOCATOR.table;
         NC_CAPTURE_ALLOCATOR.table = table;
     }
@@ -1241,7 +1244,7 @@ native_capture_release(NcCaptureHandle handle){
         if(address < start || address - start >= NC_CAPTURE_TABLE_SIZE)
             continue;
         size_t offset = address - start;
-        if(offset % sizeof(NcCaptureSlot)){
+        if(!offset || offset % sizeof(NcCaptureSlot)){
             err = NC_MAP_ERROR_INVALID;
             goto unlock;
         }
