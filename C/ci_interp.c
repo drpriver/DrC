@@ -208,32 +208,6 @@ ci_log_native_signature_error(CiInterpreter* ci, SrcLoc loc, const char* operati
 #define ci_unsafe_unreachable() abort()
 #endif
 
-static inline
-uint64_t
-ci_read_uint(const void* buf, uint32_t sz){
-    switch(sz){
-        case 1: return *(const uint8_t*)buf;
-        case 2: return *(const uint16_t*)buf;
-        case 4: return *(const uint32_t*)buf;
-        case 8: return *(const uint64_t*)buf;
-    }
-    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
-    return 0;
-}
-
-static inline
-int64_t
-ci_read_int(const void* buf, uint32_t sz){
-    switch(sz){
-        case 1: return *(const int8_t*)buf;
-        case 2: return *(const int16_t*)buf;
-        case 4: return *(const int32_t*)buf;
-        case 8: return *(const int64_t*)buf;
-    }
-    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
-    return 0;
-}
-
 #if defined __has_builtin
 #if __has_builtin(__builtin_memcpy_inline)
 #define CI_INLINE_MEMCPY(dst, src, size) __builtin_memcpy_inline(dst, src, size)
@@ -248,6 +222,33 @@ ci_read_int(const void* buf, uint32_t sz){
 #define CI_INLINE_MEMCPY(dst, src, size) memcpy(dst, src, size)
 #endif
 #endif
+
+static inline
+uint64_t
+ci_read_uint(const void* buf, uint32_t sz){
+    switch(sz){
+        case 1: return *(const uint8_t*)buf;
+        case 2: { uint16_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+        case 4: { uint32_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+        case 8: { uint64_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+    }
+    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
+    return 0;
+}
+
+static inline
+int64_t
+ci_read_int(const void* buf, uint32_t sz){
+    switch(sz){
+        case 1: return *(const int8_t*)buf;
+        case 2: { int16_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+        case 4: { int32_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+        case 8: { int64_t v; CI_INLINE_MEMCPY(&v, buf, sizeof v); return v; }
+    }
+    assert(sz == 1 || sz == 2 || sz == 4 || sz == 8);
+    return 0;
+}
+
 
 static inline
 void
@@ -1909,10 +1910,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
         case CI_OP_BIT_BUILTIN: {
             if(op->bit_builtin.op >= CC_BIT_CRC32C8 && op->bit_builtin.op <= CC_BIT_CRC32C64){
-                uint32_t seed = *(uint32_t*)((char*)frame->slots + op->bit_builtin.src);
+                uint32_t seed = (uint32_t)ci_read_uint((char*)frame->slots + op->bit_builtin.src, 4);
                 uint64_t value = ci_read_uint((char*)frame->slots + op->bit_builtin.src2, op->bit_builtin.src2_size);
-                *(uint32_t*)((char*)frame->slots + op->bit_builtin.slot) =
-                    drp_crc32c(seed, value, op->bit_builtin.src2_size);
+                ci_write_uint((char*)frame->slots + op->bit_builtin.slot, 4, drp_crc32c(seed, value, op->bit_builtin.src2_size));
                 frame->pc++;
                 return 0;
             }
@@ -2640,9 +2640,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             void* dest = (char*)frame->slots + op->bswap.slot;
             void* src = (char*)frame->slots + op->bswap.src;
             switch(sz){
-                case 2: *(uint16_t*)dest = bswap16(*(uint16_t*)src); break;
-                case 4: *(uint32_t*)dest = bswap32(*(uint32_t*)src); break;
-                case 8: *(uint64_t*)dest = bswap64(*(uint64_t*)src); break;
+                case 2: ci_write_uint(dest, 2, bswap16((uint16_t)ci_read_uint(src, 2))); break;
+                case 4: ci_write_uint(dest, 4, bswap32((uint32_t)ci_read_uint(src, 4))); break;
+                case 8: ci_write_uint(dest, 8, bswap64(ci_read_uint(src, 8))); break;
                 default:
                     return ci_unreachable(ci, op->loc, "bswap other than 2,4,8 bytes");
             }

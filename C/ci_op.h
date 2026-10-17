@@ -205,7 +205,8 @@ struct CiOp {
         } constant;
         struct {
             CiOpKind kind: 8; // CI_OP_COPY
-            uint32_t _bitpad: 24;
+            uint32_t is_volatile: 1,
+                     _bitpad: 23;
             uint32_t _pad;
             uint32_t slot, slot_size,
                      src, src_size;
@@ -351,7 +352,8 @@ struct CiOp {
             CiOpKind kind: 8; // CI_OP_STORE
             // Guaranteed alignment of the effective address: 1u << align_log2.
             uint32_t align_log2: 5,
-                     _bitpad: 19;
+                     is_volatile: 1,
+                     _bitpad: 18;
             uint32_t pad;
             uint32_t slot,
                      src,
@@ -363,7 +365,8 @@ struct CiOp {
             CiOpKind kind: 8; // CI_OP_STORE_IMM
             uint32_t size: 8,
                      align_log2: 5,
-                     _bitpad: 11;
+                     is_volatile: 1,
+                     _bitpad: 10;
             uint32_t slot, offset, _pad;
             uint64_t immediate;
             SrcLoc loc;
@@ -371,7 +374,8 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_LOAD
             uint32_t align_log2: 5,
-                     _bitpad: 19;
+                     is_volatile: 1,
+                     _bitpad: 18;
             uint32_t pad;
             uint32_t slot,
                      slot_size,
@@ -383,7 +387,8 @@ struct CiOp {
             CiOpKind kind: 8; // CI_OP_MEMCOPY
             uint32_t dst_align_log2: 5,
                      src_align_log2: 5,
-                     _bitpad: 14;
+                     is_volatile: 1,
+                     _bitpad: 13;
             uint32_t size;
             uint32_t slot,
                      offset,
@@ -394,7 +399,8 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_ZERO
             uint32_t align_log2: 5,
-                     _bitpad: 19;
+                     is_volatile: 1,
+                     _bitpad: 18;
             uint32_t size;
             uint32_t slot, offset;
             uint64_t pad;
@@ -406,7 +412,8 @@ struct CiOp {
                      bit_width: 8,
                      is_signed: 1,
                      align_log2: 5,
-                     _bitpad: 2;
+                     is_volatile: 1,
+                     _bitpad: 1;
             uint32_t pad;
             uint32_t slot,
                      src,
@@ -420,7 +427,8 @@ struct CiOp {
                      bit_width: 8,
                      is_signed: 1,
                      align_log2: 5,
-                     _bitpad: 2;
+                     is_volatile: 1,
+                     _bitpad: 1;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src,
@@ -430,7 +438,8 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_ATOMIC_LOAD
             CcMemoryOrder memorder: 4;
-            uint32_t _bitpad: 20;
+            uint32_t is_volatile: 1,
+                     _bitpad: 19;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src,
@@ -440,7 +449,8 @@ struct CiOp {
         struct {
             CiOpKind kind: 8; // CI_OP_ATOMIC_STORE
             CcMemoryOrder memorder: 4;
-            uint32_t _bitpad: 20;
+            uint32_t is_volatile: 1,
+                     _bitpad: 19;
             uint32_t pad;
             uint32_t slot,
                      src,
@@ -453,7 +463,8 @@ struct CiOp {
             CiAtomicRmwOp op: 8;
             CcMemoryOrder memorder: 4;
             uint32_t discard: 1,
-                     _bitpad: 11;
+                     is_volatile: 1,
+                     _bitpad: 10;
             uint32_t offset;
             uint32_t slot, slot_size,
                      src,
@@ -466,7 +477,8 @@ struct CiOp {
             CcMemoryOrder fail_memorder: 4;
             uint32_t weak: 1,
                      size: 5,
-                     _bitpad: 10;
+                     is_volatile: 1,
+                     _bitpad: 9;
             uint32_t offset;
             uint32_t slot,
                      src,

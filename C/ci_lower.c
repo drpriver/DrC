@@ -180,6 +180,7 @@ struct CiLowerAddr {
     uint32_t slot;
     uint32_t disp;
     uint32_t align_log2; // alignment of slot's pointer + disp
+    _Bool is_volatile; // destination access qualification for aggregate initialization
 };
 static uint32_t ci_offset_alignment(uint32_t align_log2, uint64_t offset);
 static uint32_t ci_frame_alignment(const CiLowerCtx*, uint32_t);
@@ -799,6 +800,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
     uint32_t sz;
     err = cc_sizeof_as_uint(p, e->type, e->loc, &sz);
     if(err) return err;
+    dst.is_volatile |= e->type.is_volatile;
     if(zero){
         _Bool handled;
         err = ci_try_lower_init_template(ci, ctx, e, dst, sz, &handled);
@@ -810,6 +812,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         if(err) return err;
         *op = (CiOp){
             .zero = {
+                .is_volatile = dst.is_volatile,
                 .kind = CI_OP_ZERO,
                 .slot = dst.slot,
                 .offset = dst.disp,
@@ -848,7 +851,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
                     }
                 }
             }
-            err = ci_lower_init_list(ci, ctx, value, (CiLowerAddr){.slot = dst.slot, .disp = off, .align_log2 = ci_offset_alignment(dst.align_log2, entry_loc.byte_offset)}, overwritten);
+            err = ci_lower_init_list(ci, ctx, value, (CiLowerAddr){.slot = dst.slot, .disp = off, .is_volatile = dst.is_volatile, .align_log2 = ci_offset_alignment(dst.align_log2, entry_loc.byte_offset)}, overwritten);
             if(err) return err;
             if(end > written_end) written_end = end;
             continue;
@@ -863,6 +866,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         if(entry_loc.bit_width){
             *op = (CiOp){
                 .store_bf = {
+                    .is_volatile = dst.is_volatile,
                     .kind = ci_bitfield_needs_bytes(e->type, entry->path, esz) ? CI_OP_STORE_BITFIELD_BYTES : CI_OP_STORE_BITFIELD,
                     .slot = dst.slot,
                     .src = v.slot,
@@ -880,6 +884,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         else {
             *op = (CiOp){
                 .store = {
+                    .is_volatile = dst.is_volatile,
                     .kind = CI_OP_STORE,
                     .slot = dst.slot,
                     .src = v.slot,
@@ -961,10 +966,11 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
     else {
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
-        if(atomic) *op = (CiOp){.atomic_load = {.kind = CI_OP_ATOMIC_LOAD,
+        if(atomic) *op = (CiOp){.atomic_load = {.is_volatile = lhs->type.is_volatile, .kind = CI_OP_ATOMIC_LOAD,
             .memorder = CC_MO_SEQ_CST, .slot = old, .slot_size = size,
             .src = a.slot, .offset = a.disp, .loc = e->loc}};
         else *op = (CiOp){.load = {
+            .is_volatile = lhs->type.is_volatile,
             .kind = CI_OP_LOAD,
             .slot = old,
             .slot_size = size,
@@ -1005,7 +1011,7 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
         if(atomic){
-            *op = (CiOp){.atomic_cas = {.kind = CI_OP_ATOMIC_CAS,
+            *op = (CiOp){.atomic_cas = {.is_volatile = lhs->type.is_volatile, .kind = CI_OP_ATOMIC_CAS,
                 .memorder = CC_MO_SEQ_CST, .fail_memorder = CC_MO_SEQ_CST, .weak = 1,
                 .size = size, .slot = ok, .src = a.slot, .expected = old,
                 .desired = cur, .offset = a.disp, .loc = e->loc}};
@@ -1015,6 +1021,7 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
                 .slot_size = 1, .jump = loop, .loc = e->loc}};
         }
         else *op = (CiOp){.store = {
+            .is_volatile = lhs->type.is_volatile,
             .kind = CI_OP_STORE,
             .slot = a.slot,
             .src = cur,
@@ -1203,6 +1210,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         if(err) return err;
         *op = (CiOp){
             .load = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_LOAD,
                 .slot = cur,
                 .slot_size = size,
@@ -1326,6 +1334,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         if(err) return err;
         *op = (CiOp){
             .store = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_STORE,
                 .slot = a.slot,
                 .src = cur,
@@ -1397,6 +1406,54 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
     uint32_t rsz;
     err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
     if(err) return err;
+    if(rsz < size && ccqt_kind(lhs->type) == CC_ARRAY && ccqt_kind(rhs->type) == CC_ARRAY){
+        CiLowerAddr a;
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a);
+        if(err) return err;
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.store = {
+            .is_volatile = lhs->type.is_volatile,
+            .kind = CI_OP_STORE,
+            .slot = a.slot,
+            .offset = a.disp,
+            .align_log2 = a.align_log2,
+            .src = v.slot,
+            .src_size = rsz,
+            .loc = e->loc
+        }};
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.zero = {
+            .is_volatile = lhs->type.is_volatile,
+            .kind = CI_OP_ZERO,
+            .slot = a.slot,
+            .offset = a.disp + rsz,
+            .align_log2 = ci_offset_alignment(a.align_log2, rsz),
+            .size = size - rsz,
+            .loc = e->loc
+        }};
+        if(out){
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){.load = {
+                .is_volatile = lhs->type.is_volatile,
+                .kind = CI_OP_LOAD,
+                .slot = dest,
+                .slot_size = size,
+                .src = a.slot,
+                .offset = a.disp,
+                .align_log2 = a.align_log2,
+                .loc = e->loc
+            }};
+            out->slot = dest;
+        }
+        return 0;
+    }
     if(rsz != size)
         return ci_unreachable(ci, rhs->loc, "size mismatch");
     if(lhs->type.is_atomic){
@@ -1413,6 +1470,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         if(err) return err;
         *op = (CiOp){
             .atomic_store = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_ATOMIC_STORE,
                 .memorder = CC_MO_SEQ_CST,
                 .slot = a.slot,
@@ -1465,6 +1523,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
     if(err) return err;
     *op = (CiOp){
         .store = {
+            .is_volatile = lhs->type.is_volatile,
             .kind = CI_OP_STORE,
             .slot = a.slot,
             .src = v.slot,
@@ -1588,6 +1647,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
+                        .is_volatile = e->type.is_volatile,
                         .kind = CI_OP_LOAD,
                         .slot = dest,
                         .slot_size = size,
@@ -1634,6 +1694,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
+                        .is_volatile = e->type.is_volatile,
                         .kind = CI_OP_LOAD,
                         .slot = dest,
                         .slot_size = size,
@@ -1644,6 +1705,10 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 };
                 ctx->temp = temp;
                 return 0;
+            }
+            if(dest == CI_NO_SLOT && e->type.is_volatile){
+                err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+                if(err) return err;
             }
             if(dest == CI_NO_SLOT){
                 // the variable's storage is already a slot; refer to it directly
@@ -1705,6 +1770,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             if(err) return err;
             *op = (CiOp){
                 .load = {
+                    .is_volatile = e->type.is_volatile,
                     .kind = CI_OP_LOAD,
                     .slot = dest,
                     .slot_size = size,
@@ -2917,11 +2983,23 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         out->slot = dest;
     }
     uint32_t temp = ctx->temp;
+    uint32_t result = dest;
+    if(out){
+        uint32_t align;
+        err = cc_alignof_as_uint(&ci->parser, e->type, e->loc, &align);
+        if(err) return err;
+        // Runtime reflection writes typed objects; a packed caller destination
+        // does not meet that interface's alignment requirement.
+        if(dest & (align - 1)){
+            err = ci_alloc_slot(ctx, out->size, align, &result);
+            if(err) return err;
+        }
+    }
     CiOp call = {.rt_call = {
         .kind = CI_OP_RT_CALL,
         .op = srcloc ? CI_RT_SRCLOC_REFLECT : module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
         .nargs = nargs,
-        .slot = dest,
+        .slot = result,
         .slot_size = out ? out->size : 0,
         .reflect_op = subop,
         .member_by_name = (module ? subop == CC_MODULE_SYMBOL || subop == CC_MODULE_PARSE_TYPE :
@@ -2967,6 +3045,10 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = call;
+    if(out && result != dest){
+        err = ci_emit_copy(ctx, dest, result, out->size, e->loc);
+        if(err) return err;
+    }
     ctx->temp = temp;
     return 0;
 }
@@ -3194,6 +3276,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
+                    .is_volatile = lhs->type.is_volatile,
                     .kind = CI_OP_ATOMIC_LOAD,
                     .memorder = CC_MO_SEQ_CST,
                     .slot = old,
@@ -3241,6 +3324,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
+                    .is_volatile = lhs->type.is_volatile,
                     .kind = CI_OP_ATOMIC_CAS,
                     .memorder = CC_MO_SEQ_CST,
                     .fail_memorder = CC_MO_SEQ_CST,
@@ -3272,6 +3356,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
+                    .is_volatile = lhs->type.is_volatile,
                     .kind = CI_OP_ATOMIC_RMW,
                     .op = is_inc? CI_ARMW_ADD : CI_ARMW_SUB,
                     .memorder = CC_MO_SEQ_CST,
@@ -3333,6 +3418,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         *op = (CiOp){
             .load = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_LOAD,
                 .slot = old,
                 .slot_size = size,
@@ -3408,6 +3494,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         *op = (CiOp){
             .store = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_STORE,
                 .slot = a.slot,
                 .src = newv,
@@ -3497,6 +3584,7 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         .store = {
             .kind = CI_OP_STORE,
             .slot = pv.slot,
+            .is_volatile = dtype.is_volatile,
             .src = rtmp,
             .align_log2 = alignment,
             .src_size = dsz,
@@ -3590,6 +3678,7 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         .store = {
             .kind = CI_OP_STORE,
             .slot = hv.slot,
+            .is_volatile = ccqt_as_ptr(he->type)->pointee.is_volatile,
             .src = prod + 8,
             .align_log2 = alignment,
             .src_size = 8,
@@ -3825,6 +3914,14 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         ret_size = out->size;
     }
     uint32_t temp = ctx->temp;
+    if(!out && !ccqt_bt_eq(e->type, CCBT_void)){
+        // A discarded result still needs storage for native calls and return
+        // instructions.
+        err = cc_sizeof_as_uint(p, e->type, e->loc, &ret_size);
+        if(err) return err;
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, ret_size);
+        if(err) return err;
+    }
     CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 3 * sizeof d->arg_sizes[0]);
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
@@ -3917,7 +4014,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         .call = {
             .kind = CI_OP_CALL,
             .is_indirect = func?0:1,
-            .ret_slot = out? dest : 0,
+            .ret_slot = ret_size ? dest : 0,
             .ret_size = ret_size,
             .args_slot = args_slot,
             .descrip = d,
@@ -3961,6 +4058,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
             if(err) return err;
             *op = (CiOp){
                 .store_imm = {
+                    .is_volatile = lhs->type.is_volatile,
                     .kind = CI_OP_STORE_IMM,
                     .size = size,
                     .slot = a.slot,
@@ -4036,12 +4134,13 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     if(err) return err;
     *op = (CiOp){
         .memcopy = {
+            .is_volatile = lhs->type.is_volatile || rhs->type.is_volatile,
             .kind = CI_OP_MEMCOPY,
             .slot = dst.slot,
             .offset = dst.disp, .dst_align_log2 = dst.align_log2,
             .src = src.slot,
             .src_offset = src.disp, .src_align_log2 = src.align_log2,
-            .size = size,
+            .size = rsz,
             .loc = e->loc,
         }
     };
@@ -4050,6 +4149,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
         if(err) return err;
         *op = (CiOp){
             .zero = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_ZERO,
                 .slot = dst.slot,
                 .offset = dst.disp+rsz,
@@ -4103,6 +4203,7 @@ ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     if(err) return err;
     *op = (CiOp){
         .atomic_load = {
+            .is_volatile = e->type.is_volatile,
             .kind = CI_OP_ATOMIC_LOAD,
             .memorder = CC_MO_SEQ_CST,
             .slot = slot,
@@ -4224,6 +4325,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(err) return err;
         *op = (CiOp){
             .atomic_rmw = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_ATOMIC_RMW,
                 .op = armw,
                 .memorder = CC_MO_SEQ_CST,
@@ -4261,6 +4363,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(err) return err;
         *op = (CiOp){
             .atomic_load = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_ATOMIC_LOAD,
                 .memorder = CC_MO_SEQ_CST,
                 .slot = old,
@@ -4303,6 +4406,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(err) return err;
         *op = (CiOp){
             .atomic_cas = {
+                .is_volatile = lhs->type.is_volatile,
                 .kind = CI_OP_ATOMIC_CAS,
                 .memorder = CC_MO_SEQ_CST,
                 .fail_memorder = CC_MO_SEQ_CST,
@@ -4403,6 +4507,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_LOAD,
                     .memorder = mo,
                     .slot = slot,
@@ -4425,6 +4530,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_LOAD,
                     .memorder = mo,
                     .slot = tmp,
@@ -4478,6 +4584,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_store = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_STORE,
                     .memorder = mo,
                     .slot = pv.slot,
@@ -4503,6 +4610,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_RMW,
                     .op = CI_ARMW_XCHG,
                     .memorder = mo,
@@ -4546,6 +4654,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_RMW,
                     .op = CI_ARMW_XCHG,
                     .memorder = mo,
@@ -4619,6 +4728,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_CAS,
                     .memorder = mo,
                     .fail_memorder = e->atomic.fail_memorder,
@@ -4733,6 +4843,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_RMW,
                     .op = armw,
                     .memorder = mo,
@@ -4786,6 +4897,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_RMW,
                     .op = inc? CI_ARMW_ADD : CI_ARMW_SUB,
                     .memorder = mo,
@@ -4839,6 +4951,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_CAS,
                     .memorder = mo,
                     .fail_memorder = mo,
@@ -4895,6 +5008,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
+                    .is_volatile = ccqt_as_ptr(e->lhs->type)->pointee.is_volatile,
                     .kind = CI_OP_ATOMIC_CAS,
                     .memorder = mo,
                     .fail_memorder = mo,
@@ -4992,6 +5106,7 @@ ci_emit_copy_access(CiLowerCtx* ctx, uint32_t dst, uint32_t src, uint32_t size, 
     if(err) return err;
     *op = (CiOp){
         .copy = {
+            .is_volatile = observable,
             .kind = CI_OP_COPY,
             .slot = dst,
             .slot_size = size,
@@ -5916,6 +6031,7 @@ ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok,
     err = ci_lower_addr_inner(ci, ctx, lv, one_past_ok, out);
     if(err) return err;
     out->align_log2 = alignment;
+    out->is_volatile = lv->type.is_volatile;
     return 0;
 }
 
@@ -5963,6 +6079,7 @@ ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
     alignment = ci_offset_alignment(alignment, byte_offset);
     if(load){
         *op = (CiOp){.load = {
+            .is_volatile = field.load_bf.is_volatile,
             .kind = CI_OP_LOAD,
             .slot = field.load_bf.slot,
             .slot_size = bytes,
@@ -5987,6 +6104,7 @@ ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
     }
     else {
         *op = (CiOp){.store = {
+            .is_volatile = field.store_bf.is_volatile,
             .kind = CI_OP_STORE,
             .slot = field.store_bf.slot,
             .src = field.store_bf.src,
@@ -6008,6 +6126,7 @@ ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLo
     if(err) return err;
     *op = (CiOp){
         .load_bf = {
+            .is_volatile = lv->type.is_volatile,
             .kind = ci_expr_bitfield_needs_bytes(lv, size) ? CI_OP_LOAD_BITFIELD_BYTES : CI_OP_LOAD_BITFIELD,
             .slot = dest,
             .slot_size = size,
@@ -6030,6 +6149,7 @@ ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_
     if(err) return err;
     *op = (CiOp){
         .store_bf = {
+            .is_volatile = lv->type.is_volatile,
             .kind = ci_expr_bitfield_needs_bytes(lv, size) ? CI_OP_STORE_BITFIELD_BYTES : CI_OP_STORE_BITFIELD,
             .slot = a.slot,
             .src = src,
@@ -6046,6 +6166,7 @@ ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_
 static
 _Bool
 ci_frame_lvalue(CiInterpreter* ci, const CcExpr* lv, uint32_t* offset){
+    if(lv->type.is_volatile) return 0;
     switch((uint32_t)lv->kind){
         case CC_EXPR_VARIABLE:
             if(!lv->var->automatic) return 0;
@@ -8446,6 +8567,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
     if(err) goto cleanup;
     *op = (CiOp){
         .memcopy = {
+            .is_volatile = dst.is_volatile,
             .kind = CI_OP_MEMCOPY,
             .slot = dst.slot,
             .offset = dst.disp, .dst_align_log2 = dst.align_log2,

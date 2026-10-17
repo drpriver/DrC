@@ -45,6 +45,74 @@ TestFunction(test_interpreter){
         _Bool no_toplevel_ops;
     } testcases[] = {
         {
+            "integer operations read packed signed and unsigned frame operands", __LINE__,
+            SVI("int f(void){struct __attribute__((packed)) S{char c;short s;unsigned short u;"
+                "int i;unsigned n;long long l;unsigned long long m;}s={0,-3,5,-7,11,-13,17};"
+                "return s.s+1==-2&&s.u+1==6&&s.i+2==-5&&s.n+2==13&&s.l+3==-10&&s.m+3==20;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "byte swap accepts packed source and destination slots", __LINE__,
+            SVI("int f(void){struct __attribute__((packed)) S{char c;unsigned x;}s={0,0x12345678};"
+                "s.x=__builtin_bswap32(s.x);return s.x==0x78563412;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "crc32c accepts packed seed and destination slots", __LINE__,
+            SVI("int f(void){struct __attribute__((packed)) S{char c;unsigned x;}s={0,1};"
+                "unsigned expected=__builtin_crc32c32(s.x,7);"
+                "s.x=__builtin_crc32c32(s.x,7);return s.x==expected;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "runtime type reflection accepts a packed destination", __LINE__,
+            SVI("int f(_Type t){struct __attribute__((packed)) S{char c;_Type t;}s;"
+                "s.t=t.pointee;return s.t==int;}return f(int*);"),
+            .exit_code=1,
+        },
+        {
+            "aligned pointer typedef compound assignment scales the index", __LINE__,
+            SVI("typedef int* P __attribute__((aligned(16)));"
+                "int f(void){int a[3]={};P p=a;p+=1;return p==a+1;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "automatic character array can omit the string terminator", __LINE__,
+            SVI("int f(void){char a[3]=\"abc\";return a[0]=='a'&&a[2]=='c';}return f();"),
+            .exit_code=1,
+        },
+        {
+            "aligned typedef parameters work through inline and indirect calls", __LINE__,
+            SVI("typedef int I __attribute__((aligned(16)));"
+                "__forceinline int f(char a,I b,int c){return a==3&&b==17&&c==29&&((unsigned long long)&b%16)==0;}"
+                "int g(void){int(*p)(char,int,int)=f;return f(3,17,29)&&p(3,17,29);}return g();"),
+            .skip=1, // TODO: reconcile call-buffer and aligned parameter object layouts.
+            .exit_code=1,
+        },
+        {
+            "discarded large aggregate return has sufficient result storage", __LINE__,
+            SVI("struct S{char a[9000];};int calls;struct S f(void){++calls;return (struct S){};}"
+                "int g(void){f();return calls==1;}return g();"),
+            .exit_code=1,
+        },
+        {
+            "large automatic character arrays zero fill string padding", __LINE__,
+            SVI("int f(void){char a[10000]=\"abc\";for(int i=4;i<10000;i++)if(a[i])return 0;return a[0]=='a';}return f();"),
+            .exit_code=1,
+        },
+        {
+            "aligned typedef parameter receives its argument", __LINE__,
+            SVI("typedef int I __attribute__((aligned(16)));"
+                "int f(char a,I b){return a==3 && b==17;}return f(3,17);"),
+            .skip=1, // TODO: reconcile call-buffer and aligned parameter object layouts.
+            .exit_code=1,
+        },
+        {
+            "aligned parameter declaration receives its argument", __LINE__,
+            SVI("int f(char a,int b __attribute__((aligned(16)))){return a==3 && b==17;}return f(3,17);"),
+            .exit_code=1,
+        },
+        {
             "returned array temporary survives a short circuit branch", __LINE__,
             SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
                 "int sum(int* p,int* q){return p[0]+q[0];}"
