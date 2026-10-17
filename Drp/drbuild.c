@@ -3187,6 +3187,18 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
     CmdBuilder* cmd = &target->cmd;
     cmd->allocator = allocator_from_arena(&ctx->perm_aa);
     cmd_prog(cmd, AT_to_CSV(cc));
+    // Clang and maybe other compilers delete the depfile when a build fails.
+    // This is annoying, but it means we need to rebuild if the dep file is
+    // missing.
+    Atom depfile;
+    if(flavor == COMPILER_CL)
+        depfile = b_atomize_f(ctx, "%s/%s%s.deps.json", ctx->deps_dir->data, name, kind == B_COMPILE_OBJ ? ".obj" : "");
+    else
+        depfile = b_atomize_f(ctx, "%s/%s.deps", ctx->deps_dir->data, name);
+    BuildTarget* depout = b_targeta(ctx, depfile);
+    depout->is_generated = 1;
+    b_add_dep(ctx, depout, target);
+    b_add_out(ctx, target, depout);
     if(kind == B_COMPILE_OBJ) b_arg(ctx, target, flavor == COMPILER_CL || flavor == COMPILER_CLANG_CL ? "/c" : "-c");
     switch(flavor){
         case COMPILER_GCC_MINGW:
@@ -3239,13 +3251,13 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
                 if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
                 b_argf(ctx, target, "/Fo%s/%s.obj", ctx->obj_dir->data, name);
                 b_args(ctx, target, "/clang:-MMD", "/clang:-MP");
-                b_argf(ctx, target, "/clang:-MF%s/%s.deps", ctx->deps_dir->data, name);
+                b_argf(ctx, target, "/clang:-MF%s", depfile->data);
                 b_argf(ctx, target, "/clang:-MT%s", binary->data);
             }
             else {
                 b_args(ctx, target, "-o", binary->data);
                 b_args(ctx, target, "-MT", binary->data, "-MMD", "-MP", "-MF");
-                b_argf(ctx, target, "%s/%s.deps", ctx->deps_dir->data, name);
+                b_aarg(ctx, target, depfile);
             }
             if(tsan && sanitize) b_args(ctx, target, "-fsanitize=thread,undefined");
             else if(tsan) b_args(ctx, target, "-fsanitize=thread");
@@ -3267,7 +3279,7 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
             if(kind == B_COMPILE_EXE) b_argf(ctx, target, "/Fe:%s", binary->data);
             b_argf(ctx, target, "/Fo:%s/%s.obj", ctx->obj_dir->data, name);
             b_args(ctx, target, "/sourceDependencies");
-            b_argf(ctx, target, "%s/%s%s.deps.json", ctx->deps_dir->data, name, kind == B_COMPILE_OBJ ? ".obj" : "");
+            b_aarg(ctx, target, depfile);
             break;
     }
     b_argf(ctx, target, "-I%s", ctx->gen_dir->data);
