@@ -42,6 +42,48 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "assignment scratch: pointers into temporary aggregates survive the full expression", __LINE__,
+            SVI("struct S{int a[4];};struct S make(void){return (struct S){{11,22,33,44}};}"
+                "int add(int a,int b){return a+b;}"
+                "int read(int*p,int n){return p[0]+p[3]+n;}"
+                "int f(void){int*p;return read((p=make().a),add(50,60));}return f();"),
+            .exit_code=165,
+        },
+        {
+            "assignment scratch: independent nested results survive later operands", __LINE__,
+            SVI("int f(void){int a=0,b=0,c=0,d=0;int*p=&a,*q=&c;"
+                "int r=(*p=(b=3))+(*q=(d=4));"
+                "return r==7&&a==3&&b==3&&c==4&&d==4;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "assignment scratch: atomic result survives an unaligned destination", __LINE__,
+            SVI("struct __attribute__((packed)) P{char pad;int x;};"
+                "int f(void){struct P p={0};_Atomic int a=0;int b=0,c=0;"
+                "int r=(p.x=(a=7))+(b=(c=9));"
+                "return r==16&&p.x==7&&a==7&&b==9&&c==9;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "self assignment: scalars and aggregates retain their values", __LINE__,
+            SVI("int f(void){int x=7;double d=1.25;_Bool b=1;volatile int v=9;"
+                "struct S{int a[8];}s={{1,2,3,4,5,6,7,8}};"
+                "x=x;d=d;b=b;v=v;s=s;"
+                "return x==7&&d==1.25&&b&&v==9&&s.a[0]==1&&s.a[7]==8;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "pointer offsets: mixed signs agree for values and addresses", __LINE__,
+            SVI("int n;int* next(int*p){n++;return p;}"
+                "int* value(int*p){return 3+(p-5)+4;}"
+                "int load(int*p){return *(3+(p-5)+4);}"
+                "int f(void){int a[12]={0,1,2,3,4,5,6,7,8,9,10,11};"
+                "int*p=a+5;int*q=value(next(p));int x=load(next(p));"
+                "return q==a+7&&x==7&&n==2&&*(p-2-1)==2"
+                " &&((char*)(p+1)-sizeof(int))==(char*)p;}return f();"),
+            .exit_code=1,
+        },
+        {
             "integer chains: 128 operations on signed and unsigned widths", __LINE__,
             SVI("#define R8(x) x x x x x x x x\n"
                 "#define R128(x) R8(R8(x)) R8(R8(x))\n"
