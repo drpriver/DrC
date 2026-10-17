@@ -6013,13 +6013,19 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                         goto finally;
                     }
                     _Bool wrote_number = 0;
-                    for(;va_count;++va_args, --va_count){
+                    for(int minus = 0;va_count;++va_args, --va_count){
                         CppToken tok = *va_args;
                         if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
                             ++va_args; --va_count;
                             break;
                         }
                         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+                        if(tok.type == CPP_PUNCTUATOR && tok.punct == '-'){
+                            minus++;
+                            continue;
+                        }
+                        if(tok.type == CPP_PUNCTUATOR && (tok.punct == '+' || tok.punct == '++' || tok.punct == '--'))
+                            continue;
                         if(tok.type == CPP_NUMBER){
                             if(wrote_number){
                                 err = cpp_error(cpp, tok.loc, "Too many number args to format");
@@ -6030,6 +6036,7 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                                 err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
                                 goto finally;
                             }
+                            if(minus & 1) msb_write_char(&sb, '-');
                             msb_sprintf(&sb, "%llu", (unsigned long long)uval);
                             wrote_number = 1;
                             continue;

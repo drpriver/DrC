@@ -1020,6 +1020,7 @@ TestFunction(test_builtin_macros){
         {"__IF__", SV("#define X 1\n__IF__(X, 3, __calc(1/0))"), SV("\n3"), __LINE__, 0},
         {"__ident", SV("__ident(\"this is an ident\")"), SV("this is an ident"), __LINE__, 0}, // can't really tell from the stringification, but this is a single token
         {"__FORMAT__", SV("__format(\"%d = %s\", 10, \"hello world\")"), SV("\"10 = hello world\""), __LINE__, 0},
+        {"__FORMAT__", SV("__format(\"%d = %d\", ---10, +-+-+-4)"), SV("\"-10 = -4\""), __LINE__, 0},
         {"__set/__get basic", SV("__set(x, 42)\n__get(x)"), SV("\n42"), __LINE__, 0},
         {"__get unset", SV("__get(x)"), SV(""), __LINE__, 0},
         {"__set overwrite", SV("__set(x, 1)\n__set(x, 2)\n__get(x)"), SV("\n\n2"), __LINE__, 0},
