@@ -39,6 +39,7 @@
   * [Function Uniform Call Syntax (FUCS)](#function-uniform-call-syntax-fucs)
   * [Plan9 struct embedding](#plan9-struct-embedding)
   * [Slices](#slices)
+  * [Numerically-indexed Field Access](#numerically-indexed-field-access)
   * [Typed Variadics](#typed-variadics)
   * [`_Type`](#type)
     * [Properties](#properties)
@@ -883,6 +884,21 @@ char no[:] = (char[:])ci;   // error: cannot cast to slice of different type
 
 Slices of `void` and slices of functions are not allowed.
 We might allow slices of `void` at some point.
+
+### Numerically-indexed Field Access
+
+Fields of a struct or union can be accessed via `.[idx]`. This allows you
+to access unnamed fields and also simplifies accessing the fields of a type
+with `static for`.
+
+```C
+struct Vector {int x, y;} v = {1, 2};
+printf("%d, %d\n", v.[0], v.[1]); // 1, 2
+static for(size_t i = 0; i < struct Vector.fields; i++){
+    v.[i]++;
+}
+printf("%d, %d\n", v.[0], v.[1]); // 2, 3
+```
 
 ### Typed Variadics
 

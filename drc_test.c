@@ -317,6 +317,12 @@ TestFunction(test_samples){
         { __LINE__, CSVI("Samples/Extensions/json_parse.c"), .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/macrotemplates.c"), .syntax_only = 1},
         { __LINE__, CSVI("Samples/Extensions/methods.c"), .syntax_only = 1},
+        { __LINE__, CSVI("Samples/Extensions/numeric-field-access.c"),
+            CSVI(
+                "1, 2" EOL
+                "2, 3" EOL
+            ),
+        },
         { __LINE__, CSVI("Samples/Extensions/procmacro-if.c"),
             CSVI(
                 "Samples/Extensions/procmacro-if.c:6:2: info: void* is a pointer" "\n"

@@ -5854,6 +5854,31 @@ TestFunction(test_interpreter){
             .exit_code = 41,
         },
         {
+            "indexed field: read write pointer and constant index", __LINE__,
+            SVI("struct S { char x; int y; }; struct S s={2,3}; struct S* p=&s;\n"
+                "constexpr int n=1; s.[n] = 40; p->[0]++; p.[1]++;\n"
+                "return s.[0] + *(&s.[1]);\n"),
+            .exit_code = 44,
+        },
+        {
+            "indexed field: union and nested anonymous aggregate", __LINE__,
+            SVI("struct S { int x; union { int y; unsigned z; }; }; struct S s={1,{2}};\n"
+                "s.[1].[0]=42; return s.y;\n"),
+            .exit_code = 42,
+        },
+        {
+            "indexed field: bitfields and temporary", __LINE__,
+            SVI("struct S { unsigned x:3; unsigned y:5; }; struct S s={1,2};\n"
+                "s.[1] += 3; return s.y + (struct S){2,3}.[0];\n"),
+            .exit_code = 7,
+        },
+        {
+            "indexed field: constexpr", __LINE__,
+            SVI("constexpr struct S { int x,y; } s={10,32};\n"
+                "static_assert(s.[1-1] + s.[1] == 42); return s.[1];\n"),
+            .exit_code = 32,
+        },
+        {
             "flat expr: nested calls as arguments", __LINE__,
             SVI("int add(int a, int b){ return a + b; }\n"
                "int twice(int x){ return x * 2; }\n"
@@ -14743,6 +14768,42 @@ TestFunction(test_interpreter_runtime_errors){
             "static reflection: invalid field index is rejected by parser", __LINE__,
             SVI("struct S {int x;};\nstatic struct __builtin_Field f=(struct S).field(1); return 0;\n"),
             SVI("(test):2:43: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: negative index", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[-1];\n"),
+            SVI("(test):2:11: error: field index must be a non-negative integer\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: out of bounds", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[1];\n"),
+            SVI("(test):2:11: error: field index out of bounds\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: noninteger index", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[1.5];\n"),
+            SVI("(test):2:11: error: field index must be a constant integer expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: runtime index", __LINE__,
+            SVI("struct S {int x;} s; int n=0;\nreturn s.[n];\n"),
+            SVI("(test):2:11: error: expression 'n' is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: incomplete aggregate", __LINE__,
+            SVI("struct S* s;\nreturn s.[0];\n"),
+            SVI("(test):2:11: error: can't access the fields of an incomplete struct\n"),
+            .parser_error = 1,
+        },
+        {
+            "indexed field: scalar operand", __LINE__,
+            SVI("int s;\nreturn s.[0];\n"),
+            SVI("(test):2:11: error: field index syntax unsupported on this type: int\n"),
             .parser_error = 1,
         },
         {

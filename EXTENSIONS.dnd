@@ -683,6 +683,18 @@ C::md
     Slices of `void` and slices of functions are not allowed.
     We might allow slices of `void` at some point.
 
+  Numerically-indexed Field Access::md
+    Fields of a struct or union can be accessed via `.[idx]`. This allows you
+    to access unnamed fields and also simplifies accessing the fields of a type
+    with `static for`.
+    ::pre.C
+      struct Vector {int x, y;} v = {1, 2};
+      printf("%d, %d\n", v.[0], v.[1]); // 1, 2
+      static for(size_t i = 0; i < struct Vector.fields; i++){
+          v.[i]++;
+      }
+      printf("%d, %d\n", v.[0], v.[1]); // 2, 3
+
   Typed Variadics::md
     A function can have its last param be variadic by immediately following it
     with `...`. This is sugar for a function taking a slice of that type and

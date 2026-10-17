@@ -5450,6 +5450,64 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 CcToken member;
                 err = cc_next_token(p, &member);
                 if(err) return err;
+                if(member.type == CC_PUNCTUATOR && member.punct.punct == '['){
+                    CcExpr* idx;
+                    err = cc_parse_assignment_expr(p, constexpr_flags, &idx, CCQT_NONE);
+                    if(err) return err;
+                    int64_t i;
+                    err = cc_eval_integer(&(CcEvalCtx){p}, idx, &i);
+                    SrcLoc loc = idx->loc;
+                    cc_release_expr(p, idx);
+                    if(err == CC_NOT_CONSTANT_ERROR)
+                        return cc_error(p, loc, "field index must be a constant integer expression");
+                    if(err) return err;
+                    if(i < 0) return cc_error(p, loc, "field index must be a non-negative integer");
+                    err = cc_expect_punct(p, ']');
+                    if(err) return err;
+                    CcQualType agg_type = operand->type;
+                    if(ccqt_kind(agg_type) == CC_POINTER){
+                        CcPointer* ptr = ccqt_as_ptr(agg_type);
+                        agg_type = ptr->pointee;
+                        mkind = CC_EXPR_ARROW;
+                    }
+                    else {
+                        mkind = CC_EXPR_DOT;
+                    }
+                    CcTypeKind tk = ccqt_kind(agg_type);
+                    CcField* f;
+                    if(tk == CC_STRUCT){
+                        CcStruct* s = ccqt_as_struct(agg_type);
+                        if(s->is_incomplete)
+                            return cc_error(p, loc, "can't access the fields of an incomplete struct");
+                        if(i >= s->field_count)
+                            return cc_error(p, loc, "field index out of bounds");
+                        f = &s->fields[i];
+                    }
+                    else if(tk == CC_UNION){
+                        CcUnion* u = ccqt_as_union(agg_type);
+                        if(u->is_incomplete)
+                            return cc_error(p, loc, "can't access the fields of an incomplete union");
+                        if(i >= u->field_count)
+                            return cc_error(p, loc, "field index out of bounds");
+                        f = &u->fields[i];
+                    }
+                    else {
+                        MStringBuilder* sb = cc_start_error(p, loc, "field index syntax unsupported on this type: ");
+                        cc_print_type(sb, agg_type);
+                        return cc_finish_error(p, loc);
+                    }
+                    if(agg_type.is_atomic)
+                        return cc_error(p, member.loc, "member access on atomic struct or union is undefined behavior");
+                    CcQualType member_type = f->type;
+                    member_type.quals |= agg_type.quals;
+                    CcExpr* node = cc_make_expr(p, mkind, tok.loc, member_type, 1);
+                    if(!node) return CC_OOM_ERROR;
+                    node->is_lvalue = mkind == CC_EXPR_ARROW || operand->is_lvalue;
+                    node->field_path = (CcFieldPath){.n_components=1, .idx0=(uint32_t)i};
+                    node->values[0] = operand;
+                    operand = node;
+                    continue;
+                }
                 if(member.type != CC_IDENTIFIER)
                     return cc_error(p, member.loc, "Expected identifier after '%s'", mkind == CC_EXPR_DOT ? "." : "->");
                 Atom member_name = member.ident.ident;
