@@ -42,6 +42,278 @@ TestFunction(test_interpreter){
         _Bool skip;
         _Bool no_toplevel_ops;
     } testcases[] = {
+        // C2y named jumps: N3355; N3854 6.8.2, 6.8.3, 6.8.7.3/4.
+        // https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3355.htm
+        {
+            "c2y named jumps: label example names loop, not braces", __LINE__,
+            SVI("int n=0; loop: for(int i=0;i<4;++i){++n;break loop;}"
+                "braces: {for(int i=0;i<4;++i)++n;} return n;"),
+            .exit_code=5,
+        },
+        {
+            "c2y named jumps: continue example, including unreachable named jump", __LINE__,
+            SVI("int n=0; outer: for(int i=0;i<3;++i){"
+                "for(int j=0;j<4;++j){++n;continue;continue outer;}}return n;"),
+            .exit_code=12,
+        },
+        {
+            "c2y named jumps: continue example exercises both destinations", __LINE__,
+            SVI("int n=0,tail=0,updates=0; outer: for(int i=0;i<3;++i,++updates){"
+                "for(int j=0;j<4;++j){++n;if(j==0)continue;continue outer;}"
+                "++tail;}return n==6&&tail==0&&updates==3;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: draft do-while example with progress", __LINE__,
+            // The draft's literal do-while fragment never increments i or j.
+            SVI("int i=0,n=0,checks=0,tail=0; outer: do{int j=0;do{"
+                "++j;++n;if(j==1)continue;continue outer;"
+                "}while(j<4);++tail;}while(++checks,++i<3);"
+                "return n==6&&checks==3&&tail==0;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: break example exits switch versus outer loop", __LINE__,
+            SVI("int visits=0,tail=0; outer: for(int i=0;i<5;++i){++visits;"
+                "switch(i){case 1:break;case 2:break outer;}++tail;}"
+                "return visits==3&&tail==2;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: break and goto equivalence example", __LINE__,
+            SVI("int a=0,b=0;while(1){++a;break;}"
+                "while(1){++b;goto there;}there:return a==1&&b==1;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: proposal selector example with reachable case", __LINE__,
+            SVI("int n=0; selector: switch(1){case 1:"
+                "for(int i=0;i<3;++i){++n;break selector;}n+=100;}return n;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: proposal loop from switch, continue and break", __LINE__,
+            SVI("int n=0,tail=0;loop:for(int j=0;j<5;++j){++n;"
+                "switch(j){case 0:continue loop;default:break loop;}++tail;}"
+                "return n==2&&tail==0;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: while continue reevaluates condition", __LINE__,
+            SVI("int i=0,n=0;outer:while(++i<4){"
+                "for(int j=0;j<3;++j){++n;continue outer;}n+=100;}"
+                "return i==4&&n==3;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: do-while break skips condition", __LINE__,
+            SVI("int n=0,checks=0;outer:do{while(1){++n;break outer;}"
+                "n+=100;}while(++checks<3);return n==1&&checks==0;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: chained labels both name unbraced loop", __LINE__,
+            SVI("int n=0; if(1) first:second:for(int i=0;i<4;++i){"
+                "++n;if(i==0)continue first;break second;}return n;"),
+            .exit_code=2,
+        },
+        {
+            "c2y named jumps: for expression initializer runs only once", __LINE__,
+            SVI("int init=0,i=0,n=0;outer:for(++init;i<3;++i){"
+                "++n;continue outer;}return init==1&&i==3&&n==3;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: goto and named jumps share a label", __LINE__,
+            SVI("int n=0;goto outer;return 99;outer:while(n<3){"
+                "++n;if(n==1)continue outer;break outer;}return n;"),
+            .exit_code=2,
+        },
+        {
+            "c2y named jumps: label namespace is distinct from objects", __LINE__,
+            SVI("int outer=7;outer:while(outer){--outer;break outer;}return outer;"),
+            .exit_code=6,
+        },
+        {
+            "c2y named jumps: nested loops exit to middle target", __LINE__,
+            SVI("int n=0,tail=0;for(int i=0;i<3;++i){"
+                "middle:for(int j=0;j<4;++j){while(1){++n;break middle;}}"
+                "++tail;}return n==3&&tail==3;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: break unwinds intervening defers in reverse order", __LINE__,
+            SVI("int n=0;{_Defer n=n*10+3;outer:while(1){"
+                "_Defer n=n*10+2;while(1){_Defer n=n*10+1;break outer;}}"
+                "if(n!=12)return 99;}return n;"),
+            .exit_code=123,
+        },
+        {
+            "c2y named jumps: continue unwinds body before for update", __LINE__,
+            SVI("int n=0;outer:for(int i=0;i<2;++i,n=n*10+3){"
+                "_Defer n=n*10+2;while(1){_Defer n=n*10+1;continue outer;}}"
+                "return n;"),
+            .exit_code=123123,
+        },
+        {
+            "c2y named jumps: break switch preserves enclosing loop defer", __LINE__,
+            SVI("int n=0;for(int i=0;i<2;++i){_Defer n=n*10+3;"
+                "selector:switch(1){case 1:{_Defer n=n*10+2;"
+                "while(1){_Defer n=n*10+1;break selector;}}}"
+                "if(n!=(i==0?12:12312))return 99;}return n;"),
+            .exit_code=123123,
+        },
+        {
+            "c2y named jumps: continue through switch unwinds all exited scopes", __LINE__,
+            SVI("int n=0;outer:for(int i=0;i<2;++i){_Defer n=n*10+3;"
+                "switch(i){default:{_Defer n=n*10+2;"
+                "while(1){_Defer n=n*10+1;continue outer;}}}return 99;}return n;"),
+            .exit_code=123123,
+        },
+        {
+            "c2y named jumps: while continue cleans up before condition", __LINE__,
+            SVI("int n=0,checks=0;outer:while(++checks,n<2){"
+                "_Defer ++n;for(int j=0;j<2;++j){continue outer;}return 99;}"
+                "return n==2&&checks==3;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: do continue cleans up before condition", __LINE__,
+            SVI("int n=0,checks=0;outer:do{_Defer ++n;"
+                "for(int j=0;j<2;++j){continue outer;}return 99;"
+                "}while(++checks,n<2);return n==2&&checks==2;"),
+            .exit_code=1,
+        },
+        {
+            "c2y named jumps: break skips unreached defer registrations", __LINE__,
+            SVI("int n=0;outer:for(int i=0;i<2;++i){_Defer n=n*10+2;"
+                "while(1){_Defer n=n*10+1;break outer;_Defer n=99;}"
+                "_Defer n=88;}return n;"),
+            .exit_code=12,
+        },
+        {
+            "c2y named jumps: continue preserves enclosing defer until scope exit", __LINE__,
+            SVI("int n=0;{_Defer n=n*10+3;outer:for(int i=0;i<2;++i){"
+                "_Defer n=n*10+2;while(1){_Defer n=n*10+1;continue outer;}"
+                "_Defer n=99;}if(n!=1212)return 99;}return n;"),
+            .exit_code=12123,
+        },
+        {
+            "c2y named jumps: same-scope defers use reverse registration order", __LINE__,
+            SVI("int n=0;outer:while(1){_Defer n=n*10+4;_Defer n=n*10+3;"
+                "while(1){_Defer n=n*10+2;_Defer n=n*10+1;break outer;}}return n;"),
+            .exit_code=1234,
+        },
+        {
+            "c2y named jumps: break and continue inside deferred block are legal", __LINE__,
+            SVI("int n=0;{_Defer {outer:for(int i=0;i<3;++i){"
+                "_Defer n=n*10+2;while(1){_Defer n=n*10+1;"
+                "if(i==0)continue outer;break outer;}}n=n*10+3;}}return n;"),
+            .exit_code=12123,
+        },
+        {
+            "c2y named jumps: cleanup with named loop preserves pending outer jump", __LINE__,
+            SVI("int n=0;outer:for(int i=0;i<2;++i){"
+                "_Defer {cleanup:for(int j=0;j<3;++j){"
+                "++n;if(j==0)continue cleanup;break cleanup;}}"
+                "while(1){continue outer;}}return n;"),
+            .exit_code=4,
+        },
+        {
+            "c2y named jumps: labels propagate through case and default labels", __LINE__,
+            SVI("int n=0;switch(1){outer:case 1:while(1){++n;break outer;}}"
+                "switch(2){other:default:while(1){++n;break other;}}return n;"),
+            .exit_code=2,
+        },
+        {
+            "c2y named jumps: chained label may share a typedef name", __LINE__,
+            SVI("typedef int T;int n=0;first:T:while(1){++n;break first;}return n;"),
+            .exit_code=1,
+        },
+        {
+            "labels: declarations and block ends are independent block items", __LINE__,
+            SVI("int n=0;{first:second:int x=3;n+=x;end:}"
+                "switch(1){case 1:int x=4;n+=x;default:}return n;"),
+            .exit_code=7,
+        },
+        {
+            "labels: block-item label may share a typedef name", __LINE__,
+            SVI("typedef int T;int n=0;T:while(1){++n;break T;}return n;"),
+            .exit_code=1,
+        },
+        {
+            "numbered jumps: one is the innermost target", __LINE__,
+            SVI("int n=0;for(int i=0;i<3;++i){for(int j=0;j<4;++j){"
+                "++n;if(j==0)continue 1;break 1;}}return n;"),
+            .exit_code=6,
+        },
+        {
+            "numbered jumps: unparenthesized constant expressions", __LINE__,
+            SVI("constexpr int depth=1;int n=0;depth:for(int i=0;i<3;++i){"
+                "while(1){++n;if(i==0)continue depth+1;break 1+1;}return 99;}"
+                "return n;"),
+            .exit_code=2,
+        },
+        {
+            "numbered jumps: sizeof and unary expressions", __LINE__,
+            SVI("int n=0;while(1){while(1){++n;break sizeof(char)+1;}return 99;}"
+                "while(1){++n;break +1;}return n;"),
+            .exit_code=2,
+        },
+        {
+            "numbered jumps: parentheses distinguish constexpr from label", __LINE__,
+            SVI("constexpr int depth=1;int n=0;depth:while(1){"
+                "while(1){++n;break (depth);}n+=10;break depth;}return n;"),
+            .exit_code=11,
+        },
+        {
+            "numbered jumps: constexpr continue through switch unwinds defer", __LINE__,
+            SVI("constexpr int depth=1;int n=0;for(int i=0;i<3;++i){"
+                "_Defer ++n;switch(i){default:continue (depth+1);}return 99;}return n;"),
+            .exit_code=3,
+        },
+        {
+            "numbered jumps: enum and sizeof expressions", __LINE__,
+            SVI("enum {depth=2};int n=0;while(1){while(1){++n;"
+                "break ((depth-1)+sizeof(char));}return 99;}return n;"),
+            .exit_code=1,
+        },
+        {
+            "numbered jumps: outer continue and break unwind defers", __LINE__,
+            SVI("int n=0;for(int i=0;i<3;++i){_Defer n=n*10+2;"
+                "while(1){_Defer n=n*10+1;if(i==0)continue 2;break 2;}}return n;"),
+            .exit_code=1212,
+        },
+        {
+            "numbered jumps: break counts switches", __LINE__,
+            SVI("int n=0;for(int i=0;i<3;++i){switch(i){default:"
+                "++n;break 2;}return 99;}return n;"),
+            .exit_code=1,
+        },
+        {
+            "numbered jumps: continue counts intervening switch", __LINE__,
+            SVI("int n=0;for(int i=0;i<3;++i){switch(i){default:"
+                "++n;continue 2;}return 99;}return n;"),
+            .exit_code=3,
+        },
+        {
+            "numbered jumps: middle target leaves enclosing loop running", __LINE__,
+            SVI("#define LEVEL 0x2u\nint n=0;for(int i=0;i<3;++i){"
+                "while(1){switch(i){default:++n;break LEVEL;}}}return n;"),
+            .exit_code=3,
+        },
+        {
+            "numbered jumps: maximum nesting and jump distance", __LINE__,
+            SVI("#define L while(1){\n#define R }\n"
+                "#define X2(x) x x\n#define X4(x) X2(x) X2(x)\n"
+                "#define X8(x) X4(x) X4(x)\n#define X16(x) X8(x) X8(x)\n"
+                "#define X32(x) X16(x) X16(x)\n#define X64(x) X32(x) X32(x)\n"
+                "#define X128(x) X64(x) X64(x)\n"
+                "#define X255(x) X128(x) X64(x) X32(x) X16(x) X8(x) X4(x) X2(x) x\n"
+                "int n=0;X255(L) ++n;break 255;X255(R) return n;"),
+            .exit_code=1,
+            .skip=1, // TODO: iterative statement processing; exhausts worker stack.
+        },
         {
             "global static data: constants require no top-level instructions", __LINE__,
             SVI("const unsigned char table[4]={1,2,3,4}; int n=6*7;"

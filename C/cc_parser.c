@@ -28,6 +28,8 @@
 #pragma clang assume_nonnull begin
 #endif
 
+enum {CC_CONTROL_LOOP_MAX=255};
+
 typedef struct CcParsedParams CcParsedParams;
 struct CcParsedParams {
     Marray(CcFuncParam) names;
@@ -306,9 +308,15 @@ struct CcParsedDecls {
 };
 static int cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out);
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
-static int cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out);
+typedef struct CcControlLabel CcControlLabel;
+struct CcControlLabel {
+    CcControlLabel* _Nullable prev;
+    Atom name;
+};
+static int cc_parse_label(CcParser*, CcStmtNode*_Nullable*_Nonnull);
+static int cc_parse_statement(CcParser* p, CcControlLabel*_Nullable labels, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_parse_one(CcParser* p);
-static int cc_parse_one_inner(CcParser* p);
+static int cc_parse_one_inner(CcParser* p, CcControlLabel*_Nullable labels);
 static int cc_static_goto_missing(CcParser* p);
 
 static
@@ -7508,7 +7516,7 @@ cc_skip_static_control(CcParser* p){
 static
 int
 cc_parse_one(CcParser* p){
-    int err = cc_parse_one_inner(p);
+    int err = cc_parse_one_inner(p, NULL);
     if(err) return err;
     if(p->static_goto_target) return 0;
     if(cc_static_control_pending(p)) return 0;
@@ -7517,7 +7525,7 @@ cc_parse_one(CcParser* p){
 
 static
 int
-cc_parse_one_inner(CcParser* p){
+cc_parse_one_inner(CcParser* p, CcControlLabel*_Nullable labels){
     int err;
     CcToken tok;
     if(cc_static_control_pending(p)) return cc_skip_static_control(p);
@@ -7622,6 +7630,22 @@ cc_parse_one_inner(CcParser* p){
             return 0;
         }
     }
+    CcStmtNode* label;
+    err = cc_parse_label(p, &label);
+    if(err) return err;
+    if(label){
+        err = cc_sink_push(p, label);
+        if(err) return err;
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_EOF || (tok.type == CC_PUNCTUATOR && tok.punct.punct == '}'))
+            return 0;
+        if(label->kind == CC_STMT_LABEL){
+            CcControlLabel binding = {.prev=labels, .name=label->label};
+            return cc_parse_one_inner(p, &binding);
+        }
+        return cc_parse_one_inner(p, labels);
+    }
     CcDeclBase b = {0};
     err = cc_parse_declaration_specifier(p, (CcParseFlags){0}, &b);
     if(err) return err;
@@ -7655,7 +7679,7 @@ cc_parse_one_inner(CcParser* p){
     }
     {
         CcStmtNode*_Null_unspecified node = NULL;
-        err = cc_parse_statement(p, &node);
+        err = cc_parse_statement(p, labels, &node);
         if(err) return err;
         return cc_sink_push(p, node);
     }
@@ -12779,14 +12803,125 @@ struct CcSwitchCtx {
     Marray(CcSwitchEntry) cases; // for duplicate detection
 };
 
-static int cc_parse_statement_inner(CcParser*, CcStmtNode*_Nullable*_Nonnull);
+typedef struct CcControl CcControl;
+struct CcControl {
+    CcControl* _Nullable prev;
+    CcControlLabel* _Nullable labels;
+    CcDeferContext context;
+    _Bool loop;
+};
+
+static
+int
+cc_parse_label(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
+    CcToken tok;
+    int err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_IDENTIFIER && (tok.type != CC_KEYWORD || (tok.kw.kw != CC_case && tok.kw.kw != CC_default))){
+        *out = NULL;
+        return 0;
+    }
+    err = cc_next_token(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_IDENTIFIER){
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        if(peek.type != CC_PUNCTUATOR || peek.punct.punct != ':'){
+            *out = NULL;
+            return cc_unget(p, &tok);
+        }
+        cc_next_token(p, &peek); // consume ':'
+        Atom label_name = tok.ident.ident;
+        CcLabelCtx* lctx = cc_label_ctx(p);
+        if(cc_lctx_has_defer(lctx, label_name))
+            return cc_error(p, tok.loc, "Duplicate label '%.*s'", label_name->length, label_name->data);
+        CcStmtNode* node = cc_stmt_node(p, CC_STMT_LABEL, tok.loc, 1);
+        if(!node) return CC_OOM_ERROR;
+        node->label = label_name;
+        err = cc_lctx_put_defer(lctx, cc_allocator(p), label_name, &p->defer_context);
+        if(err){
+            cc_free_stmt_tree(p, node);
+            return CC_OOM_ERROR;
+        }
+        *out = node;
+        return 0;
+    }
+    if(!p->switch_ctx)
+        return cc_error(p, tok.loc, "'%s' label not within a switch statement", tok.kw.kw == CC_case ? "case" : "default");
+    err = cc_check_transfer(p, tok.loc, p->switch_ctx->defer_context, p->defer_context);
+    if(err) return err;
+    if(tok.kw.kw == CC_default){
+        err = cc_expect_punct(p, ':');
+        if(err) return err;
+        if(p->switch_ctx->has_default)
+            return cc_error(p, tok.loc, "Multiple default labels in switch");
+        p->switch_ctx->has_default = 1;
+        CcStmtNode* node = cc_stmt_node(p, CC_STMT_DEFAULT, tok.loc, 1);
+        if(!node) return CC_OOM_ERROR;
+        *out = node;
+        return 0;
+    }
+    CcExpr* case_expr;
+    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &case_expr);
+    if(err) return err;
+    err = cc_expect_punct(p, ':');
+    if(err){
+        cc_release_expr(p, case_expr);
+        return err;
+    }
+    uint64_t case_val;
+    if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
+        CcExpr* case_val_expr;
+        err = cc_eval_expr(&(CcEvalCtx){.parser = p}, case_expr, &case_val_expr);
+        if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
+        cc_release_expr(p, case_expr);
+        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
+        if(err)
+            return cc_error(p, tok.loc, "case label must be a constant _Type expression");
+        if(!ccqt_bt_eq(case_val_expr->type, CCBT__Type)){
+            cc_release_expr(p, case_val_expr);
+            return cc_error(p, tok.loc, "case label type does not match _Type switch expression");
+        }
+        case_val = case_val_expr->type_value.bits;
+        cc_release_expr(p, case_val_expr);
+    }
+    else {
+        int64_t case_i = 0;
+        // Validate before casting, which could otherwise make floating cases integral.
+        if(!ccqt_is_integer(case_expr->type)) err = CC_NOT_CONSTANT_ERROR;
+        else {
+            err = cc_implicit_cast(p, case_expr, p->switch_ctx->type, &case_expr);
+            if(!err) err = cc_eval_integer(&(CcEvalCtx){p}, case_expr, &case_i);
+        }
+        cc_release_expr(p, case_expr);
+        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
+        if(err)
+            return cc_error(p, tok.loc, "case label must be a constant integer expression");
+        case_val = (uint64_t)case_i;
+    }
+    for(size_t i = 0; i < p->switch_ctx->cases.count; i++){
+        if(p->switch_ctx->cases.data[i].value == case_val)
+            return cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)case_val);
+    }
+    CcSwitchEntry entry = {.value = case_val};
+    err = ma_push(CcSwitchEntry)(&p->switch_ctx->cases, cc_allocator(p), entry);
+    if(err) return CC_OOM_ERROR;
+    CcStmtNode* node = cc_stmt_node(p, CC_STMT_CASE, tok.loc, 1);
+    if(!node) return CC_OOM_ERROR;
+    node->case_value = case_val;
+    *out = node;
+    return 0;
+}
+
+static int cc_parse_statement_inner(CcParser*, CcControlLabel*_Nullable, CcStmtNode*_Nullable*_Nonnull);
 
 static
 int
 cc_parse_scoped_statement(CcParser* p, _Bool unlabeled, CcStmtNode*_Nullable*_Nonnull out){
     CcDeferContext saved = p->defer_context;
     CcStmtNode* stmt = NULL;
-    int err = cc_parse_statement(p, &stmt);
+    int err = cc_parse_statement(p, NULL, &stmt);
     if(err) goto cleanup;
     if(unlabeled && (stmt->kind == CC_STMT_LABEL || stmt->kind == CC_STMT_CASE || stmt->kind == CC_STMT_DEFAULT)){
         err = cc_error(p, stmt->loc, "expected unlabeled statement after _Defer");
@@ -12817,13 +12952,11 @@ cc_parse_scoped_statement(CcParser* p, _Bool unlabeled, CcStmtNode*_Nullable*_No
 
 static
 int
-cc_parse_control_body(CcParser* p, _Bool loop, CcStmtNode*_Nullable*_Nonnull out){
-    CcDeferContext saved_break_defer_context = p->break_defer_context, saved_continue_defer_context = p->continue_defer_context;
-    p->break_defer_context = p->defer_context;
-    if(loop) p->continue_defer_context = p->defer_context;
+cc_parse_control_body(CcParser* p, _Bool loop, CcControlLabel*_Nullable labels, CcStmtNode*_Nullable*_Nonnull out){
+    CcControl control = {.prev=p->control, .labels=labels, .context=p->defer_context, .loop=loop};
+    p->control = &control;
     int err = cc_parse_scoped_statement(p, 0, out);
-    p->break_defer_context = saved_break_defer_context;
-    p->continue_defer_context = saved_continue_defer_context;
+    p->control = control.prev;
     return err;
 }
 
@@ -12975,7 +13108,7 @@ cc_parse_selection_header(CcParser* p, const char* statement, CcExpr*_Nullable*_
 
 static
 int
-cc_parse_selection(CcParser* p, CcToken tok, CcStmtNode*_Nullable*_Nonnull out){
+cc_parse_selection(CcParser* p, CcToken tok, CcControlLabel*_Nullable labels, CcStmtNode*_Nullable*_Nonnull out){
     int err = cc_push_scope(p);
     if(err) return err;
     CcStmtSink* sink = cc_push_stmt_sink(p);
@@ -13024,9 +13157,7 @@ cc_parse_selection(CcParser* p, CcToken tok, CcStmtNode*_Nullable*_Nonnull out){
         CcSwitchCtx* prev_ctx = p->switch_ctx;
         p->switch_ctx = &ctx;
         p->loop_depth++;
-        p->switch_depth++;
-        err = cc_parse_control_body(p, 0, &node->stmts[0]);
-        p->switch_depth--;
+        err = cc_parse_control_body(p, 0, labels, &node->stmts[0]);
         p->loop_depth--;
         p->switch_ctx = prev_ctx;
         ma_cleanup(CcSwitchEntry)(&ctx.cases, cc_allocator(p));
@@ -13065,7 +13196,7 @@ cc_parse_selection(CcParser* p, CcToken tok, CcStmtNode*_Nullable*_Nonnull out){
 
 static
 int
-cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
+cc_parse_statement(CcParser* p, CcControlLabel*_Nullable labels, CcStmtNode*_Nullable*_Nonnull out){
     uint64_t jump_targets = p->stmt_jump_targets;
     int err;
     CcToken tok;
@@ -13090,6 +13221,8 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     }
     err = cc_peek(p, &tok);
     if(err) return err;
+    if(p->loop_depth >= CC_CONTROL_LOOP_MAX && tok.type == CC_KEYWORD && (tok.kw.kw == CC_for || tok.kw.kw == CC_while || tok.kw.kw == CC_do || tok.kw.kw == CC_switch))
+        return cc_error(p, tok.loc, "control nesting exceeds %d levels", CC_CONTROL_LOOP_MAX);
     _Bool runtime_boundary = tok.type == CC_KEYWORD
         &&(tok.kw.kw == CC_if
         || tok.kw.kw == CC_switch
@@ -13103,7 +13236,7 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
     CcDeferContext saved_defer_context = p->defer_context;
     _Bool compound = tok.type == CC_PUNCTUATOR && tok.punct.punct == '{';
     CcStmtNode* stmt = NULL;
-    err = cc_parse_statement_inner(p, &stmt);
+    err = cc_parse_statement_inner(p, labels, &stmt);
     CcDefer* active = p->defer_context.active;
     if(compound)
         p->defer_context = saved_defer_context;
@@ -13121,8 +13254,24 @@ cc_parse_statement(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
 
 static
 int
-cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
-    int err;
+cc_parse_statement_inner(CcParser* p, CcControlLabel*_Nullable labels, CcStmtNode*_Nullable*_Nonnull out){
+    CcStmtNode* label;
+    int err = cc_parse_label(p, &label);
+    if(err) return err;
+    if(label){
+        if(label->kind == CC_STMT_LABEL){
+            CcControlLabel binding = {.prev=labels, .name=label->label};
+            err = cc_parse_statement(p, &binding, &label->stmts[0]);
+        }
+        else
+            err = cc_parse_statement(p, labels, &label->stmts[0]);
+        if(err){
+            cc_free_stmt_tree(p, label);
+            return err;
+        }
+        *out = label;
+        return 0;
+    }
     CcToken tok;
     err = cc_next_token(p, &tok);
     if(err) return err;
@@ -13306,7 +13455,7 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     err = cc_parse_local_methods(p);
                     if(err) goto for_end;
                     p->loop_depth++;
-                    err = cc_parse_control_body(p, 1, &body);
+                    err = cc_parse_control_body(p, 1, labels, &body);
                     p->loop_depth--;
                     if(err) goto for_end;
                     {
@@ -13355,7 +13504,7 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     node->exprs[0] = cond;
                     CcStmtNode*_Nullable body = NULL;
                     p->loop_depth++;
-                    err = cc_parse_control_body(p, 1, &body);
+                    err = cc_parse_control_body(p, 1, labels, &body);
                     p->loop_depth--;
                     if(err){
                         cc_free_stmt_tree(p, node);
@@ -13372,7 +13521,7 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     // do body while(cond);
                     CcStmtNode*_Nullable body = NULL;
                     p->loop_depth++;
-                    err = cc_parse_control_body(p, 1, &body);
+                    err = cc_parse_control_body(p, 1, labels, &body);
                     p->loop_depth--;
                     if(err) return err;
                     {
@@ -13420,123 +13569,84 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 }
                 case CC_if:
                 case CC_switch:
-                    return cc_parse_selection(p, tok, out);
-                case CC_break: {
-                    if(!p->loop_depth)
-                        return cc_error(p, tok.loc, "'break' statement not in loop or switch statement");
-                    err = cc_check_transfer(p, tok.loc, p->defer_context, p->break_defer_context);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ';');
-                    if(err) return err;
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_BREAK, tok.loc, 0);
-                    if(!node) return CC_OOM_ERROR;
-                    node->cleanup = (CcCleanupRange){p->defer_context.active, p->break_defer_context.active};
-                    *out = node;
-                    return 0;
-                }
+                    return cc_parse_selection(p, tok, labels, out);
+                case CC_break:
                 case CC_continue: {
-                    if(p->loop_depth <= p->switch_depth)
-                        return cc_error(p, tok.loc, "'continue' statement not in loop statement");
-                    err = cc_check_transfer(p, tok.loc, p->defer_context, p->continue_defer_context);
+                    _Bool is_continue = tok.kw.kw == CC_continue;
+                    CcToken operand;
+                    err = cc_peek(p, &operand);
+                    if(err) return err;
+                    Atom name = NULL;
+                    uint32_t requested = 0;
+                    if(operand.type == CC_IDENTIFIER){
+                        // Only an identifier followed by ';' names a label.
+                        err = cc_next_token(p, &operand);
+                        if(err) return err;
+                        CcToken next;
+                        err = cc_peek(p, &next);
+                        if(err) return err;
+                        if(next.type == CC_PUNCTUATOR && next.punct.punct == ';')
+                            name = operand.ident.ident;
+                        else {
+                            err = cc_unget(p, &operand);
+                            if(err) return err;
+                        }
+                    }
+                    if(!name && !(operand.type == CC_PUNCTUATOR && operand.punct.punct == ';')){
+                        CcExpr* depth;
+                        err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &depth);
+                        if(err) return err;
+                        int64_t value = 0;
+                        err = ccqt_is_integer(depth->type)
+                            ? cc_eval_integer(&(CcEvalCtx){.parser=p}, depth, &value)
+                            : CC_NOT_CONSTANT_ERROR;
+                        cc_release_expr(p, depth);
+                        if(err && err != CC_NOT_CONSTANT_ERROR && err != CC_OVERFLOW_ERROR)
+                            return err;
+                        if(err || value < 1 || value > CC_CONTROL_LOOP_MAX)
+                            return cc_error(p, tok.loc, "jump level must be a constant integer expression from 1 to %d", CC_CONTROL_LOOP_MAX);
+                        requested = (uint32_t)value;
+                    }
+                    CcControl* target = p->control;
+                    uint32_t levels = 1;
+                    for(; target; target = target->prev, ++levels){
+                        if(name){
+                            CcControlLabel* binding = target->labels;
+                            for(; binding; binding = binding->prev)
+                                if(binding->name == name) break;
+                            if(binding) break;
+                        }
+                        else if(requested ? levels == requested : (!is_continue || target->loop))
+                            break;
+                    }
+                    if(!target || (is_continue && !target->loop)){
+                        if(name)
+                            return cc_error(p, tok.loc, "'%s' target '%.*s' is not an enclosing %s",
+                                is_continue ? "continue" : "break", name->length, name->data,
+                                is_continue ? "loop" : "loop or switch");
+                        if(requested){
+                            if(!target)
+                                return cc_error(p, tok.loc, "jump level exceeds enclosing control depth");
+                            return cc_error(p, tok.loc, "'continue' target is a switch");
+                        }
+                        return cc_error(p, tok.loc, "%s", is_continue ?
+                                "'continue' statement not in loop statement"
+                                : "'break' statement not in loop or switch statement");
+                    }
+                    err = cc_check_transfer(p, tok.loc, p->defer_context, target->context);
                     if(err) return err;
                     err = cc_expect_punct(p, ';');
                     if(err) return err;
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_CONTINUE, tok.loc, 0);
+                    CcStmtNode* node = cc_stmt_node(p, is_continue ? CC_STMT_CONTINUE : CC_STMT_BREAK, tok.loc, 0);
                     if(!node) return CC_OOM_ERROR;
-                    node->cleanup = (CcCleanupRange){p->defer_context.active, p->continue_defer_context.active};
+                    node->jump_levels = levels;
+                    node->cleanup = (CcCleanupRange){p->defer_context.active, target->context.active};
                     *out = node;
                     return 0;
                 }
-                case CC_case: {
-                    if(!p->switch_ctx)
-                        return cc_error(p, tok.loc, "'case' label not within a switch statement");
-                    err = cc_check_transfer(p, tok.loc, p->switch_ctx->defer_context, p->defer_context);
-                    if(err) return err;
-                    CcExpr* case_expr;
-                    err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE}, &case_expr);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ':');
-                    if(err){
-                        cc_release_expr(p, case_expr);
-                        return err;
-                    }
-                    uint64_t case_val;
-                    if(ccqt_bt_eq(p->switch_ctx->type, CCBT__Type)){
-                        CcExpr* case_val_expr;
-                        err = cc_eval_expr(&(CcEvalCtx){.parser = p}, case_expr, &case_val_expr);
-                        if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
-                        cc_release_expr(p, case_expr);
-                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
-                        if(err)
-                            return cc_error(p, tok.loc, "case label must be a constant _Type expression");
-                        if(!ccqt_bt_eq(case_val_expr->type, CCBT__Type)){
-                            cc_release_expr(p, case_val_expr);
-                            return cc_error(p, tok.loc, "case label type does not match _Type switch expression");
-                        }
-                        case_val = case_val_expr->type_value.bits;
-                        cc_release_expr(p, case_val_expr);
-                    }
-                    else {
-                        int64_t case_i = 0;
-                        // Validate the original expression before inserting a
-                        // cast, which could otherwise make floating cases integral.
-                        if(!ccqt_is_integer(case_expr->type)) err = CC_NOT_CONSTANT_ERROR;
-                        else {
-                            err = cc_implicit_cast(p, case_expr, p->switch_ctx->type, &case_expr);
-                            if(err) goto case_value_end;
-                            err = cc_eval_integer(&(CcEvalCtx){p}, case_expr, &case_i);
-                        }
-                        case_value_end:
-                        cc_release_expr(p, case_expr);
-                        if(err && err != CC_NOT_CONSTANT_ERROR) return err;
-                        if(err)
-                            return cc_error(p, tok.loc, "case label must be a constant integer expression");
-                        case_val = (uint64_t)case_i;
-                    }
-                    for(size_t i = 0; i < p->switch_ctx->cases.count; i++){
-                        if(p->switch_ctx->cases.data[i].value == case_val)
-                            return cc_error(p, tok.loc, "duplicate case value '%lld'", (long long)case_val);
-                    }
-                    {
-                        CcSwitchEntry entry = {.value = case_val};
-                        err = ma_push(CcSwitchEntry)(&p->switch_ctx->cases, cc_allocator(p), entry);
-                        if(err) return CC_OOM_ERROR;
-                    }
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_CASE, tok.loc, 1);
-                    if(!node) return CC_OOM_ERROR;
-                    node->case_value = case_val;
-                    CcStmtNode*_Nullable child = NULL;
-                    err = cc_parse_statement(p, &child);
-                    if(err){
-                        cc_free_stmt_tree(p, node);
-                        return err;
-                    }
-                    node->stmts[0] = child;
-                    *out = node;
-                    return 0;
-                }
-                case CC_default: {
-                    if(!p->switch_ctx)
-                        return cc_error(p, tok.loc, "'default' label not within a switch statement");
-                    err = cc_check_transfer(p, tok.loc, p->switch_ctx->defer_context, p->defer_context);
-                    if(err) return err;
-                    err = cc_expect_punct(p, ':');
-                    if(err) return err;
-                    if(p->switch_ctx->has_default)
-                        return cc_error(p, tok.loc, "Multiple default labels in switch");
-                    p->switch_ctx->has_default = 1;
-                    CcStmtNode* node = cc_stmt_node(p, CC_STMT_DEFAULT, tok.loc, 1);
-                    if(!node) return CC_OOM_ERROR;
-                    CcStmtNode*_Nullable child = NULL;
-                    err = cc_parse_statement(p, &child);
-                    if(err){
-                        cc_free_stmt_tree(p, node);
-                        return err;
-                    }
-                    node->stmts[0] = child;
-                    *out = node;
-                    return 0;
-                }
+                case CC_case:
+                case CC_default:
+                    return cc_unreachable(p, tok.loc, "label was not consumed");
                 case CC_return: {
                     if(p->defer_context.deferred_body)
                         return cc_error(p, tok.loc, "return exits a deferred block");
@@ -13547,7 +13657,6 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                     CcQualType ret_type = ccqt_basic(CCBT_int);
                     if(p->current_func)
                         ret_type = p->current_func->type->return_type;
-
                     if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
                         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
                             err = cc_parse_init_list(p, (CcParseFlags){.vc=CC_RUNTIME_VALUE}, &ret_expr, ret_type);
@@ -13733,36 +13842,7 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 return 0;
             }
             goto expression_statement;
-        case CC_IDENTIFIER:{
-            CcToken peek;
-            err = cc_peek(p, &peek);
-            if(err) return err;
-            if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
-                cc_next_token(p, &peek); // consume ':'
-                Atom label_name = tok.ident.ident;
-                CcLabelCtx* lctx = cc_label_ctx(p);
-                if(cc_lctx_has_defer(lctx, label_name))
-                    return cc_error(p, tok.loc, "Duplicate label '%.*s'", label_name->length, label_name->data);
-                CcStmtNode* node = cc_stmt_node(p, CC_STMT_LABEL, tok.loc, 1);
-                if(!node) return CC_OOM_ERROR;
-                node->label = label_name;
-                err = cc_lctx_put_defer(lctx, cc_allocator(p), label_name, &p->defer_context);
-                if(err){
-                    cc_free_stmt_tree(p, node);
-                    return CC_OOM_ERROR;
-                }
-                CcStmtNode*_Nullable child = NULL;
-                err = cc_parse_statement(p, &child);
-                if(err){
-                    cc_free_stmt_tree(p, node);
-                    return err;
-                }
-                node->stmts[0] = child;
-                *out = node;
-                return 0;
-            }
-            goto expression_statement;
-        }
+        case CC_IDENTIFIER:
         case CC_CONSTANT:
         case CC_STRING_LITERAL:{
             expression_statement:;
@@ -15850,14 +15930,13 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     CcFunc* prev = p->current_func;
     CcQualType prev__Self = p->current_tag_type;
     uint32_t prev_loop_depth = p->loop_depth;
-    uint32_t prev_switch_depth = p->switch_depth;
+    CcControl* saved_control = p->control;
+    p->control = NULL;
     CcSwitchCtx* prev_switch_ctx = p->switch_ctx;
     CcAttributes prev_attributes = p->attributes;
     CcDeferContext saved_defer_context = p->defer_context;
-    CcDeferContext saved_break_defer_context = p->break_defer_context, saved_continue_defer_context = p->continue_defer_context;
-    p->defer_context = p->break_defer_context = p->continue_defer_context = (CcDeferContext){0};
+    p->defer_context = (CcDeferContext){0};
     p->loop_depth = 0;
-    p->switch_depth = 0;
     p->switch_ctx = NULL;
     cc_clear_attributes(&p->attributes);
     p->current_func = f;
@@ -15924,12 +16003,10 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     p->current_func = prev;
     p->current_tag_type = prev__Self;
     p->loop_depth = prev_loop_depth;
-    p->switch_depth = prev_switch_depth;
+    p->control = saved_control;
     p->switch_ctx = prev_switch_ctx;
     p->attributes = prev_attributes;
     p->defer_context = saved_defer_context;
-    p->break_defer_context = saved_break_defer_context;
-    p->continue_defer_context = saved_continue_defer_context;
     return err;
 }
 

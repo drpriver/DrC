@@ -40,7 +40,11 @@ struct CiBackpatchTarget {
         CI_BP_BREAK,
         CI_BP_CONTINUE,
     } kind;
-    Atom _Null_unspecified label;
+    union {
+        Atom _Null_unspecified label;
+        uintptr_t levels; // Remaining loops/switches to exit before patching the jump
+                          // we only use 8 bits of this if you need to smuggle some bits in.
+    };
     size_t byteoffset;
     SrcLoc loc;
 };
@@ -238,7 +242,6 @@ static int ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRun
 static int ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
-static void ci_backpatch_break(CiLowerCtx*, size_t start, uint32_t break_target);
 static int ci_lower_resolve_gotos(CiInterpreter*, CiLowerCtx*);
 static int ci_cmp_switch_entry(void*_Null_unspecified ctx, const void* a, const void* b);
 
@@ -664,7 +667,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 swop->switch_.jump = sw.has_default ? sw.default_target : break_target;
                 swop->switch_.table = table;
                 swop->switch_.is_dense = is_dense;
-                ci_backpatch_break(ctx, backpatch_start, break_target);
+                ci_backpatch_break_continue(ctx, backpatch_start, break_target, UINT32_MAX);
             }
             switch_cleanup:
             ma_cleanup(CcSwitchEntry)(&sw.entries, ctx->a);
@@ -746,6 +749,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             };
             CiBackpatchTarget t = {
                 .kind = n->kind == CC_STMT_BREAK? CI_BP_BREAK : CI_BP_CONTINUE,
+                .levels = n->jump_levels,
                 .byteoffset = (size_t)((char*)&op->jump.jump - (char*)ctx->out->data),
                 .loc = n->loc,
             };
@@ -6756,32 +6760,17 @@ ci_alloc_slot(CiLowerCtx* ctx, uint32_t sz, uint32_t align, uint32_t* slot){
 static
 void
 ci_backpatch_break_continue(CiLowerCtx* ctx, size_t start, uint32_t break_target, uint32_t continue_target){
+    // Switches pass UINT32_MAX because they cannot be continue targets.
     for(size_t i = start; i < ctx->backpatches.count; i++){
         CiBackpatchTarget* t = &ctx->backpatches.data[i];
+        if((t->kind == CI_BP_BREAK || t->kind == CI_BP_CONTINUE) && --t->levels)
+            continue;
         if(t->kind == CI_BP_BREAK){
             *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = break_target;
             t->kind = CI_BP_NONE;
         }
-        else if(t->kind == CI_BP_CONTINUE){
+        else if(t->kind == CI_BP_CONTINUE && continue_target != UINT32_MAX){
             *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = continue_target;
-            t->kind = CI_BP_NONE;
-        }
-    }
-    while(ctx->backpatches.count > start){
-        if(ctx->backpatches.data[ctx->backpatches.count-1].kind == CI_BP_NONE)
-            ctx->backpatches.count--;
-        else
-            break;
-    }
-}
-
-static
-void
-ci_backpatch_break(CiLowerCtx* ctx, size_t start, uint32_t break_target){
-    for(size_t i = start; i < ctx->backpatches.count; i++){
-        CiBackpatchTarget* t = &ctx->backpatches.data[i];
-        if(t->kind == CI_BP_BREAK){
-            *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = break_target;
             t->kind = CI_BP_NONE;
         }
     }

@@ -964,11 +964,11 @@ _cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
         return;
     case CC_STMT_CASE:       // case expr:
         msb_sprintf(sb, "case %llu:\n", (unsigned long long)s->case_value);
-        _cc_print_statement(sb, s->stmts[0], indent+1);
+        if(s->stmts[0]) _cc_print_statement(sb, s->stmts[0], indent+1);
         return;
     case CC_STMT_DEFAULT:    // default:
         msb_write_literal(sb, "default:\n");
-        _cc_print_statement(sb, s->stmts[0], indent+1);
+        if(s->stmts[0]) _cc_print_statement(sb, s->stmts[0], indent+1);
         return;
     case CC_STMT_RETURN:     // return [expr];
         msb_write_literal(sb, "return");
@@ -978,18 +978,20 @@ _cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
         }
         msb_write_char(sb, ';');
         return;
-    case CC_STMT_BREAK:      // break;
-        msb_write_literal(sb, "break;");
-        return;
-    case CC_STMT_CONTINUE:   // continue;
-        msb_write_literal(sb, "continue;");
+    case CC_STMT_BREAK:
+    case CC_STMT_CONTINUE:
+        if(s->kind == CC_STMT_BREAK) msb_write_literal(sb, "break");
+        else msb_write_literal(sb, "continue");
+        if(s->jump_levels > 1)
+            msb_sprintf(sb, " %u", (unsigned)s->jump_levels);
+        msb_write_char(sb, ';');
         return;
     case CC_STMT_GOTO:       // goto label;
         msb_sprintf(sb, "goto %.*s;", (int)s->label->length, s->label->data);
         return;
     case CC_STMT_LABEL:      // label:
         msb_sprintf(sb, "%.*s:\n", (int)s->label->length, s->label->data);
-        _cc_print_statement(sb, s->stmts[0], indent+1);
+        if(s->stmts[0]) _cc_print_statement(sb, s->stmts[0], indent+1);
         return;
     }
 

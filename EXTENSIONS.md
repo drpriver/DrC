@@ -31,6 +31,7 @@
 * [C](#c)
   * [`_Defer`](#defer)
   * [`if()`/`switch()`/`for()` declarations](#if-switch-for-declarations)
+  * [Numbered `break`/`continue`](#numbered-break-continue)
   * [`static if`](#static-if)
   * [`static goto`](#static-goto)
   * [`static for`](#static-for)
@@ -464,6 +465,29 @@ for(int i = 0; Node *node = next(i); i++){
     // use node
 }
 ```
+
+### Numbered `break`/`continue`
+
+C2Y added labeled break and continue. We extend this to take either a label
+or a constexpr positive integer indicating how many levels up to break/continue.
+`break 1;` is the same as `break;`.
+
+```C
+_Bool func(int, int);
+for(int i = 0; i < 10; i++)
+  for(int j = i; j < 10; j++){
+    if(func(i, j)) break 2; // breaks 2 loops
+    printf("%d,%d\n", i, j);
+  }
+```
+
+
+Constexpr expressions are accepted. As there is ambiguity with
+`break identifier` as to whether `identifier` names a label or variable
+(they are in different namespaces so they could be in the same scope),
+`break identifier` always identifies the labeled form. Anything else is
+parsed as a constexpr expression.  Thus you might need to write `break
+(identifier)` to disambiguate.
 
 ### `static if`
 

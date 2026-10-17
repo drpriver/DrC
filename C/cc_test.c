@@ -31,6 +31,7 @@
 #endif
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
+static void cc_print_statement(MStringBuilder* sb, CcStmtNode* s);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int);
 static int cc_sizeof_as_uint(CcParser*, CcQualType, SrcLoc, uint32_t*);
 static int test_eval_initializer(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
@@ -6383,6 +6384,177 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        // C2y named-jump constraints (N3854 6.8.2, 6.8.7.3/4).
+        {
+            "c2y named break requires a declared enclosing target", __LINE__,
+            SVI("while(1){\nbreak missing;\n}"),
+            SVI("(test):2:1: error: 'break' target 'missing' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y named continue requires an enclosing target", __LINE__,
+            SVI("while(1){\ncontinue missing;\n}"),
+            SVI("(test):2:1: error: 'continue' target 'missing' is not an enclosing loop\n"),
+        },
+        {
+            "c2y braces example does not name contained loop", __LINE__,
+            SVI("braces:{while(1){\nbreak braces;\n}}"),
+            SVI("(test):2:1: error: 'break' target 'braces' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y named continue cannot target switch even inside loop", __LINE__,
+            SVI("while(1){selector:switch(1){case 1:\ncontinue selector;\n}}"),
+            SVI("(test):2:1: error: 'continue' target 'selector' is not an enclosing loop\n"),
+        },
+        {
+            "c2y named break cannot target if", __LINE__,
+            SVI("while(1){choice:if(1){\nbreak choice;\n}}"),
+            SVI("(test):2:1: error: 'break' target 'choice' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y null statement interrupts label association", __LINE__,
+            SVI("outer:;while(1){\nbreak outer;\n}"),
+            SVI("(test):2:1: error: 'break' target 'outer' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y declaration interrupts label association", __LINE__,
+            SVI("outer:int x=0;while(1){\nbreak outer;\n}"),
+            SVI("(test):2:1: error: 'break' target 'outer' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y named break cannot target earlier sibling", __LINE__,
+            SVI("other:while(0){}while(1){\nbreak other;\n}"),
+            SVI("(test):2:1: error: 'break' target 'other' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y named continue cannot target future sibling", __LINE__,
+            SVI("while(1){\ncontinue other;\n}other:while(0){}"),
+            SVI("(test):2:1: error: 'continue' target 'other' is not an enclosing loop\n"),
+        },
+        {
+            "c2y label on body does not name containing loop", __LINE__,
+            SVI("while(1)body:{\ncontinue body;\n}"),
+            SVI("(test):2:1: error: 'continue' target 'body' is not an enclosing loop\n"),
+        },
+        {
+            "c2y named jump cannot cross local function boundary", __LINE__,
+            SVI("outer:while(1){void f(void){while(1){\nbreak outer;\n}}break;}"),
+            SVI("(test):2:1: error: 'break' target 'outer' is not an enclosing loop or switch\n"),
+        },
+        {
+            "c2y named break cannot escape deferred block", __LINE__,
+            SVI("outer:while(1){_Defer {while(1){\nbreak outer;\n}}break;}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "c2y named continue cannot escape deferred block", __LINE__,
+            SVI("outer:while(1){_Defer {while(1){\ncontinue outer;\n}}break;}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "c2y named break cannot cross nested deferred block boundary", __LINE__,
+            SVI("_Defer {outer:while(1){_Defer {while(1){\nbreak outer;\n}}break;}}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "c2y named continue cannot cross nested deferred block boundary", __LINE__,
+            SVI("_Defer {outer:while(1){_Defer {while(1){\ncontinue outer;\n}}break;}}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
+        {
+            "control nesting rejects level 256", __LINE__,
+            SVI("#define X2(x) x x\n#define X4(x) X2(x) X2(x)\n"
+                "#define X8(x) X4(x) X4(x)\n#define X16(x) X8(x) X8(x)\n"
+                "#define X32(x) X16(x) X16(x)\n#define X64(x) X32(x) X32(x)\n"
+                "#define X128(x) X64(x) X64(x)\n"
+                "#define X255(x) X128(x) X64(x) X32(x) X16(x) X8(x) X4(x) X2(x) x\n"
+                "#line 1\nX255(while(1))\nwhile(1);"),
+            SVI("(test):11:1: error: control nesting exceeds 255 levels\n"),
+        },
+        {
+            "numbered continue rejects switch target", __LINE__,
+            SVI("while(1){switch(1){default:\ncontinue 1;\n}}"),
+            SVI("(test):2:1: error: 'continue' target is a switch\n"),
+        },
+        {
+            "numbered break rejects zero", __LINE__,
+            SVI("while(1){\nbreak 0;\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "bare constexpr jump operand still names a label", __LINE__,
+            SVI("constexpr int depth=1;while(1){\nbreak depth;\n}"),
+            SVI("(test):2:1: error: 'break' target 'depth' is not an enclosing loop or switch\n"),
+        },
+        {
+            "jump expression rejects runtime variable", __LINE__,
+            SVI("int depth=1;while(1){\nbreak (depth);\n}"),
+            SVI("(test):2:8: error: expression 'depth' is not a constant expression\n"),
+        },
+        {
+            "jump expression rejects floating type", __LINE__,
+            SVI("while(1){\nbreak (1.0);\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "jump expression rejects zero", __LINE__,
+            SVI("while(1){\nbreak (1-1);\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "jump expression rejects negative", __LINE__,
+            SVI("while(1){\nbreak (-1);\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "jump expression rejects large unsigned value", __LINE__,
+            SVI("while(1){\nbreak (~0ULL);\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "jump expression rejects overflow", __LINE__,
+            SVI("while(1){\ncontinue (128+128);\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "jump expression rejects excessive depth", __LINE__,
+            SVI("while(1){\nbreak (2);\n}"),
+            SVI("(test):2:1: error: jump level exceeds enclosing control depth\n"),
+        },
+        {
+            "continue expression rejects switch target", __LINE__,
+            SVI("while(1){switch(1){default:\ncontinue (1);\n}}"),
+            SVI("(test):2:1: error: 'continue' target is a switch\n"),
+        },
+        {
+            "label before declaration is not an if body", __LINE__,
+            SVI("if(1) label:\nint x;"),
+            SVI("(test):2:1: error: Unexpected keyword in this position\n"),
+        },
+        {
+            "numbered continue rejects overflow", __LINE__,
+            SVI("while(1){\ncontinue 256;\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "numbered break rejects excessive depth", __LINE__,
+            SVI("while(1){\nbreak 2;\n}"),
+            SVI("(test):2:1: error: jump level exceeds enclosing control depth\n"),
+        },
+        {
+            "numbered break rejects fractional level", __LINE__,
+            SVI("while(1){\nbreak 1.0;\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "numbered break rejects negative level", __LINE__,
+            SVI("while(1){\nbreak -1;\n}"),
+            SVI("(test):2:1: error: jump level must be a constant integer expression from 1 to 255\n"),
+        },
+        {
+            "numbered jump cannot escape deferred block", __LINE__,
+            SVI("while(1){_Defer {while(1){\ncontinue 2;\n}}break;}"),
+            SVI("(test):2:1: error: jump crosses a deferred block boundary\n"),
+        },
         {"empty feature query", __LINE__,
             SVI("#if __has_feature()\n#endif"),
             SVI("(test):1:5: error: __has_feature() requires a single identifier\n")},

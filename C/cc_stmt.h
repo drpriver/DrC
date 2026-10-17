@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include <stdint.h>
+#include <stddef.h>
 #include "srcloc.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/parray.h"
@@ -51,9 +52,11 @@ struct CcCleanupRange {
            * _Nullable stop; // exclusive
 };
 struct CcStmtNode {
-    CcStmtKind kind: 30; // much of this is padding
-    uint32_t no_fallthrough:1; // conservative
-    uint32_t has_jump_target:1; // subtree contains a runtime label, case, or default
+    CcStmtKind kind:          8;
+    uint32_t jump_levels:     8, // BREAK/CONTINUE: enclosing loops/switches, target included
+             no_fallthrough:  1, // conservative
+             has_jump_target: 1, // subtree contains a runtime label, case, or default
+             _bit_padding:   14; // free real estate
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
     Parray(CcVariable) decls; // variables scoped to this statement
@@ -91,6 +94,7 @@ struct CcStmtNode {
     };
     CcStmtNode* _Null_unspecified stmts[];
 };
+_Static_assert(offsetof(CcStmtNode, count) == sizeof(uint32_t), "");
 
 typedef struct CcSwitchEntry CcSwitchEntry;
 struct CcSwitchEntry {
