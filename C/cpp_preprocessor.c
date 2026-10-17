@@ -1683,6 +1683,32 @@ cpp_read_directive_macro_name(CppPreprocessor* cpp, CppToken* tok){
 
 static
 int
+cpp_validate_replacement(CppPreprocessor* cpp, const CppMacro* macro, const CppToken*_Null_unspecified repl, size_t count){
+    size_t first = 0, last = count;
+    while(first < last && repl[first].type == CPP_WHITESPACE) first++;
+    while(last > first && repl[last-1].type == CPP_WHITESPACE) last--;
+    if(first == last) return 0;
+    if(repl[first].type == CPP_PUNCTUATOR && repl[first].punct == '##')
+        return cpp_error(cpp, repl[first].loc, "'##' cannot appear at start of replacement list");
+    if(repl[last-1].type == CPP_PUNCTUATOR && repl[last-1].punct == '##')
+        return cpp_error(cpp, repl[last-1].loc, "'##' cannot appear at end of replacement list");
+    if(!macro->is_function_like) return 0;
+    for(size_t i = first; i < last; i++){
+        if(repl[i].type != CPP_PUNCTUATOR || repl[i].punct != '#') continue;
+        size_t j = i + 1;
+        while(j < last && repl[j].type == CPP_WHITESPACE) j++;
+        if(j < last && repl[j].type == CPP_IDENTIFIER){
+            if(repl[j].param_idx) continue;
+            if(macro->is_variadic && (sv_equals(repl[j].txt, SV("__VA_OPT__")) || sv_equals(repl[j].txt, SV("__VA_ARG__"))))
+                continue;
+        }
+        return cpp_error(cpp, repl[i].loc, "'#' is not followed by a macro parameter");
+    }
+    return 0;
+}
+
+static
+int
 cpp_handle_directive(CppPreprocessor* cpp){
     int err;
     CppToken tok;
@@ -1973,20 +1999,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     }
                 }
             }
-            if(repl->count){
-                size_t first = 0;
-                while(first < repl->count && repl->data[first].type == CPP_WHITESPACE) first++;
-                if(first < repl->count && repl->data[first].type == CPP_PUNCTUATOR && repl->data[first].punct == '##'){
-                    err = cpp_error(cpp, repl->data[first].loc, "'##' cannot appear at start of replacement list");
-                    goto finish_func_macro;
-                }
-                size_t last = repl->count;
-                while(last > 0 && repl->data[last-1].type == CPP_WHITESPACE) last--;
-                if(last > 0 && repl->data[last-1].type == CPP_PUNCTUATOR && repl->data[last-1].punct == '##'){
-                    err = cpp_error(cpp, repl->data[last-1].loc, "'##' cannot appear at end of replacement list");
-                    goto finish_func_macro;
-                }
-            }
+            err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
+            if(err) goto finish_func_macro;
             if(repl->count)
                 memcpy(cpp_cmacro_replacement(m), repl->data, repl->count*sizeof repl->data[0]);
             finish_func_macro:;
@@ -2148,6 +2162,12 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = cpp_error(cpp, tok.loc, "expected macro param name");
                     goto finish_defblock;
                 }
+                for(size_t i = 0; i < names->count; i++){
+                    if(sv_equals(names->data[i].txt, tok.txt)){
+                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name");
+                        goto finish_defblock;
+                    }
+                }
                 {
                     CppToken peek;
                     do {
@@ -2199,9 +2219,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 continue;
             if(at_beginning_of_line && tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
                 CppToken dir;
+                CppToken space = {0};
                 do {
                     err = cpp_next_raw_token(cpp, &dir);
                     if(err) goto finish_defblock;
+                    if(dir.type == CPP_WHITESPACE) space = dir;
                 } while(dir.type == CPP_WHITESPACE);
                 if(dir.type == CPP_IDENTIFIER && sv_equals(dir.txt, SV("endblock"))){
                     do {
@@ -2214,11 +2236,15 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 err = cpp_push_tok(cpp, &cpp->pending, dir);
                 if(err) goto finish_defblock;
+                if(space.type == CPP_WHITESPACE){
+                    err = cpp_push_tok(cpp, &cpp->pending, space);
+                    if(err) goto finish_defblock;
+                }
             }
             at_beginning_of_line = 0;
             if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 continue;
-            if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#'))
+            if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || (is_func && ma_tail(*repl).punct == '#')))
                 continue;
             if(tok.type == CPP_PUNCTUATOR && tok.punct == '##' && repl->count && ma_tail(*repl).type == CPP_WHITESPACE)
                 repl->count--;
@@ -2275,6 +2301,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 if(repl->count)
                     memcpy(cpp_cmacro_replacement(m), repl->data, repl->count*sizeof repl->data[0]);
+                err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
+                if(err) goto finish_defblock;
             }
         }
         else {
@@ -2286,8 +2314,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(err && err != CPP_MACRO_ALREADY_EXISTS_ERROR)
                 goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
-            else
-                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
+            else {
+                CppMacro* m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length));
+                m->def_loc = name_loc;
+                err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
+            }
         }
         finish_defblock:;
         cpp_release_scratch(cpp, repl);
@@ -6006,6 +6037,10 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                         err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
                         goto finally;
                     }
+                    if(!wrote_number){
+                        err = cpp_error(cpp, loc, "Missing integer argument to format");
+                        goto finally;
+                    }
                 }break;
                 default:
                     msb_write_char(&sb, '%');
@@ -6203,12 +6238,14 @@ cpp_builtin_get(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     (void)arg_seps;
     // The single arg is the key (an identifier)
     Atom key = NULL;
+    _Bool seen_key = 0;
     for(size_t i = 0; i < args->count; i++){
         if(args->data[i].type == CPP_WHITESPACE || args->data[i].type == CPP_NEWLINE) continue;
         if(args->data[i].type != CPP_IDENTIFIER)
             return cpp_error(cpp, args->data[i].loc, "Expected identifier as key to __get");
-        if(key)
+        if(seen_key)
             return cpp_error(cpp, args->data[i].loc, "Only one identifier as key to __get");
+        seen_key = 1;
         key = AT_get_atom(cpp->at, args->data[i].txt.text, args->data[i].txt.length);
     }
     if(!key){
@@ -6456,8 +6493,10 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                 sig_pos++;
             if(sig_pos >= sig_count)
                 return cpp_error(cpp, loc, "Unterminated parameter list in __let");
-            if(sig_toks[sig_pos].type == CPP_PUNCTUATOR && sig_toks[sig_pos].punct == ')')
+            if(sig_toks[sig_pos].type == CPP_PUNCTUATOR && sig_toks[sig_pos].punct == ')'){
+                sig_pos++;
                 break;
+            }
             if(nparams > 0){
                 if(sig_toks[sig_pos].type != CPP_PUNCTUATOR || sig_toks[sig_pos].punct != ',')
                     return cpp_error(cpp, sig_toks[sig_pos].loc, "Expected ',' between params in __let");
@@ -6471,10 +6510,17 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                 return cpp_error(cpp, loc, "Too many params in __let (max 64)");
             Atom a = AT_atomize(cpp->at, sig_toks[sig_pos].txt.text, sig_toks[sig_pos].txt.length);
             if(!a) return CPP_OOM_ERROR;
+            for(size_t i = 0; i < nparams; i++)
+                if(param_names[i] == a)
+                    return cpp_error(cpp, sig_toks[sig_pos].loc, "Duplicate macro param name");
             param_names[nparams++] = a;
             sig_pos++;
         }
     }
+    while(sig_pos < sig_count && (sig_toks[sig_pos].type == CPP_WHITESPACE || sig_toks[sig_pos].type == CPP_NEWLINE))
+        sig_pos++;
+    if(sig_pos != sig_count)
+        return cpp_error(cpp, sig_toks[sig_pos].loc, "Unexpected token after __let macro signature");
     // Strip whitespace from replacement tokens
     while(repl_count && (repl_toks[0].type == CPP_WHITESPACE || repl_toks[0].type == CPP_NEWLINE)){
         repl_toks++; repl_count--;
@@ -6525,7 +6571,8 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
             replacement[i].txt = SV(" ");
         }
     }
-    err = cpp_expand_argument(cpp, body_toks, body_count, outtoks);
+    err = cpp_validate_replacement(cpp, m, replacement, repl_count);
+    if(!err) err = cpp_expand_argument(cpp, body_toks, body_count, outtoks);
     cpp_undef_macro(cpp, macro_name);
     return err;
 }
@@ -7538,6 +7585,12 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 if(etok.type == CPP_STRING){
                     quote = 1;
                     header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
+                    for(ei++; ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE; ei++)
+                        ;
+                    if(ei != expanded->count){
+                        err = cpp_error(cpp, tok.loc, "Unexpected token after header name in %.*s", sv_p(name));
+                        goto finish_has_include_exp;
+                    }
                     cpp_release_scratch(cpp, expanded);
                     CppIncludePosition dummy3;
                     _Bool result = cpp_find_include(cpp, source_file, quote, is_next ? &source_pos : NULL, header_name, &dummy3) == 0;
@@ -7559,6 +7612,13 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                         cpp_release_scratch(cpp, expanded);
                         msb_destroy(&hsb);
                         return err;
+                    }
+                    for(ei++; ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE; ei++)
+                        ;
+                    if(ei != expanded->count){
+                        err = cpp_error(cpp, tok.loc, "Unexpected token after header name in %.*s", sv_p(name));
+                        msb_destroy(&hsb);
+                        goto finish_has_include_exp;
                     }
                     header_name = msb_borrow_sv(&hsb);
                     CppIncludePosition dummy3;
@@ -7765,19 +7825,49 @@ cpp_eval_parse_number_typed(CppPreprocessor* cpp, CppToken tok, CppEvalValue* re
         len -= 3;
     else if(len >= 2 && s[len-1] == '8' && (s[len-2] == 'i' || s[len-2] == 'I'))
         len -= 2;
-    // Strip standard integer suffixes: [uUlL]+
-    while(len && (s[len-1] == 'u' || s[len-1] == 'U' || s[len-1] == 'l' || s[len-1] == 'L')){
-        is_unsigned |= s[len-1] == 'u' || s[len-1] == 'U';
-        len--;
+    _Bool msvc_suffix = len != tok.txt.length;
+    size_t suffix_end = len;
+    while(len && (s[len-1] == 'u' || s[len-1] == 'U' || s[len-1] == 'l' || s[len-1] == 'L')) len--;
+    // U may occur on either side of one contiguous L group
+    size_t suffix_pos = len;
+    if(suffix_pos < suffix_end && (s[suffix_pos] == 'u' || s[suffix_pos] == 'U')){
+        is_unsigned = 1;
+        suffix_pos++;
     }
+    if(!msvc_suffix && suffix_pos < suffix_end && (s[suffix_pos] == 'l' || s[suffix_pos] == 'L')){
+        char l = s[suffix_pos];
+        size_t nlong = 0;
+        while(suffix_pos < suffix_end && s[suffix_pos] == l && nlong < 3){
+            suffix_pos++;
+            nlong++;
+        }
+    }
+    if(!msvc_suffix && !is_unsigned && suffix_pos < suffix_end && (s[suffix_pos] == 'u' || s[suffix_pos] == 'U')){
+        is_unsigned = 1;
+        suffix_pos++;
+    }
+    if(suffix_pos != suffix_end)
+        return cpp_error(cpp, tok.loc, "Invalid integer suffix");
     if(!len)
         return cpp_error(cpp, tok.loc, "Invalid number literal");
-    // Remove dumb C++ digit separators.
+    // Digit separators must have a digit of the literal's base on both sides.
     char buf[256];
     if(memchr(s, '\'', len)){
+        int base = 10;
+        if(len > 1 && s[0] == '0'){
+            base = 8;
+            if(s[1] == 'x' || s[1] == 'X') base = 16;
+            if(s[1] == 'b' || s[1] == 'B') base = 2;
+        }
         size_t buf_len = 0;
         for(size_t i = 0; i < len; i++){
-            if(s[i] == '\'') continue;
+            if(s[i] == '\''){
+                int left = i ? cpp_hex_digit((unsigned char)s[i-1]) : -1;
+                int right = i+1 < len ? cpp_hex_digit((unsigned char)s[i+1]) : -1;
+                if(left < 0 || left >= base || right < 0 || right >= base)
+                    return cpp_error(cpp, tok.loc, "Invalid digit separator in number");
+                continue;
+            }
             if(buf_len >= sizeof buf - 1)
                 return cpp_error(cpp, tok.loc, "Number literal too long");
             buf[buf_len++] = s[i];
