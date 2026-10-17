@@ -1024,7 +1024,6 @@ cpp_handle_continuation(CppFrame* f){
     // skip line continuations
     for(;c < txt.length && txt.text[c] == '\\';){
         if(c + 1 == txt.length){
-            c += 1;
             break;
         }
         if(txt.text[c+1] == '\n'){
@@ -1266,7 +1265,6 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                     case CASE_a_z:
                     case CASE_A_Z:
                     case '_':
-                    case '\'':
                     case '.':
                         f->cursor++;
                         f->column++;
@@ -1274,21 +1272,25 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                             cpp_match_oneof(f, "+-");
                             continue;
                         }
-                        if(c == '\''){
-                            c = cpp_peek_char(f);
-                            switch(c){
-                                case CASE_0_9:
-                                case CASE_a_z:
-                                case CASE_A_Z:
-                                case '_':
-                                    f->cursor++;
-                                    f->column++;
-                                    continue;
-                                default:
-                                    goto break_;
-                            }
-                        }
                         continue;
+                    case '\'':{
+                        struct CppFrameLoc before_quote = f->loc;
+                        f->cursor++;
+                        f->column++;
+                        c = cpp_peek_char(f);
+                        switch(c){
+                            case CASE_0_9:
+                            case CASE_a_z:
+                            case CASE_A_Z:
+                            case '_':
+                                f->cursor++;
+                                f->column++;
+                                continue;
+                            default:
+                                f->loc = before_quote;
+                                goto break_;
+                        }
+                    }
                     default:
                         break;
                 }

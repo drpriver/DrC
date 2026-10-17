@@ -548,6 +548,8 @@ TestFunction(test_obj_macros){
         {"obj_paste_hash", SV("#define HH # ## #\nHH"), SV("\n##"), __LINE__},
         {"obj_paste_multi", SV("#define XYZ x ## y ## z\nXYZ"), SV("\nxyz"), __LINE__},
         {"identical obj redef", SV("#define X 42\n#define X 42\nX"), SV("\n\n42"), __LINE__},
+        {"standalone trailing backslash", SV(" \\"), SV(" \\"), __LINE__},
+        {"backslash after identifier at eof", SV("word\\"), SV("word\\"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
@@ -1253,6 +1255,14 @@ TestFunction(test_error_locations){
                "P(+,-)"),
             SV("(test):1:17: error: pasting \"+\" and \"-\" does not give a valid preprocessing token\n"
                "(test):2:1: ... expanded from here\n")},
+        {"identifier pasted with backslash", __LINE__,
+            SV("#define C(a,b) a##b\nC(word,\\)"),
+            SV("(test):1:17: error: pasting \"word\" and \"\\\" does not give a valid preprocessing token\n"
+               "(test):2:1: ... expanded from here\n")},
+        {"number pasted with backslash", __LINE__,
+            SV("#define C(a,b) a##b\nC(1,\\)"),
+            SV("(test):1:17: error: pasting \"1\" and \"\\\" does not give a valid preprocessing token\n"
+               "(test):2:1: ... expanded from here\n")},
         {"indirect too few args", __LINE__,
             SV("#define F(x,y) x y\n"
                "#define M F(1)\n"
@@ -1805,6 +1815,15 @@ TestFunction(test_erroneous_condition){
         {"if eval bad msvc suffix i7", __LINE__,
             SV("#if 42i7\n#endif"),
             SV("(test):1:5: error: Invalid digit in number\n")},
+        {"decimal trailing apostrophe", __LINE__,
+            SV("#if 1'\n#endif"),
+            SV("(test):1:6: error: Unterminated character literal\n")},
+        {"apostrophe before arithmetic", __LINE__,
+            SV("#if 1' + 2\n#endif"),
+            SV("(test):1:6: error: Unterminated character literal\n")},
+        {"hex trailing apostrophe", __LINE__,
+            SV("#if 0x1'\n#endif"),
+            SV("(test):1:8: error: Unterminated character literal\n")},
         {"if eval bad msvc suffix bare i", __LINE__,
             SV("#if 42i\n#endif"),
             SV("(test):1:5: error: Invalid digit in number\n")},
