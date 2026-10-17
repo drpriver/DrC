@@ -45,6 +45,28 @@ TestFunction(test_interpreter){
         _Bool no_toplevel_ops;
     } testcases[] = {
         {
+            "overflow assignment commits its flag after the result store", __LINE__,
+            SVI("int f(void){_Bool flag=1;\n"
+                "flag=__builtin_add_overflow(1,0,(unsigned char*)&flag);\n"
+                "if(flag)return 0;\n"
+                "flag=__builtin_sub_overflow(2,1,(unsigned char*)&flag);\n"
+                "if(flag)return 0;\n"
+                "flag=__builtin_mul_overflow(1,1,(unsigned char*)&flag);\n"
+                "return flag==0;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "overflow assignment preserves a true flag over an aliased zero result", __LINE__,
+            SVI("int f(void){_Bool flag=0;\n"
+                "flag=__builtin_add_overflow(255,1,(unsigned char*)&flag);\n"
+                "if(!flag)return 0;\n"
+                "flag=__builtin_sub_overflow(0,256,(unsigned char*)&flag);\n"
+                "if(!flag)return 0;\n"
+                "flag=__builtin_mul_overflow(16,16,(unsigned char*)&flag);\n"
+                "return flag==1;} return f();"),
+            .exit_code=1,
+        },
+        {
             "mixed void pointer subtraction uses typed units", __LINE__,
             SVI("int f(void *p, const int *q){return p-q;}\n"
                 "int g(const int *p, void *q){return p-q;}\n"

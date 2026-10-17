@@ -3446,22 +3446,15 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     CiCheckedOp cmp_op = e->kind == CC_EXPR_ADD_OVERFLOW? CI_CHK_ADD
                     : e->kind == CC_EXPR_SUB_OVERFLOW? CI_CHK_SUB
                     : CI_CHK_MUL;
-    // the expression value is the 1-byte overflow bool
-    uint32_t ovf;
-    uint32_t save;
     if(out){
         err = ci_lower_expr_dest(ci, ctx, e, &dest, 1);
         if(err) return err;
         out->slot = dest;
-        ovf = dest;
-        save = ctx->temp;
     }
-    else {
-        // statement context: the flag is discarded, but the store must happen
-        save = ctx->temp;
-        err = ci_alloc_slot(ctx, 1, 1, &ovf);
-        if(err) return err;
-    }
+    uint32_t save = ctx->temp;
+    uint32_t ovf;
+    err = ci_alloc_slot(ctx, 1, 1, &ovf);
+    if(err) return err;
     CiLowerVal av, bv, pv;
     err = ci_lower_expr(ci, ctx, ae, CI_NO_SLOT, &av);
     if(err) return err;
@@ -3508,6 +3501,10 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             .loc = e->loc,
         }
     };
+    if(out){
+        err = ci_emit_copy(ctx, dest, ovf, 1, e->loc);
+        if(err) return err;
+    }
     ctx->temp = save;
     return 0;
 }

@@ -282,7 +282,7 @@ static stbsp__int32 stbsp__real_to_parts(stbsp__int64 *bits, stbsp__int32 *expo,
 
 static char stbsp__period = '.';
 static char stbsp__comma = ',';
-static struct
+static const struct
 {
    short temp; // force next field to be 2-byte aligned
    char pair[201];
@@ -1300,7 +1300,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             if ((fl & STBSP__TRIPLET_COMMA) == 0) {
                do {
                   s -= 2;
-                  *(stbsp__uint16 *)s = *(stbsp__uint16 *)&stbsp__digitpair.pair[(n % 100) * 2];
+                  *(stbsp__uint16 *)s = *(const stbsp__uint16 *)&stbsp__digitpair.pair[(n % 100) * 2];
                   n /= 100;
                } while (n);
             }
@@ -2045,7 +2045,7 @@ static stbsp__int32 stbsp__real_to_str(char const **start, stbsp__uint32 *len, c
       }
       while (n) {
          out -= 2;
-         *(stbsp__uint16 *)out = *(stbsp__uint16 *)&stbsp__digitpair.pair[(n % 100) * 2];
+         *(stbsp__uint16 *)out = *(const stbsp__uint16 *)&stbsp__digitpair.pair[(n % 100) * 2];
          n /= 100;
          e += 2;
       }
