@@ -6983,7 +6983,7 @@ cpp_embed(CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified inp
                         err = cpp_error(cpp, loc, "defined is not allowed in embed %.*s", sv_p(name));
                         goto finally;
                     }
-                int64_t value;
+                int64_t value = 0;
                 err = cpp_eval_embed_limit(cpp, toks+start, length, &value);
                 if(err) goto finally;
                 if(value < 0){
