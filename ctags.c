@@ -108,7 +108,7 @@ int main(int argc, char** argv, char** envp){
             .name = SVI("file"),
             .dest = ARGDEST(filenames),
             .help = "The files to process.",
-            .min_num = 1, .max_num = arrlen(filenames),
+            .min_num = 1, .max_num = countof(filenames),
         },
     };
     StringView output = {0},
@@ -207,12 +207,12 @@ int main(int argc, char** argv, char** envp){
         .name = argv[0]?argv[0]:"drctags",
         .description = "C tags",
         .positional.args = pos_args,
-        .positional.count = arrlen(pos_args),
+        .positional.count = countof(pos_args),
         .keyword.args = kw_args,
-        .keyword.count = arrlen(kw_args),
+        .keyword.count = countof(kw_args),
         .keyword.next = cpp_kwargs(&cpp),
         .early_out.args = early_args,
-        .early_out.count = arrlen(early_args),
+        .early_out.count = countof(early_args),
         .styling.plain = !stdout_is_terminal(),
     };
     Args args = argc?(Args){argc-1, (const char*const*)argv+1}:(Args){0, 0};
@@ -292,7 +292,7 @@ int main(int argc, char** argv, char** envp){
         parser.cpp.logger = logger;
         parser.cpp.target = cpp.target;
         // Copy the arrays: source pragmas may append paths during parsing.
-        for(size_t j = 0; j < arrlen(cpp.include_paths); j++){
+        for(size_t j = 0; j < countof(cpp.include_paths); j++){
             err = ma_extend(StringView)(&parser.cpp.include_paths[j], parser.cpp.allocator, cpp.include_paths[j].data, cpp.include_paths[j].count);
             if(err) goto stringify_error;
         }
@@ -546,7 +546,7 @@ ct_vim_needs_escape_in_syntax(Atom name){
         SVI("groupthere"), SVI("display"), SVI("fold"), SVI("conceal"), SVI("concealends"),
         SVI("cchar"), SVI("contains"), SVI("containedin"), SVI("nextgroup"),
     };
-    for(size_t i = 0; i < arrlen(options); i++)
+    for(size_t i = 0; i < countof(options); i++)
         if(sv_iequals(n, options[i])) return 1;
     return 0;
 }

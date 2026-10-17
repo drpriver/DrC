@@ -165,13 +165,13 @@ TestFunction(test_snippets){
     };
     static int idx = 0;
     int err = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
         cmd_clear(&cmd);
         drc_command(&cmd);
         cmd_arg(&cmd, CSV("-e"));
         cmd_arg(&cmd, c->program);
-        for(size_t a = 0; a < arrlen(c->args); a++){
+        for(size_t a = 0; a < countof(c->args); a++){
             if(!c->args[a].text) break;
             cmd_arg(&cmd, c->args[a]);
         }
@@ -382,7 +382,7 @@ TestFunction(test_samples){
     };
     static int idx = 0;
     int err = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         const struct Case* c = &testcases[i];
         if(c->skip) continue;
         cmd_clear(&cmd);
@@ -390,7 +390,7 @@ TestFunction(test_samples){
         if(c->syntax_only)
             cmd_arg(&cmd, CSV("--syntax-only"));
         cmd_arg(&cmd, c->program);
-        for(size_t a = 0; a < arrlen(c->args); a++){
+        for(size_t a = 0; a < countof(c->args); a++){
             if(!c->args[a].text) break;
             cmd_arg(&cmd, c->args[a]);
         }
@@ -464,7 +464,7 @@ int main(int argc, char** argv, char** envp){
     };
     ArgParseKwParams extra = {
         .args = kwargs,
-        .count = arrlen(kwargs),
+        .count = countof(kwargs),
     };
     int err = test_main(argc, argv, &extra);
     return err;

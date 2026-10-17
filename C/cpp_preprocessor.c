@@ -22,6 +22,7 @@
 #include "../Drp/switch_macros.h"
 #include "../Drp/ckdint.h"
 #include "../Drp/base64.h"
+#include "../Drp/countof.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -411,7 +412,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
         start_array = after->array;
         start_idx = after->idx == SIZE_MAX ? 0 : after->idx + 1;
     }
-    for(size_t i = start_array; i < arrlen(cpp->include_paths); i++){
+    for(size_t i = start_array; i < countof(cpp->include_paths); i++){
         Marray(StringView)* dirs = &cpp->include_paths[i];
         size_t j_start = (i == start_array && after) ? start_idx : 0;
         for(size_t j = j_start; j < dirs->count; j++){
@@ -440,7 +441,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
             size_t fw_len = (size_t)(slash - header_name.text);
             const char* remaining = slash + 1;
             size_t remaining_len = header_name.length - fw_len - 1;
-            size_t first = after && after->array == arrlen(cpp->include_paths) ? after->idx + 1 : 0;
+            size_t first = after && after->array == countof(cpp->include_paths) ? after->idx + 1 : 0;
             for(size_t i = first; i < cpp->framework_paths.count; i++){
                 StringView d = cpp->framework_paths.data[i];
                 msb_reset(sb);
@@ -459,7 +460,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
                     msb_write_str(sb, header_name.text, fw_len);
                     msb_write_str(sb, ".framework/Headers/", 19);
                     msb_write_str(sb, remaining, remaining_len);
-                    *out_pos = (CppIncludePosition){arrlen(cpp->include_paths), i};
+                    *out_pos = (CppIncludePosition){countof(cpp->include_paths), i};
                     return 0;
                 }
             }
@@ -7023,7 +7024,7 @@ cpp_embed(CppPreprocessor* cpp, SrcLoc loc, const CppToken*_Null_unspecified inp
                 if(toks[i].type != CPP_PUNCTUATOR) continue;
                 uint32_t p = toks[i].punct;
                 if(p == '(' || p == '[' || p == '{'){
-                    if(depth == arrlen(stack)){
+                    if(depth == countof(stack)){
                         err = cpp_error(cpp, loc, "embed parameter nesting too deep");
                         goto finally;
                     }

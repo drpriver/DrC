@@ -16724,7 +16724,7 @@ TestFunction(test_symbolic_pointer_limits){
             // Keep casts in the AST: parsing literals can fold them before
             // the symbolic evaluator sees the integer-to-pointer conversion.
             uint64_t bits[] = {UINT64_MAX, UINT64_C(1)<<63, UINT64_C(1)<<32};
-            for(size_t i = 0; i < arrlen(bits); i++){
+            for(size_t i = 0; i < countof(bits); i++){
                 CcExpr number = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_unsigned_long_long), .uinteger = bits[i]};
                 CcExpr cast = {.kind = CC_EXPR_CAST, .type = ptr, .lhs = &number};
                 CcExpr expected = {.kind = CC_EXPR_VALUE, .type = ptr, .uinteger = bits[i]};
@@ -16740,7 +16740,7 @@ TestFunction(test_symbolic_pointer_limits){
             ArenaAllocator_free_all(&arena);
             ArenaAllocator_free_all(&p.scratch_arena);
         }
-        for(size_t i = 0; i < arrlen(cases); i++){
+        for(size_t i = 0; i < countof(cases); i++){
             ArenaAllocator arena = {0};
             Allocator al = allocator_from_arena(&arena);
             CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
@@ -16820,7 +16820,7 @@ TestFunction(test_symbolic_pointer_limits){
                 TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
                 CcExpr* casts[257];
                 _Bool built = 1;
-                for(size_t i = 0; i < arrlen(casts); i++){
+                for(size_t i = 0; i < countof(casts); i++){
                     casts[i] = cc_make_expr(&p, CC_EXPR_CAST, (SrcLoc){0}, ptr, 0);
                     if(!casts[i]){ built = 0; break; }
                     casts[i]->lhs = i ? casts[i-1] : &address;
@@ -17025,8 +17025,8 @@ TestFunction(test_alu_chain_lowering){
         {CC_EXPR_BITOR, CI_ALU_OR, 1}, {CC_EXPR_BITXOR, CI_ALU_XOR, 0},
     };
     static int chain_idx = 0;
-    for(size_t job = test_atomic_increment(&chain_idx); job < arrlen(types)*arrlen(cases); job = test_atomic_increment(&chain_idx)){
-        size_t t = job / arrlen(cases), c = job % arrlen(cases);
+    for(size_t job = test_atomic_increment(&chain_idx); job < countof(types)*countof(cases); job = test_atomic_increment(&chain_idx)){
+        size_t t = job / countof(cases), c = job % countof(cases);
         CcQualType type = ccqt_basic(types[t]);
         CcVariable var = {.type=type, .automatic=1};
         CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
@@ -17081,8 +17081,8 @@ TestFunction(test_alu_chain_lowering){
         {CC_EXPR_MOD, 1, 0, EXPECT_CONSTANT, 0},
     };
     static int simple_idx = 0;
-    for(size_t job = test_atomic_increment(&simple_idx); job < arrlen(types)*arrlen(simple); job = test_atomic_increment(&simple_idx)){
-        size_t t = job / arrlen(simple), c = job % arrlen(simple);
+    for(size_t job = test_atomic_increment(&simple_idx); job < countof(types)*countof(simple); job = test_atomic_increment(&simple_idx)){
+        size_t t = job / countof(simple), c = job % countof(simple);
         CcQualType type = ccqt_basic(types[t]);
         CcVariable var = {.type=type, .automatic=1};
         CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
@@ -17122,7 +17122,7 @@ TestFunction(test_alu_chain_lowering){
         ci_lower_deps_cleanup(&deps, al);
     }
     // Compound assignments use the same rules, including when their value is discarded.
-    for(size_t t = 0; t < arrlen(types); t++) for(size_t c = 0; c < arrlen(simple); c++){
+    for(size_t t = 0; t < countof(types); t++) for(size_t c = 0; c < countof(simple); c++){
         CcQualType type = ccqt_basic(types[t]);
         CcVariable var = {.type=type, .automatic=1};
         CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var, .is_lvalue=1};

@@ -14577,7 +14577,7 @@ cc_feature_query(CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const Cpp
         {SVI("cxx_binary_literals"), 1},
     };
     _Bool found = 0;
-    for(size_t i = 0; i < arrlen(supported); i++){
+    for(size_t i = 0; i < countof(supported); i++){
         if(sv_equals(name, supported[i].name)){
             found = extension || !supported[i].extension_only;
             break;

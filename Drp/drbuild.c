@@ -19,6 +19,7 @@
 #include "offsetof.h"
 #include "bcoro.h"
 #include "measure_time.h"
+#include "countof.h"
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h> // For _NSGetExecutablePath
@@ -62,7 +63,7 @@
 ssize_t copy_file_range(int fd_in, loff_t* off_in, int fd_out, loff_t* off_out, size_t len, unsigned int flags);
 #endif
 
-#define APET(E) {.enum_size = sizeof(enum E), .enum_count=arrlen(E##SVs), .enum_names=E##SVs,}
+#define APET(E) {.enum_size = sizeof(enum E), .enum_count=countof(E##SVs), .enum_names=E##SVs,}
 static const ArgParseEnumType OSEnum = APET(OS);
 static const ArgParseEnumType CompilerFlavorEnum = APET(CompilerFlavor);
 static const ArgParseEnumType ArchFamEnum = APET(ArchFam);
@@ -1538,11 +1539,11 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         .name = argv[0]?argv[0]:"build",
         .description = "build script",
         .positional.args = pos_args,
-        .positional.count = arrlen(pos_args),
+        .positional.count = countof(pos_args),
         .keyword.args = kw_args,
-        .keyword.count = arrlen(kw_args),
+        .keyword.count = countof(kw_args),
         .early_out.args = early_args,
-        .early_out.count = arrlen(early_args),
+        .early_out.count = countof(early_args),
         .styling.plain = !stdout_is_terminal,
         #ifndef __DRC__ // workaround libffi limitation
         .print = (int(*)(void*, const char*, ...))b_printf,

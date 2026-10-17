@@ -82,12 +82,12 @@ int main(int argc, char** argv, char** envp){
         .name = argv[0]?argv[0]:"cpp",
         .description = "cpp",
         .positional.args = pos_args,
-        .positional.count = arrlen(pos_args),
+        .positional.count = countof(pos_args),
         .keyword.args = kw_args,
-        .keyword.count = arrlen(kw_args),
+        .keyword.count = countof(kw_args),
         .keyword.next = cpp_kwargs(&cpp),
         .early_out.args = early_args,
-        .early_out.count = arrlen(early_args),
+        .early_out.count = countof(early_args),
         .styling.plain = !stdout_is_terminal(),
     };
     Args args = argc?(Args){argc-1, (const char*const*)argv+1}:(Args){0, 0};

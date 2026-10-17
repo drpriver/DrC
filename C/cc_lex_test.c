@@ -322,7 +322,7 @@ TestFunction(test_cc_lex_integers){
         {"msvc_I64_upper", SV("42I64"),    cc_int_tok(42, CC_LONG_LONG), __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -359,7 +359,7 @@ TestFunction(test_cc_lex_integers){
             {"mixed_f16", SV("0.0i16f16"), SV("(test):1:1: error: Invalid floating-point literal\n"), __LINE__},
         };
         static int error_idx = 0;
-        for(size_t i = test_atomic_increment(&error_idx); i < arrlen(error_cases); i = test_atomic_increment(&error_idx)){
+        for(size_t i = test_atomic_increment(&error_idx); i < countof(error_cases); i = test_atomic_increment(&error_idx)){
             StringView err_msg;
             int err = cc_lex_string_expect_error(error_cases[i].inp, &err_msg);
             TEST_stats.executed++;
@@ -447,7 +447,7 @@ TestFunction(test_cc_lex_floats){
         {"pos_exp",      SV("1e+10"),      cc_double_tok(1e+10), __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -506,7 +506,7 @@ TestFunction(test_cc_lex_chars){
         {"U_hex_esc",   SV("U'\\x41'"),   0x41,             CC_CHAR32, __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -546,7 +546,7 @@ TestFunction(test_cc_lex_chars){
             {"empty",     SV("''"),     SV("(test):1:1: error: Invalid character constant\n"), __LINE__},
         };
         static int error_idx = 0;
-        for(size_t i = test_atomic_increment(&error_idx); i < arrlen(error_cases); i = test_atomic_increment(&error_idx)){
+        for(size_t i = test_atomic_increment(&error_idx); i < countof(error_cases); i = test_atomic_increment(&error_idx)){
             StringView err_msg;
             int err = cc_lex_string_expect_error(error_cases[i].inp, &err_msg);
             TEST_stats.executed++;
@@ -610,7 +610,7 @@ TestFunction(test_cc_lex_strings){
         {"u_ucn_U_surr", SV("u\"\\U0001F600\""), cc_str16_tok(CC_uSTRING,  (const unsigned short[]){ 0xD83D, 0xDE00, 0}, 3), __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -696,7 +696,7 @@ TestFunction(test_cc_lex_punctuators){
     #pragma GCC diagnostic pop
     #endif
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -796,7 +796,7 @@ TestFunction(test_cc_lex_keywords){
         {"countof", SV("countof"), CC__Countof, __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -879,7 +879,7 @@ TestFunction(test_cc_lex_multi_token){
         }, __LINE__},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(test_cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
         CcToken toks[MAX_TEST_TOKENS];
         int count = 0;
         ArenaAllocator aa = {0}, synth = {0}, at = {0};
@@ -995,7 +995,7 @@ TestFunction(test_literal_regressions){
     };
     for(int array = 0; array < 2; array++){
         static int case_idx[2] = {0};
-        for(size_t i = test_atomic_increment(case_idx+array); i < arrlen(cases); i = test_atomic_increment(case_idx+array)){
+        for(size_t i = test_atomic_increment(case_idx+array); i < countof(cases); i = test_atomic_increment(case_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
             ArenaAllocator aa = {0}, synth = {0}, at = {0};
             int err = cc_lex_string_mode(cases[i].input, &out, &count, &aa, &synth, &at, __FILE__, __func__, __LINE__, array, 0, 1);
@@ -1046,7 +1046,7 @@ TestFunction(test_literal_regressions){
     };
     for(int array = 0; array < 2; array++){
         static int invalid_idx[2] = {0};
-        for(size_t i = test_atomic_increment(invalid_idx+array); i < arrlen(invalid); i = test_atomic_increment(invalid_idx+array)){
+        for(size_t i = test_atomic_increment(invalid_idx+array); i < countof(invalid); i = test_atomic_increment(invalid_idx+array)){
             CcToken out[MAX_TEST_TOKENS]; int count = 0;
             ArenaAllocator aa = {0}, synth = {0}, at = {0};
             int err = cc_lex_string_mode(invalid[i], &out, &count, &aa, &synth, &at, __FILE__, __func__, __LINE__, array, 0, 1);
@@ -1104,12 +1104,12 @@ TestFunction(test_long_double_targets){
         {SV("1e-6000L"), {0, 0}, {0, 0}, 0},
     };
     CcLongDoubleFormat formats[] = {CC_LONG_DOUBLE_BINARY128, CC_LONG_DOUBLE_X87, CC_LONG_DOUBLE_BINARY64};
-    for(size_t f = 0; f < arrlen(formats); f++){
+    for(size_t f = 0; f < countof(formats); f++){
         CcTargetConfig target = cc_target_test;
         target.long_double_format = formats[f];
         CppPreprocessor cpp = {.target = &target};
         static int case_idx[3] = {0};
-        for(size_t i = test_atomic_increment(case_idx+f); i < arrlen(cases); i = test_atomic_increment(case_idx+f)){
+        for(size_t i = test_atomic_increment(case_idx+f); i < countof(cases); i = test_atomic_increment(case_idx+f)){
             CppToken input = {.txt = cases[i].text};
             CcToken out;
             int err = cpp_number_to_cc_tok(&cpp, &input, &out);
@@ -1241,7 +1241,7 @@ TestFunction(test_fast_float_binary16){
     };
     {
         static int idx = 0;
-        for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
             StringView sv = cases[i].text;
             uint16_t bits = 42;
             fast_float_from_chars_result r = fast_float_from_chars_binary16(sv.text, sv.text+sv.length, &bits, FASTFLOAT_FORMAT_GENERAL);
@@ -1264,7 +1264,7 @@ TestFunction(test_fast_float_binary16){
     };
     {
         static int idx = 0;
-        for(size_t i = test_atomic_increment(&idx); i < arrlen(syntax); i = test_atomic_increment(&idx)){
+        for(size_t i = test_atomic_increment(&idx); i < countof(syntax); i = test_atomic_increment(&idx)){
             StringView sv = syntax[i].text;
             uint16_t bits = 42;
             fast_float_from_chars_result r = fast_float_from_chars_binary16(sv.text, sv.text+sv.length, &bits, syntax[i].fmt);
@@ -1376,7 +1376,7 @@ TestFunction(test_fast_float_wide){
     };
     {
         static int idx = 0;
-        for(size_t i = test_atomic_increment(&idx); i < arrlen(small); i = test_atomic_increment(&idx)){
+        for(size_t i = test_atomic_increment(&idx); i < countof(small); i = test_atomic_increment(&idx)){
             StringView sv = small[i].text;
             float f;
             double d;
@@ -1389,7 +1389,7 @@ TestFunction(test_fast_float_wide){
     for(int x87 = 0; x87 < 2; x87++){
         {
             static int idx[2] = {0};
-            for(size_t i = test_atomic_increment(idx+x87); i < arrlen(cases); i = test_atomic_increment(idx+x87)){
+            for(size_t i = test_atomic_increment(idx+x87); i < countof(cases); i = test_atomic_increment(idx+x87)){
                 StringView sv = cases[i].text;
                 uint64_t words[2] = {0};
                 fast_float_from_chars_result r = x87
@@ -1413,7 +1413,7 @@ TestFunction(test_fast_float_wide){
         };
         {
             static int idx[2] = {0};
-            for(size_t i = test_atomic_increment(idx+x87); i < arrlen(syntax); i = test_atomic_increment(idx+x87)){
+            for(size_t i = test_atomic_increment(idx+x87); i < countof(syntax); i = test_atomic_increment(idx+x87)){
                 StringView sv = syntax[i].text;
                 uint64_t words[2] = {42, 43};
                 fast_float_from_chars_result r = x87

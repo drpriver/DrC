@@ -19,11 +19,7 @@
 #endif
 #include "stringview.h"
 #include "dbg_diff.h"
-
-
-#ifndef arrlen
-#define arrlen(arr) (sizeof(arr)/sizeof(arr[0]))
-#endif
+#include "countof.h"
 
 #ifndef force_inline
 #if defined __GNUC__ || defined __clang__ || defined __DRC__
@@ -113,7 +109,7 @@ static size_t TestOutFileCount = 0;
 // file that any printing will print to.
 static void
 TestRegisterOutFile(FILE* fp){
-    if(TestOutFileCount >= arrlen(TestOutFiles))
+    if(TestOutFileCount >= countof(TestOutFiles))
         return;
     TestOutFiles[TestOutFileCount++] = fp;
 }
@@ -139,7 +135,7 @@ static
 void
 TestPrintfv(const char* fmt, va_list arg_){
     char buff[10000];
-    assert(TestOutFileCount < arrlen(TestOutFiles));
+    assert(TestOutFileCount < countof(TestOutFiles));
     for(size_t i = 0; i < TestOutFileCount; i++){
         va_list arg;
         va_copy(arg, arg_);
@@ -390,7 +386,7 @@ static size_t test_funcs_count;
 static inline
 void
 register_test(StringView test_name, TestFunc* func, unsigned flags){
-    assert(test_funcs_count < arrlen(test_funcs));
+    assert(test_funcs_count < countof(test_funcs));
     test_names[test_funcs_count] = test_name;
     test_funcs[test_funcs_count++] = (TestCase){
         .test_name = test_name,
@@ -1180,7 +1176,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
     #ifndef __wasm__
     StringView directory = {0};
     #endif
-    size_t tests_to_run[arrlen(test_funcs)] = {0};
+    size_t tests_to_run[countof(test_funcs)] = {0};
     struct ArgParseEnumType targets = {
         .enum_size = sizeof(size_t),
         .enum_count = test_funcs_count,
@@ -1262,7 +1258,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         },
         [TEE_INDEX] = {
             .name = SV("--tee"),
-            .max_num = arrlen(extrafiles),
+            .max_num = countof(extrafiles),
             .dest = ARGDEST(extrafiles),
             .help = "In addition to the primary output (either stderr or the file "
                     "given to --outfile), also print results to this file.",
@@ -1347,12 +1343,12 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         .description = "A test runner.",
         .keyword={
             .args = kw_args,
-            .count = arrlen(kw_args),
+            .count = countof(kw_args),
             .next = extra_kwargs,
         },
         .early_out={
             .args = early_args,
-            .count = arrlen(early_args),
+            .count = countof(early_args),
         },
         .styling={.plain = !isatty(fileno(stdout)),},
     };

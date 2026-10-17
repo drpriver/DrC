@@ -16,6 +16,7 @@
 #include "../Drp/env.h"
 #include "../Drp/free_list.h"
 #include "../Drp/rng.h"
+#include "../Drp/countof.h"
 #include "cpp_tok.h"
 #include "cc_target.h"
 #include "cc_tok.h"
@@ -62,10 +63,6 @@ typedef Marray(CppToken) CppTokens;
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
-#endif
-
-#ifndef arrlen
-#define arrlen(arr) (sizeof(arr)/sizeof((arr)[0]))
 #endif
 
 typedef struct CppIncludePosition CppIncludePosition;

@@ -484,7 +484,7 @@ TestFunction(test_func_macros){
         {"__RAND__", SV("__RAND__"), SV("1364989054"), __LINE__},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -517,7 +517,7 @@ TestFunction(test_func_macros_extensions){
         {"gnu gnu va args nocomma",SV("#define F(args...) f(1 ##args)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -556,7 +556,7 @@ TestFunction(test_obj_macros){
         {"backslash after identifier at eof", SV("word\\"), SV("word\\"), __LINE__},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
         int line = test_cases[i].line;
@@ -1206,7 +1206,7 @@ TestFunction(test_builtin_macros){
         {"defblock named variadic with comments", SV("#defblock VA(args /* one */ /* two */ ...)\nargs\n#endblock\nVA(a, b)"), SV("\na, b"), __LINE__, 0},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -1231,7 +1231,7 @@ TestFunction(test_va_opt_error_propagation){
         SV("#define B(x) x\n#define F(...) prefix ## __VA_OPT__(yes)\nF(B(1,2))"),
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(inputs); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(inputs); i = test_atomic_increment(&idx)){
         StringView message;
         int err = cpp_expand_string_expect_error(inputs[i], &message);
         TestExpectFalse(int, err);
@@ -1301,7 +1301,7 @@ TestFunction(test_error_locations){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
@@ -1363,7 +1363,7 @@ TestFunction(test_messages){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_message(test_cases[i].inp, &err_msg);
@@ -1729,7 +1729,7 @@ TestFunction(test_condition){
             SV("\nvalue")},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -2013,7 +2013,7 @@ TestFunction(test_erroneous_condition){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView err_msg;
         int err = cpp_expand_string_expect_error(test_cases[i].inp, &err_msg);
@@ -2383,7 +2383,7 @@ TestFunction(test_if_eval){
             SV("\n\nyes\n")},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled) continue;
         StringView inp = test_cases[i].inp;
         StringView exp = test_cases[i].exp;
@@ -2513,7 +2513,7 @@ TestFunction(test_include){
             {0}, SV("\n\n\n\n\n42")},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled){
             TEST_stats.skipped++;
             continue;
@@ -2572,7 +2572,7 @@ TestFunction(test_include_eof){
         {SV("#include \"sub/inner.h\"\nE"), SV("#define E _Embed(\"\\\"data\\\"\")\n"), SV("9")},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         IncludeTestFile files[] = {
             {SV("src/main.c"), cases[i].main},
             {SV("src/sub/inner.h"), cases[i].inner},
@@ -2590,7 +2590,7 @@ TestFunction(test_include_eof){
         StringView paths[] = {SV("inc0"), SV("inc1"), SV("inc2")};
         StringView frameworks[] = {SV("frameworks"), SV("next-frameworks")};
         StringView result = {0};
-        int err = cpp_expand_with_files(files, arrlen(files), paths, arrlen(paths), frameworks, arrlen(frameworks), &result, __FILE__, __func__, __LINE__);
+        int err = cpp_expand_with_files(files, countof(files), paths, countof(paths), frameworks, countof(frameworks), &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
         if(err){
             TestPrintf("source boundary case %zu failed\n", i);
@@ -2647,14 +2647,14 @@ TestFunction(test_embed){
         {SV("#define S(x) #x\nS(_Embed(E))"), SV("\n\"_Embed(E)\"")},
     };
     static int case_idx = 0;
-    for(size_t i = test_atomic_increment(&case_idx); i < arrlen(cases); i = test_atomic_increment(&case_idx)){
+    for(size_t i = test_atomic_increment(&case_idx); i < countof(cases); i = test_atomic_increment(&case_idx)){
         IncludeTestFile files[] = {
             {SV("test/main.c"), cases[i].source},
             {SV("test/data"), SV("\1\2\3\xff\0\10")},
             {SV("test/empty"), SV("")},
         };
         StringView path = SV("test"), result = {0};
-        int err = cpp_expand_with_files(files, arrlen(files), &path, 1, NULL, 0, &result, __FILE__, __func__, __LINE__);
+        int err = cpp_expand_with_files(files, countof(files), &path, 1, NULL, 0, &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
         if(err) goto embed_case_cleanup;
         test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
@@ -2697,7 +2697,7 @@ TestFunction(test_embed){
         SV("_Embed(\"__FILE__ suffix\")"),
     };
     static int bad_idx = 0;
-    for(size_t i = test_atomic_increment(&bad_idx); i < arrlen(bad); i = test_atomic_increment(&bad_idx)){
+    for(size_t i = test_atomic_increment(&bad_idx); i < countof(bad); i = test_atomic_increment(&bad_idx)){
         StringView log = {0};
         int err = cpp_expand_string_expect_error(bad[i], &log);
         TestExpectFalse(int, err);
@@ -2723,7 +2723,7 @@ TestFunction(test_embed_file_queries){
         SV("#if __has_embed(\"oversized\" gnu::offset(4194305)) != 0\n#error offset bypassed size limit\n#endif\n"),
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator arena = {0};
         Allocator a = allocator_from_arena(&arena);
         FileCache* fc = fc_create(a, FC_FLAGS_NONE);
@@ -2857,7 +2857,7 @@ TestFunction(test_framework_include){
             SV("\n\nnested")},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled){
             TEST_stats.skipped++;
             continue;
@@ -2908,7 +2908,7 @@ TestFunction(test_literal_boundaries){
           {SV("once.h"), SV("_Pragma(L\"once\")\nOK\n")}},
          SV("\n\nOK\n\n")},
     };
-    for(size_t i = 0; i < arrlen(cases); i++){
+    for(size_t i = 0; i < countof(cases); i++){
         StringView result = {0};
         int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0, &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);

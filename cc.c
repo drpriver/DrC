@@ -232,12 +232,12 @@ int main(int argc, char** argv, char** envp){
         .name = argv[0]?argv[0]:"drc",
         .description = "C interpreter",
         .positional.args = pos_args,
-        .positional.count = arrlen(pos_args),
+        .positional.count = countof(pos_args),
         .keyword.args = kw_args,
-        .keyword.count = arrlen(kw_args),
+        .keyword.count = countof(kw_args),
         .keyword.next = cpp_kwargs(&cc_interp.parser.cpp),
         .early_out.args = early_args,
-        .early_out.count = arrlen(early_args),
+        .early_out.count = countof(early_args),
         .styling.plain = !stdout_is_terminal(),
     };
     Args args = argc?(Args){argc-1, (const char*const*)argv+1}:(Args){0, 0};
@@ -335,7 +335,7 @@ int main(int argc, char** argv, char** envp){
             #endif
             #endif
         };
-        for(size_t i = 0; i < arrlen(crt_syms); i++){
+        for(size_t i = 0; i < countof(crt_syms); i++){
             err = ci_register_sym(&cc_interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
             if(err) goto stringify_error;
         }

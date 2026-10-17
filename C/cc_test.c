@@ -231,7 +231,7 @@ TestFunction(test_runtime_bitfields){
     CcParser parser = {.cpp.target=&cc_target_test};
     unsigned char bytes[16];
     memset(bytes, 0xff, sizeof bytes);
-    for(size_t i = 0; i < arrlen(cases); i++){
+    for(size_t i = 0; i < countof(cases); i++){
         CcField field = {.type=ccqt_basic(cases[i].type), .is_bitfield=1,
             .bitwidth=cases[i].width, .bitoffset=cases[i].shift};
         CcStruct st = {.kind=CC_STRUCT, .fields=&field, .field_count=1, .size=16, .alignment=16};
@@ -6061,7 +6061,7 @@ TestFunction(test_parse_decls){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         if(testcases[i].skip){
             continue;
         }
@@ -10049,7 +10049,7 @@ TestFunction(test_parse_errors){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         struct ErrorCase* c = &cases[i];
         if(c->skip){
             TEST_stats.skipped++;
@@ -10581,7 +10581,7 @@ TestFunction(test_struct_layout){
     };
     MStringBuilder sb = {0};
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
@@ -10897,7 +10897,7 @@ TestFunction(test_bitfield_abi){
     };
     MStringBuilder sb = {0};
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         sb.allocator = al;
@@ -11101,7 +11101,7 @@ TestFunction(test_pragma_pack){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         struct pp_case* c = &cases[i];
         if(c->skip){
             TEST_stats.skipped++;
@@ -11361,7 +11361,7 @@ TestFunction(test_record_call_abi){
         {CC_TARGET_X86_64_WINDOWS_MINGW, SVI("struct S { long long x,y; };"), 0, 16, .win64={.is_indirect=1}},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         size_t previous_failures = TEST_stats.failures;
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
@@ -11473,7 +11473,7 @@ TestFunction(test_feature_queries){
         {"c_atomic__", 0, 0},
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         ArenaAllocator aa = {0};
         Allocator al = allocator_from_arena(&aa);
         AtomTable at = {0};

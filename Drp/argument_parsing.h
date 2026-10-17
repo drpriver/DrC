@@ -16,10 +16,7 @@
 #include "stringview.h"
 #include "cstring_view.h"
 #include "parse_numbers.h"
-
-#ifndef arrlen
-#define arrlen(arr) (sizeof(arr)/sizeof((arr)[0]))
-#endif
+#include "countof.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -2129,7 +2126,7 @@ print_argparse_fish_completions(ArgParser* p){
         ArgToParse* a = &p->early_out.args[i];
         p->print(p->hout, "complete -c %s", p->name);
         StringView names[] = {a->name, a->altname1};
-        for(size_t j = 0; j < arrlen(names); j++){
+        for(size_t j = 0; j < countof(names); j++){
             StringView name = names[j];
             if(!name.length) continue;
             if(name.length > 2 && memcmp(name.text, "--", 2) == 0){
@@ -2154,7 +2151,7 @@ print_argparse_fish_completions(ArgParser* p){
             ArgToParse* a = &keywords->args[i];
             p->print(p->hout, "complete -c %s", p->name);
             StringView names[] = {a->name, a->altname1};
-            for(size_t j = 0; j < arrlen(names); j++){
+            for(size_t j = 0; j < countof(names); j++){
                 StringView name = names[j];
                 if(!name.length) continue;
                 if(name.length > 2 && memcmp(name.text, "--", 2) == 0){
@@ -2267,11 +2264,11 @@ main(int argc, const char*_Null_unspecified*_Null_unspecified argv){
         .name = argc?argv[0]:"argparse_example",
         .description = "An example of how to use the argparser.",
         .positional.args = pos_args,
-        .positional.count = arrlen(pos_args),
+        .positional.count = countof(pos_args),
         .early_out.args = early_args,
-        .early_out.count = arrlen(early_args),
+        .early_out.count = countof(early_args),
         .keyword.args = kw_args,
-        .keyword.count = arrlen(kw_args),
+        .keyword.count = countof(kw_args),
     };
     // Real program would use OS apis to get the width of the terminal.
     int columns = 80;
