@@ -1133,6 +1133,25 @@ TestFunction(test_builtin_macros){
     TESTEND();
 }
 
+TestFunction(test_va_opt_error_propagation){
+    TESTBEGIN();
+    StringView inputs[] = {
+        SV("#define B(x) x\n#define F(...) __VA_OPT__(yes)\nF(B(1,2))"),
+        SV("#define B(x) x\n#define F(...) #__VA_OPT__(yes)\nF(B(1,2))"),
+        SV("#define B(x) x\n#define F(...) prefix ## __VA_OPT__(yes)\nF(B(1,2))"),
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(inputs); i = test_atomic_increment(&idx)){
+        StringView message;
+        int err = cpp_expand_string_expect_error(inputs[i], &message);
+        TestExpectFalse(int, err);
+        test_expect_equals_sv(SV("(test):3:6: error: Too many arguments to function-like macro B()\n"),
+                              message, "expected", "message", &TEST_stats, __FILE__, __func__, __LINE__);
+        if(message.text) Allocator_free(MALLOCATOR, message.text, message.length);
+    }
+    TESTEND();
+}
+
 TestFunction(test_error_locations){
     TESTBEGIN();
     struct {
@@ -2634,6 +2653,7 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_torture, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_builtin_macros, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_error_locations, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_va_opt_error_propagation, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_messages, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_erroneous_condition, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

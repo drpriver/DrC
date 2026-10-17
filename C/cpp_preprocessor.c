@@ -3118,8 +3118,9 @@ cpp_get_va_args(const CppTokens *args, const Marray(size_t) *arg_seps, size_t np
 
 
 static
-_Bool
-cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *_Nullable*_Null_unspecified expanded_args){
+int
+cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *_Nullable*_Null_unspecified expanded_args, _Bool* nonempty){
+    *nonempty = 0;
     CppToken* start;
     size_t count;
     cpp_get_va_args(args, arg_seps, macro->nparams, &start, &count);
@@ -3127,11 +3128,11 @@ cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppToken
     size_t va_idx = macro->nparams;
     if(!expanded_args[va_idx]){
         CppTokens *ea = cpp_get_scratch(cpp);
-        if(!ea) return 0;
+        if(!ea) return CPP_OOM_ERROR;
         int err = cpp_expand_argument(cpp, start, count, ea);
         if(err){
             cpp_release_scratch(cpp, ea);
-            return 0;
+            return err;
         }
         expanded_args[va_idx] = ea;
     }
@@ -3139,8 +3140,10 @@ cpp_va_args_nonempty(CppPreprocessor *cpp, const CppMacro *macro, const CppToken
     for(size_t i = 0; i < expanded->count; i++){
         if(expanded->data[i].type != CPP_WHITESPACE &&
            expanded->data[i].type != CPP_NEWLINE &&
-           expanded->data[i].type != CPP_PLACEMARKER)
-            return 1;
+           expanded->data[i].type != CPP_PLACEMARKER){
+            *nonempty = 1;
+            break;
+        }
     }
     return 0;
 }
@@ -3493,7 +3496,10 @@ cpp_substitute_and_paste(
                 err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &ccount, &cparen, expansion_parent);
                 if(err) return err;
                 CppToken stringified;
-                if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+                _Bool nonempty;
+                err = cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args, &nonempty);
+                if(err) return err;
+                if(nonempty){
                     CppTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
                     err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, temp, 1, expansion_parent);
@@ -3638,7 +3644,10 @@ cpp_substitute_and_paste(
                 size_t cstart, ccount, cparen;
                 err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &ccount, &cparen, expansion_parent);
                 if(err) return err;
-                if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+                _Bool nonempty;
+                err = cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args, &nonempty);
+                if(err) return err;
+                if(nonempty){
                     CppTokens *temp = cpp_get_scratch(cpp);
                     if(!temp) return CPP_OOM_ERROR;
                     err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, temp, raw_only, expansion_parent);
@@ -3759,7 +3768,10 @@ cpp_substitute_and_paste(
             err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &ccount, &cparen, expansion_parent);
             if(err) return err;
             size_t before = out->count;
-            if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
+            _Bool nonempty;
+            err = cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args, &nonempty);
+            if(err) return err;
+            if(nonempty){
                 err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, out, raw_only, expansion_parent);
                 if(err) return err;
             }
