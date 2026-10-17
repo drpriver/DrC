@@ -628,7 +628,7 @@ cc_plan9_base(CcQualType from, CcQualType to){
     CcStruct* s = ccqt_as_struct(from);
     for(uint32_t i = 0; i < s->field_count; i++){
         CcField* f = &s->fields[i];
-        if(f->is_method || f->name || f->is_bitfield) continue;
+        if(f->name || f->is_bitfield) continue;
         CcQualType sub = f->type;
         sub.quals |= from.quals;
         if(cc_plan9_base(sub, to)){
@@ -666,7 +666,7 @@ cc_base_path(CcParser* p, CcQualType from, CcQualType to, CcFieldPath* out){
     CcStruct* s = ccqt_as_struct(from);
     for(uint32_t i = 0; i < s->field_count; i++){
         CcField* field = &s->fields[i];
-        if(field->is_method || field->name || field->is_bitfield) continue;
+        if(field->name || field->is_bitfield) continue;
         CcQualType sub = field->type;
         sub.quals |= from.quals;
         if(!cc_plan9_base(sub, to)) continue;
@@ -9148,7 +9148,6 @@ _Bool
 cc_sysv_classify_fields(const CcTargetConfig* tc, const CcField* _Null_unspecified fields, uint32_t count, uint32_t base, CcSysVEightByte cls[_Nonnull 8]){
     for(uint32_t i = 0; i < count; i++){
         const CcField* f = &fields[i];
-        if(f->is_method) continue;
         if(f->is_bitfield){
             // Classify occupied bits, not the declared storage unit.
             // Packed fields can cross eightbytes.
@@ -9407,7 +9406,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
                 return 0;
             for(uint32_t i = 0; i < s->field_count; i++){
                 CcField* f = &s->fields[i];
-                if(f->is_method || (f->is_bitfield && !f->bitwidth))
+                if(f->is_bitfield && !f->bitwidth)
                     continue;
                 if(f->is_bitfield)
                     return 0;
@@ -9467,7 +9466,7 @@ cc_arm64_empty_record(const CcStruct* s){
     // Unnamed bitfields occupy storage but do not carry a member value.
     for(uint32_t i = 0; i < s->field_count; i++){
         const CcField* f = &s->fields[i];
-        if(f->is_method || (f->is_bitfield && !f->name)) continue;
+        if(f->is_bitfield && !f->name) continue;
         if(!cc_arm64_empty_type(f->type)) return 0;
     }
     return 1;
@@ -9493,7 +9492,7 @@ cc_classify_record(CcParser* p, CcStruct* s, uint32_t natural_alignment){
     const CcTargetConfig* tc = cc_target(p);
     s->has_wide_vector = 0;
     for(uint32_t i = 0; i < s->field_count; i++){
-        if(!s->fields[i].is_method && cc_type_has_wide_vector(s->fields[i].type)){
+        if(cc_type_has_wide_vector(s->fields[i].type)){
             s->has_wide_vector = 1;
             break;
         }
@@ -9544,21 +9543,11 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     CcBitfieldABI bf_abi = cc_target(p)->bitfield_abi;
     for(uint32_t i = 0; i < s->field_count; i++){
         CcField* f = &s->fields[i];
-        if(f->is_method) continue;
         if(ccqt_kind(f->type) == CC_ARRAY){
             CcArray* arr = ccqt_as_array(f->type);
             if(arr->is_incomplete){
-                if(i + 1 < s->field_count){
-                    _Bool has_later = 0;
-                    for(uint32_t j = i + 1; j < s->field_count; j++){
-                        if(!s->fields[j].is_method){
-                            has_later = 1;
-                            break;
-                        }
-                    }
-                    if(has_later)
-                        return cc_error(p, f->loc, "flexible array member must be last field");
-                }
+                if(i + 1 < s->field_count)
+                    return cc_error(p, f->loc, "flexible array member must be last field");
                 if(bitfield_offset > 0){
                     offset = bitfield_storage_end;
                     bitfield_offset = 0;
@@ -9579,13 +9568,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
         if(ccqt_kind(f->type) == CC_STRUCT){
             CcStruct* inner = ccqt_as_struct(f->type);
             if(inner->has_fam){
-                _Bool is_last = 1;
-                for(uint32_t j = i + 1; j < s->field_count; j++)
-                    if(!s->fields[j].is_method){
-                        is_last = 0;
-                        break;
-                    }
-                if(!f->name && is_last)
+                if(!f->name && i + 1 == s->field_count)
                     s->has_fam = 1;
                 else
                     return cc_error(p, f->loc, "struct with flexible array member cannot be embedded");
@@ -9719,7 +9702,6 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
     int err = 0;
     for(uint32_t i = 0; i < u->field_count; i++){
         CcField* f = &u->fields[i];
-        if(f->is_method) continue;
         if(ccqt_kind(f->type) == CC_ARRAY && ccqt_as_array(f->type)->is_incomplete){
             uint32_t field_align;
             err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
@@ -9946,7 +9928,7 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
     if(out_owner) *out_owner = CCQT_NONE;
     for(uint32_t i = 0; i < count; i++){
         CcField* field = &fields[i];
-        if((field->is_method ? field->method->name : field->name) == name){
+        if(field->name == name){
             if(out_path){
                 CcFieldPath path;
                 if(cc_field_path_make(cc_allocator(p), &i, 1, &path)) return CC_OOM_ERROR;
@@ -9956,7 +9938,7 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
             *out_type = field->type;
             return 0;
         }
-        if(field->name || field->is_method || (ccqt_kind(field->type) != CC_STRUCT && ccqt_kind(field->type) != CC_UNION))
+        if(field->name || (ccqt_kind(field->type) != CC_STRUCT && ccqt_kind(field->type) != CC_UNION))
             continue;
         CcStruct* sub = ccqt_as_struct(field->type);
         CcFieldPath suffix = {0};
@@ -10392,7 +10374,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             path->count = path_depth;
             if(first_value){
                 CcExpr* fv = first_value;
-                while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+                while(fi < s->field_count && !s->fields[fi].name && s->fields[fi].is_bitfield)
                     fi++;
                 if(fi >= s->field_count) break;
                 CcField* fld = &s->fields[fi];
@@ -10401,7 +10383,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 if(err) return err;
                 first_value = NULL;
                 fi++;
-                while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+                while(fi < s->field_count && !s->fields[fi].name && s->fields[fi].is_bitfield)
                     fi++;
                 if(fi >= s->field_count) break;
                 CcToken peek;
@@ -10453,7 +10435,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 if(err) return err;
                 if(stop) break;
             }
-            while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+            while(fi < s->field_count && !s->fields[fi].name && s->fields[fi].is_bitfield)
                 fi++;
             if(fi >= s->field_count){
                 if(braced){
@@ -10470,7 +10452,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             err = cc_parse_init_value(p, flags, fld->type, 1, loc, buf, path);
             if(err) return err;
             fi++;
-            while(fi < s->field_count && (s->fields[fi].is_method || (!s->fields[fi].name && s->fields[fi].is_bitfield)))
+            while(fi < s->field_count && !s->fields[fi].name && s->fields[fi].is_bitfield)
                 fi++;
             if(braced){
                 err = cc_init_list_comma(p);
@@ -10549,7 +10531,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
         }
         CcField* field = NULL;
         for(uint32_t fi = 0; fi < u->field_count; fi++){
-            if(u->fields[fi].name || (!u->fields[fi].is_bitfield && !u->fields[fi].is_method)){
+            if(u->fields[fi].name || !u->fields[fi].is_bitfield){
                 field = &u->fields[fi];
                 break;
             }
@@ -10998,11 +10980,7 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
     }
     for(uint32_t i = 0; i < inner_count; i++){
         CcField* f = &inner_fields[i];
-        if(f->is_method){
-            if(cc_has_field(p, existing, existing_count, f->method->name))
-                return cc_error(p, loc, "duplicate member '%s'", f->method->name->data);
-        }
-        else if(f->name){
+        if(f->name){
             if(cc_has_field(p, existing, existing_count, f->name))
                 return cc_error(p, loc, "duplicate member '%s'", f->name->data);
         }
@@ -17005,7 +16983,7 @@ cc_eval_opaque_region(CcParser* p, CcQualType type, uint64_t offset, uint32_t si
         CcStruct* aggregate = ccqt_as_struct(type);
         for(uint32_t i = 0; i < aggregate->field_count; i++){
             CcField* field = &aggregate->fields[i];
-            if(field->is_method || field->is_bitfield || offset < field->offset) continue;
+            if(field->is_bitfield || offset < field->offset) continue;
             if(cc_eval_opaque_region(p, field->type, offset-field->offset, size, metadata, depth+1)) return 1;
         }
     }
@@ -17114,7 +17092,6 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
         for(uint32_t i = 0; i < aggregate->field_count; i++){
             if(selected != UINT32_MAX && i != selected) continue;
             CcField* field = &aggregate->fields[i];
-            if(field->is_method) continue;
             if(field->is_bitfield){
                 if(kind == CC_UNION && field->name) return 0;
                 continue;
@@ -18099,8 +18076,8 @@ cc_eval_default_path(CcQualType type, CcFieldPath path){
             if(index >= aggregate->field_count) return 0;
             if(kind == CC_UNION){
                 uint32_t first = 0;
-                while(first < aggregate->field_count && (aggregate->fields[first].is_method
-                    || (aggregate->fields[first].is_bitfield && !aggregate->fields[first].name))) first++;
+                while(first < aggregate->field_count && aggregate->fields[first].is_bitfield
+                    && !aggregate->fields[first].name) first++;
                 if(index != first) return 0;
             }
             type = aggregate->fields[index].type;
@@ -18294,7 +18271,7 @@ cc_eval_offset_path(CcParser* p, CcQualType owner, uint64_t offset, CcQualType t
         }
         else {
             CcField* field = &ccqt_as_struct(owner)->fields[i];
-            if(field->is_method || field->is_bitfield || field->offset > offset) continue;
+            if(field->is_bitfield || field->offset > offset) continue;
             if(ccqt_kind(field->type) == CC_ARRAY && ccqt_as_array(field->type)->is_incomplete) continue;
             start = field->offset;
             child = field->type;

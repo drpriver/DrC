@@ -406,7 +406,6 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             msb_write_literal(sb, "{\n");
             for(uint32_t i = 0; i < s->field_count; i++){
                 CcField* f = &s->fields[i];
-                if(f->is_method) continue;
                 for(int j = 0; j < indent + 1; j++) msb_write_literal(sb, "  ");
                 if(f->name)
                     msb_sprintf(sb, ".%.*s = ", (int)f->name->length, f->name->data);

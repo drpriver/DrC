@@ -789,17 +789,19 @@ repl_builtin_command(CcParser* parser, StringView input){
                             log_sprintf(l, " %.*s", (int)f->name->length, f->name->data);
                         else
                             log_sprintf(l, " <anonymous>");
-                        if(f->is_method)
-                            log_sprintf(l, "(method)");
-                        else {
-                            log_sprintf(l, ", offset=%u", f->offset);
-                            if(f->alignment)
-                                log_sprintf(l, ", override align=%u", f->alignment);
-                            if(f->is_bitfield){
-                                log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
-                            }
+                        log_sprintf(l, ", offset=%u", f->offset);
+                        if(f->alignment)
+                            log_sprintf(l, ", override align=%u", f->alignment);
+                        if(f->is_bitfield){
+                            log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
                         }
                         log_sprintf(l, "\n");
+                    }
+                    for(uint32_t j = 0; j < s->method_count; j++){
+                        CcField* m = &s->methods[j];
+                        log_sprintf(l, "    ");
+                        cc_print_type(&l->buff, m->type);
+                        log_sprintf(l, " %.*s (method)\n", (int)m->method->name->length, m->method->name->data);
                     }
                 }
             }
@@ -829,17 +831,19 @@ repl_builtin_command(CcParser* parser, StringView input){
                             log_sprintf(l, " %.*s", (int)f->name->length, f->name->data);
                         else
                             log_sprintf(l, " <anonymous>");
-                        if(f->is_method)
-                            log_sprintf(l, "(method)");
-                        else {
-                            log_sprintf(l, ", offset=%u", f->offset);
-                            if(f->alignment)
-                                log_sprintf(l, ", override align=%u", f->alignment);
-                            if(f->is_bitfield){
-                                log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
-                            }
+                        log_sprintf(l, ", offset=%u", f->offset);
+                        if(f->alignment)
+                            log_sprintf(l, ", override align=%u", f->alignment);
+                        if(f->is_bitfield){
+                            log_sprintf(l, ", bitoffset=%u, bitwidth=%u", f->bitoffset, f->bitwidth);
                         }
                         log_sprintf(l, "\n");
+                    }
+                    for(uint32_t j = 0; j < u->method_count; j++){
+                        CcField* m = &u->methods[j];
+                        log_sprintf(l, "    ");
+                        cc_print_type(&l->buff, m->type);
+                        log_sprintf(l, " %.*s (method)\n", (int)m->method->name->length, m->method->name->data);
                     }
                 }
             }

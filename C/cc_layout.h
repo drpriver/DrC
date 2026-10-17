@@ -73,7 +73,7 @@ cc_field_path_resolve(const CcTargetConfig* target, CcQualType type, CcFieldPath
             CcStruct* aggregate = ccqt_as_struct(type);
             CcField* fields = aggregate->fields;
             uint32_t field_count = aggregate->field_count;
-            if(index >= field_count || (fields[index].is_method && i+1 < count))
+            if(index >= field_count)
                 return _cc_not_constant_error;
             CcField* field = &fields[index];
             if(add_overflow(offset, (uint64_t)field->offset, &offset)) return _cc_overflow_error;
