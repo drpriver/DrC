@@ -67,6 +67,7 @@ static int cpp_push_if(CppPreprocessor* cpp, CppPoundIf s);
 static CppTokens*_Nullable cpp_get_scratch(CppPreprocessor*);
 static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CppPreprocessor*);
 static void cpp_release_scratch(CppPreprocessor*, CppTokens*);
+static void cpp_release_pending(CppPreprocessor*, CppTokens*);
 static void cpp_release_scratch_idxes(CppPreprocessor*, Marray(size_t)*);
 static int cpp_substitute_and_paste(CppPreprocessor*, const CppToken*, size_t, const CppMacro*, const CppTokens*, const Marray(size_t)*, CppTokens*_Nullable*_Null_unspecified, CppTokens*, _Bool, SrcLocExp*);
 static int cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out);
@@ -3353,7 +3354,7 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
     finally:
     if(arg_seps) cpp_release_scratch_idxes(cpp, arg_seps);
     if(args) cpp_release_scratch(cpp, args);
-    if(pending)cpp_release_scratch(cpp, pending);
+    if(pending)cpp_release_pending(cpp, pending);
     return err;
 }
 
@@ -4036,6 +4037,17 @@ static
 void
 cpp_release_scratch(CppPreprocessor *cpp, CppTokens *scratch){
     fl_push(&cpp->scratch_list, scratch);
+}
+
+static
+void
+cpp_release_pending(CppPreprocessor *cpp, CppTokens *pending){
+    for(size_t i = 0; i < pending->count; i++){
+        CppToken tok = pending->data[i];
+        if(tok.type == CPP_REENABLE)
+            ((CppMacro*)tok.data1)->is_disabled = 0;
+    }
+    cpp_release_scratch(cpp, pending);
 }
 
 static
@@ -7320,7 +7332,7 @@ cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t co
         if(!err && next.type != CPP_END_OF_INPUT)
             err = cpp_error(cpp, next.loc, "Unexpected token after #if expression");
     }
-    cpp_release_scratch(cpp, pending);
+    cpp_release_pending(cpp, pending);
     return err;
 }
 
@@ -7338,7 +7350,7 @@ cpp_eval_embed_limit(CppPreprocessor* cpp, CppToken* toks, size_t count, int64_t
     if(next.type != CPP_END_OF_INPUT)
         err = cpp_error(cpp, next.loc, "unexpected token in embed limit");
     cleanup:
-    cpp_release_scratch(cpp, pending);
+    cpp_release_pending(cpp, pending);
     return err;
 }
 

@@ -302,6 +302,14 @@ TestFunction(test_func_macros){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         {"simple_func_macro",SV("#define F(x) x*x\nF(2)"), SV("\n2*2"), __LINE__},
+        {"counter argument cached", SV("#define F(x) x x\nF(__COUNTER__) __COUNTER__"), SV("\n0 0 1"), __LINE__},
+        {"counter unused and raw", SV("#define F(x) #x\n#define DROP(x)\nF(__COUNTER__) DROP(__COUNTER__) __COUNTER__"), SV("\n\n\"__COUNTER__\"  0"), __LINE__},
+        {"counter va opt cached", SV("#define F(...) __VA_OPT__(__VA_ARGS__ __VA_ARGS__)\nF(__COUNTER__) __COUNTER__"), SV("\n0 0 1"), __LINE__},
+        {"empty variadic forms", SV("#define E\n#define F(...) [__VA_OPT__(yes)]\nF() F( ) F(\n) F(E) F(,)"), SV("\n\n[] [] [] [] [yes]"), __LINE__},
+        {"empty paste operands", SV("#define C(a,b) a##b\nC(,) C(,word) C(word,)"), SV("\n word word"), __LINE__},
+        {"suppressed token through argument", SV("#define F(x) x\n#define A F(A)\nF(A) A"), SV("\n\nA A"), __LINE__},
+        {"pasted token rescanned", SV("#define C(a,b) a##b\n#define AB 7\n#define I(x) x\nC(A,B) I(C(A,B))"), SV("\n\n\n7 7"), __LINE__},
+        {"counter expression paths", SV("#define F(x) (x==x)\n#if F(__COUNTER__)\nyes\n#endif\n__CALC__(F(__COUNTER__)) __COUNTER__"), SV("\n\nyes\n\n1 2"), __LINE__},
         {"comment_before_macro_name", SV("#define /* comment */ F(x) x\nF(2)"), SV("\n2"), __LINE__},
         {"uninvoked_macro_before_define", SV(
             "#define F(x) x\nF\n#define A 1\nA"), SV("\nF\n\n1"), __LINE__},
