@@ -1688,6 +1688,40 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "alignas with enum type", __LINE__,
+            SVI("enum E { E0 };\n"
+                "alignas(enum E) char x;\n"
+                "_Static_assert(alignof(x) == alignof(enum E));\n"),
+            .vars = {{ SVI("x"), SVI("char") }},
+        },
+        {
+            "alignas with nested and aggregate arrays", __LINE__,
+            SVI("struct S { double x; };\n"
+                "alignas(struct S[2]) char x;\n"
+                "alignas(int[2][3]) char y;\n"
+                "alignas(void *[2]) char z;\n"
+                "_Static_assert(alignof(x) == alignof(struct S));\n"
+                "_Static_assert(alignof(y) == alignof(int));\n"
+                "_Static_assert(alignof(z) == alignof(void *));\n"),
+            .vars = {{ SVI("x"), SVI("char") },
+                     { SVI("y"), SVI("char") },
+                     { SVI("z"), SVI("char") }},
+        },
+        {
+            "alignas with aligned typedef", __LINE__,
+            SVI("typedef int A __attribute__((aligned(32)));\n"
+                "alignas(A) char x;\n"
+                "_Static_assert(alignof(x) == 32);\n"),
+            .vars = {{ SVI("x"), SVI("char") }},
+        },
+        {
+            "alignas with atomic aggregate", __LINE__,
+            SVI("struct S { char x[8]; };\n"
+                "alignas(_Atomic(struct S)) char x;\n"
+                "_Static_assert(alignof(x) == alignof(_Atomic(struct S)));\n"),
+            .vars = {{ SVI("x"), SVI("char") }},
+        },
+        {
             "prefix aligned attribute on decl", __LINE__,
             SVI("__attribute__((aligned(16))) int x;\n"
                "int a[_Alignof x];\n"

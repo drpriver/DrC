@@ -12456,49 +12456,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             CcQualType align_type;
                             err = cc_parse_type_name(p, flags, &align_type, NULL);
                             if(err) return err;
-                            switch(ccqt_kind(align_type)){
-                                case CC_ALIGNED: cc_unsafe_unreachable();
-                                case CC_BASIC:
-                                    align_val = cc_target(p)->alignof_[ccqt_basic_kind(align_type)];
-                                    break;
-                                case CC_STRUCT: {
-                                    CcStruct* s = ccqt_as_struct(align_type);
-                                    if(s->is_incomplete)
-                                        return cc_error(p, tok.loc, "_Alignas applied to incomplete struct type");
-                                    align_val = s->alignment;
-                                    break;
-                                }
-                                case CC_UNION: {
-                                    CcUnion* u = ccqt_as_union(align_type);
-                                    if(u->is_incomplete)
-                                        return cc_error(p, tok.loc, "_Alignas applied to incomplete union type");
-                                    align_val = u->alignment;
-                                    break;
-                                }
-                                case CC_ARRAY: {
-                                    CcArray* arr = ccqt_as_array(align_type);
-                                    if(arr->is_vector){
-                                        align_val = arr->vector_size > cc_target(p)->max_align ? cc_target(p)->max_align : arr->vector_size;
-                                    }
-                                    else {
-                                        CcQualType elem = arr->element;
-                                        if(ccqt_is_basic(elem))
-                                            align_val = cc_target(p)->alignof_[ccqt_basic_kind(elem)];
-                                        else
-                                            return cc_error(p, tok.loc, "_Alignas with complex array element type not yet supported");
-                                    }
-                                    break;
-                                }
-                                case CC_SLICE:
-                                case CC_BLOCK_POINTER:
-                                case CC_POINTER:
-                                    align_val = cc_target(p)->alignof_[CCBT_nullptr_t];
-                                    break;
-                                case CC_ENUM:
-                                case CC_FUNCTION:
-                                    return cc_error(p, tok.loc, "_Alignas with this type not yet supported");
-                                DRP_CASES_EXHAUSTED;
-                            }
+                            err = cc_alignof_as_uint(p, align_type, tok.loc, &align_val);
+                            if(err) return err;
                         }
                         else {
                             CcExpr* expr = NULL;
