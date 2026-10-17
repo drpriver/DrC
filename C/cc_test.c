@@ -2626,6 +2626,13 @@ TestFunction(test_parse_decls){
             .vars = { { SVI("s"), SVI("struct S") } },
         },
         {
+            "static_assert expressions have void type", __LINE__,
+            SVI("static_assert(typeof(static_assert(1)) == void);\n"
+                "static_assert(_Generic(static_assert(1, \"ok\"), void: 1, default: 0));\n"
+                "enum { N = _Generic(_Static_assert(1), void: 3) }; int a[N];\n"),
+            .vars = {{SVI("a"), SVI("int[3]")}},
+        },
+        {
             "constexpr variable in constant expr", __LINE__,
             SVI("constexpr int x = 5;\n"
                "int a[x];\n"),
@@ -6971,6 +6978,21 @@ TestFunction(test_parse_errors){
             SVI("constexpr _Any a=4096ull;\n"
                 "_Static_assert(a.as(_Type).is_struct);\n"),
             SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "static_assert expression fails in unevaluated operand", __LINE__,
+            SVI("typeof(static_assert(0, \"bad\"))* p;\n"),
+            SVI("(test):1:8: error: static assertion failed: 0: \"bad\"\n"),
+        },
+        {
+            "static_assert expression requires a constant", __LINE__,
+            SVI("int n;\nint x=(static_assert(n), 1);\n"),
+            SVI("(test):2:22: error: expression 'n' is not a constant expression\n"),
+        },
+        {
+            "static_assert expression fails in unselected branch", __LINE__,
+            SVI("int x=1 ? 2 : (static_assert(0), 3);\n"),
+            SVI("(test):1:16: error: static assertion failed: 0\n"),
         },
         {
             "any constexpr rejects empty payload", __LINE__,

@@ -4769,6 +4769,16 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             return cc_error(p, tok.loc, "Unexpected punctuator in expression");
         case CC_KEYWORD:
             switch(tok.kw.kw){
+            case CC_static_assert: {
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                err = cc_handle_static_assert(p, flags);
+                if(err) return err;
+                CcExpr* v = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_void));
+                if(!v) return CC_OOM_ERROR;
+                *out = v;
+                return 0;
+            }
             case CC_sizeof:{
                 CcParseFlags sizeof_flags = runtime_flags;
                 sizeof_flags.parsing_default_arg = 0;
@@ -5022,7 +5032,6 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC_return:
             case CC__Defer:
             case CC_static:
-            case CC_static_assert:
             case CC_switch:
             case CC_thread_local:
             case CC___forceinline:
@@ -7621,11 +7630,6 @@ cc_parse_one_inner(CcParser* p){
     err = cc_peek(p, &tok);
     if(err) return err;
     switch(tok.type){
-        case CC_KEYWORD:
-            if(tok.kw.kw == CC_static_assert){
-                return cc_handle_static_assert(p, (CcParseFlags){0});
-            }
-            goto Ldefault;
         case CC_EMBED:
             return cc_unreachable(p, tok.loc, "embed should be gone by now");
         case CC_CONSTANT:
@@ -7633,6 +7637,7 @@ cc_parse_one_inner(CcParser* p){
         case CC_IDENTIFIER:
         case CC_PUNCTUATOR:
         case CC_STRING_LITERAL:
+        case CC_KEYWORD:
             Ldefault:;
             break;
     }
@@ -11145,6 +11150,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             if(tok.type == CC_KEYWORD && tok.kw.kw == CC_static_assert){
                 err = cc_handle_static_assert(p, flags);
                 if(err) goto struct_err;
+                err = cc_expect_punct(p, CC_semi);
+                if(err) goto struct_err;
                 continue;
             }
             CcAttributes member_attrs = {0};
@@ -13465,6 +13472,7 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 case CC__Generic:
                 case CC__Countof:
                 case CC_false:
+                case CC_static_assert:
                     goto expression_statement;
                 case CC_int:
                 case CC_asm:
@@ -13511,7 +13519,6 @@ cc_parse_statement_inner(CcParser* p, CcStmtNode*_Nullable*_Nonnull out){
                 case CC___int128:
                 case CC_thread_local:
                 case CC___forceinline:
-                case CC_static_assert:
                 case CC_typeof_unqual:
                 case CC__Any:
                 case CC__Type:
@@ -14914,8 +14921,6 @@ cc_handle_static_assert(CcParser* p, CcParseFlags flags){
         msg_len = tok.str.length;
     }
     err = cc_expect_punct(p, CC_rparen);
-    if(err) return err;
-    err = cc_expect_punct(p, CC_semi);
     if(err) return err;
     if(!sa_truthy){
         MStringBuilder tmp = {.allocator = allocator_from_arena(&p->scratch_arena)};

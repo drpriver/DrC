@@ -11890,6 +11890,15 @@ TestFunction(test_interpreter){
             .exit_code = 300,
         },
         {
+            "static_assert expressions in macros and statements", __LINE__,
+            SVI("#define CHECKED(x) (static_assert(sizeof(int)==4, \"int\"), (x))\n"
+                "int f(void){int n=0; static_assert(1), ++n;\n"
+                "if(n) static_assert(1);\n"
+                "for(static_assert(1); n<3; ++n) (static_assert(1));\n"
+                "return CHECKED(++n);}\nreturn f();\n"),
+            .exit_code = 4,
+        },
+        {
             "static_assert with arithmetic", __LINE__,
             SVI("_Static_assert(3 * 4 == 12, \"mul\");\n"
                "_Static_assert(10 / 2 == 5, \"div\");\n"
