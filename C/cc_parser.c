@@ -545,8 +545,7 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc, _Bool subs
             return 0;
         }
         if(kind == CC_ARRAY && (subscript || !ccqt_as_array(t)->is_vector)){
-            *out = ccqt_as_array(t)->element;
-            out->quals |= t.quals;
+            *out = cc_array_element_type(t);
             return 0;
         }
         if(kind == CC_SLICE){
@@ -714,7 +713,20 @@ struct CcTypePair {
     const CcTypePair* _Nullable previous;
 };
 
-static _Bool cc_types_match(CcQualType, CcQualType, unsigned, const CcTypePair* _Nullable, _Bool, _Bool);
+
+typedef struct CcTypesMatchFlags CcTypesMatchFlags;
+struct CcTypesMatchFlags {
+    union {
+        uint32_t _bits;
+        struct {
+            uint32_t same: 1,
+                     anon: 1,
+                     unqual: 1,
+                     _padding: 29; // free real estate
+        };
+    };
+};
+static _Bool cc_types_match(CcQualType, CcQualType, unsigned, const CcTypePair* _Nullable, CcTypesMatchFlags);
 
 static
 _Bool
@@ -733,7 +745,7 @@ cc_record_members_match(CcStruct* a, CcStruct* b, unsigned depth, const CcTypePa
         if(ccqt_kind(x->type) == CC_ARRAY && ccqt_kind(y->type) == CC_ARRAY
         && ccqt_as_array(x->type)->is_incomplete != ccqt_as_array(y->type)->is_incomplete)
             return 0;
-        if(!cc_types_match(x->type, y->type, depth+1, pairs, same, !x->name && !x->is_bitfield))
+        if(!cc_types_match(x->type, y->type, depth+1, pairs, (CcTypesMatchFlags){.same=same, .anon=!x->name && !x->is_bitfield}))
             return 0;
     }
     return 1;
@@ -741,32 +753,35 @@ cc_record_members_match(CcStruct* a, CcStruct* b, unsigned depth, const CcTypePa
 
 static
 _Bool
-cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nullable pairs, _Bool same, _Bool anonymous){
+cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nullable pairs, CcTypesMatchFlags flags){
     a = ccqt_unaligned(a);
     b = ccqt_unaligned(b);
+    if(flags.unqual) a.quals = b.quals = 0;
     if(a.bits == b.bits) return 1;
     if(depth >= 256 || a.quals != b.quals || ccqt_kind(a) != ccqt_kind(b)) return 0;
-    if(same && !anonymous) return 0;
+    if(flags.same && !flags.anon) return 0;
     CcTypePair pair = {a, b, pairs};
     switch(ccqt_kind(a)){
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_POINTER: case CC_BLOCK_POINTER:
             return ccqt_as_ptr(a)->restrict_ == ccqt_as_ptr(b)->restrict_
-                && cc_types_match(ccqt_as_ptr(a)->pointee, ccqt_as_ptr(b)->pointee, depth+1, pairs, 0, 0);
+                && cc_types_match(ccqt_as_ptr(a)->pointee, ccqt_as_ptr(b)->pointee, depth+1, pairs, (CcTypesMatchFlags){0});
         case CC_SLICE:
             return ccqt_as_slice(a)->restrict_ == ccqt_as_slice(b)->restrict_
-                && cc_types_match(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1, pairs, 0, 0);
+                && cc_types_match(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1, pairs, (CcTypesMatchFlags){0});
         case CC_ARRAY: {
             CcArray* x = ccqt_as_array(a);
             CcArray* y = ccqt_as_array(b);
             return x->is_vector == y->is_vector && x->vector_size == y->vector_size
                 && (x->is_incomplete || y->is_incomplete || x->is_vla || y->is_vla || x->length == y->length)
-                && cc_types_match(x->element, y->element, depth+1, pairs, 0, 0);
+                // Array qualification belongs to the element type, including
+                // nested arrays; pointer pointee qualifications still matter.
+                && cc_types_match(x->element, y->element, depth+1, pairs, (CcTypesMatchFlags){.unqual=flags.unqual});
         }
         case CC_FUNCTION: {
             CcFunction* x = ccqt_as_function(a);
             CcFunction* y = ccqt_as_function(b);
-            if(!cc_types_match(x->return_type, y->return_type, depth+1, pairs, 0, 0)) return 0;
+            if(!cc_types_match(x->return_type, y->return_type, depth+1, pairs, (CcTypesMatchFlags){0})) return 0;
             if(x->no_prototype || y->no_prototype){
                 CcFunction* proto = x->no_prototype ? y : x;
                 if(proto->is_variadic) return 0;
@@ -783,7 +798,7 @@ cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nu
             for(uint32_t i = 0; i < x->param_count; i++){
                 CcQualType at = {.unqual=x->params[i].unqual};
                 CcQualType bt = {.unqual=y->params[i].unqual};
-                if(!cc_types_match(at, bt, depth+1, pairs, 0, 0))
+                if(!cc_types_match(at, bt, depth+1, pairs, (CcTypesMatchFlags){0}))
                     return 0;
             }
             return 1;
@@ -795,9 +810,9 @@ cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nu
             for(const CcTypePair* prev = pairs; prev; prev = prev->previous)
                 if(prev->a.unqual == a.unqual && prev->b.unqual == b.unqual)
                     return 1;
-            if(x->is_incomplete || y->is_incomplete || x->name != y->name || (!x->name && !anonymous))
+            if(x->is_incomplete || y->is_incomplete || x->name != y->name || (!x->name && !flags.anon))
                 return 0;
-            return cc_record_members_match(x, y, depth, &pair, same);
+            return cc_record_members_match(x, y, depth, &pair, flags.same);
         }
         case CC_ENUM: {
             CcEnum* x = ccqt_as_enum(a);
@@ -826,7 +841,13 @@ cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nu
 static
 _Bool
 cc_types_compatible(CcQualType a, CcQualType b, unsigned depth){
-    return cc_types_match(a, b, depth, NULL, 0, 0);
+    return cc_types_match(a, b, depth, NULL, (CcTypesMatchFlags){0});
+}
+
+static
+_Bool
+cc_types_compatible_unqualified(CcQualType a, CcQualType b){
+    return cc_types_match(a, b, 0, NULL, (CcTypesMatchFlags){.unqual=1});
 }
 
 static
@@ -862,7 +883,7 @@ cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
     if(fk == CC_SLICE && tk == CC_SLICE){
         CcQualType fp = ccqt_as_slice(from)->pointee;
         CcQualType tp = ccqt_as_slice(to)->pointee;
-        if(fp.unqual == tp.unqual)
+        if(cc_types_compatible((CcQualType){.unqual=fp.unqual}, (CcQualType){.unqual=tp.unqual}, 0))
             return (fp.quals & ~tp.quals) == 0;
         return 0;
     }
@@ -870,15 +891,13 @@ cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
     if(fk == CC_ARRAY && tk == CC_SLICE){
         CcArray* a = ccqt_as_array(from);
         if(a->is_incomplete || a->is_vector) return 0;
-        CcQualType ep = a->element;
-        ep.quals |= from.quals;
+        CcQualType ep = cc_array_element_type(from);
         CcQualType tp = ccqt_as_slice(to)->pointee;
-        if(ep.unqual != tp.unqual) return 0;
+        if(!cc_types_compatible((CcQualType){.unqual=ep.unqual}, (CcQualType){.unqual=tp.unqual}, 0)) return 0;
         return (ep.quals & ~tp.quals) == 0;
     }
     if(fk == CC_ARRAY && tk == CC_POINTER && !ccqt_as_array(from)->is_vector){
-        CcQualType ep = ccqt_as_array(from)->element;
-        ep.quals |= from.quals;
+        CcQualType ep = cc_array_element_type(from);
         CcQualType tp = ccqt_as_ptr(to)->pointee;
         return cc_pointer_pointee_convertible(ep, tp);
     }
@@ -1109,12 +1128,10 @@ static
 int
 cc_implicit_cast_to_index(CcParser* p, CcExpr* e, CcExpr* _Nullable* _Nonnull out){
     CcQualType src = cc_arithmetic_operand_type(p, e);
-    if(ccqt_kind(src) == CC_ENUM)
-        src = ccqt_as_enum(src)->underlying;
-    if(!ccqt_is_basic(src) || !ccbt_is_integer(ccqt_basic_kind(src)))
+    if(!ccqt_is_integer(src))
         return cc_error(p, e->loc, "index requires integer type");
     const CcTargetConfig* t = cc_target(p);
-    CcQualType target = ccqt_basic(ccbt_is_unsigned(ccqt_basic_kind(src), !t->char_is_signed)?  t->size_type : ccbt_to_signed(t->size_type));
+    CcQualType target = ccqt_basic(ccqt_is_unsigned(src, !t->char_is_signed)? t->size_type : ccbt_to_signed(t->size_type));
     return cc_implicit_cast(p, e, target, out);
 }
 
@@ -1606,7 +1623,8 @@ cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc)
         return CC_SYNTAX_ERROR;
     }
     if(fk == CC_SLICE && tk == CC_SLICE){
-        if(ccqt_as_slice(from)->pointee.ptr == ccqt_as_slice(to)->pointee.ptr)
+        if(cc_types_compatible((CcQualType){.unqual=ccqt_as_slice(from)->pointee.unqual},
+                (CcQualType){.unqual=ccqt_as_slice(to)->pointee.unqual}, 0))
             return 0;
         if(p) cc_error(p, loc, "cannot cast to slice of different type");
         return CC_SYNTAX_ERROR;
@@ -1617,7 +1635,8 @@ cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc)
             if(p) cc_error(p, loc, "cannot cast to slice from incomplete array or vector");
             return CC_SYNTAX_ERROR;
         }
-        if(a->element.ptr == ccqt_as_slice(to)->pointee.ptr)
+        if(cc_types_compatible((CcQualType){.unqual=a->element.unqual},
+                (CcQualType){.unqual=ccqt_as_slice(to)->pointee.unqual}, 0))
             return 0;
         if(p) cc_error(p, loc, "cannot cast to slice of different type");
         return CC_SYNTAX_ERROR;
@@ -2080,79 +2099,12 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
 static
 int
 cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
-    if(t.is_atomic){
-        uint32_t alignment;
-        int err = cc_alignof_as_uint(p, t, loc, &alignment);
-        if(err) return err;
-        CcExpr* node = cc_value_expr(p, loc, ccqt_basic(cc_target(p)->size_type));
-        if(!node) return CC_OOM_ERROR;
-        node->uinteger = alignment;
-        *out = node;
-        return 0;
-    }
-    if(ccqt_raw_kind(t) == CC_ALIGNED){
-        uint32_t natural;
-        int err = cc_alignof_as_uint(p, ccqt_unaligned(t), loc, &natural);
-        if(err) return err;
-        CcExpr* node = cc_value_expr(p, loc, ccqt_basic(cc_target(p)->size_type));
-        if(!node) return CC_OOM_ERROR;
-        node->uinteger = ccqt_as_aligned(t)->alignment;
-        *out = node;
-        return 0;
-    }
-    const CcTargetConfig* cfg = cc_target(p);
-    CcQualType size_type = ccqt_basic(cfg->size_type);
-    uint64_t align;
-    switch(ccqt_kind(t)){
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        DRP_CASES_EXHAUSTED;
-        case CC_BASIC:{
-            if(ccqt_basic_kind(t) >= CCBT_COUNT)
-                return cc_error(p, loc, "alignof applied to invalid kind");
-            CcExpr* node = cc_value_expr(p, loc, size_type);
-            if(!node) return CC_OOM_ERROR;
-            node->uinteger = cfg->alignof_[ccqt_basic_kind(t)];
-            *out = node;
-            return 0;
-        }
-        case CC_BLOCK_POINTER:
-        case CC_POINTER:
-        case CC_SLICE:
-            align = cfg->alignof_[CCBT_nullptr_t];
-            break;
-        case CC_ARRAY: {
-            CcArray* arr = ccqt_as_array(t);
-            if(arr->is_vector){
-                align = arr->vector_size > cfg->max_align ? cfg->max_align:arr->vector_size;
-                break;
-            }
-            return cc_alignof_as_expr(p, arr->element, loc, out);
-        }
-        case CC_STRUCT: {
-            CcStruct* s = ccqt_as_struct(t);
-            if(s->is_incomplete)
-                return cc_error(p, loc, "alignof applied to incomplete struct type");
-            align = s->alignment;
-            break;
-        }
-        case CC_UNION: {
-            CcUnion* u = ccqt_as_union(t);
-            if(u->is_incomplete)
-                return cc_error(p, loc, "alignof applied to incomplete union type");
-            align = u->alignment;
-            break;
-        }
-        case CC_ENUM: {
-            CcEnum* e = ccqt_as_enum(t);
-            if(e->is_incomplete) return cc_error(p, loc, "alignof applied to incomplete enum type");
-            return cc_alignof_as_expr(p, e->underlying, loc, out);
-        }
-        case CC_FUNCTION:
-            return cc_error(p, loc, "alignof applied to function type");
-    }
-    CcExpr* node = cc_value_expr(p, loc, size_type);
+    uint32_t alignment;
+    int err = cc_alignof_as_uint(p, t, loc, &alignment);
+    if(err) return err;
+    CcExpr* node = cc_value_expr(p, loc, ccqt_basic(cc_target(p)->size_type));
     if(!node) return CC_OOM_ERROR;
-    node->uinteger = align;
+    node->uinteger = alignment;
     *out = node;
     return 0;
 }
@@ -2267,14 +2219,14 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_STRUCT: {
             CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
-                return ((void)cc_error(p, loc, "taking alignof an incomplete type"), CC_UNREACHABLE_ERROR);
+                return cc_error(p, loc, "alignof applied to incomplete struct type");
             *out = s->alignment;
             return 0;
         }
         case CC_UNION: {
             CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
-                return ((void)cc_error(p, loc, "taking alignof an incomplete type"), CC_UNREACHABLE_ERROR);
+                return cc_error(p, loc, "alignof applied to incomplete union type");
             *out = u->alignment;
             return 0;
         }
@@ -2284,7 +2236,7 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             return cc_alignof_as_uint(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
-            return ((void)cc_error(p, loc, "Taking alignof of a function type (not function pointer type)"), CC_UNREACHABLE_ERROR);
+            return cc_error(p, loc, "alignof applied to function type");
     }
     cc_unsafe_unreachable();
 }
@@ -2435,10 +2387,7 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
             if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
             || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
             || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
-                CcQualType lt = left->type;
-                lt.is_atomic = 0;
-                if(ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
-                if(!ccqt_is_basic(lt) || !ccbt_is_integer(ccqt_basic_kind(lt)))
+                if(!ccqt_is_integer(left->type))
                     return cc_error(p, tok.loc, "operator requires integer operands");
             }
             CcQualType operation_type = CCQT_NONE;
@@ -2618,7 +2567,7 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
         else if(tk == CC_SLICE && ek == CC_SLICE){
             CcQualType tpointee = ccqt_as_slice(then_expr->type)->pointee;
             CcQualType epointee = ccqt_as_slice(else_expr->type)->pointee;
-            if(tpointee.unqual != epointee.unqual)
+            if(!cc_types_compatible((CcQualType){.unqual=tpointee.unqual}, (CcQualType){.unqual=epointee.unqual}, 0))
                 return cc_error(p, tok.loc, "incompatible operand types for ternary");
             CcQualType pointee = {.quals = tpointee.quals | epointee.quals, .unqual = tpointee.unqual};
             err = cc_slice_of(p, pointee, &common);
@@ -3579,19 +3528,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     err = cc_expect_punct(p, CC_rparen);
                     if(err) return err;
-                    type1 = (CcQualType){.unqual=type1.unqual};
-                    type2 = (CcQualType){.unqual=type2.unqual};
-                    _Bool is_same = cc_types_compatible(type1, type2, 0);
-                    if(!is_same && ccqt_kind(type1) == CC_ARRAY && ccqt_kind(type2) == CC_ARRAY){
-                        CcArray* a = ccqt_as_array(type1);
-                        CcArray* b = ccqt_as_array(type2);
-                        if(!a->is_vector && !b->is_vector && a->element.unqual == b->element.unqual){
-                            if(a->is_incomplete || b->is_incomplete || a->length == b->length){
-                                is_same = 1;
-                            }
-                        }
-                    }
-                    // TODO: function types
+                    _Bool is_same = cc_types_compatible_unqualified(type1, type2);
 
                     CcExpr* node = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_int));
                     if(!node) return CC_OOM_ERROR;
@@ -5573,9 +5510,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 if(err) return err;
                 {
                     CcQualType idx_type = index->type;
-                    if(ccqt_kind(idx_type) == CC_ENUM)
-                        idx_type = ccqt_as_enum(idx_type)->underlying;
-                    _Bool idx_int = ccqt_is_basic(idx_type) && ccbt_is_integer(ccqt_basic_kind(idx_type));
+                    _Bool idx_int = ccqt_is_integer(idx_type);
                     _Bool idx_ptr = ccqt_is_pointer_like(idx_type);
                     if(!idx_int && !idx_ptr)
                         return cc_error(p, tok.loc, "array subscript requires integer or pointer type");
@@ -10469,7 +10404,7 @@ cc_check_string_array(CcParser* p, CcQualType target_type, CcExpr* value){
         return cc_error(p, value->loc, "array initializer requires a string literal");
     CcQualType target = ccqt_as_array(target_type)->element;
     CcQualType source = ccqt_as_array(value->type)->element;
-    if(target.unqual == source.unqual) return 0;
+    if(cc_types_compatible((CcQualType){.unqual=target.unqual}, (CcQualType){.unqual=source.unqual}, 0)) return 0;
     _Bool source_char = ccqt_bt_eq(source, CCBT_char) || ccqt_bt_eq(source, CCBT_signed_char) || ccqt_bt_eq(source, CCBT_unsigned_char);
     _Bool target_char = ccqt_bt_eq(target, CCBT_char) || ccqt_bt_eq(target, CCBT_signed_char) || ccqt_bt_eq(target, CCBT_unsigned_char);
     if(source_char && target_char) return 0;
@@ -11393,8 +11328,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         err = cc_error(p, tok.loc, "atomic bitfields are not supported");
                         goto struct_err;
                     }
-                    if(!(ccqt_is_basic(member_type) && ccbt_is_integer(ccqt_basic_kind(member_type)))
-                       && ccqt_kind(member_type) != CC_ENUM){
+                    if(!ccqt_is_integer(member_type)){
                         err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
                         goto struct_err;
                     }
@@ -11478,7 +11412,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                                 && (ccqt_as_struct(func->_Self_type)->is_incomplete
                                     || record->is_incomplete
                                     || cc_types_compatible(func->_Self_type, p->current_tag_type, 0));
-                            if(!owner_matches || !cc_types_match(previous_type, member_type, 0, &owners, 0, 0)){
+                            if(!owner_matches || !cc_types_match(previous_type, member_type, 0, &owners, (CcTypesMatchFlags){0})){
                                 err = cc_error(p, name_loc, "conflicting declaration of method '%s'", member_name->data);
                                 goto struct_err;
                             }
@@ -11601,8 +11535,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             err = cc_error(p, tok.loc, "atomic bitfields are not supported");
                             goto struct_err;
                         }
-                        if(!(ccqt_is_basic(member_type) && ccbt_is_integer(ccqt_basic_kind(member_type)))
-                           && ccqt_kind(member_type) != CC_ENUM){
+                        if(!ccqt_is_integer(member_type)){
                             err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
                             goto struct_err;
                         }
@@ -19278,154 +19211,11 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             return err;
         }
         case CC_EXPR_LOGNOT: {
-            if(cc_eval_address_type(e->lhs->type)){
-                _Bool truth;
-                int err = cc_eval_truthy(ctx, e->lhs, &truth);
-                if(err) return err;
-                *result = cc_int64_expr(p, e->loc, e->type, !truth);
-                return *result ? 0 : CC_OOM_ERROR;
-            }
-            CcExpr* operand;
-            int err = cc_eval_expr(ctx, e->lhs, &operand);
+            _Bool truth;
+            int err = cc_eval_truthy(ctx, e->lhs, &truth);
             if(err) return err;
-            CcQualType ot = operand->type;
-            while(ccqt_kind(ot) == CC_ENUM)
-                ot = ccqt_as_enum(ot)->underlying;
-            if(!ccqt_is_basic(ot)){
-                err = CC_UNREACHABLE_ERROR;
-                goto fini_lognot;
-            }
-            if(!ccqt_bt_eq(e->type, CCBT_int)){
-                err = CC_UNREACHABLE_ERROR;
-                goto fini_lognot;
-            }
-            if(cc_eval_wide(operand->type)){
-                CcExpr* wide = cc_value_expr(p, e->loc, e->type);
-                if(!wide){
-                    err = CC_OOM_ERROR;
-                    goto fini_lognot;
-                }
-                wide->integer = !cc_eval_value_truth(p, operand);
-                if(err) cc_release_expr(p, wide);
-                else *result = wide;
-                goto fini_lognot;
-            }
-            CcExpr* node;
-            switch(ccqt_basic_kind(ot)){
-                #define LOGNOT(fixed) do { \
-                    node = cc_value_expr(p, e->loc, e->type); \
-                    if(!node) {err = CC_OOM_ERROR; goto fini_lognot;}\
-                    node->integer = !operand->fixed; \
-                    *result = node; \
-                    err = 0; \
-                    goto fini_lognot; \
-                }while(0)
-                DRP_CASES_EXHAUSTED;
-                case CCBT_INVALID:
-                case CCBT_void:
-                case CCBT_nullptr_t:
-                    node = cc_value_expr(p, e->loc, e->type);
-                    if(!node) { err = CC_OOM_ERROR; goto fini_lognot;}
-                    node->integer = 1;
-                    *result = node;
-                    goto fini_lognot;
-                case CCBT__Any:
-                case CCBT__Type:
-                case CCBT_COUNT:
-                    err = CC_UNREACHABLE_ERROR;
-                    goto fini_lognot;
-                case CCBT_bool:
-                    LOGNOT(uinteger);
-                case CCBT_char:
-                    LOGNOT(integer); // signedness doesn't matter for !
-                case CCBT_signed_char:
-                    LOGNOT(integer);
-                case CCBT_unsigned_char:
-                    LOGNOT(uinteger);
-                case CCBT_short:
-                    LOGNOT(integer);
-                case CCBT_unsigned_short:
-                    LOGNOT(uinteger);
-                case CCBT_int:
-                    lognot_int:
-                    LOGNOT(integer);
-                case CCBT_unsigned:
-                    lognot_unsigned:;
-                    LOGNOT(uinteger);
-                case CCBT_long:
-                    if(cc_target(p)->sizeof_[CCBT_long] == 8)
-                        goto lognot_longlong;
-                    else goto lognot_int;
-                case CCBT_long_long:
-                    lognot_longlong:;
-                    LOGNOT(integer);
-                case CCBT_unsigned_long:
-                    if(cc_target(p)->sizeof_[CCBT_unsigned_long] == 8)
-                        goto lognot_unsigned_longlong;
-                    goto lognot_unsigned;
-                case CCBT_unsigned_long_long:
-                    lognot_unsigned_longlong:
-                    LOGNOT(uinteger);
-                case CCBT_float:
-                    LOGNOT(float_);
-                case CCBT_double:
-                    LOGNOT(double_);
-                case CCBT_int128:
-                case CCBT_unsigned_int128:
-                case CCBT_bfloat16:
-                case CCBT_float16:
-                case CCBT_long_double:
-                case CCBT_float128:
-                case CCBT_float_complex:
-                case CCBT_double_complex:
-                case CCBT_long_double_complex:
-                case CCBT_float16_complex:
-                case CCBT_char_complex:
-                case CCBT_signed_char_complex:
-                case CCBT_unsigned_char_complex:
-                case CCBT_short_complex:
-                case CCBT_unsigned_short_complex:
-                case CCBT_int_complex:
-                case CCBT_unsigned_complex:
-                case CCBT_long_complex:
-                case CCBT_unsigned_long_complex:
-                case CCBT_long_long_complex:
-                case CCBT_unsigned_long_long_complex:
-                case CCBT_int128_complex:
-                case CCBT_unsigned_int128_complex:
-                    err = CC_UNIMPLEMENTED_ERROR;
-                    goto fini_lognot;
-                #undef LOGNOT
-            }
-            fini_lognot:;
-            cc_release_expr(p, operand);
-            return err;
-        }
-        case CC_EXPR_SUBSCRIPT: {
-            // Handle string_literal[constant_index]
-            CcExpr* arr = e->lhs;
-            if(arr->kind == CC_EXPR_VALUE && arr->str.length && arr->text){
-                int64_t i;
-                int err = cc_eval_integer(ctx, e->values[0], &i);
-                if(err) return err;
-                if(i < 0 || (uint64_t)i >= arr->str.length)
-                    return CC_VALUE_ERROR;
-                CcExpr* node = cc_value_expr(p, e->loc, e->type);
-                if(!node) return CC_OOM_ERROR;
-                CcArray* arr_type = ccqt_as_array(arr->type);
-                uint32_t elem_sz = cc_target(p)->sizeof_[ccqt_basic_kind(arr_type->element)];
-                if(elem_sz == 4)
-                    node->uinteger = ((const uint32_t*)arr->text)[i];
-                else if(elem_sz == 2)
-                    node->uinteger = ((const uint16_t*)arr->text)[i];
-                else if(cc_target(p)->char_is_signed)
-                    node->integer = (signed char)arr->text[i];
-                else
-                    node->uinteger = (unsigned char)arr->text[i];
-                *result = node;
-                return 0;
-            }
-            goto eval_init_list_access;
+            *result = cc_int64_expr(p, e->loc, e->type, !truth);
+            return *result ? 0 : CC_OOM_ERROR;
         }
         case CC_EXPR_COMMA: {
             CcExpr* source;
@@ -20300,7 +20090,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_CALL:
             return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_DOT: case CC_EXPR_ARROW: case CC_EXPR_DEREF:
-        eval_init_list_access: {
+        case CC_EXPR_SUBSCRIPT: {
             _Bool handled;
             int err = cc_eval_object_view_select(ctx, e, 0, &handled, result);
             return err ? err : handled ? 0 : CC_NOT_CONSTANT_ERROR;

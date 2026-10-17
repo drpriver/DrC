@@ -12527,6 +12527,38 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "aligned element types: implicit slice conversion", __LINE__,
+            SVI("typedef int A __attribute__((aligned(4)));\n"
+                "A a[2] = {17, 25};\n"
+                "A original[:] = a; int converted[:] = original; int direct[:] = a;\n"
+                "return converted[0] + direct[1];\n"),
+            .exit_code = 42,
+        },
+        {
+            "aligned element types: explicit slice conversion", __LINE__,
+            SVI("typedef int A __attribute__((aligned(4)));\n"
+                "A a[2] = {17, 25}; A original[:] = a;\n"
+                "int converted[:] = (int[:])original; int direct[:] = (int[:])a;\n"
+                "return converted[0] + direct[1];\n"),
+            .exit_code = 42,
+        },
+        {
+            "aligned element types: conditional slices", __LINE__,
+            SVI("typedef int A __attribute__((aligned(4)));\n"
+                "A a[1] = {17}; int b[1] = {25};\n"
+                "A left[:] = a; int right[:] = b;\n"
+                "int choose(int n){ return (n ? left : right)[0]; }\n"
+                "return choose(1) + choose(0);\n"),
+            .exit_code = 42,
+        },
+        {
+            "aligned element types: wide string initialization", __LINE__,
+            SVI("typedef typeof(u\"\"[0]) U __attribute__((aligned(2)));\n"
+                "U text[] = u\"hi\";\n"
+                "return sizeof(text) == sizeof(u\"hi\") && text[0] == 'h' && text[1] == 'i' && text[2] == 0;\n"),
+            .exit_code = 1,
+        },
+        {
             "reflection: enum integer classification agrees with constexpr", __LINE__,
             SVI("enum E : unsigned { A };\n"
                 "typedef enum E Aligned __attribute__((aligned(16)));\n"

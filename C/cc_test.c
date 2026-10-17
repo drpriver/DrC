@@ -4239,6 +4239,12 @@ TestFunction(test_parse_decls){
             .vars = {{SVI("a"), SVI("int[1]")}},
         },
         {
+            "constant string subscript bounds", __LINE__,
+            SVI("_Static_assert(!__builtin_constant_p(\"a\"[-1]));\n"
+                "_Static_assert(!__builtin_constant_p(\"a\"[2]));\n"
+                "_Static_assert(\"a\"[1] == 0);\n"),
+        },
+        {
             "sizeof L string as constant", __LINE__,
             SVI("int a[sizeof(L\"hello\")];\n"),
             .vars = {{SVI("a"), SVI("int[24]")}}, // 6 * 4
@@ -6132,6 +6138,14 @@ TestFunction(test_parse_decls){
                 "ne(float[], int[]);\n"
                 "eq(int[3], int[]);\n"
                 "eq(const int[3], int[]);\n"
+                "eq(const int[2][3], int[2][3]);\n"
+                "eq(volatile int[][3], int[2][3]);\n"
+                "ne(const int[2][3], int[2][4]);\n"
+                "eq(int *const[2], int *[2]);\n"
+                "ne(const int *[2], int *[2]);\n"
+                "ne(const int (*)[2], int (*)[2]);\n"
+                "eq(int(int), int(int));\n"
+                "ne(int(int), int(double));\n"
                 "ne(int*, int**);\n"
                 "ne(long, long long);\n"
                 "ne(char, signed char);\n"
@@ -9173,6 +9187,23 @@ TestFunction(test_parse_errors){
             SVI("enum E;\n"
                 "_Static_assert(alignof(enum E));\n"),
             SVI("(test):2:16: error: alignof applied to incomplete enum type\n"),
+        },
+        {
+            "incomplete struct has no alignment", __LINE__,
+            SVI("struct S;\n"
+                "_Static_assert(alignof(struct S));\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete struct type\n"),
+        },
+        {
+            "incomplete union has no alignment", __LINE__,
+            SVI("union U;\n"
+                "_Static_assert(alignof(union U));\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete union type\n"),
+        },
+        {
+            "function type has no alignment", __LINE__,
+            SVI("_Static_assert(alignof(int(void)));\n"),
+            SVI("(test):1:16: error: alignof applied to function type\n"),
         },
         {
             "fixed unsigned enum rejects negative value", __LINE__,
