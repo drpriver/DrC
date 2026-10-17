@@ -58,6 +58,12 @@ static const StringView cpp_embed_result[] = {
 };
 
 // Internal APIs
+typedef struct CppEvalValue CppEvalValue;
+struct CppEvalValue {
+    uint64_t value;
+    _Bool is_unsigned;
+};
+static int cpp_eval_tokens_typed(CppPreprocessor*, CppToken*_Null_unspecified, size_t, CppEvalValue*, const CppIncludePosition* _Nullable);
 static int cpp_next_raw_token(CppPreprocessor*, CppToken*);
 static int cpp_next_pp_token(CppPreprocessor*, CppToken*);
 LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
@@ -5810,29 +5816,16 @@ cpp_builtin_calc(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
     (void)ctx;
     (void)arg_seps;
     int err;
-    int64_t value;
-    err = cpp_eval_tokens(cpp, args->data, args->count, &value, NULL);
+    CppEvalValue result;
+    err = cpp_eval_tokens_typed(cpp, args->data, args->count, &result, NULL);
     if(err) return err;
+    uint64_t value = result.value;
     Atom a;
-    if(value == INT64_MIN){
-        CppToken minus = {
-            .punct = '-',
-            .txt = SV("-"),
-            .loc = loc,
-            .type = CPP_PUNCTUATOR,
-        };
-        err = cpp_push_tok(cpp, outtoks, minus);
-        if(err) return err;
-        a = cpp_atomizef(cpp, "9223372036854775808llu");
-        if(!a) return CPP_OOM_ERROR;
-        CppToken tok = {
-            .txt = {a->length, a->data},
-            .loc = loc,
-            .type = CPP_NUMBER,
-        };
-        return cpp_push_tok(cpp, outtoks, tok);
+    if(!result.is_unsigned && value == (uint64_t)INT64_MIN){
+        // Its positive magnitude cannot be represented by a signed literal.
+        return cpp_tokenize_text(cpp, loc, SV("(-9223372036854775807ll-1)"), outtoks);
     }
-    else if(value < 0){
+    else if(!result.is_unsigned && value > INT64_MAX){
         CppToken tok = {
             .punct = '-',
             .txt = SV("-"),
@@ -5841,12 +5834,14 @@ cpp_builtin_calc(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, 
         };
         err = cpp_push_tok(cpp, outtoks, tok);
         if(err) return err;
-        value = -value;
+        value = 0 - value;
     }
-    if(value <= INT_MAX)
+    if(result.is_unsigned)
+        a = cpp_atomizef(cpp, "%llullu", (unsigned long long)value);
+    else if(value <= INT_MAX)
         a = cpp_atomizef(cpp, "%u", (unsigned)value);
     else
-        a = cpp_atomizef(cpp, "%llullu", (unsigned long long)value);
+        a = cpp_atomizef(cpp, "%llull", (unsigned long long)value);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
         .txt = {a->length, a->data},
@@ -7308,12 +7303,6 @@ struct CppTokenStream {
 
 static CppToken cpp_ts_next(CppTokenStream* s);
 
-typedef struct CppEvalValue CppEvalValue;
-struct CppEvalValue {
-    uint64_t value;
-    _Bool is_unsigned;
-};
-
 static
 int64_t
 cpp_eval_signed(uint64_t bits){
@@ -7333,6 +7322,15 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* r
 static
 int
 cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t count, int64_t* value, const CppIncludePosition* _Nullable source_pos){
+    CppEvalValue result;
+    int err = cpp_eval_tokens_typed(cpp, toks, count, &result, source_pos);
+    if(!err) *value = cpp_eval_signed(result.value);
+    return err;
+}
+
+static
+int
+cpp_eval_tokens_typed(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t count, CppEvalValue* value, const CppIncludePosition* _Nullable source_pos){
     int err = 0;
     CppTokens *pending = NULL;
     pending = cpp_get_scratch(cpp);
@@ -7346,7 +7344,7 @@ cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t co
         .pending = pending,
         .source_pos = source_pos,
     };
-    err = cpp_recursive_eval(cpp, &stream, value);
+    err = cpp_recursive_eval_prec(cpp, &stream, value, 1, 1);
     if(!err){
         CppToken next;
         err = cpp_eval_ts_next(cpp, &stream, &next);
