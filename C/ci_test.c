@@ -40,7 +40,29 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
+        _Bool no_toplevel_ops;
     } testcases[] = {
+        {
+            "global static data: constants require no top-level instructions", __LINE__,
+            SVI("const unsigned char table[4]={1,2,3,4}; int n=6*7;"
+                "int* p=&n; int f(void){return *p+table[2];} int (*fp)(void)=f;"),
+            .exit_code=-1,
+            .no_toplevel_ops=1,
+        },
+        {
+            "global static data: initialized before top-level execution", __LINE__,
+            SVI("extern int n; extern const int table[4]; extern int* p;"
+                "return n==42 && table[3]==4 && p==&n && *p==42;"
+                "int n=6*7; const int table[4]={1,2,3,4}; int* p=&n;"),
+            .exit_code=1,
+        },
+        {
+            "global static data: runtime initializers retain effects and order", __LINE__,
+            SVI("int count=0; int next(void){return ++count;}"
+                "int a=next(); int values[4]={10,next(),30,40}; int b=count;"
+                "return a==1 && values[1]==2 && b==2 && count==2;"),
+            .exit_code=1,
+        },
         {
             "assignment scratch: pointers into temporary aggregates survive the full expression", __LINE__,
             SVI("struct S{int a[4];};struct S make(void){return (struct S){{11,22,33,44}};}"
@@ -13994,6 +14016,13 @@ TestFunction(test_interpreter){
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
+        if(tc->no_toplevel_ops){
+            TEST_stats.executed++;
+            if(interp.toplevel_ops.count){
+                TEST_stats.failures++;
+                TestPrintf("%s:%d: expected no top-level instructions, got %zu\n", __FILE__, tc->line, interp.toplevel_ops.count);
+            }
+        }
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;

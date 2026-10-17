@@ -14,6 +14,7 @@
 #include "../Drp/ckdint.h"
 static _Bool cc_eval_aggregate_type(CcQualType);
 static _Bool cc_eval_address_type(CcQualType);
+static int cc_check_linktime_expr(CcParser*_Nonnull, CcExpr*_Nonnull, _Bool, unsigned);
 
 #ifndef ci_ice
 #define ci_ice(ci, loc, fmt, ...) ci_error(ci, loc, "ICE: " fmt " at %s:%d", __VA_ARGS__, __FILE__, __LINE__)
@@ -156,6 +157,7 @@ struct CiLowerVal {
 
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
+static int ci_try_preinit_global(CiInterpreter*, CiLowerCtx*, CcExpr*, _Bool*);
 static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
 static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
@@ -436,6 +438,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_DEFER:
             return 0;
         case CC_STMT_EXPR:
+            {
+                _Bool handled;
+                err = ci_try_preinit_global(ci, ctx, n->exprs[0], &handled);
+                if(err || handled) return err;
+            }
             if(n->exprs[0]->kind == CC_EXPR_ASSIGN && n->exprs[0]->lhs->kind == CC_EXPR_VARIABLE){
                 CcVariable* var = n->exprs[0]->lhs->var;
                 if(var->automatic && var->constexpr_ && !var->constexpr_storage
@@ -7619,6 +7626,11 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
             int64_t index;
             err = ci_static_integer(ci, e->values[0], &index, runtime_ctx);
             if(err) return err;
+            if(ccqt_kind(e->lhs->type) == CC_ARRAY){
+                CcArray* array = ccqt_as_array(e->lhs->type);
+                if(!array->is_incomplete && !array->is_vla && (index < 0 || (uint64_t)index > array->length))
+                    return _cc_not_constant_error;
+            }
             uint32_t scale;
             err = cc_sizeof_as_uint(p, e->type, e->loc, &scale);
             if(err) return err;
@@ -8434,6 +8446,45 @@ ci_build_static_data(CiInterpreter* ci, CiStaticData* data, CiLowerDeps* deps){
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
     Allocator_free(al, buffer.bytes, buffer.size);
     return err;
+}
+
+static
+int
+ci_try_preinit_global(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled){
+    *handled = 0;
+    if(e->kind != CC_EXPR_ASSIGN || e->lhs->kind != CC_EXPR_VARIABLE) 
+        return 0;
+    CcVariable* var = e->lhs->var;
+    if(!var->interp_try_preinit || e->values[0] != var->initializer) 
+        return 0;
+    Allocator al = ci_allocator(ci);
+    CcParser* p = &ci->parser;
+    Logger quiet = {.level = LOG_OFF, .buff = {.allocator = al}};
+    Logger* logger = p->cpp.logger;
+    p->cpp.logger = &quiet;
+    CiStaticBuffer buffer = {0};
+    int err = cc_check_linktime_expr(p, var->initializer, 0, 0);
+    if(err) goto cleanup;
+    err = cc_sizeof_as_uint(p, var->type, var->loc, &buffer.size);
+    if(err) goto cleanup;
+    unsigned char* bytes = Allocator_zalloc(al, buffer.size ? buffer.size : 1);
+    if(!bytes){
+        err = CI_OOM_ERROR;
+        goto cleanup;
+    }
+    buffer.bytes = bytes;
+    err = ci_static_write(ci, &buffer, var->initializer, 0, buffer.size);
+    cleanup:
+    p->cpp.logger = logger;
+    msb_destroy(&quiet.buff);
+    if(buffer.bytes) Allocator_free(al, buffer.bytes, buffer.size ? buffer.size : 1);
+    ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
+    if(err) return err == CI_OOM_ERROR ? err : 0;
+    err = ci_deps_add_var(&ctx->deps, al, var, CI_VAR_DEP_USED);
+    if(err) return err;
+    var->interp_preinit = 1;
+    *handled = 1;
+    return 0;
 }
 
 static

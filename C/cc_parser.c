@@ -14406,6 +14406,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase){
                         initializer->kind = CC_EXPR_INIT_LIST;
                 }
                 else {
+                    if(var && !var->automatic && p->current == p->file_scope)
+                        var->interp_try_preinit = 1;
                     CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, type, 0);
                     if(!var_ref) return CC_OOM_ERROR;
                     var_ref->is_lvalue = 1;
