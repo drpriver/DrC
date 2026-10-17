@@ -90,7 +90,7 @@ Atom _Nullable
 AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
     if(len + 1 > UINT32_MAX/2) return NULL;
-    return AT_raw_atomize_hashed(at, txt, len, hash_align1(txt, len));
+    return AT_raw_atomize_hashed(at, txt, len, drp_hash(txt, len));
 }
 
 static inline
@@ -98,7 +98,7 @@ Atom _Nullable
 AT_atomize(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
     if(len + 1 > UINT32_MAX/2) return NULL;
-    uint32_t hash = hash_align1(txt, len);
+    uint32_t hash = drp_hash(txt, len);
     Atom atom = AT_get_atom_hashed(at, txt, len, hash);
     if(atom) return atom;
     atom = AT_raw_atomize_hashed(at, txt, len, hash);
@@ -210,7 +210,7 @@ Atom _Nullable
 AT_get_atom(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
     if(!at->count) return NULL;
-    return AT_get_atom_hashed(at, txt, len, hash_align1(txt, len));
+    return AT_get_atom_hashed(at, txt, len, drp_hash(txt, len));
 }
 
 #ifdef __clang__

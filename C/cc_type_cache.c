@@ -22,23 +22,23 @@ uint32_t
 cctc_hash_pointer(CcQualType pointee, _Bool restrict_, _Bool is_block){
     uint64_t v = pointee.bits;
     v = v * 0x9e3779b97f4a7c15ULL + restrict_ + (is_block? 2u : 0u);
-    return hash_align8(&v, sizeof v);
+    return drp_hash(&v, sizeof v);
 }
 
 static inline
 uint32_t
 cctc_hash_array(CcQualType element, size_t length, uint32_t flags){ // flags: bit0=is_static, bit1=is_incomplete, bit2=is_vector
     uint64_t buf[3] = { element.bits, length, flags};
-    return hash_align8(buf, sizeof buf);
+    return drp_hash(buf, sizeof buf);
 }
 
 static inline
 uint32_t
 cctc_hash_function(CcQualType return_type, const CcQualType*_Null_unspecified params, uint32_t param_count, uint32_t flags){
     uint64_t buf[2] = { return_type.bits, (uint64_t)param_count | ((uint64_t)flags << 32)};
-    uint32_t h = hash_align8(buf, sizeof buf);
+    uint32_t h = drp_hash(buf, sizeof buf);
     if(param_count)
-        h = hash_align8(params, sizeof *params * param_count) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h = drp_hash(params, sizeof *params * param_count) + 0x9e3779b9 + (h << 6) + (h >> 2);
     return h;
 }
 
@@ -80,7 +80,7 @@ static inline
 uint32_t
 cctc_hash_aligned(CcQualType underlying, uint32_t alignment){
     uint64_t buf[2] = {underlying.bits, alignment};
-    return hash_align8(buf, sizeof buf);
+    return drp_hash(buf, sizeof buf);
 }
 
 static inline

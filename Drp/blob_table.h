@@ -7,7 +7,7 @@
 #include <string.h>
 #include "Allocators/arena_allocator.h"
 #include "blob_atom.h"
-#include "../Vendored/rapidhash.h"
+#include "Hashes/rapidhash.h"
 #ifndef __builtin_trap
 #if defined _MSC_VER && !defined __clang__
 #define __builtin_trap() __fastfail(7)
@@ -86,7 +86,7 @@ BT_raw_atomize(BlobTable* bt, const void* blob, size_t len){
     if(!atom) return NULL;
     atom->length = blen;
     memcpy(atom->data, blob, len);
-    atom->hash = rapidhash(atom->data, blen);
+    atom->hash = rapidhash_hash(atom->data, blen);
     return atom;
 }
 
@@ -176,7 +176,7 @@ BT_get_atom(BlobTable* bt, const void* blob, size_t len){
     if(len > (size_t)PTRDIFF_MAX - sizeof(BlobAtom_) - 15) return NULL;
     if(!bt->count) return NULL;
     uint32_t* idxes = (uint32_t*)(void*)(sizeof(BlobAtom)*bt->cap+(char*)bt->data);
-    uint64_t hash = rapidhash_padded(blob, len);
+    uint64_t hash = rapidhash_hash_zero_padded(blob, len);
     uint64_t idx = fast_reduce64(hash, (uint64_t)bt->cap*2);
     size_t trunc = len & ~(size_t)15;
     size_t up = (len+15)&~(size_t)15;

@@ -74,7 +74,7 @@ static inline
 uint32_t
 BPM_hash_ptr(const void* p){
     uintptr_t v = (uintptr_t)p;
-    return hash_align8(&v, sizeof v);
+    return drp_hash(&v, sizeof v);
 }
 
 static inline

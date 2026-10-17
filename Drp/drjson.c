@@ -2533,7 +2533,7 @@ drj_free_obj(DrJsonContext* ctx, DrJsonObject* o){
     #endif
     if(o->read_only){
         o->read_only = 0;
-        uint32_t hash = hash_align8(o->object_items, o->count*sizeof(DrJsonObjectPair));
+        uint32_t hash = drp_hash(o->object_items, o->count*sizeof(DrJsonObjectPair));
         uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_objects.capacity*2);
         uint32_t* idxes = (uint32_t*)(ctx->interned_objects.data+ctx->interned_objects.capacity);
         DrjHashIdx* hi = ctx->interned_objects.data;
@@ -2590,7 +2590,7 @@ drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
     if(a->read_only){
         a->read_only = 0;
         // fprintf(stderr, "Freeing interned array: %p (%zu)\n", a, a_idx);
-        uint32_t hash = hash_align8(a->array_items, a->count*sizeof *a->array_items);
+        uint32_t hash = drp_hash(a->array_items, a->count*sizeof *a->array_items);
         uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_arrays.capacity*2);
         uint32_t* idxes = (uint32_t*)(ctx->interned_arrays.data+ctx->interned_arrays.capacity);
         DrjHashIdx* hi = ctx->interned_arrays.data;
@@ -2742,7 +2742,7 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
         ctx->interned_arrays.data = data;
         ctx->interned_arrays.count = acount;
     }
-    uint32_t hash = hash_align8(items, count * sizeof *items);
+    uint32_t hash = drp_hash(items, count * sizeof *items);
     uint32_t* idxes = (uint32_t*)(ctx->interned_arrays.data+ctx->interned_arrays.capacity);
     uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_arrays.capacity*2);
     DrjHashIdx* hi = ctx->interned_arrays.data;
@@ -2856,7 +2856,7 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
         ctx->interned_objects.data = data;
         ctx->interned_objects.count = ocount;
     }
-    uint32_t hash = hash_align8(pairs, count * sizeof *pairs);
+    uint32_t hash = drp_hash(pairs, count * sizeof *pairs);
     uint32_t* idxes = (uint32_t*)(ctx->interned_objects.data+ctx->interned_objects.capacity);
     uint32_t idx = fast_reduce32(hash, (uint32_t)ctx->interned_objects.capacity*2);
     DrjHashIdx* hi = ctx->interned_objects.data;

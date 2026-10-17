@@ -247,7 +247,36 @@ _Static_assert(offsetof(TypeInfoClass, _vtable) == sizeof(TypeInfo), "");
 
 #ifndef TYPEINFO_ATOMS_HANDLED
 #define TYPEINFO_ATOMS_HANDLED
-#ifndef __wasm__
+#if defined USE_RAPIDHASH
+    _Alignas(Atom_) static const char ATOM_AT_uint8_[] = "\x05\x00\x00\x00\xe0\x71\x31\x3f""uint8";
+    #define ATOM_AT_uint8 ((Atom)ATOM_AT_uint8_)
+    _Alignas(Atom_) static const char ATOM_AT_int8_[] = "\x04\x00\x00\x00\x4c\x4a\x1e\x6c""int8";
+    #define ATOM_AT_int8 ((Atom)ATOM_AT_int8_)
+    _Alignas(Atom_) static const char ATOM_AT_uint16_[] = "\x06\x00\x00\x00\x53\x2e\x6f\x0b""uint16";
+    #define ATOM_AT_uint16 ((Atom)ATOM_AT_uint16_)
+    _Alignas(Atom_) static const char ATOM_AT_int16_[] = "\x05\x00\x00\x00\x0d\xde\x8b\x72""int16";
+    #define ATOM_AT_int16 ((Atom)ATOM_AT_int16_)
+    _Alignas(Atom_) static const char ATOM_AT_uint32_[] = "\x06\x00\x00\x00\x72\xb5\xaa\x45""uint32";
+    #define ATOM_AT_uint32 ((Atom)ATOM_AT_uint32_)
+    _Alignas(Atom_) static const char ATOM_AT_int32_[] = "\x05\x00\x00\x00\xff\x04\x13\xfe""int32";
+    #define ATOM_AT_int32 ((Atom)ATOM_AT_int32_)
+    _Alignas(Atom_) static const char ATOM_AT_uint64_[] = "\x06\x00\x00\x00\xb5\xb7\x2b\xa0""uint64";
+    #define ATOM_AT_uint64 ((Atom)ATOM_AT_uint64_)
+    _Alignas(Atom_) static const char ATOM_AT_int64_[] = "\x05\x00\x00\x00\x2a\x77\x19\x24""int64";
+    #define ATOM_AT_int64 ((Atom)ATOM_AT_int64_)
+    _Alignas(Atom_) static const char ATOM_AT_float32_[] = "\x07\x00\x00\x00\x9f\x47\xe3\xff""float32";
+    #define ATOM_AT_float32 ((Atom)ATOM_AT_float32_)
+    _Alignas(Atom_) static const char ATOM_AT_float64_[] = "\x07\x00\x00\x00\x8c\x3e\x83\xe7""float64";
+    #define ATOM_AT_float64 ((Atom)ATOM_AT_float64_)
+    _Alignas(Atom_) static const char ATOM_AT_bool_[] = "\x04\x00\x00\x00\xd4\x71\x3e\x65""bool";
+    #define ATOM_AT_bool ((Atom)ATOM_AT_bool_)
+    _Alignas(Atom_) static const char ATOM_AT_atom_[] = "\x04\x00\x00\x00\x74\x9f\xb7\x23""atom";
+    #define ATOM_AT_atom ((Atom)ATOM_AT_atom_)
+    _Alignas(Atom_) static const char ATOM_AT_StringView_[] = "\x0a\x00\x00\x00\xa2\x8e\xcd\xe5""StringView";
+    #define ATOM_AT_StringView ((Atom)ATOM_AT_StringView_)
+    _Alignas(Atom_) static const char ATOM_AT_AtomSet_[] = "\x07\x00\x00\x00\x91\x6a\x77\xd4""AtomSet";
+    #define ATOM_AT_AtomSet ((Atom)ATOM_AT_AtomSet_)
+#elif defined USE_CRC32
     _Alignas(Atom_) static const char ATOM_AT_uint8_[] = "\x05\x00\x00\x00\x3e\xfa\x25\xa8""uint8";
     #define ATOM_AT_uint8 ((Atom)ATOM_AT_uint8_)
     _Alignas(Atom_) static const char ATOM_AT_int8_[] = "\x04\x00\x00\x00\x08\x95\xaa\xd3""int8";
@@ -276,7 +305,7 @@ _Static_assert(offsetof(TypeInfoClass, _vtable) == sizeof(TypeInfo), "");
     #define ATOM_AT_StringView ((Atom)ATOM_AT_StringView_)
     _Alignas(Atom_) static const char ATOM_AT_AtomSet_[] = "\x07\x00\x00\x00\xef\x2a\xaa\xb0""AtomSet";
     #define ATOM_AT_AtomSet ((Atom)ATOM_AT_AtomSet_)
-#else
+#elif defined USE_MURMUR
      _Alignas(Atom_) static const char ATOM_AT_uint8_[] = "\x05\x00\x00\x00\x9e\xe2\x71\xe6""uint8";
      #define ATOM_AT_uint8 ((Atom)ATOM_AT_uint8_)
      _Alignas(Atom_) static const char ATOM_AT_int8_[] = "\x04\x00\x00\x00\x63\x7f\x3c\x73""int8";
@@ -305,6 +334,8 @@ _Static_assert(offsetof(TypeInfoClass, _vtable) == sizeof(TypeInfo), "");
     #define ATOM_AT_StringView ((Atom)ATOM_AT_StringView_)
     _Alignas(Atom_) static const char ATOM_AT_AtomSet_[] = "\x07\x00\x00\x00\xa9\x46\xa2\xa7""AtomSet";
     #define ATOM_AT_AtomSet ((Atom)ATOM_AT_AtomSet_)
+#else
+    _Static_assert(0, "No hash func detected for pre-computed atoms");
 #endif
 
 static const Atom _Nonnull TYPE_ATOMS[] = {

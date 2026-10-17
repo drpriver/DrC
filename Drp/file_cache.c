@@ -73,7 +73,7 @@ fc_path_equals(FileCache* fc, StringView a, StringView b){
 static
 uint32_t
 fc_hash_path(FileCache* fc, StringView path){
-    return fc->case_insensitive ? ascii_insensitive_hash(path.text, path.length) : hash_align1(path.text, path.length);
+    return fc->case_insensitive ? drp_hash_ascii_insensitive(path.text, path.length) : drp_hash(path.text, path.length);
 }
 
 static

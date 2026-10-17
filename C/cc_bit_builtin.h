@@ -7,7 +7,7 @@
 #include "../Drp/typed_enum.h"
 #include "../Drp/bit_util.h"
 #include "../Drp/switch_macros.h"
-#include "../Drp/crc32c.h"
+#include "../Drp/Hashes/crc32.h"
 
 enum CcBitBuiltinOp TYPED_ENUM(uint32_t) {
     CC_BIT_FFS,

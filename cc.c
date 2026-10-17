@@ -40,6 +40,7 @@ static _Bool repl_builtin_command(CcParser* parser, StringView input);
 static int cc_pointer_of(CcParser*, CcQualType pointee, CcQualType* out);
 static const char* cc_stringify_error(int err);
 static void cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast);
+static int cc_dump_atoms(const char* path, const AtomTable* at);
 
 // static lifetime atexit callbacks with interpreted code work
 static AtomTable cc_at = {0};
@@ -123,7 +124,14 @@ int main(int argc, char** argv, char** envp){
     StringView eval_str = {0};
     _Bool repl = 0;
     _Bool dump = 0;
+    const char* dump_atoms = NULL;
     ArgToParse kw_args[] = {
+        {
+            .name = SV("--dump-atoms"),
+            .dest = ARGDEST(&dump_atoms),
+            .help = "Write final atoms: DRCATOM1 followed by little-endian u32 lengths and raw bytes",
+            .min_num = 0, .max_num = 1,
+        },
         {
             .name = SV("-o"),
             .dest = ARGDEST(&output),
@@ -661,11 +669,32 @@ int main(int argc, char** argv, char** envp){
         }
     }
     fini:;
+    if(dump_atoms && cc_dump_atoms(dump_atoms, &cc_at) && !err) err = 1;
     return err;
     stringify_error:;
     const char* error_name = cc_stringify_error(err);
     fprintf(stderr, "Fail: %s\n", error_name);
-    return 1;
+    err = 1;
+    goto fini;
+}
+
+static
+int
+cc_dump_atoms(const char* path, const AtomTable* at){
+    FILE* f = fopen(path, "wb");
+    if(!f){ perror(path); return 1; }
+    _Bool failed = fwrite("DRCATOM1", 1, 8, f) != 8;
+    Atom* atoms = at->data;
+    for(size_t i = 0; !failed && i < at->count; i++){
+        Atom a = atoms[i];
+        uint32_t n = a->length;
+        unsigned char length[4] = {(unsigned char)n, (unsigned char)(n >> 8),
+            (unsigned char)(n >> 16), (unsigned char)(n >> 24)};
+        failed = fwrite(length, 1, 4, f) != 4 || fwrite(a->data, 1, n, f) != n;
+    }
+    if(fclose(f)) failed = 1;
+    if(failed) fprintf(stderr, "Failed to write atoms to %s\n", path);
+    return failed;
 }
 
 
