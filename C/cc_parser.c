@@ -299,6 +299,8 @@ struct CcDeclBase {
     CcSpecifier spec;
     SrcLoc loc;
     uint16_t alignment; // from _Alignas or prefix __attribute__((aligned))
+    uint16_t alignas_alignment;
+    _Bool has_alignas;
 };
 
 typedef struct CcParsedDecls CcParsedDecls;
@@ -989,12 +991,26 @@ cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through){
 static
 int
 cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
-    *out = ccqt_bt_eq(e->type, CCBT_nullptr_t);
-    if(*out || !ccqt_is_integer(e->type)) return 0;
+    if(ccqt_bt_eq(e->type, CCBT_nullptr_t)){
+        *out = 1;
+        return 0;
+    }
+    if(e->kind == CC_EXPR_CAST 
+    && ccqt_is_some_kind_of_pointer(e->type)
+    && ccqt_is_integer(e->lhs->type))
+        return cc_is_null_pointer_constant(p, e->lhs, out);
+    if(!ccqt_is_integer(e->type)){
+        *out = 0;
+        return 0;
+    }
     int64_t value;
     int err = cc_eval_integer(&(CcEvalCtx){.parser=p}, e, &value);
+    if(err == _cc_not_constant_error){
+        *out = 0;
+        return 0;
+    }
     if(err == CC_OOM_ERROR) return err;
-    *out = !err && value == 0;
+    *out = value == 0;
     return 0;
 }
 
@@ -2259,6 +2275,18 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
 }
 
 static
+int
+cc_check_decl_alignment(CcParser* p, const CcDeclBase* base, CcQualType type){
+    if(!base->alignas_alignment) return 0;
+    uint32_t natural;
+    int err = cc_alignof_as_uint(p, type, base->loc, &natural);
+    if(err) return err;
+    if(base->alignas_alignment < natural)
+        return cc_error(p, base->loc, "_Alignas cannot weaken natural alignment");
+    return 0;
+}
+
+static
 _Bool
 cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec){
     static const struct {
@@ -2511,29 +2539,38 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 err = cc_implicit_cast(p, else_expr, etype, &else_expr);
                 if(err) return err;
             }
-            CcPointer* tp = ccqt_as_ptr(ttype);
-            CcPointer* ep = ccqt_as_ptr(etype);
-            CcQualType tpointee = tp->pointee;
-            CcQualType epointee = ep->pointee;
-            _Bool tvoid = ccqt_is_basic(tpointee) && ccqt_basic_kind(tpointee) == CCBT_void;
-            _Bool evoid = ccqt_is_basic(epointee) && ccqt_basic_kind(epointee) == CCBT_void;
-            CcQualType pointee;
-            if(tvoid || evoid){
-                pointee = ccqt_basic(CCBT_void);
-                pointee.quals = tpointee.quals | epointee.quals;
-            }
-            else if(cc_types_compatible((CcQualType){.unqual=tpointee.unqual}, (CcQualType){.unqual=epointee.unqual}, 0)){
-                uintptr_t quals = tpointee.quals | epointee.quals;
-                tpointee.quals = epointee.quals = quals;
-                err = cc_merge_compatible_decl_types(p, tpointee, epointee, &pointee);
+            _Bool tnull, enull;
+            err = cc_is_null_pointer_constant(p, then_expr, &tnull);
+            if(err) return err;
+            err = cc_is_null_pointer_constant(p, else_expr, &enull);
+            if(err) return err;
+            if(tnull) common = etype;
+            else if(enull) common = ttype;
+            else {
+                CcPointer* tp = ccqt_as_ptr(ttype);
+                CcPointer* ep = ccqt_as_ptr(etype);
+                CcQualType tpointee = tp->pointee;
+                CcQualType epointee = ep->pointee;
+                _Bool tvoid = ccqt_is_basic(tpointee) && ccqt_basic_kind(tpointee) == CCBT_void;
+                _Bool evoid = ccqt_is_basic(epointee) && ccqt_basic_kind(epointee) == CCBT_void;
+                CcQualType pointee;
+                if(tvoid || evoid){
+                    pointee = ccqt_basic(CCBT_void);
+                    pointee.quals = tpointee.quals | epointee.quals;
+                }
+                else if(cc_types_compatible((CcQualType){.unqual=tpointee.unqual}, (CcQualType){.unqual=epointee.unqual}, 0)){
+                    uintptr_t quals = tpointee.quals | epointee.quals;
+                    tpointee.quals = epointee.quals = quals;
+                    err = cc_merge_compatible_decl_types(p, tpointee, epointee, &pointee);
+                    if(err) return err;
+                }
+                else {
+                    pointee = tpointee;
+                    pointee.quals |= epointee.quals;
+                }
+                err = cc_pointer_of(p, pointee, &common);
                 if(err) return err;
             }
-            else {
-                pointee = tpointee;
-                pointee.quals |= epointee.quals;
-            }
-            err = cc_pointer_of(p, pointee, &common);
-            if(err) return err;
         }
         else if(tptr && (ccqt_is_basic(else_expr->type) || ek == CC_ENUM)){
             _Bool is_npc;
@@ -3125,6 +3162,8 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                     for(;;){
                         if(object->compound_register)
                             return cc_error(p, tok.loc, "cannot take address of register compound literal");
+                        if(object->kind == CC_EXPR_VARIABLE && object->var->register_)
+                            return cc_error(p, tok.loc, "cannot take address of register variable");
                         if(object->kind == CC_EXPR_DOT) object = object->values[0];
                         else if(object->kind == CC_EXPR_COMMA) object = object->values[0];
                         else break;
@@ -5210,14 +5249,13 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         if(err) return err;
         tswitch = condition->type;
         cc_release_expr(p, condition);
-        tswitch.quals = 0;
         CcTypeKind tk = ccqt_kind(tswitch);
         switch(tk){
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_ARRAY:{
             CcArray* arr = ccqt_as_array(tswitch);
             if(!arr->is_vector){
-                err = cc_pointer_of(p, arr->element, &tswitch);
+                err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch);
                 if(err) return err;
             }
             break;
@@ -5236,6 +5274,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         case CC_SLICE:
             break;
         }
+        tswitch.quals = 0;
     }
     err = cc_expect_punct(p, ',');
     if(err) return err;
@@ -11572,6 +11611,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 if(err) goto struct_err;
                 cc_clear_attributes(&p->attributes);
                 // Create field
+                err = cc_check_decl_alignment(p, &member_base, member_type);
+                if(err) goto struct_err;
                 if(member_name && cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, member_name)){
                     err = cc_error(p, tok.loc, "duplicate member '%s'", member_name->data);
                     goto struct_err;
@@ -12393,6 +12434,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                     case CC_typeof:
                         goto do_typeof;
                     case CC_alignas: {
+                        base->has_alignas = 1;
                         err = cc_expect_punct(p, CC_lparen);
                         if(err) return err;
                         CcToken peek;
@@ -12428,6 +12470,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         }
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
+                        if(align_val > base->alignas_alignment)
+                            base->alignas_alignment = (uint16_t)align_val;
                         if(align_val > 0){
                             if(align_val > base->alignment)
                                 base->alignment = (uint16_t)align_val;
@@ -14017,6 +14061,8 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     if(b.spec.sp_const) b.type.is_const = 1;
     if(b.spec.sp_volatile) b.type.is_volatile = 1;
     if(b.spec.sp_atomic) b.type.is_atomic = 1;
+    if(b.spec.sp_restrict && !ccqt_is_some_kind_of_pointer(b.type))
+        return cc_error(p, b.loc, "restrict requires a pointer type");
     if(b.type.is_atomic){
         CcTypeKind tk = ccqt_kind(b.type);
         if(tk == CC_ARRAY)
@@ -14253,6 +14299,17 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     err = cc_error(p, peek.loc, "thread_local is not valid on parameters");
                     goto param_err;
                 }
+                if(param_base.spec.sp_static 
+                || param_base.spec.sp_extern
+                || param_base.spec.sp_auto 
+                || param_base.spec.sp_constexpr){
+                    err = cc_error(p, peek.loc, "only register storage class is allowed on parameters");
+                    goto param_err;
+                }
+                if(param_base.has_alignas){
+                    err = cc_error(p, peek.loc, "_Alignas is not allowed on parameters");
+                    goto param_err;
+                }
                 err = cc_resolve_specifiers(p, &param_base);
                 if(err) goto param_err;
                 if(param_base.spec.sp_infer_type){
@@ -14338,7 +14395,13 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     goto param_err;
                 }
                 if(!param_name) param_name = nil_atom;
-                *var = (CcVariable){.name = param_name, .loc = param_loc, .type = param_type, .automatic = 1};
+                *var = (CcVariable){
+                    .name = param_name, 
+                    .loc = param_loc, 
+                    .type = param_type,
+                    .automatic = 1, 
+                    .register_ = param_base.spec.sp_register,
+                };
                 err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), param_name, var);
                 if(err){
                     err = CC_OOM_ERROR;
@@ -14610,6 +14673,10 @@ static
 int
 cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out){
     *out = (CcParsedDecls){0};
+    if(declbase->spec.sp_register 
+    && (cc_scope_declarations(p->current) == &p->global 
+        || cc_scope_declarations(p->current) == p->file_scope))
+        return cc_error(p, declbase->loc, "register requires block scope");
     int err = 0;
     CcToken tok;
     CcAttributes decl_attributes = p->attributes;
@@ -14943,6 +15010,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 .static_ = declbase->spec.sp_static,
                 .constexpr_ = declbase->spec.sp_constexpr,
                 .thread_local_ = declbase->spec.sp_thread_local,
+                .register_ = declbase->spec.sp_register,
                 .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
             };
             err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
@@ -15035,6 +15103,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         else if(declbase->spec.sp_infer_type){
             return cc_error(p, tok.loc, "type-inferred declaration requires initializer");
         }
+        err = cc_check_decl_alignment(p, declbase, type);
+        if(err) return err;
         if(tok.type == CC_EOF || (tok.type == CC_PUNCTUATOR && (tok.punct.punct == ';' || tok.punct.punct == ')'))){
             err = cc_unget(p, &tok);
             if(err) return err;

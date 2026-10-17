@@ -697,6 +697,21 @@ ccqt_is_pointer_like(CcQualType t){
 
 static inline
 _Bool
+ccqt_is_some_kind_of_pointer(CcQualType t){
+    t = ccqt_unaligned(t);
+    switch(ccqt_raw_kind(t)){
+        case CC_BLOCK_POINTER:
+        case CC_POINTER:
+            return 1;
+        case CC_BASIC:
+            return t.basic.kind == CCBT_nullptr_t;
+        default:
+            return 0;
+    }
+}
+
+static inline
+_Bool
 ccqt_is_block_ptr(CcQualType t){
     return ccqt_kind(t) == CC_BLOCK_POINTER;
 }

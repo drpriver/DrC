@@ -58,6 +58,43 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "declaration checks preserve valid qualifiers and alignment", __LINE__,
+            SVI("typedef int *P; restrict P p;\n"
+                "_Alignas(0) int zero; _Alignas(16) int aligned;\n"
+                "int f(register int n,int a[static 1]){register int *q=a; return *(&*q)+n;}\n"
+                "int a[1]={3}; return f(4,a);\n"),
+            .exit_code = 7,
+        },
+        {
+            "conditional null constants preserve both operand orders and qualifiers", __LINE__,
+            SVI("int f(int b){const int a=1; void *v=0;\n"
+                "return _Generic(b?(void*)0:&a,const int*:1,default:0)\n"
+                "&& _Generic(b?&a:(void*)(1-1),const int*:1,default:0)\n"
+                "&& _Generic(b?&a:v,const void*:1,default:0)\n"
+                "&& _Generic(b?&a:(void*)1,const void*:1,default:0);}\n"
+                "return f(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            // A typedef-qualified array must decay to a pointer to const elements.
+            "generic selection preserves const array elements", __LINE__,
+            SVI("typedef int A[2];\n"
+                "int f(void){const A a={0};\n"
+                "if(!_Generic(&a[0],const int*:1,default:0))return 2;\n"
+                "if(!_Generic(a+0,const int*:1,default:0))return 3;\n"
+                "return _Generic(a,const int*:1,default:0);}\n"
+                "return f();\n"),
+            .exit_code = 1,
+        },
+        {
+            // (void *)0 is a null pointer constant, so the result has type int *.
+            "conditional with void pointer null constant", __LINE__,
+            SVI("int f(int b){int a=3;\n"
+                "return _Generic(b?&a:(void*)0,int*:1,default:0);}\n"
+                "return f(1);\n"),
+            .exit_code = 1,
+        },
+        {
             "procmacro: file-scope static aggregate and scalar initialization", __LINE__,
             SVI("static struct {short pad; char digits[5];} table={0,\"0123\"};\n"
                 "static char separator='.';\n"

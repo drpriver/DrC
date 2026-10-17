@@ -6494,6 +6494,56 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "register parameter address", __LINE__,
+            SVI("void f(register int x){&x;}"),
+            SVI("(test):1:24: error: cannot take address of register variable\n"),
+        },
+        {
+            "register aggregate member address", __LINE__,
+            SVI("void f(void){register struct S{int x;} s={0}; &s.x;}"),
+            SVI("(test):1:47: error: cannot take address of register variable\n"),
+        },
+        {
+            "zero alignas is still forbidden on parameters", __LINE__,
+            SVI("void f(_Alignas(0) int x){}"),
+            SVI("(test):1:8: error: _Alignas is not allowed on parameters\n"),
+        },
+        {
+            "alignas cannot weaken member alignment", __LINE__,
+            SVI("struct S{_Alignas(1) int x;};"),
+            SVI("(test):1:10: error: _Alignas cannot weaken natural alignment\n"),
+        },
+        {
+            "regression: restrict requires a pointer type", __LINE__,
+            SVI("restrict int x;"),
+            SVI("(test):1:1: error: restrict requires a pointer type\n"),
+        },
+        {
+            "regression: register requires block scope", __LINE__,
+            SVI("register int x;"),
+            SVI("(test):1:1: error: register requires block scope\n"),
+        },
+        {
+            "regression: address of register object", __LINE__,
+            SVI("int f(void){register int x=1; int *p=&x; return *p;}"),
+            SVI("(test):1:38: error: cannot take address of register variable\n"),
+        },
+        {
+            "regression: alignas cannot weaken natural alignment", __LINE__,
+            SVI("_Alignas(1) int x;"),
+            SVI("(test):1:1: error: _Alignas cannot weaken natural alignment\n"),
+        },
+        {
+            "regression: alignas cannot qualify a parameter", __LINE__,
+            SVI("void f(_Alignas(16) int x){}"),
+            SVI("(test):1:8: error: _Alignas is not allowed on parameters\n"),
+        },
+        {
+            "regression: parameter cannot have static storage class", __LINE__,
+            SVI("void f(static int x){}"),
+            SVI("(test):1:8: error: only register storage class is allowed on parameters\n"),
+        },
+        {
             "complex bitwise", __LINE__,
             SVI("void f(double _Complex z){z & 1;}"),
             SVI("(test):1:29: error: operator requires integer operands\n"),
