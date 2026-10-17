@@ -2156,7 +2156,7 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
                 return 0;
             }
             if(arr->is_incomplete)
-                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+                return cc_error(p, loc, "Taking sizeof of an incomplete type");
             if(arr->is_vla)
                 return ((void)cc_error(p, loc, "Taking sizeof of a VLA when needing it as a constant"), CC_UNREACHABLE_ERROR);
             uint32_t elem_size;
@@ -2169,14 +2169,14 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_STRUCT: {
             CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
-                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+                return cc_error(p, loc, "Taking sizeof of an incomplete type");
             *out = s->size;
             return 0;
         }
         case CC_UNION: {
             CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
-                return ((void)cc_error(p, loc, "Taking sizeof of an incomplete type"), CC_UNREACHABLE_ERROR);
+                return cc_error(p, loc, "Taking sizeof of an incomplete type");
             *out = u->size;
             return 0;
         }
@@ -2186,7 +2186,7 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             return cc_sizeof_as_uint(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
-            return ((void)cc_error(p, loc, "Taking sizeof of a function type (not function pointer type)"), CC_UNREACHABLE_ERROR);
+            return cc_error(p, loc, "Taking sizeof of a function type (not function pointer type)");
     }
     cc_unsafe_unreachable();
 }
@@ -2732,8 +2732,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                 if(err) return err;
                 err = cc_integer_promote(p, cc_arithmetic_operand_type(p, right), &rp, tok.loc);
                 if(err) return err;
-                if((ccqt_is_basic(lp) && ccbt_is_float(ccqt_basic_kind(lp)))
-                || (ccqt_is_basic(rp) && ccbt_is_float(ccqt_basic_kind(rp))))
+                if(!ccqt_is_integer(lp) || !ccqt_is_integer(rp))
                     return cc_error(p, tok.loc, "shift operands require integer type");
                 err = cc_implicit_cast(p, left, lp, &left);
                 if(err) return err;
@@ -2812,6 +2811,19 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                         err = cc_implicit_cast(p, right, ptr_type, &right);
                         if(err) return err;
                     }
+                    // Mixed void/object subtraction measures both operands in
+                    // the typed pointee's units, regardless of operand order.
+                    if(ccqt_bt_eq(lp, CCBT_void) != ccqt_bt_eq(rp, CCBT_void)){
+                        CcQualType pointee = ccqt_bt_eq(lp, CCBT_void) ? rp : lp;
+                        pointee.quals |= lp.quals | rp.quals;
+                        CcQualType common;
+                        err = cc_pointer_of(p, pointee, &common);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, left, common, &left);
+                        if(err) return err;
+                        err = cc_implicit_cast(p, right, common, &right);
+                        if(err) return err;
+                    }
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
@@ -2850,7 +2862,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                 if(err) return err;
                 if(kind == CC_EXPR_MOD || kind == CC_EXPR_BITAND
                 || kind == CC_EXPR_BITOR || kind == CC_EXPR_BITXOR){
-                    if(ccqt_is_basic(result_type) && ccbt_is_float(ccqt_basic_kind(result_type)))
+                    if(!ccqt_is_integer(result_type))
                         return cc_error(p, tok.loc, "operator requires integer operands");
                 }
                 err = cc_implicit_cast(p, left, result_type, &left);
@@ -3359,6 +3371,21 @@ cc_check_atomic_builtin_object(CcParser* p, SrcLoc loc, CcQualType object, CcAto
             return 0;
         DRP_CASES_EXHAUSTED;
     }
+}
+
+static
+int
+cc_check_interlocked_pointer(CcParser* p, CcExpr*_Nullable*_Nonnull ptr, CcBasicTypeKind expected, SrcLoc loc){
+    int err = cc_decay_array(p, ptr);
+    if(err) return err;
+    if(ccqt_kind((*ptr)->type) != CC_POINTER)
+        return cc_error(p, loc, "first argument to interlocked builtin must be a pointer");
+    CcQualType object = ccqt_as_ptr((*ptr)->type)->pointee;
+    err = cc_check_atomic_builtin_object(p, loc, object, CC_AOBJ_WRITE);
+    if(err) return err;
+    if(!cc_types_compatible_unqualified(object, ccqt_basic(expected)))
+        return cc_error(p, loc, "interlocked destination has incorrect pointee type");
+    return 0;
 }
 
 static
@@ -3988,15 +4015,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, flags, &ptr_expr, CCQT_NONE);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
-                        CcQualType t;
-                        err = cc_pointer_of(p, cc_array_element_type(ptr_expr->type), &t);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
-                        if(err) return err;
-                    }
-                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
-                        return cc_error(p, tok.loc, "first argument to interlocked builtin must be a pointer");
+                    err = cc_check_interlocked_pointer(p, &ptr_expr, val_kind, tok.loc);
+                    if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, val_type, nargs);
                     if(!node) return CC_OOM_ERROR;
                     node->atomic.op = op;
@@ -4037,15 +4057,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, flags, &ptr_expr, CCQT_NONE);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
-                        CcQualType t;
-                        err = cc_pointer_of(p, cc_array_element_type(ptr_expr->type), &t);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
-                        if(err) return err;
-                    }
-                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
-                        return cc_error(p, tok.loc, "first argument to interlocked builtin must be a pointer");
+                    err = cc_check_interlocked_pointer(p, &ptr_expr, val_kind, tok.loc);
+                    if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(val_kind), 0);
@@ -4062,15 +4075,10 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* ptr_expr;
                     err = cc_parse_assignment_expr(p, flags, &ptr_expr, CCQT_NONE);
                     if(err) return err;
-                    if(ccqt_kind(ptr_expr->type) == CC_ARRAY && !ccqt_as_array(ptr_expr->type)->is_vector){
-                        CcQualType t;
-                        err = cc_pointer_of(p, cc_array_element_type(ptr_expr->type), &t);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, ptr_expr, t, &ptr_expr);
-                        if(err) return err;
-                    }
-                    else if(ccqt_kind(ptr_expr->type) != CC_POINTER)
-                        return cc_error(p, tok.loc, "first argument to _InterlockedCompareExchange128 must be a pointer");
+                    err = cc_check_interlocked_pointer(p, &ptr_expr, CCBT_long_long, tok.loc);
+                    if(err) return err;
+                    err = cc_check_atomic_size(p, 16, tok.loc);
+                    if(err) return err;
                     CcQualType ll_type = ccqt_basic(CCBT_long_long);
                     CcQualType ll_ptr_type;
                     err = cc_pointer_of(p, ll_type, &ll_ptr_type);
@@ -10113,6 +10121,12 @@ cc_lookup_member(CcParser* p, CcStruct* s, Atom name, CcFieldPath* _Nullable pat
 static
 int
 cc_append_method(CcParser* p, CcStruct* s, CcFunc* func, SrcLoc loc){
+    if(!func->type->param_count)
+        return cc_error(p, loc, "method requires a receiver of its enclosing type or a pointer to it");
+    CcQualType receiver = func->type->params[0];
+    if(ccqt_kind(receiver) == CC_POINTER) receiver = ccqt_as_ptr(receiver)->pointee;
+    if(_ccqt_to_type_ptr(receiver) != s)
+        return cc_error(p, loc, "method requires a receiver of its enclosing type or a pointer to it");
     CcQualType type;
     CcField* found;
     int err = cc_lookup_member(p, s, func->name, NULL, &type, NULL, &found);
@@ -10212,6 +10226,13 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
 static
 int
 cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
+    if(ccqt_kind(target) == CC_ARRAY && ccqt_as_array(target)->is_incomplete){
+        if((value->kind == CC_EXPR_INIT_LIST || value->kind == CC_EXPR_COMPOUND_LITERAL) && !value->init_list->count){
+            cc_release_expr(p, value);
+            return 0;
+        }
+        return cc_error(p, value->loc, "initialization of flexible array members is not supported");
+    }
     CcQualType t = {.unqual=target.unqual};
     CcExpr* casted;
     int err = cc_implicit_cast(p, value, t, &casted);
@@ -11058,11 +11079,28 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         }
     }
     make_node:;
-    // Validate subobject paths without storing a byte layout.
     for(uint32_t i = 0; i < list->count; i++){
+        CcInitEntry* entry = &list->entries[i];
         uint64_t offset;
-        err = cc_field_path_resolve(cc_target(p), resolved_type, list->entries[i].path, &offset);
+        err = cc_field_path_resolve(cc_target(p), resolved_type, entry->path, &offset);
         if(err) goto release_list;
+        CcQualType sub = resolved_type;
+        for(uint32_t j = 0, n = cc_field_path_count(entry->path);; j++){
+            if(ccqt_kind(sub) == CC_ARRAY && ccqt_as_array(sub)->is_incomplete){
+                // Empty braces are permitted, but no storage is allocated
+                // beyond the declared struct for flexible member contents.
+                if(j < n || (entry->value && !(entry->value->kind == CC_EXPR_INIT_LIST && !entry->value->init_list->count))){
+                    err = cc_error(p, entry->value ? entry->value->loc : loc, "initialization of flexible array members is not supported");
+                    goto release_list;
+                }
+            }
+            if(j == n) break;
+            uint32_t index = cc_field_path_component(entry->path, j);
+            CcTypeKind kind = ccqt_kind(sub);
+            if(kind == CC_ARRAY) sub = ccqt_as_array(sub)->element;
+            else if(kind == CC_STRUCT || kind == CC_UNION) sub = ccqt_as_struct(sub)->fields[index].type;
+            else break;
+        }
     }
     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, loc, resolved_type, 0);
     if(!node){
@@ -11380,6 +11418,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         err = cc_peek(p, &tok);
                         if(err) goto struct_err;
                         _Bool has_body = tok.type == CC_PUNCTUATOR && tok.punct.punct == '{';
+                        if(tail == &head && has_body){
+                            err = cc_error(p, tok.loc, "cannot define method with typedef function type");
+                            goto struct_err;
+                        }
                         if(func){
                             if(has_body && func->defined){
                                 err = cc_error(p, name_loc, "redefinition of method '%s'", member_name->data);
@@ -11422,10 +11464,6 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             if(AM_put(&p->external_methods, cc_allocator(p), symbol, func)){
                                 err = CC_OOM_ERROR; goto struct_err;
                             }
-                        }
-                        if(tail == &head && tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
-                            err = cc_error(p, tok.loc, "cannot define method with typedef function type");
-                            goto struct_err;
                         }
                         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
                             err = cc_next_token(p, &tok); // consume '{'
@@ -15108,6 +15146,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                     return cc_error(p, tok.loc, "variable has incomplete type 'struct %s'", ccqt_as_struct(type)->name ? ccqt_as_struct(type)->name->data : "(anonymous)");
                 if(tk == CC_UNION && ccqt_as_union(type)->is_incomplete)
                     return cc_error(p, tok.loc, "variable has incomplete type 'union %s'", ccqt_as_union(type)->name ? ccqt_as_union(type)->name->data : "(anonymous)");
+                if(tk == CC_ENUM && ccqt_as_enum(type)->is_incomplete)
+                    return cc_error(p, tok.loc, "variable has incomplete enum type");
             }
             if(var){
                 if(initializer && var->initializer)

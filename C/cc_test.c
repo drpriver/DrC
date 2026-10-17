@@ -20,6 +20,7 @@
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
 #include "cc_parser.h"
+#include "cc_errors.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -291,6 +292,66 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
     } testcases[] = {
+        {
+            "interlocked qualified array decay", __LINE__,
+            SVI("void f(void){volatile long long p[1]={0}; _InterlockedExchange64(p,1); _InterlockedIncrement64(p);}"),
+        },
+        {
+            "method Self pointer receiver", __LINE__,
+            SVI("struct S {int x[8]; void boxed(_Self *a){}}; void f(struct S *p){p.boxed();}"),
+        },
+        {
+            "method qualified and value receivers", __LINE__,
+            SVI("struct S {int x; int get(const _Self *a){return a->x;} int val(_Self a){return a.x;}};"),
+        },
+        {
+            "FUCS receiver boxing", __LINE__,
+            SVI("struct S {int x[8];}; void boxed(_Any a){} void f(struct S *p){p.boxed();}"),
+        },
+        {
+            "incomplete enum extern", __LINE__,
+            SVI("enum E; extern enum E x; enum E {A};"),
+        },
+        {
+            "mixed void pointer subtraction antisymmetry", __LINE__,
+            SVI("int a[2]; _Static_assert((void*)&a[1]-&a[0] == -(&a[0]-(void*)&a[1]));"),
+        },
+        {
+            "void left subtraction uses typed units", __LINE__,
+            SVI("int a[2]; _Static_assert((void*)&a[1]-&a[0] == 1);"),
+        },
+        {
+            "void right subtraction uses typed units", __LINE__,
+            SVI("int a[2]; _Static_assert(&a[0]-(void*)&a[1] == -1);"),
+        },
+        {
+            "void pointer subtraction", __LINE__,
+            SVI("int a[2]; _Static_assert((void*)&a[1]-(void*)&a[0] == sizeof(int));"),
+        },
+        {
+            "typed pointer subtraction", __LINE__,
+            SVI("int a[2]; _Static_assert(&a[1]-&a[0] == 1);"),
+        },
+        {
+            "qualified parameter declaration", __LINE__,
+            SVI("int f(int); int f(const int);"),
+        },
+        {
+            "qualified parameter pointer", __LINE__,
+            SVI("int f(int); int (*p)(const int)=f;"),
+        },
+        {
+            "anonymous zero width", __LINE__,
+            SVI("struct S{int :0; int x;};"),
+        },
+        {
+            "flexible member empty", __LINE__,
+            SVI("struct S{int n; int a[];}; struct S s={.a={}}; struct S t={1};"),
+        },
+        {
+            "const member whole-object assignment extension", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a, struct S *b){*a=*b;}"),
+        },
         {
             "bfloat16 types, casts, literals, and arithmetic types", __LINE__,
             SVI("__bf16 a; typedef const __bf16 BF; BF b;\n"
@@ -6433,6 +6494,221 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "complex bitwise", __LINE__,
+            SVI("void f(double _Complex z){z & 1;}"),
+            SVI("(test):1:29: error: operator requires integer operands\n"),
+        },
+        {
+            "complex compound bitwise", __LINE__,
+            SVI("void f(double _Complex z){z &= 1;}"),
+            SVI("(test):1:29: error: operator requires integer operands\n"),
+        },
+        {
+            "complex shift", __LINE__,
+            SVI("void f(double _Complex z){z << 1;}"),
+            SVI("(test):1:29: error: shift operands require integer type\n"),
+        },
+        {
+            "complex remainder", __LINE__,
+            SVI("void f(double _Complex z){z % 1;}"),
+            SVI("(test):1:29: error: operator requires integer operands\n"),
+        },
+        {
+            "complex shift count", __LINE__,
+            SVI("void f(double _Complex z){1 >> z;}"),
+            SVI("(test):1:29: error: shift operands require integer type\n"),
+        },
+        {
+            "interlocked const destination", __LINE__,
+            SVI("void f(const long *p){_InterlockedIncrement(p);}"),
+            SVI("(test):1:23: error: atomic operation requires writable object\n"),
+        },
+        {
+            "interlocked wrong pointee", __LINE__,
+            SVI("void f(char *p){_InterlockedExchange64(p, 1);}"),
+            SVI("(test):1:17: error: interlocked destination has incorrect pointee type\n"),
+        },
+        {
+            "atomic const", __LINE__,
+            SVI("void f(const long *p){__atomic_fetch_add(p, 1, 5);}"),
+            SVI("(test):1:23: error: atomic operation requires writable object\n"),
+        },
+        {
+            "interlocked const exchange", __LINE__,
+            SVI("void f(const long long *p){_InterlockedExchange64(p, 1);}"),
+            SVI("(test):1:28: error: atomic operation requires writable object\n"),
+        },
+        {
+            "interlocked wrong increment type", __LINE__,
+            SVI("void f(double *p){_InterlockedIncrement64(p);}"),
+            SVI("(test):1:19: error: interlocked destination has incorrect pointee type\n"),
+        },
+        {
+            "interlocked 128 const destination", __LINE__,
+            SVI("void f(const long long *p, long long *q){_InterlockedCompareExchange128(p, 1, 2, q);}"),
+            SVI("(test):1:42: error: atomic operation requires writable object\n"),
+        },
+        {
+            "interlocked 128 wrong destination", __LINE__,
+            SVI("void f(char *p, long long *q){_InterlockedCompareExchange128(p, 1, 2, q);}"),
+            SVI("(test):1:31: error: interlocked destination has incorrect pointee type\n"),
+        },
+        {
+            "method rejects Any receiver declaration", __LINE__,
+            SVI("struct S {int x[8]; void boxed(_Any a){}};"),
+            SVI("(test):1:26: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+        },
+        {
+            "method rejects unrelated receiver", __LINE__,
+            SVI("struct S {int x; void bad(int *a);};"),
+            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+        },
+        {
+            "method rejects missing receiver", __LINE__,
+            SVI("struct S {int x; void bad(void);};"),
+            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+        },
+        {
+            "push_method rejects Any receiver", __LINE__,
+            SVI("struct S {int x;}; void bad(_Any a){} (struct S).push_method(bad,bad);"),
+            SVI("(test):1:39: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+        },
+        {
+            "incomplete enum local", __LINE__,
+            SVI("enum E; void f(void){enum E x;}"),
+            SVI("(test):1:30: error: variable has incomplete enum type\n"),
+        },
+        {
+            "incomplete struct", __LINE__,
+            SVI("struct S; void f(void){struct S x;}"),
+            SVI("(test):1:34: error: variable has incomplete type 'struct S'\n"),
+        },
+        {
+            "incompatible pointer subtraction", __LINE__,
+            SVI("long f(char *p, int *q){return p-q;}"),
+            SVI("(test):1:33: error: pointer subtraction with incompatible types\n"),
+        },
+        {
+            "prototype promotion declaration", __LINE__,
+            SVI("int f(); int f(float);"),
+            SVI("(test):1:22: error: conflicting type for parameter 1 of 'f'\n"),
+        },
+        {
+            "prototype promotion pointer", __LINE__,
+            SVI("int f(); int (*p)(float)=f;"),
+            SVI("(test):1:26: error: cannot implicitly convert from 'int()' to 'int (*)(float)'\n"),
+        },
+        {
+            "anonymous bool width", __LINE__,
+            SVI("struct S{_Bool :2;};"),
+            SVI("(test):1:16: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+        },
+        {
+            "named bool width", __LINE__,
+            SVI("struct S{_Bool x:2;};"),
+            SVI("(test):1:17: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+        },
+        {
+            "named zero width", __LINE__,
+            SVI("struct S{int x:0;};"),
+            SVI("(test):1:15: error: named bitfield 'x' cannot have zero width\n"),
+        },
+        {
+            "expression sizeof incomplete", __LINE__,
+            SVI("struct S; int n=sizeof(struct S);"),
+            SVI("(test):1:17: error: sizeof applied to incomplete struct type\n"),
+        },
+        {
+            "layout sizeof incomplete", __LINE__,
+            SVI("struct S; struct T{struct S s;};"),
+            SVI("(test):1:30: error: Taking sizeof of an incomplete type\n"),
+        },
+        {
+            "nested designator range", __LINE__,
+            SVI("struct S{int a[2];}; struct S s={.a[2]=1};"),
+            SVI("(test):1:36: error: array index 2 out of bounds (size 2)\n"),
+        },
+        {
+            "direct designator range", __LINE__,
+            SVI("int a[2]={[2]=1};"),
+            SVI("(test):1:11: error: array index 2 out of bounds (size 2)\n"),
+        },
+        {
+            "nested extreme designator", __LINE__,
+            SVI("struct S{int a[2];}; struct S s={.a[4294967295]=1};"),
+            SVI("(test):1:36: error: array index 4294967295 out of bounds (size 2)\n"),
+        },
+        {
+            "direct extreme designator", __LINE__,
+            SVI("int a[]={[4294967295]=1};"),
+            SVI("(test):1:10: error: object size exceeds 32-bit layout limit\n"),
+        },
+        {
+            "flexible member extreme designator", __LINE__,
+            SVI("struct S{int n; int a[];}; struct S s={.a[4294967295]=1};"),
+            SVI("(test):1:55: error: initialization of flexible array members is not supported\n"),
+        },
+        {
+            "flexible member ordinary designator", __LINE__,
+            SVI("struct S{int n; int a[];}; struct S s={.a[0]=1};"),
+            SVI("(test):1:46: error: initialization of flexible array members is not supported\n"),
+        },
+        {
+            "flexible member braces", __LINE__,
+            SVI("struct S{int n; int a[];}; struct S s={.a={1}};"),
+            SVI("(test):1:43: error: initialization of flexible array members is not supported\n"),
+        },
+        {
+            "flexible member positional", __LINE__,
+            SVI("struct S{int n; int a[];}; struct S s={0,1};"),
+            SVI("(test):1:42: error: initialization of flexible array members is not supported\n"),
+        },
+        {
+            "flexible member string", __LINE__,
+            SVI("struct S{int n; char a[];}; struct S s={0,\"x\"};"),
+            SVI("(test):1:43: error: initialization of flexible array members is not supported\n"),
+        },
+        {
+            "const member direct assignment", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a){a->x=1;}"),
+            SVI("(test):1:49: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "const member prefix increment", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a){++a->x;}"),
+            SVI("(test):1:45: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "const member postfix increment", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a){a->x++;}"),
+            SVI("(test):1:49: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "const member prefix decrement", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a){--a->x;}"),
+            SVI("(test):1:45: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "const member postfix decrement", __LINE__,
+            SVI("struct S{const int x;}; void f(struct S *a){a->x--;}"),
+            SVI("(test):1:49: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "const assignment", __LINE__,
+            SVI("void f(void){const int x=1; x=2;}"),
+            SVI("(test):1:30: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "const prefix", __LINE__,
+            SVI("void f(void){const int x=1; ++x;}"),
+            SVI("(test):1:29: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "const postfix", __LINE__,
+            SVI("void f(void){const int x=1; x++;}"),
+            SVI("(test):1:30: error: cannot modify const-qualified variable\n"),
+        },
+        {
             "overflow rejects boolean result", __LINE__,
             SVI("_Bool r;\n__builtin_add_overflow(1,1,&r);"),
             SVI("(test):2:1: error: overflow builtin requires non-boolean integer operands and result\n"),
@@ -10821,9 +11097,12 @@ TestFunction(test_parse_errors){
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
         TEST_stats.executed++;
-        if(!err){
+        if(err != _cc_syntax_error){
             TEST_stats.failures++;
-            TestPrintf("%s:%d: %s: expected error but parsing succeeded\n", __FILE__, c->line, c->test);
+            if(!err)
+                TestPrintf("%s:%d: %s: expected error but parsing succeeded\n", __FILE__, c->line, c->test);
+            else
+                TestPrintf("%s:%d: %s: expected syntax error but got '%s'\n", __FILE__, c->line, c->test, _cc_error_names[err]);
         }
         if(1){
             StringView log = msb_borrow_sv(&log_sb);

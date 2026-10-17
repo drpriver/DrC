@@ -45,6 +45,13 @@ TestFunction(test_interpreter){
         _Bool no_toplevel_ops;
     } testcases[] = {
         {
+            "mixed void pointer subtraction uses typed units", __LINE__,
+            SVI("int f(void *p, const int *q){return p-q;}\n"
+                "int g(const int *p, void *q){return p-q;}\n"
+                "int a[3]={}; return f(&a[2],a)==2 && g(a,&a[2])==-2;"),
+            .exit_code=1,
+        },
+        {
             "discarded qualified reads survive lowering", __LINE__,
             SVI("volatile int x=1; _Atomic int y=2; volatile int *p=&x; _Atomic int *q=&y;\n"
                 "x; *p; y; *q; (void)x; 1 && x; 0 || y; 1 ? x : y;\n"
@@ -11470,7 +11477,7 @@ TestFunction(test_interpreter){
         },
         {
             "type introspection: has field and method", __LINE__,
-            SVI("struct S { int x; int get(void){return 7;} };\n"
+            SVI("struct S { int x; int get(_Self *self){return 7;} };\n"
                 "_Type t = struct S;\n"
                 "_Static_assert((struct S).has_field(\"x\") && !(struct S).has_field(\"get\"));\n"
                 "_Static_assert((struct S).has_method(\"get\") && !(struct S).has_method(\"x\"));\n"
@@ -11485,11 +11492,11 @@ TestFunction(test_interpreter){
         },
         {
             "type introspection: has member guards static if", __LINE__,
-            SVI("constexpr _Type T = struct S { int x; int get(void){return 7;} };\n"
+            SVI("constexpr _Type T = struct S { int x; int get(_Self *self){return 7;} };\n"
                 "static if(T.has_field(\"x\") && T.field(\"x\").type == int){ int found = 1; }\n"
                 "static if(T.has_field(\"missing\") && T.field(\"missing\").type == int){ invalid tokens here }\n"
                 "static if(T.has_method(\"missing\") && T.method(\"missing\").type == int(void)){ invalid tokens here }\n"
-                "static if(T.has_method(\"get\") && T.method(\"get\").type == int(void)){ int method_found = 1; }\n"
+                "static if(T.has_method(\"get\") && T.method(\"get\").type == int(struct S*)){ int method_found = 1; }\n"
                 "_Type t = T;\n"
                 "if(t.has_field(\"missing\") && t.field(\"missing\").type == int) return 0;\n"
                 "if(t.has_method(\"missing\") && t.method(\"missing\").address) return 0;\n"
@@ -11498,8 +11505,8 @@ TestFunction(test_interpreter){
         },
         {
             "type introspection: has anonymous and union members", __LINE__,
-            SVI("struct S { union { int x; int get(void){return 1;} }; };\n"
-                "union U { int y; int get(void){return 2;} };\n"
+            SVI("struct S { union { int x; int get(_Self *self){return 1;} }; };\n"
+                "union U { int y; int get(_Self *self){return 2;} };\n"
                 "_Static_assert((struct S).has_field(\"x\") && (struct S).has_method(\"get\"));\n"
                 "_Static_assert((union U).has_field(\"y\") && (union U).has_method(\"get\"));\n"
                 "_Type s = struct S; _Type u = union U;\n"
@@ -11516,7 +11523,7 @@ TestFunction(test_interpreter){
         },
         {
             "type introspection: has method does not resolve function", __LINE__,
-            SVI("struct S { int not_defined_anywhere(void); };\n"
+            SVI("struct S { int not_defined_anywhere(_Self *); };\n"
                 "_Static_assert((struct S).has_method(\"not_defined_anywhere\"));\n"
                 "_Type t = struct S;\n"
                 "return t.has_method(\"not_defined_anywhere\");\n"),
@@ -15072,6 +15079,15 @@ TestFunction(test_interpreter_runtime_errors){
             SVI("(test):1:1: error: __builtin_capture_backtrace buffer must not be NULL\n"),
         },
         {
+            "flexible member static initialization is rejected by parser", __LINE__,
+            SVI("struct S {int n; int a[];};\n"
+                "static struct S s={.a[0]=\n"
+                "1};\n"
+                "return s.n;\n"),
+            SVI("(test):3:1: error: initialization of flexible array members is not supported\n"),
+            .parser_error = 1,
+        },
+        {
             "call layout rejects argument alignment overflow", __LINE__,
             SVI("struct S {char data[0xffffffffu];}; void (*f)(struct S, int)=0;\n"
                 "f(*(struct S*)0, 1);\n"),
@@ -15897,37 +15913,37 @@ TestFunction(test_interpreter_runtime_errors){
         },
         {
             "reflection: field rejects method name", __LINE__,
-            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int x; int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.field(\"get\");\n"),
             SVI("(test):2:2: error: _Type.field: no field with that name\n"),
         },
         {
             "reflection: field index excludes methods", __LINE__,
-            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int x; int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.field(1);\n"),
             SVI("(test):2:2: error: _Type.field: index out of range\n"),
         },
         {
             "reflection: method rejects field name", __LINE__,
-            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int x; int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.method(\"x\");\n"),
             SVI("(test):2:2: error: _Type.method: no method with that name\n"),
         },
         {
             "reflection: method index excludes fields", __LINE__,
-            SVI("struct S { int x; int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int x; int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.method(1);\n"),
             SVI("(test):2:2: error: _Type.method: index out of range\n"),
         },
         {
             "reflection: empty method name", __LINE__,
-            SVI("struct S { int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.method(\"\");\n"),
             SVI("(test):2:2: error: _Type.method: no method with that name\n"),
         },
         {
             "reflection: negative method index", __LINE__,
-            SVI("struct S { int get(void){return 1;} }; _Type t = struct S;\n"
+            SVI("struct S { int get(_Self *self){return 1;} }; _Type t = struct S;\n"
                 "t.method(-1);\n"),
             SVI("(test):2:2: error: _Type.method: index out of range\n"),
         },

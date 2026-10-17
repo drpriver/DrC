@@ -1444,6 +1444,8 @@ An incomplete list:
 * GNU `__builtin_*`-style intrinsics
 * some MSVC intrinsics
 * pointer arithmetic on `void *` (treat `sizeof(void)==1`)
+    + in pointer subtraction, the void pointer is cast to the type
+        of the typed pointer.
 * ... and more
 
 ### Minor extensions
@@ -1456,6 +1458,9 @@ An incomplete list:
     + `int a[3] = {1,2,3}; int b[3] = a; int c[3]; c = b;`
 * `_Self` names the enclosing type in `struct` or `union` declarations, including anonymous types.
     + `typedef struct { _Self* next; } Node;`
+* Aggregate types with const members are assignable if the
+    whole object is replaced. The const member remains const when
+    accessed directly.
 * FIXME: list all the other random minor extensions.
 
 ## Interpreter-only
