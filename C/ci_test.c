@@ -21,6 +21,7 @@
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
+#include "../Drp/countof.h"
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "cc_errors.h"
@@ -33,16 +34,26 @@
 #endif
 
 
+static const struct opt {
+    _Bool noinline;
+} optimization_options[] = {
+    {.noinline = 0},
+    {.noinline = 1},
+};
+
 TestFunction(test_interpreter){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
-    static struct tc {
+    static const struct tc {
         const char* name; int line;
         StringView program;
         int exit_code;
         _Bool skip;
         _Bool no_toplevel_ops;
+        _Bool embed_files;
+        _Bool builtin_headers;
+        const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
             "integer operations read packed signed and unsigned frame operands", __LINE__,
@@ -14987,11 +14998,1109 @@ TestFunction(test_interpreter){
                 "return foo({1});\n"),
             .exit_code = 3,
         },
+        {
+            "embed: GNU offset and base64 blob lifetime", __LINE__,
+            SVI("constexpr unsigned char a[]={\n#embed \".\" gnu::base64(\"AQIDBP8ABwg=\")\n};"
+                "static_assert(sizeof(a)==8 && a[4]==255 && a[5]==0 && a[7]==8);"
+                "unsigned char b[2][3]={_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")};"
+                "unsigned char c[]={\n#embed \"embed.bin\" limit(3) gnu::offset(4)\n};"
+                "return b[1][0]==255 && b[1][1]==0 && b[1][2]==8 && sizeof(c)==3 && c[0]==255 && c[1]==0 && c[2]==7;"),
+            .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: directives, inline spelling and boundary operators", __LINE__,
+            SVI("unsigned char a[]={\n#embed \"embed.bin\"\n};"
+                "int b[]={10 * _Embed(\"\\\"embed.bin\\\" limit(3)\") + 20};"
+                "int f(int a,int b,int c){return a+b+c;}"
+                "return sizeof(a)==8 && a[0]==1 && a[4]==255 && a[7]==8 && "
+                "b[0]==10 && b[1]==2 && b[2]==23 && f(_Embed(\"\\\"embed.bin\\\" limit(3)\"))==6;"),
+            .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: blob overrides, constexpr reads, nested arrays and conversions", __LINE__,
+            SVI("constexpr unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[3]=99};"
+                "static_assert(sizeof(a)==8 && a[2]==3 && a[3]==99 && a[4]==255);"
+                "unsigned char b[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "double d[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "bool bits[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return b[1][0]==255 && b[1][1]==0 && d[4]==255.0 && !bits[5] && bits[4];"),
+            .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: parameters, empty expansion and comma expression", __LINE__,
+            SVI("#define FILE \"embed.bin\"\n#define N 3\n"
+                "int a[]={_Embed(\"FILE __limit__(N) prefix(9,) suffix(,10)\")};"
+                "int b[]={_Embed(\"FILE limit(0) prefix(bad) suffix(bad) if_empty(42)\")};"
+                "int c=(_Embed(\"FILE\"));"
+                "return sizeof(a)/sizeof(*a)==5 && a[0]==9 && a[4]==10 && b[0]==42 && c==8;"),
+            .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: local copies, static storage and signed bytes", __LINE__,
+            SVI("int f(int x){unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[2]=x};"
+                "static unsigned char s[]={_Embed(\"\\\"embed.bin\\\"\"),[4]=42};"
+                "signed char c[]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return a[1]==2 && a[2]==x && a[4]==255 && s[4]==42 && s[6]==7 && c[4]==-1;}"
+                "return f(33) && f(44);"), .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: aggregate copies and nested constexpr access", __LINE__,
+            SVI("struct S{unsigned char a[8];int x;};"
+                "constexpr struct S s={{_Embed(\"\\\"embed.bin\\\"\")},42};"
+                "static_assert(s.a[4]==255 && s.a[5]==0);"
+                "constexpr unsigned char m[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "static_assert(m[1][0]==255 && m[0][2]==3);"
+                "struct S t=s; const unsigned char row[4]=m[1];"
+                "return t.a[4]==255 && t.x==42 && row[0]==255 && row[3]==8;"), .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: brace elision across mixed struct members", __LINE__,
+            SVI("struct S{int lead;unsigned char a[2];int middle;"
+                "struct {unsigned char b[2];bool zero;} inner;short tail[2];int end;};"
+                "constexpr struct S s={99,\n#embed \"embed.bin\"\n,42};"
+                "static_assert(s.lead==99 && s.a[0]==1 && s.a[1]==2 && s.middle==3);"
+                "static_assert(s.inner.b[0]==4 && s.inner.b[1]==255 && !s.inner.zero);"
+                "static_assert(s.tail[0]==7 && s.tail[1]==8 && s.end==42);"
+                "int f(int n){struct S t={n,_Embed(\"\\\"embed.bin\\\"\"),42};"
+                "return t.lead==n && t.a[0]==1 && t.a[1]==2 && t.middle==3 && "
+                "t.inner.b[0]==4 && t.inner.b[1]==255 && !t.inner.zero && "
+                "t.tail[0]==7 && t.tail[1]==8 && t.end==42;}"
+                "return f(17) && f(23);"), .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: brace elision across an array of structs", __LINE__,
+            SVI("struct S{unsigned char bytes[3];int last;};"
+                "constexpr struct S a[2]={\n#embed \"embed.bin\"\n};"
+                "static_assert(a[0].bytes[0]==1 && a[0].bytes[1]==2 && a[0].bytes[2]==3 && a[0].last==4);"
+                "static_assert(a[1].bytes[0]==255 && a[1].bytes[1]==0 && a[1].bytes[2]==7 && a[1].last==8);"
+                "static struct S b[2]={_Embed(\"\\\"embed.bin\\\"\")};"
+                "return b[0].bytes[0]==1 && b[0].bytes[1]==2 && b[0].bytes[2]==3 && b[0].last==4 && "
+                "b[1].bytes[0]==255 && b[1].bytes[1]==0 && b[1].bytes[2]==7 && b[1].last==8;"), .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "embed: large resource stays compact", __LINE__,
+            SVI("constexpr unsigned char a[]={_Embed(\"\\\"large.bin\\\"\")};"
+                "static_assert(sizeof(a)==4096 && a[1023]==255 && a[2048]==0);"
+                "return a[4095]==255 && a[4094]==254;"),
+            .exit_code=1,
+            .embed_files = 1,
+        },
+        {
+            "stdatomic: typedefs use atomic-qualified types", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = ATOMIC_VAR_INIT(1);\n"
+               "atomic_init(&x, 2);\n"
+               "int old = atomic_fetch_add(&x, 5);\n"
+               "return old * 10 + atomic_load(&x);\n"),
+            .exit_code = 27,
+            .builtin_headers = 1,
+        },
+        {
+            "defer: header and feature macros", __LINE__,
+            SVI("#include <stddefer.h>\n"
+                "static_assert(__STDC_DEFER_TS25755__==2);"
+                "static_assert(__STDC_VERSION_STDDEFER_H__==202602L);"
+                "int n=0; {defer n++;} return n;"),
+            .exit_code=1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: bitwise fetch operations return old value", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_uint x = 0xF0u;\n"
+               "unsigned a = atomic_fetch_or(&x, 0x0Fu);\n"
+               "unsigned b = atomic_fetch_and_explicit(&x, 0x33u, memory_order_seq_cst);\n"
+               "unsigned c = atomic_fetch_xor(&x, 0x30u);\n"
+               "return (a == 0xF0u) && (b == 0xFFu) && (c == 0x33u) && (x == 0x03u);\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: parenthesized _Atomic remains keyword after include", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "_Atomic(int) x = 4;\n"
+               "atomic_store(&x, 9);\n"
+               "return atomic_load(&x);\n"),
+            .exit_code = 9,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: exchange and compare-exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 10;\n"
+               "int old = atomic_exchange(&x, 20);\n"
+               "int expected = 20;\n"
+               "bool ok1 = atomic_compare_exchange_strong(&x, &expected, 30);\n"
+               "expected = 99;\n"
+               "bool ok2 = atomic_compare_exchange_weak_explicit(&x, &expected, 40, memory_order_seq_cst, memory_order_relaxed);\n"
+               "return old == 10 && ok1 && !ok2 && expected == 30 && x == 30;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: flag test and clear", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_flag f = ATOMIC_FLAG_INIT;\n"
+               "bool a = atomic_flag_test_and_set(&f);\n"
+               "bool b = atomic_flag_test_and_set_explicit(&f, memory_order_seq_cst);\n"
+               "atomic_flag_clear(&f);\n"
+               "bool c = atomic_flag_test_and_set(&f);\n"
+               "return !a && b && !c;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: scalar typedef load store", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_bool b = false;\n"
+               "atomic_char c = 1;\n"
+               "atomic_long l = 2;\n"
+               "atomic_llong ll = 3;\n"
+               "atomic_store(&b, true);\n"
+               "atomic_store_explicit(&c, 4, memory_order_release);\n"
+               "atomic_store(&l, 5);\n"
+               "atomic_store(&ll, 6);\n"
+               "return atomic_load_explicit(&b, memory_order_acquire)\n"
+               "    && atomic_load(&c) == 4\n"
+               "    && atomic_load(&l) == 5\n"
+               "    && atomic_load(&ll) == 6;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: atomic_init aggregate initializer", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) s;\n"
+               "atomic_init(&s, {3, 4});\n"
+               "struct S t = s;\n"
+               "return t.x * 10 + t.y;\n"),
+            .exit_code = 34,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: volatile atomic object API", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "volatile atomic_int x = 0;\n"
+               "atomic_store(&x, 3);\n"
+               "int a = atomic_load(&x);\n"
+               "atomic_store_explicit(&x, 4, memory_order_release);\n"
+               "int b = atomic_load_explicit(&x, memory_order_acquire);\n"
+               "return a * 10 + b;\n"),
+            .exit_code = 34,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: remaining integer typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_schar sc = -1;\n"
+               "atomic_uchar uc = 2;\n"
+               "atomic_short sh = 3;\n"
+               "atomic_ushort ush = 4;\n"
+               "atomic_ulong ul = 5;\n"
+               "atomic_ullong ull = 6;\n"
+               "atomic_store(&sc, -7);\n"
+               "atomic_store(&uc, 8);\n"
+               "atomic_store(&sh, -9);\n"
+               "atomic_store(&ush, 10);\n"
+               "atomic_store(&ul, 11);\n"
+               "atomic_store(&ull, 12);\n"
+               "return atomic_load(&sc) == -7\n"
+               "    && atomic_load(&uc) == 8\n"
+               "    && atomic_load(&sh) == -9\n"
+               "    && atomic_load(&ush) == 10\n"
+               "    && atomic_load(&ul) == 11\n"
+               "    && atomic_load(&ull) == 12;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: atomic_is_lock_free", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 0;\n"
+               "atomic_llong y = 0;\n"
+               "return atomic_is_lock_free(&x) && atomic_is_lock_free(&y);\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: fetch macro evaluates object argument once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int arr[2] = {10, 20};\n"
+               "int idx = 0;\n"
+               "int calls = 0;\n"
+               "atomic_int *next(void){ calls++; return &arr[idx++]; }\n"
+               "int old = atomic_fetch_add(next(), 5);\n"
+               "return calls == 1 && idx == 1 && old == 10 && arr[0] == 15 && arr[1] == 20;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: compare exchange macro evaluates desired once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int x = 1;\n"
+               "int expected = 1;\n"
+               "int calls = 0;\n"
+               "int desired(void){ calls++; return 2; }\n"
+               "bool ok = atomic_compare_exchange_strong(&x, &expected, desired());\n"
+               "return ok && calls == 1 && expected == 1 && x == 2;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: pointer fetch add and sub", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "int arr[5] = {1, 2, 3, 4, 5};\n"
+               "_Atomic(int*) p = arr;\n"
+               "int *old_add = atomic_fetch_add(&p, 2);\n"
+               "int *old_sub = atomic_fetch_sub_explicit(&p, 1, memory_order_seq_cst);\n"
+               "return old_add == arr && old_sub == arr + 2 && p == arr + 1 && *p == 2;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: least fast and max typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int_least8_t a = 1;\n"
+               "atomic_uint_least16_t b = 2;\n"
+               "atomic_int_least32_t c = 3;\n"
+               "atomic_uint_least64_t d = 4;\n"
+               "atomic_int_fast8_t e = 5;\n"
+               "atomic_uint_fast16_t f = 6;\n"
+               "atomic_int_fast32_t g = 7;\n"
+               "atomic_uint_fast64_t h = 8;\n"
+               "atomic_intmax_t i = 9;\n"
+               "atomic_uintmax_t j = 10;\n"
+               "atomic_store(&a, -11);\n"
+               "atomic_store(&b, 12);\n"
+               "atomic_store(&c, -13);\n"
+               "atomic_store(&d, 14);\n"
+               "atomic_store(&e, -15);\n"
+               "atomic_store(&f, 16);\n"
+               "atomic_store(&g, -17);\n"
+               "atomic_store(&h, 18);\n"
+               "atomic_store(&i, -19);\n"
+               "atomic_store(&j, 20);\n"
+               "return atomic_load(&a) == -11\n"
+               "    && atomic_load(&b) == 12\n"
+               "    && atomic_load(&c) == -13\n"
+               "    && atomic_load(&d) == 14\n"
+               "    && atomic_load(&e) == -15\n"
+               "    && atomic_load(&f) == 16\n"
+               "    && atomic_load(&g) == -17\n"
+               "    && atomic_load(&h) == 18\n"
+               "    && atomic_load(&i) == -19\n"
+               "    && atomic_load(&j) == 20;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: pointer sized typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_intptr_t ip = 1;\n"
+               "atomic_uintptr_t up = 2;\n"
+               "atomic_size_t sz = 3;\n"
+               "atomic_ptrdiff_t pd = -4;\n"
+               "atomic_store(&ip, -5);\n"
+               "atomic_store(&up, 6);\n"
+               "atomic_store(&sz, 7);\n"
+               "atomic_store(&pd, -8);\n"
+               "return atomic_load(&ip) == -5\n"
+               "    && atomic_load(&up) == 6\n"
+               "    && atomic_load(&sz) == 7\n"
+               "    && atomic_load(&pd) == -8;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: character typedefs", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_char16_t c16 = 1;\n"
+               "atomic_char32_t c32 = 2;\n"
+               "atomic_wchar_t wc = 3;\n"
+               "atomic_store(&c16, 4);\n"
+               "atomic_store(&c32, 5);\n"
+               "atomic_store(&wc, 6);\n"
+               "return atomic_load(&c16) == 4 && atomic_load(&c32) == 5 && atomic_load(&wc) == 6;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: kill dependency evaluates once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "int calls = 0;\n"
+               "int next(void){ calls++; return 7; }\n"
+               "int x = kill_dependency(next());\n"
+               "return calls * 10 + x;\n"),
+            .exit_code = 17,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: fence macros accept memory orders", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_thread_fence(memory_order_seq_cst);\n"
+               "atomic_thread_fence(memory_order_acquire);\n"
+               "atomic_signal_fence(memory_order_release);\n"
+               "atomic_signal_fence(memory_order_relaxed);\n"
+               "return 1;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: aggregate exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S desired = {3, 4};\n"
+               "struct S old = atomic_exchange(&a, desired);\n"
+               "struct S now = atomic_load(&a);\n"
+               "return old.x == 1 && old.y == 2 && now.x == 3 && now.y == 4;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: aggregate compare exchange", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S expected = {1, 2};\n"
+               "struct S desired = {3, 4};\n"
+               "bool ok1 = atomic_compare_exchange_strong(&a, &expected, desired);\n"
+               "expected = (struct S){9, 9};\n"
+               "desired = (struct S){5, 6};\n"
+               "bool ok2 = atomic_compare_exchange_weak(&a, &expected, desired);\n"
+               "struct S now = atomic_load(&a);\n"
+               "return ok1 && !ok2 && expected.x == 3 && expected.y == 4 && now.x == 3 && now.y == 4;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: aggregate load and store explicit", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "struct S { int x, y; };\n"
+               "_Atomic(struct S) a = {1, 2};\n"
+               "struct S b = {7, 8};\n"
+               "atomic_store_explicit(&a, b, memory_order_release);\n"
+               "struct S c = atomic_load_explicit(&a, memory_order_acquire);\n"
+               "return c.x * 10 + c.y;\n"),
+            .exit_code = 78,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: scalar atomic_init evaluates arguments once", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int a[2] = {1, 2};\n"
+               "int idx = 0;\n"
+               "int calls = 0;\n"
+               "atomic_int *next_obj(void){ calls++; return &a[idx++]; }\n"
+               "int next_val(void){ calls++; return 9; }\n"
+               "atomic_init(next_obj(), next_val());\n"
+               "return calls == 2 && idx == 1 && a[0] == 9 && a[1] == 2;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: atomic flag is atomic-qualified", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "return _Generic(atomic_flag, _Atomic bool: 1, bool: 2, default: 3);\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "review: static binary128 bool conversion", __LINE__,
+            SVI("static _Bool value=0.5L; return value;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "review: static x87 bool conversion", __LINE__,
+            SVI("static _Bool value=0.5L; return value;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "static float128: precision, arithmetic, and conversions on x87 target", __LINE__,
+            SVI("constexpr _Float128 q=(_Float128)(((unsigned __int128)1<<100)+1);\n"
+                "static unsigned __int128 n=(unsigned __int128)(q+(_Float128)1);\n"
+                "static float f=(float)(_Float128)1.25;\n"
+                "static double d=(double)(_Float128)2.5;\n"
+                "static long double l=(long double)(_Float128)3.5;\n"
+                "return n==(((unsigned __int128)1<<100)+2) && f==1.25f && d==2.5 && l==3.5L;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "static long double retains binary128 integer precision", __LINE__,
+            SVI("static long double value=(long double)(((unsigned __int128)1<<100)+1);\n"
+                "return value-(long double)((unsigned __int128)1<<100)==1.L;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "static binary128 converts precisely to wide integer", __LINE__,
+            SVI("static unsigned __int128 value=(unsigned __int128)0x1.0000000000000000000000001p100L;\n"
+                "return value==(((unsigned __int128)1<<100)+1);\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "static binary128 rounds directly to float", __LINE__,
+            SVI("static float value=(float)0x1.0000010000000000000000001p0L;\n"
+                "return value>1.f;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "long double literal precision and range X86_64_LINUX", __LINE__,
+            SVI("constexpr long double x=0x1.000000000000001p60L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
+                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
+                "volatile long double y=0x1.000000000000001p60L;\n"
+                "return y-0x1p60L==1.L;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "long double literal precision and range AARCH64_LINUX", __LINE__,
+            SVI("constexpr long double x=0x1.0000000000000000000000001p100L;\n"
+                "_Static_assert(x-0x1p100L==1.L);\n"
+                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
+                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
+                "volatile long double y=0x1.0000000000000000000000001p100L;\n"
+                "return y-0x1p100L==1.L;"),
+            .exit_code=1, .target = &cc_target_aarch64_linux,
+        },
+        {"wide long double x87 runtime", __LINE__,
+            SVI("long double x=0x1p60L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"wide long double x87 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p60L+1.L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"wide long double binary128 runtime", __LINE__,
+            SVI("long double x=0x1p100L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p100L==1.L;"), .exit_code=1, .target = &cc_target_aarch64_linux},
+        {"wide long double binary128 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p100L+1.L;\n"
+                "_Static_assert(x-0x1p100L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p100L==1.L;"), .exit_code=1, .target = &cc_target_aarch64_linux},
+        {"mingw target types and long double precision", __LINE__,
+            SVI("_Static_assert(sizeof(long)==4 && sizeof(void*)==8);\n"
+                "_Static_assert(sizeof(long double)==16 && alignof(long double)==16);\n"
+                "_Static_assert(sizeof(__INT_FAST16_TYPE__)==2);\n"
+                "_Static_assert(__INT_FAST16_MAX__==32767 && __INT_FAST16_WIDTH__==16);\n"
+                "_Static_assert(__MINGW32__ && __MINGW64__);\n"
+                "constexpr long double x=0x1p60L+1.L;\n"
+                "_Static_assert(x-0x1p60L==1.L);\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p60L==1.L;"), .exit_code=1, .target = &cc_target_x86_64_windows_mingw},
+        {"mingw va_list copy", __LINE__,
+            SVI("int f(int n,...){\n"
+                "__builtin_va_list ap, copy;\n"
+                "__builtin_va_start(ap,n); __builtin_va_copy(copy,ap);\n"
+                "int x=__builtin_va_arg(ap,int);\n"
+                "int y=__builtin_va_arg(copy,int);\n"
+                "double z=__builtin_va_arg(copy,double);\n"
+                "__builtin_va_end(ap); __builtin_va_end(copy);\n"
+                "return x+y+(int)z; }\n"
+                "return f(2,20,2.0);"), .exit_code=42, .target = &cc_target_x86_64_windows_mingw},
+        {"wide long double binary64 runtime", __LINE__,
+            SVI("long double x=0x1p50L+1.L;\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target = &cc_target_x86_64_windows_msvc},
+        {"wide long double binary64 constexpr", __LINE__,
+            SVI("constexpr long double x=0x1p50L+1.L;\n"
+                "_Static_assert(x-0x1p50L==1.L);\n"
+                "_Static_assert(!(-0.L));\n"
+                "_Static_assert(x && (1.L ? 1 : 0));\n"
+                "volatile long double y=x;\n"
+                "return y-0x1p50L==1.L;"), .exit_code=1, .target = &cc_target_x86_64_windows_msvc},
+        {
+            "constexpr wide conversions", __LINE__,
+            SVI("constexpr long double a=42;\n"
+                "constexpr _Float128 b=a;\n"
+                "_Static_assert((float)b==42.f && (double)b==42.);\n"
+                "_Static_assert((long long)b==42 && (unsigned long long)b==42);\n"
+                "_Static_assert((__int128)-b==-42 && (bool)b && !(bool)-0.L);\n"
+                "_Static_assert((long double)b==42.L);\n"
+                "_Static_assert(((__int128)-1>>100)==-1);\n"
+                "_Static_assert(((unsigned __int128)-1+1)==0);\n"
+                "return 1;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux,
+        },
+        {"constexpr wide truth", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert(x && !(!x));\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide add", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((x+3)-x==3);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide mul", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((x*7)/7==x && (x*7)%7==0);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide bits", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
+                "_Static_assert((~x & x)==0 && ((x|3)^x)==3);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide neg", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "constexpr __int128 n=-(__int128)x;\n"
+                "_Static_assert(n<0 && -n==x);\n"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide aggregate", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "struct S {unsigned __int128 x;\n"
+                "   long double y;\n"
+                "};\n"
+                "constexpr struct S s={x,0x1.000000000000001p60L};\n"
+                "_Static_assert(s.x==x && s.y-0x1p60L==1.L);\n"
+                "volatile long double d=s.y;"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x && d-0x1p60L==1.L;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+        {"constexpr wide quad", __LINE__,
+            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
+                "constexpr _Float128 q=(_Float128)x+1;\n"
+                "_Static_assert(q-(_Float128)x==1);\n"
+                "_Static_assert((unsigned __int128)q==x+1);"
+                "volatile unsigned __int128 v=x;\n"
+                "return v==x;"),
+            .exit_code=1, .target = &cc_target_x86_64_linux},
+
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_macos,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "any: layout and target long width", __LINE__,
+            SVI("_Any a=(long)0x100000001ull;\n"
+                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
+                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "fold: windows long truncates", __LINE__,
+            SVI("return (long)0x100000001ULL == 1;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "fold: linux long preserves high bits", __LINE__,
+            SVI("return (long)0x100000001ULL == 0x100000001ULL;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+
+        {
+            "sysv va_list param", __LINE__,
+            SVI(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "#define va_copy __builtin_va_copy\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap, int);\n"
+               "    }\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "sysv va_copy param", __LINE__,
+            SVI(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "#define va_copy __builtin_va_copy\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    va_list ap2;\n"
+               "    va_copy(ap2, ap);\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap2, int);\n"
+               "    }\n"
+               "    va_end(ap2);\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "aarch64 linux va_list param", __LINE__,
+            SVI(
+               "#define va_start __builtin_va_start\n"
+               "#define va_arg __builtin_va_arg\n"
+               "#define va_end __builtin_va_end\n"
+               "typedef __builtin_va_list va_list;\n"
+               "int vsum(int n, va_list ap){\n"
+               "    int sum = 0;\n"
+               "    for(int i = 0; i < n; i++){\n"
+               "        sum += va_arg(ap, int);\n"
+               "    }\n"
+               "    return sum;\n"
+               "}\n"
+               "int sum(int n, ...){\n"
+               "    va_list ap;\n"
+               "    va_start(ap, n);\n"
+               "    int result = vsum(n, ap);\n"
+               "    va_end(ap);\n"
+               "    return result;\n"
+               "}\n"
+               "return sum(3, 4, 5, 6);\n"
+               ),
+            .exit_code = 15,
+            .target = &cc_target_aarch64_linux,
+        },
+        {
+            "windows sizeof long", __LINE__,
+            SVI("return sizeof(long);\n"),
+            .exit_code = 4,
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "linux sizeof long", __LINE__,
+            SVI("return sizeof(long);\n"),
+            .exit_code = 8,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "windows struct layout with long", __LINE__,
+            SVI("typedef struct { char c; long x; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // 1 + 3 pad + 4
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "linux struct layout with long", __LINE__,
+            SVI("typedef struct { char c; long x; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 16, // 1 + 7 pad + 8
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "aarch64 linux char unsigned", __LINE__,
+            SVI("char c = 255;\n"
+               "return c > 0;\n"),
+            .exit_code = 1,
+            .target = &cc_target_aarch64_linux,
+        },
+        {
+            "x86_64 linux char signed", __LINE__,
+            SVI("char c = 255;\n"
+               "return c < 0;\n"),
+            .exit_code = 1,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "windows long overflow", __LINE__,
+            SVI("unsigned long x = 0xFFFFFFFF;\n"
+               "return (x + 1) == 0;\n"),
+            .exit_code = 1, // 32-bit wraps
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "linux long no overflow", __LINE__,
+            SVI("unsigned long x = 0xFFFFFFFF;\n"
+               "return (x + 1) == 0x100000000;\n"),
+            .exit_code = 1, // 64-bit doesn't wrap
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "aarch64 macos sizeof long double", __LINE__,
+            SVI("return sizeof(long double);\n"),
+            .exit_code = 8,
+            .target = &cc_target_aarch64_macos,
+        },
+        {
+            "x86_64 linux sizeof long double", __LINE__,
+            SVI("return sizeof(long double);\n"),
+            .exit_code = 16,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "x87: arithmetic and conversions", __LINE__,
+            SVI("long double a = (long double)9007199254740993ull;\n"
+                "long double b = (long double)9007199254740992ull;\n"
+                "long double c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "binary128 long double: arithmetic and conversions", __LINE__,
+            SVI("long double a = (long double)9007199254740993ull;\n"
+                "long double b = (long double)9007199254740992ull;\n"
+                "long double c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "float128: arithmetic and conversions", __LINE__,
+            SVI("_Float128 a = (_Float128)9007199254740993ull;\n"
+                "_Float128 b = (_Float128)9007199254740992ull;\n"
+                "_Float128 c = a - b;\n"
+                "c *= 6;\n"
+                "c /= 2;\n"
+                "c++;\n"
+                "--c;\n"
+                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "extended literal sign and casts", __LINE__,
+            SVI("long double a = -2.5L;\n"
+                "long double z = -0.0L;\n"
+                "return a < 0 && (double)a == -2.5 && !z;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "extended literal sign and casts", __LINE__,
+            SVI("long double a = -2.5L;\n"
+                "long double z = -0.0L;\n"
+                "return a < 0 && (double)a == -2.5 && !z;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "long double: special values", __LINE__,
+            SVI("long double z = (long double)0;\n"
+                "long double n = z/z;\n"
+                "long double inf = (long double)1/z;\n"
+                "long double nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "long double: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "long double: memory increments and float conversions", __LINE__,
+            SVI("long double a[1] = {(long double)1.5f};\n"
+                "long double *p = a;\n"
+                "long double old = (*p)++;\n"
+                "--*p;\n"
+                "*p += (long double)2.25;\n"
+                "*p -= (long double)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "long double: special values", __LINE__,
+            SVI("long double z = (long double)0;\n"
+                "long double n = z/z;\n"
+                "long double inf = (long double)1/z;\n"
+                "long double nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "long double: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "long double: memory increments and float conversions", __LINE__,
+            SVI("long double a[1] = {(long double)1.5f};\n"
+                "long double *p = a;\n"
+                "long double old = (*p)++;\n"
+                "--*p; *p += (long double)2.25;\n"
+                "*p -= (long double)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_linux,
+        },
+        {
+            "_Float128: special values", __LINE__,
+            SVI("_Float128 z = (_Float128)0;\n"
+                "_Float128 n = z/z;\n"
+                "_Float128 inf = (_Float128)1/z;\n"
+                "_Float128 nz = -z;\n"
+                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "_Float128: wide integer roundtrip", __LINE__,
+            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
+                "__int128 i = -(__int128)u;\n"
+                "_Float128 a = (_Float128)u;\n"
+                "_Float128 b = (_Float128)i;\n"
+                "return (unsigned __int128)a == u && (__int128)b == i && (int)(_Float128)-3.75 == -3;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "_Float128: memory increments and float conversions", __LINE__,
+            SVI("_Float128 a[1] = {(_Float128)1.5f};\n"
+                "_Float128 *p = a;\n"
+                "_Float128 old = (*p)++;\n"
+                "--*p; *p += (_Float128)2.25;\n"
+                "*p -= (_Float128)1;\n"
+                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "binary128 precision and x87 conversion", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 112) + 1;\n"
+                " _Float128 q = (_Float128)u;\n"
+                " _Float128 one = q - (_Float128)(u - 1);\n"
+                " long double e = (long double)one;\n"
+                " return (unsigned __int128)q == u && e == 1 && (_Float128)e == one;\n"
+            ),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "long double: rounding ties and subnormal truth", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 64) + 1;\n"
+                "long double a = (long double)u;\n"
+                "long double b = (long double)(u + 2);\n"
+                "union U { long double f;\n"
+                "   unsigned long long bits[2];\n"
+                "} tiny = {.bits = {1, 0}};\n"
+                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
+            ),
+            .exit_code = 1, .target = &cc_target_x86_64_linux,
+        },
+        {
+            "_Float128: rounding ties and subnormal truth", __LINE__,
+            SVI("unsigned __int128 u = ((unsigned __int128)1 << 113) + 1;\n"
+                "_Float128 a = (_Float128)u;\n"
+                "_Float128 b = (_Float128)(u + 2);\n"
+                "union U { _Float128 f;\n"
+                "   unsigned long long bits[2];\n"
+                "} tiny = {.bits = {1, 0}};\n"
+                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
+            ),
+            .exit_code = 1, .target = &cc_target_aarch64_macos,
+        },
+        {
+            "windows sizeof size_t", __LINE__,
+            SVI("return sizeof(__SIZE_TYPE__);\n"),
+            .exit_code = 8, // unsigned long long is 8
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        // MSVC bitfield: different types don't share storage units
+        {
+            "msvc bitfield layout", __LINE__,
+            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // short unit (2) + pad(2) + int unit (4)
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "sysv bitfield layout", __LINE__,
+            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // both fit in one 4-byte unit
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "enum", __LINE__,
+            SVI("enum Foo { X } ; typedef struct { enum Foo f : 8; unsigned int b: 8; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // enum then both fit in one 4-byte unit
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "msvc bitfield typed enum packs with underlying", __LINE__,
+            SVI("enum A : unsigned int { A_VAL = 1 };\n"
+               "enum B : unsigned int { B_VAL = 2 };\n"
+               "typedef struct { enum A a: 4; unsigned int b: 1; enum B c: 1; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 4, // all have uint32_t underlying, pack together
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "msvc bitfield diff size enum starts new unit", __LINE__,
+            SVI("enum A : unsigned short { A_VAL = 1 };\n"
+               "typedef struct { enum A a: 4; unsigned int b: 1; } S;\n"
+               "return sizeof(S);\n"),
+            .exit_code = 8, // short(2) + pad(2) + int(4)
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "alignof", __LINE__,
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "alignof", __LINE__,
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = &cc_target_aarch64_linux,
+        },
+        {
+            "alignof", __LINE__,
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 16,
+            .target = &cc_target_x86_64_macos,
+        },
+        {
+            "alignof", __LINE__,
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 8,
+            .target = &cc_target_aarch64_macos,
+        },
+        {
+            "alignof", __LINE__,
+            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
+            .exit_code = 8,
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        // abi smoke tests... don't have a direct way to test them in the cross interpreter
+        {
+            "sysv", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "win64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = &cc_target_x86_64_windows_msvc,
+        },
+        {
+            "mac arm64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = &cc_target_aarch64_macos,
+        },
+        {
+            "linux arm64", __LINE__,
+            SVI("struct S1 {int x;};\n"
+                "struct S2 {int x; float y;};\n"
+                "struct S3 {int x, y;};\n"
+                "struct S4 {int x, y, z;};\n"
+                "struct S5 {double x, y;};\n"
+                "struct S6 {double x; int y, z;};\n"
+                "struct S7 {double x[3]; int y[4], z;};\n"
+                "struct S8 {float x[2]; double d;};\n"
+                "struct S9 {float x[2]; float f[2];};\n"
+                "return 12;\n"
+            ),
+            .exit_code = 12,
+            .target = &cc_target_aarch64_linux,
+        },
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+        size_t opt_idx = i % countof(optimization_options);
+        size_t test_idx = i / countof(optimization_options);
+        const struct opt* o = &optimization_options[opt_idx];
+        const struct tc* tc = &testcases[test_idx];
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -15008,6 +16117,7 @@ TestFunction(test_interpreter){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .opt_noinline = o->noinline,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -15016,7 +16126,7 @@ TestFunction(test_interpreter){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_targets[CC_TARGET_TEST],
+                    .target = tc->target ? (const CcTargetConfig*_Nonnull)tc->target : cc_targets[CC_TARGET_TEST],
                 },
                 .current = &interp.parser.global,
             },
@@ -15031,8 +16141,22 @@ TestFunction(test_interpreter){
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
+        if(tc->embed_files){
+            fc_write_path(fc, __FILE__ "/../embed.bin", sizeof __FILE__ "/../embed.bin"-1);
+            err = fc_cache_file(fc, SV("\1\2\3\4\xff\0\7\10"));
+            if(err){TestReport("setup failure"); goto finally;}
+            char bytes[4096];
+            for(size_t j = 0; j < sizeof bytes; j++) bytes[j] = (char)j;
+            fc_write_path(fc, __FILE__ "/../large.bin", sizeof __FILE__ "/../large.bin"-1);
+            err = fc_cache_file(fc, (StringView){sizeof bytes, bytes});
+            if(err){TestReport("setup failure"); goto finally;}
+        }
         err = cpp_define_builtin_macros(&interp.parser.cpp);
         if(err){TestReport("setup failure"); goto finally;}
+        if(tc->builtin_headers){
+            err = cpp_setup_builtin_headers(&interp.parser.cpp);
+            if(err){TestReport("setup failure"); goto finally;}
+        }
         err = cc_define_builtin_types(&interp.parser);
         if(err){TestReport("setup failure"); goto finally;}
         err = cc_register_pragmas(&interp.parser);
@@ -15061,204 +16185,6 @@ TestFunction(test_interpreter){
                 TestPrintf("%s:%d: expected no top-level instructions, got %zu\n", __FILE__, tc->line, interp.toplevel_ops.count);
             }
         }
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
-        TEST_stats.executed++;
-        if(interp.exit_code != tc->exit_code){
-            TEST_stats.failures++;
-            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
-        }
-        else
-            ok = 1;
-
-        finally:
-        if(log_sb.cursor && !log_sb.errored && !ok){
-            StringView sv = msb_borrow_sv(&log_sb);
-            TestPrintf("%.*s\n", sv_p(sv));
-        }
-        if(err) TEST_stats.failures++;
-        ci_tls_cleanup(&interp);
-        ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
-        ArenaAllocator_free_all(&arena);
-        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
-        ArenaAllocator_free_all(&interp.parser.scratch_arena);
-    }
-    TESTEND();
-}
-
-TestFunction(test_embed){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    static struct tc {
-        const char* name; int line;
-        StringView program;
-        int exit_code;
-    } testcases[] = {
-        {
-            "embed: GNU offset and base64 blob lifetime", __LINE__,
-            SVI("constexpr unsigned char a[]={\n#embed \".\" gnu::base64(\"AQIDBP8ABwg=\")\n};"
-                "static_assert(sizeof(a)==8 && a[4]==255 && a[5]==0 && a[7]==8);"
-                "unsigned char b[2][3]={_Embed(\"\\\".\\\" gnu::base64(\\\"AQID/wAI\\\")\")};"
-                "unsigned char c[]={\n#embed \"embed.bin\" limit(3) gnu::offset(4)\n};"
-                "return b[1][0]==255 && b[1][1]==0 && b[1][2]==8 && sizeof(c)==3 && c[0]==255 && c[1]==0 && c[2]==7;"),
-            .exit_code=1,
-        },
-        {
-            "embed: directives, inline spelling and boundary operators", __LINE__,
-            SVI("unsigned char a[]={\n#embed \"embed.bin\"\n};"
-                "int b[]={10 * _Embed(\"\\\"embed.bin\\\" limit(3)\") + 20};"
-                "int f(int a,int b,int c){return a+b+c;}"
-                "return sizeof(a)==8 && a[0]==1 && a[4]==255 && a[7]==8 && "
-                "b[0]==10 && b[1]==2 && b[2]==23 && f(_Embed(\"\\\"embed.bin\\\" limit(3)\"))==6;"),
-            .exit_code=1,
-        },
-        {
-            "embed: blob overrides, constexpr reads, nested arrays and conversions", __LINE__,
-            SVI("constexpr unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[3]=99};"
-                "static_assert(sizeof(a)==8 && a[2]==3 && a[3]==99 && a[4]==255);"
-                "unsigned char b[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "double d[]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "bool bits[]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "return b[1][0]==255 && b[1][1]==0 && d[4]==255.0 && !bits[5] && bits[4];"),
-            .exit_code=1,
-        },
-        {
-            "embed: parameters, empty expansion and comma expression", __LINE__,
-            SVI("#define FILE \"embed.bin\"\n#define N 3\n"
-                "int a[]={_Embed(\"FILE __limit__(N) prefix(9,) suffix(,10)\")};"
-                "int b[]={_Embed(\"FILE limit(0) prefix(bad) suffix(bad) if_empty(42)\")};"
-                "int c=(_Embed(\"FILE\"));"
-                "return sizeof(a)/sizeof(*a)==5 && a[0]==9 && a[4]==10 && b[0]==42 && c==8;"),
-            .exit_code=1,
-        },
-        {
-            "embed: local copies, static storage and signed bytes", __LINE__,
-            SVI("int f(int x){unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[2]=x};"
-                "static unsigned char s[]={_Embed(\"\\\"embed.bin\\\"\"),[4]=42};"
-                "signed char c[]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "return a[1]==2 && a[2]==x && a[4]==255 && s[4]==42 && s[6]==7 && c[4]==-1;}"
-                "return f(33) && f(44);"), .exit_code=1,
-        },
-        {
-            "embed: aggregate copies and nested constexpr access", __LINE__,
-            SVI("struct S{unsigned char a[8];int x;};"
-                "constexpr struct S s={{_Embed(\"\\\"embed.bin\\\"\")},42};"
-                "static_assert(s.a[4]==255 && s.a[5]==0);"
-                "constexpr unsigned char m[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "static_assert(m[1][0]==255 && m[0][2]==3);"
-                "struct S t=s; const unsigned char row[4]=m[1];"
-                "return t.a[4]==255 && t.x==42 && row[0]==255 && row[3]==8;"), .exit_code=1,
-        },
-        {
-            "embed: brace elision across mixed struct members", __LINE__,
-            SVI("struct S{int lead;unsigned char a[2];int middle;"
-                "struct {unsigned char b[2];bool zero;} inner;short tail[2];int end;};"
-                "constexpr struct S s={99,\n#embed \"embed.bin\"\n,42};"
-                "static_assert(s.lead==99 && s.a[0]==1 && s.a[1]==2 && s.middle==3);"
-                "static_assert(s.inner.b[0]==4 && s.inner.b[1]==255 && !s.inner.zero);"
-                "static_assert(s.tail[0]==7 && s.tail[1]==8 && s.end==42);"
-                "int f(int n){struct S t={n,_Embed(\"\\\"embed.bin\\\"\"),42};"
-                "return t.lead==n && t.a[0]==1 && t.a[1]==2 && t.middle==3 && "
-                "t.inner.b[0]==4 && t.inner.b[1]==255 && !t.inner.zero && "
-                "t.tail[0]==7 && t.tail[1]==8 && t.end==42;}"
-                "return f(17) && f(23);"), .exit_code=1,
-        },
-        {
-            "embed: brace elision across an array of structs", __LINE__,
-            SVI("struct S{unsigned char bytes[3];int last;};"
-                "constexpr struct S a[2]={\n#embed \"embed.bin\"\n};"
-                "static_assert(a[0].bytes[0]==1 && a[0].bytes[1]==2 && a[0].bytes[2]==3 && a[0].last==4);"
-                "static_assert(a[1].bytes[0]==255 && a[1].bytes[1]==0 && a[1].bytes[2]==7 && a[1].last==8);"
-                "static struct S b[2]={_Embed(\"\\\"embed.bin\\\"\")};"
-                "return b[0].bytes[0]==1 && b[0].bytes[1]==2 && b[0].bytes[2]==3 && b[0].last==4 && "
-                "b[1].bytes[0]==255 && b[1].bytes[1]==0 && b[1].bytes[2]==7 && b[1].last==8;"), .exit_code=1,
-        },
-        {
-            "embed: large resource stays compact", __LINE__,
-            SVI("constexpr unsigned char a[]={_Embed(\"\\\"large.bin\\\"\")};"
-                "static_assert(sizeof(a)==4096 && a[1023]==255 && a[2048]==0);"
-                "return a[4095]==255 && a[4094]==254;"),
-            .exit_code=1,
-        },
-    };
-    int err;
-    static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
-        _Bool ok = 0;
-        err = 0;
-        TEST_stats.executed++;
-        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
-        if(!fc){
-            TestReport("setup failure");
-            ArenaAllocator_free_all(&arena);
-            return TEST_stats;
-        }
-        MStringBuilder log_sb = {.allocator=al};
-        MsbLogger logger_ = {0};
-        Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
-        Environment env = {.allocator = al, .at=&at};
-        CiInterpreter interp = {
-            .poison_frame_slots = 1,
-            .exit_code = -1,
-            .parser = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_targets[CC_TARGET_TEST],
-                },
-                .current = &interp.parser.global,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
-        };
-        LOCK_T_init(&interp.error_lock);
-        LOCK_T_init(&interp.atom_lock);
-        LOCK_T_init(&interp.resolve_lock);
-        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
-        err = fc_cache_file(fc, tc->program);
-        if(err){TestReport("setup failure"); goto finally;}
-        fc_write_path(fc, __FILE__ "/../embed.bin", sizeof __FILE__ "/../embed.bin"-1);
-        err = fc_cache_file(fc, SV("\1\2\3\4\xff\0\7\10"));
-        if(err){TestReport("setup failure"); goto finally;}
-        char bytes[4096];
-        for(size_t j = 0; j < sizeof bytes; j++) bytes[j] = (char)j;
-        fc_write_path(fc, __FILE__ "/../large.bin", sizeof __FILE__ "/../large.bin"-1);
-        err = fc_cache_file(fc, (StringView){sizeof bytes, bytes});
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cpp_define_builtin_macros(&interp.parser.cpp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_define_builtin_types(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_register_pragmas(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_pragmas(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_macros(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-
-        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
-        if(err) {TestReport("failed to include"); goto finally;}
-        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
-
-        err = cc_parse_all(&interp.parser);
-        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp);
-        if(err){TestPrintf("%s:%d: failed to link: %s\n", __FILE__, tc->line, _cc_error_names[err]); goto finally;}
-
-        CiInterpFrame* frame = &interp.top_frame;
-        err = ci_prepare_toplevel(&interp);
-        if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
@@ -16416,1182 +17342,6 @@ TestFunction(test_interpreter_runtime_errors){
     TESTEND();
 }
 
-TestFunction(test_interpreter_builtin_headers){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    struct tc {
-        const char* name; int line;
-        StringView program;
-        int exit_code;
-    } testcases[] = {
-        {
-            "stdatomic: typedefs use atomic-qualified types", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int x = ATOMIC_VAR_INIT(1);\n"
-               "atomic_init(&x, 2);\n"
-               "int old = atomic_fetch_add(&x, 5);\n"
-               "return old * 10 + atomic_load(&x);\n"),
-            .exit_code = 27,
-        },
-        {
-            "defer: header and feature macros", __LINE__,
-            SVI("#include <stddefer.h>\n"
-                "static_assert(__STDC_DEFER_TS25755__==2);"
-                "static_assert(__STDC_VERSION_STDDEFER_H__==202602L);"
-                "int n=0; {defer n++;} return n;"),
-            .exit_code=1,
-        },
-        {
-            "stdatomic: bitwise fetch operations return old value", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_uint x = 0xF0u;\n"
-               "unsigned a = atomic_fetch_or(&x, 0x0Fu);\n"
-               "unsigned b = atomic_fetch_and_explicit(&x, 0x33u, memory_order_seq_cst);\n"
-               "unsigned c = atomic_fetch_xor(&x, 0x30u);\n"
-               "return (a == 0xF0u) && (b == 0xFFu) && (c == 0x33u) && (x == 0x03u);\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: parenthesized _Atomic remains keyword after include", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "_Atomic(int) x = 4;\n"
-               "atomic_store(&x, 9);\n"
-               "return atomic_load(&x);\n"),
-            .exit_code = 9,
-        },
-        {
-            "stdatomic: exchange and compare-exchange", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int x = 10;\n"
-               "int old = atomic_exchange(&x, 20);\n"
-               "int expected = 20;\n"
-               "bool ok1 = atomic_compare_exchange_strong(&x, &expected, 30);\n"
-               "expected = 99;\n"
-               "bool ok2 = atomic_compare_exchange_weak_explicit(&x, &expected, 40, memory_order_seq_cst, memory_order_relaxed);\n"
-               "return old == 10 && ok1 && !ok2 && expected == 30 && x == 30;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: flag test and clear", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_flag f = ATOMIC_FLAG_INIT;\n"
-               "bool a = atomic_flag_test_and_set(&f);\n"
-               "bool b = atomic_flag_test_and_set_explicit(&f, memory_order_seq_cst);\n"
-               "atomic_flag_clear(&f);\n"
-               "bool c = atomic_flag_test_and_set(&f);\n"
-               "return !a && b && !c;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: scalar typedef load store", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_bool b = false;\n"
-               "atomic_char c = 1;\n"
-               "atomic_long l = 2;\n"
-               "atomic_llong ll = 3;\n"
-               "atomic_store(&b, true);\n"
-               "atomic_store_explicit(&c, 4, memory_order_release);\n"
-               "atomic_store(&l, 5);\n"
-               "atomic_store(&ll, 6);\n"
-               "return atomic_load_explicit(&b, memory_order_acquire)\n"
-               "    && atomic_load(&c) == 4\n"
-               "    && atomic_load(&l) == 5\n"
-               "    && atomic_load(&ll) == 6;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: atomic_init aggregate initializer", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "struct S { int x, y; };\n"
-               "_Atomic(struct S) s;\n"
-               "atomic_init(&s, {3, 4});\n"
-               "struct S t = s;\n"
-               "return t.x * 10 + t.y;\n"),
-            .exit_code = 34,
-        },
-        {
-            "stdatomic: volatile atomic object API", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "volatile atomic_int x = 0;\n"
-               "atomic_store(&x, 3);\n"
-               "int a = atomic_load(&x);\n"
-               "atomic_store_explicit(&x, 4, memory_order_release);\n"
-               "int b = atomic_load_explicit(&x, memory_order_acquire);\n"
-               "return a * 10 + b;\n"),
-            .exit_code = 34,
-        },
-        {
-            "stdatomic: remaining integer typedefs", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_schar sc = -1;\n"
-               "atomic_uchar uc = 2;\n"
-               "atomic_short sh = 3;\n"
-               "atomic_ushort ush = 4;\n"
-               "atomic_ulong ul = 5;\n"
-               "atomic_ullong ull = 6;\n"
-               "atomic_store(&sc, -7);\n"
-               "atomic_store(&uc, 8);\n"
-               "atomic_store(&sh, -9);\n"
-               "atomic_store(&ush, 10);\n"
-               "atomic_store(&ul, 11);\n"
-               "atomic_store(&ull, 12);\n"
-               "return atomic_load(&sc) == -7\n"
-               "    && atomic_load(&uc) == 8\n"
-               "    && atomic_load(&sh) == -9\n"
-               "    && atomic_load(&ush) == 10\n"
-               "    && atomic_load(&ul) == 11\n"
-               "    && atomic_load(&ull) == 12;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: atomic_is_lock_free", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int x = 0;\n"
-               "atomic_llong y = 0;\n"
-               "return atomic_is_lock_free(&x) && atomic_is_lock_free(&y);\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: fetch macro evaluates object argument once", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int arr[2] = {10, 20};\n"
-               "int idx = 0;\n"
-               "int calls = 0;\n"
-               "atomic_int *next(void){ calls++; return &arr[idx++]; }\n"
-               "int old = atomic_fetch_add(next(), 5);\n"
-               "return calls == 1 && idx == 1 && old == 10 && arr[0] == 15 && arr[1] == 20;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: compare exchange macro evaluates desired once", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int x = 1;\n"
-               "int expected = 1;\n"
-               "int calls = 0;\n"
-               "int desired(void){ calls++; return 2; }\n"
-               "bool ok = atomic_compare_exchange_strong(&x, &expected, desired());\n"
-               "return ok && calls == 1 && expected == 1 && x == 2;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: pointer fetch add and sub", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "int arr[5] = {1, 2, 3, 4, 5};\n"
-               "_Atomic(int*) p = arr;\n"
-               "int *old_add = atomic_fetch_add(&p, 2);\n"
-               "int *old_sub = atomic_fetch_sub_explicit(&p, 1, memory_order_seq_cst);\n"
-               "return old_add == arr && old_sub == arr + 2 && p == arr + 1 && *p == 2;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: least fast and max typedefs", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int_least8_t a = 1;\n"
-               "atomic_uint_least16_t b = 2;\n"
-               "atomic_int_least32_t c = 3;\n"
-               "atomic_uint_least64_t d = 4;\n"
-               "atomic_int_fast8_t e = 5;\n"
-               "atomic_uint_fast16_t f = 6;\n"
-               "atomic_int_fast32_t g = 7;\n"
-               "atomic_uint_fast64_t h = 8;\n"
-               "atomic_intmax_t i = 9;\n"
-               "atomic_uintmax_t j = 10;\n"
-               "atomic_store(&a, -11);\n"
-               "atomic_store(&b, 12);\n"
-               "atomic_store(&c, -13);\n"
-               "atomic_store(&d, 14);\n"
-               "atomic_store(&e, -15);\n"
-               "atomic_store(&f, 16);\n"
-               "atomic_store(&g, -17);\n"
-               "atomic_store(&h, 18);\n"
-               "atomic_store(&i, -19);\n"
-               "atomic_store(&j, 20);\n"
-               "return atomic_load(&a) == -11\n"
-               "    && atomic_load(&b) == 12\n"
-               "    && atomic_load(&c) == -13\n"
-               "    && atomic_load(&d) == 14\n"
-               "    && atomic_load(&e) == -15\n"
-               "    && atomic_load(&f) == 16\n"
-               "    && atomic_load(&g) == -17\n"
-               "    && atomic_load(&h) == 18\n"
-               "    && atomic_load(&i) == -19\n"
-               "    && atomic_load(&j) == 20;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: pointer sized typedefs", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_intptr_t ip = 1;\n"
-               "atomic_uintptr_t up = 2;\n"
-               "atomic_size_t sz = 3;\n"
-               "atomic_ptrdiff_t pd = -4;\n"
-               "atomic_store(&ip, -5);\n"
-               "atomic_store(&up, 6);\n"
-               "atomic_store(&sz, 7);\n"
-               "atomic_store(&pd, -8);\n"
-               "return atomic_load(&ip) == -5\n"
-               "    && atomic_load(&up) == 6\n"
-               "    && atomic_load(&sz) == 7\n"
-               "    && atomic_load(&pd) == -8;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: character typedefs", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_char16_t c16 = 1;\n"
-               "atomic_char32_t c32 = 2;\n"
-               "atomic_wchar_t wc = 3;\n"
-               "atomic_store(&c16, 4);\n"
-               "atomic_store(&c32, 5);\n"
-               "atomic_store(&wc, 6);\n"
-               "return atomic_load(&c16) == 4 && atomic_load(&c32) == 5 && atomic_load(&wc) == 6;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: kill dependency evaluates once", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "int calls = 0;\n"
-               "int next(void){ calls++; return 7; }\n"
-               "int x = kill_dependency(next());\n"
-               "return calls * 10 + x;\n"),
-            .exit_code = 17,
-        },
-        {
-            "stdatomic: fence macros accept memory orders", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_thread_fence(memory_order_seq_cst);\n"
-               "atomic_thread_fence(memory_order_acquire);\n"
-               "atomic_signal_fence(memory_order_release);\n"
-               "atomic_signal_fence(memory_order_relaxed);\n"
-               "return 1;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: aggregate exchange", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "struct S { int x, y; };\n"
-               "_Atomic(struct S) a = {1, 2};\n"
-               "struct S desired = {3, 4};\n"
-               "struct S old = atomic_exchange(&a, desired);\n"
-               "struct S now = atomic_load(&a);\n"
-               "return old.x == 1 && old.y == 2 && now.x == 3 && now.y == 4;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: aggregate compare exchange", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "struct S { int x, y; };\n"
-               "_Atomic(struct S) a = {1, 2};\n"
-               "struct S expected = {1, 2};\n"
-               "struct S desired = {3, 4};\n"
-               "bool ok1 = atomic_compare_exchange_strong(&a, &expected, desired);\n"
-               "expected = (struct S){9, 9};\n"
-               "desired = (struct S){5, 6};\n"
-               "bool ok2 = atomic_compare_exchange_weak(&a, &expected, desired);\n"
-               "struct S now = atomic_load(&a);\n"
-               "return ok1 && !ok2 && expected.x == 3 && expected.y == 4 && now.x == 3 && now.y == 4;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: aggregate load and store explicit", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "struct S { int x, y; };\n"
-               "_Atomic(struct S) a = {1, 2};\n"
-               "struct S b = {7, 8};\n"
-               "atomic_store_explicit(&a, b, memory_order_release);\n"
-               "struct S c = atomic_load_explicit(&a, memory_order_acquire);\n"
-               "return c.x * 10 + c.y;\n"),
-            .exit_code = 78,
-        },
-        {
-            "stdatomic: scalar atomic_init evaluates arguments once", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "atomic_int a[2] = {1, 2};\n"
-               "int idx = 0;\n"
-               "int calls = 0;\n"
-               "atomic_int *next_obj(void){ calls++; return &a[idx++]; }\n"
-               "int next_val(void){ calls++; return 9; }\n"
-               "atomic_init(next_obj(), next_val());\n"
-               "return calls == 2 && idx == 1 && a[0] == 9 && a[1] == 2;\n"),
-            .exit_code = 1,
-        },
-        {
-            "stdatomic: atomic flag is atomic-qualified", __LINE__,
-            SVI("#include <stdatomic.h>\n"
-               "return _Generic(atomic_flag, _Atomic bool: 1, bool: 2, default: 3);\n"),
-            .exit_code = 1,
-        },
-    };
-    int err;
-    static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
-        err = 0;
-        TEST_stats.executed++;
-        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
-        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
-        MStringBuilder log_sb = {.allocator=al};
-        MsbLogger logger_ = {0};
-        Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
-        Environment env = {.allocator = al, .at=&at};
-        CiInterpreter interp = {
-            .poison_frame_slots = 1,
-            .exit_code = -1,
-            .parser = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_targets[CC_TARGET_TEST],
-                },
-                .current = &interp.parser.global,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
-        };
-        LOCK_T_init(&interp.error_lock);
-        LOCK_T_init(&interp.atom_lock);
-        LOCK_T_init(&interp.resolve_lock);
-        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
-        err = fc_cache_file(fc, tc->program);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cpp_define_builtin_macros(&interp.parser.cpp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cpp_setup_builtin_headers(&interp.parser.cpp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_define_builtin_types(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_register_pragmas(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_pragmas(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_macros(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-
-        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
-        if(err) {TestReport("failed to include"); goto finally;}
-        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
-
-        err = cc_parse_all(&interp.parser);
-        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
-        err = ci_resolve_refs(&interp);
-        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
-
-        CiInterpFrame* frame = &interp.top_frame;
-        err = ci_prepare_toplevel(&interp);
-        if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
-        TEST_stats.executed++;
-        if(interp.exit_code != tc->exit_code){
-            TEST_stats.failures++;
-            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
-        }
-
-        finally:
-        if(log_sb.cursor && !log_sb.errored){
-            StringView sv = msb_borrow_sv(&log_sb);
-            TestPrintf("%.*s\n", sv_p(sv));
-        }
-        if(err) TEST_stats.failures++;
-        ci_tls_cleanup(&interp);
-        ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
-        ArenaAllocator_free_all(&arena);
-        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
-        ArenaAllocator_free_all(&interp.parser.scratch_arena);
-    }
-    TESTEND();
-}
-TestFunction(test_cross_target){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    static struct tc {
-        const char* name; int line;
-        StringView program;
-        int exit_code;
-        _Bool skip;
-        CcTarget target;
-    } testcases[] = {
-        {
-            "review: static binary128 bool conversion", __LINE__,
-            SVI("static _Bool value=0.5L; return value;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "review: static x87 bool conversion", __LINE__,
-            SVI("static _Bool value=0.5L; return value;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "static float128: precision, arithmetic, and conversions on x87 target", __LINE__,
-            SVI("constexpr _Float128 q=(_Float128)(((unsigned __int128)1<<100)+1);\n"
-                "static unsigned __int128 n=(unsigned __int128)(q+(_Float128)1);\n"
-                "static float f=(float)(_Float128)1.25;\n"
-                "static double d=(double)(_Float128)2.5;\n"
-                "static long double l=(long double)(_Float128)3.5;\n"
-                "return n==(((unsigned __int128)1<<100)+2) && f==1.25f && d==2.5 && l==3.5L;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "static long double retains binary128 integer precision", __LINE__,
-            SVI("static long double value=(long double)(((unsigned __int128)1<<100)+1);\n"
-                "return value-(long double)((unsigned __int128)1<<100)==1.L;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "static binary128 converts precisely to wide integer", __LINE__,
-            SVI("static unsigned __int128 value=(unsigned __int128)0x1.0000000000000000000000001p100L;\n"
-                "return value==(((unsigned __int128)1<<100)+1);\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "static binary128 rounds directly to float", __LINE__,
-            SVI("static float value=(float)0x1.0000010000000000000000001p0L;\n"
-                "return value>1.f;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "long double literal precision and range X86_64_LINUX", __LINE__,
-            SVI("constexpr long double x=0x1.000000000000001p60L;\n"
-                "_Static_assert(x-0x1p60L==1.L);\n"
-                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
-                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
-                "volatile long double y=0x1.000000000000001p60L;\n"
-                "return y-0x1p60L==1.L;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "long double literal precision and range AARCH64_LINUX", __LINE__,
-            SVI("constexpr long double x=0x1.0000000000000000000000001p100L;\n"
-                "_Static_assert(x-0x1p100L==1.L);\n"
-                "_Static_assert(0x1p4000L/0x1p3999L==2.L);\n"
-                "_Static_assert(0x1p-4000L && -0x1p-4000L<0.L);\n"
-                "volatile long double y=0x1.0000000000000000000000001p100L;\n"
-                "return y-0x1p100L==1.L;"),
-            .exit_code=1, .target=CC_TARGET_AARCH64_LINUX,
-        },
-        {"wide long double x87 runtime", __LINE__,
-            SVI("long double x=0x1p60L+1.L;\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"wide long double x87 constexpr", __LINE__,
-            SVI("constexpr long double x=0x1p60L+1.L;\n"
-                "_Static_assert(x-0x1p60L==1.L);\n"
-                "_Static_assert(!(-0.L));\n"
-                "_Static_assert(x && (1.L ? 1 : 0));\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"wide long double binary128 runtime", __LINE__,
-            SVI("long double x=0x1p100L+1.L;\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p100L==1.L;"), .exit_code=1, .target=CC_TARGET_AARCH64_LINUX},
-        {"wide long double binary128 constexpr", __LINE__,
-            SVI("constexpr long double x=0x1p100L+1.L;\n"
-                "_Static_assert(x-0x1p100L==1.L);\n"
-                "_Static_assert(!(-0.L));\n"
-                "_Static_assert(x && (1.L ? 1 : 0));\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p100L==1.L;"), .exit_code=1, .target=CC_TARGET_AARCH64_LINUX},
-        {"mingw target types and long double precision", __LINE__,
-            SVI("_Static_assert(sizeof(long)==4 && sizeof(void*)==8);\n"
-                "_Static_assert(sizeof(long double)==16 && alignof(long double)==16);\n"
-                "_Static_assert(sizeof(__INT_FAST16_TYPE__)==2);\n"
-                "_Static_assert(__INT_FAST16_MAX__==32767 && __INT_FAST16_WIDTH__==16);\n"
-                "_Static_assert(__MINGW32__ && __MINGW64__);\n"
-                "constexpr long double x=0x1p60L+1.L;\n"
-                "_Static_assert(x-0x1p60L==1.L);\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p60L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MINGW},
-        {"mingw va_list copy", __LINE__,
-            SVI("int f(int n,...){\n"
-                "__builtin_va_list ap, copy;\n"
-                "__builtin_va_start(ap,n); __builtin_va_copy(copy,ap);\n"
-                "int x=__builtin_va_arg(ap,int);\n"
-                "int y=__builtin_va_arg(copy,int);\n"
-                "double z=__builtin_va_arg(copy,double);\n"
-                "__builtin_va_end(ap); __builtin_va_end(copy);\n"
-                "return x+y+(int)z; }\n"
-                "return f(2,20,2.0);"), .exit_code=42, .target=CC_TARGET_X86_64_WINDOWS_MINGW},
-        {"wide long double binary64 runtime", __LINE__,
-            SVI("long double x=0x1p50L+1.L;\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MSVC},
-        {"wide long double binary64 constexpr", __LINE__,
-            SVI("constexpr long double x=0x1p50L+1.L;\n"
-                "_Static_assert(x-0x1p50L==1.L);\n"
-                "_Static_assert(!(-0.L));\n"
-                "_Static_assert(x && (1.L ? 1 : 0));\n"
-                "volatile long double y=x;\n"
-                "return y-0x1p50L==1.L;"), .exit_code=1, .target=CC_TARGET_X86_64_WINDOWS_MSVC},
-        {
-            "constexpr wide conversions", __LINE__,
-            SVI("constexpr long double a=42;\n"
-                "constexpr _Float128 b=a;\n"
-                "_Static_assert((float)b==42.f && (double)b==42.);\n"
-                "_Static_assert((long long)b==42 && (unsigned long long)b==42);\n"
-                "_Static_assert((__int128)-b==-42 && (bool)b && !(bool)-0.L);\n"
-                "_Static_assert((long double)b==42.L);\n"
-                "_Static_assert(((__int128)-1>>100)==-1);\n"
-                "_Static_assert(((unsigned __int128)-1+1)==0);\n"
-                "return 1;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX,
-        },
-        {"constexpr wide truth", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
-                "_Static_assert(x && !(!x));\n"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide add", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
-                "_Static_assert((x+3)-x==3);\n"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide mul", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
-                "_Static_assert((x*7)/7==x && (x*7)%7==0);\n"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide bits", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;\n"
-                "_Static_assert((~x & x)==0 && ((x|3)^x)==3);\n"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide neg", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
-                "constexpr __int128 n=-(__int128)x;\n"
-                "_Static_assert(n<0 && -n==x);\n"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide aggregate", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
-                "struct S {unsigned __int128 x;\n"
-                "   long double y;\n"
-                "};\n"
-                "constexpr struct S s={x,0x1.000000000000001p60L};\n"
-                "_Static_assert(s.x==x && s.y-0x1p60L==1.L);\n"
-                "volatile long double d=s.y;"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x && d-0x1p60L==1.L;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-        {"constexpr wide quad", __LINE__,
-            SVI("constexpr unsigned __int128 x=(unsigned __int128)1<<100;"
-                "constexpr _Float128 q=(_Float128)x+1;\n"
-                "_Static_assert(q-(_Float128)x==1);\n"
-                "_Static_assert((unsigned __int128)q==x+1);"
-                "volatile unsigned __int128 v=x;\n"
-                "return v==x;"),
-            .exit_code=1, .target=CC_TARGET_X86_64_LINUX},
-
-        {
-            "any: layout and target long width", __LINE__,
-            SVI("_Any a=(long)0x100000001ull;\n"
-                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
-                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "any: layout and target long width", __LINE__,
-            SVI("_Any a=(long)0x100000001ull;\n"
-                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
-                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "any: layout and target long width", __LINE__,
-            SVI("_Any a=(long)0x100000001ull;\n"
-                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
-                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_MACOS,
-        },
-        {
-            "any: layout and target long width", __LINE__,
-            SVI("_Any a=(long)0x100000001ull;\n"
-                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
-                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "any: layout and target long width", __LINE__,
-            SVI("_Any a=(long)0x100000001ull;\n"
-                "return sizeof(_Any)==16 && alignof(_Any)==8\n"
-                " && a.type==long && a.as(long)==(long)0x100000001ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "fold: windows long truncates", __LINE__,
-            SVI("return (long)0x100000001ULL == 1;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "fold: linux long preserves high bits", __LINE__,
-            SVI("return (long)0x100000001ULL == 0x100000001ULL;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-
-        {
-            "sysv va_list param", __LINE__,
-            SVI(
-               "#define va_start __builtin_va_start\n"
-               "#define va_arg __builtin_va_arg\n"
-               "#define va_end __builtin_va_end\n"
-               "#define va_copy __builtin_va_copy\n"
-               "typedef __builtin_va_list va_list;\n"
-               "int vsum(int n, va_list ap){\n"
-               "    int sum = 0;\n"
-               "    for(int i = 0; i < n; i++){\n"
-               "        sum += va_arg(ap, int);\n"
-               "    }\n"
-               "    return sum;\n"
-               "}\n"
-               "int sum(int n, ...){\n"
-               "    va_list ap;\n"
-               "    va_start(ap, n);\n"
-               "    int result = vsum(n, ap);\n"
-               "    va_end(ap);\n"
-               "    return result;\n"
-               "}\n"
-               "return sum(3, 4, 5, 6);\n"
-               ),
-            .exit_code = 15,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "sysv va_copy param", __LINE__,
-            SVI(
-               "#define va_start __builtin_va_start\n"
-               "#define va_arg __builtin_va_arg\n"
-               "#define va_end __builtin_va_end\n"
-               "#define va_copy __builtin_va_copy\n"
-               "typedef __builtin_va_list va_list;\n"
-               "int vsum(int n, va_list ap){\n"
-               "    va_list ap2;\n"
-               "    va_copy(ap2, ap);\n"
-               "    int sum = 0;\n"
-               "    for(int i = 0; i < n; i++){\n"
-               "        sum += va_arg(ap2, int);\n"
-               "    }\n"
-               "    va_end(ap2);\n"
-               "    return sum;\n"
-               "}\n"
-               "int sum(int n, ...){\n"
-               "    va_list ap;\n"
-               "    va_start(ap, n);\n"
-               "    int result = vsum(n, ap);\n"
-               "    va_end(ap);\n"
-               "    return result;\n"
-               "}\n"
-               "return sum(3, 4, 5, 6);\n"
-               ),
-            .exit_code = 15,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "aarch64 linux va_list param", __LINE__,
-            SVI(
-               "#define va_start __builtin_va_start\n"
-               "#define va_arg __builtin_va_arg\n"
-               "#define va_end __builtin_va_end\n"
-               "typedef __builtin_va_list va_list;\n"
-               "int vsum(int n, va_list ap){\n"
-               "    int sum = 0;\n"
-               "    for(int i = 0; i < n; i++){\n"
-               "        sum += va_arg(ap, int);\n"
-               "    }\n"
-               "    return sum;\n"
-               "}\n"
-               "int sum(int n, ...){\n"
-               "    va_list ap;\n"
-               "    va_start(ap, n);\n"
-               "    int result = vsum(n, ap);\n"
-               "    va_end(ap);\n"
-               "    return result;\n"
-               "}\n"
-               "return sum(3, 4, 5, 6);\n"
-               ),
-            .exit_code = 15,
-            .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "windows sizeof long", __LINE__,
-            SVI("return sizeof(long);\n"),
-            .exit_code = 4,
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "linux sizeof long", __LINE__,
-            SVI("return sizeof(long);\n"),
-            .exit_code = 8,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "windows struct layout with long", __LINE__,
-            SVI("typedef struct { char c; long x; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 8, // 1 + 3 pad + 4
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "linux struct layout with long", __LINE__,
-            SVI("typedef struct { char c; long x; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 16, // 1 + 7 pad + 8
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "aarch64 linux char unsigned", __LINE__,
-            SVI("char c = 255;\n"
-               "return c > 0;\n"),
-            .exit_code = 1,
-            .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "x86_64 linux char signed", __LINE__,
-            SVI("char c = 255;\n"
-               "return c < 0;\n"),
-            .exit_code = 1,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "windows long overflow", __LINE__,
-            SVI("unsigned long x = 0xFFFFFFFF;\n"
-               "return (x + 1) == 0;\n"),
-            .exit_code = 1, // 32-bit wraps
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "linux long no overflow", __LINE__,
-            SVI("unsigned long x = 0xFFFFFFFF;\n"
-               "return (x + 1) == 0x100000000;\n"),
-            .exit_code = 1, // 64-bit doesn't wrap
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "aarch64 macos sizeof long double", __LINE__,
-            SVI("return sizeof(long double);\n"),
-            .exit_code = 8,
-            .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "x86_64 linux sizeof long double", __LINE__,
-            SVI("return sizeof(long double);\n"),
-            .exit_code = 16,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "x87: arithmetic and conversions", __LINE__,
-            SVI("long double a = (long double)9007199254740993ull;\n"
-                "long double b = (long double)9007199254740992ull;\n"
-                "long double c = a - b;\n"
-                "c *= 6;\n"
-                "c /= 2;\n"
-                "c++;\n"
-                "--c;\n"
-                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "binary128 long double: arithmetic and conversions", __LINE__,
-            SVI("long double a = (long double)9007199254740993ull;\n"
-                "long double b = (long double)9007199254740992ull;\n"
-                "long double c = a - b;\n"
-                "c *= 6;\n"
-                "c /= 2;\n"
-                "c++;\n"
-                "--c;\n"
-                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "float128: arithmetic and conversions", __LINE__,
-            SVI("_Float128 a = (_Float128)9007199254740993ull;\n"
-                "_Float128 b = (_Float128)9007199254740992ull;\n"
-                "_Float128 c = a - b;\n"
-                "c *= 6;\n"
-                "c /= 2;\n"
-                "c++;\n"
-                "--c;\n"
-                "return c == 3 && -c < 0 && (_Bool)c && (unsigned long long)a == 9007199254740993ull;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "extended literal sign and casts", __LINE__,
-            SVI("long double a = -2.5L;\n"
-                "long double z = -0.0L;\n"
-                "return a < 0 && (double)a == -2.5 && !z;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "extended literal sign and casts", __LINE__,
-            SVI("long double a = -2.5L;\n"
-                "long double z = -0.0L;\n"
-                "return a < 0 && (double)a == -2.5 && !z;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "long double: special values", __LINE__,
-            SVI("long double z = (long double)0;\n"
-                "long double n = z/z;\n"
-                "long double inf = (long double)1/z;\n"
-                "long double nz = -z;\n"
-                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "long double: wide integer roundtrip", __LINE__,
-            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
-                "__int128 i = -(__int128)u;\n"
-                "long double a = (long double)u;\n"
-                "long double b = (long double)i;\n"
-                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "long double: memory increments and float conversions", __LINE__,
-            SVI("long double a[1] = {(long double)1.5f};\n"
-                "long double *p = a;\n"
-                "long double old = (*p)++;\n"
-                "--*p;\n"
-                "*p += (long double)2.25;\n"
-                "*p -= (long double)1;\n"
-                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "long double: special values", __LINE__,
-            SVI("long double z = (long double)0;\n"
-                "long double n = z/z;\n"
-                "long double inf = (long double)1/z;\n"
-                "long double nz = -z;\n"
-                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "long double: wide integer roundtrip", __LINE__,
-            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
-                "__int128 i = -(__int128)u;\n"
-                "long double a = (long double)u;\n"
-                "long double b = (long double)i;\n"
-                "return (unsigned __int128)a == u && (__int128)b == i && (int)(long double)-3.75 == -3;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "long double: memory increments and float conversions", __LINE__,
-            SVI("long double a[1] = {(long double)1.5f};\n"
-                "long double *p = a;\n"
-                "long double old = (*p)++;\n"
-                "--*p; *p += (long double)2.25;\n"
-                "*p -= (long double)1;\n"
-                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "_Float128: special values", __LINE__,
-            SVI("_Float128 z = (_Float128)0;\n"
-                "_Float128 n = z/z;\n"
-                "_Float128 inf = (_Float128)1/z;\n"
-                "_Float128 nz = -z;\n"
-                "return n != n && !(n < z) && !(n >= z) && !(n <= z) && !(n > z) && (_Bool)n && inf > z && z == nz && !nz;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "_Float128: wide integer roundtrip", __LINE__,
-            SVI("unsigned __int128 u = (unsigned __int128)1 << 100;\n"
-                "__int128 i = -(__int128)u;\n"
-                "_Float128 a = (_Float128)u;\n"
-                "_Float128 b = (_Float128)i;\n"
-                "return (unsigned __int128)a == u && (__int128)b == i && (int)(_Float128)-3.75 == -3;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "_Float128: memory increments and float conversions", __LINE__,
-            SVI("_Float128 a[1] = {(_Float128)1.5f};\n"
-                "_Float128 *p = a;\n"
-                "_Float128 old = (*p)++;\n"
-                "--*p; *p += (_Float128)2.25;\n"
-                "*p -= (_Float128)1;\n"
-                "return (float)*p == 2.75f && (double)old == 1.5;\n"),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "binary128 precision and x87 conversion", __LINE__,
-            SVI("unsigned __int128 u = ((unsigned __int128)1 << 112) + 1;\n"
-                " _Float128 q = (_Float128)u;\n"
-                " _Float128 one = q - (_Float128)(u - 1);\n"
-                " long double e = (long double)one;\n"
-                " return (unsigned __int128)q == u && e == 1 && (_Float128)e == one;\n"
-            ),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "long double: rounding ties and subnormal truth", __LINE__,
-            SVI("unsigned __int128 u = ((unsigned __int128)1 << 64) + 1;\n"
-                "long double a = (long double)u;\n"
-                "long double b = (long double)(u + 2);\n"
-                "union U { long double f;\n"
-                "   unsigned long long bits[2];\n"
-                "} tiny = {.bits = {1, 0}};\n"
-                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
-            ),
-            .exit_code = 1, .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "_Float128: rounding ties and subnormal truth", __LINE__,
-            SVI("unsigned __int128 u = ((unsigned __int128)1 << 113) + 1;\n"
-                "_Float128 a = (_Float128)u;\n"
-                "_Float128 b = (_Float128)(u + 2);\n"
-                "union U { _Float128 f;\n"
-                "   unsigned long long bits[2];\n"
-                "} tiny = {.bits = {1, 0}};\n"
-                "return (unsigned __int128)a == u - 1 && (unsigned __int128)b == u + 3 && tiny.f > 0 && (_Bool)tiny.f;\n"
-            ),
-            .exit_code = 1, .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "windows sizeof size_t", __LINE__,
-            SVI("return sizeof(__SIZE_TYPE__);\n"),
-            .exit_code = 8, // unsigned long long is 8
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        // MSVC bitfield: different types don't share storage units
-        {
-            "msvc bitfield layout", __LINE__,
-            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 8, // short unit (2) + pad(2) + int unit (4)
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "sysv bitfield layout", __LINE__,
-            SVI("typedef struct { unsigned short a: 8; unsigned int b: 8; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 4, // both fit in one 4-byte unit
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "enum", __LINE__,
-            SVI("enum Foo { X } ; typedef struct { enum Foo f : 8; unsigned int b: 8; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 4, // enum then both fit in one 4-byte unit
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "msvc bitfield typed enum packs with underlying", __LINE__,
-            SVI("enum A : unsigned int { A_VAL = 1 };\n"
-               "enum B : unsigned int { B_VAL = 2 };\n"
-               "typedef struct { enum A a: 4; unsigned int b: 1; enum B c: 1; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 4, // all have uint32_t underlying, pack together
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "msvc bitfield diff size enum starts new unit", __LINE__,
-            SVI("enum A : unsigned short { A_VAL = 1 };\n"
-               "typedef struct { enum A a: 4; unsigned int b: 1; } S;\n"
-               "return sizeof(S);\n"),
-            .exit_code = 8, // short(2) + pad(2) + int(4)
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "alignof", __LINE__,
-            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
-            .exit_code = 16,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "alignof", __LINE__,
-            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
-            .exit_code = 16,
-            .target = CC_TARGET_AARCH64_LINUX,
-        },
-        {
-            "alignof", __LINE__,
-            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
-            .exit_code = 16,
-            .target = CC_TARGET_X86_64_MACOS,
-        },
-        {
-            "alignof", __LINE__,
-            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
-            .exit_code = 8,
-            .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "alignof", __LINE__,
-            SVI("return _Alignof(__MAX_ALIGN_TYPE__);\n"),
-            .exit_code = 8,
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        // abi smoke tests... don't have a direct way to test them in the cross interpreter
-        {
-            "sysv", __LINE__,
-            SVI("struct S1 {int x;};\n"
-                "struct S2 {int x; float y;};\n"
-                "struct S3 {int x, y;};\n"
-                "struct S4 {int x, y, z;};\n"
-                "struct S5 {double x, y;};\n"
-                "struct S6 {double x; int y, z;};\n"
-                "struct S7 {double x[3]; int y[4], z;};\n"
-                "struct S8 {float x[2]; double d;};\n"
-                "struct S9 {float x[2]; float f[2];};\n"
-                "return 12;\n"
-            ),
-            .exit_code = 12,
-            .target = CC_TARGET_X86_64_LINUX,
-        },
-        {
-            "win64", __LINE__,
-            SVI("struct S1 {int x;};\n"
-                "struct S2 {int x; float y;};\n"
-                "struct S3 {int x, y;};\n"
-                "struct S4 {int x, y, z;};\n"
-                "struct S5 {double x, y;};\n"
-                "struct S6 {double x; int y, z;};\n"
-                "struct S7 {double x[3]; int y[4], z;};\n"
-                "struct S8 {float x[2]; double d;};\n"
-                "struct S9 {float x[2]; float f[2];};\n"
-                "return 12;\n"
-            ),
-            .exit_code = 12,
-            .target = CC_TARGET_X86_64_WINDOWS_MSVC,
-        },
-        {
-            "mac arm64", __LINE__,
-            SVI("struct S1 {int x;};\n"
-                "struct S2 {int x; float y;};\n"
-                "struct S3 {int x, y;};\n"
-                "struct S4 {int x, y, z;};\n"
-                "struct S5 {double x, y;};\n"
-                "struct S6 {double x; int y, z;};\n"
-                "struct S7 {double x[3]; int y[4], z;};\n"
-                "struct S8 {float x[2]; double d;};\n"
-                "struct S9 {float x[2]; float f[2];};\n"
-                "return 12;\n"
-            ),
-            .exit_code = 12,
-            .target = CC_TARGET_AARCH64_MACOS,
-        },
-        {
-            "linux arm64", __LINE__,
-            SVI("struct S1 {int x;};\n"
-                "struct S2 {int x; float y;};\n"
-                "struct S3 {int x, y;};\n"
-                "struct S4 {int x, y, z;};\n"
-                "struct S5 {double x, y;};\n"
-                "struct S6 {double x; int y, z;};\n"
-                "struct S7 {double x[3]; int y[4], z;};\n"
-                "struct S8 {float x[2]; double d;};\n"
-                "struct S9 {float x[2]; float f[2];};\n"
-                "return 12;\n"
-            ),
-            .exit_code = 12,
-            .target = CC_TARGET_AARCH64_LINUX,
-        },
-    };
-    int err;
-    static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
-        if(tc->skip){
-            TEST_stats.skipped++;
-            continue;
-        }
-        err = 0;
-        TEST_stats.executed++;
-        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
-        if(!fc){err = 1; TestReport("setup failure"); goto finally;}
-        MStringBuilder log_sb = {.allocator=al};
-        MsbLogger logger_ = {0};
-        Logger* logger = msb_logger(&logger_, &log_sb);
-        AtomTable at = {0};
-        Environment env = {.allocator = al, .at=&at};
-        CiInterpreter interp = {
-            .poison_frame_slots = 1,
-            .exit_code = -1,
-            .parser = {
-                .cpp = {
-                    .allocator = al,
-                    .fc = fc,
-                    .at = &at,
-                    .logger = logger,
-                    .env = &env,
-                    .target = cc_targets[tc->target],
-                },
-                .current = &interp.parser.global,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
-        };
-        LOCK_T_init(&interp.error_lock);
-        LOCK_T_init(&interp.atom_lock);
-        LOCK_T_init(&interp.resolve_lock);
-        fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
-        err = fc_cache_file(fc, tc->program);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cpp_define_builtin_macros(&interp.parser.cpp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_define_builtin_types(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = cc_register_pragmas(&interp.parser);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_pragmas(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-        err = ci_register_macros(&interp);
-        if(err){TestReport("setup failure"); goto finally;}
-
-        err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
-        if(err) {TestReport("failed to include"); goto finally;}
-        ma_tail(interp.parser.cpp.frames).line = tc->line+1;
-
-        err = cc_parse_all(&interp.parser);
-        if(err){TestPrintf("%s:%d: failed to parse (error %d)\n%.*s", __FILE__, tc->line, err, (int)log_sb.cursor, log_sb.data); goto finally;}
-        err = ci_resolve_refs(&interp);
-        if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
-
-        CiInterpFrame* frame = &interp.top_frame;
-        err = ci_prepare_toplevel(&interp);
-        if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
-        TEST_stats.executed++;
-        if(interp.exit_code != tc->exit_code){
-            TEST_stats.failures++;
-            TestPrintf("%s:%d: expected (%d) != actual (%d)\n", __FILE__, tc->line, tc->exit_code, interp.exit_code);
-        }
-
-        finally:
-        if(log_sb.cursor && !log_sb.errored){
-            StringView sv = msb_borrow_sv(&log_sb);
-            TestPrintf("%.*s\n", sv_p(sv));
-        }
-        if(err) TEST_stats.failures++;
-        ci_tls_cleanup(&interp);
-        ArenaAllocator_free_all(&interp.bt.arena);
-        ArenaAllocator_free_all(&at.arena);
-        ArenaAllocator_free_all(&arena);
-        ArenaAllocator_free_all(&interp.parser.cpp.synth_arena);
-        ArenaAllocator_free_all(&interp.parser.scratch_arena);
-    }
-    TESTEND();
-}
 TestFunction(test_ci_call_main){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -17664,8 +17414,9 @@ TestFunction(test_ci_call_main){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+        const struct opt* o = &optimization_options[i % countof(optimization_options)];
+        struct tc* tc = &testcases[i / countof(optimization_options)];
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -17681,6 +17432,7 @@ TestFunction(test_ci_call_main){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .opt_noinline = o->noinline,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -17916,8 +17668,9 @@ TestFunction(test_ci_call_by_name){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+        const struct opt* o = &optimization_options[i % countof(optimization_options)];
+        struct tc* tc = &testcases[i / countof(optimization_options)];
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -17933,6 +17686,7 @@ TestFunction(test_ci_call_by_name){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .opt_noinline = o->noinline,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -18037,10 +17791,7 @@ int main(int argc, char** argv){
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_embed, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interpreter_runtime_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_interpreter_builtin_headers, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);

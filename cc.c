@@ -65,7 +65,10 @@ cc_cleanup_interp(void){
 }
 
 int main(int argc, char** argv, char** envp){
-    _Bool eager = 0, syntax_only = 0, poison_frame_slots = 0;
+    _Bool eager = 0,
+          syntax_only = 0,
+          poison_frame_slots = 0,
+          opt_noinline = 0;
     Logger* logger = std_logger();
     if(!logger) return 1;
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
@@ -209,6 +212,11 @@ int main(int argc, char** argv, char** envp){
             .dest = ARGDEST(&ast),
             .help = "print the AST in addition to bytecode",
         },
+        {
+            .name = SV("-fno-inline"),
+            .dest = ARGDEST(&opt_noinline),
+            .help = "Disable inlining",
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -273,6 +281,7 @@ int main(int argc, char** argv, char** envp){
     cc_interp.parser.cpp.logger = logger;
     cc_interp.parser.cpp.target = cc_targets[cc_target_arg];
     cc_interp.parser.eager_parsing = eager;
+    cc_interp.opt_noinline = opt_noinline;
     err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     // _Argc, _Argv and args to main

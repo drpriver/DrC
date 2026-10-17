@@ -383,7 +383,12 @@ ci_inline_code(CiInterpreter* ci, Marray(CiOp)* code, uint32_t* frame_size, size
 static
 int
 ci_optimize_code(CiInterpreter* ci, Marray(CiOp)* code, uint32_t* frame_size, size_t start, AtomMap(uintptr_t)*_Nullable labels, size_t*_Nullable pc){
-    return ci_inline_code(ci, code, frame_size, start, labels, pc);
+    int err = 0;
+    if(!ci->opt_noinline){
+        err = ci_inline_code(ci, code, frame_size, start, labels, pc);
+        if(err) return err;
+    }
+    return err;
 }
 
 typedef struct CiInlineVisit CiInlineVisit;
@@ -435,7 +440,12 @@ ci_inline_func(CiInterpreter* ci, CcFunc* f){
 static
 int
 ci_optimize_func(CiInterpreter* ci, CcFunc* f){
-    return ci_inline_func(ci, f);
+    int err = 0;
+    if(!ci->opt_noinline){
+        err = ci_inline_func(ci, f);
+        if(err) return err;
+    }
+    return err;
 }
 
 static
@@ -463,7 +473,12 @@ ci_inline_toplevel(CiInterpreter* ci){
 static
 int
 ci_optimize_toplevel(CiInterpreter* ci){
-    return ci_inline_toplevel(ci);
+    int err = 0;
+    if(!ci->opt_noinline){
+        err = ci_inline_toplevel(ci);
+        if(err) return err;
+    }
+    return err;
 }
 #ifdef __clang__
 #pragma clang assume_nonnull end

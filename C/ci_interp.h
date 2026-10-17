@@ -65,10 +65,11 @@ struct CiInterpreter {
     union {
         uint32_t flags;
         struct {
-            uint32_t can_dlopen: 1,
-                     procedural_macros: 1,
+            uint32_t can_dlopen:         1,
+                     procedural_macros:  1,
                      poison_frame_slots: 1, // debug fill for uninitialized automatic storage
-                    _padding:29;
+                     opt_noinline:       1,
+                    _padding:            28;
         };
     };
     int exit_code;
