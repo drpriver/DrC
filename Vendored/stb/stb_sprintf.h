@@ -152,6 +152,10 @@ process locale. Invalid Unicode returns -1.
 
 */
 
+#ifdef __DRC__
+#define STBSP_NO_LONG_DOUBLE
+#endif
+
 #if defined(__clang__)
  #if defined(__has_feature) && defined(__has_attribute)
   #if __has_feature(address_sanitizer)
@@ -772,9 +776,11 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       case 'e':              // float
       case 'f':              // float
       case 'F':
+         #ifndef STBSP_NO_LONG_DOUBLE
          if (fl & STBSP__LONGDOUBLE)
             va_arg(va, long double);
          else
+         #endif
             va_arg(va, double); // eat it
          s = (char *)"No float";
          l = 8;
@@ -788,7 +794,11 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       case 'A': // hex float
       case 'a': // hex float
          h = (f[0] == 'A') ? hexu : hex;
+         #ifndef STBSP_NO_LONG_DOUBLE
          fv = (fl & STBSP__LONGDOUBLE) ? (double)va_arg(va, long double) : va_arg(va, double);
+         #else
+         fv = va_arg(va, double);
+         #endif
          if (pr == -1)
             pr = 6; // default is 6
          // read the double into a string
@@ -869,7 +879,11 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       case 'G': // float
       case 'g': // float
          h = (f[0] == 'G') ? hexu : hex;
+         #ifndef STBSP_NO_LONG_DOUBLE
          fv = (fl & STBSP__LONGDOUBLE) ? (double)va_arg(va, long double) : va_arg(va, double);
+         #else
+         fv = va_arg(va, double);
+         #endif
          if (pr == -1)
             pr = 6;
          else if (pr == 0)
@@ -910,7 +924,11 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       case 'E': // float
       case 'e': // float
          h = (f[0] == 'E') ? hexu : hex;
+         #ifndef STBSP_NO_LONG_DOUBLE
          fv = (fl & STBSP__LONGDOUBLE) ? (double)va_arg(va, long double) : va_arg(va, double);
+         #else
+         fv = va_arg(va, double);
+         #endif
          if (pr == -1)
             pr = 6; // default is 6
          // read the double into a string
@@ -968,7 +986,11 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
 
       case 'F':
       case 'f': // float
+         #ifndef STBSP_NO_LONG_DOUBLE
          fv = (fl & STBSP__LONGDOUBLE) ? (double)va_arg(va, long double) : va_arg(va, double);
+         #else
+         fv = va_arg(va, double);
+         #endif
       doafloat:
          // do kilos
          if (fl & STBSP__METRIC_SUFFIX) {
