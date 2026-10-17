@@ -312,6 +312,20 @@ string literal.
 __format("item_%d", 42) // -> "item_42"
 ```
 
+
+The following format specifiers are accepted:
+
+
+* '%s' takes a string, identifier or pp-number. For strings, the contents
+    are unquoted and unescaped. identifiers and numbers have their spelling
+    written into the output string
+* '%d' evaluates its argument as a preprocessor expression (like in `#if`
+    or `__calc()`) and writes the signed or unsigned result as decimal digits.
+
+```C
+__format("%d", -(2 + 3) * 4) // -> "-20"
+```
+
 ### `__print(...)`
 
 `__print()` (also spelled `__PRINT__()`) prints a

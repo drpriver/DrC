@@ -65,7 +65,6 @@ struct CppEvalValue {
     _Bool is_unsigned;
 };
 static int cpp_eval_tokens_typed(CppPreprocessor*, CppToken*_Null_unspecified, size_t, CppEvalValue*, const CppIncludePosition* _Nullable);
-static int cpp_eval_parse_number_typed(CppPreprocessor*, CppToken, CppEvalValue*);
 static int cpp_next_raw_token(CppPreprocessor*, CppToken*);
 static int cpp_next_pp_token(CppPreprocessor*, CppToken*);
 LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
@@ -5590,8 +5589,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SVI("__if"), cpp_builtin_if, 3, 0, 1},
         {SVI("__ident"), cpp_builtin_ident, 1, 0, 0},
         {SVI("__IDENT__"), cpp_builtin_ident, 1, 0, 0},
-        {SVI("__format"), cpp_builtin_fmt, 1, 1, 0},
-        {SVI("__FORMAT__"), cpp_builtin_fmt, 1, 1, 0},
+        {SVI("__format"), cpp_builtin_fmt, 1, 1, 1},
+        {SVI("__FORMAT__"), cpp_builtin_fmt, 1, 1, 1},
         {SVI("__print"), cpp_builtin_print, 0, 1, 0},
         {SVI("__PRINT__"), cpp_builtin_print, 0, 1, 0},
         {SVI("__set"), cpp_builtin_set, 1, 1, 0},
@@ -6017,12 +6016,15 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     int err = 0;
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
     MStringBuilder decoded = {.allocator=allocator_from_arena(&cpp->synth_arena)};
+    CppTokens* expanded = cpp_get_scratch(cpp);
+    if(!expanded) return CPP_OOM_ERROR;
     CppToken* fmts; size_t fmt_count;
-    CppToken* va_args; size_t va_count;
+    size_t arg_index = 1;
     cpp_get_argument(args, arg_seps, 0, &fmts, &fmt_count);
-    cpp_get_va_args(args, arg_seps, 1, &va_args, &va_count);
-    for(size_t f = 0; f < fmt_count; f++){
-        CppToken fmt = fmts[f];
+    err = cpp_expand_argument(cpp, fmts, fmt_count, expanded);
+    if(err) goto finally;
+    for(size_t f = 0; f < expanded->count; f++){
+        CppToken fmt = expanded->data[f];
         if(fmt.type == CPP_WHITESPACE || fmt.type == CPP_NEWLINE) continue;
         if(fmt.type != CPP_STRING){
             err = cpp_error(cpp, fmt.loc, "Only string literals supported as fmt to format");
@@ -6039,69 +6041,50 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
             switch(c){
                 case '%': msb_write_char(&sb, '%'); break;
                 case 's':{
-                    if(!va_count){
+                    if(arg_index > arg_seps->count){
                         err = cpp_error(cpp, loc, "Run out of va_args");
                         goto finally;
                     }
-                    for(;va_count;++va_args, --va_count){
-                        CppToken tok = *va_args;
-                        if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
-                            ++va_args; --va_count;
-                            break;
-                        }
+                    CppToken* arg; size_t count;
+                    cpp_get_argument(args, arg_seps, arg_index++, &arg, &count);
+                    expanded->count = 0;
+                    err = cpp_expand_argument(cpp, arg, count, expanded);
+                    if(err) goto finally;
+                    for(size_t a = 0; a < expanded->count; a++){
+                        CppToken tok = expanded->data[a];
                         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
                         if(tok.type == CPP_STRING){
                             err = cpp_decode_text(cpp, tok, &sb);
                             if(err) goto finally;
                             continue;
                         }
-                        err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected string)");
+                        if(tok.type == CPP_IDENTIFIER || tok.type == CPP_NUMBER){
+                            msb_write_str(&sb, tok.txt.text, tok.txt.length);
+                            continue;
+                        }
+                        err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected string, identifier, or pp-number)");
                         goto finally;
                     }
                 }break;
                 case 'd':{
-                    if(!va_count){
+                    if(arg_index > arg_seps->count){
                         err = cpp_error(cpp, loc, "Run out of va_args");
                         goto finally;
                     }
-                    _Bool wrote_number = 0;
-                    for(int minus = 0;va_count;++va_args, --va_count){
-                        CppToken tok = *va_args;
-                        if(tok.type == CPP_PUNCTUATOR && tok.punct == ','){
-                            ++va_args; --va_count;
-                            break;
-                        }
-                        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
-                        if(wrote_number && tok.type == CPP_PUNCTUATOR && (tok.punct == '-' || tok.punct == '+' || tok.punct == '++' || tok.punct == '--')){
-                            err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
-                            goto finally;
-                        }
-                        if(tok.type == CPP_PUNCTUATOR && tok.punct == '-'){
-                            minus++;
-                            continue;
-                        }
-                        if(tok.type == CPP_PUNCTUATOR && (tok.punct == '+' || tok.punct == '++' || tok.punct == '--'))
-                            continue;
-                        if(tok.type == CPP_NUMBER){
-                            if(wrote_number){
-                                err = cpp_error(cpp, tok.loc, "Too many number args to format");
-                                goto finally;
-                            }
-                            CppEvalValue value;
-                            err = cpp_eval_parse_number_typed(cpp, tok, &value);
-                            if(err) goto finally;
-                            if(minus & 1) msb_write_char(&sb, '-');
-                            msb_sprintf(&sb, "%llu", (unsigned long long)value.value);
-                            wrote_number = 1;
-                            continue;
-                        }
-                        err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
-                        goto finally;
-                    }
-                    if(!wrote_number){
+                    CppToken* arg; size_t count;
+                    cpp_get_argument(args, arg_seps, arg_index++, &arg, &count);
+                    if(!count){
                         err = cpp_error(cpp, loc, "Missing integer argument to format");
                         goto finally;
                     }
+                    CppEvalValue value;
+                    err = cpp_eval_tokens_typed(cpp, arg, count, &value, NULL);
+                    if(err) goto finally;
+                    if(!value.is_unsigned && value.value > INT64_MAX){
+                        msb_write_char(&sb, '-');
+                        value.value = 0 - value.value;
+                    }
+                    msb_sprintf(&sb, "%llu", (unsigned long long)value.value);
                 }break;
                 default:
                     msb_write_char(&sb, '%');
@@ -6129,6 +6112,7 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     };
     err = cpp_push_tok(cpp, outtoks, tok);
     finally:;
+    cpp_release_scratch(cpp, expanded);
     msb_destroy(&decoded);
     msb_destroy(&sb);
     return err;
