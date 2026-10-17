@@ -16338,7 +16338,9 @@ cc_eval_wide_cast(CcParser* p, CcExpr* v, CcExpr* out){
         CiFloat128 bound = ci_float128_from_uint128(ci_uint128_shl(ci_uint128_from_uint64(1), size*8-1), 1);
         if(uns) bound = ci_float128_add(bound, bound);
         CiFloat128 low = uns ? ci_float128_from_int64(0) : ci_float128_neg(bound);
-        if(!ci_float128_le(low, q) || !ci_float128_lt(q, bound)) return CC_OVERFLOW_ERROR;
+        CiFloat128 below = ci_float128_sub(low, ci_float128_from_int64(1));
+        if(!(ci_float128_le(low, q) || ci_float128_lt(below, q))
+            || !ci_float128_lt(q, bound)) return CC_OVERFLOW_ERROR;
         u = ci_float128_to_uint128(q);
     }
     else u = cc_eval_u128(p, v);
@@ -16539,13 +16541,13 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
         DRP_CASES_EXHAUSTED;
         case CCBT_double:{
             double d = v->double_;
-            if(d != d || d < 0.0 || d >= 18446744073709551616.0) return CC_OVERFLOW_ERROR;
+            if(d != d || d <= -1.0 || d >= 18446744073709551616.0) return CC_OVERFLOW_ERROR;
             *out = (uint64_t)d;
             return 0;
         }
         case CCBT_float:{
             float f = v->float_;
-            if(f != f || f < 0.0f || f >= 18446744073709551616.0f) return CC_OVERFLOW_ERROR;
+            if(f != f || f <= -1.0f || f >= 18446744073709551616.0f) return CC_OVERFLOW_ERROR;
             *out = (uint64_t)f;
             return 0;
         }
@@ -19697,6 +19699,10 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             if(tk == CCBT_void){
                 node = cc_value_expr(p, e->loc, ccqt_basic(CCBT_void));
                 if(!node) err = CC_OOM_ERROR;
+                goto fini_cast;
+            }
+            if(ccbt_is_complex(tk)){
+                err = CC_NOT_CONSTANT_ERROR;
                 goto fini_cast;
             }
             node = cc_value_expr(p, e->loc, e->type);

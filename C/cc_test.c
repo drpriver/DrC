@@ -369,6 +369,16 @@ TestFunction(test_parse_decls){
                 {SVI("values"), SVI("__bf16[2]")}, {SVI("p"), SVI("__bf16 *")}},
         },
         {
+            "constant float to integer truncation at lower bounds", __LINE__,
+            SVI("_Static_assert((unsigned)-0.5 == 0);\n"
+                "_Static_assert((unsigned)-0.5f == 0);\n"
+                "_Static_assert((unsigned)-0.5L == 0);\n"
+                "_Static_assert((unsigned __int128)-0.5L == 0);\n"
+                "_Static_assert((int)-2147483648.5L == (-2147483647-1));\n"
+                "_Static_assert((signed char)-128.5L == -128);\n"
+                "_Static_assert((int)-2147483648.0L == (-2147483647-1));\n"),
+        },
+        {
             "complex types in either specifier order", __LINE__,
             SVI("_Complex float f; float _Complex g; _Complex double d; double _Complex e;\n"
                 "_Complex long double l; long _Complex double m; double long _Complex n;\n"
@@ -7172,6 +7182,31 @@ TestFunction(test_parse_errors){
             "defer rejects attributed label on another defer", __LINE__,
             SVI("_Defer [[maybe_unused]] label: _Defer ;"),
             SVI("(test):1:25: error: expected unlabeled statement after _Defer\n"),
+        },
+        {
+            "complex constant cast must not fold to zero", __LINE__,
+            SVI("_Static_assert(!(_Bool)(_Complex double)1.0);"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "integer to complex constant cast must not fold to zero", __LINE__,
+            SVI("_Static_assert(!(_Bool)(_Complex float)1);"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "unsigned constant cast rejects negative integer", __LINE__,
+            SVI("_Static_assert((unsigned)-1.0 == 0);"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide unsigned constant cast rejects negative integer", __LINE__,
+            SVI("_Static_assert((unsigned)-1.0L == 0);"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "wide signed constant cast rejects value below truncated range", __LINE__,
+            SVI("_Static_assert((int)-2147483649.0L == 0);"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
         },
         {
             "complex rejects void", __LINE__, SVI("_Complex void z;"),
