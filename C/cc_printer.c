@@ -73,12 +73,16 @@ static
 _Bool
 cc_type_needs_parens(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return (k == CC_ARRAY && !ccqt_as_array(t)->is_vector) || k == CC_FUNCTION;
+    return ccqt_is_array(t) || k == CC_FUNCTION;
 }
 
 static
 void
 cc_print_type_pre(MStringBuilder* sb, CcQualType t){
+    if(ccqt_kind(t) == CC_VLA){
+        cc_print_type_pre(sb, ccqt_as_vla(t)->element);
+        return;
+    }
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         cc_print_type_pre(sb, ccqt_unaligned(t));
         if(ccqt_kind(t) != CC_ARRAY)
@@ -87,6 +91,7 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
     }
     CcTypeKind kind = ccqt_kind(t);
     switch(kind){
+        case CC_VLA: cc_unsafe_unreachable();
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC:
             if(t.is_const) msb_write_literal(sb, "const ");
@@ -176,6 +181,10 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
         return;
     }
     switch(ccqt_kind(t)){
+        case CC_VLA:
+            msb_write_literal(sb, "[*]");
+            cc_print_type_post(sb, ccqt_as_vla(t)->element);
+            return;
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BLOCK_POINTER:
         case CC_POINTER: {
@@ -386,9 +395,10 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             cc_print_runtime_integer(sb, bits, sz*8, signed_);
             return;
         }
+        case CC_VLA: msb_write_literal(sb, "[VLA]"); return;
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(type);
-            if(arr->is_incomplete || arr->is_vla){ msb_write_literal(sb, "[...]"); return; }
+            if(arr->is_incomplete){ msb_write_literal(sb, "[...]"); return; }
             uint32_t elem_sz;
             if(cc_sizeof_as_uint(p, arr->element, loc, &elem_sz)){ msb_write_literal(sb, "[...]"); return; }
             msb_write_char(sb, '{');
@@ -903,6 +913,9 @@ void
 _cc_print_statement(MStringBuilder* sb, CcStmtNode* s, int indent){
     msb_write_nchar(sb, ' ', indent*2);
     switch(s->kind){
+    case CC_STMT_VLA:
+        msb_sprintf(sb, "vla_alloc %.*s", s->vla.object->name->length, s->vla.object->name->data);
+        return;
     case CC_STMT_DEFER:
         msb_write_literal(sb, "_Defer\n");
         _cc_print_statement(sb, s->stmts[0], indent+1);

@@ -31,6 +31,7 @@ enum CcStmtKind TYPED_ENUM(uint32_t){
     CC_STMT_GOTO,
     CC_STMT_LABEL,
     CC_STMT_DEFER,
+    CC_STMT_VLA,
 };
 TYPEDEF_ENUM(CcStmtKind, uint32_t);
 
@@ -39,6 +40,8 @@ typedef struct CcDefer CcDefer;
 struct CcDefer {
     CcDefer* _Nullable prev;
     CcStmtNode* _Nullable body; // borrowed from CC_STMT_DEFER
+    CcVariable* _Nullable stack_mark; // hidden saved mark. NULL for a VM-only marker
+    _Bool vm_scope;
 };
 typedef struct CcDeferContext CcDeferContext;
 struct CcDeferContext {
@@ -57,7 +60,8 @@ struct CcStmtNode {
              no_fallthrough:  1, // conservative
              has_jump_target: 1, // subtree contains a runtime label, case, or default
              case_empty:      1, // CC_STMT_CASE: no dispatch entry, but retain the body
-             _bit_padding:   13; // free real estate
+             zero_initialize: 1, // CC_STMT_VLA: initializer requests zeroed storage
+             _bit_padding:   12; // free real estate
     uint32_t count; // number of allocated entries in stmts[]
     SrcLoc loc;
     Parray(CcVariable) decls; // variables scoped to this statement
@@ -80,6 +84,10 @@ struct CcStmtNode {
     // CC_STMT_DEFER:    stmts[0] = deferred body (owned, emitted via cleanup)
     union {
         CcExpr* expr; // CC_STMT_EXPR
+        struct { // CC_STMT_VLA
+            CcVariable* object;
+            CcVariable* mark;
+        } vla;
         CcExpr* _Null_unspecified exprs[2];
         Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
         struct {

@@ -47,6 +47,7 @@ typedef struct CcScope CcScope;
 typedef struct CcFuncParam CcFuncParam;
 struct CcFuncParam {
     Atom name;
+    CcVariable*_Nullable decl;
     _Bool typed_pack;
     uint32_t sz, offset; // set by lowering
     uint32_t native_index; // set by lowering; UINT32_MAX for an ignored ABI argument
@@ -112,7 +113,8 @@ struct CcFunc {
     uint32_t frame_size; // size of params + automatic local vars + temporaries;
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.
-    CcStmtNode*_Nullable body_tree; // set when parsed; owned by this func
+    CcStmtNode*_Nullable body_tree; // lazily allocated, can be allocated with bound initializers due to VLA side-effects.
+                                    // owned by this func
     CiFuncOps*_Nullable interp_ops; // executable form; created and owned by ci_lower
     struct {
         size_t count;

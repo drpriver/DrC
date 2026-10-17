@@ -218,6 +218,12 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
             CI_REMAP(op->alloca.slot);
             CI_REMAP(op->alloca.src);
             break;
+        case CI_OP_STACK_SAVE:
+            CI_REMAP(op->stack_save.slot);
+            break;
+        case CI_OP_STACK_RESTORE:
+            CI_REMAP(op->stack_restore.slot);
+            break;
         case CI_OP_CLEAR_CACHE:
             CI_REMAP(op->clear_cache.begin);
             CI_REMAP(op->clear_cache.end);

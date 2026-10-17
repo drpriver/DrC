@@ -652,7 +652,13 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, "clear_cache([%u], [%u])", op->clear_cache.begin, op->clear_cache.end);
             break;
         case CI_OP_ALLOCA:
-            msb_sprintf(out, "[%u] = alloca([%u])", op->alloca.slot, op->alloca.src);
+            msb_sprintf(out, "[%u] = alloca([%u], align=%u, zero=%u)", op->alloca.slot, op->alloca.src, op->alloca.alignment, op->alloca.zero_initialize);
+            break;
+        case CI_OP_STACK_SAVE:
+            msb_sprintf(out, "[%u] = stack_save()", op->stack_save.slot);
+            break;
+        case CI_OP_STACK_RESTORE:
+            msb_sprintf(out, "stack_restore([%u])", op->stack_restore.slot);
             break;
         case CI_OP_BSWAP:
             msb_sprintf(out, "[%u] = bswap%u([%u])", op->bswap.slot, op->bswap.size*8, op->bswap.src);

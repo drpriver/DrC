@@ -152,6 +152,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FENCE,
     CI_OP_CLEAR_CACHE,
     CI_OP_ALLOCA,
+    CI_OP_STACK_SAVE,
+    CI_OP_STACK_RESTORE,
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
     CI_OP_VA_START,
@@ -571,12 +573,20 @@ struct CiOp {
         } switch_;
         struct {
             CiOpKind kind: 8; // CI_OP_ALLOCA
-            uint32_t _bitpad: 24;
-            uint32_t _pad;
+            uint32_t zero_initialize: 1,
+                     _bitpad: 23;
+            uint32_t alignment;
             uint32_t slot, src;
             uint64_t pad;
             SrcLoc loc;
         } alloca;
+        struct {
+            CiOpKind kind: 8; // CI_OP_STACK_SAVE, CI_OP_STACK_RESTORE
+            uint32_t _bitpad: 24;
+            uint32_t slot;
+            uint64_t _pad[2];
+            SrcLoc loc;
+        } stack_save, stack_restore;
         struct {
             CiOpKind kind: 8; // CI_OP_BSWAP
             uint32_t _bitpad: 24;

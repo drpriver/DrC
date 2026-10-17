@@ -13433,7 +13433,6 @@ TestFunction(test_interpreter){
             SVI("int x = 7;\n"
                 "return _Countof(int[x]);\n"),
             .exit_code = 7,
-            .skip = 1,
         },
         {
             "_Countof expression statement", __LINE__,
@@ -14527,14 +14526,12 @@ TestFunction(test_interpreter){
             SVI("int x = 3;\n"
             "return (int)sizeof(int[x]);\n"),
             .exit_code = 12,
-            .skip = 1,
         },
         {
             "sizeof vla in array", __LINE__,
             SVI("int x = 3;\n"
             "return (int)sizeof(int[2][x]);\n"),
             .exit_code = 24,
-            .skip = 1,
         },
         {
             "vla: object sizeof captures bound", __LINE__,
@@ -14544,7 +14541,6 @@ TestFunction(test_interpreter){
                "int z[n];\n"
                "return (int)(sizeof x + sizeof y + sizeof z);\n"),
             .exit_code = 48,
-            .skip = 1,
         },
         {
             "vla: sizeof type evaluates bound expression", __LINE__,
@@ -14553,7 +14549,6 @@ TestFunction(test_interpreter){
                "int b = sizeof(int[n++]);\n"
                "return a + b + n;\n"),
             .exit_code = 12 + 16 + 5,
-            .skip = 1,
         },
         {
             "vla: sizeof object does not re-evaluate bound", __LINE__,
@@ -14563,7 +14558,6 @@ TestFunction(test_interpreter){
                "int b = sizeof x;\n"
                "return a + b + n;\n"),
             .exit_code = 12 + 12 + 4,
-            .skip = 1,
         },
         {
             "vla: subscript storage", __LINE__,
@@ -14572,7 +14566,6 @@ TestFunction(test_interpreter){
                "for(int i = 0; i < n; i++) x[i] = i + 1;\n"
                "return x[0] + x[1] + x[2] + x[3];\n"),
             .exit_code = 10,
-            .skip = 1,
         },
         {
             "vla: nested sizeof captures each dimension", __LINE__,
@@ -14581,7 +14574,6 @@ TestFunction(test_interpreter){
                "int a[m++][n++];\n"
                "return (int)(sizeof a + sizeof a[0] + m * 10 + n);\n"),
             .exit_code = 24 + 12 + 34,
-            .skip = 1,
         },
         {
             "vla: nested subscript storage", __LINE__,
@@ -14594,7 +14586,6 @@ TestFunction(test_interpreter){
                "a[1][2] = 30;\n"
                "return a[0][0] + a[0][2] + a[1][0] + a[1][2];\n"),
             .exit_code = 44,
-            .skip = 1,
         },
         {
             "vla: pointer arithmetic uses captured element size", __LINE__,
@@ -14603,7 +14594,6 @@ TestFunction(test_interpreter){
                "int (*p)[3] = a;\n"
                "return (char*)(p + 1) - (char*)p + n;\n"),
             .exit_code = 12 + 4,
-            .skip = 1,
         },
         {
             "vla: typedef captures bound", __LINE__,
@@ -14614,7 +14604,6 @@ TestFunction(test_interpreter){
                "A y;\n"
                "return (int)(sizeof x + sizeof y + n);\n"),
             .exit_code = 12 + 12 + 9,
-            .skip = 1,
         },
         {
             "vla: pointer to typedef uses captured bound", __LINE__,
@@ -14625,7 +14614,6 @@ TestFunction(test_interpreter){
                "n = 9;\n"
                "return (int)sizeof *p + n;\n"),
             .exit_code = 12 + 9,
-            .skip = 1,
         },
         {
             "vla: parameter adjusts to pointer", __LINE__,
@@ -14636,7 +14624,6 @@ TestFunction(test_interpreter){
                "int a[n];\n"
                "return sizeof_param(n, a);\n"),
             .exit_code = 1,
-            .skip = 1,
         },
         {
             "vla: multidimensional parameter keeps inner bound", __LINE__,
@@ -14647,7 +14634,130 @@ TestFunction(test_interpreter){
                "a[1][2] = 7;\n"
                "return sum(2, 3, a);\n"),
             .exit_code = 7 + 12,
-            .skip = 1,
+        },
+        {
+            "vla: function bound and conditional type names", __LINE__,
+            SVI("int calls; int bound(void){calls++;return 3;}"
+                "int f(void){int a[bound()];int n=2;"
+                "int x=0?sizeof(int[n++]):sizeof a;"
+                "int y=0 && sizeof(int[n++]);"
+                "return calls==1 && n==2 && x==12 && y==0;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: pointer strides and sizeof operand side effects", __LINE__,
+            SVI("int f(void){int n=3;int a[4][n];int (*p)[n]=a;"
+                "p++;p+=2;p--;(*p)[2]=7;"
+                "int s=sizeof *p++;return s==12 && p-a==3 && a[2][2]==7;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: prototype bounds are not executed", __LINE__,
+            SVI("int calls;int bound(void){calls++;return 3;}"
+                "int f(int a[bound()]);int f(int a[bound()]){return calls;}"
+                "int a[3];return f(a)==1 && f(a)==2;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: empty and single-zero initialization", __LINE__,
+            SVI("int n=3;int top[n]={0};"
+                "int f(void){int n=3;typedef int Row[n];"
+                "int a[n++]={};const int b[n]={0};Row rows[2]={0};"
+                "struct S{int x;double y;void* p;};struct S s[n]={};"
+                "for(int i=0;i<n;i++){if(b[i] || s[i].x || s[i].y || s[i].p)return 0;}"
+                "return n==4 && a[0]==0 && a[2]==0 && rows[1][2]==0;}"
+                "return top[0]==0 && top[2]==0 && f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: zero initialization clears reused stack storage", __LINE__,
+            SVI("int f(void){int n=17;for(int i=0;i<3;i++){int a[n]={0};"
+                "for(int j=0;j<n;j++){if(a[j])return 0;a[j]=42;}}return 1;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "pointer strides: atomic fixed and VLA pointees share arithmetic", __LINE__,
+            SVI("int f(void){int n=3;int a[5][n];int b[5][3];"
+                "int (*_Atomic p)[n]=a;int (*_Atomic q)[3]=b;"
+                "p++;q++;p+=2;q+=2;p--;q--;"
+                "int (*oldp)[n]=__atomic_fetch_add(&p,1,__ATOMIC_SEQ_CST);"
+                "int (*oldq)[3]=__atomic_fetch_add(&q,1,__ATOMIC_SEQ_CST);"
+                "p-=2;q-=2;return oldp-a==2 && oldq-b==2 && p-a==1 && q-b==1;}"
+                "return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: typedef backward goto refreshes bounds", __LINE__,
+            SVI("int f(void){int n=2,sum=0;again:;typedef int A[n++];"
+                "A a;sum+=sizeof a;if(n<5)goto again;return sum;}return f();"),
+            .exit_code = 36,
+        },
+        {
+            "vla: nested defers preserve arrays until their cleanup", __LINE__,
+            SVI("int result;int f(void){int n=3;int a[n];a[0]=7;"
+                "_Defer result+=a[0];{int b[n];b[0]=11;_Defer result+=b[0];}"
+                "return a[0];}int x=f();return x==7 && result==18;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: loops rewind across stack segments", __LINE__,
+            SVI("int f(void){int n=70001;unsigned long long address=0;"
+                "for(int i=0;i<20;i++){char a[n];a[n-1]=i;"
+                "if(i && address!=(unsigned long long)a)return 0;"
+                "address=(unsigned long long)a;if(i<19)continue;break;}return 1;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: typeof evaluates VM operand", __LINE__,
+            SVI("int f(void){int n=3;int a[2][n];int (*p)[n]=a;"
+                "typeof(*p++) b;b[0]=9;return p-a==1 && sizeof b==12 && b[0]==9;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: unspecified prototype and unevaluated alignment", __LINE__,
+            SVI("int f(int n,int a[*][*]);"
+                "int f(int n,int a[n][n]){return sizeof a[0];}"
+                "int n=3;int a[n][n];int alignment=alignof(int[n++]);"
+                "return n==3 && alignment==alignof(int) && f(n,a)==12;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: slices and type reflection", __LINE__,
+            SVI("int f(void){int n=3;int a[2][n];a[1][2]=7;auto s=a[1:];"
+                "return s.count==1 && s[0][2]==7 && typeof(a).is_array"
+                " && typeof(a).count==2 && typeof(a).sizeof_==24"
+                " && typeof(a).element_type.count==3;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: alignment and calls preserve the parent allocation", __LINE__,
+            SVI("int child(int n){char a[n];a[n-1]=9;return a[n-1];}"
+                "int f(void){int n=3;alignas(64) int a[n];a[2]=7;"
+                "return (unsigned long long)a%64==0 && child(70001)==9 && a[2]==7;}return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: location reflection preserves each declarator layer", __LINE__,
+            SVI("int n=3; constexpr int base=__LINE__;\n"
+                "int a[2][n];\n"
+                "typedef int Row[n];\n"
+                "_Type t=typeof(a);\n"
+                "return typeof(a).loc.line==base+1 && typeof(a).loc.col==6"
+                " && typeof(a).element_type.loc.col==9"
+                " && Row.loc.line==base+2 && Row.loc.col==16"
+                " && t.loc.line==base+1 && t.loc.col==6 && t.loc.file.count>0;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: unnamed parameters do not alias bound temporaries", __LINE__,
+            SVI("int f(int n,int [n],int x){return n+x;}int a[3];return f(3,a,7);"),
+            .exit_code = 10,
+        },
+        {
+            "vla: VM types alone can coexist with alloca", __LINE__,
+            SVI("int f(void){int n=3;typedef int A[n];A *p=__builtin_alloca(sizeof(A));"
+                "(*p)[2]=7;return sizeof *p==12 && (*p)[2]==7;}return f();"),
+            .exit_code = 1,
         },
         {
             "slice array", __LINE__,
@@ -16642,6 +16752,16 @@ TestFunction(test_interpreter_diagnostics){
                 "f(*(struct S*)0, *(struct S*)0);\n"),
             SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
             .lowering_error = 1,
+        },
+        {
+            "vla rejects subsequent explicit alloca", __LINE__,
+            SVI("int f(void){\nint n=3;int a[n];\n__builtin_alloca(4);\nreturn 0;}return f();"),
+            SVI("(test):3:1: error: cannot mix explicit alloca and VLA allocations in one function\n"),
+        },
+        {
+            "vla rejects preceding explicit alloca", __LINE__,
+            SVI("int f(void){\nint n=3;\n__builtin_alloca(4);\nint a[n];\nreturn 0;}return f();"),
+            SVI("(test):4:5: error: cannot mix explicit alloca and VLA allocations in one function\n"),
         },
         {
             "call layout rejects final buffer alignment overflow", __LINE__,

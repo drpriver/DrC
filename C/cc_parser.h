@@ -54,7 +54,8 @@ struct CcParseFlags {
             CcValueClass vc: 2;
             uint32_t parsing_default_arg: 1,
                      static_rebind: 1,
-                     _padding: 28;
+                     parameter_type: 1,
+                     _padding: 27;
         };
     };
 };
@@ -277,6 +278,7 @@ struct CcParser {
     CcQualType char_star,
                const_char_star,
                void_star,
+               stack_mark_type,
                const_void_star,
                char_slice,
                const_char_slice,

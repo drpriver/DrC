@@ -7084,6 +7084,51 @@ TestFunction(test_parse_errors){
             SVI("(test):1:1: error: jump enters the scope of a defer statement\n"),
         },
         {
+            "VLA typedef rejects skipped declaration", __LINE__,
+            SVI("int n=3;\ngoto end; typedef int A[n]; end:;"),
+            SVI("(test):2:1: error: jump enters the scope of a variably modified declaration\n"),
+        },
+        {
+            "VLA pointer rejects skipped declaration", __LINE__,
+            SVI("int n=3;\ngoto end; int (*p)[n]; end:;"),
+            SVI("(test):2:1: error: jump enters the scope of a variably modified declaration\n"),
+        },
+        {
+            "VLA rejects entering nested scope", __LINE__,
+            SVI("int n=3;\ngoto end; {int a[n]; end:;}"),
+            SVI("(test):2:1: error: jump enters the scope of a variably modified declaration\n"),
+        },
+        {
+            "VM typedef rejects switch dispatch into scope", __LINE__,
+            SVI("int n=3;\nswitch(n){typedef int A[n];\ncase 1:;}"),
+            SVI("(test):3:1: error: jump enters the scope of a variably modified declaration\n"),
+        },
+        {
+            "VLA rejects noninteger bound", __LINE__,
+            SVI("int a[1.5];"),
+            SVI("(test):1:6: error: array dimension must have integer type\n"),
+        },
+        {
+            "VLA rejects nonzero initializer", __LINE__,
+            SVI("int n=3;\nint a[n]={1};"),
+            SVI("(test):2:10: error: VLA initializer must be {} or {0}\n"),
+        },
+        {
+            "VLA rejects multiple zero initializers", __LINE__,
+            SVI("int n=3;\nint a[n]={0,0};"),
+            SVI("(test):2:10: error: VLA initializer must be {} or {0}\n"),
+        },
+        {
+            "VLA rejects designated zero initializer", __LINE__,
+            SVI("int n=3;\nint a[n]={[0]=0};"),
+            SVI("(test):2:10: error: VLA initializer must be {} or {0}\n"),
+        },
+        {
+            "VLA typedef rejects incomplete element", __LINE__,
+            SVI("int n=3; struct S;\ntypedef struct S A[n];"),
+            SVI("(test):2:1: error: array requires a complete object element type\n"),
+        },
+        {
             "defer rejects entry into cleanup", __LINE__,
             SVI("goto end; _Defer {end:;}"),
             SVI("(test):1:1: error: jump crosses a deferred block boundary\n"),
@@ -8455,7 +8500,7 @@ TestFunction(test_parse_errors){
         {
             "wide array bound cannot discard high bits", __LINE__,
             SVI("int arr[((unsigned __int128)1<<64)+2];"),
-            SVI("(test):1:8: error: array dimension must be a constant integer expression\n"),
+            SVI("(test):1:8: error: array dimension exceeds supported range\n"),
         },
         {
             "long double array designator is not integral", __LINE__,
@@ -9444,16 +9489,16 @@ TestFunction(test_parse_errors){
             SVI("(test):2:21: error: function call in constant expression\n"),
         },
         {
-            "array dim: non-constexpr variable", __LINE__,
+            "VLA rejects static storage", __LINE__,
             SVI("int n = 10;\n"
-               "int arr[n];\n"),
-            SVI("(test):2:9: error: expression 'n' is not a constant expression\n"),
+               "static int arr[n];\n"),
+            SVI("(test):2:12: error: VLA object requires automatic storage duration\n"),
         },
         {
-            "array dim: function call", __LINE__,
+            "VM declaration rejects external linkage", __LINE__,
             SVI("int f(void);\n"
-               "int arr[f()];\n"),
-            SVI("(test):2:10: error: function call in constant expression\n"),
+               "extern int arr[f()];\n"),
+            SVI("(test):2:12: error: variably modified declaration cannot have external linkage\n"),
         },
         {
             "constexpr: post-increment", __LINE__,

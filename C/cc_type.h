@@ -33,6 +33,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_BLOCK_POINTER,
     CC_SLICE,
     CC_ALIGNED,
+    CC_VLA,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -126,9 +127,9 @@ struct CC_ALIGN(8) CcPointer {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind: 4;
+            CcTypeKind kind:    4; // CC_POINTER
             uint32_t restrict_: 1;
-            uint32_t _padding: 27;
+            uint32_t _padding:  27;
         };
     };
     CcQualType pointee;
@@ -140,9 +141,9 @@ struct CC_ALIGN(8) CcSlice {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind: 4;
+            CcTypeKind kind:    4; // CC_SLICE
             uint32_t restrict_: 1;
-            uint32_t _padding: 27;
+            uint32_t _padding:  27;
         };
     };
     CcQualType pointee;
@@ -156,22 +157,36 @@ struct CC_ALIGN(8) CcArray {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:        4;
+            CcTypeKind kind:        4; // CC_ARRAY
             uint32_t is_static:     1;
-            uint32_t is_vla:        1;
             uint32_t is_incomplete: 1;
             uint32_t is_vector:     1;
-            uint32_t _padding:      24;
+            uint32_t _padding:      25;
         };
     };
     uint32_t vector_size; // in bytes
     CcQualType element;
-    union {
-        size_t length;
-        CcExpr* _Nullable vla_expr;
-    };
+    size_t length;
+    SrcLoc declarator_loc; // parsed arrays only; preserved when an outer layer becomes a VLA
 };
 _Static_assert(_Alignof(CcArray)==8, "");
+
+typedef struct CcVla CcVla;
+struct CC_ALIGN(8) CcVla {
+    union {
+        uint32_t _bits;
+        struct {
+            CcTypeKind kind:   4; // CC_VLA
+            uint32_t unspecified: 1,
+                     _padding: 27; // Free real estate
+        };
+    };
+    uint32_t _pad; // free real estate
+    CcQualType element;
+    CcExpr *_Nonnull bound; // captured dimension, or a constant for a fixed outer layer
+    SrcLoc loc;
+};
+_Static_assert(_Alignof(CcVla)==8, "");
 
 enum {CC_MAX_PARAMS=0xffff};
 typedef struct CcFunction CcFunction;
@@ -295,7 +310,7 @@ struct CC_ALIGN(8) CcStruct {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:          4;
+            CcTypeKind kind:          4; // CC_STRUCT
             uint32_t is_incomplete:   1,
                      packed:          1,
                      has_fam:         1,
@@ -327,7 +342,7 @@ struct CC_ALIGN(8) CcUnion {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:            4;
+            CcTypeKind kind:            4; // CC_UNION
             uint32_t is_incomplete:     1,
                      packed:            1,
                      _reserved_has_fam: 1,
@@ -371,7 +386,7 @@ struct CC_ALIGN(8) CcEnum {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:               4;
+            CcTypeKind kind:               4; // CC_ENUM
             uint32_t is_incomplete:        1,
                      has_fixed_underlying: 1,
                      has_definition:       1,
@@ -393,7 +408,7 @@ struct CC_ALIGN(8) CcAligned {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind: 4;
+            CcTypeKind kind: 4; // CC_ALIGNED
             uint32_t _padding: 28;
         };
     };
@@ -692,7 +707,7 @@ static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector);
+    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector) || k == CC_VLA;
 }
 
 static inline
@@ -723,6 +738,24 @@ static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_p
 static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcVla*      ccqt_as_vla     (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline _Bool ccqt_is_array(CcQualType t){
+    return ccqt_kind(t) == CC_VLA || (ccqt_kind(t) == CC_ARRAY && !ccqt_as_array(t)->is_vector);
+}
+static inline CcQualType ccqt_array_element(CcQualType t){
+    return ccqt_kind(t) == CC_VLA ? ccqt_as_vla(t)->element : ccqt_as_array(t)->element;
+}
+static inline _Bool ccqt_is_vm(CcQualType t){
+    for(;;){
+        switch(ccqt_kind(t)){
+            case CC_VLA: return 1;
+            case CC_ARRAY: t = ccqt_as_array(t)->element; break;
+            case CC_POINTER: case CC_BLOCK_POINTER: t = ccqt_as_ptr(t)->pointee; break;
+            case CC_SLICE: t = ccqt_as_slice(t)->pointee; break;
+            default: return 0;
+        }
+    }
+}
 static inline CcAligned*  ccqt_as_aligned (CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
 
 static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && ccqt_basic_kind(t) == bt;}

@@ -767,7 +767,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_IS_ARRAY: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY && !ccqt_as_array(qt)->is_vector;
+            *(_Bool*)result = ccqt_is_array(qt);
             return 0;
         }
         case CC_TYPE_IS_VECTOR: {
@@ -838,6 +838,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_IS_INCOMPLETE: {
             CcTypeKind k = ccqt_kind(qt);
             switch(k){
+                case CC_VLA: *(_Bool*)result = 0; break;
                 case CC_ALIGNED: ci_unsafe_unreachable();
                 DRP_CASES_EXHAUSTED;
                 case CC_STRUCT:
@@ -885,6 +886,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_LOC:{
             SrcLoc* out = result;
             switch(ccqt_kind(qt)){
+                case CC_VLA: *out = ccqt_as_vla(qt)->loc; break;
                 case CC_ALIGNED: ci_unsafe_unreachable();
                 DRP_CASES_EXHAUSTED;
                 case CC_ENUM:
@@ -1067,7 +1069,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         }
         case CC_TYPE_ELEMENT_TYPE: {
             CcTypeKind k = ccqt_kind(qt);
-            if(k == CC_ARRAY){
+            if(k == CC_ARRAY || k == CC_VLA){
                 *(uintptr_t*)result = cc_array_element_type(qt).bits;
                 return 0;
             }
@@ -2632,9 +2634,27 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CiStack* stack;
             int err = ci_frame_stack(ci, frame, &stack);
             if(err) return err;
-            void* ptr = ci_stack_zalloc(stack, sz, 16);
+            void* ptr = op->alloca.zero_initialize?
+                ci_stack_zalloc(stack, sz, op->alloca.alignment)
+                : ci_stack_alloc(stack, sz, op->alloca.alignment);
             if(!ptr) return CI_OOM_ERROR;
             CI_INLINE_MEMCPY(dest, &ptr, sizeof dest);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_STACK_SAVE: {
+            CiStack* stack;
+            int err = ci_frame_stack(ci, frame, &stack);
+            if(err) return err;
+            CiStackMark mark = ci_stack_mark(stack);
+            CI_INLINE_MEMCPY((char*)frame->slots + op->stack_save.slot, &mark, sizeof mark);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_STACK_RESTORE: {
+            CiStackMark mark;
+            CI_INLINE_MEMCPY(&mark, (char*)frame->slots + op->stack_restore.slot, sizeof mark);
+            ci_stack_rewind(frame->stack, mark);
             frame->pc++;
             return 0;
         }
@@ -3432,11 +3452,17 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
                 }
                 else {
                     uint32_t sz;
-                    err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
+                    if(ccqt_kind(var->type) == CC_VLA){
+                        sz = sizeof(void*);
+                        err = 0;
+                    }
+                    else err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &sz);
                     if(err) goto cleanup;
                     uint32_t alignment;
                     err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &alignment);
                     if(err) goto cleanup;
+                    if(ccqt_kind(var->type) == CC_VLA)
+                        alignment = _Alignof(void*);
                     if(var->alignment > alignment) alignment = var->alignment;
                     if(!alignment) alignment = 1;
                     // FIXME: Allocator abstraction needs to take an alignment
@@ -4189,6 +4215,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     int tok_type = CPP_NUMBER;
     retry:;
     switch(ccqt_kind(rt)){
+        case CC_VLA: err = ci_ice(ci, loc, "%s", "invalid VLA return type"); goto cleanup;
         case CC_ALIGNED: ci_unsafe_unreachable();
         case CC_BASIC:
             switch(ccqt_basic_kind(rt)){

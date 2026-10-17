@@ -24,6 +24,7 @@ static inline
 int
 cc_type_sizeof_complete(const CcTargetConfig* tc, CcQualType type, uint32_t* out){
     switch(ccqt_kind(type)){
+        case CC_VLA: return _cc_not_constant_error;
         case CC_ALIGNED: return _cc_unreachable_error;
         DRP_CASES_EXHAUSTED;
         case CC_BASIC:    *out = tc->sizeof_[ccqt_basic_kind(type)]; return 0;
@@ -39,7 +40,7 @@ cc_type_sizeof_complete(const CcTargetConfig* tc, CcQualType type, uint32_t* out
         case CC_ARRAY:{
             CcArray* a = ccqt_as_array(type);
             if(a->is_vector){ *out = a->vector_size; return 0; }
-            if(a->is_incomplete || a->is_vla) return _cc_not_constant_error;
+            if(a->is_incomplete) return _cc_not_constant_error;
             uint32_t element_size;
             int err = cc_type_sizeof_complete(tc, a->element, &element_size);
             if(err) return err;
@@ -60,7 +61,6 @@ cc_field_path_resolve(const CcTargetConfig* target, CcQualType type, CcFieldPath
         if(kind == CC_ARRAY){
             CcArray* array = ccqt_as_array(type);
             if(!array->is_incomplete && index >= array->length) return _cc_not_constant_error;
-            if(array->is_vla) return _cc_not_constant_error;
             uint32_t size;
             int err = cc_type_sizeof_complete(target, array->element, &size);
             if(err) return err;

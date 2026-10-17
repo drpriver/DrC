@@ -25,6 +25,8 @@ struct CiStackMark {
     CiStackSegment*_Nullable segment;
     size_t used;
 };
+_Static_assert(sizeof(CiStackMark) == 2*sizeof(size_t), "hidden stack mark storage");
+_Static_assert(_Alignof(CiStackMark) == _Alignof(size_t), "hidden stack mark alignment");
 
 typedef struct CiStack CiStack;
 struct CiStack {

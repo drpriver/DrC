@@ -89,6 +89,10 @@ static struct OomTestCase {
          "return a(0)==4&&b(1)==7&&a(4)==8;\n")},
     {__LINE__, SVI("int f(int n){char* p=__builtin_alloca(70001);p[0]=n;p[70000]=n+1;\n"
          "int v=n?f(n-1):0;return v+p[0]+p[70000];}return f(2);\n")},
+    {__LINE__, SVI("int f(int n,int a[n]){typedef char Row[n+70001];"
+         "for(int i=0;i<3;i++){Row b;b[0]=a[0];b[n+70000]=i;"
+         "_Defer a[0]+=b[0]+b[n+70000];}return a[0];}"
+         "int n=3;int a[n];a[0]=1;return f(n,a);\n")},
     {__LINE__, SVI("struct S {_SrcLoc loc;};int expected;\n"
          "int f(int args...,struct S s={__builtin_SRCLOC()}){return args.count==2&&s.loc.line==expected&&s.loc.file.count>0;}\n"
          "int probe(void){expected=__LINE__;return f(1,2);}return probe();\n")},

@@ -77,6 +77,7 @@ nc_abi_type(const CcTargetConfig* tc, CcQualType qt, NcAbiRole role, NcAbiType* 
     _Bool aggregate = 0, fp = 0, complex = 0;
     const CcStruct* record = NULL;
     switch(ccqt_kind(qt)){
+        case CC_VLA: return _cc_invalid_value_error;
         case CC_ENUM:
             return nc_abi_type(tc, ccqt_as_enum(qt)->underlying, role, out);
         case CC_POINTER:
