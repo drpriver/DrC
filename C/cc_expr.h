@@ -6,14 +6,15 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../Drp/ByteBuffer.h"
-#include "srcloc.h"
 #include "../Drp/typed_enum.h"
+#include "../Drp/Allocators/allocator.h"
+#include "../Drp/ckdint.h"
+#include "srcloc.h"
 #include "cc_type.h"
 #include "cc_memory_order.h"
 #include "ci_softnum.h"
 #include "cc_bit_builtin.h"
-#include "../Drp/Allocators/allocator.h"
-#include "../Drp/ckdint.h"
+#include "cc_errors.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -336,13 +337,15 @@ cc_field_path_make(Allocator al, const uint32_t*_Nullable components, uint32_t c
         return 0;
     }
     _Bool extended = count > 6;
-    for(uint32_t i = 0; i < count && !extended; i++) extended = components[i] > 1023;
+    for(uint32_t i = 0; i < count && !extended; i++)
+        extended = components[i] > 1023;
     if(extended){
         size_t size;
         if(mul_overflow((size_t)count, sizeof(uint32_t), &size) || add_overflow(sizeof(CcFieldPathEx), size, &size))
-            return 1;
+            return _cc_oom_error;
         CcFieldPathEx* ex = Allocator_alloc(al, size);
-        if(!ex) return 1;
+        if(!ex)
+            return _cc_oom_error;
         ex->n_components = count;
         for(uint32_t i = 0; i < count; i++) ex->components[i] = components[i];
         path.is_extended = 1;
@@ -391,6 +394,7 @@ cc_field_path_concat(Allocator al, CcFieldPath prefix, CcFieldPath suffix, CcFie
     *out = (CcFieldPath){.is_extended=1, .ptr=(uintptr_t)ex >> 1};
     return 0;
 }
+
 static inline
 int
 cc_field_path_drop(Allocator al, CcFieldPath path, uint32_t count, CcFieldPath* out){

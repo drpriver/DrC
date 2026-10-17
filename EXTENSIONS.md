@@ -648,6 +648,46 @@ da.dump();
 
 Anonymous structs and Plan9 structs export their methods.
 
+
+Methods can also be declared and defined in later blocks for the same
+tagged type. Method-only blocks add to the interface without defining or
+changing the data layout. Matching method declarations can appear in any
+order. Each method can only be defined once.
+
+```C
+// Look, we are better than C++, an opaque type with methods.
+struct Opaque {
+    void increment(_Self*);
+    int sum(_Self*);
+};
+// Pointers and method calls are allowed; objects and sizeof are not yet.
+struct Opaque { int x, y; };
+struct Opaque {
+    int sum(_Self* self) { return self.x + self.y; }
+};
+struct Opaque {
+    void increment(_Self* self) { self.x++; }
+};
+```
+
+
+A method-only block may add new methods to an already complete type, just
+as `push_method` does.
+
+```C
+// Redeclare the type without data fields to add a method
+// to the type.
+struct Opaque {
+    void print(const _Self* self){
+        printf("Opaque(%d,%d)\n", self.x, self.y);
+    }
+}
+```
+
+
+For compatibility with GNU, an empty struct declaration with no methods
+is a complete 0-sized type.
+
 ### `.` and `-&gt;` interchangeable
 
 The `.` and `-&gt;` operators are interchangeable. Using
@@ -1038,6 +1078,12 @@ struct __builtin_Enumerator {
 ```
 
 #### `push_method`
+
+`push_method()` is probably going to be removed now that methods
+can be declared by re-declaring a type with only methods, but
+it is a bit different as you can inject existing functions into
+a type as a method.
+
 
 `push_method` is a compile-time mutation that adds a method to
 a struct or union type. It must be used at global scope. The syntax is:

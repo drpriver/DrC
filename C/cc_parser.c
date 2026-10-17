@@ -169,6 +169,8 @@ static int cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc,
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
 static _Bool cc_has_field(CcParser*, CcField*_Nullable, uint32_t, Atom);
 static int cc_lookup_field(CcParser*, CcField*_Nullable, uint32_t, Atom, CcFieldPath*_Nullable, CcQualType*, CcQualType*_Nullable, CcField*_Nullable*_Nonnull);
+static int cc_lookup_member(CcParser*, CcStruct*, Atom, CcFieldPath*_Nullable, CcQualType*, CcQualType*_Nullable, CcField*_Nullable*_Nonnull);
+static int cc_append_method(CcParser*, CcStruct*, CcFunc*, SrcLoc);
 static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
 static int cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value);
 static int cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value);
@@ -638,11 +640,11 @@ cc_plan9_base(CcQualType from, CcQualType to){
 
 static
 int
-cc_member_path(CcParser* p, CcField* fields, uint32_t count, Atom name, _Bool owner, CcFieldPath* out){
+cc_member_path(CcParser* p, CcStruct* s, Atom name, _Bool owner, CcFieldPath* out){
     CcQualType type;
     CcField* field;
     CcFieldPath path;
-    int err = cc_lookup_field(p, fields, count, name, &path, &type, NULL, &field);
+    int err = cc_lookup_member(p, s, name, &path, &type, NULL, &field);
     if(err) return err;
     if(!field) return CC_NOT_CONSTANT_ERROR;
     if(owner && field->is_method){
@@ -686,38 +688,71 @@ int
 cc_set_member_path(CcParser* p, CcExpr* e, CcQualType owner_type, Atom name, _Bool owner, uint32_t builtin_index){
     if(ccqt_kind(owner_type) == CC_STRUCT || ccqt_kind(owner_type) == CC_UNION){
         CcStruct* s = ccqt_as_struct(owner_type);
-        return cc_member_path(p, s->fields, s->field_count, name, owner, &e->field_path);
+        return cc_member_path(p, s, name, owner, &e->field_path);
     }
     e->field_path = (CcFieldPath){.n_components=1, .idx0=builtin_index};
     return 0;
 }
 
+typedef struct CcTypePair CcTypePair;
+struct CcTypePair {
+    CcQualType a, b;
+    const CcTypePair* _Nullable previous;
+};
+
+static _Bool cc_types_match(CcQualType, CcQualType, unsigned, const CcTypePair* _Nullable, _Bool, _Bool);
+
 static
 _Bool
-cc_types_compatible(CcQualType a, CcQualType b, unsigned depth){
+cc_record_members_match(CcStruct* a, CcStruct* b, unsigned depth, const CcTypePair* _Nullable pairs, _Bool same){
+    if(a->field_count != b->field_count) return 0;
+    if(a->packed != b->packed) return 0;
+    if(a->size != b->size) return 0;
+    if(a->alignment != b->alignment) return 0;
+    for(uint32_t i = 0; i < a->field_count; i++){
+        CcField* x = &a->fields[i];
+        CcField* y = &b->fields[i];
+        if(x->name != y->name) return 0;
+        if(x->alignment != y->alignment) return 0;
+        if(x->is_bitfield != y->is_bitfield) return 0;
+        if(x->bitwidth != y->bitwidth) return 0;
+        if(ccqt_kind(x->type) == CC_ARRAY && ccqt_kind(y->type) == CC_ARRAY
+        && ccqt_as_array(x->type)->is_incomplete != ccqt_as_array(y->type)->is_incomplete)
+            return 0;
+        if(!cc_types_match(x->type, y->type, depth+1, pairs, same, !x->name && !x->is_bitfield))
+            return 0;
+    }
+    return 1;
+}
+
+static
+_Bool
+cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nullable pairs, _Bool same, _Bool anonymous){
     a = ccqt_unaligned(a);
     b = ccqt_unaligned(b);
     if(a.bits == b.bits) return 1;
     if(depth >= 256 || a.quals != b.quals || ccqt_kind(a) != ccqt_kind(b)) return 0;
+    if(same && !anonymous) return 0;
+    CcTypePair pair = {a, b, pairs};
     switch(ccqt_kind(a)){
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_POINTER: case CC_BLOCK_POINTER:
             return ccqt_as_ptr(a)->restrict_ == ccqt_as_ptr(b)->restrict_
-                && cc_types_compatible(ccqt_as_ptr(a)->pointee, ccqt_as_ptr(b)->pointee, depth+1);
+                && cc_types_match(ccqt_as_ptr(a)->pointee, ccqt_as_ptr(b)->pointee, depth+1, pairs, 0, 0);
         case CC_SLICE:
             return ccqt_as_slice(a)->restrict_ == ccqt_as_slice(b)->restrict_
-                && cc_types_compatible(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1);
+                && cc_types_match(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1, pairs, 0, 0);
         case CC_ARRAY: {
             CcArray* x = ccqt_as_array(a);
             CcArray* y = ccqt_as_array(b);
             return x->is_vector == y->is_vector && x->vector_size == y->vector_size
                 && (x->is_incomplete || y->is_incomplete || x->is_vla || y->is_vla || x->length == y->length)
-                && cc_types_compatible(x->element, y->element, depth+1);
+                && cc_types_match(x->element, y->element, depth+1, pairs, 0, 0);
         }
         case CC_FUNCTION: {
             CcFunction* x = ccqt_as_function(a);
             CcFunction* y = ccqt_as_function(b);
-            if(!cc_types_compatible(x->return_type, y->return_type, depth+1)) return 0;
+            if(!cc_types_match(x->return_type, y->return_type, depth+1, pairs, 0, 0)) return 0;
             if(x->no_prototype || y->no_prototype){
                 CcFunction* proto = x->no_prototype ? y : x;
                 if(proto->is_variadic) return 0;
@@ -734,13 +769,50 @@ cc_types_compatible(CcQualType a, CcQualType b, unsigned depth){
             for(uint32_t i = 0; i < x->param_count; i++){
                 CcQualType at = {.unqual=x->params[i].unqual};
                 CcQualType bt = {.unqual=y->params[i].unqual};
-                if(!cc_types_compatible(at, bt, depth+1)) return 0;
+                if(!cc_types_match(at, bt, depth+1, pairs, 0, 0))
+                    return 0;
             }
             return 1;
         }
-        case CC_BASIC: case CC_STRUCT: case CC_UNION: case CC_ENUM: return 0;
+        case CC_STRUCT:
+        case CC_UNION: {
+            CcStruct* x = ccqt_as_struct(a);
+            CcStruct* y = ccqt_as_struct(b);
+            for(const CcTypePair* prev = pairs; prev; prev = prev->previous)
+                if(prev->a.unqual == a.unqual && prev->b.unqual == b.unqual)
+                    return 1;
+            if(x->is_incomplete || y->is_incomplete || x->name != y->name || (!x->name && !anonymous))
+                return 0;
+            return cc_record_members_match(x, y, depth, &pair, same);
+        }
+        case CC_ENUM: {
+            CcEnum* x = ccqt_as_enum(a);
+            CcEnum* y = ccqt_as_enum(b);
+            if(x->is_incomplete || y->is_incomplete) return 0;
+            if(!x->name || x->name != y->name) return 0;
+            if(x->has_fixed_underlying != y->has_fixed_underlying) return 0;
+            if(x->underlying.bits != y->underlying.bits) return 0;
+            if(x->enumerator_count != y->enumerator_count) return 0;
+            for(size_t i = 0; i < x->enumerator_count; i++){
+                CcEnumerator* en = x->enumerators[i];
+                size_t j;
+                for(j = 0; j < y->enumerator_count; j++)
+                    if(en->name == y->enumerators[j]->name)
+                        break;
+                if(j == y->enumerator_count || !ci_uint128_eq(en->value, y->enumerators[j]->value))
+                    return 0;
+            }
+            return 1;
+        }
+        case CC_BASIC: return 0;
         DRP_CASES_EXHAUSTED;
     }
+}
+
+static
+_Bool
+cc_types_compatible(CcQualType a, CcQualType b, unsigned depth){
+    return cc_types_match(a, b, depth, NULL, 0, 0);
 }
 
 static
@@ -766,8 +838,8 @@ cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
     _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(from))) || fk == CC_ENUM;
     _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(to))) || tk == CC_ENUM;
     if(f_arith && t_arith) return 1;
-    if(fk == CC_STRUCT && tk == CC_STRUCT) return from.unqual == to.unqual;
-    if(fk == CC_UNION && tk == CC_UNION) return from.unqual == to.unqual;
+    if((fk == CC_STRUCT || fk == CC_UNION) && fk == tk)
+        return cc_types_compatible((CcQualType){.unqual=from.unqual}, (CcQualType){.unqual=to.unqual}, 0);
     if(fk == CC_POINTER && tk == CC_POINTER){
         CcQualType fp = ccqt_as_ptr(from)->pointee;
         CcQualType tp = ccqt_as_ptr(to)->pointee;
@@ -1519,16 +1591,74 @@ cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, 
     return 0;
 }
 
-// Returns CC_SYNTAX_ERROR for incompatible declarations, without emitting a
-// diagnostic
+static
+_Bool
+cc_type_contains_composite(CcQualType candidate, CcQualType other, unsigned depth, const CcTypePair* _Nullable pairs){
+    if(candidate.bits == other.bits) return 1;
+    if(depth >= 256) return 0;
+    if(ccqt_raw_kind(other) == CC_ALIGNED && ccqt_raw_kind(candidate) != CC_ALIGNED) return 0;
+    candidate = ccqt_unaligned(candidate);
+    other = ccqt_unaligned(other);
+    switch(ccqt_kind(candidate)){
+        case CC_ALIGNED: cc_unsafe_unreachable();
+        case CC_POINTER:
+        case CC_BLOCK_POINTER:
+            return cc_type_contains_composite(ccqt_as_ptr(candidate)->pointee, ccqt_as_ptr(other)->pointee, depth+1, pairs);
+        case CC_SLICE:
+            return cc_type_contains_composite(ccqt_as_slice(candidate)->pointee, ccqt_as_slice(other)->pointee, depth+1, pairs);
+        case CC_ARRAY: {
+            CcArray* a = ccqt_as_array(candidate);
+            CcArray* b = ccqt_as_array(other);
+            if(a->is_incomplete && !b->is_incomplete)
+                return 0;
+            return cc_type_contains_composite(a->element, b->element, depth+1, pairs);
+        }
+        case CC_FUNCTION: {
+            CcFunction* a = ccqt_as_function(candidate);
+            CcFunction* b = ccqt_as_function(other);
+            if(!cc_type_contains_composite(a->return_type, b->return_type, depth+1, pairs))
+                return 0;
+            if(a->no_prototype || b->no_prototype)
+                return b->no_prototype;
+            for(uint32_t i = 0; i < a->param_count; i++)
+                if(!cc_type_contains_composite(a->params[i], b->params[i], depth+1, pairs))
+                    return 0;
+            return 1;
+        }
+        case CC_STRUCT:
+        case CC_UNION: {
+            for(const CcTypePair* prev = pairs; prev; prev = prev->previous)
+                if(prev->a.unqual == candidate.unqual && prev->b.unqual == other.unqual)
+                    return 1;
+            CcTypePair pair = {candidate, other, pairs};
+            CcStruct* a = ccqt_as_struct(candidate);
+            CcStruct* b = ccqt_as_struct(other);
+            for(uint32_t i = 0; i < a->field_count; i++)
+                if(!cc_type_contains_composite(a->fields[i].type, b->fields[i].type, depth+1, &pair))
+                    return 0;
+            return 1;
+        }
+        case CC_BASIC:
+        case CC_ENUM:
+            return 1;
+        DRP_CASES_EXHAUSTED;
+    }
+}
+
+typedef struct CcCompositePair CcCompositePair;
+struct CcCompositePair {
+    CcQualType a, b, composite;
+    const CcCompositePair* _Nullable previous;
+};
+
 static
 int
-cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out){
+cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out, const CcCompositePair* _Nullable pairs){
     *out = new_;
     if(old.bits == new_.bits) return 0;
     if(ccqt_raw_kind(old) == CC_ALIGNED || ccqt_raw_kind(new_) == CC_ALIGNED){
         CcQualType merged;
-        int err = cc_merge_compatible_decl_types(p, ccqt_unaligned(old), ccqt_unaligned(new_), &merged);
+        int err = cc_merge_decl_types(p, ccqt_unaligned(old), ccqt_unaligned(new_), &merged, pairs);
         if(err) return err;
         CcQualType aligned_type = ccqt_raw_kind(new_) == CC_ALIGNED ? new_ : old;
         CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), merged, ccqt_as_aligned(aligned_type)->alignment);
@@ -1548,7 +1678,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
             if(!a->is_vla && !b->is_vla && !a->is_incomplete && !b->is_incomplete && a->length != b->length)
                 return CC_SYNTAX_ERROR;
             CcQualType element;
-            int err = cc_merge_compatible_decl_types(p, a->element, b->element, &element);
+            int err = cc_merge_decl_types(p, a->element, b->element, &element, pairs);
             if(err) return err;
             CcArray* bound = b->is_incomplete ? a : b;
             if(bound->is_vla){
@@ -1570,7 +1700,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
             CcPointer* b = ccqt_as_ptr(new_);
             if(a->restrict_ != b->restrict_) return CC_SYNTAX_ERROR;
             CcQualType pointee;
-            int err = cc_merge_compatible_decl_types(p, a->pointee, b->pointee, &pointee);
+            int err = cc_merge_decl_types(p, a->pointee, b->pointee, &pointee, pairs);
             if(err) return err;
             CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, b->restrict_, kind == CC_BLOCK_POINTER);
             if(!ptr) return CC_OOM_ERROR;
@@ -1582,7 +1712,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
             CcSlice* b = ccqt_as_slice(new_);
             if(a->restrict_ != b->restrict_) return CC_SYNTAX_ERROR;
             CcQualType pointee;
-            int err = cc_merge_compatible_decl_types(p, a->pointee, b->pointee, &pointee);
+            int err = cc_merge_decl_types(p, a->pointee, b->pointee, &pointee, pairs);
             if(err) return err;
             CcSlice* slice = cc_intern_slice(&p->type_cache, cc_allocator(p), pointee, b->restrict_);
             if(!slice) return CC_OOM_ERROR;
@@ -1593,7 +1723,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
             CcFunction* a = ccqt_as_function(old);
             CcFunction* b = ccqt_as_function(new_);
             CcQualType ret;
-            int err = cc_merge_compatible_decl_types(p, a->return_type, b->return_type, &ret);
+            int err = cc_merge_decl_types(p, a->return_type, b->return_type, &ret, pairs);
             if(err) return err;
             CcFunction* proto = b->no_prototype ? a : b;
             if(a->no_prototype || b->no_prototype){
@@ -1615,7 +1745,7 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
                 if(!a->no_prototype && !b->no_prototype){
                     CcQualType ap = a->params[i], bp = b->params[i];
                     ap.quals = bp.quals = 0;
-                    err = cc_merge_compatible_decl_types(p, ap, bp, &pt);
+                    err = cc_merge_decl_types(p, ap, bp, &pt, pairs);
                     if(err) break;
                 }
                 err = ma_push(CcQualType)(&params, cc_scratch_allocator(p), pt);
@@ -1632,13 +1762,56 @@ cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQ
             ma_cleanup(CcQualType)(&params, cc_scratch_allocator(p));
             return err;
         }
-        case CC_BASIC:
         case CC_STRUCT:
-        case CC_UNION:
-        case CC_ENUM:
+        case CC_UNION: {
+            for(const CcCompositePair* prev = pairs; prev; prev = prev->previous){
+                if(prev->a.unqual == old.unqual && prev->b.unqual == new_.unqual){
+                    *out = prev->composite;
+                    out->quals = new_.quals;
+                    return 0;
+                }
+            }
+            if(cc_type_contains_composite(new_, old, 0, NULL)) return 0;
+            if(cc_type_contains_composite(old, new_, 0, NULL)){
+                *out = old;
+                return 0;
+            }
+            CcStruct* a = ccqt_as_struct(old);
+            CcStruct* b = ccqt_as_struct(new_);
+            CcStruct* record = Allocator_alloc(cc_allocator(p), sizeof *record);
+            if(!record) return CC_OOM_ERROR;
+            *record = *b;
+            record->ffi_cache = NULL;
+            record->method_capacity = record->method_count;
+            record->methods = NULL;
+            if(b->method_count){
+                record->methods = Allocator_dupe(cc_allocator(p), (const void*)b->methods, b->method_count * sizeof(CcField));
+                if(!record->methods) return CC_OOM_ERROR;
+            }
+            record->fields = Allocator_alloc(cc_allocator(p), b->field_count * sizeof(CcField));
+            if(b->field_count && !record->fields) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits = (uintptr_t)record | new_.quals};
+            CcCompositePair pair = {old, new_, *out, pairs};
+            for(uint32_t i = 0; i < b->field_count; i++){
+                record->fields[i] = b->fields[i];
+                int err = cc_merge_decl_types(p, a->fields[i].type, b->fields[i].type, &record->fields[i].type, &pair);
+                if(err) return err;
+            }
+            return 0;
+        }
+        case CC_BASIC:
             return CC_SYNTAX_ERROR;
+        case CC_ENUM:
+            return 0; // Compatibility was checked before constructing the composite.
         DRP_CASES_EXHAUSTED;
     }
+}
+
+static
+int
+cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out){
+    if(!cc_types_compatible(old, new_, 0)) return CC_SYNTAX_ERROR;
+    return cc_merge_decl_types(p, old, new_, out, NULL);
 }
 
 static
@@ -2351,7 +2524,8 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
         else if(ccqt_bt_eq(then_expr->type, CCBT__Any) && ccqt_bt_eq(else_expr->type, CCBT__Any)){
             common = ccqt_basic(CCBT__Any);
         }
-        else if((tk == CC_STRUCT || tk == CC_UNION) && then_expr->type.ptr == else_expr->type.ptr){
+        else if((tk == CC_STRUCT || tk == CC_UNION) && tk == ek
+            && cc_types_compatible((CcQualType){.unqual=then_expr->type.unqual}, (CcQualType){.unqual=else_expr->type.unqual}, 0)){
             common = then_expr->type;
         }
         else if(tk == CC_SLICE && ek == CC_SLICE){
@@ -2565,7 +2739,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     if(err) return err;
                     err = cc_deref_type(p, right->type, &rp, tok.loc, 0);
                     if(err) return err;
-                    if(_ccqt_to_type_ptr(lp) != _ccqt_to_type_ptr(rp)
+                    if(!cc_types_compatible((CcQualType){.unqual=lp.unqual}, (CcQualType){.unqual=rp.unqual}, 0)
                     && !(ccqt_is_basic(lp) && ccqt_basic_kind(lp) == CCBT_void)
                     && !(ccqt_is_basic(rp) && ccqt_basic_kind(rp) == CCBT_void))
                         return cc_error(p, tok.loc, "pointer subtraction with incompatible types");
@@ -5437,7 +5611,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 if(tk == CC_STRUCT){
                     CcStruct* s = ccqt_as_struct(agg_type);
                     CcField* field;
-                    err = cc_lookup_field(p, s->fields, s->field_count, member_name, NULL, &member_type, &member_owner, &field);
+                    err = cc_lookup_member(p, s, member_name, NULL, &member_type, &member_owner, &field);
                     if(err) return err;
                     if(field && field->is_method) method = field->method;
                     if(member_type.bits) member_type.quals |= agg_type.quals;
@@ -5445,7 +5619,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 else if(tk == CC_UNION){
                     CcUnion* u = ccqt_as_union(agg_type);
                     CcField* field;
-                    err = cc_lookup_field(p, u->fields, u->field_count, member_name, NULL, &member_type, &member_owner, &field);
+                    err = cc_lookup_member(p, (CcStruct*)u, member_name, NULL, &member_type, &member_owner, &field);
                     if(err) return err;
                     if(field && field->is_method) method = field->method;
                     if(member_type.bits) member_type.quals |= agg_type.quals;
@@ -5493,16 +5667,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         CcStruct* s = ccqt_as_struct(qt);
-                        Allocator al = cc_allocator(p);
-                        CcField* new_fields = Allocator_realloc(al, s->fields, s->field_count * sizeof *new_fields, (s->field_count + 1)*sizeof *new_fields);
-                        if(!new_fields) return CC_OOM_ERROR;
-                        s->fields = new_fields;
-                        s->fields[s->field_count++] = (CcField){
-                            .type = (CcQualType){.bits=(uintptr_t)func->type},
-                            .method = func,
-                            .is_method = 1,
-                            .loc = operand->loc,
-                        };
+                        err = cc_append_method(p, s, func, operand->loc);
+                        if(err) return err;
                         cc_release_expr(p, operand);
                         CcExpr* dummy = cc_value_expr(p, tok.loc, ccqt_basic(CCBT_void));
                         if(!dummy) return CC_OOM_ERROR;
@@ -9736,7 +9902,7 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
             continue;
         CcStruct* sub = ccqt_as_struct(field->type);
         CcFieldPath suffix = {0};
-        int err = cc_lookup_field(p, sub->fields, sub->field_count, name, out_path ? &suffix : NULL,
+        int err = cc_lookup_member(p, sub, name, out_path ? &suffix : NULL,
             out_type, out_owner, out_field);
         if(err) return err;
         if(!*out_field) continue;
@@ -9756,6 +9922,53 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
         }
         return 0;
     }
+    return 0;
+}
+
+static
+int
+cc_lookup_member(CcParser* p, CcStruct* s, Atom name, CcFieldPath* _Nullable path, CcQualType* type, CcQualType* _Nullable owner, CcField* _Nullable* _Nonnull field){
+    for(uint32_t i = 0; i < s->method_count; i++){
+        CcField* m = &s->methods[i];
+        if(m->method->name != name) continue;
+        *field = m;
+        *type = m->type;
+        if(owner) *owner = CCQT_NONE;
+        // A synthetic final component identifies the method. Consumers strip
+        // it before resolving the data path to the receiver subobject.
+        uint32_t index = s->field_count + i;
+        if(path){
+            CcFieldPath result;
+            int err = cc_field_path_make(cc_allocator(p), &index, 1, &result);
+            if(err) return err;
+            *path = result;
+        }
+        return 0;
+    }
+    return cc_lookup_field(p, s->fields, s->field_count, name, path, type, owner, field);
+}
+
+static
+int
+cc_append_method(CcParser* p, CcStruct* s, CcFunc* func, SrcLoc loc){
+    CcQualType type;
+    CcField* found;
+    int err = cc_lookup_member(p, s, func->name, NULL, &type, NULL, &found);
+    if(err) return err;
+    if(found) return cc_error(p, loc, "duplicate member '%s'", func->name->data);
+    if(s->method_count == s->method_capacity){
+        uint32_t capacity = s->method_capacity ? s->method_capacity * 2 : 4;
+        CcField* methods = Allocator_realloc(cc_allocator(p), s->methods, s->method_capacity * sizeof *methods, capacity * sizeof *methods);
+        if(!methods) return CC_OOM_ERROR;
+        s->methods = methods;
+        s->method_capacity = capacity;
+    }
+    s->methods[s->method_count++] = (CcField){.type={
+        .bits=(uintptr_t)func->type},
+        .method=func,
+        .is_method=1,
+        .loc=loc
+    };
     return 0;
 }
 
@@ -9820,8 +10033,15 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
         return 0;
     }
     CcFieldPath path;
-    int err = cc_lookup_field(p, fields, count, name, &path, out_type, NULL, out_field);
+    int err = cc_lookup_member(p, ccqt_as_struct(type), name, &path, out_type, NULL, out_field);
     if(err || !*out_field) return err;
+    if((*out_field)->is_method){
+        CcFieldPath owner;
+        err = cc_field_path_take(cc_allocator(p), path, cc_field_path_count(path)-1, &owner);
+        cc_field_path_free(cc_allocator(p), path);
+        if(err) return CC_OOM_ERROR;
+        path = owner;
+    }
     err = cc_field_path_resolve(cc_target(p), type, path, out_offset);
     cc_field_path_free(cc_allocator(p), path);
     return err;
@@ -10736,6 +10956,12 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
             }
         }
     }
+    CcStruct* record = ccqt_as_struct(anon_type);
+    for(uint32_t i = 0; i < record->method_count; i++){
+        Atom name = record->methods[i].method->name;
+        if(cc_has_field(p, existing, existing_count, name))
+            return cc_error(p, loc, "duplicate member '%s'", name->data);
+    }
     return 0;
 }
 
@@ -10766,10 +10992,12 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         err = cc_next_token(p, &tok);
         if(err) return err;
         void* existing = NULL;
+        _Bool redefining = 0;
         if(name){
             if(is_union){
                 CcUnion* u = existing = cc_scope_lookup_union_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
-                if(u && !u->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                if(u && u->is_defining) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                redefining = u && !u->is_incomplete;
                 if(!u){
                     // Register incomplete tag before parsing body so self-references resolve.
                     u = Allocator_zalloc(cc_allocator(p), sizeof *u);
@@ -10786,7 +11014,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             }
             else {
                 CcStruct* s = existing = cc_scope_lookup_struct_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
-                if(s && !s->is_incomplete) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                if(s && s->is_defining) return cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+                redefining = s && !s->is_incomplete;
                 if(!s){
                     // Register incomplete tag before parsing body so self-references resolve.
                     s = Allocator_zalloc(cc_allocator(p), sizeof *s);
@@ -10819,8 +11048,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             }
         }
         CcQualType saved_tag_type = p->current_tag_type;
+        ((CcStruct*)existing)->is_defining = 1;
         p->current_tag_type = (CcQualType){.bits = (uintptr_t)existing};
         Marray(CcField) fields_arr = {0};
+        _Bool saw_method = 0;
         for(;;){
             err = cc_peek(p, &tok);
             if(err) goto struct_err;
@@ -10957,24 +11188,82 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             err = cc_error(p, tok.loc, "expected method name");
                             goto struct_err;
                         }
-                        CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
-                        if(!func){
-                            ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
-                            err = CC_OOM_ERROR;
-                            goto struct_err;
+                        saw_method = 1;
+                        CcStruct* record = existing;
+                        CcField* old_method = NULL;
+                        for(uint32_t i = 0; i < record->method_count; i++)
+                            if(record->methods[i].method->name == member_name)
+                                old_method = &record->methods[i];
+                        CcFunc* func = old_method ? old_method->method : NULL;
+                        Atom symbol = NULL;
+                        CcScope* scope = cc_scope_declarations(p->current);
+                        if(name && (scope == &p->global || scope == p->file_scope)){
+                            MStringBuilder mangled = {.allocator=cc_scratch_allocator(p)};
+                            msb_sprintf(&mangled, "__method_%c_%u_%s_%s", is_union ? 'u' : 's', (unsigned)name->length, name->data, member_name->data);
+                            if(mangled.errored){
+                                msb_destroy(&mangled);
+                                err = CC_OOM_ERROR;
+                                goto struct_err;
+                            }
+                            symbol = msb_atomize(&mangled, p->cpp.at);
+                            msb_destroy(&mangled);
+                            if(!symbol){
+                                err = CC_OOM_ERROR;
+                                goto struct_err;
+                            }
+                            if(!func) func = AM_get(&p->external_methods, symbol);
                         }
-                        func->name = member_name;
-                        func->type = ccqt_as_function(member_type);
-                        func->loc = name_loc;
-                        err = cc_merge_default_args(p, func, &param_names, 1, name_loc);
-                        if(err) goto struct_err;
-                        func->param_scope = param_names.scope;
+                        _Bool new_method = !func;
                         // Check for method body
                         // If tail == &head, the function type came from the
                         // base type (e.g. a typedef), not the declarator.
                         // In that case, a body is not allowed.
                         err = cc_peek(p, &tok);
                         if(err) goto struct_err;
+                        _Bool has_body = tok.type == CC_PUNCTUATOR && tok.punct.punct == '{';
+                        if(func){
+                            if(has_body && func->defined){
+                                err = cc_error(p, name_loc, "redefinition of method '%s'", member_name->data);
+                                goto struct_err;
+                            }
+                            CcQualType previous_type = {.bits=(uintptr_t)func->type};
+                            CcTypePair owners = {func->_Self_type, p->current_tag_type, NULL};
+                            // Matching file-scope tags across TUs can denote the
+                            // same opaque receiver even when only one TU has its layout.
+                            _Bool owner_matches = func->_Self_type.bits
+                                && (ccqt_as_struct(func->_Self_type)->is_incomplete
+                                    || record->is_incomplete
+                                    || cc_types_compatible(func->_Self_type, p->current_tag_type, 0));
+                            if(!owner_matches || !cc_types_match(previous_type, member_type, 0, &owners, 0, 0)){
+                                err = cc_error(p, name_loc, "conflicting declaration of method '%s'", member_name->data);
+                                goto struct_err;
+                            }
+                        }
+                        else {
+                            func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                            if(!func){ err = CC_OOM_ERROR; goto struct_err; }
+                            func->name = member_name;
+                            func->loc = name_loc;
+                        }
+                        if(has_body || !func->type){
+                            func->type = ccqt_as_function(member_type);
+                            func->_Self_type = p->current_tag_type;
+                        }
+                        err = cc_merge_default_args(p, func, &param_names, has_body || new_method, name_loc);
+                        if(err) goto struct_err;
+                        if(has_body || new_method) func->param_scope = param_names.scope;
+                        if(old_method) old_method->type = member_type;
+                        else {
+                            err = cc_append_method(p, record, func, name_loc);
+                            if(err) goto struct_err;
+                            record->methods[record->method_count-1].type = member_type;
+                        }
+                        if(symbol){
+                            func->mangle = symbol;
+                            if(AM_put(&p->external_methods, cc_allocator(p), symbol, func)){
+                                err = CC_OOM_ERROR; goto struct_err;
+                            }
+                        }
                         if(tail == &head && tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
                             err = cc_error(p, tok.loc, "cannot define method with typedef function type");
                             goto struct_err;
@@ -11026,18 +11315,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             err = cc_error(p, tok.loc, "duplicate member '%s'", func->name->data);
                             goto struct_err;
                         }
-                        err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
-                            .type = member_type,
-                            .method = func,
-                            .is_method = 1,
-                            .loc = tok.loc,
-                        }));
-                        if(err){
-                            err = CC_OOM_ERROR;
-                            goto struct_err;
-                        }
                         // Method definitions with body don't need ';'
-                        if(func->defined){
+                        if(has_body){
                             err = cc_peek(p, &tok);
                             if(err) goto struct_err;
                             // Allow optional ';' after method body
@@ -11138,6 +11417,30 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         // Parse optional trailing attributes
         err = cc_parse_attributes(p, flags, &attrs);
         if(err) goto struct_err;
+        CcStruct* record = existing;
+        for(uint32_t i = 0; i < record->method_count; i++){
+            Atom method_name = record->methods[i].method->name;
+            if(cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, method_name)){
+                err = cc_error(p, loc, "duplicate member '%s'", method_name->data);
+                goto struct_err;
+            }
+        }
+        // Methods describe an interface, not a data layout. An explicit empty
+        // block completes an empty record; a methods-only block never does.
+        if(saw_method && !fields_arr.count) goto struct_err;
+        if(redefining){
+            // Keep the original type (and all pointers to it) canonical. Only the
+            // candidate member list and layout are temporary during validation.
+            CcStruct candidate = {.kind = is_union ? CC_UNION : CC_STRUCT,
+                .name = name, .loc = loc, .fields = fields_arr.data,
+                .field_count = (uint32_t)fields_arr.count, .packed = attrs.packed,
+                .alignment = attrs.has_aligned ? attrs.aligned : 0};
+            err = is_union ? cc_compute_union_layout(p, (CcUnion*)&candidate, p->pragma_pack)
+                : cc_compute_struct_layout(p, &candidate, p->pragma_pack);
+            if(!err && !cc_record_members_match(existing, &candidate, 0, NULL, 1))
+                err = cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
+            goto struct_err;
+        }
         // Finalize
         err = ma_shrink_to_size(CcField)(&fields_arr, cc_allocator(p));
         if(err) return err;
@@ -11156,6 +11459,9 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .field_count = field_count,
                 .fields = flat_fields,
                 .packed = attrs.packed,
+                .methods = s->methods,
+                .method_count = s->method_count,
+                .method_capacity = s->method_capacity,
             };
             if(attrs.has_aligned)
                 s->alignment = attrs.aligned;
@@ -11179,6 +11485,9 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .loc = loc,
                 .field_count = field_count,
                 .fields = flat_fields,
+                .methods = u->methods,
+                .method_count = u->method_count,
+                .method_capacity = u->method_capacity,
             };
             if(attrs.has_aligned)
                 u->alignment = attrs.aligned;
@@ -11193,8 +11502,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         return 0;
 
         struct_err:
+        ((CcStruct*)existing)->is_defining = 0;
         p->current_tag_type = saved_tag_type;
         ma_cleanup(CcField)(&fields_arr, cc_allocator(p));
+        if(!err) *base_type = (CcQualType){.bits = (uintptr_t)existing};
         return err;
     }
 
@@ -11370,11 +11681,15 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         err = cc_next_token(p, &tok); // consume '{'
         if(err) return err;
         CcEnum* e = NULL;
+        _Bool redefining = 0;
         if(name){
             CcEnum* existing = cc_scope_lookup_enum_tag(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK);
             if(existing){
-                if(existing->has_definition)
+                if(existing->is_defining)
                     return cc_error(p, loc, "Redefinition of enum '%s'", name->data);
+                redefining = existing->has_definition;
+                if(redefining && !existing->has_fixed_underlying && has_fixed_underlying)
+                    return cc_error(p, loc, "Redefinition of enum '%s' with fixed underlying type", name->data);
                 if(existing->has_fixed_underlying && has_fixed_underlying && existing->underlying.bits != underlying.bits)
                     return cc_error(p, loc, "Redefinition of enum '%s' with differing underlying types", name->data);
                 if(existing->has_fixed_underlying){
@@ -11382,8 +11697,10 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                     has_fixed_underlying = 1;
                 }
                 e = existing;
-                e->loc = loc;
-                e->underlying = underlying;
+                if(!redefining){
+                    e->loc = loc;
+                    e->underlying = underlying;
+                }
             }
         }
         if(!e){
@@ -11402,7 +11719,8 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         }
         e->has_fixed_underlying = has_fixed_underlying;
         e->has_definition = 1;
-        e->is_incomplete = !has_fixed_underlying;
+        e->is_incomplete = !redefining && !has_fixed_underlying;
+        e->is_defining = 1;
         CcQualType enum_type = {.bits = (uintptr_t)e};
         // Parse enumerator list
         Parray(CcEnumerator) enumerators = {0};
@@ -11423,7 +11741,22 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
             Atom ename = tok.ident.ident;
             CcSymbol sym;
             _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), ename, CC_SCOPE_NO_WALK, &sym);
-            if(found){
+            CcEnumerator* previous = NULL;
+            if(redefining){
+                for(size_t i = 0; i < e->enumerator_count; i++)
+                    if(e->enumerators[i]->name == ename) previous = e->enumerators[i];
+                for(size_t i = 0; i < enumerators.count; i++){
+                    if(enumerators.data[i] == previous){
+                        err = cc_error(p, tok.loc, "Redefinition of enumerator '%s'", ename->data);
+                        goto enum_err;
+                    }
+                }
+                if(!previous){
+                    err = cc_error(p, loc, "Redefinition of enum '%s'", name->data);
+                    goto enum_err;
+                }
+            }
+            if(found && !previous){
                 if(sym.kind == CC_SYM_ENUMERATOR)
                     err = cc_error(p, tok.loc, "Redefinition of enumerator '%s'", ename->data);
                 else
@@ -11485,21 +11818,31 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                 goto enum_err;
             }
             if(has_fixed_underlying) next_type = enum_type;
-            CcEnumerator* enumerator = Allocator_zalloc(cc_allocator(p), sizeof *enumerator);
-            if(!enumerator){
-                err = CC_OOM_ERROR;
-                goto enum_err;
+            CcEnumerator* enumerator = previous;
+            if(previous){
+                if(!ci_uint128_eq(previous->value, next_value)){
+                    err = cc_error(p, loc, "Redefinition of enum '%s'", name->data);
+                    goto enum_err;
+                }
+                next_type = previous->type;
             }
-            *enumerator = (CcEnumerator){
-                .name = ename,
-                .value = next_value,
-                .type = next_type,
-                .loc = eloc,
-            };
-            err = cc_scope_insert_enumerator(cc_allocator(p), cc_scope_declarations(p->current), ename, enumerator);
-            if(err){
-                err = CC_OOM_ERROR;
-                goto enum_err;
+            else {
+                enumerator = Allocator_zalloc(cc_allocator(p), sizeof *enumerator);
+                if(!enumerator){
+                    err = CC_OOM_ERROR;
+                    goto enum_err;
+                }
+                *enumerator = (CcEnumerator){
+                    .name = ename,
+                    .value = next_value,
+                    .type = next_type,
+                    .loc = eloc,
+                };
+                err = cc_scope_insert_enumerator(cc_allocator(p), cc_scope_declarations(p->current), ename, enumerator);
+                if(err){
+                    err = CC_OOM_ERROR;
+                    goto enum_err;
+                }
             }
             err = pa_push(&enumerators, cc_allocator(p), enumerator);
             if(err){
@@ -11537,18 +11880,27 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         if(err) goto enum_err;
         err = cc_parse_attributes(p, flags, &enum_attrs);
         if(err) goto enum_err;
+        if(redefining){
+            if(enumerators.count != e->enumerator_count || e->packed != enum_attrs.packed)
+                err = cc_error(p, loc, "Redefinition of enum '%s'", name->data);
+            if(!err) *base_type = enum_type;
+            goto enum_err;
+        }
         // Finalize enumerators
         err = pa_shrink_to_size(&enumerators, cc_allocator(p));
         if(err) goto enum_err;
         e->enumerators = (CcEnumerator**)enumerators.data;
         e->enumerator_count = enumerators.count;
+        e->packed = enum_attrs.packed;
         err = cc_finalize_enum(p, e, has_fixed_underlying, enum_attrs.packed);
         if(err) goto enum_err;
         e->is_incomplete = 0;
+        e->is_defining = 0;
         *base_type = enum_type;
         return 0;
 
         enum_err:
+        e->is_defining = 0;
         pa_cleanup(&enumerators, cc_allocator(p));
         return err;
     }
@@ -19171,11 +19523,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcTypeKind k = ccqt_kind(qt);
                     if(k != CC_STRUCT && k != CC_UNION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcStruct* s = ccqt_as_struct(qt);
-                    uint32_t count = 0;
                     _Bool methods = e->type_introspection.op == CC_TYPE_METHODS;
-                    for(uint32_t i = 0; i < s->field_count; i++)
-                        count += s->fields[i].is_method == methods;
-                    UINTRES(count);
+                    UINTRES(methods ? s->method_count : s->field_count);
                 }
                 case CC_TYPE_RETURN_TYPE: {
                     CcQualType ft = qt;
@@ -19266,13 +19615,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         err = cc_eval_integer(ctx, e->values[0], &idx);
                         if(err) goto fini_introspection;
                         if(idx >= 0){
-                            for(uint32_t i = 0; i < s->field_count; i++){
-                                if(s->fields[i].is_method != method) continue;
-                                if(idx-- == 0){
-                                    f = &s->fields[i];
-                                    break;
-                                }
-                            }
+                            uint32_t count = method ? s->method_count : s->field_count;
+                            if((uint64_t)idx < count) f = &(method ? s->methods : s->fields)[idx];
                         }
                         if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     }

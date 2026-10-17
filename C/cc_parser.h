@@ -252,6 +252,7 @@ struct CcParser {
     CcFunc*_Nullable current_func;
     CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
+    AtomMap(CcFunc) external_methods;
     FreeList(Marray(CcToken)) scratch_tokens;
     FreeList(CcStmtSink) scratch_stmt_sinks;
     #define CC_RECYCLE_EXPRS 1

@@ -988,9 +988,9 @@ TestFunction(test_parse_decls){
             .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[0,1];[0]{};")}},
         },
         {
-            "initializer paths use field-table indices for methods and bitfields", __LINE__,
+            "initializer paths exclude methods and retain unnamed bitfields", __LINE__,
             SVI("struct S {void method(struct S* self){} int a:3; int:2; int b:3;}; struct S s={1,2};\n"),
-            .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[1];[3];")}},
+            .vars = {{.name=SVI("s"), .repr=SVI("struct S"), .paths=SVI("[0];[2];")}},
         },
         {
             "initializer paths include generated slice members and whole strings", __LINE__,
@@ -5988,6 +5988,97 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "C23 repeated record definitions", __LINE__,
+            SVI("struct S { int x; struct S *next; };\n"
+                "typedef struct S Original;\n"
+                "struct S { int x; struct S *next; };\n"
+                "union U { int x; double y; };\n"
+                "union U { int x; double y; };\n"
+                "struct A { struct { int x; }; };\n"
+                "struct Sized { int x; };\n"
+                "struct Sized { int x; _Static_assert(sizeof(struct Sized) == sizeof(int)); };\n"
+                "_Static_assert(Original == struct S);\n"
+                "struct A { struct { int x; }; };\n"
+                "_Static_assert(__builtin_types_compatible_p(Original, struct S));\n"),
+        },
+        {
+            "C23 scoped record compatibility and C2y array members", __LINE__,
+            SVI("struct S { struct S *next; int x; }; typedef struct S Outer;\n"
+                "struct F { int n; char data[]; }; typedef struct F Flexible;\n"
+                "struct A { int (*p)[]; }; typedef struct A ArrayPtr;\n"
+                "typedef struct { int x; } Untagged;\n"
+                "void f(void) {\n"
+                " struct S { struct S *next; int x; };\n"
+                " _Static_assert(__builtin_types_compatible_p(Outer, struct S));\n"
+                " Outer a = {}; struct S b = a; a = b;\n"
+                " Outer *p = &b; struct S *q = &a;\n"
+                " (void)(p == q); (void)(p - q); (void)(1 ? a : b);\n"
+                " _Static_assert(_Generic(b, Outer: 1, default: 0));\n"
+                " struct F { int n; char data[2]; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(Flexible, struct F));\n"
+                " struct A { int (*p)[3]; };\n"
+                " _Static_assert(__builtin_types_compatible_p(ArrayPtr, struct A));\n"
+                " ArrayPtr *ap = 0; struct A *bp = 0;\n"
+                " _Static_assert(sizeof(*(1 ? ap : bp)->p) == 3*sizeof(int));\n"
+                " _Static_assert(sizeof(*(1 ? bp : ap)->p) == 3*sizeof(int));\n"
+                " typedef struct { int x; } Other;\n"
+                " _Static_assert(!__builtin_types_compatible_p(Untagged, Other));\n"
+                "}\n"),
+        },
+        {
+            "C23 enum redefinitions preserve identity and values", __LINE__,
+            SVI("enum E { A=1, B=2 }; typedef enum E Original;\n"
+                "enum E { B=2, A=1 };\n"
+                "_Static_assert(Original == enum E);\n"
+                "enum F : unsigned long { F0=0, F1=1 };\n"
+                "enum F : unsigned long { F0=0, F1 };\n"
+                "enum G { G0=-1, G1 }; enum G { G0=-1, G1 };\n"),
+        },
+        {
+            "C23 records with compatible enum members", __LINE__,
+            SVI("struct S { enum E { A=1, B=2 } e; }; typedef struct S Outer;\n"
+                "void f(void) { struct S { enum E { B=2, A=1 } e; };\n"
+                " _Static_assert(__builtin_types_compatible_p(Outer, struct S));\n"
+                " Outer *a=0; struct S *b=0; (void)(1 ? a : b); }\n"
+                "struct S { enum E { A=1, B=2 } e; };\n"),
+        },
+        {
+            "C23 composite recursive records combine member bounds", __LINE__,
+            SVI("struct S { struct S *next; int (*a)[3]; int (*b)[]; }; typedef struct S Outer;\n"
+                "void f(void) { struct S { struct S *next; int (*a)[]; int (*b)[4]; };\n"
+                " Outer *a = 0; struct S *b = 0;\n"
+                " _Static_assert(sizeof(*(1 ? a : b)->a) == 3*sizeof(int));\n"
+                " _Static_assert(sizeof(*(1 ? a : b)->b) == 4*sizeof(int));\n"
+                " _Static_assert(sizeof(*(1 ? a : b)->next->a) == 3*sizeof(int));\n"
+                " _Static_assert(sizeof(*(1 ? a : b)->next->b) == 4*sizeof(int));\n"
+                "}\n"),
+        },
+        {
+            "C23 matching anonymous members and member mismatches", __LINE__,
+            SVI("struct S { union { int x; float y; }; unsigned b:3; }; typedef struct S Outer;\n"
+                "struct A { _Alignas(8) int x; }; typedef struct A Aligned;\n"
+                "struct N { struct { int x; } n; }; typedef struct N Named;\n"
+                "void f(void) {\n"
+                " struct S { union { int x; float y; }; unsigned b:3; };\n"
+                " _Static_assert(__builtin_types_compatible_p(Outer, struct S));\n"
+                " struct A { int x; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(Aligned, struct A));\n"
+                " struct N { struct { int x; } n; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(Named, struct N));\n"
+                "}\n"
+                "void g(void) { struct S { union { int x; float y; }; unsigned b:4; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(Outer, struct S)); }\n"),
+        },
+        {
+            "C23 recursive record mismatches", __LINE__,
+            SVI("struct S { struct S *next; int x; }; typedef struct S Outer;\n"
+                "void f(void) { struct S { struct S *next; double x; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(Outer, struct S)); }\n"
+                "union U { int x; double y; }; typedef union U OuterU;\n"
+                "void g(void) { union U { double y; int x; };\n"
+                " _Static_assert(!__builtin_types_compatible_p(OuterU, union U)); }\n"),
+        },
+        {
             "__builtin_types_compatible_p", __LINE__,
             SVI(
                 "#define eq(a, b) _Static_assert(__builtin_types_compatible_p(a, b))\n"
@@ -7260,7 +7351,7 @@ TestFunction(test_parse_errors){
         },
         {
             "constexpr reflection on runtime instance names receiver", __LINE__,
-            SVI("struct Baz { int get_x(_Self* self){return 3;} };\n"
+            SVI("struct Baz {}; struct Baz { int get_x(_Self* self){return 3;} };\n"
                 "struct Baz b;\n"
                 "constexpr m = b.method(\"get_x\");\n"),
             SVI("(test):3:15: error: expression 'b' is not a constant expression\n"),
@@ -7854,6 +7945,97 @@ TestFunction(test_parse_errors){
             SVI("const int x = 0;\n"
                "x = 1;"),
             SVI("(test):2:3: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "method-only struct remains incomplete", __LINE__,
+            SVI("struct O { void f(_Self*); };\nstruct O o;\n"),
+            SVI("(test):2:11: error: variable has incomplete type 'struct O'\n"),
+        },
+        {
+            "method definition does not complete layout", __LINE__,
+            SVI("struct O { void f(_Self* self) {} };\nstruct O o;\n"),
+            SVI("(test):2:11: error: variable has incomplete type 'struct O'\n"),
+        },
+        {
+            "method block rejects conflicting signature", __LINE__,
+            SVI("struct O { int f(_Self*); };\nstruct O { void f(_Self*); };\n"),
+            SVI("(test):2:17: error: conflicting declaration of method 'f'\n"),
+        },
+        {
+            "method block rejects duplicate body", __LINE__,
+            SVI("struct O { void f(_Self* self) {} };\nstruct O { void f(_Self* self) {} };\n"),
+            SVI("(test):2:17: error: redefinition of method 'f'\n"),
+        },
+        {
+            "method block rejects field collision", __LINE__,
+            SVI("struct O { int f; };\nstruct O { void f(_Self*); };\n"),
+            SVI("(test):2:17: error: duplicate member 'f'\n"),
+        },
+        {
+            "opaque completion rejects method field collision", __LINE__,
+            SVI("struct O { void f(_Self*); };\nstruct O { int f; };\n"),
+            SVI("(test):2:1: error: duplicate member 'f'\n"),
+        },
+        {
+            "enum redefinition rejects changed value", __LINE__,
+            SVI("enum E { A=1 };\n"
+                "enum E { A=2 };\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E'\n"),
+        },
+        {
+            "enum redefinition rejects missing member", __LINE__,
+            SVI("enum E { A=1, B=2 };\n"
+                "enum E { A=1 };\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E'\n"),
+        },
+        {
+            "enum redefinition rejects new member", __LINE__,
+            SVI("enum E { A=1 };\n"
+                "enum E { A=1, B=2 };\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E'\n"),
+        },
+        {
+            "enum redefinition rejects duplicate member", __LINE__,
+            SVI("enum E { A=1, B=2 };\n"
+                "enum E { A=1, A=1 };\n"),
+            SVI("(test):2:15: error: Redefinition of enumerator 'A'\n"),
+        },
+        {
+            "enum redefinition rejects changed packing", __LINE__,
+            SVI("enum E { A=1 };\n"
+                "enum __attribute__((packed)) E { A=1 };\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E'\n"),
+        },
+        {
+            "record redefinition requires same member types", __LINE__,
+            SVI("struct S { int (*p)[3]; };\n"
+                "struct S { int (*p)[]; };\n"),
+            SVI("(test):2:1: error: Redefinition of struct 'S'\n"),
+        },
+        {
+            "record redefinition rejects distinct compatible member types", __LINE__,
+            SVI("struct S { int x; };\n"
+                "void f(void) { struct T { struct S s; };\n"
+                "struct S { int x; };\n"
+                "struct T { struct S s; }; }\n"),
+            SVI("(test):4:1: error: Redefinition of struct 'T'\n"),
+        },
+        {
+            "union redefinition requires member order", __LINE__,
+            SVI("union U { int x; double y; };\n"
+                "union U { double y; int x; };\n"),
+            SVI("(test):2:1: error: Redefinition of union 'U'\n"),
+        },
+        {
+            "record definition cannot nest a redefinition", __LINE__,
+            SVI("struct S { struct S { int x; } s; };\n"),
+            SVI("(test):1:12: error: Redefinition of struct 'S'\n"),
+        },
+        {
+            "record repeated definition cannot nest a redefinition", __LINE__,
+            SVI("struct S { int x; };\n"
+                "struct S { struct S { int x; } s; };\n"),
+            SVI("(test):2:12: error: Redefinition of struct 'S'\n"),
         },
         {
             "incompatible struct types", __LINE__,

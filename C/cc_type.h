@@ -295,12 +295,13 @@ struct CC_ALIGN(8) CcStruct {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
-                     has_fam:       1,
+            CcTypeKind kind:          4;
+            uint32_t is_incomplete:   1,
+                     packed:          1,
+                     has_fam:         1,
                      has_wide_vector: 1,
-                     _padding:     24;
+                     is_defining:     1,
+                     _padding:        23;
         };
     };
     uint32_t size;
@@ -309,6 +310,8 @@ struct CC_ALIGN(8) CcStruct {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Null_unspecified fields;
+    uint32_t method_count, method_capacity;
+    CcField* _Nullable methods;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;
@@ -323,12 +326,13 @@ struct CC_ALIGN(8) CcUnion {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1,
-                     packed:        1,
+            CcTypeKind kind:            4;
+            uint32_t is_incomplete:     1,
+                     packed:            1,
                      _reserved_has_fam: 1,
-                     has_wide_vector: 1,
-                     _padding:     24;
+                     has_wide_vector:   1,
+                     is_defining:       1,
+                     _padding:          23;
         };
     };
     uint32_t size;
@@ -337,6 +341,8 @@ struct CC_ALIGN(8) CcUnion {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Nullable fields;
+    uint32_t method_count, method_capacity;
+    CcField* _Nullable methods;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;
@@ -363,11 +369,13 @@ struct CC_ALIGN(8) CcEnum {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:        4;
-            uint32_t is_incomplete: 1;
-            uint32_t has_fixed_underlying: 1;
-            uint32_t has_definition: 1;
-            uint32_t _padding:      25;
+            CcTypeKind kind:               4;
+            uint32_t is_incomplete:        1,
+                     has_fixed_underlying: 1,
+                     has_definition:       1,
+                     is_defining:          1,
+                     packed:               1,
+                     _padding:             23;
         };
     };
     Atom name;

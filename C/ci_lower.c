@@ -1759,6 +1759,8 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             }
             if(ccqt_unaligned(from).unqual == ccqt_unaligned(to).unqual)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
+            if((ccqt_kind(from) == CC_STRUCT || ccqt_kind(from) == CC_UNION) && ccqt_kind(from) == ccqt_kind(to))
+                return ci_lower_expr(ci, ctx, operand, dest, out);
             if(ccqt_kind(from) == CC_SLICE && ccqt_kind(to) == CC_SLICE)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
             if(ccqt_bt_eq(to, CCBT__Any)){

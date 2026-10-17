@@ -2526,6 +2526,85 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "opaque methods defined in separate modules", __LINE__,
+            SVI("_Module api=__compile(\"struct O {void a(_Self*); void b(_Self*); int sum(const _Self*);}; int use(void* v){struct O* p=v;p.a();p.b();return p.sum();}\", \"\");\n"
+                "_Module one=__compile(\"struct O {int x,y;}; struct O {void a(_Self* self){self.x++;}};\", \"\");\n"
+                "_Module two=__compile(\"struct O {int x,y;}; struct O {void b(_Self* self){self.y++;} int sum(const _Self* self){return self.x+self.y;}};\", \"\");\n"
+                "if(!api || !one || !two) return 99;\n"
+                "struct O {int x,y;};\n"
+                "int (*use)(void*)=api.symbol(\"use\", int(void*)); if(!use) return 98;\n"
+                "struct O o={2,3}; return use(&o);\n"),
+            .exit_code = 7,
+        },
+        {
+            "opaque interface and separate method blocks", __LINE__,
+            SVI("struct Opaque { void first(_Self*); void second(_Self*); };\n"
+                "void use(struct Opaque* p) { p.first(); p.second(); }\n"
+                "struct Opaque { int x, y; };\n"
+                "struct Opaque { void second(_Self* self) { self.y++; } };\n"
+                "struct Opaque { void first(_Self* self) { self.x++; } };\n"
+                "struct Opaque { int sum(_Self* self) { return self.x+self.y; } };\n"
+                "struct Opaque { void second(_Self*); void first(_Self*); };\n"
+                "_Static_assert((struct Opaque).fields == 2);\n"
+                "_Static_assert((struct Opaque).methods == 3);\n"
+                "struct Opaque o={2,3}; use(&o); return o.sum();\n"),
+            .exit_code = 7,
+        },
+        {
+            "method order defaults and explicit empty completion", __LINE__,
+            SVI("struct S { int a(_Self*, int n=2); int x; int b(_Self*); };\n"
+                "struct S { int b(_Self*); int x; int a(_Self*, int n); };\n"
+                "struct S { int a(_Self* self,int n){return self.x+n;} };\n"
+                "struct S { int b(_Self* self){return self.a();} };\n"
+                "struct Empty { int f(_Self*); }; struct Empty {};\n"
+                "struct Empty { int f(_Self* self){return 1;} };\n"
+                "struct S s={4}; struct Empty e={}; return s.b()+e.f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "method blocks preserve field paths and reflection", __LINE__,
+            SVI("struct S { int x; };\n"
+                "int get(struct S* s) { return s.x; }\n"
+                "struct S { int read(_Self* self) { return self.x; } };\n"
+                "(struct S).push_method(other, int(struct S* self){return self.x;});\n"
+                "_Static_assert((struct S).fields == 1 && (struct S).methods == 2);\n"
+                "struct S s={7}; return get(&s)==7 && s.other()==s.read() ? 7 : 0;\n"),
+            .exit_code = 7,
+        },
+        {
+            "C23 macro record types in prototypes and definitions", __LINE__,
+            SVI("#define PAIR struct Pair { int x; int y; }\n"
+                "int sum(PAIR);\n"
+                "int sum(PAIR p) { return p.x + p.y; }\n"
+                "PAIR p = {3, 4}; return sum(p);\n"),
+            .exit_code = 7,
+        },
+        {
+            "C23 compatible aggregate constant initialization", __LINE__,
+            SVI("struct S { int x; }; constexpr struct S original = {7};\n"
+                "int f(void) { struct S { int x; };\n"
+                " constexpr struct S copy = original;\n"
+                " _Static_assert(copy.x == 7); return copy.x; } return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "C23 compatible unions and anonymous members", __LINE__,
+            SVI("union U { int x; double y; }; typedef union U Outer;\n"
+                "int f(void) { union U { int x; double y; };\n"
+                " union U x = {.x=7}; Outer y = x; x = y; return x.x; }\n"
+                "return f();\n"),
+            .exit_code = 7,
+        },
+        {
+            "C23 compatible structs pass return assign and select", __LINE__,
+            SVI("struct S { struct S *next; int x; }; typedef struct S Outer;\n"
+                "Outer identity(Outer x) { return x; }\n"
+                "int f(void) { struct S { struct S *next; int x; };\n"
+                " struct S x = {0, 7}; Outer y = identity(x);\n"
+                " x = y; y = 1 ? x : y; return y.x; } return f();\n"),
+            .exit_code = 7,
+        },
+        {
             "function redeclaration accepts compatible array pointer parameters", __LINE__,
             SVI("int f(int (*p)[]);\n"
                 "int f(int (*p)[3]){return (*p)[2];}\n"
@@ -4722,7 +4801,7 @@ TestFunction(test_interpreter){
         },
         {
             "static for: methods retain iteration bindings", __LINE__,
-            SVI("int x=0; static for(int i=1;i<3;i++){{struct S{int get(_Self* s){return i;}}; struct S s; x+=s.get();}} return x;"),
+            SVI("int x=0; static for(int i=1;i<3;i++){{struct S{}; struct S{int get(_Self* s){return i;}}; struct S s; x+=s.get();}} return x;"),
             .exit_code = 3,
         },
         {
@@ -13863,6 +13942,7 @@ TestFunction(test_interpreter){
             SVI("int run(void) {\n"
                 "struct Outer {\n"
                 "    struct Inner {\n"
+                "        int unused;\n"
                 "        int call(_Self* self, struct Outer* outer) {\n"
                 "            return outer.answer();\n"
                 "        }\n"
@@ -13879,6 +13959,7 @@ TestFunction(test_interpreter){
             "local struct method calls enclosing function helper", __LINE__,
             SVI("int outer(void) {\n"
                 "    int helper(void) { return 42; }\n"
+                "    struct S {};\n"
                 "    struct S {\n"
                 "        int method(_Self* s) {\n"
                 "            return helper();\n"
@@ -13908,6 +13989,7 @@ TestFunction(test_interpreter){
                 "int run(void) {\n"
                 "    {\n"
                 "        int helper(void) { return 42; }\n"
+                "        union U {};\n"
                 "        union U {\n"
                 "            int first(_Self* self) { return self.second(); }\n"
                 "            int second(_Self* self) { return helper(); }\n"
@@ -13925,7 +14007,7 @@ TestFunction(test_interpreter){
                 "    for(int i = 0; i < 2; i++) {\n"
                 "        switch(i) {\n"
                 "        case 0:\n"
-                "            { struct S { int get(_Self* self) {\n"
+                "            { struct S {}; struct S { int get(_Self* self) {\n"
                 "                int n = 0;\n"
                 "                for(int j = 0; j < 2; j++) {\n"
                 "                    switch(j) { case 0: continue; default: n += helper(); break; }\n"
