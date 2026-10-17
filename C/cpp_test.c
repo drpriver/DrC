@@ -1344,6 +1344,80 @@ TestFunction(test_messages){
             SVI("#warning hello\n"),
             SVI("(test):1:2: warning: #warning hello\n"),
         },
+        {"object redefinition uses new value", __LINE__,
+            SVI("#define X 1\n#define X 2\n__print(X)\n"),
+            SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"equal numeric values with different spellings", __LINE__,
+            SVI("#define X 1U\n#define X 0x0001U\n__print(X)\n"),
+            SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 0x0001U\n")},
+        {"object redefinition changes token count and kind", __LINE__,
+            SVI("#define X 1\n#define X name + other\n__print(X)\n"),
+            SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: name + other\n")},
+        {"object redefinition to empty", __LINE__,
+            SVI("#define X 1\n#define X\n__print([X])\n"),
+            SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: []\n")},
+        {"empty object redefinition to nonempty", __LINE__,
+            SVI("#define X\n#define X 1\n__print(X)\n"),
+            SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 1\n")},
+        {"object redefined as function", __LINE__,
+            SVI("#define F 1\n#define F(x) x\n__print(F(2))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"function redefined as object", __LINE__,
+            SVI("#define F(x) x\n#define F 2\n__print(F)\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"function redefined as empty object", __LINE__,
+            SVI("#define F(x) x\n#define F\n__print([F])\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: []\n")},
+        {"function redefinition changes body", __LINE__,
+            SVI("#define F(a) a\n#define F(a) a + 1\n__print(F(2))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2 + 1\n")},
+        {"function redefinition changes parameter count", __LINE__,
+            SVI("#define F(a, b) a\n#define F(a) a\n__print(F(2))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"function redefinition changes parameter name", __LINE__,
+            SVI("#define F(a) a\n#define F(b) b\n__print(F(2))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"function redefinition changes variadic status", __LINE__,
+            SVI("#define F(a) a\n#define F(a, ...) a __VA_ARGS__\n__print(F(2, + 1))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2 + 1\n")},
+        {"named varargs redefinition changes substitution", __LINE__,
+            SVI("#define F(args...) args\n#define F(other...) args\n__print(F(2))\n"),
+            SVI("(test):2:9: warning: Macro (F) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: args\n")},
+        {"type builtin replacement can redefine again", __LINE__,
+            SVI("#define __int64 1\n#define __int64 2\n__print(__int64)\n"),
+            SVI("(test):2:9: warning: Macro (__int64) redefined with a different definition\n"
+                "(test):1:9: info: ... previously defined here\n"
+                "(test):3:1: 2\n")},
+        {"identical definitions remain silent", __LINE__,
+            SVI("#define X 1\n#define X 1\n#define E\n#define E\n"
+                "#define F(a) a + 1\n#define F(a) a  +  1\n"),
+            SVI("")},
         {
             "__print", __LINE__,
             SVI("__print(hello)\n"),
@@ -1799,10 +1873,6 @@ TestFunction(test_erroneous_condition){
         {"empty expanded has include header", __LINE__,
             SVI("#define H <>\n#if __has_include(H)\n#endif"),
             SVI("(test):2:5: error: Empty header name in __has_include\n")},
-        {"named varargs redefinition changes substitution", __LINE__,
-            SVI("#define F(args...) args\n#define F(other...) args\n"),
-            SVI("(test):2:25: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:9: error: ... previously defined here\n")},
         {"defblock duplicate named variadic parameter", __LINE__,
             SVI("#defblock F(x, x...)\nx\n#endblock\n"),
             SVI("(test):1:16: error: Duplicate macro param name\n")},
@@ -2014,10 +2084,6 @@ TestFunction(test_erroneous_condition){
         {"error directive empty", __LINE__,
             SVI("#error\n"),
             SVI("(test):1:2: error: #error \n")},
-        {"obj macro redef different", __LINE__,
-            SVI("#define X 1\n#define X 2\n"),
-            SVI("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
-               "(test):1:9: error: ... previously defined here\n")},
         {"named variadic parameter duplicates fixed parameter", __LINE__,
             SVI("#define F(x, x...) x\n"),
             SVI("(test):1:14: error: Duplicate macro param name\n")},
@@ -2027,21 +2093,6 @@ TestFunction(test_erroneous_condition){
         {"named variadic parameter duplicates later fixed parameter", __LINE__,
             SVI("#define F(a, b, b...) b\n"),
             SVI("(test):1:17: error: Duplicate macro param name\n")},
-        {"type builtin replacement cannot redef again", __LINE__,
-            SVI("#define __int64 1\n#define __int64 2\n"),
-            SVI("(test):2:18: error: Duplicate object-like macro (__int64) with different definitions (0 different content)\n"
-               "(test):1:9: error: ... previously defined here\n")},
-        {
-            "func macro redef different body", __LINE__,
-            SVI("#define F(a) a\n#define F(a) a + 1\n"),
-            SVI("(test):2:19: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:9: error: ... previously defined here\n")},
-        {
-            "func macro redef different params", __LINE__,
-            SVI("#define F(a, b) a\n#define F(a) a\n"),
-            SVI("(test):2:15: error: Duplicate function-like macro (F) with different definitions\n"
-               "(test):1:9: error: ... previously defined here\n"),
-        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){

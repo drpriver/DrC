@@ -120,7 +120,10 @@ struct CppFrame {
     };
     StringView txt;
     CppIncludePosition include_position;
-    uint32_t include_depth; // zero for the main input file
+    uint32_t include_depth: 31; // zero for the main input file.
+                                // Honestly 31 bits is too many, but whatever, we can steal
+                                // some if we need more flags.
+    uint32_t is_system_header: 1;
 };
 
 typedef struct CppPoundIf CppPoundIf;
@@ -151,6 +154,14 @@ typedef struct CppPragma CppPragma;
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
+
+enum {
+    CPP_INCLUDE_PATH_iquote,
+    CPP_INCLUDE_PATH_I,
+    CPP_INCLUDE_PATH_isystem,
+    CPP_INCLUDE_PATH_istandard_system,
+    CPP_INCLUDE_PATH_idirafter,
+};
 
 typedef struct CppPreprocessor CppPreprocessor;
 struct CppPreprocessor {

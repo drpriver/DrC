@@ -1749,6 +1749,7 @@ static
 int
 cpp_handle_directive(CppPreprocessor* cpp){
     int err;
+    _Bool is_system_header = ma_tail(cpp->frames).is_system_header;
     CppToken tok;
     do {
         err = cpp_next_raw_token(cpp, &tok);
@@ -1824,11 +1825,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(!a) return CPP_UNREACHABLE_ERROR;
                 CppMacro* m = AM_get(&cpp->macros, a);
                 if(!m) return CPP_UNREACHABLE_ERROR;
-                if(m->nparams || m->is_function_like || m->nreplace){
-                    cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions", sv_p(name));
-                    return cpp_error(cpp, m->def_loc, "... previously defined here");
+                if(!is_system_header){
+                    cpp_warn(cpp, name_loc, "Macro (%.*s) redefined with a different definition", sv_p(name));
+                    cpp_info(cpp, m->def_loc, "... previously defined here");
                 }
-                err = 0;
+                err = cpp_undef_macro(cpp, name);
+                if(err) return err;
+                err = cpp_define_obj_macro(cpp, name, NULL, 0);
             }
             if(err) return err;
             ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
@@ -1953,54 +1956,37 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = CPP_UNREACHABLE_ERROR;
                     goto finish_func_macro;
                 }
-                if(!m->is_function_like){
-                    err = cpp_error(cpp, tok.loc, "redefinition of an object-like macro (%.*s) as a function-like macro", sv_p(name));
-                    goto finish_func_macro;
-                }
-                if(!!variadic != !!m->is_variadic){
-                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                    goto finish_func_macro;
-                }
-                if(names->count != m->nparams){
-                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                    goto finish_func_macro;
-                }
+                if(!m->is_function_like || !!variadic != !!m->is_variadic
+                || names->count != m->nparams || repl->count != m->nreplace)
+                    goto redefine_func_macro;
                 for(size_t i = 0; i < names->count; i++){
                     CppToken tname = names->data[i];
                     Atom pname = cpp_cmacro_params(m)[i];
-                    if(AT_get_atom(cpp->at, tname.txt.text, tname.txt.length) != pname){
-                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                        goto finish_func_macro;
-                    }
-                }
-                if(repl->count != m->nreplace){
-                    cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                    goto finish_func_macro;
+                    if(AT_get_atom(cpp->at, tname.txt.text, tname.txt.length) != pname)
+                        goto redefine_func_macro;
                 }
                 for(size_t i = 0; i < repl->count; i++){
                     CppToken r = repl->data[i];
                     CppToken pre = cpp_cmacro_replacement(m)[i];
                     if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
                         continue;
-                    if(r.type != pre.type){
-                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                        goto finish_func_macro;
-                    }
+                    if(r.type != pre.type)
+                        goto redefine_func_macro;
                     _Bool va_param = variadic && r.type == CPP_IDENTIFIER &&
                         (sv_equals(r.txt, SV("__VA_ARGS__")) || (named_variadic.length && sv_equals(r.txt, named_variadic)));
-                    if(!sv_equals(r.txt, pre.txt) || va_param != (variadic && pre.param_idx == m->nparams + 1)){
-                        cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
-                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                        goto finish_func_macro;
-                    }
+                    if(!sv_equals(r.txt, pre.txt) || va_param != (variadic && pre.param_idx == m->nparams + 1))
+                        goto redefine_func_macro;
                 }
                 err = 0;
                 goto finish_func_macro;
+                redefine_func_macro:
+                if(!is_system_header){
+                    cpp_warn(cpp, name_loc, "Macro (%.*s) redefined with a different definition", sv_p(name));
+                    cpp_info(cpp, m->def_loc, "... previously defined here");
+                }
+                err = cpp_undef_macro(cpp, name);
+                if(err) goto finish_func_macro;
+                err = cpp_define_macro(cpp, name, repl->count, names->count, &m);
             }
             if(err) goto finish_func_macro;
             m->def_loc = name_loc;
@@ -2113,33 +2099,14 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = CPP_UNREACHABLE_ERROR;
                     goto finish_obj_macro;
                 }
-                if(m->is_function_like){
-                    cpp_error(cpp, tok.loc, "Redefinition of function-like macro (%.*s) as an object-like macro", sv_p(name));
-                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                    goto finish_obj_macro;
+                // cpp_define_obj_macro already accepts identical definitions.
+                if(!is_system_header){
+                    cpp_warn(cpp, name_loc, "Macro (%.*s) redefined with a different definition", sv_p(name));
+                    cpp_info(cpp, m->def_loc, "... previously defined here");
                 }
-                if(m->nreplace != repl->count){
-                    cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions, %zu != %zu", sv_p(name), repl->count, (size_t)m->nreplace);
-                    err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                    goto finish_obj_macro;
-                }
-                for(size_t i = 0; i < repl->count; i++){
-                    CppToken r = repl->data[i];
-                    CppToken pre = cpp_cmacro_replacement(m)[i];
-                    if(r.type == CPP_WHITESPACE && pre.type == CPP_WHITESPACE)
-                        continue;
-                    if(r.type != pre.type){
-                        cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different type)", sv_p(name), i);
-                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                        goto finish_obj_macro;
-                    }
-                    if(!sv_equals(r.txt, pre.txt)){
-                        cpp_error(cpp, tok.loc, "Duplicate object-like macro (%.*s) with different definitions (%zu different content)", sv_p(name), i);
-                        err = cpp_error(cpp, m->def_loc, "... previously defined here");
-                        goto finish_obj_macro;
-                    }
-                }
-                err = 0;
+                err = cpp_undef_macro(cpp, name);
+                if(err) goto finish_obj_macro;
+                err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
             }
             if(!err){
                 CppMacro* m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length));
@@ -2841,6 +2808,9 @@ cpp_handle_directive(CppPreprocessor* cpp){
             .column = 1,
             .include_position = inc_pos,
             .include_depth = source_depth + 1,
+            // Relative quoted includes inherit their including header's status.
+            .is_system_header = (inc_pos.array >= CPP_INCLUDE_PATH_isystem && inc_pos.array <= CPP_INCLUDE_PATH_idirafter)
+                || (is_system_header && quote && inc_pos.idx == SIZE_MAX && !path_is_abspath(header_name, cpp->fc->is_windows)),
         };
         err = ma_push(CppFrame)(&cpp->frames, cpp->allocator, frame);
         msb_destroy(&header_sb);
