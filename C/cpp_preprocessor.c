@@ -65,6 +65,7 @@ struct CppEvalValue {
     _Bool is_unsigned;
 };
 static int cpp_eval_tokens_typed(CppPreprocessor*, CppToken*_Null_unspecified, size_t, CppEvalValue*, const CppIncludePosition* _Nullable);
+static int cpp_eval_parse_number_typed(CppPreprocessor*, CppToken, CppEvalValue*);
 static int cpp_next_raw_token(CppPreprocessor*, CppToken*);
 static int cpp_next_pp_token(CppPreprocessor*, CppToken*);
 LOG_PRINTF(3, 4) static void cpp_warn(CppPreprocessor*, SrcLoc, const char*, ...);
@@ -6071,6 +6072,10 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                             break;
                         }
                         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+                        if(wrote_number && tok.type == CPP_PUNCTUATOR && (tok.punct == '-' || tok.punct == '+' || tok.punct == '++' || tok.punct == '--')){
+                            err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
+                            goto finally;
+                        }
                         if(tok.type == CPP_PUNCTUATOR && tok.punct == '-'){
                             minus++;
                             continue;
@@ -6082,13 +6087,11 @@ cpp_builtin_fmt(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                                 err = cpp_error(cpp, tok.loc, "Too many number args to format");
                                 goto finally;
                             }
-                            uint64_t uval; err = parse_unsigned_human(tok.txt.text, tok.txt.length, &uval);
-                            if(err){
-                                err = cpp_error(cpp, tok.loc, "Invalid arg to format (expected int)");
-                                goto finally;
-                            }
+                            CppEvalValue value;
+                            err = cpp_eval_parse_number_typed(cpp, tok, &value);
+                            if(err) goto finally;
                             if(minus & 1) msb_write_char(&sb, '-');
-                            msb_sprintf(&sb, "%llu", (unsigned long long)uval);
+                            msb_sprintf(&sb, "%llu", (unsigned long long)value.value);
                             wrote_number = 1;
                             continue;
                         }
