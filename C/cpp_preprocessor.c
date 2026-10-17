@@ -7233,6 +7233,18 @@ struct CppTokenStream {
 
 static CppToken cpp_ts_next(CppTokenStream* s);
 
+typedef struct CppEvalValue CppEvalValue;
+struct CppEvalValue {
+    uint64_t value;
+    _Bool is_unsigned;
+};
+
+static
+int64_t
+cpp_eval_signed(uint64_t bits){
+    return bits <= INT64_MAX ? (int64_t)bits : -1 - (int64_t)~bits;
+}
+
 static
 int
 cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *tok);
@@ -7241,7 +7253,7 @@ int
 cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value);
 static
 int
-cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec, _Bool evaluate);
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* result, int min_prec, _Bool evaluate);
 
 static
 int
@@ -7664,9 +7676,10 @@ cpp_ts_next(CppTokenStream* s){
 
 static
 int
-cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
+cpp_eval_parse_number_typed(CppPreprocessor* cpp, CppToken tok, CppEvalValue* result){
     const char* s = tok.txt.text;
     size_t len = tok.txt.length;
+    _Bool is_unsigned = 0;
     // Strip MSVC integer suffixes: [uU]?[iI](8|16|32|64|128)
     if(len >= 4 && s[len-1] == '8' && s[len-2] == '2' && s[len-3] == '1' && (s[len-4] == 'i' || s[len-4] == 'I'))
         len -= 4;
@@ -7679,8 +7692,10 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
     else if(len >= 2 && s[len-1] == '8' && (s[len-2] == 'i' || s[len-2] == 'I'))
         len -= 2;
     // Strip standard integer suffixes: [uUlL]+
-    while(len && (s[len-1] == 'u' || s[len-1] == 'U' || s[len-1] == 'l' || s[len-1] == 'L'))
+    while(len && (s[len-1] == 'u' || s[len-1] == 'U' || s[len-1] == 'l' || s[len-1] == 'L')){
+        is_unsigned |= s[len-1] == 'u' || s[len-1] == 'U';
         len--;
+    }
     if(!len)
         return cpp_error(cpp, tok.loc, "Invalid number literal");
     ParseNumberError err;
@@ -7701,8 +7716,17 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
         err = parse_uint64(s, len, &v);
         if(err) return cpp_error(cpp, tok.loc, "Invalid digit in number");
     }
-    *value = (int64_t)v;
+    *result = (CppEvalValue){v, is_unsigned || v > INT64_MAX};
     return 0;
+}
+
+static
+int
+cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
+    CppEvalValue result;
+    int err = cpp_eval_parse_number_typed(cpp, tok, &result);
+    if(!err) *value = cpp_eval_signed(result.value);
+    return err;
 }
 
 static
@@ -7749,11 +7773,11 @@ cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char*
 
 static
 int
-cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, int64_t* value){
+cpp_eval_parse_char(CppPreprocessor* cpp, CppToken tok, uint64_t* value){
     CcToken ctok;
     int err = cpp_char_to_cc_tok(cpp, &tok, &ctok);
     if(err) return err;
-    if(!err) *value = (int64_t)ctok.constant.integer_value;
+    if(!err) *value = ctok.constant.integer_value;
     return err;
 }
 
@@ -7792,7 +7816,9 @@ cpp_eval_binop_prec(CppToken tok){
 
 static
 int
-cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, _Bool evaluate){
+cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* result, _Bool evaluate){
+    uint64_t* value = &result->value;
+    result->is_unsigned = 0;
     int err;
     CppToken tok;
     err = cpp_eval_ts_next(cpp, s, &tok);
@@ -7801,13 +7827,13 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, _Bool eva
         return cpp_error(cpp, tok.loc, "Unexpected end of #if expression");
     switch(tok.type){
         case CPP_NUMBER:
-            return cpp_eval_parse_number(cpp, tok, value);
+            return cpp_eval_parse_number_typed(cpp, tok, result);
         case CPP_CHAR:
             return cpp_eval_parse_char(cpp, tok, value);
         case CPP_PUNCTUATOR:
             switch(tok.punct){
                 case '(':
-                    err = cpp_recursive_eval_prec(cpp, s, value, 1, evaluate);
+                    err = cpp_recursive_eval_prec(cpp, s, result, 1, evaluate);
                     if(err) return err;
                     err = cpp_eval_ts_next(cpp, s, &tok);
                     if(err) return err;
@@ -7815,24 +7841,25 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, _Bool eva
                         return cpp_error(cpp, tok.loc, "Expected ')' in expression");
                     return 0;
                 case '!':
-                    err = cpp_eval_atom(cpp, s, value, evaluate);
+                    err = cpp_eval_atom(cpp, s, result, evaluate);
                     if(err) return err;
                     *value = !*value;
+                    result->is_unsigned = 0;
                     return 0;
                 case '~':
-                    err = cpp_eval_atom(cpp, s, value, evaluate);
+                    err = cpp_eval_atom(cpp, s, result, evaluate);
                     if(err) return err;
                     *value = ~*value;
                     return 0;
                 case '+':
-                    return cpp_eval_atom(cpp, s, value, evaluate);
+                    return cpp_eval_atom(cpp, s, result, evaluate);
                 case '-':
-                    err = cpp_eval_atom(cpp, s, value, evaluate);
+                    err = cpp_eval_atom(cpp, s, result, evaluate);
                     if(err) return err;
                     if(!evaluate) return 0;
-                    if(*value == INT64_MIN)
+                    if(!result->is_unsigned && *value == (uint64_t)INT64_MIN)
                         return cpp_error(cpp, tok.loc, "overflow in negation in #if");
-                    *value = -*value;
+                    *value = 0 - *value;
                     return 0;
                 default:
                     return cpp_error(cpp, tok.loc, "Unexpected punctuator in #if expression");
@@ -7855,9 +7882,10 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, _Bool eva
 
 static
 int
-cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec, _Bool evaluate){
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* result, int min_prec, _Bool evaluate){
+    uint64_t* value = &result->value;
     int err;
-    err = cpp_eval_atom(cpp, s, value, evaluate);
+    err = cpp_eval_atom(cpp, s, result, evaluate);
     if(err) return err;
     for(;;){
         CppToken tok;
@@ -7872,7 +7900,7 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
             break;
         }
         if(tok.punct == '?'){
-            int64_t mid, right;
+            CppEvalValue mid, right;
             err = cpp_recursive_eval_prec(cpp, s, &mid, 1, evaluate && *value != 0);
             if(err) return err;
             CppToken colon;
@@ -7882,55 +7910,89 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
                 return cpp_error(cpp, colon.loc, "Expected ':' in ternary expression");
             err = cpp_recursive_eval_prec(cpp, s, &right, 1, evaluate && *value == 0);
             if(err) return err;
-            *value = *value ? mid : right;
+            *value = *value ? mid.value : right.value;
+            result->is_unsigned = mid.is_unsigned || right.is_unsigned;
         }
         else{
-            int64_t rhs;
+            CppEvalValue right;
             _Bool evaluate_rhs = evaluate;
             if((tok.punct == '&&' && !*value) || (tok.punct == '||' && *value))
                 evaluate_rhs = 0;
-            err = cpp_recursive_eval_prec(cpp, s, &rhs, prec + 1, evaluate_rhs);
+            err = cpp_recursive_eval_prec(cpp, s, &right, prec + 1, evaluate_rhs);
             if(err) return err;
+            uint64_t rhs = right.value;
+            _Bool shift = tok.punct == '<<' || tok.punct == '>>';
+            _Bool use_unsigned = result->is_unsigned || (!shift && right.is_unsigned);
+            _Bool boolean = (prec >= 7 && prec <= 8) || prec == 2 || prec == 3;
+            result->is_unsigned = !boolean && use_unsigned;
             if(!evaluate) continue;
+            if(use_unsigned){
+                uint64_t lhs = *value, urhs = rhs;
+                switch(tok.punct){
+                    case '*': *value = lhs * urhs; continue;
+                    case '+': *value = lhs + urhs; continue;
+                    case '-': *value = lhs - urhs; continue;
+                    case '/':
+                        if(!rhs) return cpp_error(cpp, tok.loc, "Division by zero in #if");
+                        *value = lhs / urhs; continue;
+                    case '%':
+                        if(!rhs) return cpp_error(cpp, tok.loc, "Modulo by zero in #if");
+                        *value = lhs % urhs; continue;
+                    case '>>':
+                        if(urhs >= 64) return cpp_error(cpp, tok.loc, "shift amount out of range in #if");
+                        *value = lhs >> urhs; continue;
+                    case '<': *value = lhs < urhs; continue;
+                    case '>': *value = lhs > urhs; continue;
+                    case '<=': *value = lhs <= urhs; continue;
+                    case '>=': *value = lhs >= urhs; continue;
+                    default: break;
+                }
+            }
+            int64_t signed_lhs = cpp_eval_signed(*value);
+            int64_t signed_rhs = cpp_eval_signed(rhs);
+            int64_t signed_result;
             switch(tok.punct){
                 case '*':
-                    if(mul_overflow(*value, rhs, value))
+                    if(mul_overflow(signed_lhs, signed_rhs, &signed_result))
                         return cpp_error(cpp, tok.loc, "overflow in mul in #if");
+                    *value = (uint64_t)signed_result;
                     break;
                 case '/':
                     if(!rhs) return cpp_error(cpp, tok.loc, "Division by zero in #if");
-                    if(*value == INT64_MIN && rhs == -1)
+                    if(signed_lhs == INT64_MIN && signed_rhs == -1)
                         return cpp_error(cpp, tok.loc, "overflow in div in #if");
-                    *value = *value / rhs;
+                    *value = (uint64_t)(signed_lhs / signed_rhs);
                     break;
                 case '%':
                     if(!rhs) return cpp_error(cpp, tok.loc, "Modulo by zero in #if");
-                    if(*value == INT64_MIN && rhs == -1)
+                    if(signed_lhs == INT64_MIN && signed_rhs == -1)
                         return cpp_error(cpp, tok.loc, "overflow in mod in #if");
-                    *value = *value % rhs;
+                    *value = (uint64_t)(signed_lhs % signed_rhs);
                     break;
                 case '+':
-                    if(add_overflow(*value, rhs, value))
+                    if(add_overflow(signed_lhs, signed_rhs, &signed_result))
                         return cpp_error(cpp, tok.loc, "overflow in add in #if");
+                    *value = (uint64_t)signed_result;
                     break;
                 case '-':
-                    if(sub_overflow(*value, rhs, value))
+                    if(sub_overflow(signed_lhs, signed_rhs, &signed_result))
                         return cpp_error(cpp, tok.loc, "overflow in sub in #if");
+                    *value = (uint64_t)signed_result;
                     break;
                 case '<<':
-                    if(rhs < 0 || rhs >= 64)
+                    if(rhs >= 64)
                         return cpp_error(cpp, tok.loc, "shift amount out of range in #if");
-                    *value = (int64_t)((uint64_t)*value << rhs);
+                    *value = *value << rhs;
                     break;
                 case '>>':
-                    if(rhs < 0 || rhs >= 64)
+                    if(rhs >= 64)
                         return cpp_error(cpp, tok.loc, "shift amount out of range in #if");
-                    *value = *value >> rhs;
+                    *value = (uint64_t)(signed_lhs >> rhs);
                     break;
-                case '<':  *value = (*value < rhs); break;
-                case '>':  *value = (*value > rhs); break;
-                case '<=': *value = (*value <= rhs); break;
-                case '>=': *value = (*value >= rhs); break;
+                case '<':  *value = (signed_lhs < signed_rhs); break;
+                case '>':  *value = (signed_lhs > signed_rhs); break;
+                case '<=': *value = (signed_lhs <= signed_rhs); break;
+                case '>=': *value = (signed_lhs >= signed_rhs); break;
                 case '==': *value = (*value == rhs); break;
                 case '!=': *value = (*value != rhs); break;
                 case '&':  *value = *value & rhs; break;
@@ -7949,7 +8011,10 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
 static
 int
 cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
-    return cpp_recursive_eval_prec(cpp, s, value, 1, 1);
+    CppEvalValue result;
+    int err = cpp_recursive_eval_prec(cpp, s, &result, 1, 1);
+    if(!err) *value = cpp_eval_signed(result.value);
+    return err;
 }
 
 static

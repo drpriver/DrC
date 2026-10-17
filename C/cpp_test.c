@@ -1237,6 +1237,21 @@ TestFunction(test_condition){
                     "#endif"),
             SV("\nFoo\n")
         },
+        {"unsigned arithmetic and conversions", __LINE__, 0,
+            SV("#if -1 < 1U || !(0xffffffffffffffff > 0)\n#error comparison\n#endif\n"
+               "#if (0xffffffffffffffffU + 1) != 0 || (0U - 1) != 0xffffffffffffffff\n#error wrap\n#endif\n"
+               "#if (0xffffffffffffffffU * 2) != 0xfffffffffffffffeU\n#error multiply\n#endif\n"
+               "#if (0xffffffffffffffffU / 2) != 0x7fffffffffffffff || (0xffffffffffffffffU % 2) != 1\n#error division\n#endif\n"
+               "#if (0xffffffffffffffffU >> 63) != 1 || (-2 >> 1U) != -1\n#error shift\n#endif\n"
+               "#if -0x8000000000000000U != 0x8000000000000000U || -1U < 0\n#error negate\n#endif\n"
+               "#if (1 ? -1 : 0U) < 0 || (0 ? 0U : -1) < 0\n#error ternary\n#endif\n"
+               "#if (1 ? -1 : (1U / 0)) < 0 || (1 ? -1 : (0 ? 0 : 1U)) < 0\n#error skipped_type\n#endif\n"
+               "#if -1 >= !0U || -1 >= (1U == 1) || -1 >= (1U && 1) || -1 >= (1U < 2)\n#error boolean_type\n#endif\n"
+               "#if (1 ? -1 : (1U < 2)) >= 0 || (1 ? -1 : (1 << 1U)) >= 0\n#error skipped_signed_type\n#endif\n"
+               "#if ~(0U) != 0xffffffffffffffffU || (+1uL - 2) < 0 || (1ui64 - 2) < 0\n#error suffix\n#endif\n"
+               "ok"),
+            SV("\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n"
+               "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "\n\n\n" "ok")},
         {"ifdef (defined)", __LINE__, 0,
             SV("#define FOO\n"
                "#ifdef FOO\n"
