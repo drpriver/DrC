@@ -302,6 +302,7 @@ TestFunction(test_func_macros){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         {"simple_func_macro",SV("#define F(x) x*x\nF(2)"), SV("\n2*2"), __LINE__},
+        {"comment_before_macro_name", SV("#define /* comment */ F(x) x\nF(2)"), SV("\n2"), __LINE__},
         {"uninvoked_macro_before_define", SV(
             "#define F(x) x\nF\n#define A 1\nA"), SV("\nF\n\n1"), __LINE__},
         {"uninvoked_macro_before_conditional", SV(
@@ -1133,6 +1134,8 @@ TestFunction(test_builtin_macros){
         {"__TIMESTAMP__", SV("__TIMESTAMP__"), SV("\"??? ??? ?? ??:??:?? ????\""), __LINE__, 0},
         {"__format", SV("__format(\"%d + %d = %d\", 1, 2, 3)"), SV("\"1 + 2 = 3\""), __LINE__, 0},
         {"defblock obj", SV("#defblock HELLO\nhello world\n#endblock\nHELLO"), SV("\nhello world"), __LINE__, 0},
+        {"defblock comment before name", SV("#defblock /* comment */ HELLO\nhello world\n#endblock\nHELLO"), SV("\nhello world"), __LINE__, 0},
+        {"defifndef comment before name", SV("#defifndef /* comment */ HELLO hello\nHELLO"), SV("\nhello"), __LINE__, 0},
         {"defblock func", SV("#defblock ADD(x, y)\nx + y\n#endblock\nADD(3, 4)"), SV("\n3 + 4"), __LINE__, 0},
         {"defblock variadic", SV("#defblock LOG(fmt, ...)\nfmt __VA_ARGS__\n#endblock\nLOG(hello, world)"), SV("\nhello world"), __LINE__, 0},
     };
@@ -1844,6 +1847,20 @@ TestFunction(test_if_eval){
             SV("#if 1\nyes\n#endif"), SV("\nyes\n")},
         {"if 42", __LINE__, 0,
             SV("#if 42\nyes\n#endif"), SV("\nyes\n")},
+        {"comment_before_ifdef_name", __LINE__, 0,
+            SV("#define X\n#ifdef /* comment */ X\nyes\n#endif"), SV("\n\nyes\n")},
+        {"comment_before_ifndef_name", __LINE__, 0,
+            SV("#ifndef /* comment */ X\nyes\n#endif"), SV("\nyes\n")},
+        {"comment_before_undef_name", __LINE__, 0,
+            SV("#define X\n#undef /* comment */ X\n#ifndef X\nyes\n#endif"), SV("\n\n\nyes\n")},
+        {"comment_before_active_elifdef_name", __LINE__, 0,
+            SV("#if 1\nyes\n#elifdef /* comment */ X\nno\n#endif"), SV("\nyes\n\n\n")},
+        {"comment_before_inactive_elifdef_name", __LINE__, 0,
+            SV("#define X\n#if 0\nno\n#elifdef /* comment */ X\nyes\n#endif"), SV("\n\n\n\nyes\n")},
+        {"comment_before_active_elifndef_name", __LINE__, 0,
+            SV("#if 1\nyes\n#elifndef /* comment */ X\nno\n#endif"), SV("\nyes\n\n\n")},
+        {"comment_before_inactive_elifndef_name", __LINE__, 0,
+            SV("#if 0\nno\n#elifndef /* comment */ X\nyes\n#endif"), SV("\n\n\nyes\n")},
         {"zero_parameter_condition_call_with_space", __LINE__, 0,
             SV("#define F() 1\n#if F( )\nyes\n#endif"), SV("\n\nyes\n")},
         {"decimal digit separators", __LINE__, 0,

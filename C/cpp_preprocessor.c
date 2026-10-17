@@ -1658,6 +1658,22 @@ cpp_info(CppPreprocessor* cpp, SrcLoc loc, const char* fmt, ...){
 
 static
 int
+cpp_read_directive_macro_name(CppPreprocessor* cpp, CppToken* tok){
+    int err = cpp_next_raw_token(cpp, tok);
+    if(err) return err;
+    if(tok->type != CPP_WHITESPACE)
+        return cpp_error(cpp, tok->loc, "macro name missing");
+    do {
+        err = cpp_next_raw_token(cpp, tok);
+        if(err) return err;
+    } while(tok->type == CPP_WHITESPACE);
+    if(tok->type != CPP_IDENTIFIER)
+        return cpp_error(cpp, tok->loc, "macro name missing");
+    return 0;
+}
+
+static
+int
 cpp_handle_directive(CppPreprocessor* cpp){
     int err;
     CppToken tok;
@@ -1706,12 +1722,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
     }
     if(sv_equals(tok.txt, SV("define")) || sv_equals(tok.txt, SV("defifndef"))){
         _Bool ifndef = tok.txt.length > 6;
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         SrcLoc name_loc = tok.loc;
         if(ifndef){
@@ -2075,12 +2087,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
     }
     else if(sv_equals(tok.txt, SV("defblock"))){
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         SrcLoc name_loc = tok.loc;
         err = cpp_next_raw_token(cpp, &tok);
@@ -2274,12 +2282,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         return err;
     }
     else if(sv_equals(tok.txt, SV("undef"))){
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
@@ -2327,12 +2331,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
     }
     else if(sv_equals(tok.txt, SV("ifdef"))){
         CppPoundIf s = { .start = tok.loc };
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
@@ -2352,12 +2352,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
     }
     else if(sv_equals(tok.txt, SV("ifndef"))){
         CppPoundIf s = { .start = tok.loc };
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
@@ -2418,12 +2414,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifdef after #else");
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
@@ -2444,12 +2436,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
         s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifndef after #else");
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
@@ -2961,12 +2949,8 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
         s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifdef after #else");
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
@@ -2991,12 +2975,8 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
         s->guard_macro = NULL;
         if(s->seen_else)
             return cpp_error(cpp, tok.loc, "#elifndef after #else");
-        err = cpp_next_raw_token(cpp, &tok);
+        err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
-        if(tok.type != CPP_WHITESPACE) return cpp_error(cpp, tok.loc, "macro name missing");
-        err = cpp_next_raw_token(cpp, &tok);
-        if(err) return err;
-        if(tok.type != CPP_IDENTIFIER) return cpp_error(cpp, tok.loc, "macro name missing");
         StringView name = tok.txt;
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
