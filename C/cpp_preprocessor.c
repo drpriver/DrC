@@ -7698,6 +7698,19 @@ cpp_eval_parse_number_typed(CppPreprocessor* cpp, CppToken tok, CppEvalValue* re
     }
     if(!len)
         return cpp_error(cpp, tok.loc, "Invalid number literal");
+    // Remove dumb C++ digit separators.
+    char buf[256];
+    if(memchr(s, '\'', len)){
+        size_t buf_len = 0;
+        for(size_t i = 0; i < len; i++){
+            if(s[i] == '\'') continue;
+            if(buf_len >= sizeof buf - 1)
+                return cpp_error(cpp, tok.loc, "Number literal too long");
+            buf[buf_len++] = s[i];
+        }
+        s = buf;
+        len = buf_len;
+    }
     ParseNumberError err;
     uint64_t v = 0;
     if(len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')){
