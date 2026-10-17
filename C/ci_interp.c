@@ -132,6 +132,7 @@ static void ci_unlock_resolver(CiInterpreter*);
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static inline int cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32_t* out);
+static CcQualType cc_array_element_type(CcQualType array);
 static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
 static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
 static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
@@ -1091,7 +1092,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_ELEMENT_TYPE: {
             CcTypeKind k = ccqt_kind(qt);
             if(k == CC_ARRAY){
-                *(uintptr_t*)result = ccqt_as_array(qt)->element.bits;
+                *(uintptr_t*)result = cc_array_element_type(qt).bits;
                 return 0;
             }
             if(k == CC_SLICE){

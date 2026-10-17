@@ -4566,6 +4566,10 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
         }
         case CC_ATOMIC_COMPARE_EXCHANGE_N:
         case CC_ATOMIC_COMPARE_EXCHANGE:{
+            // TODO: respect weak flag.
+            // Just always do strong for now.
+            err = ci_lower_expr_discard(ci, ctx, e->values[2]);
+            if(err) return err;
             CiLowerVal ep;
             err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &ep);
             if(err) return err;
@@ -4621,7 +4625,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .kind = CI_OP_ATOMIC_CAS,
                     .memorder = mo,
                     .fail_memorder = e->atomic.fail_memorder,
-                    .weak = e->atomic.weak,
+                    .weak = 0,
                     .size = sz,
                     .slot = ok,
                     .src = pv.slot,
@@ -5304,6 +5308,8 @@ ci_expr_discardable(CiLowerCtx* ctx, CcExpr* e, _Bool* safe){
         return 0;
     }
     *safe = 0;
+    if(e->is_lvalue && (e->type.is_volatile || e->type.is_atomic))
+        return 0;
     // Keep unsupported-type diagnostics in the normal discard walker.
     if(ccqt_bt_eq(e->type, CCBT_bfloat16) || (ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))))
         return 0;
@@ -5355,8 +5361,65 @@ ci_expr_discardable(CiLowerCtx* ctx, CcExpr* e, _Bool* safe){
 
 static
 int
+ci_lower_address_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
+    int err;
+    switch(e->kind){
+        case CC_EXPR_VARIABLE: case CC_EXPR_FUNCTION:
+        case CC_EXPR_VALUE: case CC_EXPR_BLOB:
+            return 0;
+        case CC_EXPR_DEREF:
+            return ci_lower_expr_discard(ci, ctx, e->lhs);
+        case CC_EXPR_ARROW:
+            return ci_lower_expr_discard(ci, ctx, e->values[0]);
+        case CC_EXPR_DOT:
+            return ci_lower_address_discard(ci, ctx, e->values[0]);
+        case CC_EXPR_OBJECT_VIEW:
+            return ci_lower_address_discard(ci, ctx, e->lhs);
+        case CC_EXPR_SUBSCRIPT:
+            err = ccqt_kind(e->lhs->type) == CC_ARRAY
+                ? ci_lower_address_discard(ci, ctx, e->lhs)
+                : ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            return ci_lower_expr_discard(ci, ctx, e->values[0]);
+        case CC_EXPR_COMMA:
+            err = ci_lower_expr_discard(ci, ctx, e->lhs);
+            if(err) return err;
+            return ci_lower_address_discard(ci, ctx, e->values[0]);
+        case CC_EXPR_COMPOUND_LITERAL: case CC_EXPR_INIT_LIST:
+            for(size_t i = 0; i < e->init_list->count; i++){
+                err = ci_lower_expr_discard(ci, ctx, e->init_list->entries[i].value);
+                if(err) return err;
+            }
+            return 0;
+        default: {
+            uint32_t temp = ctx->temp;
+            CiLowerAddr address;
+            err = ci_lower_addr(ci, ctx, e, 1, &address);
+            ctx->temp = temp;
+            return err;
+        }
+    }
+}
+
+static
+int
 ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     int err;
+    if(ccqt_kind(e->type) == CC_ARRAY || ccqt_kind(e->type) == CC_FUNCTION)
+        return ci_lower_address_discard(ci, ctx, e);
+    if(e->is_lvalue && (e->type.is_volatile || e->type.is_atomic) && ccqt_kind(e->type) != CC_ARRAY && ccqt_kind(e->type) != CC_FUNCTION){
+        uint32_t temp = ctx->temp, size, align, slot;
+        err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &size);
+        if(err) return err;
+        err = cc_alignof_as_uint(&ci->parser, e->type, e->loc, &align);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, size, align, &slot);
+        if(err) return err;
+        CiLowerVal value;
+        err = ci_lower_expr(ci, ctx, e, slot, &value);
+        ctx->temp = temp;
+        return err;
+    }
     if(ccqt_bt_eq(e->type, CCBT_bfloat16)){
         ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
@@ -5372,7 +5435,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_VALUE:
             return 0;
         case CC_EXPR_VARIABLE:
-            // FIXME: volatile reads
             return 0;
         case CC_EXPR_SIZEOF_VMT:
             return ci_unimplemented(ci, e->loc, "sizeof(vmt)");
@@ -5407,13 +5469,14 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_BITNOT:
         case CC_EXPR_LOGNOT:
         case CC_EXPR_DEREF:
-        case CC_EXPR_ADDR:
         case CC_EXPR_CAST:
         case CC_EXPR_ALLOCA:
         case CC_EXPR_SLICE_ALL:
         case CC_EXPR_BSWAP:
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             return err;
+        case CC_EXPR_ADDR:
+            return ci_lower_address_discard(ci, ctx, e->lhs);
         case CC_EXPR_INTERN:
         case CC_EXPR_SRCLOC_REFLECT:
             // idk maybe these should be treated as having side effects?

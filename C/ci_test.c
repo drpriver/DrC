@@ -25,6 +25,8 @@
 #include "cc_target.h"
 #include "cc_errors.h"
 #include "ci_interp.h"
+// Do not include ci_op.h in this file, this file tests the runtime execution
+// of the interpreter and its observable effects, not its internal bytecode.
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -42,6 +44,71 @@ TestFunction(test_interpreter){
         _Bool skip;
         _Bool no_toplevel_ops;
     } testcases[] = {
+        {
+            "discarded qualified reads survive lowering", __LINE__,
+            SVI("volatile int x=1; _Atomic int y=2; volatile int *p=&x; _Atomic int *q=&y;\n"
+                "x; *p; y; *q; (void)x; 1 && x; 0 || y; 1 ? x : y;\n"
+                "&x; &y; &*p; &*q;\n"
+                "return 1;"),
+            .exit_code=1,
+        },
+        {
+            "overflow builtins accept enum operands and result storage", __LINE__,
+            SVI("enum E:unsigned char {A=250}; enum E a=A,r; int out;\n"
+                "if(!__builtin_add_overflow(a,10,&r)||r!=4) return 0;\n"
+                "if(__builtin_sub_overflow(a,1,&out)||out!=249) return 0;\n"
+                "return !__builtin_mul_overflow(2,a,&out)&&out==500;"),
+            .exit_code=1,
+        },
+        {
+            "discarded volatile members distinguish reads from addresses", __LINE__,
+            SVI("struct S {int x,a[2];}; volatile struct S s={1,{2,3}}; int i=0;\n"
+                "s.x; s.a[0]; (void)s.a[1];\n"
+                "&s.x; &s.a[0]; s.a;\n"
+                "&s.a[i++]; &s.a[i++]; return i==2;"),
+            .exit_code=1,
+        },
+        {
+            "generic atomic aggregates accept const input buffers", __LINE__,
+            SVI("struct S {int x;}; _Atomic(struct S) s={1}; const struct S input={2}; struct S out;\n"
+                "__atomic_store(&s,&input,5); __atomic_load(&s,&out,5);\n"
+                "if(out.x!=2) return 0; __atomic_exchange(&s,&input,&out,5);\n"
+                "return out.x==2;"),
+            .exit_code=1,
+        },
+        {
+            "generic atomics preserve memory orders and decay buffers", __LINE__,
+            SVI("_Atomic int x[1]={1}; int value[1]={2},out[1]={0};\n"
+                "__atomic_store(x,value,5); __atomic_load(x,out,5);\n"
+                "if(out[0]!=2)return 0; value[0]=3; __atomic_exchange(x,value,out,5);\n"
+                "return out[0]==2&&__atomic_load_n(x,5)==3;"),
+            .exit_code=1,
+        },
+        {
+            "generic atomic pointer forms preserve memory orders", __LINE__,
+            SVI("int x=1,value=2,out=0;\n"
+                "__atomic_store(&x,&value,5); __atomic_load(&x,&out,5);\n"
+                "__atomic_exchange(&x,&value,&out,5); return out==2;"),
+            .exit_code=1,
+        },
+        {
+            "compare exchange evaluates runtime boolean weak argument", __LINE__,
+            SVI("_Atomic int x=1; int expected[1]={1},desired[1]={2},calls=0;\n"
+                "if(!__atomic_compare_exchange(&x,expected,desired,(++calls,9),5,5))return 0;\n"
+                "expected[0]=2;\n"
+                "if(!__atomic_compare_exchange_n(&x,expected,3,(++calls,0),5,5))return 0;\n"
+                "return calls==2&&x==3;"),
+            .exit_code=1,
+        },
+        {
+            "array element reflection preserves inherited qualifiers", __LINE__,
+            SVI("typedef int Row[4];\n"
+                "static_assert((const Row).element_type.is_const);\n"
+                "static_assert((volatile Row).element_type.is_volatile);\n"
+                "_Type t=const Row; _Type v=volatile Row;\n"
+                "return t.element_type.is_const&&v.element_type.is_volatile;"),
+            .exit_code=1,
+        },
         // C2y named jumps: N3355; N3854 6.8.2, 6.8.3, 6.8.7.3/4.
         // https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3355.htm
         {

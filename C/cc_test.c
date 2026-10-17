@@ -6433,6 +6433,86 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "overflow rejects boolean result", __LINE__,
+            SVI("_Bool r;\n__builtin_add_overflow(1,1,&r);"),
+            SVI("(test):2:1: error: overflow builtin requires non-boolean integer operands and result\n"),
+        },
+        {
+            "overflow rejects boolean operand", __LINE__,
+            SVI("int r;\n__builtin_mul_overflow((_Bool)1,2,&r);"),
+            SVI("(test):2:1: error: overflow builtin requires non-boolean integer operands and result\n"),
+        },
+        {
+            "overflow rejects const result", __LINE__,
+            SVI("const int r=0;\n__builtin_add_overflow(1,1,&r);"),
+            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage\n"),
+        },
+        {
+            "overflow rejects atomic result", __LINE__,
+            SVI("_Atomic int r;\n__builtin_add_overflow(1,1,&r);"),
+            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage\n"),
+        },
+        {
+            "generic atomic load rejects integer buffer", __LINE__,
+            SVI("int x;\n__atomic_load(&x,123,0);"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+        },
+        {
+            "generic atomic store rejects mismatched buffer", __LINE__,
+            SVI("int x; short value;\n__atomic_store(&x,&value,0);"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+        },
+        {
+            "generic atomic exchange rejects const output", __LINE__,
+            SVI("int x,value; const int out=0;\n__atomic_exchange(&x,&value,&out,0);"),
+            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+        },
+        {
+            "generic atomic load rejects atomic output", __LINE__,
+            SVI("int x; _Atomic int out;\n__atomic_load(&x,&out,0);"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+        },
+        {
+            "compare exchange rejects const expected", __LINE__,
+            SVI("int x; const int expected=0;\n__atomic_compare_exchange_n(&x,&expected,1,0,0,0);"),
+            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+        },
+        {
+            "atomic store rejects const object", __LINE__,
+            SVI("const int x=0;\n__atomic_store_n(&x,1,0);"),
+            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+        },
+        {
+            "generic atomic store rejects const object", __LINE__,
+            SVI("const int x=0; int value=1;\n__atomic_store(&x,&value,0);"),
+            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+        },
+        {
+            "atomic exchange rejects const object", __LINE__,
+            SVI("const int x=0;\n__atomic_exchange_n(&x,1,0);"),
+            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+        },
+        {
+            "generic atomic load rejects release order", __LINE__,
+            SVI("int x,out;\n__atomic_load(&x,&out,3);"),
+            SVI("(test):2:1: error: atomic load memory order cannot be release or acq_rel\n"),
+        },
+        {
+            "generic atomic store rejects acquire order", __LINE__,
+            SVI("int x,value;\n__atomic_store(&x,&value,2);"),
+            SVI("(test):2:1: error: atomic store memory order cannot be consume, acquire, or acq_rel\n"),
+        },
+        {
+            "generic atomic rejects unsupported object size", __LINE__,
+            SVI("struct S {char a[3];} x,out;\n__atomic_load(&x,&out,0);"),
+            SVI("(test):2:1: error: atomic operand size 3 is not a power of 2\n"),
+        },
+        {
+            "generic atomic rejects oversized object", __LINE__,
+            SVI("struct S {char a[32];} x,value;\n__atomic_store(&x,&value,0);"),
+            SVI("(test):2:1: error: atomic operand size 32 exceeds target's maximum lock-free size 16\n"),
+        },
+        {
             "compound literal rejects extern", __LINE__,
             SVI("(extern int){1};"),
             SVI("(test):1:2: error: invalid storage class in compound literal\n"),

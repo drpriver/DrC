@@ -516,8 +516,7 @@ struct CcExpr {
             CcAtomicOp op: 8;
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4; // compare_exchange only
-            uint32_t weak: 1;          // weak flag (compare_exchange only)
-            uint32_t _bitpadding: 6;
+            uint32_t _bitpadding: 7;
             uint32_t is_lvalue: 1;
             uint32_t _pad;
         } atomic;
