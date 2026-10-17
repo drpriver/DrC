@@ -19886,7 +19886,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             switch(op){
                 case CC_TYPE_IS_VALID:      INTRES(qt.bits != 0);
                 case CC_TYPE_IS_INVALID:    INTRES(qt.bits == 0);
-                case CC_TYPE_IS_INTEGER:    INTRES(ccqt_is_basic(qt) && ccbt_is_integer(ccqt_basic_kind(qt)));
+                case CC_TYPE_IS_INTEGER:    INTRES(ccqt_is_integer(qt));
                 case CC_TYPE_IS_FLOAT:      INTRES(ccqt_is_basic(qt) && ccbt_is_float(ccqt_basic_kind(qt)));
                 case CC_TYPE_IS_ARITHMETIC: INTRES((ccqt_is_basic(qt) && ccbt_is_arithmetic(ccqt_basic_kind(qt))) || ccqt_kind(qt) == CC_ENUM);
                 case CC_TYPE_IS_POINTER:    INTRES(ccqt_kind(qt) == CC_POINTER);
@@ -19900,8 +19900,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_IS_CONST:      INTRES(qt.is_const);
                 case CC_TYPE_IS_VOLATILE:   INTRES(qt.is_volatile);
                 case CC_TYPE_IS_ATOMIC:     INTRES(qt.is_atomic);
-                case CC_TYPE_IS_UNSIGNED:   INTRES(ccqt_is_basic(qt) && ccbt_is_unsigned(ccqt_basic_kind(qt), !cc_target(p)->char_is_signed));
-                case CC_TYPE_IS_SIGNED:     INTRES(ccqt_is_basic(qt) && ccbt_is_integer(ccqt_basic_kind(qt)) && !ccbt_is_unsigned(ccqt_basic_kind(qt), !cc_target(p)->char_is_signed));
+                case CC_TYPE_IS_UNSIGNED:   INTRES(ccqt_is_unsigned(qt, !cc_target(p)->char_is_signed));
+                case CC_TYPE_IS_SIGNED:     INTRES(ccqt_is_integer(qt) && !ccqt_is_unsigned(qt, !cc_target(p)->char_is_signed));
                 case CC_TYPE_IS_INCOMPLETE: {
                     CcTypeKind k = ccqt_kind(qt);
                     _Bool is_incomplete;

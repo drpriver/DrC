@@ -771,9 +771,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             *(_Bool*)result = (qt.bits != 0) == (op == CC_TYPE_IS_VALID);
             return 0;
         case CC_TYPE_IS_INTEGER: {
-            CcQualType st = qt;
-            while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(ccqt_basic_kind(st));
+            *(_Bool*)result = ccqt_is_integer(qt);
             return 0;
         }
         case CC_TYPE_IS_FLOAT: {
@@ -833,9 +831,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_IS_SIGNED: {
-            CcQualType st = qt;
-            while(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
-            *(_Bool*)result = ccqt_is_basic(st) && ccbt_is_integer(ccqt_basic_kind(st)) && !ccbt_is_unsigned(ccqt_basic_kind(st), !ci_target(ci)->char_is_signed);
+            *(_Bool*)result = ccqt_is_integer(qt) && !ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
             return 0;
         }
         case CC_TYPE_SIZEOF: {

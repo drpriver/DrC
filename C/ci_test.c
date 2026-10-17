@@ -12527,6 +12527,34 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "reflection: enum integer classification agrees with constexpr", __LINE__,
+            SVI("enum E : unsigned { A };\n"
+                "typedef enum E Aligned __attribute__((aligned(16)));\n"
+                "int f(_Type t){ return t.is_integer; }\n"
+                "_Static_assert((enum E).is_integer);\n"
+                "_Static_assert(Aligned.is_integer);\n"
+                "return f(enum E) && f(Aligned) && !f(float) && !f(int*);\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: enum signed classification agrees with constexpr", __LINE__,
+            SVI("enum S : int { A = -1 }; enum U : unsigned { B };\n"
+                "int f(_Type t){ return t.is_signed; }\n"
+                "_Static_assert((enum S).is_signed);\n"
+                "_Static_assert(!(enum U).is_signed);\n"
+                "return f(enum S) && !f(enum U) && !f(float) && !f(int*);\n"),
+            .exit_code = 1,
+        },
+        {
+            "reflection: enum unsigned classification agrees with constexpr", __LINE__,
+            SVI("enum S : int { A = -1 }; enum U : unsigned { B };\n"
+                "int f(_Type t){ return t.is_unsigned; }\n"
+                "_Static_assert((enum U).is_unsigned);\n"
+                "_Static_assert(!(enum S).is_unsigned);\n"
+                "return f(enum U) && !f(enum S) && !f(float) && !f(int*);\n"),
+            .exit_code = 1,
+        },
+        {
             "constexpr: type introspection struct/enum", __LINE__,
             SVI("struct S { int x; };\n"
                "enum E { A };\n"
