@@ -306,6 +306,12 @@ TestFunction(test_func_macros){
         {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
         {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
         {"stringify_with_spaces",SV("#define STR(x) #x\nSTR(hello world)"),SV("\n\"hello world\""),__LINE__},
+        {"stringify_uninvoked_function_macro", SV(
+            "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
+            "EXPAND(F word)"), SV("\n\n\n\"F word\""), __LINE__},
+        {"stringify_uninvoked_function_macro_newline", SV(
+            "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
+            "EXPAND(F\nword)"), SV("\n\n\n\"F word\""), __LINE__},
         {"token_paste",SV("#define PASTE(a,b) a##b\nPASTE(foo, bar)"), SV("\nfoobar"), __LINE__},
         {"token_paste_3",SV("#define PASTE3(a,b,c) a##b##c\nPASTE3(x,y,z)"),SV("\nxyz"),__LINE__},
         {"paste_empty_left",SV("#define PASTE(a,b) a##b\nPASTE(,bar)"),SV("\nbar"), __LINE__},

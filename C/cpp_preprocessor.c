@@ -3247,6 +3247,9 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
             if(err) goto finally;
             continue;
         }
+        size_t lookahead_start = out->count;
+        err = cpp_push_tok(cpp, out, tok);
+        if(err) goto finally;
         CppToken next = {.type = CPP_END_OF_INPUT};
         for(;;){
             while(pending->count){
@@ -3264,16 +3267,17 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
             got_next:;
             if(next.type != CPP_WHITESPACE && next.type != CPP_NEWLINE)
                 break;
+            err = cpp_push_tok(cpp, out, next);
+            if(err) goto finally;
         }
         if(next.type != CPP_PUNCTUATOR || next.punct != '('){
             if(next.type != CPP_END_OF_INPUT){
                 err = cpp_push_tok(cpp, pending, next);
                 if(err) goto finally;
             }
-            err = cpp_push_tok(cpp, out, tok);
-            if(err) goto finally;
             continue;
         }
+        out->count = lookahead_start;
         args = cpp_get_scratch(cpp);
         arg_seps = cpp_get_scratch_idxes(cpp);
         if(!args || !arg_seps){
