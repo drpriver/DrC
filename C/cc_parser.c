@@ -7470,7 +7470,7 @@ cc_parse_static_switch(CcParser* p, SrcLoc loc){
                         for(size_t i = 0; i < cases.count; i++){
                             CcStaticCase prev = cases.data[i];
                             if(ci_uint128_le(low, ci_uint128_xor(prev.high, sign)) && ci_uint128_le(ci_uint128_xor(prev.value, sign), high)){
-                                err = cc_error(p, label.loc, "%s", 
+                                err = cc_error(p, label.loc, "%s",
                                     ci_uint128_eq(entry.value, entry.high) && ci_uint128_eq(prev.value, prev.high) ?
                                     "duplicate static case value" : "overlapping static case values"
                                 );
@@ -8665,29 +8665,13 @@ cc_integer_bits_expr(CcParser* p, SrcLoc loc, CcQualType type, CiUint128 bits){
 static
 CcExpr*_Nullable
 cc_int64_expr(CcParser* p, SrcLoc loc, CcQualType type, int64_t v){
-    CcExpr* node = cc_value_expr(p, loc, type);
-    if(node){
-        CcQualType t = type;
-        while(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
-        if(ccqt_bt_eq(t, CCBT_int128) || ccqt_bt_eq(t, CCBT_unsigned_int128))
-            node->uinteger128 = ci_uint128_from_int64(v);
-        else node->integer = v;
-    }
-    return node;
+    return cc_integer_bits_expr(p, loc, type, ci_uint128_from_int64(v));
 }
 
 static
 CcExpr*_Nullable
 cc_uint64_expr(CcParser* p, SrcLoc loc, CcQualType type, uint64_t v){
-    CcExpr* node = cc_value_expr(p, loc, type);
-    if(node){
-        CcQualType t = type;
-        while(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
-        if(ccqt_bt_eq(t, CCBT_int128) || ccqt_bt_eq(t, CCBT_unsigned_int128))
-            node->uinteger128 = ci_uint128_from_uint64(v);
-        else node->uinteger = v;
-    }
-    return node;
+    return cc_integer_bits_expr(p, loc, type, ci_uint128_from_uint64(v));
 }
 
 static
@@ -8827,6 +8811,33 @@ cc_scratch_allocator(CcParser*p){
     return allocator_from_arena(&p->scratch_arena);
 }
 
+static
+int
+cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttributes* attrs, const char* name){
+    int err = cc_expect_punct(p, CC_lparen);
+    if(err) return err;
+    flags.vc = CC_CONSTEXPR_VALUE;
+    CcExpr* expr = NULL;
+    err = cc_parse_assignment_expr(p, flags, &expr, CCQT_NONE);
+    if(err) return err;
+    if(!expr)
+        return cc_error(p, loc, "expected constant expression for %s", name);
+    int64_t align_i;
+    err = cc_eval_integer(&(CcEvalCtx){p}, expr, &align_i);
+    cc_release_expr(p, expr);
+    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
+    if(err)
+        return cc_error(p, loc, "%s requires a constant integral expression", name);
+    uint64_t align = (uint64_t)align_i;
+    if(align == 0 || (align & (align - 1)) != 0)
+        return cc_error(p, loc, "alignment must be a positive power of 2");
+    if(align > UINT16_MAX)
+        return cc_error(p, loc, "alignment too large");
+    attrs->aligned = (uint16_t)align;
+    attrs->has_aligned = 1;
+    return cc_expect_punct(p, CC_rparen);
+}
+
 // cc_match_gnu_attribute
 // ----------------------
 // Tries to match a gnu-style attribute.
@@ -8870,27 +8881,7 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
         err = cc_peek(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
-            err = cc_next_token(p, &tok); // consume '('
-            if(err) return err;
-            CcExpr* expr = NULL;
-            err = cc_parse_assignment_expr(p, constexpr_flags, &expr, CCQT_NONE);
-            if(err) return err;
-            if(!expr)
-                return cc_error(p, loc, "expected constant expression for aligned attribute");
-            int64_t align_i;
-            err = cc_eval_integer(&(CcEvalCtx){p}, expr, &align_i);
-            cc_release_expr(p, expr);
-            if(err && err != CC_NOT_CONSTANT_ERROR) return err;
-            if(err)
-                return cc_error(p, loc, "aligned attribute requires a constant integral expression");
-            uint64_t align = (uint64_t)align_i;
-            if(align == 0 || (align & (align - 1)) != 0)
-                return cc_error(p, loc, "alignment must be a positive power of 2");
-            if(align > UINT16_MAX)
-                return cc_error(p, loc, "alignment too large");
-            attrs->aligned = (uint16_t)align;
-            attrs->has_aligned = 1;
-            err = cc_expect_punct(p, CC_rparen);
+            err = cc_parse_alignment_argument(p, flags, loc, attrs, "aligned attribute");
             if(err) return err;
         }
         else {
@@ -9150,8 +9141,6 @@ cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
 static
 int
 cc_parse_declspec(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
-    CcParseFlags constexpr_flags = flags;
-    constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     int err = 0;
     CcToken tok;
     for(;;){
@@ -9199,27 +9188,7 @@ cc_parse_declspec(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 return cc_error(p, tok.loc, "expected __declspec specifier name");
             StringView name = {.text = tok.ident.ident->data, .length = tok.ident.ident->length};
             if(sv_equals(name, SV("align"))){
-                err = cc_expect_punct(p, CC_lparen);
-                if(err) return err;
-                CcExpr* expr = NULL;
-                err = cc_parse_assignment_expr(p, constexpr_flags, &expr, CCQT_NONE);
-                if(err) return err;
-                if(!expr)
-                    return cc_error(p, tok.loc, "expected constant expression for __declspec(align)");
-                int64_t align_i;
-                err = cc_eval_integer(&(CcEvalCtx){p}, expr, &align_i);
-                cc_release_expr(p, expr);
-                if(err && err != CC_NOT_CONSTANT_ERROR) return err;
-                if(err)
-                    return cc_error(p, tok.loc, "__declspec(align) requires a constant integral expression");
-                uint64_t align = (uint64_t)align_i;
-                if(align == 0 || (align & (align - 1)) != 0)
-                    return cc_error(p, tok.loc, "alignment must be a positive power of 2");
-                if(align > UINT16_MAX)
-                    return cc_error(p, tok.loc, "alignment too large");
-                attrs->aligned = (uint16_t)align;
-                attrs->has_aligned = 1;
-                err = cc_expect_punct(p, CC_rparen);
+                err = cc_parse_alignment_argument(p, flags, tok.loc, attrs, "__declspec(align)");
                 if(err) return err;
             }
             else if(sv_equals(name, SV("thread"))){
@@ -12830,9 +12799,9 @@ cc_eval_case_range(CcParser* p, SrcLoc loc, CcQualType type, CcExpr* low, CcExpr
     _Bool negative[2];
     int err = 0;
     for(unsigned i = 0; i < 2; i++){
-        if(!ccqt_is_integer(exprs[i]->type)) 
+        if(!ccqt_is_integer(exprs[i]->type))
             err = CC_NOT_CONSTANT_ERROR;
-        else 
+        else
             err = cc_eval_expr(&(CcEvalCtx){.parser=p}, exprs[i], &values[i]);
         if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
             err = cc_error(p, loc, "case range endpoints must be constant integer expressions");

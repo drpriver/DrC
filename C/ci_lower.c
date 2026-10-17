@@ -1115,7 +1115,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         err = cc_sizeof_as_uint(p, ccqt_as_ptr(e->type)->pointee, e->loc, &elem_sz);
         if(err) return err;
         is_ptr = 1;
-        opkind = ctx->ptr_size == 16?CI_OP_ALU128:ctx->ptr_size == 4? CI_OP_ALU32:CI_OP_ALU64;
+        opkind = ci_int_op_kind(ctx->ptr_size);
         op_unsigned = ccqt_is_unsigned(rhs->type, ctx->char_is_unsigned);
     }
     else {
@@ -1258,7 +1258,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         if(err) return err;
         *op = (CiOp){
             .alu = {
-                .kind = ctx->ptr_size==8?CI_OP_ALU64:ctx->ptr_size==4?CI_OP_ALU32:CI_OP_ALU128,
+                .kind = ci_int_op_kind(ctx->ptr_size),
                 .slot = scaled,
                 .src = r.slot,
                 .src2 = esz,
@@ -1898,12 +1898,9 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 kind = ci_falu_kind(e->type, ctx->ldbl_fmt);
             }
             else if(ccqt_is_integer(e->type)){
-                switch(size){
-                    case 4: kind = CI_OP_ALU32; break;
-                    case 8: kind = CI_OP_ALU64; break;
-                    case 16: kind = CI_OP_ALU128; break;
-                    default: return ci_ice(ci, e->loc, "unsupported alu operand size %u", size);
-                }
+                kind = ci_int_op_kind(size);
+                if(size < 4 || !kind)
+                    return ci_ice(ci, e->loc, "unsupported alu operand size %u", size);
             }
             else {
                 return ci_unimplemented(ci, e->loc, "Unimplemented op");
@@ -2034,7 +2031,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
-                            .kind = ctx->ptr_size==8?CI_OP_ALU64:ctx->ptr_size==4?CI_OP_ALU32:CI_OP_ALU128,
+                            .kind = ci_int_op_kind(ctx->ptr_size),
                             .slot = diff,
                             .src = l.slot,
                             .src2 = r.slot,
@@ -2063,7 +2060,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         if(err) return err;
                         *op = (CiOp){
                             .alu = {
-                                .kind = ctx->ptr_size==8?CI_OP_ALU64:ctx->ptr_size==4?CI_OP_ALU32:CI_OP_ALU128,
+                                .kind = ci_int_op_kind(ctx->ptr_size),
                                 .slot = dest,
                                 .src = diff,
                                 .src2 = esz,
@@ -2145,7 +2142,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
-                            .kind = ctx->ptr_size==8?CI_OP_ALU64:ctx->ptr_size==4?CI_OP_ALU32:CI_OP_ALU128,
+                            .kind = ci_int_op_kind(ctx->ptr_size),
                             .slot = scaled,
                             .src = iv->slot,
                             .src2 = esz,
@@ -2162,7 +2159,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
-                        .kind = ctx->ptr_size==8?CI_OP_ALU64:ctx->ptr_size==4?CI_OP_ALU32:CI_OP_ALU128,
+                        .kind = ci_int_op_kind(ctx->ptr_size),
                         .slot = dest,
                         .src = pv->slot,
                         .src2 = iv->slot,
@@ -3852,19 +3849,20 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             align = CI_ASSUMED_VARARG_ALIGN; // Variadic values occupy whole 8-byte slots.
         }
         if(align > buffer_align) buffer_align = align;
-        d->args_size += align -1;
-        d->args_size &= ~(align - 1);
+        err = cc_align_to(p, e->loc, d->args_size, align, &d->args_size);
+        if(err) return err;
         d->arg_offsets[i] = d->args_size;
         CcQualType arg_type = i < ftype->param_count ? ftype->params[i] : e->values[i]->type;
         if(!ci_arg_is_ignored(ci_target(ci)->target, arg_type))
             d->native_arg_offsets[d->native_nargs++] = d->args_size;
         if(i == ftype->param_count) d->varargs_offset = d->args_size;
         uint32_t storage_size = i >= ftype->param_count && asz < 8 ? 8 : asz;
-        d->args_size += storage_size;
+        if(add_overflow(d->args_size, storage_size, &d->args_size))
+            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
         if(i < ftype->param_count) d->fixed_size = d->args_size;
         else {
-            d->args_size += (unsigned)(CI_ASSUMED_VARARG_ALIGN-1);
-            d->args_size &= ~(unsigned)(CI_ASSUMED_VARARG_ALIGN-1);
+            err = cc_align_to(p, e->loc, d->args_size, CI_ASSUMED_VARARG_ALIGN, &d->args_size);
+            if(err) return err;
         }
     }
     if(nargs <= ftype->param_count)
@@ -3883,15 +3881,21 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     err = ci_lower_native_signature(ci, ctx->a, d->call_type, &d->native_call_type);
     if(err) return err;
     uint32_t prefix = func ? 0 : buffer_align;
-    uint32_t buffer_size = d->args_size + ctx->ptr_size-1;
-    buffer_size &= ~(unsigned)(ctx->ptr_size-1);
+    uint32_t buffer_size;
+    err = cc_align_to(p, e->loc, d->args_size, ctx->ptr_size, &buffer_size);
+    if(err) return err;
     // TODO: Native calls need a buffer for libffi calls (which takes an array
     //       of pointers to the args).
     //       Allocate it on our frame for now, when we write our own ffi
     //       backend we can generate a thunk or something instead.
-    if(!func || !func->defined)
-        buffer_size += d->native_nargs * ctx->ptr_size;
-    buffer_size += prefix;
+    if(!func || !func->defined){
+        uint32_t native_size;
+        if(mul_overflow(d->native_nargs, ctx->ptr_size, &native_size)
+            || add_overflow(buffer_size, native_size, &buffer_size))
+            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
+    }
+    if(add_overflow(buffer_size, prefix, &buffer_size))
+        return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
     uint32_t args_slot;
     err = ci_alloc_slot(ctx, buffer_size, buffer_align, &args_slot);
     if(err) return err;
@@ -4195,7 +4199,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(err) return err;
         *op = (CiOp){
             .alu = {
-                .kind = ctx->size_size == 8? CI_OP_ALU64 : CI_OP_ALU32,
+                .kind = ci_int_op_kind(ctx->size_size),
                 .slot = scaled,
                 .src = r.slot,
                 .src2 = esz,
@@ -4683,7 +4687,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
-                            .kind = ctx->size_size == 8? CI_OP_ALU64 : CI_OP_ALU32,
+                            .kind = ci_int_op_kind(ctx->size_size),
                             .slot = scaled,
                             .src = v.slot,
                             .src2 = esz,
@@ -4996,7 +5000,7 @@ ci_emit_alu(CiLowerCtx* ctx, CiAluOp aop, uint32_t dst, uint32_t a, uint32_t b, 
     if(err) return err;
     *op = (CiOp){
         .alu = {
-            .kind = size==8?CI_OP_ALU64:size==4?CI_OP_ALU32:CI_OP_ALU128,
+            .kind = ci_int_op_kind(size),
             .op = aop,
             .slot = dst,
             .src = a,
@@ -7141,17 +7145,11 @@ ci_static_float_cast(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
         return 0;
     }
     double d;
-    if(ccqt_bt_eq(from.type, CCBT_float)){
-        float f;
-        memcpy(&f, from.bits, sizeof f);
-        d = (double)f;
-    }
-    else if(ccqt_bt_eq(from.type, CCBT_double)) memcpy(&d, from.bits, sizeof d);
-    else if(ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_BINARY64)
-        memcpy(&d, from.bits, sizeof d);
-    else if(ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_X87)
+    if(from_width == 32 || from_width == 64)
+        d = ci_read_float(from.bits, from_width);
+    else if(from_width == 80)
         d = ci_float80_to_double(ci_float80_read(from.bits));
-    else if(ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_BINARY128)
+    else if(from_width == 128)
         d = ci_float128_to_double(ci_float128_read(from.bits));
     else if(ccqt_is_integer(from.type))
         d = ci_uint128_to_double(ci_fold_integer(&ctx, &from), ccqt_is_unsigned(from.type, ctx.char_is_unsigned));
@@ -7197,20 +7195,8 @@ ci_static_float_to_integer(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
         ci_uint128_write(out->bits, size, value);
         return 0;
     }
-    double d;
-    if(ccqt_bt_eq(from.type, CCBT_float)){
-        float f;
-        memcpy(&f, from.bits, sizeof f);
-        d = (double)f;
-    }
-    else if(ccqt_bt_eq(from.type, CCBT_double)
-        || (ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_BINARY64))
-        memcpy(&d, from.bits, sizeof d);
-    else if(ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_X87)
-        d = ci_float80_to_double(ci_float80_read(from.bits));
-    else if(ccqt_bt_eq(from.type, CCBT_long_double) && ctx.ldbl_fmt == CC_LONG_DOUBLE_BINARY128)
-        d = ci_float128_to_double(ci_float128_read(from.bits));
-    else return _cc_not_constant_error;
+    if(from_width != 32 && from_width != 64) return _cc_not_constant_error;
+    double d = ci_read_float(from.bits, from_width);
     uint32_t bits = size * 8;
     double signed_limit = bits == 128 ? 0x1p127 : (double)(UINT64_C(1) << (bits - 1));
     _Bool uns = ccqt_is_unsigned(e->type, ctx.char_is_unsigned);
@@ -9054,8 +9040,13 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
                 default:{
                     if(l.sz > 8) return FOLD_FAIL;
                     uint64_t v = ci_read_uint(l.bits, l.sz), n;
-                    n = 0;
-                    for(uint32_t i = 0; i < l.sz; i++, v >>= 8) n = (n << 8) | (v & 255);
+                    switch(l.sz){
+                        case 1: n = v; break;
+                        case 2: n = bswap16((uint16_t)v); break;
+                        case 4: n = bswap32((uint32_t)v); break;
+                        case 8: n = bswap64(v); break;
+                        default: return FOLD_FAIL;
+                    }
                     u = ci_uint128_from_uint64(n);
                     break;
                 }

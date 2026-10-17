@@ -15005,6 +15005,34 @@ TestFunction(test_interpreter_runtime_errors){
             SVI("(test):1:1: error: __builtin_capture_backtrace buffer must not be NULL\n"),
         },
         {
+            "call layout rejects argument alignment overflow", __LINE__,
+            SVI("struct S {char data[0xffffffffu];}; void (*f)(struct S, int)=0;\n"
+                "f(*(struct S*)0, 1);\n"),
+            SVI("(test):2:2: error: object size exceeds 32-bit layout limit\n"),
+            .lowering_error = 1,
+        },
+        {
+            "call layout rejects argument size overflow", __LINE__,
+            SVI("struct S {char data[0x80000000u];}; void (*f)(struct S, struct S)=0;\n"
+                "f(*(struct S*)0, *(struct S*)0);\n"),
+            SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
+            .lowering_error = 1,
+        },
+        {
+            "call layout rejects final buffer alignment overflow", __LINE__,
+            SVI("struct S {char data[0xfffffffdu];}; void (*f)(struct S)=0;\n"
+                "f(*(struct S*)0);\n"),
+            SVI("(test):2:2: error: object size exceeds 32-bit layout limit\n"),
+            .lowering_error = 1,
+        },
+        {
+            "call layout rejects native buffer overhead overflow", __LINE__,
+            SVI("struct S {char data[0xfffffff0u];}; void (*f)(struct S)=0;\n"
+                "f(*(struct S*)0);\n"),
+            SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
+            .lowering_error = 1,
+        },
+        {
             "implicit constexpr: volatile const remains runtime", __LINE__,
             SVI("const volatile int n=7;\nstatic_assert(n==7);"),
             SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),

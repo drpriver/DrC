@@ -131,6 +131,7 @@ static void ci_unlock_resolver(CiInterpreter*);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+static inline int cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32_t* out);
 static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
 static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
 static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
@@ -3412,25 +3413,12 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                 symbol_type = func_type;
                 if(expected.bits && func_type.bits != expected.bits)
                     goto done;
-                if(!func->defined){
-                    if(!func->native_func){
-                        Atom fsym = func->mangle?func->mangle:func->name;
-                        void* addr = NULL;
-                        int err = ci_try_dlsym(ci, fsym, &addr);
-                        if(err){ ret = err; goto done; }
-                        if(!addr) goto done;
-                        func->native_func = (void(*)(void))addr;
-                    }
-                    *out = (void*)func->native_func;
-                    goto done;
-                }
-                int err = ci_deps_add_func(&ci->deps, ci_allocator(ci), func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
-                if(err){ ret = CI_OOM_ERROR; goto done; }
-                err = ci_resolve_deps(ci, &ci->deps);
-                if(err){ ret = err; goto done; }
-                if(!func->native_func)
+                CiRtModuleMember member;
+                ret = ci_reflect_func_unlocked(ci, loc, func, &member, 1);
+                if(ret) goto done;
+                if(func->defined && !member.address)
                     { ret = ci_error(ci, loc, "_Module.symbol: function '%s' has no address", name); goto done; }
-                *out = (void*)func->native_func;
+                *out = member.address;
                 goto done;
             }
             case CC_SYM_VAR: {
@@ -3438,33 +3426,12 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                 symbol_type = var->type;
                 if(expected.bits && var->type.bits != expected.bits)
                     goto done;
-                if(var->automatic)
-                    goto done;
-                if(var->thread_local_){
-                    CiRtModuleMember member;
-                    ret = ci_reflect_var_unlocked(ci, loc, var, &member);
-                    if(!ret) *out = member.address;
-                    goto done;
-                }
-                if(var->extern_ && !var->initializer){
-                    if(!var->interp_val){
-                        Atom vsym = var->mangle?var->mangle:var->name;
-                        void* addr = NULL;
-                        int err = ci_try_dlsym(ci, vsym, &addr);
-                        if(err){ ret = err; goto done; }
-                        if(!addr) goto done;
-                        var->interp_val = addr;
-                    }
-                    *out = var->interp_val;
-                    goto done;
-                }
-                int err = ci_deps_add_var(&ci->deps, ci_allocator(ci), var, CI_VAR_DEP_USED);
-                if(err){ ret = CI_OOM_ERROR; goto done; }
-                err = ci_resolve_deps(ci, &ci->deps);
-                if(err){ ret = err; goto done; }
-                if(!var->interp_val)
+                CiRtModuleMember member;
+                ret = ci_reflect_var_unlocked(ci, loc, var, &member);
+                if(ret) goto done;
+                if(!var->automatic && !var->thread_local_ && !(var->extern_ && !var->initializer) && !member.address)
                     { ret = ci_error(ci, loc, "_Module.symbol: variable '%s' has no storage", name); goto done; }
-                *out = var->interp_val;
+                *out = member.address;
                 goto done;
             }
             case CC_SYM_TYPEDEF:

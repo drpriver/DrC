@@ -84,6 +84,7 @@ static int cpp_eval_embed_limit(CppPreprocessor*, CppToken*, size_t, int64_t*);
 static int cpp_embed(CppPreprocessor*, SrcLoc, const CppToken*_Null_unspecified, size_t, CppTokens*, int*_Nullable);
 static void cpp_write_token(MStringBuilder*, CppToken);
 static int cpp_peel_embed(CppPreprocessor* cpp, CppTokens* pending, CppToken* tok);
+static int cpp_tokenize_text_impl(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out, _Bool fixed_loc);
 static int cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out);
 static SrcLocExp*_Nullable cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
@@ -4416,19 +4417,8 @@ cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
     // predefined values can be a sequence of tokens.
     CppTokens* replacement = cpp_get_scratch(cpp);
     if(!replacement) return CPP_OOM_ERROR;
-    CppFrame frame = {.txt=num, .line=1, .column=1};
-    int err;
-    for(;;){
-        CppToken tok;
-        err = cpp_tokenize_from_frame(cpp, &frame, &tok);
-        if(err) break;
-        if(cpp_token_is_end(tok)){
-            err = cpp_define_obj_macro(cpp, name, replacement->data, replacement->count);
-            break;
-        }
-        err = cpp_push_tok(cpp, replacement, tok);
-        if(err) break;
-    }
+    int err = cpp_tokenize_text_impl(cpp, (SrcLoc){.line=1, .column=1}, num, replacement, 0);
+    if(!err) err = cpp_define_obj_macro(cpp, name, replacement->data, replacement->count);
     cpp_release_scratch(cpp, replacement);
     return err;
 }
@@ -5637,16 +5627,7 @@ static
 int
 cpp_builtin_file(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
-    uint64_t file_id = 0;
-    if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
-        while(e->parent)
-            e = e->parent;
-        file_id = e->file_id;
-    }
-    else {
-        file_id = loc.file_id;
-    }
+    uint32_t file_id = cpp_expansion_file(loc);
     CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     Atom a = cpp_quote_string(cpp, CSV_to_SV(path));
     if(!a) return CPP_OOM_ERROR;
@@ -5663,16 +5644,7 @@ static
 int
 cpp_builtin_file_id(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
-    uint64_t file_id = 0;
-    if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
-        while(e->parent)
-            e = e->parent;
-        file_id = e->file_id;
-    }
-    else {
-        file_id = loc.file_id;
-    }
+    uint32_t file_id = cpp_expansion_file(loc);
     Atom a = cpp_atomizef(cpp, "%llu", (unsigned long long)file_id);
     if(!a) return CPP_OOM_ERROR;
     CppToken tok = {
@@ -5688,16 +5660,7 @@ static
 int
 cpp_builtin_filename(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
-    uint64_t file_id = 0;
-    if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
-        while(e->parent)
-            e = e->parent;
-        file_id = e->file_id;
-    }
-    else {
-        file_id = loc.file_id;
-    }
+    uint32_t file_id = cpp_expansion_file(loc);
     CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     _Bool windows = 0;
     #ifdef _WIN32
@@ -5719,16 +5682,7 @@ static
 int
 cpp_builtin_dir(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks){
     (void)ctx;
-    uint64_t file_id = 0;
-    if(loc.is_actually_a_pointer){
-        SrcLocExp* e = (SrcLocExp*)((uintptr_t)loc.pointer.bits<<1);
-        while(e->parent)
-            e = e->parent;
-        file_id = e->file_id;
-    }
-    else {
-        file_id = loc.file_id;
-    }
+    uint32_t file_id = cpp_expansion_file(loc);
     CStringView path = file_id < cpp->fc->map.count?cpp->fc->map.data[file_id].path:CSV("???");
     _Bool windows = 0;
     #ifdef _WIN32
@@ -7246,19 +7200,6 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     }
     if(!strtok.type)
         return cpp_error(cpp, loc, "_Pragma requires a string literal");
-    // Destringify: strip quotes, unescape backslash-quote and backslash-backslash
-    StringView str = cpp_string_body(strtok.txt);
-    MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
-    for(size_t i = 0; i < str.length; i++){
-        char c = str.text[i];
-        if(c == '\\' && i + 1 < str.length && (str.text[i+1] == '\\' || str.text[i+1] == '"')){
-            msb_write_char(&sb, str.text[++i]);
-            continue;
-        }
-        msb_write_char(&sb, c);
-    }
-    // Tokenize the destringified content
-    if(sb.errored){ msb_destroy(&sb); return CPP_OOM_ERROR; }
     CppTokens* toks = cpp_get_scratch(cpp);
     if(!toks) return CPP_OOM_ERROR;
     int err = cpp_destringize_tokens(cpp, loc, strtok, toks);
@@ -8294,7 +8235,7 @@ cpp_register_pragma(CppPreprocessor* cpp, StringView name, CppPragmaFn* fn, void
 
 static
 int
-cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
+cpp_tokenize_text_impl(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out, _Bool fixed_loc){
     CppFrame frame = {
         .txt = str,
         .file_id = loc.is_actually_a_pointer?((SrcLocExp*)((uintptr_t)loc.pointer.bits<<1))->file_id:loc.file_id,
@@ -8306,11 +8247,17 @@ cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* o
         int err = cpp_tokenize_from_frame(cpp, &frame, &tok);
         if(err) return err;
         if(tok.type == CPP_END_OF_SOURCE_FILE) break;
-        tok.loc = loc;
+        if(fixed_loc) tok.loc = loc;
         err = cpp_push_tok(cpp, out, tok);
         if(err) return err;
     }
     return 0;
+}
+
+static 
+int
+cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
+    return cpp_tokenize_text_impl(cpp, loc, str, out, 1);
 }
 
 #ifdef __GNUC__
