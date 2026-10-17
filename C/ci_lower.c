@@ -87,6 +87,7 @@ struct CiLowerCtx {
     uint32_t temp; // top of the local + temp slot stack; statements save/restore
                    // this around their children so siblings recycle slots
     uint64_t materialized_addresses; // generation: new temporary objects may escape through pointers
+    uint32_t materialized_end; // live temporary objects cannot be recycled as expression scratch
     uint32_t frame_alignment; // largest alignment required by automatic storage
     uint32_t* frame_size; // high-water mark of slot usage: &func->frame_size,
                           // or the toplevel/module slot size
@@ -420,6 +421,7 @@ int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
     if(!n) return 0;
     uint32_t temp = ctx->temp;
+    uint32_t materialized_end = ctx->materialized_end;
     int err = ci_layout_decls(ci, ctx, (CcStmtNode*_Nonnull)n);
     if(err) goto cleanup;
     err = ci_lower_stmt_inner(ci, ctx, (CcStmtNode*_Nonnull)n);
@@ -429,6 +431,7 @@ ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
 
     cleanup:
     ctx->temp = temp;
+    ctx->materialized_end = materialized_end;
     return err;
 }
 
@@ -4520,6 +4523,9 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &rp);
             if(err) return err;
+            // The exchange itself can replace storage holding this argument.
+            err = ci_preserve_value(ci, ctx, e->values[1], &rp);
+            if(err) return err;
             uint32_t tmpv, tmpold;
             err = ci_alloc_slot(ctx, sz, sz, &tmpv);
             if(err) return err;
@@ -4625,8 +4631,13 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            // the old value writes back through the expected pointer; on
-            // success it equals what was already there
+            // Only failure writes expected. It may alias the atomic object,
+            // which already contains desired after a successful exchange.
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            uint32_t skip_writeback = (uint32_t)ctx->out->count - 1;
+            *op = (CiOp){.jump_true = {.kind = CI_OP_JUMP_TRUE,
+                .slot = ok, .slot_size = 1, .loc = e->loc}};
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
@@ -4638,6 +4649,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
+            ctx->out->data[skip_writeback].jump_true.jump = (uint32_t)ctx->out->count;
             if(out){
                 err = ci_emit_copy(ctx, dest, ok, 1, e->loc);
                 if(err) return err;
@@ -6443,7 +6455,11 @@ ci_lower_materialize_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLower
     CiLowerVal v;
     int err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
     if(err) return err;
-    if(!v.borrowed) ctx->materialized_addresses++;
+    if(!v.borrowed){
+        ctx->materialized_addresses++;
+        uint32_t end = v.slot + v.size; // the allocation already checked overflow
+        if(end > ctx->materialized_end) ctx->materialized_end = end;
+    }
     uint32_t aslot;
     err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
     if(err) return err;
@@ -6814,6 +6830,7 @@ int
 ci_alloc_slot(CiLowerCtx* ctx, uint32_t sz, uint32_t align, uint32_t* slot){
     if(align > ctx->frame_alignment) ctx->frame_alignment = align;
     uint32_t frm = ctx->temp;
+    if(frm < ctx->materialized_end) frm = ctx->materialized_end;
     if(add_overflow(frm, align - 1, &frm))
         return _cc_overflow_error;
     frm &= ~(align - 1);

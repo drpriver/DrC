@@ -45,6 +45,76 @@ TestFunction(test_interpreter){
         _Bool no_toplevel_ops;
     } testcases[] = {
         {
+            "returned array temporary survives a short circuit branch", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(void){int* p=0;if((p=make(13).a)&&sum(p,make(29).a)==42)return 1;return 0;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives extracting a pointer member", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "struct P{int* p;};int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(void){return sum(((struct P){make(13).a}).p,make(29).a)==42;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "generic atomic exchange captures the result pointer before updating the object", __LINE__,
+            SVI("int f(void){void* out=0;void* other=0;void* p=&out;void* desired=&other;"
+                "__atomic_exchange(&p,&desired,(void**)p,5);"
+                "return p==&other && out==&out && other==0;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "successful compare exchange does not overwrite an aliased expected object", __LINE__,
+            SVI("int f(void){int x=3;int ok=__atomic_compare_exchange_n(&x,&x,7,0,5,5);"
+                "return ok && x==7;} return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives a pointer identity call", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "int* identity(int* p){return p;}"
+                "int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(void){return sum(identity(make(13).a),make(29).a)==42;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives a pointer cast round trip", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(void){return sum((int*)(unsigned __int128)(unsigned long long)make(13).a,make(29).a)==42;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives pointer arithmetic", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,n+1,n+2,n+3}};}"
+                "int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(void){return sum(make(13).a+1,make(29).a)==43;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives a conditional expression", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "int sum(int* p,int* q){return p[0]+q[0];}"
+                "int f(int flag){return sum(flag?make(13).a:make(7).a,make(29).a)==42;}return f(1);"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives slice construction", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "int sum(int p[:],int q[:]){return p[0]+q[0];}"
+                "int f(void){return sum(make(13).a[:],make(29).a[:])==42;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "returned array temporary survives the remaining aggregate initializers", __LINE__,
+            SVI("struct S{int a[4];};struct S make(int n){return (struct S){{n,17,19,23}};}"
+                "struct P{int* p;int* q;};int sum(struct P x){return x.p[0]+x.q[0];}"
+                "int f(void){return sum((struct P){make(13).a,make(29).a})==42;}return f();"),
+            .exit_code=1,
+        },
+        {
             "interlocked 128-bit CAS commits its result after comparand writeback", __LINE__,
             SVI("int f(void){_Alignas(16) volatile long long p[2]={1,2};"
                 "union U{long long words[2];unsigned char ok;} e={.words={0,2}};"
