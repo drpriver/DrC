@@ -2793,6 +2793,8 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             return 0;
         }
         case CC_EXPR_BUILTIN:{
+            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
+                return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, dest, out);
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -2973,10 +2975,15 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
 static
 int
 ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out){
-    uint32_t nargs = (rt_op == CI_RT_HOTSWAP || rt_op == CI_RT_COMPILE) ? 2 : 1;
+    _Bool trace = rt_op == CI_RT_CAPTURE_BACKTRACE || rt_op == CI_RT_SYMBOLICATE;
+    uint32_t nargs = (trace || rt_op == CI_RT_HOTSWAP || rt_op == CI_RT_COMPILE) ? 2 : 1;
     CcExpr* args[2] = {e->lhs, NULL};
     if(nargs == 2)
         args[1] = e->values[0];
+    if(trace){
+        args[0] = e->values[0];
+        args[1] = e->values[1];
+    }
     uint32_t temp = ctx->temp;
     uint32_t slots[3] = {0};
     for(uint32_t i = 0; i < nargs; i++){
@@ -5541,6 +5548,8 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_VA:
             return ci_lower_va(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_BUILTIN:{
+            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
+                return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, CI_NO_SLOT, NULL);
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -8454,10 +8463,10 @@ static
 int
 ci_try_preinit_global(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* handled){
     *handled = 0;
-    if(e->kind != CC_EXPR_ASSIGN || e->lhs->kind != CC_EXPR_VARIABLE) 
+    if(e->kind != CC_EXPR_ASSIGN || e->lhs->kind != CC_EXPR_VARIABLE)
         return 0;
     CcVariable* var = e->lhs->var;
-    if(!var->interp_try_preinit || e->values[0] != var->initializer) 
+    if(!var->interp_try_preinit || e->values[0] != var->initializer)
         return 0;
     Allocator al = ci_allocator(ci);
     CcParser* p = &ci->parser;

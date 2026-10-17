@@ -9104,6 +9104,42 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "backtrace: capture survives return and preserves call sites", __LINE__,
+            SVI("#if !__has_builtin(__builtin_capture_backtrace) || !__has_builtin(__builtin_symbolicate)\n#error missing backtrace builtins\n#endif\n"
+                "void *entries[8]; constexpr int base = __LINE__;\n"
+                "int leaf(void){return __builtin_capture_backtrace(entries, 8);}\n"
+                "int parent(void){return leaf();}\n"
+                "int n = parent();\n"
+                "if(n != 3) return 91;\n"
+                "for(int i=0;i<n;i++){_SrcLoc loc; __builtin_symbolicate(entries[i], &loc);\n"
+                "if(loc.line != base+1+i || !loc.col || !loc.file.count) return 92;}\n"
+                "return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "backtrace: bounded capture, zero capacity, and discarded result", __LINE__,
+            SVI("void *entries[2] = {nullptr, nullptr};\n"
+                "int f(int depth){if(depth) return f(depth-1); return __builtin_capture_backtrace(entries, 1);}\n"
+                "if(f(10)!=1 || entries[1]!=nullptr) return 91;\n"
+                "if(__builtin_capture_backtrace(nullptr, 0)!=0) return 92;\n"
+                "if(__builtin_capture_backtrace(nullptr, -1)!=0) return 93;\n"
+                "__builtin_capture_backtrace(entries, 1); constexpr int expected = __LINE__;\n"
+                "_SrcLoc loc; __builtin_symbolicate(entries[0], &loc);\n"
+                "return loc.line==expected;\n"),
+            .exit_code = 1,
+        },
+        {
+            "backtrace: inline operands and macro source locations", __LINE__,
+            SVI("#define CAPTURE(p, n) __builtin_capture_backtrace(p, n)\n"
+                "int expected;\n"
+                "inline int capture(void **p){int n=1; expected=__LINE__; return CAPTURE(p++, n++);}\n"
+                "void *entries[2]={nullptr, nullptr};\n"
+                "if(capture(entries)!=1 || entries[1]!=nullptr) return 91;\n"
+                "_SrcLoc loc; int i=0; __builtin_symbolicate(entries[i++], &loc);\n"
+                "return i==1 && loc.line==expected && loc.col>0;\n"),
+            .exit_code = 1,
+        },
+        {
             "source builtins: SRCLOC returns a constexpr _SrcLoc", __LINE__,
             SVI("#if !__has_builtin(__builtin_SRCLOC)\n#error missing SRCLOC builtin\n#endif\n"
                 "constexpr _SrcLoc loc=__builtin_SRCLOC(); constexpr int expected=__LINE__;\n"
@@ -14368,6 +14404,16 @@ TestFunction(test_interpreter_runtime_errors){
         _Bool lowering_error;
         _Bool parser_error;
     } testcases[] = {
+        {
+            "backtrace: positive capacity needs a buffer", __LINE__,
+            SVI("__builtin_capture_backtrace(nullptr, 1);\n"),
+            SVI("(test):1:1: error: __builtin_capture_backtrace buffer must not be NULL\n"),
+        },
+        {
+            "backtrace: symbolication needs an output", __LINE__,
+            SVI("__builtin_symbolicate(nullptr, nullptr);\n"),
+            SVI("(test):1:1: error: __builtin_symbolicate output must not be NULL\n"),
+        },
         {
             "complex literal fails during lowering", __LINE__,
             SVI("float _Complex z=1.0fi;\n"),

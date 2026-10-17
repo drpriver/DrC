@@ -51,8 +51,6 @@ void
 free_bt(BacktraceArray* a);
 
 #else
-
-typedef struct BacktraceArray BacktraceArray;
 struct BacktraceArray {
     int count;
     void*_Nonnull symbols[];
@@ -60,7 +58,7 @@ struct BacktraceArray {
 
 static
 dbg_noinline
-BacktraceArray*
+BacktraceArray* _Null_unspecified
 get_bt(void);
 
 static
@@ -79,7 +77,46 @@ free_bt(BacktraceArray* a){
     if(a) free(a);
 }
 
-#if defined(__APPLE__) || defined(__linux__)
+#if defined __DRC__
+#include <stdlib.h>
+#include <stdio.h>
+static
+dbg_noinline
+BacktraceArray* _Null_unspecified
+get_bt(void){
+    // Opaque entries, youngest first. Keep the interpreter's source metadata
+    // alive until the captured trace has been symbolicated.
+    void *buffer[256];
+    int n = __builtin_capture_backtrace(buffer, _Countof buffer);
+    BacktraceArray* a = malloc(sizeof *a + sizeof a->symbols[0]*n);
+    if(a){
+        a->count = n;
+        __builtin_memcpy(a->symbols, buffer, sizeof buffer[0]*n);
+    }
+    return a;
+}
+
+static
+dbg_noinline
+void
+dump_bt(BacktraceArray* a){
+    if(!a) return;
+    for(int i = 0; i < a->count; i++){
+        _SrcLoc loc;
+        __builtin_symbolicate(a->symbols[i], &loc);
+        fprintf(stderr, "%2d) %.*s:%-4lu\n", a->count-i-1, (int)loc.file.count, loc.file.data, loc.line);
+    }
+}
+
+static
+dbg_noinline
+void
+bt(void){
+    __bt();
+}
+
+
+#elif defined __APPLE__ || defined __linux__
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
@@ -140,14 +177,16 @@ dbg_capture_stack(void* _Nonnull* _Nonnull array, int capacity){
 
 static
 dbg_noinline
-BacktraceArray*
+BacktraceArray* _Null_unspecified
 get_bt(void){
     enum {bufflen=256};
     void* array[bufflen];
     int n = dbg_capture_stack(array, bufflen);
     BacktraceArray* result = malloc(sizeof(*result)+n*sizeof(void*));
-    result->count = n;
-    __builtin_memcpy(result->symbols, array, n*sizeof(void*));
+    if(result){
+        result->count = n;
+        __builtin_memcpy(result->symbols, array, n*sizeof(void*));
+    }
     return result;
 }
 
@@ -155,6 +194,7 @@ static
 dbg_noinline
 void
 dump_bt(BacktraceArray*_Nonnull a){
+    if(!a) return;
     if(a->count > 4)
         backtrace_symbols_fd(a->symbols+4, a->count-4, 2);
 }
@@ -168,7 +208,7 @@ bt(void){
     int n = dbg_capture_stack(array, bufflen);
     backtrace_symbols_fd(array, n, 2);
 }
-#elif defined(_WIN32)
+#elif defined _WIN32
 
 #ifdef __clang__
 #pragma clang assume_nonnull end
@@ -253,7 +293,7 @@ bt(void){
 }
 static
 dbg_noinline
-BacktraceArray*
+BacktraceArray* _Null_unspecified
 get_bt(void){
     enum {bufflen=256};
     void* array[bufflen];
@@ -261,8 +301,10 @@ get_bt(void){
     if(dbg_can_capture_stack())
         frames = CaptureStackBackTrace(0, bufflen, array, NULL);
     BacktraceArray* result = malloc(sizeof(*result)+sizeof(void*)*frames);
-    result->count = frames;
-    memcpy(result->symbols, array, sizeof(void*)*frames);
+    if(result){
+        result->count = frames;
+        memcpy(result->symbols, array, sizeof(void*)*frames);
+    }
     return result;
 }
 
@@ -270,6 +312,7 @@ static
 dbg_noinline
 void
 dump_bt(BacktraceArray* bta){
+    if(!bta) return;
     if(!bta->count) return;
     dbg_ensure_init();
     int count = bta->count;

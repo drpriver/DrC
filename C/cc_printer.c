@@ -655,6 +655,16 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 case CC_BUILTIN_DEBUGTRAP: msb_write_literal(sb, "debugtrap()"); break;
                 case CC_BUILTIN_ABORT: msb_write_literal(sb, "abort()"); break;
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(sb, "backtrace()"); break;
+                case CC_BUILTIN_CAPTURE_BACKTRACE:
+                case CC_BUILTIN_SYMBOLICATE:
+                    if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE)
+                        msb_write_literal(sb, "__builtin_capture_backtrace(");
+                    else msb_write_literal(sb, "__builtin_symbolicate(");
+                    cc_print_expr(sb, e->values[0]);
+                    msb_write_literal(sb, ", ");
+                    cc_print_expr(sb, e->values[1]);
+                    msb_write_char(sb, ')');
+                    break;
                 case CC_BUILTIN_LINE: msb_write_literal(sb, "__builtin_LINE()"); break;
                 case CC_BUILTIN_COLUMN: msb_write_literal(sb, "__builtin_COLUMN()"); break;
                 case CC_BUILTIN_FILE: msb_write_literal(sb, "__builtin_FILE()"); break;

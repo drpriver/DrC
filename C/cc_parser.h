@@ -183,6 +183,8 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin_alloca,
     CC__builtin_intern,
     CC__bt,
+    CC__builtin_capture_backtrace,
+    CC__builtin_symbolicate,
     CC_InterlockedExchange,
     CC_InterlockedExchange8,
     CC_InterlockedExchange16,

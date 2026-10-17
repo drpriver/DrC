@@ -4162,6 +4162,53 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     return 0;
                 }
+                case CC__builtin_capture_backtrace:{
+                    CcBuiltinOp op;
+                    CcQualType first, second, ret;
+                    op = CC_BUILTIN_CAPTURE_BACKTRACE;
+                    err = cc_pointer_of(p, p->void_star, &first);
+                    if(err) return err;
+                    second = ccqt_basic(CCBT_int);
+                    ret = ccqt_basic(CCBT_int);
+                    goto parse_trace;
+                case CC__builtin_symbolicate:
+                    op = CC_BUILTIN_SYMBOLICATE;
+                    first = p->void_star;
+                    err = cc_pointer_of(p, p->builtin_src_loc, &second);
+                    if(err) return err;
+                    ret = ccqt_basic(CCBT_void);
+
+                    parse_trace:;
+                    CcExpr *first_arg = NULL, *second_arg = NULL;
+                    err = cc_expect_punct(p, '(');
+                    if(err) return err;
+                    err = cc_parse_assignment_expr(p, flags, &first_arg, CCQT_NONE);
+                    if(err) goto trace_error;
+                    err = cc_implicit_cast(p, first_arg, first, &first_arg);
+                    if(err) goto trace_error;
+                    err = cc_expect_punct(p, ',');
+                    if(err) goto trace_error;
+                    err = cc_parse_assignment_expr(p, flags, &second_arg, CCQT_NONE);
+                    if(err) goto trace_error;
+                    err = cc_implicit_cast(p, second_arg, second, &second_arg);
+                    if(err) goto trace_error;
+                    err = cc_expect_punct(p, ')');
+                    if(err) goto trace_error;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ret, 2);
+                    if(!node){
+                        err = CC_OOM_ERROR;
+                        goto trace_error;
+                    }
+                    node->builtin.op = op;
+                    node->values[0] = first_arg;
+                    node->values[1] = second_arg;
+                    *out = node;
+                    return 0;
+                    trace_error:
+                    if(first_arg) cc_release_expr(p, first_arg);
+                    if(second_arg) cc_release_expr(p, second_arg);
+                    return err;
+                }
                 case CC__builtin_unreachable:
                 case CC__builtin_trap:
                 case CC__builtin_debugtrap:
@@ -8238,7 +8285,9 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_FUNCTION:
             return 0;
         case CC_EXPR_BUILTIN:
-            return e->builtin.op == CC_BUILTIN_COMPLEX ? 2 : 0;
+            return e->builtin.op == CC_BUILTIN_COMPLEX
+                || e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE
+                || e->builtin.op == CC_BUILTIN_SYMBOLICATE ? 2 : 0;
         case CC_EXPR_ADD:
         case CC_EXPR_SUB:
         case CC_EXPR_MUL:
@@ -15467,6 +15516,8 @@ cc_define_builtin_types(CcParser* p){
             {SVI("alloca"), CC__builtin_alloca},
             {SVI("__builtin_intern"), CC__builtin_intern},
             {SVI("__bt"), CC__bt},
+            {SVI("__builtin_capture_backtrace"), CC__builtin_capture_backtrace},
+            {SVI("__builtin_symbolicate"), CC__builtin_symbolicate},
             {SVI("_InterlockedExchange"), CC_InterlockedExchange},
             {SVI("_InterlockedExchange8"), CC_InterlockedExchange8},
             {SVI("_InterlockedExchange16"), CC_InterlockedExchange16},

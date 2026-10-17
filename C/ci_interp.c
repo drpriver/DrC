@@ -1296,6 +1296,28 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     }
                     break;
                 }
+                case CI_RT_CAPTURE_BACKTRACE: {
+                    _Static_assert(sizeof(SrcLoc) == sizeof(void*), "backtrace entry size");
+                    void** buffer;
+                    int capacity, count = 0;
+                    CI_INLINE_MEMCPY(&buffer, (char*)frame->slots + op->rt_call.args[0], sizeof buffer);
+                    CI_INLINE_MEMCPY(&capacity, (char*)frame->slots + op->rt_call.args[1], sizeof capacity);
+                    if(capacity > 0 && !buffer)
+                        return ci_error(ci, op->loc, "__builtin_capture_backtrace buffer must not be NULL");
+                    for(CiInterpFrame* f = frame; f && count < capacity; f = f->parent){
+                        if(!f->ops || f->pc >= f->op_count) continue;
+                        CI_INLINE_MEMCPY(&buffer[count++], &f->ops[f->pc].loc, sizeof(SrcLoc));
+                    }
+                    if(op->rt_call.slot_size) CI_INLINE_MEMCPY(result, &count, sizeof count);
+                    break;
+                }
+                case CI_RT_SYMBOLICATE: {
+                    SrcLoc* dest;
+                    CI_INLINE_MEMCPY(&dest, (char*)frame->slots + op->rt_call.args[1], sizeof dest);
+                    if(!dest) return ci_error(ci, op->loc, "__builtin_symbolicate output must not be NULL");
+                    CI_INLINE_MEMCPY(dest, (char*)frame->slots + op->rt_call.args[0], sizeof *dest);
+                    break;
+                }
                 case CI_RT_INTERN: {
                     CiRtSlice s;
                     CI_INLINE_MEMCPY(&s, (char*)frame->slots + op->rt_call.args[0], sizeof s);
@@ -2650,6 +2672,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     return ci_unreachable(ci, op->loc, "unexpanded default argument source location");
                 case CC_BUILTIN_COMPLEX:
                     return ci_unimplemented(ci, op->loc, "complex expression lowering");
+                case CC_BUILTIN_CAPTURE_BACKTRACE:
+                case CC_BUILTIN_SYMBOLICATE:
+                    return ci_unreachable(ci, op->loc, "unlowered backtrace builtin");
                 DRP_CASES_EXHAUSTED;
             }
         }
