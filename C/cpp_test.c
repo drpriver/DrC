@@ -970,6 +970,11 @@ TestFunction(test_builtin_macros){
 
         // extensions
         {"__CALC__", SV("__CALC__(1+1)"), SV("2"), __LINE__, 0},
+        {"calc multiline defined", SV("__CALC__(defined\n__CALC__)"), SV("1"), __LINE__, 0},
+        {"calc multiline macro call", SV("#define F(x) x\n__CALC__(F\n(7))"), SV("\n7"), __LINE__, 0},
+        {"calc multiline has_include", SV("__CALC__(__has_include(\n\"missing-newline-test.h\"\n))"), SV("0"), __LINE__, 0},
+        {"pragma newline after empty macro", SV("#define EMPTY\n_Pragma(EMPTY\n\"unknown_pragma\")ok"), SV("\nok"), __LINE__, 0},
+        {"pragma multiline name", SV("__pragma(\nunknown_pragma\n)ok"), SV("ok"), __LINE__, 0},
         {"__CALC__", SV("__CALC__(defined __CALC__)"), SV("1"), __LINE__, 0},
         {"__calc", SV("__calc(3*4/3)"), SV("4"), __LINE__, 0},
         {"__calc", SV("__calc(3-4)"), SV("-1"), __LINE__, 0},
@@ -1127,6 +1132,12 @@ TestFunction(test_builtin_macros){
         {"__let multi param", SV(
             "__let(ADD(a, b), a + b, ADD(1, 2))"), SV(
             "1 + 2"), __LINE__, 0},
+        {"__let newline before parameter list", SV(
+            "__let(ADD\n(a, b), a + b, ADD(1, 2))"), SV("1 + 2"), __LINE__, 0},
+        {"__let newline after parameter comma", SV(
+            "__let(ADD(a,\nb), a + b, ADD(1, 2))"), SV("1 + 2"), __LINE__, 0},
+        {"__let multiline stringify", SV("__let(S(x), #\nx, S(word))"), SV("\"word\""), __LINE__, 0},
+        {"__let multiline paste", SV("__let(C(a,b), a ##\nb, C(x,y))"), SV("xy"), __LINE__, 0},
         {"__append enum strings", SV(
             "__set(n2, 0)\n"
             "#define EV2(name) name = __get(n2), __append(strs2, [name] = #name,) __set(n2, __calc(__get(n2) + 1))\n"
@@ -1279,6 +1290,9 @@ TestFunction(test_messages){
                "__where(FOO)\n"),
             SV("(test):1:9: info: FOO defined\n"),
         },
+        {"__where multiline", __LINE__,
+            SV("#define FOO BAR\n__where(\nFOO\n)"),
+            SV("(test):1:9: info: FOO defined\n")},
         {
             "__WHERE__", __LINE__,
             SV("#define FOO BAR\n"
@@ -2222,6 +2236,10 @@ TestFunction(test_include){
             SV("test/main.c"),   SV("#include \"header.h\"\nMAIN_BODY"),
             SV("test/header.h"), SV("#define MAIN_BODY hello\n"),
             {0}, SV("\n\nhello")},
+        {"multiline pragma include path", __LINE__, 0,
+            SV("main.c"), SV("__pragma(\ninclude_path\n\"-I\"\n\"inc\"\n)\n#include <header.h>\n"),
+            SV("inc/header.h"), SV("ok"),
+            {0}, SV("\n\nok")},
         {"angle bracket with -I path", __LINE__, 0,
             SV("src/main.c"), SV("#include <sys.h>\nVALUE"),
             SV("inc/sys.h"),  SV("#define VALUE 42\n"),

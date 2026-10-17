@@ -1808,8 +1808,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 {
                     CppToken peek;
                     do {
-                    err = cpp_next_raw_token(cpp, &peek);
-                    if(err) goto finish_func_macro;
+                        err = cpp_next_raw_token(cpp, &peek);
+                        if(err) goto finish_func_macro;
                     } while(peek.type == CPP_WHITESPACE);
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
@@ -2142,8 +2142,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 {
                     CppToken peek;
                     do {
-                    err = cpp_next_raw_token(cpp, &peek);
-                    if(err) goto finish_defblock;
+                        err = cpp_next_raw_token(cpp, &peek);
+                        if(err) goto finish_defblock;
                     } while(peek.type == CPP_WHITESPACE);
                     if(peek.type == CPP_PUNCTUATOR && peek.punct == '...'){
                         variadic = 1;
@@ -6052,7 +6052,7 @@ cpp_builtin_where(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc,
     // Find the first non-whitespace token — should be an identifier
     const CppToken* name_tok = NULL;
     for(size_t i = 0; i < args->count; i++){
-        if(args->data[i].type != CPP_WHITESPACE){
+        if(args->data[i].type != CPP_WHITESPACE && args->data[i].type != CPP_NEWLINE){
             name_tok = &args->data[i];
             break;
         }
@@ -6416,7 +6416,7 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     Atom param_names[64];
     size_t nparams = 0;
     // Skip whitespace between name and potential (
-    while(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_WHITESPACE)
+    while(sig_pos < sig_count && (sig_toks[sig_pos].type == CPP_WHITESPACE || sig_toks[sig_pos].type == CPP_NEWLINE))
         sig_pos++;
     if(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_PUNCTUATOR && sig_toks[sig_pos].punct == '('){
         is_function_like = 1;
@@ -6432,7 +6432,7 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
                 if(sig_toks[sig_pos].type != CPP_PUNCTUATOR || sig_toks[sig_pos].punct != ',')
                     return cpp_error(cpp, sig_toks[sig_pos].loc, "Expected ',' between params in __let");
                 sig_pos++;
-                while(sig_pos < sig_count && sig_toks[sig_pos].type == CPP_WHITESPACE)
+                while(sig_pos < sig_count && (sig_toks[sig_pos].type == CPP_WHITESPACE || sig_toks[sig_pos].type == CPP_NEWLINE))
                     sig_pos++;
             }
             if(sig_pos >= sig_count || sig_toks[sig_pos].type != CPP_IDENTIFIER)
@@ -6453,8 +6453,8 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         repl_count--;
     }
     // Define the temporary macro
+    CppMacro* m;
     if(is_function_like){
-        CppMacro* m;
         err = cpp_define_macro(cpp, macro_name, repl_count, nparams, &m);
         if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
             return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
@@ -6485,6 +6485,15 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
             return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
         if(err) return err;
+        m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, macro_name.text, macro_name.length));
+    }
+    // Normalize newlines into whitespace
+    CppToken* replacement = cpp_cmacro_replacement(m);
+    for(size_t i = 0; i < repl_count; i++){
+        if(replacement[i].type == CPP_NEWLINE){
+            replacement[i].type = CPP_WHITESPACE;
+            replacement[i].txt = SV(" ");
+        }
     }
     err = cpp_expand_argument(cpp, body_toks, body_count, outtoks);
     cpp_undef_macro(cpp, macro_name);
@@ -6605,7 +6614,7 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
     size_t en = expanded->count;
     // Find the string literal
     size_t i = 0;
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    while(i < en && (etoks[i].type == CPP_WHITESPACE || etoks[i].type == CPP_NEWLINE)) i++;
     if(i >= en || etoks[i].type != CPP_STRING){
         err = cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
         goto cleanup;
@@ -6632,7 +6641,7 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
         }
         msb_destroy(&sb);
         if(idx != (size_t)-1){
-            while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+            while(i < en && (etoks[i].type == CPP_WHITESPACE || etoks[i].type == CPP_NEWLINE)) i++;
             if(i >= en || etoks[i].type != CPP_STRING){
                 err = cpp_error(cpp, loc, "#pragma include_path requires a string literal path");
                 goto cleanup;
@@ -6643,7 +6652,7 @@ cpp_builtin_pragma_include_path(void* _Null_unspecified ctx, CppPreprocessor* cp
             idx = 1;
     }
     // Warn on trailing tokens
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    while(i < en && (etoks[i].type == CPP_WHITESPACE || etoks[i].type == CPP_NEWLINE)) i++;
     if(i < en) cpp_warn(cpp, loc, "Trailing tokens after #pragma include_path");
     err = cpp_add_search_path_from_pragma(cpp, cpp_expansion_file(loc), strtok, idx);
     cleanup:
@@ -6662,14 +6671,14 @@ cpp_builtin_pragma_framework_path(void* _Null_unspecified ctx, CppPreprocessor* 
     const CppToken* etoks = expanded->data;
     size_t en = expanded->count;
     size_t i = 0;
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    while(i < en && (etoks[i].type == CPP_WHITESPACE || etoks[i].type == CPP_NEWLINE)) i++;
     if(i >= en || etoks[i].type != CPP_STRING){
         err = cpp_error(cpp, loc, "#pragma framework_path requires a string literal path");
         goto finally;
     }
     CppToken strtok = etoks[i];
     i++;
-    while(i < en && etoks[i].type == CPP_WHITESPACE) i++;
+    while(i < en && (etoks[i].type == CPP_WHITESPACE || etoks[i].type == CPP_NEWLINE)) i++;
     if(i < en) cpp_warn(cpp, loc, "Trailing tokens after #pragma framework_path");
     err = cpp_add_search_path_from_pragma(cpp, cpp_expansion_file(loc), strtok, 5);
     finally:
@@ -7093,7 +7102,7 @@ cpp_builtin__Pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     // Find the string literal argument
     CppToken strtok = {0};
     for(size_t i = 0; i < args->count; i++){
-        if(args->data[i].type == CPP_WHITESPACE) continue;
+        if(args->data[i].type == CPP_WHITESPACE || args->data[i].type == CPP_NEWLINE) continue;
         if(args->data[i].type != CPP_STRING)
             return cpp_error(cpp, args->data[i].loc, "_Pragma requires a string literal");
         strtok = args->data[i];
@@ -7152,7 +7161,7 @@ cpp_builtin___pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
     (void)arg_seps;
     // Find pragma name (first non-whitespace identifier)
     size_t ti = 0;
-    while(ti < args->count && args->data[ti].type == CPP_WHITESPACE) ti++;
+    while(ti < args->count && (args->data[ti].type == CPP_WHITESPACE || args->data[ti].type == CPP_NEWLINE)) ti++;
     if(ti >= args->count)
         return 0; // empty __pragma - do nothing
     if(args->data[ti].type != CPP_IDENTIFIER)
@@ -7164,10 +7173,10 @@ cpp_builtin___pragma(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         return 0; // Unknown pragma - silently ignore
     // Collect remaining tokens (skip leading whitespace after pragma name)
     ti++;
-    while(ti < args->count && args->data[ti].type == CPP_WHITESPACE) ti++;
+    while(ti < args->count && (args->data[ti].type == CPP_WHITESPACE || args->data[ti].type == CPP_NEWLINE)) ti++;
     // Strip trailing whitespace
     size_t end = args->count;
-    while(end > ti && args->data[end-1].type == CPP_WHITESPACE) end--;
+    while(end > ti && (args->data[end-1].type == CPP_WHITESPACE || args->data[end-1].type == CPP_NEWLINE)) end--;
     return prag->fn(prag->ctx, cpp, loc, args->data + ti, end - ti);
 }
 
@@ -7699,6 +7708,8 @@ cpp_ts_next(CppTokenStream* s){
             ((CppMacro*)tok.data1)->is_disabled = 0;
             continue;
         }
+        // Normalize newlines into whitespace
+        if(tok.type == CPP_NEWLINE) tok.type = CPP_WHITESPACE;
         break;
     }
     return tok;
