@@ -419,6 +419,11 @@ TestFunction(test_func_macros){
         {"va_count_basic", SV("#define F(...) __VA_COUNT__\nF(a, b, c)"), SV("\n3"), __LINE__},
         {"va_count_one", SV("#define F(...) __VA_COUNT__\nF(a)"), SV("\n1"), __LINE__},
         {"va_count_empty", SV("#define F(...) __VA_COUNT__\nF()"), SV("\n0"), __LINE__},
+        {"va_count_whitespace", SV("#define F(...) __VA_COUNT__\nF( )"), SV("\n0"), __LINE__},
+        {"va_count_comment", SV("#define F(...) __VA_COUNT__\nF(/* empty */)"), SV("\n0"), __LINE__},
+        {"va_count_whitespace_stringify", SV("#define F(...) #__VA_COUNT__\nF( )"), SV("\n\"0\""), __LINE__},
+        {"va_count_whitespace_paste", SV("#define F(...) func ## __VA_COUNT__\nF(\n)"), SV("\nfunc0"), __LINE__},
+        {"va_count_explicit_empty_arguments", SV("#define F(...) __VA_COUNT__\nF( , )"), SV("\n2"), __LINE__},
         {"va_count_named", SV("#define F(x, ...) __VA_COUNT__\nF(1, 2, 3)"), SV("\n2"), __LINE__},
         {"va_count_named_empty", SV("#define F(x, ...) __VA_COUNT__\nF(1)"), SV("\n0"), __LINE__},
         {"va_count_paste", SV("#define F(...) func ## __VA_COUNT__\nF(a, b)"), SV("\nfunc2"), __LINE__},
@@ -1157,6 +1162,10 @@ TestFunction(test_error_locations){
     struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
+        {"va_arg whitespace-only arguments", __LINE__,
+            SV("#define F(...) __VA_ARG__(0)\nF( )"),
+            SV("(test):1:16: error: __VA_ARG__ index out of range\n"
+               "(test):2:1: ... expanded from here\n")},
         {"indirect too many args", __LINE__,
             SV("#define F(x) x\n"
                "#define M F(1,2)\n"

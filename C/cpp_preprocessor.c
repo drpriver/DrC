@@ -3456,7 +3456,7 @@ cpp_resolve_va_arg(
     cpp_release_scratch(cpp, expr_subst);
     if(err) return err;
 
-    size_t nargs_total = args->count ? arg_seps->count + 1 : 0;
+    size_t nargs_total = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
     size_t va_count = nargs_total > macro->nparams ? nargs_total - macro->nparams : 0;
     if(index < 0 || (size_t)index >= va_count){
         SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
@@ -3544,7 +3544,7 @@ cpp_substitute_and_paste(
             size_t pidx = repl[j].param_idx - 1;
             // # __VA_COUNT__
             if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
-                size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                size_t nargs = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
                 size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                 Atom a = cpp_atomizef(cpp, "\"%zu\"", va_count);
                 if(!a) return CPP_OOM_ERROR;
@@ -3591,7 +3591,7 @@ cpp_substitute_and_paste(
                 size_t pidx = repl[j].param_idx - 1;
                 // ## __VA_COUNT__
                 if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
-                    size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                    size_t nargs = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
                     size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                     Atom a = cpp_atomizef(cpp, "%zu", va_count);
                     if(!a) return CPP_OOM_ERROR;
@@ -3789,7 +3789,7 @@ cpp_substitute_and_paste(
             size_t pidx = t.param_idx - 1;
             // __VA_COUNT__: emit the number of variadic arguments
             if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
-                size_t nargs = args->count ? arg_seps->count + 1 : 0;
+                size_t nargs = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
                 size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
                 Atom a = cpp_atomizef(cpp, "%zu", va_count);
                 if(!a) return CPP_OOM_ERROR;
