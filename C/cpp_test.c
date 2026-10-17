@@ -380,6 +380,15 @@ TestFunction(test_func_macros){
             "#define F(...) __VA_OPT__(x) ## y\n"
             "F(1)\n"
             "F()"), SV("\nxy\ny"), __LINE__},
+        {"va_opt_empty_paste_after_prefix", SV(
+            "#define F(...) prefix __VA_OPT__(x) ## y\n"
+            "F()"), SV("\nprefix y"), __LINE__},
+        {"va_opt_empty_content_paste_after_prefix", SV(
+            "#define F(...) prefix __VA_OPT__() ## y\n"
+            "F(1)"), SV("\nprefix y"), __LINE__},
+        {"va_opt_empty_paste_after_punctuator", SV(
+            "#define F(...) +__VA_OPT__(x) ## y\n"
+            "F()"), SV("\n+y"), __LINE__},
         // empty __VA_OPT__ content with non-empty VA_ARGS
         {"va_opt_empty_content", SV(
             "#define F(...) a __VA_OPT__() b\n"

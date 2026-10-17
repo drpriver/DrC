@@ -3745,8 +3745,14 @@ cpp_substitute_and_paste(
             size_t cstart, ccount, cparen;
             err = cpp_parse_va_opt_content(cpp, repl, nreplace, i+1, t.loc, &cstart, &ccount, &cparen, expansion_parent);
             if(err) return err;
+            size_t before = out->count;
             if(cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args)){
                 err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, out, raw_only, expansion_parent);
+                if(err) return err;
+            }
+            if(out->count == before){
+                CppToken pm = {.type = CPP_PLACEMARKER, .loc = t.loc};
+                err = cpp_push_tok(cpp, out, pm);
                 if(err) return err;
             }
             i = cparen;
