@@ -39,6 +39,18 @@
 #endif
 #endif
 
+#ifndef DRP_NONSTRING
+#if defined(__has_attribute)
+#  if __has_attribute(nonstring)
+#    define DRP_NONSTRING __attribute__((nonstring))
+#  endif
+#endif
+#endif
+
+#ifndef DRP_NONSTRING
+#  define DRP_NONSTRING
+#endif
+
 typedef enum Base64Error{
     BASE64_NO_ERROR = 0,
     BASE64_DECODING_ERROR = 1,
@@ -71,6 +83,7 @@ base64_decode_size(size_t src_length){
 static inline
 size_t
 base64_encode(char* restrict dst, size_t dst_length, const void* restrict src, size_t src_length){
+    DRP_NONSTRING
     static const char  base64_encode_table0[256] =
         "AAAABBBBCC"
         "CCDDDDEEEE"
@@ -98,6 +111,7 @@ base64_encode(char* restrict dst, size_t dst_length, const void* restrict src, s
         "5566667777"
         "88889999++"
         "++////";
+    DRP_NONSTRING
     static const char base64_encode_table1[256] =
         "ABCDEFGHIJ"
         "KLMNOPQRST"
@@ -125,6 +139,7 @@ base64_encode(char* restrict dst, size_t dst_length, const void* restrict src, s
         "mnopqrstuv"
         "wxyz012345"
         "6789+/";
+    DRP_NONSTRING
     static const char base64_encode_table2[256] =
         "ABCDEFGHIJ"
         "KLMNOPQRST"
