@@ -1782,11 +1782,11 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
             if(!record) return CC_OOM_ERROR;
             *record = *b;
             record->ffi_cache = NULL;
-            record->method_capacity = record->method_count;
-            record->methods = NULL;
-            if(b->method_count){
-                record->methods = Allocator_dupe(cc_allocator(p), (const void*)b->methods, b->method_count * sizeof(CcField));
-                if(!record->methods) return CC_OOM_ERROR;
+            record->methods.capacity = record->methods.count;
+            record->methods.data = NULL;
+            if(b->methods.count){
+                record->methods.data = Allocator_dupe(cc_allocator(p), b->methods.data, b->methods.count * sizeof(CcField));
+                if(!record->methods.data) return CC_OOM_ERROR;
             }
             record->fields = Allocator_alloc(cc_allocator(p), b->field_count * sizeof(CcField));
             if(b->field_count && !record->fields) return CC_OOM_ERROR;
@@ -5756,7 +5756,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         if(err) return err;
                         if(mname_tok.type != CC_IDENTIFIER)
                             return cc_error(p, mname_tok.loc, "push_method: expected method name");
-                        Atom method_name = mname_tok.ident.ident;
+                        Atom methods_name = mname_tok.ident.ident;
                         err = cc_expect_punct(p, CC_comma);
                         if(err) return err;
                         CcExpr* func_expr;
@@ -5767,7 +5767,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             func = func_expr->func;
                         else
                             return cc_error(p, func_expr->loc, "push_method: expected function");
-                        func->name = method_name;
+                        func->name = methods_name;
                         cc_release_expr(p, func_expr);
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
@@ -10017,8 +10017,8 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
 static
 int
 cc_lookup_member(CcParser* p, CcStruct* s, Atom name, CcFieldPath* _Nullable path, CcQualType* type, CcQualType* _Nullable owner, CcField* _Nullable* _Nonnull field){
-    for(uint32_t i = 0; i < s->method_count; i++){
-        CcField* m = &s->methods[i];
+    for(uint32_t i = 0; i < s->methods.count; i++){
+        CcField* m = &s->methods.data[i];
         if(m->method->name != name) continue;
         *field = m;
         *type = m->type;
@@ -10045,14 +10045,14 @@ cc_append_method(CcParser* p, CcStruct* s, CcFunc* func, SrcLoc loc){
     int err = cc_lookup_member(p, s, func->name, NULL, &type, NULL, &found);
     if(err) return err;
     if(found) return cc_error(p, loc, "duplicate member '%s'", func->name->data);
-    if(s->method_count == s->method_capacity){
-        uint32_t capacity = s->method_capacity ? s->method_capacity * 2 : 4;
-        CcField* methods = Allocator_realloc(cc_allocator(p), s->methods, s->method_capacity * sizeof *methods, capacity * sizeof *methods);
+    if(s->methods.count == s->methods.capacity){
+        uint32_t capacity = s->methods.capacity ? s->methods.capacity * 2 : 4;
+        CcField* methods = Allocator_realloc(cc_allocator(p), s->methods.data, s->methods.capacity * sizeof *methods, capacity * sizeof *methods);
         if(!methods) return CC_OOM_ERROR;
-        s->methods = methods;
-        s->method_capacity = capacity;
+        s->methods.data = methods;
+        s->methods.capacity = capacity;
     }
-    s->methods[s->method_count++] = (CcField){.type={
+    s->methods.data[s->methods.count++] = (CcField){.type={
         .bits=(uintptr_t)func->type},
         .method=func,
         .is_method=1,
@@ -11042,8 +11042,8 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
         }
     }
     CcStruct* record = ccqt_as_struct(anon_type);
-    for(uint32_t i = 0; i < record->method_count; i++){
-        Atom name = record->methods[i].method->name;
+    for(uint32_t i = 0; i < record->methods.count; i++){
+        Atom name = record->methods.data[i].method->name;
         if(cc_has_field(p, existing, existing_count, name))
             return cc_error(p, loc, "duplicate member '%s'", name->data);
     }
@@ -11276,15 +11276,15 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         saw_method = 1;
                         CcStruct* record = existing;
                         CcField* old_method = NULL;
-                        for(uint32_t i = 0; i < record->method_count; i++)
-                            if(record->methods[i].method->name == member_name)
-                                old_method = &record->methods[i];
+                        for(uint32_t i = 0; i < record->methods.count; i++)
+                            if(record->methods.data[i].method->name == member_name)
+                                old_method = &record->methods.data[i];
                         CcFunc* func = old_method ? old_method->method : NULL;
                         Atom symbol = NULL;
                         CcScope* scope = cc_scope_declarations(p->current);
                         if(name && (scope == &p->global || scope == p->file_scope)){
                             MStringBuilder mangled = {.allocator=cc_scratch_allocator(p)};
-                            msb_sprintf(&mangled, "__method_%c_%u_%s_%s", is_union ? 'u' : 's', (unsigned)name->length, name->data, member_name->data);
+                            msb_sprintf(&mangled, "__methods.%c_%u_%s_%s", is_union ? 'u' : 's', (unsigned)name->length, name->data, member_name->data);
                             if(mangled.errored){
                                 msb_destroy(&mangled);
                                 err = CC_OOM_ERROR;
@@ -11341,7 +11341,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         else {
                             err = cc_append_method(p, record, func, name_loc);
                             if(err) goto struct_err;
-                            record->methods[record->method_count-1].type = member_type;
+                            record->methods.data[record->methods.count-1].type = member_type;
                         }
                         if(symbol){
                             func->mangle = symbol;
@@ -11503,10 +11503,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         err = cc_parse_attributes(p, flags, &attrs);
         if(err) goto struct_err;
         CcStruct* record = existing;
-        for(uint32_t i = 0; i < record->method_count; i++){
-            Atom method_name = record->methods[i].method->name;
-            if(cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, method_name)){
-                err = cc_error(p, loc, "duplicate member '%s'", method_name->data);
+        for(uint32_t i = 0; i < record->methods.count; i++){
+            Atom methods_name = record->methods.data[i].method->name;
+            if(cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, methods_name)){
+                err = cc_error(p, loc, "duplicate member '%s'", methods_name->data);
                 goto struct_err;
             }
         }
@@ -11544,9 +11544,9 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .field_count = field_count,
                 .fields = flat_fields,
                 .packed = attrs.packed,
-                .methods = s->methods,
-                .method_count = s->method_count,
-                .method_capacity = s->method_capacity,
+                .methods.data = s->methods.data,
+                .methods.count = s->methods.count,
+                .methods.capacity = s->methods.capacity,
             };
             if(attrs.has_aligned)
                 s->alignment = attrs.aligned;
@@ -11570,9 +11570,9 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .loc = loc,
                 .field_count = field_count,
                 .fields = flat_fields,
-                .methods = u->methods,
-                .method_count = u->method_count,
-                .method_capacity = u->method_capacity,
+                .methods.data = u->methods.data,
+                .methods.count = u->methods.count,
+                .methods.capacity = u->methods.capacity,
             };
             if(attrs.has_aligned)
                 u->alignment = attrs.aligned;
@@ -19610,7 +19610,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(k != CC_STRUCT && k != CC_UNION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcStruct* s = ccqt_as_struct(qt);
                     _Bool methods = e->type_introspection.op == CC_TYPE_METHODS;
-                    UINTRES(methods ? s->method_count : s->field_count);
+                    UINTRES(methods ? s->methods.count : s->field_count);
                 }
                 case CC_TYPE_RETURN_TYPE: {
                     CcQualType ft = qt;
@@ -19701,8 +19701,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         err = cc_eval_integer(ctx, e->values[0], &idx);
                         if(err) goto fini_introspection;
                         if(idx >= 0){
-                            uint32_t count = method ? s->method_count : s->field_count;
-                            if((uint64_t)idx < count) f = &(method ? s->methods : s->fields)[idx];
+                            uint32_t count = method ? s->methods.count : s->field_count;
+                            if((uint64_t)idx < count) f = &(method ? s->methods.data : s->fields)[idx];
                         }
                         if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     }

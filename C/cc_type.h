@@ -310,8 +310,10 @@ struct CC_ALIGN(8) CcStruct {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Null_unspecified fields;
-    uint32_t method_count, method_capacity;
-    CcField* _Nullable methods;
+    struct {
+        uint32_t count, capacity;
+        CcField* _Null_unspecified data;
+    } methods;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;
@@ -341,8 +343,10 @@ struct CC_ALIGN(8) CcUnion {
     uint32_t alignment;
     uint32_t field_count;
     CcField* _Nullable fields;
-    uint32_t method_count, method_capacity;
-    CcField* _Nullable methods;
+    struct {
+        uint32_t count, capacity;
+        CcField* _Null_unspecified data;
+    } methods;
     void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;

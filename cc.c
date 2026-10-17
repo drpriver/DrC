@@ -797,8 +797,8 @@ repl_builtin_command(CcParser* parser, StringView input){
                         }
                         log_sprintf(l, "\n");
                     }
-                    for(uint32_t j = 0; j < s->method_count; j++){
-                        CcField* m = &s->methods[j];
+                    for(uint32_t j = 0; j < s->methods.count; j++){
+                        CcField* m = &s->methods.data[j];
                         log_sprintf(l, "    ");
                         cc_print_type(&l->buff, m->type);
                         log_sprintf(l, " %.*s (method)\n", (int)m->method->name->length, m->method->name->data);
@@ -839,8 +839,8 @@ repl_builtin_command(CcParser* parser, StringView input){
                         }
                         log_sprintf(l, "\n");
                     }
-                    for(uint32_t j = 0; j < u->method_count; j++){
-                        CcField* m = &u->methods[j];
+                    for(uint32_t j = 0; j < u->methods.count; j++){
+                        CcField* m = &u->methods.data[j];
                         log_sprintf(l, "    ");
                         cc_print_type(&l->buff, m->type);
                         log_sprintf(l, " %.*s (method)\n", (int)m->method->name->length, m->method->name->data);

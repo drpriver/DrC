@@ -1007,8 +1007,8 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             }
             else {
                 uintptr_t idx = arg;
-                uint32_t count = method ? s->method_count : s->field_count;
-                if(idx < count) f = &(method ? s->methods : s->fields)[idx];
+                uint32_t count = method ? s->methods.count : s->field_count;
+                if(idx < count) f = &(method ? s->methods.data : s->fields)[idx];
                 if(!f) return ci_error(ci, loc, "_Type.%s: index out of range", member);
             }
             if(method){
@@ -1117,7 +1117,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                 return ci_error(ci, loc, "_Type.%s: not a struct or union type", methods ? "methods" : "fields");
             CcStruct* s = ccqt_as_struct(qt);
             size_t count = 0;
-            count = methods ? s->method_count : s->field_count;
+            count = methods ? s->methods.count : s->field_count;
             *(size_t*)result = count;
             return 0;
         }
