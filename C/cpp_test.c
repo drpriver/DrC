@@ -936,6 +936,9 @@ TestFunction(test_builtin_macros){
         {"type builtin redef empty", SV("#define __int64\n__int64"), SV("\n"), __LINE__, 0},
         {"type builtin redef function", SV("#define __int64(x) x + 1\n__int64(2)"), SV("\n2 + 1"), __LINE__, 0},
         {"__LINE__", SV("__LINE__"), SV("1"), __LINE__, 0},
+        {"line after leading continuation", SV("\\\n__LINE__"), SV("2"), __LINE__, 0},
+        {"line after leading CRLF continuation", SV("\\\r\n__LINE__"), SV("2"), __LINE__, 0},
+        {"line after continuation at line start", SV("\n\\\n__LINE__"), SV("\n3"), __LINE__, 0},
         {"__COLUMN__", SV("__COLUMN__"), SV("1"), __LINE__, 0},
         {"__FILE_ID__", SV("__FILE_ID__"), SV("0"), __LINE__, 0}, // just happens to be 0, could change
         {"__LI\\NE__", SV("__LI\\\nNE__"), SV("1"), __LINE__, 0},
@@ -2058,6 +2061,12 @@ TestFunction(test_if_eval){
         {"true keyword", __LINE__, 0,
             SV("#if true\nyes\n#endif"),
             SV("\nyes\n")},
+        {"true macro in condition", __LINE__, 0,
+            SV("#define true 0\n#if !true\nyes\n#endif"),
+            SV("\n\nyes\n")},
+        {"true function macro in condition", __LINE__, 0,
+            SV("#define true(x) x\n#if true(1)\nyes\n#endif"),
+            SV("\n\nyes\n")},
 
         {"prec: + vs *", __LINE__, 0,
             SV("#if 1 + 2 * 3 == 7\nyes\n#endif"), SV("\nyes\n")},

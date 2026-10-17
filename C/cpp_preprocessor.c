@@ -7379,10 +7379,6 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 continue;
         }
         StringView name = tok.txt;
-        if(sv_equals(name, SV("true"))){
-            *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("1"), .loc = tok.loc};
-            return 0;
-        }
         _Bool is_embed = 0;
         _Bool is_next = sv_equals(name, SV("__has_include_next"));
         if(is_next) goto has_include;
@@ -7612,14 +7608,15 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             *outtok = t;
             return 0;
         }
+        StringView identifier_value = sv_equals(name, SV("true")) ? SV("1") : SV("0");
         Atom a = AT_get_atom(cpp->at, name.text, name.length);
         if(!a){
-            *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
+            *outtok = (CppToken){.type=CPP_NUMBER, .txt = identifier_value, .loc = tok.loc};
             return 0;
         }
         CppMacro* m = AM_get(&cpp->macros, a);
         if(!m || m->is_disabled || tok.disabled){
-            *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
+            *outtok = (CppToken){.type=CPP_NUMBER, .txt = identifier_value, .loc = tok.loc};
             return 0;
         }
         if(!m->is_function_like){
@@ -7634,10 +7631,10 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 next = cpp_ts_next(s);
             } while(next.type == CPP_WHITESPACE);
             if(next.type != CPP_PUNCTUATOR || next.punct != '('){
-                // not an invocation, push back and treat as 0
+                // Not an invocation: push back and use the identifier value.
                 err = cpp_push_tok(cpp, s->pending, next);
                 if(err) return err;
-                *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
+                *outtok = (CppToken){.type=CPP_NUMBER, .txt = identifier_value, .loc = tok.loc};
                 return 0;
             }
             CppTokens *args = cpp_get_scratch(cpp);
