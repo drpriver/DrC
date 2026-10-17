@@ -344,6 +344,16 @@ TestFunction(test_func_macros){
         "#define EMPTY() \n"
         "#define IDENT(x) x\n"
         "IDENT(EMPTY())test"),SV("\n\ntest"), __LINE__},
+        {"empty_argument_in_nested_call", SV(
+            "#define F(x) [x]\n#define ID(x) x\nID(F())"), SV("\n\n[]"), __LINE__},
+        {"zero_parameter_nested_call_with_space", SV(
+            "#define F() yes\n#define ID(x) x\nID(F( ))"), SV("\n\nyes"), __LINE__},
+        {"zero_parameter_nested_call_with_newline", SV(
+            "#define F() yes\n#define ID(x) x\nID(F(\n))"), SV("\n\nyes"), __LINE__},
+        {"zero_parameter_call_with_space", SV(
+            "#define F() yes\nF( )"), SV("\nyes"), __LINE__},
+        {"zero_parameter_call_with_comment", SV(
+            "#define F() yes\nF(/* empty */)"), SV("\nyes"), __LINE__},
         {"stringify_va_args",SV("#define LOG(...) #__VA_ARGS__\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
         {"gnu_stringify_va_args",SV("#define LOG(args...) #args\nLOG(hello, world)"),SV("\n\"hello, world\""),__LINE__},
         {"variadic_with_named_param", SV(
@@ -1790,6 +1800,8 @@ TestFunction(test_if_eval){
             SV("#if 1\nyes\n#endif"), SV("\nyes\n")},
         {"if 42", __LINE__, 0,
             SV("#if 42\nyes\n#endif"), SV("\nyes\n")},
+        {"zero_parameter_condition_call_with_space", __LINE__, 0,
+            SV("#define F() 1\n#if F( )\nyes\n#endif"), SV("\n\nyes\n")},
         {"decimal digit separators", __LINE__, 0,
             SV("#if 1'000 == 1000\nyes\n#endif"), SV("\nyes\n")},
         {"hex digit separators and unsigned suffix", __LINE__, 0,

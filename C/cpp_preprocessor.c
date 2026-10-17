@@ -91,6 +91,16 @@ static int cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc e
 static void cpp_free_macro(CppPreprocessor* cpp, CppMacro* macro);
 
 static
+_Bool
+cpp_has_argument_tokens(const CppTokens* args){
+    for(size_t i = 0; i < args->count; i++){
+        CppTokenType type = args->data[i].type;
+        if(type != CPP_WHITESPACE && type != CPP_NEWLINE) return 1;
+    }
+    return 0;
+}
+
+static
 int
 cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t nparams, CppMacro*_Nullable*_Nonnull outmacro){
     Atom key = AT_atomize(cpp->at, name.text, name.length);
@@ -909,7 +919,7 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                         err = cpp_push_tok(cpp, args, next);
                         if(err) goto invoke_cleanup;
                     }
-                    if(args->count && !macro->nparams && !macro->is_variadic){
+                    if(!macro->nparams && !macro->is_variadic && cpp_has_argument_tokens(args)){
                         err = cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
                         goto invoke_cleanup;
                     }
@@ -3327,12 +3337,11 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
             err = cpp_push_tok(cpp, args, next);
             if(err) goto finally;
         }
-        if(args->count && !macro->nparams && !macro->is_variadic){
+        if(!macro->nparams && !macro->is_variadic && cpp_has_argument_tokens(args)){
             err = cpp_error(cpp, args->data[0].loc, "Too many arguments to function-like macro %s()", a->data);
             goto finally;
         }
-        size_t nargs = args->count ? arg_seps->count + 1 : 0;
-        if(nargs < macro->nparams){
+        if(arg_seps->count + 1 < macro->nparams){
             err = cpp_error(cpp, tok.loc, "Too few arguments to function-like macro %s()", a->data);
             goto finally;
         }
@@ -7653,7 +7662,7 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 err = cpp_push_tok(cpp, args, next);
                 if(err) goto func_cleanup;
             }
-            if(args->count && !m->nparams && !m->is_variadic){
+            if(!m->nparams && !m->is_variadic && cpp_has_argument_tokens(args)){
                 err = cpp_error(cpp, tok.loc, "Too many arguments to function-like macro");
                 goto func_cleanup;
             }
