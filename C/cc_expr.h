@@ -476,7 +476,11 @@ struct CcExpr {
         uint32_t bits[2];
         struct {
             CcExprKind kind: 8;
-            uint32_t _padding: 22;
+            uint32_t _padding: 18;
+            uint32_t compound_static: 1;
+            uint32_t compound_thread_local: 1;
+            uint32_t compound_constexpr: 1;
+            uint32_t compound_register: 1;
             uint32_t defer_compound_storage: 1;
             uint32_t is_lvalue: 1;
             uint32_t _pad;

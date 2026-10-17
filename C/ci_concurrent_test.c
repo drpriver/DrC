@@ -174,6 +174,13 @@ TestFunction(test_concurrent_callbacks){
             .exit_code = 1,
         },
         {
+            "TLS compound literal isolation and persistence", __LINE__,
+            SV("int run_tls_threads(int* (*)(int));\n"
+               "int* worker(int n){int* p=&(static thread_local int){17}; *p+=n; return p;}\n"
+               "return run_tls_threads(worker) && run_tls_threads(worker);\n"),
+            .exit_code = 1,
+        },
+        {
             "TLS atomic addresses", __LINE__,
             SV("int run_tls_threads(int* (*)(int));\n"
                "_Thread_local _Atomic int x = 17;\n"

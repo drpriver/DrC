@@ -6384,6 +6384,56 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        {
+            "compound literal rejects extern", __LINE__,
+            SVI("(extern int){1};"),
+            SVI("(test):1:2: error: invalid storage class in compound literal\n"),
+        },
+        {
+            "compound literal rejects auto", __LINE__,
+            SVI("(auto int){1};"),
+            SVI("(test):1:2: error: invalid storage class in compound literal\n"),
+        },
+        {
+            "compound literal register requires block scope", __LINE__,
+            SVI("(register int){1};"),
+            SVI("(test):1:2: error: register compound literal requires block scope\n"),
+        },
+        {
+            "compound literal block TLS requires static", __LINE__,
+            SVI("void f(void){\n(thread_local int){1};}"),
+            SVI("(test):2:2: error: block-scope thread_local compound literal requires static\n"),
+        },
+        {
+            "compound literal storage class requires braces", __LINE__,
+            SVI("(static int)1;"),
+            SVI("(test):1:1: error: storage class requires a compound literal\n"),
+        },
+        {
+            "compound literal sizeof storage class requires braces", __LINE__,
+            SVI("sizeof(static int);"),
+            SVI("(test):1:1: error: storage class requires a compound literal\n"),
+        },
+        {
+            "compound literal rejects runtime static initializer", __LINE__,
+            SVI("int f(void);\n(static int){f()};"),
+            SVI("(test):2:15: error: function call in constant expression\n"),
+        },
+        {
+            "compound literal constexpr is const", __LINE__,
+            SVI("void f(void){\n++(constexpr int){1};}"),
+            SVI("(test):2:1: error: cannot modify const-qualified variable\n"),
+        },
+        {
+            "compound literal register address is forbidden", __LINE__,
+            SVI("void f(void){\n&(register int){1};}"),
+            SVI("(test):2:1: error: cannot take address of register compound literal\n"),
+        },
+        {
+            "compound literal register member address is forbidden", __LINE__,
+            SVI("struct S{int x;}; void f(void){\n&(register struct S){1}.x;}"),
+            SVI("(test):2:1: error: cannot take address of register compound literal\n"),
+        },
         // C2y named-jump constraints (N3854 6.8.2, 6.8.7.3/4).
         {
             "c2y named break requires a declared enclosing target", __LINE__,

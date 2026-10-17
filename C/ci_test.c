@@ -918,6 +918,53 @@ TestFunction(test_interpreter){
             .exit_code=43,
         },
         {
+            "compound literal: static identity and persistence", __LINE__,
+            SVI("int* f(void){return &(static int){7};}"
+                "int* p=f(); *p=19; return p==f() && *f()==19 && p!=&(static int){7};"),
+            .exit_code=1,
+        },
+        {
+            "compound literal: static arrays and aggregate mutation", __LINE__,
+            SVI("struct S{int n;}; int f(void){return ++(static struct S){4}.n;}"
+                "int* a(void){return (static int[]){2,3};}"
+                "a()[1]=8; return f()==5 && f()==6 && a()[1]==8;"),
+            .exit_code=1,
+        },
+        {
+            "compound literal: constexpr values and object qualifiers", __LINE__,
+            SVI("static int n=9; typedef int* IP;"
+                "static_assert(typeof((constexpr int*){&n})==const IP);"
+                "int f(void){static_assert((constexpr int){3}==3);"
+                "static_assert((constexpr int[]){2,5}[1]==5);"
+                "return *(constexpr int*){&n}+(static constexpr int){4};} return f();"),
+            .exit_code=13,
+        },
+        {
+            "compound literal: register and unevaluated operands", __LINE__,
+            SVI("int f(void){int n=3; return (register int){n}"
+                "+sizeof(static int){2}+_Countof(static int[]){1,2};} return f();"),
+            .exit_code=9,
+        },
+        {
+            "compound literal: static address constant and default argument", __LINE__,
+            SVI("static int* p=&(static int){11};"
+                "int* f(int* q=&(static int){5}){return q;}"
+                "*f()=8; return *p==11 && *f()==8;"),
+            .exit_code=1,
+        },
+        {
+            "compound literal: constexpr automatic storage per invocation", __LINE__,
+            SVI("int f(const int* previous){const int* p=&(constexpr int){42};"
+                "if(previous)return p!=previous && *p==42 && *previous==42; return f(p);} return f(0);"),
+            .exit_code=1,
+        },
+        {
+            "compound literal: automatic reevaluation and register constexpr", __LINE__,
+            SVI("int f(void){int sum=0; for(int i=0;i<3;i++)sum+=(register int){i};"
+                "static_assert((register constexpr int){3}==3); return sum;} return f();"),
+            .exit_code=3,
+        },
+        {
             "implicit constexpr: external integers and chained local constants", __LINE__,
             SVI("extern const int n; const int n=4; static_assert(n==4);\n"
                 "int f(void){const int m=n+2; int a[m]={}; static_assert(sizeof(a)==24); return m;} return f();"),

@@ -1224,12 +1224,36 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
     }
 }
 
+static int cc_const_object_type(CcParser*, CcQualType, CcQualType*);
+
+static
+_Bool
+cc_is_compound_type_start(CcParser* p, CcToken* tok){
+    if(cc_is_type_start(p, tok)) return 1;
+    if(tok->type != CC_KEYWORD) return 0;
+    switch(tok->kw.kw){
+        case CC_static: case CC_thread_local: case CC_constexpr: case CC_register:
+        case CC_auto: case CC_extern: case CC_typedef:
+            return 1;
+        default: return 0;
+    }
+}
+
 static
 int
-cc_parse_type_name(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names){
+cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcSpecifier* _Nullable storage){
     CcDeclBase base = {0};
     int err = cc_parse_declaration_specifier(p, flags, &base);
     if(err) return err;
+    if(storage){
+        if(base.spec.sp_auto || base.spec.sp_extern || base.spec.sp_typedef || base.spec.sp_funcbits)
+            return cc_error(p, base.loc, "invalid storage class in compound literal");
+        *storage = base.spec;
+        if(base.spec.sp_register && !p->current_func)
+            return cc_error(p, base.loc, "register compound literal requires block scope");
+        if(base.spec.sp_thread_local && p->current_func && !base.spec.sp_static)
+            return cc_error(p, base.loc, "block-scope thread_local compound literal requires static");
+    }
     if(!base.spec.bits && !base.type.bits){
         CcToken peek;
         err = cc_peek(p, &peek);
@@ -1246,7 +1270,17 @@ cc_parse_type_name(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedPar
     if(err) return err;
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
+    if(storage && storage->sp_constexpr){
+        err = cc_const_object_type(p, *out, out);
+        if(err) return err;
+    }
     return cc_check_array_element_alignment(p, *out, base.loc);
+}
+
+static
+int
+cc_parse_type_name(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names){
+    return cc_parse_compound_type(p, flags, out, param_names, NULL);
 }
 
 static
@@ -1416,7 +1450,10 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         .name = nil_atom,
         .loc = loc,
         .type = type,
-        .automatic = p->current_func != NULL,
+        .automatic = p->current_func != NULL && !cl->compound_static && !cl->compound_thread_local,
+        .static_ = cl->compound_static,
+        .thread_local_ = cl->compound_thread_local,
+        .constexpr_ = cl->compound_constexpr,
         .initializer = cl,
     };
     err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), nil_atom, anon);
@@ -1426,16 +1463,52 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     if(!var_ref) return CC_OOM_ERROR;
     var_ref->is_lvalue = 1;
     var_ref->var = anon;
+    if(anon->static_ || anon->thread_local_ || (anon->constexpr_ && !anon->automatic)){
+        anon->interp_preinit = 1;
+        *out = var_ref;
+        return 0;
+    }
     CcExpr* assign = cc_binary_expr(p, CC_EXPR_ASSIGN, loc, type, var_ref, cl);
     if(!assign) return CC_OOM_ERROR;
     CcExpr* var_ref2 = cc_make_expr(p, CC_EXPR_VARIABLE, loc, type, 0);
     if(!var_ref2) return CC_OOM_ERROR;
     var_ref2->is_lvalue = 1;
     var_ref2->var = anon;
+    var_ref2->compound_register = cl->compound_register;
     CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, loc, type, assign, var_ref2);
     if(!comma) return CC_OOM_ERROR;
     comma->is_lvalue = var_ref2->is_lvalue;
     *out = comma;
+    return 0;
+}
+
+static
+int
+cc_parse_compound_literal(CcParser* p, CcParseFlags flags, CcQualType type, CcSpecifier storage, CcExpr*_Nullable*_Nonnull out){
+    CcParseFlags init_flags = flags;
+    if(storage.sp_constexpr) init_flags.vc = CC_CONSTEXPR_VALUE;
+    else if(storage.sp_static || storage.sp_thread_local) init_flags.vc = CC_LINKTIME_VALUE;
+    CcExpr* result;
+    int err = cc_parse_init_list(p, init_flags, &result, type);
+    if(err) return err;
+    result->kind = CC_EXPR_COMPOUND_LITERAL;
+    result->compound_static = storage.sp_static;
+    result->compound_thread_local = storage.sp_thread_local;
+    result->compound_constexpr = storage.sp_constexpr;
+    result->compound_register = storage.sp_register;
+    result->defer_compound_storage = flags.parsing_default_arg && !storage.sp_static && !storage.sp_thread_local;
+    if(storage.sp_static || storage.sp_thread_local || storage.sp_constexpr){
+        err = cc_check_linktime_expr(p, result, 0, 0);
+        if(err == CC_NOT_CONSTANT_ERROR)
+            return cc_error(p, result->loc, "compound literal initializer requires a link-time constant");
+        if(err) return err;
+    }
+    // Persistent objects must have storage even when used only as values.
+    if(storage.sp_static || storage.sp_thread_local){
+        err = cc_desugar_compound_literal(p, result, &result);
+        if(err) return err;
+    }
+    *out = result;
     return 0;
 }
 
@@ -2898,10 +2971,11 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
             CcToken peek;
             err = cc_peek(p, &peek);
             if(err) return err;
-            if(cc_is_type_start(p, &peek)){
+            if(cc_is_compound_type_start(p, &peek)){
                 CcQualType cast_type;
+                CcSpecifier storage = {0};
                 CcParsedParams param_names = {0};
-                err = cc_parse_type_name(p, flags, &cast_type, &param_names);
+                err = cc_parse_compound_type(p, flags, &cast_type, &param_names, &storage);
                 if(err){
                     ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                     return err;
@@ -2914,6 +2988,8 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                 }
                 if(peek_after.type == CC_PUNCTUATOR && peek_after.punct.punct == CC_lbrace
                    && ccqt_kind(cast_type) == CC_FUNCTION){
+                    if(storage.sp_storagebits)
+                        return cc_error(p, tok.loc, "storage class requires a compound literal");
                     CcExpr* lambda;
                     err = cc_parse_lambda_body(p, flags, tok.loc, cast_type, &param_names, &lambda);
                     if(err) return err;
@@ -2929,12 +3005,12 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                 if(err) return err;
                 if(peek2.type == CC_PUNCTUATOR && peek2.punct.punct == CC_lbrace){
                     CcExpr* result;
-                    err = cc_parse_init_list(p, flags, &result, cast_type);
+                    err = cc_parse_compound_literal(p, flags, cast_type, storage, &result);
                     if(err) return err;
-                    result->kind = CC_EXPR_COMPOUND_LITERAL;
-                    result->defer_compound_storage = flags.parsing_default_arg;
                     return cc_parse_postfix(p, flags, result, out);
                 }
+                if(storage.sp_storagebits)
+                    return cc_error(p, tok.loc, "storage class requires a compound literal");
                 if(peek2.type == CC_PUNCTUATOR && (
                     peek2.punct.punct == CC_dot
                     || peek2.punct.punct == CC_rparen
@@ -3066,6 +3142,14 @@ cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out
                     CcExpr* val = operand;
                     while(val->kind == CC_EXPR_CAST){
                         val = val->lhs;
+                    }
+                    CcExpr* object = val;
+                    for(;;){
+                        if(object->compound_register)
+                            return cc_error(p, tok.loc, "cannot take address of register compound literal");
+                        if(object->kind == CC_EXPR_DOT) object = object->values[0];
+                        else if(object->kind == CC_EXPR_COMMA) object = object->values[0];
+                        else break;
                     }
                     if(val->kind == CC_EXPR_VALUE && ccqt_kind(val->type) != CC_ARRAY){
                         // eg &3. Desugar to &(int){3}.
@@ -4805,9 +4889,10 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcToken peek2;
                     err = cc_peek(p, &peek2);
                     if(err) return err;
-                    if(cc_is_type_start(p, &peek2)){
+                    if(cc_is_compound_type_start(p, &peek2)){
                         CcQualType type;
-                        err = cc_parse_type_name(p, sizeof_flags, &type, NULL);
+                        CcSpecifier storage = {0};
+                        err = cc_parse_compound_type(p, sizeof_flags, &type, NULL, &storage);
                         if(err) return err;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
@@ -4816,9 +4901,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         if(err) return err;
                         if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
                             CcExpr* result;
-                            err = cc_parse_init_list(p, sizeof_flags, &result, type);
+                            err = cc_parse_compound_literal(p, sizeof_flags, type, storage, &result);
                             if(err) return err;
-                            result->kind = CC_EXPR_COMPOUND_LITERAL;
                             CcExpr* postfixed;
                             err = cc_parse_postfix(p, sizeof_flags, result, &postfixed);
                             if(err) return err;
@@ -4829,6 +4913,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                             *out = sz;
                             return 0;
                         }
+                        if(storage.sp_storagebits)
+                            return cc_error(p, tok.loc, "storage class requires a compound literal");
                         CcExpr* sz;
                         err = cc_sizeof_as_expr(p, type, tok.loc, &sz);
                         if(err) return err;
@@ -4906,8 +4992,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcToken peek2;
                     err = cc_peek(p, &peek2);
                     if(err) return err;
-                    if(cc_is_type_start(p, &peek2)){
-                        err = cc_parse_type_name(p, flags, &arr_type, NULL);
+                    if(cc_is_compound_type_start(p, &peek2)){
+                        CcSpecifier storage = {0};
+                        err = cc_parse_compound_type(p, flags, &arr_type, NULL, &storage);
                         if(err) return err;
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
@@ -4916,15 +5003,16 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         if(err) return err;
                         if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
                             CcExpr* result;
-                            err = cc_parse_init_list(p, flags, &result, arr_type);
+                            err = cc_parse_compound_literal(p, flags, arr_type, storage, &result);
                             if(err) return err;
-                            result->kind = CC_EXPR_COMPOUND_LITERAL;
                             CcExpr* postfixed;
                             err = cc_parse_postfix(p, flags, result, &postfixed);
                             if(err) return err;
                             arr_type = postfixed->type;
                             cc_release_expr(p, postfixed);
                         }
+                        else if(storage.sp_storagebits)
+                            return cc_error(p, tok.loc, "storage class requires a compound literal");
                         goto countof_have_type;
                     }
                     err = cc_unget(p, &peek);
@@ -16837,7 +16925,7 @@ cc_eval_comma_source(CcEvalCtx* ctx, CcExpr* e, _Bool storage, CcExpr*_Nonnull*_
     CcExpr* ref = e->values[0];
     if(assign->kind == CC_EXPR_ASSIGN && assign->lhs->kind == CC_EXPR_VARIABLE
         && ref->kind == CC_EXPR_VARIABLE && assign->lhs->var == ref->var
-        && ref->var->name == nil_atom && !ref->var->automatic){
+        && ref->var->name == nil_atom && (!ref->var->automatic || ref->var->constexpr_)){
         *out = storage ? ref : assign->values[0];
         return 0;
     }
@@ -17795,7 +17883,8 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             if(e->lhs->kind == CC_EXPR_ASSIGN && e->lhs->lhs->kind == CC_EXPR_VARIABLE
                 && e->values[0]->kind == CC_EXPR_VARIABLE
                 && e->lhs->lhs->var == e->values[0]->var
-                && e->values[0]->var->name == nil_atom && !e->values[0]->var->automatic)
+                && e->values[0]->var->name == nil_atom
+                && (!e->values[0]->var->automatic || (!address && e->values[0]->var->constexpr_)))
                 return cc_check_linktime_expr(p, e->lhs->values[0], 0, depth + 1);
             err = cc_check_linktime_expr(p, e->lhs, 0, depth + 1);
             if(err) return err;
