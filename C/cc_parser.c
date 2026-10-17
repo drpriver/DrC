@@ -14536,10 +14536,75 @@ cc_has_builtin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, Cp
         found = AM_get(&p->builtins, a) != 0;
     CppToken result = {
         .type = CPP_NUMBER,
-        .loc = loc,
         .txt = found ? SV("1") : SV("0"),
+        .loc = loc,
     };
     return cpp_push_tok(cpp, outtoks, result);
+}
+
+static
+int
+cc_feature_query(CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, _Bool extension){
+    StringView name = {0};
+    for(size_t i = 0; i < args->count; i++){
+        CppToken tok = args->data[i];
+        if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
+        if(tok.type != CPP_IDENTIFIER || name.length)
+            return cpp_error(cpp, loc, "%s() requires a single identifier", extension?"__has_extension":"__has_feature");
+        name = tok.txt;
+    }
+    if(!name.length)
+        return cpp_error(cpp, loc, "%s() requires a single identifier", extension?"__has_extension":"__has_feature");
+    if(name.length > 4 && sv_startswith(name, SV("__")) && sv_endswith(name, SV("__")))
+        name = sv_slice(name, 2, name.length-2);
+    static const struct {
+        StringView name;
+        _Bool extension_only;
+    } supported[] = {
+        {SVI("c_alignas"), 0},
+        {SVI("c_alignof"), 0},
+        {SVI("c_atomic"), 0},
+        {SVI("c_generic_selections"), 0},
+        {SVI("c_static_assert"), 0},
+        {SVI("c_thread_local"), 0},
+        {SVI("c_fixed_enum"), 0},
+        {SVI("c_countof"), 0},
+        {SVI("tls"), 0},
+        {SVI("enumerator_attributes"), 0},
+        {SVI("c_attributes"), 1},
+        {SVI("c_generic_selection_with_controlling_type"), 1},
+        {SVI("cxx_fixed_enum"), 1},
+        {SVI("cxx_binary_literals"), 1},
+    };
+    _Bool found = 0;
+    for(size_t i = 0; i < arrlen(supported); i++){
+        if(sv_equals(name, supported[i].name)){
+            found = extension || !supported[i].extension_only;
+            break;
+        }
+    }
+    CppToken result = {
+        .type = CPP_NUMBER,
+        .txt = found ? SV("1") : SV("0"),
+        .loc = loc,
+    };
+    return cpp_push_tok(cpp, outtoks, result);
+}
+
+static
+int
+cc_has_feature(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    (void)ctx;
+    (void)arg_seps;
+    return cc_feature_query(cpp, loc, outtoks, args, 0);
+}
+
+static
+int
+cc_has_extension(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps){
+    (void)ctx;
+    (void)arg_seps;
+    return cc_feature_query(cpp, loc, outtoks, args, 1);
 }
 
 static
@@ -15059,6 +15124,10 @@ cc_define_builtin_types(CcParser* p){
         }
     }
     err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_builtin"), cc_has_builtin, p, 1, 0, 1);
+    if(err) return err;
+    err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_feature"), cc_has_feature, p, 1, 0, 1);
+    if(err) return err;
+    err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_extension"), cc_has_extension, p, 1, 0, 1);
     if(err) return err;
 
     // Register type methods/fields

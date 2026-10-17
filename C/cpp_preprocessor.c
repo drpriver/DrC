@@ -7241,7 +7241,7 @@ int
 cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value);
 static
 int
-cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec);
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec, _Bool evaluate);
 
 static
 int
@@ -7260,6 +7260,12 @@ cpp_eval_tokens(CppPreprocessor* cpp, CppToken*_Null_unspecified toks, size_t co
         .source_pos = source_pos,
     };
     err = cpp_recursive_eval(cpp, &stream, value);
+    if(!err){
+        CppToken next;
+        err = cpp_eval_ts_next(cpp, &stream, &next);
+        if(!err && next.type != CPP_END_OF_INPUT)
+            err = cpp_error(cpp, next.loc, "Unexpected token after #if expression");
+    }
     cpp_release_scratch(cpp, pending);
     return err;
 }
@@ -7786,7 +7792,7 @@ cpp_eval_binop_prec(CppToken tok){
 
 static
 int
-cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
+cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, _Bool evaluate){
     int err;
     CppToken tok;
     err = cpp_eval_ts_next(cpp, s, &tok);
@@ -7801,7 +7807,7 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
         case CPP_PUNCTUATOR:
             switch(tok.punct){
                 case '(':
-                    err = cpp_recursive_eval_prec(cpp, s, value, 1);
+                    err = cpp_recursive_eval_prec(cpp, s, value, 1, evaluate);
                     if(err) return err;
                     err = cpp_eval_ts_next(cpp, s, &tok);
                     if(err) return err;
@@ -7809,20 +7815,21 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
                         return cpp_error(cpp, tok.loc, "Expected ')' in expression");
                     return 0;
                 case '!':
-                    err = cpp_eval_atom(cpp, s, value);
+                    err = cpp_eval_atom(cpp, s, value, evaluate);
                     if(err) return err;
                     *value = !*value;
                     return 0;
                 case '~':
-                    err = cpp_eval_atom(cpp, s, value);
+                    err = cpp_eval_atom(cpp, s, value, evaluate);
                     if(err) return err;
                     *value = ~*value;
                     return 0;
                 case '+':
-                    return cpp_eval_atom(cpp, s, value);
+                    return cpp_eval_atom(cpp, s, value, evaluate);
                 case '-':
-                    err = cpp_eval_atom(cpp, s, value);
+                    err = cpp_eval_atom(cpp, s, value, evaluate);
                     if(err) return err;
+                    if(!evaluate) return 0;
                     if(*value == INT64_MIN)
                         return cpp_error(cpp, tok.loc, "overflow in negation in #if");
                     *value = -*value;
@@ -7848,9 +7855,9 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
 
 static
 int
-cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec){
+cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value, int min_prec, _Bool evaluate){
     int err;
-    err = cpp_eval_atom(cpp, s, value);
+    err = cpp_eval_atom(cpp, s, value, evaluate);
     if(err) return err;
     for(;;){
         CppToken tok;
@@ -7866,21 +7873,25 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
         }
         if(tok.punct == '?'){
             int64_t mid, right;
-            err = cpp_recursive_eval_prec(cpp, s, &mid, 1);
+            err = cpp_recursive_eval_prec(cpp, s, &mid, 1, evaluate && *value != 0);
             if(err) return err;
             CppToken colon;
             err = cpp_eval_ts_next(cpp, s, &colon);
             if(err) return err;
             if(colon.type != CPP_PUNCTUATOR || colon.punct != ':')
                 return cpp_error(cpp, colon.loc, "Expected ':' in ternary expression");
-            err = cpp_recursive_eval_prec(cpp, s, &right, 1);
+            err = cpp_recursive_eval_prec(cpp, s, &right, 1, evaluate && *value == 0);
             if(err) return err;
             *value = *value ? mid : right;
         }
         else{
             int64_t rhs;
-            err = cpp_recursive_eval_prec(cpp, s, &rhs, prec + 1);
+            _Bool evaluate_rhs = evaluate;
+            if((tok.punct == '&&' && !*value) || (tok.punct == '||' && *value))
+                evaluate_rhs = 0;
+            err = cpp_recursive_eval_prec(cpp, s, &rhs, prec + 1, evaluate_rhs);
             if(err) return err;
+            if(!evaluate) continue;
             switch(tok.punct){
                 case '*':
                     if(mul_overflow(*value, rhs, value))
@@ -7938,7 +7949,7 @@ cpp_recursive_eval_prec(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value,
 static
 int
 cpp_recursive_eval(CppPreprocessor* cpp, CppTokenStream* s, int64_t* value){
-    return cpp_recursive_eval_prec(cpp, s, value, 1);
+    return cpp_recursive_eval_prec(cpp, s, value, 1, 1);
 }
 
 static

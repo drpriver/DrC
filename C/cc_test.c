@@ -5057,6 +5057,25 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "compiler feature query expansion", __LINE__,
+            SVI("#if !defined(__has_feature) || !defined(__has_extension)\n#error missing query\n#endif\n"
+                "#if !defined(__has_feature) || !__has_feature(modules)\nint no_modules;\n#endif\n"
+                "#define c_atomic 0\n#define ALIAS c_atomic\n"
+                "static_assert(__has_feature(c_atomic) == 1);\n"
+                "static_assert(__has_extension(c_atomic) == 1);\n"
+                "static_assert(__has_feature(ALIAS) == 0);\n"
+                "static_assert(__has_extension(ALIAS) == 0);\n"
+                "#undef c_atomic\n"
+                "#define QUERY(x) __has_extension(x)\n"
+                "static_assert(QUERY(ALIAS) == 1);\n"),
+            .vars = {{SVI("no_modules"), SVI("int")}},
+        },
+        {
+            "feature query outside directives", __LINE__,
+            SVI("static_assert(__has_feature(modules) == 0);\n"
+                "static_assert(__has_feature(unknown_feature) == 0);\n"),
+        },
+        {
             "[[nodiscard]] on struct", __LINE__,
             SVI("struct [[nodiscard]] error_info { int code; };\n"
                "struct error_info enable_missile_safety_mode(void);\n"),
@@ -6266,6 +6285,15 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        {"empty feature query", __LINE__,
+            SVI("#if __has_feature()\n#endif"),
+            SVI("(test):1:5: error: __has_feature() requires a single identifier\n")},
+        {"numeric extension query", __LINE__,
+            SVI("#if __has_extension(123)\n#endif"),
+            SVI("(test):1:5: error: __has_extension() requires a single identifier\n")},
+        {"multiple feature identifiers", __LINE__,
+            SVI("#if __has_feature(c_atomic c_alignas)\n#endif"),
+            SVI("(test):1:5: error: __has_feature() requires a single identifier\n")},
         {
             "defer rejects skipped registration", __LINE__,
             SVI("goto end; _Defer ; end:;"),
@@ -11413,11 +11441,83 @@ TestFunction(test_record_call_abi){
     TESTEND();
 }
 
+TestFunction(test_feature_queries){
+    TESTBEGIN();
+    const struct {const char* name; int feature, extension;} cases[] = {
+        {"c_alignas", 1, 1},
+        {"c_alignof", 1, 1},
+        {"c_atomic", 1, 1},
+        {"c_generic_selections", 1, 1},
+        {"c_static_assert", 1, 1},
+        {"c_thread_local", 1, 1},
+        {"c_fixed_enum", 1, 1},
+        {"c_countof", 1, 1},
+        {"tls", 1, 1},
+        {"enumerator_attributes", 1, 1},
+        {"c_attributes", 0, 1},
+        {"c_generic_selection_with_controlling_type", 0, 1},
+        {"cxx_fixed_enum", 0, 1},
+        {"cxx_binary_literals", 0, 1},
+        {"modules", 0, 0},
+        {"unknown_feature", 0, 0},
+        {"cxx_exceptions", 0, 0},
+        {"cxx_static_assert", 0, 0},
+        {"blocks", 0, 0},
+        {"gnu_asm", 0, 0},
+        {"attribute_ext_vector_type", 0, 0},
+        {"attribute_overloadable", 0, 0},
+        {"attribute_deprecated_with_message", 0, 0},
+        {"address_sanitizer", 0, 0},
+        {"nullability", 0, 0},
+        {"__c_atomic", 0, 0},
+        {"c_atomic__", 0, 0},
+    };
+    static int idx = 0;
+    for(size_t i = test_atomic_increment(&idx); i < arrlen(cases); i = test_atomic_increment(&idx)){
+        ArenaAllocator aa = {0};
+        Allocator al = allocator_from_arena(&aa);
+        AtomTable at = {0};
+        FileCache* fc = fc_create(al, FC_FLAGS_NONE);
+        MStringBuilder log = {.allocator=al};
+        MsbLogger logger = {0};
+        CcParser cc = {
+            .cpp = {.allocator=al, .at=&at, .fc=fc,
+                    .logger=msb_logger(&logger, &log), .target=&cc_target_test},
+            .current = &cc.global,
+            .eager_parsing = 1,
+        };
+        MStringBuilder input = {.allocator=al};
+        msb_sprintf(&input,
+            "#if __has_feature(%s) != %d || __has_extension(%s) != %d\n#error query mismatch\n#endif\n"
+            "static_assert(__has_feature(%s) == %d);\n"
+            "static_assert(__has_extension(%s) == %d);\n"
+            "static_assert(__has_feature(__%s__) == %d);\n"
+            "static_assert(__has_extension( /*comment*/ __%s__ ) == %d);\n",
+            cases[i].name, cases[i].feature, cases[i].name, cases[i].extension,
+            cases[i].name, cases[i].feature, cases[i].name, cases[i].extension,
+            cases[i].name, cases[i].feature, cases[i].name, cases[i].extension);
+        fc_write_path(fc, "(test)", 6);
+        int err = fc_cache_file(fc, msb_borrow_sv(&input));
+        if(!err) err = cpp_define_builtin_macros(&cc.cpp);
+        if(!err) err = cc_define_builtin_types(&cc);
+        if(!err) err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
+        if(!err) err = cc_parse_all(&cc);
+        TestExpectFalse(int, err);
+        if(err) TestPrintf("%s: %.*s\n", cases[i].name, sv_p(msb_borrow_sv(&log)));
+        ArenaAllocator_free_all(&at.arena);
+        ArenaAllocator_free_all(&aa);
+        ArenaAllocator_free_all(&cc.cpp.synth_arena);
+        ArenaAllocator_free_all(&cc.scratch_arena);
+    }
+    TESTEND();
+}
+
 int main(int argc, char** argv){
 #ifdef USE_TESTING_ALLOCATOR
     testing_allocator_init();
 #endif
     RegisterTestFlags(test_parse_decls, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_feature_queries, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_field_paths, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_call_abi_types, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_runtime_bitfields, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
