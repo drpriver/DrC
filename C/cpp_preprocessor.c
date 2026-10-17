@@ -6408,13 +6408,20 @@ cpp_builtin_for(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         if(err) return err;
         err = cpp_push_tok(cpp, outtoks, lparen);
         if(err) return err;
-        if(i < 0){
-            CppToken minus = {.type = CPP_PUNCTUATOR, .punct = '-', .loc = loc, .txt = SV("-")};
-            err = cpp_push_tok(cpp, outtoks, minus);
+        if(i == INT64_MIN){
+            // The positive magnitude is unsigned; preserve the signed index.
+            err = cpp_tokenize_text(cpp, loc, SV("(-9223372036854775807ll-1)"), outtoks);
             if(err) return err;
         }
-        err = cpp_push_tok(cpp, outtoks, num_tok);
-        if(err) return err;
+        else {
+            if(i < 0){
+                CppToken minus = {.type = CPP_PUNCTUATOR, .punct = '-', .loc = loc, .txt = SV("-")};
+                err = cpp_push_tok(cpp, outtoks, minus);
+                if(err) return err;
+            }
+            err = cpp_push_tok(cpp, outtoks, num_tok);
+            if(err) return err;
+        }
         err = cpp_push_tok(cpp, outtoks, rparen);
         if(err) return err;
     }

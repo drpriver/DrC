@@ -1105,6 +1105,10 @@ TestFunction(test_builtin_macros){
         {"__for negative indices", SV(
             "#define P(n) __CALC__((n) * (n))\n"
             "__for(-2, 1, P)"), SV("\n4 1 0"), __LINE__, 0},
+        {"__for minimum index signed evaluation", SV(
+            "#define P(i) __format(\"%d:%d\", (i) < 0, (i) / 2)\n"
+            "__for(-9223372036854775807 - 1, -9223372036854775807, P)"),
+            SV("\n\"1:-4611686018427387904\""), __LINE__, 0},
         {"__for minimum index", SV(
             "#define P(n) __CALC__((n) == (-9223372036854775807 - 1))\n"
             "__for(-9223372036854775807 - 1, -9223372036854775807, P)"),
