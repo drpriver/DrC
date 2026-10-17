@@ -7618,7 +7618,7 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
             return 0;
         }
         CppMacro* m = AM_get(&cpp->macros, a);
-        if(!m || m->is_disabled){
+        if(!m || m->is_disabled || tok.disabled){
             *outtok = (CppToken){.type=CPP_NUMBER, .txt = SV("0"), .loc = tok.loc};
             return 0;
         }
