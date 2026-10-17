@@ -866,14 +866,25 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                 if(macro->is_function_like){
                     // Need to check for '(' - if not present, not an invocation
                     CppToken next;
-                    do {
+                    CppTokens* skipped = cpp_get_scratch(cpp);
+                    if(!skipped) return CPP_OOM_ERROR;
+                    for(;;){
                         err = cpp_next_raw_token(cpp, &next);
-                        if(err) return err;
-                    } while(next.type == CPP_WHITESPACE || next.type == CPP_NEWLINE || next.type == CPP_END_OF_SOURCE_FILE);
-                    if(next.type != CPP_PUNCTUATOR || next.punct != '('){
-                        // not actually an invocation
+                        if(err) break;
+                        if(next.type != CPP_WHITESPACE && next.type != CPP_NEWLINE && next.type != CPP_END_OF_SOURCE_FILE)
+                            break;
+                        err = cpp_push_tok(cpp, skipped, next);
+                        if(err) break;
+                    }
+                    if(!err && (next.type != CPP_PUNCTUATOR || next.punct != '(')){
+                        // Restore whitespace too
                         err = cpp_push_tok(cpp, &cpp->pending, next);
-                        if(err) return err;
+                        while(!err && skipped->count)
+                            err = cpp_push_tok(cpp, &cpp->pending, ma_pop_(*skipped));
+                    }
+                    cpp_release_scratch(cpp, skipped);
+                    if(err) return err;
+                    if(next.type != CPP_PUNCTUATOR || next.punct != '('){
                         goto noexp;
                     }
                     CppTokens *args = cpp_get_scratch(cpp);

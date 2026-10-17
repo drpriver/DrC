@@ -302,6 +302,11 @@ TestFunction(test_func_macros){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         {"simple_func_macro",SV("#define F(x) x*x\nF(2)"), SV("\n2*2"), __LINE__},
+        {"uninvoked_macro_before_define", SV(
+            "#define F(x) x\nF\n#define A 1\nA"), SV("\nF\n\n1"), __LINE__},
+        {"uninvoked_macro_before_conditional", SV(
+            "#define F(x) x\nF\n#if 0\nskipped\n#endif\nkept"),
+            SV("\nF\n\n\n\nkept"), __LINE__},
         {"no_space_after_rparen",SV("#define F(x)x*x\nF(2)"), SV("\n2*2"), __LINE__},
         {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
         {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
@@ -861,14 +866,14 @@ TestFunction(test_torture){
                "M L )\n"),
             SV("\n"
                "\n"
-               "M( )\n")
+               "M ( )\n")
         },
         {
             "", __LINE__,
             SV( "#define M() 1\n"
                "M\n"),
             SV("\n"
-               "M")
+               "M\n")
         },
         {
             "stringify strips leading/trailing whitespace", __LINE__,
