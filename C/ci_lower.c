@@ -1227,6 +1227,8 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     if(simplified == CI_IMMEDIATE_IDENTITY && !is_mem && !lhs->type.is_volatile){
         ctx->temp = keep;
         if(!out) return 0;
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+        if(err) return err;
         return ci_lower_expr(ci, ctx, lhs, dest, (CiLowerVal*)out);
     }
     CiLowerVal r = {0};
@@ -1333,10 +1335,13 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     }
     ctx->temp = keep; // free rhs and address scratch; cur survives
     if(!out) return 0;
-    if(dest == CI_NO_SLOT){
+    if(dest == CI_NO_SLOT && is_mem){
         out->slot = cur;
         return 0;
     }
+    // Frame storage can be changed by a subsequent operand.
+    err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+    if(err) return err;
     out->slot = dest;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
@@ -1387,6 +1392,115 @@ ci_expr_is_boolean(CcExpr* e){
         case CC_EXPR_GT: case CC_EXPR_GE: return 1;
         default: return 0;
     }
+}
+
+static
+int
+ci_lower_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out, uint32_t size){
+    int err;
+    CcParser* p = &ci->parser;
+    if(out){
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+        if(err) return err;
+    }
+    CcExpr* lhs = e->lhs;
+    CcExpr* rhs = e->values[0];
+    uint32_t rsz;
+    err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
+    if(err) return err;
+    if(rsz != size)
+        return ci_unreachable(ci, rhs->loc, "size mismatch");
+    if(lhs->type.is_atomic){
+        CiLowerAddr a;
+        err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+        if(err) return err;
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, rhs, dest, &v);
+        if(err) return err;
+        err = ci_lower_atomic_operand(ci, ctx, rhs, &v, size, e->loc);
+        if(err) return err;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .atomic_store = {
+                .kind = CI_OP_ATOMIC_STORE,
+                .memorder = CC_MO_SEQ_CST,
+                .slot = a.slot,
+                .src = v.slot,
+                .src_size = size,
+                .offset = a.disp,
+                .loc = e->loc,
+            }
+        };
+        if(out){
+            out->slot = v.slot;
+            out->canonical = v.canonical;
+        }
+        return 0;
+    }
+    uint32_t vslot;
+    if(ci_frame_lvalue(ci, lhs, &vslot)){
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, rhs, vslot, &v);
+        if(err) return err;
+        if(!out) return 0;
+        out->canonical = v.canonical;
+        out->slot = dest;
+        CiOp* op;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .copy = {
+                .kind = CI_OP_COPY,
+                .slot = dest,
+                .slot_size = size,
+                .src = vslot,
+                .src_size = size,
+                .loc = e->loc,
+            }
+        };
+        return 0;
+    }
+    CiLowerAddr a;
+    if(cc_expr_field_bit_width(lhs)){
+        err = ci_lower_bitfield_addr(ci, ctx, lhs, &a);
+        if(err) return err;
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
+        if(err) return err;
+        err = ci_emit_store_bitfield(ctx, lhs, a, v.slot, size);
+        if(err) return err;
+        if(!out) return 0;
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, dest, size);
+        if(err) return err;
+        out->slot = dest;
+        return 0;
+    }
+    err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
+    if(err) return err;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, rhs, dest, &v);
+    if(err) return err;
+    CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){
+        .store = {
+            .kind = CI_OP_STORE,
+            .slot = a.slot,
+            .src = v.slot,
+            .src_size = size,
+            .offset = a.disp,
+            .align_log2 = a.align_log2,
+            .loc = e->loc,
+        }
+    };
+    if(out){
+        out->slot = v.slot;
+        out->canonical = v.canonical;
+    }
+    return 0;
 }
 
 static
@@ -1865,108 +1979,8 @@ ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             out->canonical = 1;
             return 0;
         }
-        case CC_EXPR_ASSIGN:{
-            CcExpr* lhs = e->lhs;
-            CcExpr* rhs = e->values[0];
-            uint32_t rsz;
-            err = cc_sizeof_as_uint(p, rhs->type, rhs->loc, &rsz);
-            if(err) return err;
-            if(rsz != size)
-                return ci_unreachable(ci, rhs->loc, "size mismatch");
-            if(lhs->type.is_atomic){
-                CiLowerAddr a;
-                err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
-                if(err) return err;
-                CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, rhs, dest, &v);
-                if(err) return err;
-                err = ci_lower_atomic_operand(ci, ctx, rhs, &v, size, e->loc);
-                if(err) return err;
-                CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .atomic_store = {
-                        .kind = CI_OP_ATOMIC_STORE,
-                        .memorder = CC_MO_SEQ_CST,
-                        .slot = a.slot,
-                        .src = v.slot,
-                        .src_size = size,
-                        .offset = a.disp,
-                        .loc = e->loc,
-                    }
-                };
-                out->slot = v.slot;
-                out->canonical = v.canonical;
-                return 0;
-            }
-            uint32_t vslot;
-            if(ci_frame_lvalue(ci, lhs, &vslot)){
-                CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, rhs, vslot, &v);
-                if(err) return err;
-                out->canonical = v.canonical;
-                if(dest == CI_NO_SLOT){
-                    out->slot = vslot;
-                    return 0;
-                }
-                out->slot = dest;
-                CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .copy = {
-                        .kind = CI_OP_COPY,
-                        .slot = dest,
-                        .slot_size = size,
-                        .src = vslot,
-                        .src_size = size,
-                        .loc = e->loc,
-                    }
-                };
-                return 0;
-            }
-            CiLowerAddr a;
-            if(cc_expr_field_bit_width(lhs)){
-                // read-modify-write on the storage unit; the assignment's
-                // value is the stored bits, re-read truncated and extended
-                err = ci_lower_bitfield_addr(ci, ctx, lhs, &a);
-                if(err) return err;
-                CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
-                if(err) return err;
-                err = ci_emit_store_bitfield(ctx, lhs, a, v.slot, size);
-                if(err) return err;
-                err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
-                if(err) return err;
-                err = ci_emit_load_bitfield(ci, ctx, lhs, a, dest, size);
-                if(err) return err;
-                out->slot = dest;
-                return 0;
-            }
-            err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
-            if(err) return err;
-            CiLowerVal v;
-            err = ci_lower_expr(ci, ctx, rhs, dest, &v);
-            if(err) return err;
-            CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .store = {
-                    .kind = CI_OP_STORE,
-                    .slot = a.slot,
-                    .src = v.slot,
-                    .src_size = size,
-                    .offset = a.disp,
-                    .align_log2 = a.align_log2,
-                    .loc = e->loc,
-                }
-            };
-            out->slot = v.slot;
-            out->canonical = v.canonical;
-            return 0;
-        }
+        case CC_EXPR_ASSIGN:
+            return ci_lower_assign(ci, ctx, e, dest, out, size);
         case CC_EXPR_ADDASSIGN:
         case CC_EXPR_SUBASSIGN:
         case CC_EXPR_MULASSIGN:
@@ -3176,24 +3190,21 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         }
         ctx->temp = temp;
         if(out && is_pre){
-            if(dest == CI_NO_SLOT){
-                out->slot = vslot;
-            }
-            else {
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .copy = {
-                        .kind = CI_OP_COPY,
-                        .slot = dest,
-                        .slot_size = size,
-                        .src = vslot,
-                        .src_size = size,
-                        .loc = e->loc,
-                    }
-                };
-                out->slot = dest;
-            }
+            err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+            if(err) return err;
+            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            if(err) return err;
+            *op = (CiOp){
+                .copy = {
+                    .kind = CI_OP_COPY,
+                    .slot = dest,
+                    .slot_size = size,
+                    .src = vslot,
+                    .src_size = size,
+                    .loc = e->loc,
+                }
+            };
+            out->slot = dest;
         }
         return 0;
     }
@@ -5589,8 +5600,10 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_assign_direct(ci, ctx, e, &handled);
             if(err) return err;
             if(handled) return 0;
-            CiLowerVal v;
-            return ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
+            uint32_t size;
+            err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &size);
+            if(err) return err;
+            return ci_lower_assign(ci, ctx, e, CI_NO_SLOT, NULL, size);
         }
         case CC_EXPR_ADDASSIGN:
         case CC_EXPR_SUBASSIGN:
@@ -6104,7 +6117,6 @@ ci_lower_pointer_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t fi
     int alignment_err = ci_pointer_alignment(ci, ctx, e, &alignment);
     if(alignment_err) return alignment_err;
     alignment = ci_offset_alignment(alignment, field_offset);
-    CcExpr* original = e;
     CcExpr* base = e;
     uint64_t offset = field_offset;
     uint32_t disp = field_offset;
@@ -6138,14 +6150,18 @@ ci_lower_pointer_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t fi
             disp = (uint32_t)offset;
         }
     }
-    uint32_t dest = CI_NO_SLOT;
-    if(snapshot && base != original){
-        int err = ci_alloc_slot(ctx, ctx->ptr_size, ci_target(ci)->alignof_[CCBT_nullptr_t], &dest);
-        if(err) return err;
-    }
+    uint32_t temp = ctx->temp;
     CiLowerVal value;
-    int err = ci_lower_expr(ci, ctx, base, dest, &value);
+    int err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &value);
     if(err) return err;
+    if(snapshot && value.slot < temp){
+        uint32_t dest;
+        err = ci_alloc_slot(ctx, ctx->ptr_size, ci_target(ci)->alignof_[CCBT_nullptr_t], &dest);
+        if(err) return err;
+        err = ci_emit_copy(ctx, dest, value.slot, ctx->ptr_size, base->loc);
+        if(err) return err;
+        value.slot = dest;
+    }
     *out = (CiLowerAddr){.slot=value.slot, .disp=disp, .align_log2=alignment};
     return 0;
 }

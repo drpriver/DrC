@@ -54,6 +54,20 @@ static int test_fp_callback(int (*f)(void)){
 }
 static void test_fp_clear(void){ feclearexcept(FE_ALL_EXCEPT); }
 static int test_fp_inexact(void){ return fetestexcept(FE_INEXACT) != 0; }
+static int test_fp_rounding_modes(int (*f)(int)){
+    fenv_t saved;
+    if(feholdexcept(&saved)) return -1;
+    int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+    int result = 1;
+    for(size_t i = 0; i < countof(modes); i++){
+        if(fesetround(modes[i]) || !f(modes[i] == FE_UPWARD) || fegetround() != modes[i]){
+            result = 0;
+            break;
+        }
+    }
+    fesetenv(&saved);
+    return result;
+}
 #endif
 
 // Integer types
@@ -769,6 +783,20 @@ TestFunction(test_interop){
             .exit_code = 1,
         },
 #if !(defined __DRC__ && defined __GLIBC__)
+        {
+            "floating expressions honor each rounding mode at runtime", __LINE__,
+            SV("int fp_modes(int(*)(int));void fp_clear(void);int fp_inexact(void);\n"
+               "int f(int up){fp_clear();float x=(float)16777217;\n"
+               "double y=1.0+0x1p-53;float z=(float)0x1.000001p0;\n"
+               "return x==(up?16777218.f:16777216.f)"
+               " &&y==(up?0x1.0000000000001p0:1.0)"
+               " &&z==(up?0x1.000002p0f:1.f)&&fp_inexact();}\n"
+               "return fp_modes(f);\n"),
+            {{SV("fp_modes"), (void*)test_fp_rounding_modes},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_inexact"), (void*)test_fp_inexact}},
+            .exit_code = 1,
+        },
         {
             "review: runtime aggregate preserves floating exceptions", __LINE__,
             SV("int fp_callback(int(*)(void)); void fp_clear(void); int fp_inexact(void);\n"

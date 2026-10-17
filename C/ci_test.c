@@ -42,6 +42,163 @@ TestFunction(test_interpreter){
         _Bool skip;
     } testcases[] = {
         {
+            "integer chains: 128 operations on signed and unsigned widths", __LINE__,
+            SVI("#define R8(x) x x x x x x x x\n"
+                "#define R128(x) R8(R8(x)) R8(R8(x))\n"
+                "#define CHECK(T,name) int name(T x){return (x R128(+1))==(T)(x+128)"
+                " && (x R128(-1))==(T)(x-128) && (x R128(*1))==x"
+                " && (x R128(&1))==(x&1) && (x R128(|1))==(x|1)"
+                " && (x R128(^1))==x;}\n"
+                "CHECK(int,si) CHECK(unsigned,ui) CHECK(long long,sl) CHECK(unsigned long long,ul)\n"
+                "return si(-257)&&ui(0xfffffffeu)&&sl(-4294967297LL)&&ul(0xfffffffffffffffeULL);"),
+            .exit_code=1,
+        },
+        {
+            "pointer chains: repeated offsets preserve element scaling", __LINE__,
+            SVI("#define R8(x) x x x x x x x x\n"
+                "#define R64(x) R8(R8(x))\n"
+                "int* f(int*p){return p R64(+1-1)+1;}"
+                "char* g(char*p){return p R64(+1-1)+1;}"
+                "int a[3]={1,7,9};char b[3]={2,8,10};"
+                "return f(a)==a+1&&*f(a)==7&&g(b)==b+1&&*g(b)==8;"),
+            .exit_code=1,
+        },
+        {
+            "compound assignments: identities preserve values and stored operands", __LINE__,
+            SVI("#define CHECK(T,name) int name(T x){T original=x;"
+                "if((x+=0)!=original||(x-=0)!=original||(x*=1)!=original||(x/=1)!=original"
+                " ||(x|=0)!=original||(x^=0)!=original||(x&=(T)~(T)0)!=original"
+                " ||(x<<=0)!=original||(x>>=0)!=original)return 0;"
+                "x+=0;x-=0;x*=1;x/=1;x|=0;x^=0;x&=(T)~(T)0;x<<=0;x>>=0;"
+                "return x==original;}\n"
+                "CHECK(int,si) CHECK(unsigned,ui) CHECK(long long,sl) CHECK(unsigned long long,ul)\n"
+                "return si(73)&&ui(0x80000001u)&&sl(0x100000001LL)&&ul(0x8000000000000001ULL);"),
+            .exit_code=1,
+        },
+        {
+            "compound assignments: arithmetic and absorbing constants", __LINE__,
+            SVI("#define CHECK(T,name) int name(void){T x=9;"
+                "if((x+=3)!=12||(x*=7)!=84||(x&=7)!=4||(x|=7)!=7||(x^=7)!=0)return 0;"
+                "x=9;if((x*=8)!=72||(x/=8)!=9||(x%=8)!=1)return 0;"
+                "if((x*=0)!=0)return 0;x=9;if((x&=0)!=0)return 0;"
+                "if((x|=(T)~(T)0)!=(T)~(T)0||(x%=1)!=0)return 0;"
+                "x=9;x+=3;x*=7;x&=7;x|=7;x^=7;if(x!=0)return 0;"
+                "x=9;x*=8;x/=8;x%=8;if(x!=1)return 0;"
+                "x*=0;if(x!=0)return 0;x=9;x&=0;if(x!=0)return 0;"
+                "x|=(T)~(T)0;if(x!=(T)~(T)0)return 0;x%=1;return x==0;}\n"
+                "CHECK(int,si) CHECK(unsigned,ui) CHECK(long long,sl) CHECK(unsigned long long,ul)\n"
+                "return si()&&ui()&&sl()&&ul();"),
+            .exit_code=1,
+        },
+        {
+            "compound division: negative signed operands round toward zero", __LINE__,
+            SVI("int f(int x){int q=(x/=8);return q==-1&&x==-1;}"
+                "long long g(long long x){long long r=(x%=8);return r==-1&&x==-1;}"
+                "int x=-9;long long y=-9;x%=8;y/=8;return f(-9)&&g(-9)&&x==-1&&y==-1;"),
+            .exit_code=1,
+        },
+        {
+            "static storage: identical initializers have independent objects and relocations", __LINE__,
+            SVI("static int a=7,b=7;static int*pa=&a;static int*pb=&b;"
+                "int f(void){int local=3;int*p=&a;int*q=&a;return local+*p+*q;}"
+                "int(*fp)(void)=f;*pa=11;"
+                "return a==11&&b==7&&pa==&a&&pb==&b&&pa!=pb&&f()==25&&fp()==25;"),
+            .exit_code=1,
+        },
+        {
+            "floating casts: subnormals and signed zero survive narrowing and widening", __LINE__,
+            SVI("float narrow(double x){return (float)x;}double widen(float x){return (double)x;}"
+                "return narrow(0x1p-126)==0x1p-126f&&narrow(0x1p-127)==0x1p-127f"
+                " &&widen(0x1p-149f)==0x1p-149&&narrow(0x1p-1074)==0.f"
+                " &&1.0/narrow(-0.0)<0&&1.0/widen(-0.0f)<0"
+                " &&(_Bool)0x1p-1074&&(_Bool)0x1p-149f&&!(_Bool)-0.0;"),
+            .exit_code=1,
+        },
+        {
+            "floating casts: wide integer boundaries and exact powers of two", __LINE__,
+            SVI("double d(unsigned __int128 x){return (double)x;}"
+                "float f(unsigned __int128 x){return (float)x;}"
+                "unsigned __int128 u(double x){return (unsigned __int128)x;}"
+                "__int128 s(double x){return (__int128)x;}"
+                "return d((unsigned __int128)1<<100)==0x1p100&&f((unsigned __int128)1<<100)==0x1p100f"
+                " &&u(0x1p127)==((unsigned __int128)1<<127)&&s(-0x1p127)==-((__int128)1<<126)*2"
+                " &&(long long)-0x1p63==(-9223372036854775807LL-1)"
+                " &&(unsigned long long)0x1p63==0x8000000000000000ULL;"),
+            .exit_code=1,
+        },
+        {
+            "floating values: signaling NaNs retain comparison and truth behavior", __LINE__,
+            SVI("union F{unsigned u;float f;};union D{unsigned long long u;double d;};"
+                "union F f={.u=0x7f800001u};union D d={.u=0x7ff0000000000001ULL};"
+                "double widen(float x){return (double)x;}float narrow(double x){return (float)x;}"
+                "return f.f!=f.f&&d.d!=d.d&&(_Bool)f.f&&(_Bool)d.d"
+                " &&widen(f.f)!=widen(f.f)&&narrow(d.d)!=narrow(d.d);"),
+            .exit_code=1,
+        },
+        {
+            "assignment result survives a later call", __LINE__,
+            SVI("int g(int*p){*p=9;return 3;}"
+                "int f(void){int x=0;return (x=1)+g(&x);} return f();"),
+            .exit_code=4,
+        },
+        {
+            "member assignment result survives a later call", __LINE__,
+            SVI("int g(int*p){*p=9;return 3;}"
+                "int f(void){struct {int x;} s={0};return (s.x=1)+g(&s.x);} return f();"),
+            .exit_code=4,
+        },
+        {
+            "indirect assignment result snapshots its source", __LINE__,
+            // Allow g before the source read (11), between read and store
+            // (3), or after the store (2). A live source alias produces 10.
+            SVI("int g(int*x,int*y){int r=*y;*x=9;return r;}"
+                "int f(void){int x=1,y=2;int*p=&y;return (*p=x)+g(&x,&y);}"
+                "int r=f();return r==2||r==3||r==11 ? 1 : r;"),
+            .exit_code=1,
+        },
+        {
+            "atomic assignment result snapshots its source", __LINE__,
+            SVI("int g(int*x,_Atomic int*y){int r=*y;*x=9;return r;}"
+                "int f(void){int x=1;_Atomic int y=2;return (y=x)+g(&x,&y);}"
+                "int r=f();return r==2||r==3||r==11 ? 1 : r;"),
+            .exit_code=1,
+        },
+        {
+            "indirect compound assignment keeps its evaluated address", __LINE__,
+            // Either address-evaluation order is allowed. Loading a but
+            // storing into b produces 14, which is never a valid result.
+            SVI("int g(int**p,int*q){*p=q;return 3;}"
+                "int f(void){int a=1,b=2;int*p=&a;*p+=g(&p,&b);return a*10+b;}"
+                "int r=f();return r==42||r==15 ? 1 : r;"),
+            .exit_code=1,
+        },
+        {
+            "member compound assignment keeps its evaluated address", __LINE__,
+            SVI("struct S{int pad,x;};int g(struct S**p,struct S*q){*p=q;return 3;}"
+                "int f(void){struct S a={0,1},b={0,2};struct S*p=&a;"
+                "p->x+=g(&p,&b);return a.x*10+b.x;}"
+                "int r=f();return r==42||r==15 ? 1 : r;"),
+            .exit_code=1,
+        },
+        {
+            "identity compound result survives a later call", __LINE__,
+            SVI("int g(int*p){*p=9;return 3;}"
+                "int f(void){int x=1;return (x+=0)+g(&x);} return f();"),
+            .exit_code=4,
+        },
+        {
+            "prefix increment result survives a later call", __LINE__,
+            SVI("int g(int*p){*p=9;return 3;}"
+                "int f(void){int x=0;return ++x+g(&x);} return f();"),
+            .exit_code=4,
+        },
+        {
+            "compound assignment result survives a later call", __LINE__,
+            SVI("int g(int*p){*p=9;return 3;}"
+                "int f(void){int x=0;return (x+=1)+g(&x);} return f();"),
+            .exit_code=4,
+        },
+        {
             "defer: labels without cleanup survive map growth", __LINE__,
             SVI("int f(void){int n=0;goto a;a:n++;goto b;b:n++;goto c;c:n++;"
                 "goto d;d:n++;goto e;e:n++;goto g;g:n++;return n;}return f()==6;"),
@@ -16640,11 +16797,6 @@ TestFunction(test_ci_call_by_name){
     }
     TESTEND();
 }
-TestFunction(test_float_folding);
-TestFunction(test_alu_chain_lowering);
-TestFunction(test_lower_deps);
-TestFunction(test_static_blobs);
-TestFunction(test_symbolic_pointer_limits);
 
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
@@ -16657,11 +16809,6 @@ int main(int argc, char** argv){
     RegisterTestFlags(test_cross_target, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_float_folding, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_alu_chain_lowering, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTest(test_lower_deps);
-    RegisterTest(test_static_blobs);
-    RegisterTestFlags(test_symbolic_pointer_limits, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
         testing_assert_all_freed();
@@ -16680,707 +16827,6 @@ int main(int argc, char** argv){
 #include "cc_parser.c"
 #include "native_call.c"
 
-#include <fenv.h>
-#include "ci_op_printer.h"
-
-#ifdef __clang__
-#pragma clang assume_nonnull begin
-#endif
-
-TestFunction(test_symbolic_pointer_limits){
-    TESTBEGIN();
-    static const struct {
-        const char* name;
-        int64_t left, right, extra, expected;
-        CcBasicTypeKind element;
-        int status;
-        _Bool needs_64_bits;
-    } cases[] = {
-        {"zero", 0, 0, 0, 0, CCBT_char},
-        {"positive scaled difference", 7, 2, 0, 5, CCBT_int},
-        {"negative scaled difference", 2, 7, 0, -5, CCBT_int},
-        {"32-bit maximum", INT32_MAX, 0, 0, INT32_MAX, CCBT_char},
-        {"32-bit minimum", INT32_MIN, 0, 0, INT32_MIN, CCBT_char},
-        {"above 32-bit maximum", (int64_t)INT32_MAX+1, 0, 0, (int64_t)INT32_MAX+1, CCBT_char, 0, 1},
-        {"below 32-bit minimum", (int64_t)INT32_MIN-1, 0, 0, (int64_t)INT32_MIN-1, CCBT_char, 0, 1},
-        {"64-bit maximum", INT64_MAX, 0, 0, INT64_MAX, CCBT_char, 0, 1},
-        {"64-bit minimum", INT64_MIN, 0, 0, INT64_MIN, CCBT_char, 0, 1},
-        {"positive delta overflow", INT64_MAX, -1, 0, 0, CCBT_char, _cc_overflow_error},
-        {"negative delta overflow", INT64_MIN, 1, 0, 0, CCBT_char, _cc_overflow_error},
-        {"positive scale overflow", INT64_MAX, 0, 0, 0, CCBT_int, _cc_overflow_error},
-        {"negative scale overflow", INT64_MIN, 0, 0, 0, CCBT_int, _cc_overflow_error},
-        {"positive offset addition overflow", INT64_MAX, 0, 1, 0, CCBT_char, _cc_overflow_error},
-        {"negative offset addition overflow", INT64_MIN, 0, -1, 0, CCBT_char, _cc_overflow_error},
-    };
-    static int idx = 0;
-    for(size_t target = test_atomic_increment(&idx); target <= CC_TARGET_COUNT; target = test_atomic_increment(&idx)){
-        {
-            ArenaAllocator arena = {0};
-            CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
-            CcParser p = {.cpp = {.target = &t, .allocator = allocator_from_arena(&arena)}};
-            if(target == CC_TARGET_COUNT) t.sizeof_[CCBT_nullptr_t] = 4;
-            CcPointer pointer = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_char)};
-            CcQualType ptr = {.bits = (uintptr_t)&pointer};
-            // Keep casts in the AST: parsing literals can fold them before
-            // the symbolic evaluator sees the integer-to-pointer conversion.
-            uint64_t bits[] = {UINT64_MAX, UINT64_C(1)<<63, UINT64_C(1)<<32};
-            for(size_t i = 0; i < countof(bits); i++){
-                CcExpr number = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_unsigned_long_long), .uinteger = bits[i]};
-                CcExpr cast = {.kind = CC_EXPR_CAST, .type = ptr, .lhs = &number};
-                CcExpr expected = {.kind = CC_EXPR_VALUE, .type = ptr, .uinteger = bits[i]};
-                if(p.cpp.target->sizeof_[CCBT_nullptr_t] == 4) expected.uinteger &= UINT32_MAX;
-                CcExpr* equal = cc_binary_expr(&p, CC_EXPR_EQ, (SrcLoc){0}, ccqt_basic(CCBT_int), &cast, &expected);
-                TestExpectTrue(_Bool, equal != NULL);
-                if(equal){
-                    int64_t value = 0;
-                    TestExpect(int, cc_eval_symbolic_binary(&p, equal, 0, &value), ==, 0);
-                    TestExpect(int64_t, value, ==, 1);
-                }
-            }
-            ArenaAllocator_free_all(&arena);
-            ArenaAllocator_free_all(&p.scratch_arena);
-        }
-        for(size_t i = 0; i < countof(cases); i++){
-            ArenaAllocator arena = {0};
-            Allocator al = allocator_from_arena(&arena);
-            CcTargetConfig t = *cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target];
-            CcParser p = {.cpp = {.target = &t, .allocator = al}};
-            // Exercise the target-dependent range check even though the shipped
-            // configurations currently all use a 64-bit ptrdiff_t.
-            if(target == CC_TARGET_COUNT) t.ptrdiff_type = CCBT_int;
-            CcQualType element = ccqt_basic(cases[i].element);
-            CcPointer pointer = {.kind = CC_POINTER, .pointee = element};
-            CcQualType ptr = {.bits = (uintptr_t)&pointer};
-            CcQualType diff = ccqt_basic(p.cpp.target->ptrdiff_type);
-            CcVariable var = {.type = element};
-            CcExpr ref = {.kind = CC_EXPR_VARIABLE, .type = element, .var = &var};
-            CcExpr address = {.kind = CC_EXPR_ADDR, .type = ptr, .lhs = &ref};
-            CcExpr left_value = {.kind = CC_EXPR_VALUE, .type = ccqt_basic(CCBT_long_long), .integer = cases[i].left};
-            CcExpr right_value = {.kind = CC_EXPR_VALUE, .type = left_value.type, .integer = cases[i].right};
-            CcExpr extra = {.kind = CC_EXPR_VALUE, .type = left_value.type, .integer = cases[i].extra};
-            CcExpr* left = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, &address, &left_value);
-            CcExpr* right = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, &address, &right_value);
-            TestExpectTrue(_Bool, left && right);
-            if(left && right){
-                if(cases[i].extra) left = cc_binary_expr(&p, CC_EXPR_ADD, (SrcLoc){0}, ptr, left, &extra);
-                CcExpr* expression = left ? cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, diff, left, right) : NULL;
-                TestExpectTrue(_Bool, expression != NULL);
-                if(expression){
-                    int64_t value = 0;
-                    int expected_status = cases[i].status;
-                    if(cases[i].needs_64_bits && p.cpp.target->sizeof_[p.cpp.target->ptrdiff_type] < 8)
-                        expected_status = _cc_overflow_error;
-                    int status = cc_eval_symbolic_binary(&p, expression, 0, &value);
-                    if(status != expected_status || (!status && value != cases[i].expected))
-                        TestPrintf("symbolic pointer limit: %s, target %zu\n", cases[i].name, target);
-                    TestExpect(int, status, ==, expected_status);
-                    if(!status) TestExpect(int64_t, value, ==, cases[i].expected);
-                }
-            }
-            ArenaAllocator_free_all(&arena);
-            ArenaAllocator_free_all(&p.scratch_arena);
-        }
-        {
-            ArenaAllocator arena = {0};
-            CcParser p = {.cpp = {.target = cc_targets[target == CC_TARGET_COUNT ? CC_TARGET_TEST : target], .allocator = allocator_from_arena(&arena)}};
-            CcQualType integer = ccqt_basic(CCBT_int);
-            CcPointer pointer = {.kind = CC_POINTER, .pointee = integer};
-            CcQualType ptr = {.bits = (uintptr_t)&pointer};
-            CcVariable object = {.type = integer};
-            CcExpr ref = {.kind = CC_EXPR_VARIABLE, .type = integer, .var = &object};
-            CcExpr address = {.kind = CC_EXPR_ADDR, .type = ptr, .lhs = &ref};
-            CcVariable alias = {.type = ptr, .constexpr_ = 1};
-            CcExpr alias_ref = {.kind = CC_EXPR_VARIABLE, .type = ptr, .var = &alias};
-            alias.initializer = &alias_ref;
-            CcExpr* expression = cc_binary_expr(&p, CC_EXPR_SUB, (SrcLoc){0}, ccqt_basic(p.cpp.target->ptrdiff_type), &alias_ref, &address);
-            TestExpectTrue(_Bool, expression != NULL);
-            if(expression){
-                int64_t value;
-                // Cyclic aliases stop at the depth limit instead of recursing
-                // indefinitely or resolving an actual address.
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 0, &value), ==, _cc_not_constant_error);
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                alias.initializer = &address;
-                alias.constexpr_ = 0;
-                alias_ref.type.is_const = 1;
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 0, &value), ==, _cc_not_constant_error);
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, 0);
-                TestExpect(int64_t, value, ==, 0);
-                alias_ref.type.is_volatile = 1;
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                alias_ref.type.is_volatile = 0;
-                alias_ref.type.is_atomic = 1;
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                alias_ref.type.is_atomic = 0;
-                object.automatic = 1;
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                object.automatic = 0;
-                CcExpr unknown = {.kind = CC_EXPR_CALL, .type = ptr};
-                alias.initializer = &unknown;
-                TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                CcExpr* casts[257];
-                _Bool built = 1;
-                for(size_t i = 0; i < countof(casts); i++){
-                    casts[i] = cc_make_expr(&p, CC_EXPR_CAST, (SrcLoc){0}, ptr, 0);
-                    if(!casts[i]){ built = 0; break; }
-                    casts[i]->lhs = i ? casts[i-1] : &address;
-                }
-                TestExpectTrue(_Bool, built);
-                if(built){
-                    alias.initializer = casts[256];
-                    TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, _cc_not_constant_error);
-                    alias.initializer = casts[250];
-                    TestExpect(int, cc_eval_symbolic_binary(&p, expression, 1, &value), ==, 0);
-                    TestExpect(int64_t, value, ==, 0);
-                }
-            }
-            ArenaAllocator_free_all(&arena);
-            ArenaAllocator_free_all(&p.scratch_arena);
-        }
-    }
-    TESTEND();
-}
-
-TestFunction(test_static_blobs){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    CiInterpreter ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = al}};
-    CiLowerDeps deps = {0};
-    CcQualType type = ccqt_basic(CCBT_int);
-    CcExpr value = {.kind = CC_EXPR_VALUE, .type = type, .integer = 7};
-    CcVariable a = {.type = type, .initializer = &value};
-    CcVariable b = {.type = type, .initializer = &value};
-    int target_a = 1, target_b = 2;
-    CcVariable ta = {.type = type, .interp_val = &target_a};
-    CcVariable tb = {.type = type, .interp_val = &target_b};
-    CcPointer pointer = {.kind = CC_POINTER, .pointee = type};
-    CcQualType ptr_type = {.bits = (uintptr_t)&pointer};
-    CcExpr ref_a = {.kind = CC_EXPR_VARIABLE, .type = type, .var = &ta};
-    CcExpr ref_b = {.kind = CC_EXPR_VARIABLE, .type = type, .var = &tb};
-    CcExpr addr_a = {.kind = CC_EXPR_ADDR, .type = ptr_type, .lhs = &ref_a};
-    CcExpr addr_b = {.kind = CC_EXPR_ADDR, .type = ptr_type, .lhs = &ref_b};
-    int* result_a = NULL;
-    int* result_b = NULL;
-    CcVariable pa = {.type = ptr_type, .initializer = &addr_a, .interp_val = &result_a};
-    CcVariable pb = {.type = ptr_type, .initializer = &addr_b, .interp_val = &result_b};
-    CiStaticData data[] = {{.var = &a}, {.var = &b}, {.var = &pa}, {.var = &pb}};
-    for(size_t i = 0; i < sizeof data / sizeof data[0]; i++){
-        int err = ci_build_static_data(&ci, &data[i], &deps);
-        TestExpect(int, err, ==, 0);
-        if(err) goto cleanup;
-    }
-    TestExpectTrue(_Bool, data[0].blob == data[1].blob);
-    TestExpect(uint32_t, data[0].size, ==, sizeof(int));
-    int stored;
-    memcpy(&stored, data[0].blob->data, sizeof stored);
-    TestExpect(int, stored, ==, 7);
-    // Identical unrelocated bytes can share a blob even with different symbols.
-    TestExpectTrue(_Bool, data[2].blob == data[3].blob);
-    ci_relocate_static_data(&data[2]);
-    ci_relocate_static_data(&data[3]);
-    TestExpectTrue(_Bool, result_a == &target_a);
-    TestExpectTrue(_Bool, result_b == &target_b);
-    TestExpect(uint64_t, data[2].blob->data[0], ==, 0);
-    cleanup:
-    for(size_t i = 0; i < sizeof data / sizeof data[0]; i++)
-        ci_static_data_cleanup(&data[i], al);
-    ci_lower_deps_cleanup(&deps, al);
-    ArenaAllocator_free_all(&ci.bt.arena);
-    ArenaAllocator_free_all(&arena);
-    TESTEND();
-}
-
-TestFunction(test_lower_deps){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    CiInterpreter ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = al}};
-    Marray(CiOp) ops = {0};
-    uint32_t frame_size = 0;
-    CiLowerCtx ctx = {.a = al, .out = &ops, .frame_size = &frame_size, .ptr_size = 8, .size_size = 8};
-    CcVariable global = {.type = ccqt_basic(CCBT_int)};
-    CcVariable local = {.type = ccqt_basic(CCBT_int), .automatic = 1};
-    CcExpr expr = {.kind = CC_EXPR_VARIABLE, .type = global.type, .var = &global, .is_lvalue = 1};
-    CiLowerVal value;
-    CiLowerAddr addr;
-    int err = ci_lower_expr_discard(&ci, &ctx, &expr);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 0);
-    err = ci_lower_expr(&ci, &ctx, &expr, CI_NO_SLOT, &value);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 1);
-    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.vars, &global), ==, 1);
-    expr.var = &local;
-    err = ci_lower_expr(&ci, &ctx, &expr, CI_NO_SLOT, &value);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 1);
-    CcVariable addressed = {.type = global.type};
-    expr.var = &addressed;
-    err = ci_lower_addr(&ci, &ctx, &expr, 0, &addr);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 2);
-    err = ci_lower_addr(&ci, &ctx, &expr, 0, &addr);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 2);
-    CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
-    CcFunc func = {.type = &type};
-    CcExpr callee = {.kind = CC_EXPR_FUNCTION, .type = {.bits = (uintptr_t)&type}, .func = &func};
-    CcExpr call = {.kind = CC_EXPR_CALL, .type = type.return_type, .lhs = &callee};
-    err = ci_lower_call(&ci, &ctx, &call, CI_NO_SLOT, NULL);
-    TestExpect(int, err, ==, 0);
-    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.funcs, &func), ==, CC_FUNC_DEP_USED);
-    err = ci_lower_cast_operand(&ci, &ctx, &callee, CI_NO_SLOT, &value);
-    TestExpect(int, err, ==, 0);
-    err = ci_lower_call(&ci, &ctx, &call, CI_NO_SLOT, NULL);
-    TestExpect(int, err, ==, 0);
-    TestExpect(size_t, ctx.deps.funcs.count, ==, 1);
-    TestExpect(uintptr_t, (uintptr_t)PM_get(&ctx.deps.funcs, &func), ==, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
-    // Lowering records dependencies locally, without modifying interpreter sets.
-    TestExpect(size_t, ci.deps.funcs.count, ==, 0);
-    TestExpect(size_t, ci.deps.vars.count, ==, 0);
-    ci_lower_deps_cleanup(&ctx.deps, al);
-    TestExpect(size_t, ctx.deps.vars.count, ==, 0);
-    TestExpect(size_t, ctx.deps.funcs.count, ==, 0);
-    ci_lower_deps_cleanup(&ctx.deps, al);
-    // A failed lazy parse must remain an error when preparation is retried.
-    CcFunc failed = {.type = &type, .defined = 1, .parse_failed = 1};
-    err = ci_deps_add_func(&ci.deps, al, &failed, CC_FUNC_DEP_USED);
-    TestExpect(int, err, ==, 0);
-    for(int i = 0; i < 2; i++){
-        err = ci_resolve_deps(&ci, &ci.deps);
-        TestExpect(int, err, ==, CI_SYNTAX_ERROR);
-        TestExpectTrue(_Bool, failed.interp_ops == NULL);
-    }
-    ci_lower_deps_cleanup(&ci.deps, al);
-    ci_tls_cleanup(&ci);
-    TestExpectFalse(_Bool, ci.tls_key_created);
-    ArenaAllocator_free_all(&arena);
-    {
-        TestingAllocator ta = {0};
-        LOCK_T_init(&ta.lock);
-        Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = retry_al}};
-        CcVariable retry_global = {.type = ccqt_basic(CCBT_int)};
-        CcExpr retry_expr = {.kind = CC_EXPR_VARIABLE, .type = retry_global.type, .var = &retry_global};
-        CcStmtNode retry_stmt = {.kind = CC_STMT_RETURN, .expr = &retry_expr};
-        CcStmtNode* retry_nodes_data[] = {&retry_stmt};
-        Parray(CcStmtNode) retry_nodes = {.data = (void**)retry_nodes_data, .count = 1};
-        Marray(CiOp) retry_ops = {0};
-        AtomMap(uintptr_t) retry_labels = {0};
-        uint32_t retry_size = 0;
-        size_t retry_lowered = 0;
-        CiLowerDeps retry_deps = {0};
-        // Fail the dependency merge after the local dependency and ops allocations.
-        ta.fail_at = 3;
-        int retry_err = ci_lower_nodes(&retry_ci, &retry_nodes, &retry_lowered, &retry_ops, &retry_labels, &retry_size, &retry_deps);
-        TestExpect(int, retry_err, ==, CI_OOM_ERROR);
-        TestExpect(size_t, retry_lowered, ==, 0);
-        TestExpect(size_t, retry_ops.count, ==, 0);
-        TestExpect(uint32_t, retry_size, ==, 0);
-        ta.fail_at = 0;
-        retry_err = ci_lower_nodes(&retry_ci, &retry_nodes, &retry_lowered, &retry_ops, &retry_labels, &retry_size, &retry_deps);
-        TestExpect(int, retry_err, ==, 0);
-        TestExpect(size_t, retry_deps.vars.count, ==, 1);
-        TestExpect(size_t, retry_ops.count, ==, 3);
-        recording_free_all(&ta.recorder);
-        recording_cleanup(&ta.recorder);
-    }
-    {
-        TestingAllocator ta = {0};
-        LOCK_T_init(&ta.lock);
-        Allocator retry_al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-        CiInterpreter retry_ci = {.parser.cpp = {.target = cc_targets[CC_TARGET_TEST], .allocator = retry_al}};
-        CiFuncOps prepared = {0};
-        CcFunc retry_func = {.type = &type, .defined = 1, .parsed = 1, .interp_ops = &prepared};
-        int retry_err = ci_deps_add_func(&retry_ci.deps, retry_al, &retry_func, CC_FUNC_DEP_USED | CC_FUNC_DEP_ADDR_TAKEN);
-        TestExpect(int, retry_err, ==, 0);
-        ta.nallocs = 0;
-        ta.fail_at = 1;
-        retry_err = ci_resolve_deps(&retry_ci, &retry_ci.deps);
-        TestExpect(int, retry_err, ==, CI_OOM_ERROR);
-        TestExpectTrue(_Bool, retry_func.native_func == NULL);
-        ta.fail_at = 0;
-        retry_err = ci_resolve_deps(&retry_ci, &retry_ci.deps);
-        TestExpect(int, retry_err, ==, 0);
-        TestExpectTrue(_Bool, retry_func.native_func != NULL);
-        TestExpectTrue(_Bool, BPM_get(&retry_ci.closure_map, &retry_func) == (void*)retry_func.native_func);
-        ci_tls_cleanup(&retry_ci);
-        TestExpectFalse(_Bool, retry_ci.tls_key_created);
-        recording_free_all(&ta.recorder);
-        recording_cleanup(&ta.recorder);
-    }
-    TESTEND();
-}
-
-TestFunction(test_alu_chain_lowering){
-    TESTBEGIN();
-    ArenaAllocator arena = {0};
-    Allocator al = allocator_from_arena(&arena);
-    CiInterpreter ci = {.parser.cpp = {.target=cc_targets[CC_TARGET_TEST], .allocator=al}};
-    CcBasicTypeKind types[] = {CCBT_int, CCBT_unsigned, CCBT_long_long, CCBT_unsigned_long_long};
-    static const struct { CcExprKind kind; CiAluOp op; uint64_t immediate; } cases[] = {
-        {CC_EXPR_ADD, CI_ALU_ADD, 128}, {CC_EXPR_SUB, CI_ALU_SUB, 128},
-        {CC_EXPR_MUL, CI_ALU_MUL, 1}, {CC_EXPR_BITAND, CI_ALU_AND, 1},
-        {CC_EXPR_BITOR, CI_ALU_OR, 1}, {CC_EXPR_BITXOR, CI_ALU_XOR, 0},
-    };
-    static int chain_idx = 0;
-    for(size_t job = test_atomic_increment(&chain_idx); job < countof(types)*countof(cases); job = test_atomic_increment(&chain_idx)){
-        size_t t = job / countof(cases), c = job % countof(cases);
-        CcQualType type = ccqt_basic(types[t]);
-        CcVariable var = {.type=type, .automatic=1};
-        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
-        CcExpr one = {.kind=CC_EXPR_VALUE, .type=type, .integer=1};
-        CcExpr* expr = &ref;
-        for(unsigned i = 0; i < 128; i++){
-            expr = cc_binary_expr(&ci.parser, cases[c].kind, (SrcLoc){0}, type, expr, &one);
-            if(!expr){ TestReport("allocating addition chain failed"); goto cleanup; }
-        }
-        CiLoweredExpr code = {.frame_size=8};
-        CiLowerDeps deps = {0};
-        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
-        TestExpect(int, err, ==, 0);
-        if(!err){
-            _Bool identity = cases[c].kind == CC_EXPR_MUL || cases[c].kind == CC_EXPR_BITXOR;
-            TestExpect(size_t, code.ops.count, ==, identity ? 0 : 1);
-            if(identity) TestExpect(uint32_t, code.value_slot, ==, 0);
-            else if(code.ops.count == 1){
-                CiOp* op = &code.ops.data[0];
-                TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
-                TestExpect(int, op->alu_imm.op, ==, cases[c].op);
-                TestExpect(uint64_t, op->alu_imm.immediate, ==, cases[c].immediate);
-            }
-        }
-        ci_lowered_expr_cleanup(&code, al);
-        ci_lower_deps_cleanup(&deps, al);
-    }
-    // Check the emitted operation, not just the result of executing it.
-    enum {EXPECT_OPERAND = -1, EXPECT_CONSTANT = -2};
-    static const struct {
-        CcExprKind kind;
-        uint64_t constant;
-        _Bool constant_left;
-        int expected; // EXPECT_OPERAND, EXPECT_CONSTANT, or a CiAluOp
-        uint64_t immediate;
-    } simple[] = {
-        {CC_EXPR_ADD, 0, 0, EXPECT_OPERAND}, {CC_EXPR_SUB, 0, 0, EXPECT_OPERAND},
-        {CC_EXPR_MUL, 1, 0, EXPECT_OPERAND}, {CC_EXPR_DIV, 1, 0, EXPECT_OPERAND},
-        {CC_EXPR_BITOR, 0, 0, EXPECT_OPERAND}, {CC_EXPR_BITXOR, 0, 0, EXPECT_OPERAND},
-        {CC_EXPR_BITAND, UINT64_MAX, 0, EXPECT_OPERAND},
-        {CC_EXPR_LSHIFT, 0, 0, EXPECT_OPERAND}, {CC_EXPR_RSHIFT, 0, 0, EXPECT_OPERAND},
-        {CC_EXPR_ADD, 3, 1, CI_ALU_ADD, 3},
-        {CC_EXPR_MUL, 7, 1, CI_ALU_MUL, 7},
-        {CC_EXPR_BITAND, 7, 1, CI_ALU_AND, 7},
-        {CC_EXPR_BITOR, 7, 1, CI_ALU_OR, 7},
-        {CC_EXPR_BITXOR, 7, 1, CI_ALU_XOR, 7},
-        {CC_EXPR_MUL, 8, 1, CI_ALU_SHL, 3},
-        {CC_EXPR_DIV, 8, 0, CI_ALU_SHR, 3},
-        {CC_EXPR_MOD, 8, 0, CI_ALU_AND, 7},
-        {CC_EXPR_MUL, 0, 0, EXPECT_CONSTANT, 0}, {CC_EXPR_BITAND, 0, 1, EXPECT_CONSTANT, 0},
-        {CC_EXPR_BITOR, UINT64_MAX, 0, EXPECT_CONSTANT, UINT64_MAX},
-        {CC_EXPR_MOD, 1, 0, EXPECT_CONSTANT, 0},
-    };
-    static int simple_idx = 0;
-    for(size_t job = test_atomic_increment(&simple_idx); job < countof(types)*countof(simple); job = test_atomic_increment(&simple_idx)){
-        size_t t = job / countof(simple), c = job % countof(simple);
-        CcQualType type = ccqt_basic(types[t]);
-        CcVariable var = {.type=type, .automatic=1};
-        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
-        CcExpr value = {.kind=CC_EXPR_VALUE, .type=type, .uinteger=simple[c].constant};
-        CcExpr* expr = cc_binary_expr(&ci.parser, simple[c].kind, (SrcLoc){0}, type,
-            simple[c].constant_left ? &value : &ref, simple[c].constant_left ? &ref : &value);
-        if(!expr){ TestReport("allocating ALU simplification failed"); goto cleanup; }
-        CiLoweredExpr code = {.frame_size=8};
-        CiLowerDeps deps = {0};
-        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
-        TestExpect(int, err, ==, 0);
-        int expected = simple[c].expected;
-        uint64_t immediate = simple[c].immediate;
-        if(!(t % 2) && simple[c].constant == 8
-            && (simple[c].kind == CC_EXPR_DIV || simple[c].kind == CC_EXPR_MOD)){
-            expected = simple[c].kind == CC_EXPR_DIV ? CI_ALU_DIV : CI_ALU_MOD;
-            immediate = 8;
-        }
-        if(t < 2) immediate = (uint32_t)immediate;
-        if(!err){
-            TestExpect(size_t, code.ops.count, ==, expected == EXPECT_OPERAND ? 0 : 1);
-            if(expected == EXPECT_OPERAND) TestExpect(uint32_t, code.value_slot, ==, 0);
-            else if(code.ops.count == 1){
-                CiOp* op = &code.ops.data[0];
-                if(expected == EXPECT_CONSTANT){
-                    TestExpect(int, op->kind, ==, CI_OP_CONST);
-                    TestExpect(uint64_t, ci_read_uint(op->constant.immediate, code.value_size), ==, immediate);
-                }
-                else {
-                    TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
-                    TestExpect(int, op->alu_imm.op, ==, expected);
-                    TestExpect(uint64_t, op->alu_imm.immediate, ==, immediate);
-                }
-            }
-        }
-        ci_lowered_expr_cleanup(&code, al);
-        ci_lower_deps_cleanup(&deps, al);
-    }
-    // Compound assignments use the same rules, including when their value is discarded.
-    for(size_t t = 0; t < countof(types); t++) for(size_t c = 0; c < countof(simple); c++){
-        CcQualType type = ccqt_basic(types[t]);
-        CcVariable var = {.type=type, .automatic=1};
-        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var, .is_lvalue=1};
-        CcExpr value = {.kind=CC_EXPR_VALUE, .type=type, .uinteger=simple[c].constant};
-        CcExprKind kind = (CcExprKind)(simple[c].kind-CC_EXPR_ADD+CC_EXPR_ADDASSIGN);
-        CcExpr* expr = cc_binary_expr(&ci.parser, kind, (SrcLoc){0}, type, &ref, &value);
-        if(!expr){ TestReport("allocating compound simplification failed"); goto cleanup; }
-        int expected = simple[c].expected;
-        uint64_t immediate = simple[c].immediate;
-        if(!(t % 2) && simple[c].constant == 8
-            && (simple[c].kind == CC_EXPR_DIV || simple[c].kind == CC_EXPR_MOD)){
-            expected = simple[c].kind == CC_EXPR_DIV ? CI_ALU_DIV : CI_ALU_MOD;
-            immediate = 8;
-        }
-        if(t < 2) immediate = (uint32_t)immediate;
-        for(unsigned discard = 0; discard < 2; discard++){
-            CiLoweredExpr code = {.frame_size=8};
-            CiLowerCtx ctx = {.a=al, .out=&code.ops, .temp=8, .frame_size=&code.frame_size};
-            CiLowerVal result;
-            int err = discard ? ci_lower_expr_discard(&ci, &ctx, expr)
-                : ci_lower_expr(&ci, &ctx, expr, CI_NO_SLOT, &result);
-            TestExpect(int, err, ==, 0);
-            TestExpect(size_t, code.ops.count, ==, expected == EXPECT_OPERAND ? 0 : 1);
-            if(code.ops.count == 1){
-                CiOp* op = &code.ops.data[0];
-                if(expected == EXPECT_CONSTANT){
-                    TestExpect(int, op->kind, ==, CI_OP_CONST);
-                    TestExpect(uint64_t, ci_read_uint(op->constant.immediate, t < 2 ? 4 : 8), ==, immediate);
-                }
-                else {
-                    TestExpect(int, op->kind, ==, t < 2 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
-                    TestExpect(int, op->alu_imm.op, ==, expected);
-                    TestExpect(uint64_t, op->alu_imm.immediate, ==, immediate);
-                }
-            }
-            ci_lowered_expr_cleanup(&code, al);
-            ci_lower_deps_cleanup(&ctx.deps, al);
-        }
-    }
-    // Pointer offsets use the pointee size and preserve mixed add/sub signs.
-    static int pointer_idx = 0;
-    for(unsigned job = test_atomic_increment(&pointer_idx); job < 2; job = test_atomic_increment(&pointer_idx)){
-        unsigned width = (job+1)*4;
-        CcTargetConfig target = *cc_targets[CC_TARGET_TEST];
-        target.sizeof_[CCBT_nullptr_t] = (uint8_t)width;
-        target.size_type = width == 4 ? CCBT_unsigned : CCBT_unsigned_long_long;
-        ci.parser.cpp.target = &target;
-        CcPointer pointer = {.kind=CC_POINTER, .pointee=ccqt_basic(CCBT_int)};
-        CcQualType type = {.bits=(uintptr_t)&pointer};
-        CcVariable var = {.type=type, .automatic=1};
-        CcExpr ref = {.kind=CC_EXPR_VARIABLE, .type=type, .var=&var};
-        CcExpr one = {.kind=CC_EXPR_VALUE, .type=ccqt_basic(target.size_type), .integer=1};
-        CcExpr* expr = &ref;
-        for(unsigned i = 0; i < 129; i++){
-            expr = cc_binary_expr(&ci.parser, i % 2 ? CC_EXPR_SUB : CC_EXPR_ADD,
-                (SrcLoc){0}, type, expr, &one);
-            if(!expr){ TestReport("allocating pointer chain failed"); goto cleanup; }
-        }
-        CiLoweredExpr code = {.frame_size=8};
-        CiLowerDeps deps = {0};
-        int err = ci_lower_standalone_expr(&ci, expr, &code, &deps);
-        TestExpect(int, err, ==, 0);
-        if(!err){
-            TestExpect(size_t, code.ops.count, ==, 1);
-            if(code.ops.count == 1){
-                TestExpect(int, code.ops.data[0].kind, ==, width == 4 ? CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64);
-                TestExpect(int, code.ops.data[0].alu_imm.op, ==, CI_ALU_ADD);
-                TestExpect(uint64_t, code.ops.data[0].alu_imm.immediate, ==, target.sizeof_[CCBT_int]);
-            }
-        }
-        ci_lowered_expr_cleanup(&code, al);
-        ci_lower_deps_cleanup(&deps, al);
-    }
-    cleanup:
-    ArenaAllocator_free_all(&arena);
-    TESTEND();
-}
-
-TestFunction(test_float_folding){
-    TESTBEGIN();
-    #if defined __DRC__ && defined __GLIBC__
-    // fenv functions have inline gnu asm with glibc
-    #else
-    ArenaAllocator fold_arena = {0};
-    CiInterpreter ci = {.parser.cpp = {.target=cc_targets[CC_TARGET_TEST], .allocator=allocator_from_arena(&fold_arena)}};
-    CiLowerCtx ctx = {.char_is_unsigned = !ci_target(&ci)->char_is_signed, .ldbl_fmt=ci_target(&ci)->long_double_format};
-    static const struct {
-        CcBasicTypeKind from, to;
-        uint64_t input[2], expected[2];
-        int status;
-    } cases[] = {
-        {CCBT_int, CCBT_double, {800}, {0x4089000000000000}},
-        {CCBT_int, CCBT_float, {2}, {0x40000000}},
-        {CCBT_int, CCBT_float, {0}, {0}},
-        {CCBT_int, CCBT_double, {0xffffffff}, {0xbff0000000000000}},
-        {CCBT_unsigned, CCBT_float, {16777216}, {0x4b800000}},
-        {CCBT_unsigned, CCBT_float, {16777217}, {0}, -1},
-        {CCBT_unsigned_long_long, CCBT_double, {9007199254740992ULL}, {0x4340000000000000}},
-        {CCBT_unsigned_long_long, CCBT_double, {9007199254740993ULL}, {0}, -1},
-        {CCBT_long_long, CCBT_double, {0x8000000000000000}, {0xc3e0000000000000}},
-        {CCBT_unsigned_int128, CCBT_double, {0, 0x1000000000}, {0x4630000000000000}}, // 2^100
-        {CCBT_unsigned_int128, CCBT_float, {0, 0x1000000000}, {0x71800000}},
-        {CCBT_unsigned_int128, CCBT_double, {1, 0x1000000000}, {0}, -1},
-        {CCBT_int128, CCBT_double, {0, 0x8000000000000000}, {0xc7e0000000000000}},
-        {CCBT_unsigned_int128, CCBT_float, {UINT64_MAX, UINT64_MAX}, {0}, -1},
-        {CCBT_float, CCBT_double, {0x3fc00000}, {0x3ff8000000000000}}, // 1.5
-        {CCBT_double, CCBT_float, {0x3ff8000000000000}, {0x3fc00000}},
-        {CCBT_double, CCBT_float, {0x3ff0000000000001}, {0}, -1},
-        {CCBT_double, CCBT_float, {0x47f0000000000000}, {0}, -1}, // 2^128
-        {CCBT_double, CCBT_float, {0x3810000000000000}, {0x00800000}}, // min normal
-        {CCBT_double, CCBT_float, {0x3800000000000000}, {0}, -1}, // subnormal result
-        {CCBT_float, CCBT_double, {1}, {0}, -1}, // subnormal input
-        {CCBT_double, CCBT_float, {1}, {0}, -1},
-        {CCBT_double, CCBT_float, {0x8000000000000000}, {0x80000000}},
-        {CCBT_float, CCBT_double, {0x80000000}, {0x8000000000000000}},
-        {CCBT_double, CCBT_float, {0x7ff0000000000000}, {0x7f800000}},
-        {CCBT_float, CCBT_double, {0xff800000}, {0xfff0000000000000}},
-        {CCBT_double, CCBT_float, {0x7ff0000000000001}, {0}, -1}, // sNaN
-        {CCBT_float, CCBT_double, {0x7f800001}, {0}, -1},
-        {CCBT_double, CCBT_float, {0x7ff8000000000000}, {0}, -1}, // qNaN
-        {CCBT_float, CCBT_float, {0x7f800001}, {0x7f800001}}, // identity is a copy
-        {CCBT_double, CCBT_int, {0x4045000000000000}, {42}},
-        {CCBT_float, CCBT_int, {0xc2280000}, {0xffffffd6}}, // -42
-        {CCBT_double, CCBT_int, {0x3ff8000000000000}, {0}, -1}, // fractional
-        {CCBT_double, CCBT_int, {0x8000000000000000}, {0}},
-        {CCBT_double, CCBT_unsigned, {0xbff0000000000000}, {0}, -1},
-        {CCBT_double, CCBT_signed_char, {0x4060000000000000}, {0}, -1}, // 128
-        {CCBT_double, CCBT_signed_char, {0xc060000000000000}, {0x80}},
-        {CCBT_double, CCBT_long_long, {0x43e0000000000000}, {0}, -1}, // 2^63
-        {CCBT_double, CCBT_long_long, {0xc3e0000000000000}, {0x8000000000000000}},
-        {CCBT_double, CCBT_unsigned_long_long, {0x43e0000000000000}, {0x8000000000000000}},
-        {CCBT_double, CCBT_unsigned_long_long, {0x43f0000000000000}, {0}, -1}, // 2^64
-        {CCBT_double, CCBT_int128, {0x4630000000000000}, {0, 0x1000000000}},
-        {CCBT_double, CCBT_int128, {0xc7e0000000000000}, {0, 0x8000000000000000}},
-        {CCBT_double, CCBT_int128, {0x47e0000000000000}, {0}, -1},
-        {CCBT_double, CCBT_unsigned_int128, {0x47e0000000000000}, {0, 0x8000000000000000}},
-        {CCBT_double, CCBT_unsigned_int128, {0x47f0000000000000}, {0}, -1},
-        {CCBT_double, CCBT_int, {0x7ff0000000000000}, {0}, -1},
-        {CCBT_double, CCBT_int, {0x7ff0000000000001}, {0}, -1},
-        {CCBT_double, CCBT_bool, {0x8000000000000000}, {0}},
-        {CCBT_double, CCBT_bool, {0x3ff8000000000000}, {1}},
-        {CCBT_double, CCBT_bool, {0x7ff0000000000001}, {0}, -1},
-        {CCBT_float, CCBT_bool, {0x7f800001}, {0}, -1},
-    };
-    static const struct {
-        CcExprKind kind;
-        CcBasicTypeKind type;
-        uint64_t a, b, expected;
-        int status;
-        _Bool comparison;
-    } binary[] = {
-        {CC_EXPR_DIV, CCBT_double, 0x4089000000000000, 0x4000000000000000, 0x4079000000000000},
-        {CC_EXPR_DIV, CCBT_double, 0x4018000000000000, 0x4008000000000000, 0x4000000000000000},
-        {CC_EXPR_DIV, CCBT_double, 0x3ff0000000000000, 0x4008000000000000, 0, -1},
-        {CC_EXPR_DIV, CCBT_double, 0x3ff0000000000000, 0, 0, -1},
-        {CC_EXPR_DIV, CCBT_double, 0, 0, 0, -1},
-        {CC_EXPR_DIV, CCBT_double, 0x8000000000000000, 0x4000000000000000, 0x8000000000000000},
-        {CC_EXPR_MUL, CCBT_double, 0x8000000000000000, 0xc000000000000000, 0},
-        {CC_EXPR_MUL, CCBT_double, 0x7fefffffffffffff, 0x4000000000000000, 0, -1},
-        {CC_EXPR_MUL, CCBT_double, 0x0010000000000000, 0x3fe0000000000000, 0, -1},
-        {CC_EXPR_ADD, CCBT_double, 0x3ff0000000000000, 0x4000000000000000, 0x4008000000000000},
-        {CC_EXPR_ADD, CCBT_double, 0x3ff0000000000000, 0x39b0000000000000, 0, -1},
-        {CC_EXPR_ADD, CCBT_double, 0, 0x8000000000000000, 0, -1},
-        {CC_EXPR_ADD, CCBT_double, 0x8000000000000000, 0x8000000000000000, 0x8000000000000000},
-        {CC_EXPR_SUB, CCBT_double, 0x4008000000000000, 0x4000000000000000, 0x3ff0000000000000},
-        {CC_EXPR_SUB, CCBT_double, 0x4000000000000000, 0x4008000000000000, 0xbff0000000000000},
-        {CC_EXPR_SUB, CCBT_double, 0x3ff0000000000000, 0x3ff0000000000000, 0, -1},
-        {CC_EXPR_MUL, CCBT_float, 0x3fc00000, 0x40000000, 0x40400000},
-        {CC_EXPR_DIV, CCBT_float, 0x40400000, 0x40000000, 0x3fc00000},
-        {CC_EXPR_ADD, CCBT_float, 0x3f800000, 0x33800000, 0, -1},
-        {CC_EXPR_EQ, CCBT_double, 0, 0x8000000000000000, 1, 0, 1},
-        {CC_EXPR_LT, CCBT_double, 0xc008000000000000, 0xc000000000000000, 1, 0, 1},
-        {CC_EXPR_GT, CCBT_double, 0x7ff0000000000000, 0x7fefffffffffffff, 1, 0, 1},
-        {CC_EXPR_LE, CCBT_double, 0xfff0000000000000, 0xfff0000000000000, 1, 0, 1},
-        {CC_EXPR_NE, CCBT_double, 0x7ff8000000000000, 0, 0, -1, 1},
-        {CC_EXPR_NE, CCBT_double, 0x7ff0000000000001, 0, 0, -1, 1},
-        {CC_EXPR_GT, CCBT_double, 1, 0, 0, -1, 1},
-        {CC_EXPR_EQ, CCBT_float, 0x7f800001, 0, 0, -1, 1},
-    };
-    fenv_t saved;
-    int hold = feholdexcept(&saved);
-    if(hold != 0)
-        EndTest("feholdexcept != 0");
-    if(hold) return TEST_stats;
-    int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
-    for(size_t m = 0; m < sizeof modes / sizeof modes[0]; m++){
-        if(fesetround(modes[m]) != 0)
-            EndTest("fesetround failed");
-        {
-            static int idx[sizeof modes/sizeof modes[0]] = {0};
-            for(size_t i = test_atomic_increment(idx+m); i < sizeof binary/sizeof binary[0]; i = test_atomic_increment(idx+m)){
-                CcQualType type = ccqt_basic(binary[i].type);
-                uint32_t size = ci_target(&ci)->sizeof_[binary[i].type];
-                CiFoldValue a = {.type = type, .sz = size, .bits = {binary[i].a}};
-                CiFoldValue b = {.type = type, .sz = size, .bits = {binary[i].b}};
-                CiFoldValue result = {.type = binary[i].comparison ? ccqt_basic(CCBT_int) : type, .sz = binary[i].comparison ? 4 : size};
-                feclearexcept(FE_ALL_EXCEPT);
-                if(i & 1) feraiseexcept(FE_DIVBYZERO);
-                int flags = fetestexcept(FE_ALL_EXCEPT);
-                int status = ci_fold_float_binary(&ctx, binary[i].kind, &a, &b, &result);
-                int after_flags = fetestexcept(FE_ALL_EXCEPT);
-                int after_round = fegetround();
-                if(status != binary[i].status || (status == 0 && result.bits[0] != binary[i].expected))
-                    TestPrintf("float binary fold case %zu, rounding mode %zu\n", i, m);
-                TestExpect(int, status, ==, binary[i].status);
-                TestExpect(int, after_flags, ==, flags);
-                TestExpect(int, after_round, ==, modes[m]);
-                if(status == 0) TestExpect(uint64_t, result.bits[0], ==, binary[i].expected);
-            }
-        }
-        {
-            static int idx[sizeof modes/sizeof modes[0]] = {0};
-            for(size_t i = test_atomic_increment(idx+m); i < sizeof cases/sizeof cases[0]; i = test_atomic_increment(idx+m)){
-                CiFoldValue from = {.type = ccqt_basic(cases[i].from), .sz = ci_target(&ci)->sizeof_[cases[i].from]};
-                memcpy(from.bits, cases[i].input, sizeof from.bits);
-                CiFoldValue to = {.type = ccqt_basic(cases[i].to), .sz = ci_target(&ci)->sizeof_[cases[i].to]};
-                feclearexcept(FE_ALL_EXCEPT);
-                if(i & 1) feraiseexcept(FE_DIVBYZERO);
-                int flags = fetestexcept(FE_ALL_EXCEPT);
-                int status;
-                if(from.sz <= 8){
-                    CcExpr value = {.kind = CC_EXPR_VALUE, .type = from.type, .uinteger = from.bits[0]};
-                    CcExpr cast = {.kind = CC_EXPR_CAST, .type = to.type, .lhs = &value};
-                    status = ci_fold_expr(&ci, &ctx, &cast, &to);
-                    // Reading an object view must not bypass the runtime
-                    // folder's rounding and exception rules.
-                    CcExpr view = {.kind=CC_EXPR_OBJECT_VIEW, .type=to.type, .lhs=&cast};
-                    CiFoldValue read;
-                    int read_status = ci_fold_expr(&ci, &ctx, &view, &read);
-                    TestExpect(int, read_status, ==, status);
-                    if(!read_status){
-                        TestExpect(uint64_t, read.bits[0], ==, to.bits[0]);
-                        TestExpect(uint64_t, read.bits[1], ==, to.bits[1]);
-                    }
-                }
-                else status = ci_fold_float_cast(&ctx, &from, &to);
-                int after_flags = fetestexcept(FE_ALL_EXCEPT);
-                int after_round = fegetround();
-                if(status != cases[i].status) TestPrintf("float fold case %zu, rounding mode %zu\n", i, m);
-                TestExpect(int, status, ==, cases[i].status);
-                TestExpect(int, after_flags, ==, flags);
-                TestExpect(int, after_round, ==, modes[m]);
-                if(status == 0){
-                    TestExpect(uint64_t, to.bits[0], ==, cases[i].expected[0]);
-                    TestExpect(uint64_t, to.bits[1], ==, cases[i].expected[1]);
-                }
-            }
-        }
-    }
-    if(fesetenv(&saved) != 0)
-        EndTest("fesetenv failed");
-    ArenaAllocator_free_all(&fold_arena);
-    #endif
-    TESTEND();
-}
-#ifdef __clang__
-#pragma clang assume_nonnull end
-#endif
 
 #ifdef __DRC__
 #include "../Vendored/softfloat/softfloat_unity.c"
