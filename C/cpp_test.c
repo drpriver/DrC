@@ -505,6 +505,10 @@ TestFunction(test_func_macros_extensions){
         const char* name; StringView inp, exp; int line;
     } test_cases[] = {
         // ## __VA_ARGS
+        {"gnu comma keeps explicitly empty argument", SV("#define F(x,...) f(x,##__VA_ARGS__)\nF(1) F(1,)"), SV("\nf(1) f(1,)"), __LINE__},
+        {"gnu comma argument expansion cached", SV("#define F(...) __VA_ARGS__ ,##__VA_ARGS__\nF(__COUNTER__)"), SV("\n0 ,0"), __LINE__},
+        {"gnu comma expansion cached before ordinary use", SV("#define F(...) ,##__VA_ARGS__ __VA_ARGS__\nF(__COUNTER__)"), SV("\n,0 0"), __LINE__},
+        {"gnu named comma keeps explicitly empty argument", SV("#define F(x,args...) f(x,##args)\nF(1) F(1,)"), SV("\nf(1) f(1,)"), __LINE__},
         {"gnu va args comma",SV("#define F(...) f(1, ##__VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
         {"gnu va args comma2",SV("#define F(...) f(1, ## __VA_ARGS__)\nF(2)\nF(2,3)\nF()"), SV("\nf(1,2)\nf(1,2,3)\nf(1)"), __LINE__},
         {"gnu va args nocomma",SV("#define F(...) f(1 ##__VA_ARGS__)\nF(2)\nF(2, 3)\nF()"), SV("\nf(12)\nf(12, 3)\nf(1)"), __LINE__},
@@ -1749,6 +1753,37 @@ TestFunction(test_erroneous_condition){
         {"defblock duplicate parameters", __LINE__,
             SV("#defblock F(x, x)\nx\n#endblock\n"),
             SV("(test):1:16: error: Duplicate macro param name\n")},
+        {"nested va opt in unused macro", __LINE__,
+            SV("#define F(...) __VA_OPT__(__VA_OPT__(x))\n"),
+            SV("(test):1:27: error: Nested __VA_OPT__ is not allowed\n")},
+        {"va opt in object macro", __LINE__,
+            SV("#define X __VA_OPT__(x)\n"),
+            SV("(test):1:11: error: __VA_OPT__ requires a variadic macro\n")},
+        {"va opt without parentheses", __LINE__,
+            SV("#define F(...) __VA_OPT__ x\n"),
+            SV("(test):1:16: error: Expected '(' after __VA_OPT__\n")},
+        {"unterminated va opt in unused macro", __LINE__,
+            SV("#define F(...) __VA_OPT__(x\n"),
+            SV("(test):1:16: error: Unterminated __VA_OPT__\n")},
+        {"va opt in nonvariadic macro", __LINE__,
+            SV("#define F(x) __VA_OPT__(x)\n"),
+            SV("(test):1:14: error: __VA_OPT__ requires a variadic macro\n")},
+        {"empty has include header", __LINE__,
+            SV("#if __has_include(\"\")\n#endif"),
+            SV("(test):1:5: error: Empty header name in __has_include\n")},
+        {"empty angle has include header", __LINE__,
+            SV("#if __has_include(<>)\n#endif"),
+            SV("(test):1:5: error: Empty header name in __has_include\n")},
+        {"empty expanded quoted has include header", __LINE__,
+            SV("#define H \"\"\n#if __has_include(H)\n#endif"),
+            SV("(test):2:5: error: Empty header name in __has_include\n")},
+        {"empty expanded has include header", __LINE__,
+            SV("#define H <>\n#if __has_include(H)\n#endif"),
+            SV("(test):2:5: error: Empty header name in __has_include\n")},
+        {"named varargs redefinition changes substitution", __LINE__,
+            SV("#define F(args...) args\n#define F(other...) args\n"),
+            SV("(test):2:25: error: Duplicate function-like macro (F) with different definitions\n"
+               "(test):1:9: error: ... previously defined here\n")},
         {"defblock duplicate named variadic parameter", __LINE__,
             SV("#defblock F(x, x...)\nx\n#endblock\n"),
             SV("(test):1:16: error: Duplicate macro param name\n")},
@@ -2394,6 +2429,24 @@ TestFunction(test_include){
             SV("test/main.c"),   SV("#define HDR \"header.h\"\n#include HDR\nRESULT"),
             SV("test/header.h"), SV("#define RESULT yes\n"),
             {0}, SV("\n\n\nyes")},
+        {"absolute include", __LINE__, 0,
+            SV("src/main.c"), SV("#include \"/virtual/absolute.h\"\n"),
+            SV("/virtual/absolute.h"), SV("OK"), {0}, SV("\nOK")},
+        {"absolute has include", __LINE__, 0,
+            SV("src/main.c"), SV("#if __has_include(\"/virtual/absolute.h\")\nOK\n#endif\n"),
+            SV("/virtual/absolute.h"), SV(""), {0}, SV("\nOK\n\n")},
+        {"macro expanded fallback candidates", __LINE__, 0,
+            SV("src/main.c"), SV("#define HEADERS \"missing.h\" \"good.h\"\n#include_oneof HEADERS\n"),
+            SV("src/good.h"), SV("OK"), {0}, SV("\n\nOK")},
+        {"macro candidate after literal fallback", __LINE__, 0,
+            SV("src/main.c"), SV("#define HEADER \"good.h\"\n#include_oneof \"missing.h\" HEADER\n"),
+            SV("src/good.h"), SV("OK"), {0}, SV("\n\nOK")},
+        {"angle macro candidate after angle fallback", __LINE__, 0,
+            SV("src/main.c"), SV("#define HEADER <good.h>\n#include <missing.h> HEADER\n"),
+            SV("inc/good.h"), SV("OK"), SV("inc"), SV("\n\nOK")},
+        {"include path pragma dot in current directory", __LINE__, 0,
+            SV("main.c"), SV("#pragma include_path \"-I\" \".\"\n#include <good.h>\n"),
+            SV("good.h"), SV("OK"), {0}, SV("\n\nOK")},
         {"_Pragma once prevents double inclusion", __LINE__, 0,
             SV("test/main.c"), SV("#include \"hdr.h\"\n#include \"hdr.h\"\nVAL"),
             SV("test/hdr.h"),  SV("_Pragma(\"once\")\n#define VAL ok\n"),
@@ -2489,6 +2542,8 @@ TestFunction(test_include){
 TestFunction(test_include_eof){
     TESTBEGIN();
     struct { StringView main, inner, expected; } cases[] = {
+        {SV("#pragma include_path \"-iquote\" \"quote\"\n#include \"sub/inner.h\"\n"), SV("#include_next \"only.h\"\n"), SV("QUOTE")},
+        {SV("#include <Wrap/a.h>\n"), SV(""), SV("WRAPNEXT")},
         {SV("#include \"sub/inner.h\""), SV("#include \"depth.h\""), SV("2")},
         {SV("#include \"sub/inner.h\"\nLEVEL"), SV("#define LEVEL __INCLUDE_LEVEL__\nLEVEL"), SV("10")},
         {SV("#include \"sub/inner.h\"\n)"), SV("#define ID(x) x\nID(__BASE_FILE__"), SV("\"src/main.c\"")},
@@ -2521,6 +2576,9 @@ TestFunction(test_include_eof){
         IncludeTestFile files[] = {
             {SV("src/main.c"), cases[i].main},
             {SV("src/sub/inner.h"), cases[i].inner},
+            {SV("src/quote/only.h"), SV("QUOTE")},
+            {SV("frameworks/Wrap.framework/Headers/a.h"), SV("#pragma once\nWRAP\n#include_next <Wrap/a.h>\n")},
+            {SV("next-frameworks/Wrap.framework/Headers/a.h"), SV("NEXT")},
             {SV("src/sub/local.h"), SV("OK\n")},
             {SV("src/sub/depth.h"), SV("__INCLUDE_LEVEL__")},
             {SV("src/local.h"), SV("WRONG\n")},
@@ -2530,8 +2588,9 @@ TestFunction(test_include_eof){
             {SV("src/data"), SV("\11")},
         };
         StringView paths[] = {SV("inc0"), SV("inc1"), SV("inc2")};
+        StringView frameworks[] = {SV("frameworks"), SV("next-frameworks")};
         StringView result = {0};
-        int err = cpp_expand_with_files(files, arrlen(files), paths, arrlen(paths), NULL, 0, &result, __FILE__, __func__, __LINE__);
+        int err = cpp_expand_with_files(files, arrlen(files), paths, arrlen(paths), frameworks, arrlen(frameworks), &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
         if(err){
             TestPrintf("source boundary case %zu failed\n", i);
@@ -2782,7 +2841,12 @@ TestFunction(test_framework_include){
         StringView main_src;
         StringView hdr_path; StringView hdr_content;
         StringView expected;
+        _Bool empty_path;
     } test_cases[] = {
+        {"empty framework search directory", __LINE__, 0,
+            SV("#include <Local/header.h>\n"),
+            SV("Local.framework/Headers/header.h"), SV("LOCAL"),
+            SV("\nLOCAL"), 1},
         {"single-component framework include", __LINE__, 0,
             SV("#include <Cocoa/Cocoa.h>\nVALUE"),
             SV("frameworks/Cocoa.framework/Headers/Cocoa.h"), SV("#define VALUE single\n"),
@@ -2792,7 +2856,6 @@ TestFunction(test_framework_include){
             SV("frameworks/IOKit.framework/Headers/hidsystem/IOLLEvent.h"), SV("#define VALUE nested\n"),
             SV("\n\nnested")},
     };
-    StringView fpath = SV("frameworks");
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < arrlen(test_cases); i = test_atomic_increment(&idx)){
         if(test_cases[i].disabled){
@@ -2803,6 +2866,7 @@ TestFunction(test_framework_include){
             {SV("test/main.c"), test_cases[i].main_src},
             {test_cases[i].hdr_path, test_cases[i].hdr_content},
         };
+        StringView fpath = test_cases[i].empty_path ? SV("") : SV("frameworks");
         StringView result;
         int err = cpp_expand_with_files(
             files, 2,

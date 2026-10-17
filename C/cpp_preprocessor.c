@@ -369,6 +369,16 @@ static
 int
 cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const CppIncludePosition*_Nullable after, StringView header_name, CppIncludePosition* out_pos){
     MStringBuilder* sb = fc_path_builder(cpp->fc);
+    if(path_is_abspath(header_name, cpp->fc->is_windows)){
+        msb_reset(sb);
+        msb_write_str(sb, header_name.text, header_name.length);
+        int fc_err = fc_is_file(cpp->fc);
+        if(fc_err == FC_ERROR_OOM) return CPP_OOM_ERROR;
+        if(fc_err != FC_OK) return CPP_FILE_NOT_FOUND_ERROR;
+        msb_write_str(sb, header_name.text, header_name.length);
+        *out_pos = (CppIncludePosition){0, SIZE_MAX};
+        return 0;
+    }
     if(quote && !after){
         if(source_file < cpp->fc->map.count){
             CStringView file_path = cpp->fc->map.data[source_file].path;
@@ -389,7 +399,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
                         msb_write_char(sb, '/');
                 }
                 msb_write_str(sb, header_name.text, header_name.length);
-                *out_pos = (CppIncludePosition){0, 0};
+                *out_pos = (CppIncludePosition){0, SIZE_MAX};
                 return 0;
             }
         }
@@ -399,7 +409,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
     size_t start_idx = 0;
     if(after){
         start_array = after->array;
-        start_idx = after->idx + 1;
+        start_idx = after->idx == SIZE_MAX ? 0 : after->idx + 1;
     }
     for(size_t i = start_array; i < arrlen(cpp->include_paths); i++){
         Marray(StringView)* dirs = &cpp->include_paths[i];
@@ -407,9 +417,8 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
         for(size_t j = j_start; j < dirs->count; j++){
             StringView d = dirs->data[j];
             msb_reset(sb);
-            if(!d.length) continue;
             msb_write_str(sb, d.text, d.length);
-            if(msb_peek(sb) != '/')
+            if(d.length && msb_peek(sb) != '/')
                 msb_write_char(sb, '/');
             msb_write_str(sb, header_name.text, header_name.length);
             int fc_err = fc_is_file(cpp->fc);
@@ -417,7 +426,7 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
             if(fc_err == FC_OK){
                 // fc_is_file consumed the path, rebuild it
                 msb_write_str(sb, d.text, d.length);
-                if(d.text[d.length-1] != '/')
+                if(d.length && d.text[d.length-1] != '/')
                     msb_write_char(sb, '/');
                 msb_write_str(sb, header_name.text, header_name.length);
                 *out_pos = (CppIncludePosition){i, j};
@@ -431,11 +440,12 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
             size_t fw_len = (size_t)(slash - header_name.text);
             const char* remaining = slash + 1;
             size_t remaining_len = header_name.length - fw_len - 1;
-            for(size_t i = 0; i < cpp->framework_paths.count; i++){
+            size_t first = after && after->array == arrlen(cpp->include_paths) ? after->idx + 1 : 0;
+            for(size_t i = first; i < cpp->framework_paths.count; i++){
                 StringView d = cpp->framework_paths.data[i];
                 msb_reset(sb);
                 msb_write_str(sb, d.text, d.length);
-                if(d.text[d.length-1] != '/')
+                if(d.length && d.text[d.length-1] != '/')
                     msb_write_char(sb, '/');
                 msb_write_str(sb, header_name.text, fw_len);
                 msb_write_str(sb, ".framework/Headers/", 19);
@@ -444,12 +454,12 @@ cpp_find_include(CppPreprocessor* cpp, uint32_t source_file, _Bool quote, const 
                 if(fc_err == FC_ERROR_OOM) return CPP_OOM_ERROR;
                 if(fc_err == FC_OK){
                     msb_write_str(sb, d.text, d.length);
-                    if(d.text[d.length-1] != '/')
+                    if(d.length && d.text[d.length-1] != '/')
                         msb_write_char(sb, '/');
                     msb_write_str(sb, header_name.text, fw_len);
                     msb_write_str(sb, ".framework/Headers/", 19);
                     msb_write_str(sb, remaining, remaining_len);
-                    *out_pos = (CppIncludePosition){0, 0};
+                    *out_pos = (CppIncludePosition){arrlen(cpp->include_paths), i};
                     return 0;
                 }
             }
@@ -1692,8 +1702,28 @@ cpp_validate_replacement(CppPreprocessor* cpp, const CppMacro* macro, const CppT
         return cpp_error(cpp, repl[first].loc, "'##' cannot appear at start of replacement list");
     if(repl[last-1].type == CPP_PUNCTUATOR && repl[last-1].punct == '##')
         return cpp_error(cpp, repl[last-1].loc, "'##' cannot appear at end of replacement list");
-    if(!macro->is_function_like) return 0;
+    size_t va_opt_end = 0;
     for(size_t i = first; i < last; i++){
+        if(repl[i].type == CPP_IDENTIFIER && sv_equals(repl[i].txt, SV("__VA_OPT__"))){
+            if(!macro->is_variadic)
+                return cpp_error(cpp, repl[i].loc, "__VA_OPT__ requires a variadic macro");
+            if(i < va_opt_end)
+                return cpp_error(cpp, repl[i].loc, "Nested __VA_OPT__ is not allowed");
+            size_t j = i+1;
+            while(j < last && repl[j].type == CPP_WHITESPACE) j++;
+            if(j == last || repl[j].type != CPP_PUNCTUATOR || repl[j].punct != '(')
+                return cpp_error(cpp, repl[i].loc, "Expected '(' after __VA_OPT__");
+            size_t depth = 1;
+            for(j++; j < last; j++){
+                if(repl[j].type != CPP_PUNCTUATOR) continue;
+                if(repl[j].punct == '(') depth++;
+                else if(repl[j].punct == ')' && !--depth) break;
+            }
+            if(j == last)
+                return cpp_error(cpp, repl[i].loc, "Unterminated __VA_OPT__");
+            va_opt_end = j;
+        }
+        if(!macro->is_function_like) continue;
         if(repl[i].type != CPP_PUNCTUATOR || repl[i].punct != '#') continue;
         size_t j = i + 1;
         while(j < last && repl[j].type == CPP_WHITESPACE) j++;
@@ -1953,7 +1983,9 @@ cpp_handle_directive(CppPreprocessor* cpp){
                         err = cpp_error(cpp, m->def_loc, "... previously defined here");
                         goto finish_func_macro;
                     }
-                    if(!sv_equals(r.txt, pre.txt)){
+                    _Bool va_param = variadic && r.type == CPP_IDENTIFIER &&
+                        (sv_equals(r.txt, SV("__VA_ARGS__")) || (named_variadic.length && sv_equals(r.txt, named_variadic)));
+                    if(!sv_equals(r.txt, pre.txt) || va_param != (variadic && pre.param_idx == m->nparams + 1)){
                         cpp_error(cpp, tok.loc, "Duplicate function-like macro (%.*s) with different definitions", sv_p(name));
                         err = cpp_error(cpp, m->def_loc, "... previously defined here");
                         goto finish_func_macro;
@@ -2101,8 +2133,11 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 err = 0;
             }
-            if(!err)
-                ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
+            if(!err){
+                CppMacro* m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length));
+                m->def_loc = name_loc;
+                err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
+            }
             finish_obj_macro:;
             cpp_release_scratch(cpp, repl);
             return err;
@@ -2672,8 +2707,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(err) goto cleanup;
             } while(tok.type == CPP_WHITESPACE);
         }
-        // If the first token wasn't a header form, try macro expansion.
-        if(!header_name.length && tok.type != CPP_NEWLINE && !cpp_token_is_end(tok)){
+        // Expand remaining candidates, including macros after failed literals.
+        if(tok.type != CPP_NEWLINE && !cpp_token_is_end(tok)){
             CppTokens* line_toks = cpp_get_scratch(cpp);
             if(!line_toks){
                 err = CPP_OOM_ERROR;
@@ -2715,45 +2750,45 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = cpp_error(cpp, directive_loc, "Empty #include after macro expansion");
                 goto cleanup3;
             }
-            CppToken etok = expanded->data[ei];
-            if(etok.type == CPP_STRING){
-                quote = 1;
-                header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
-            }
-            else if(etok.type == CPP_PUNCTUATOR && etok.punct == '<'){
-                quote = 0;
-                for(ei++; ei < expanded->count; ei++){
-                    CppToken t = expanded->data[ei];
-                    if(t.type == CPP_PUNCTUATOR && t.punct == '>')
-                        break;
-                    msb_write_str(&header_sb, t.txt.text, t.txt.length);
+            while(ei < expanded->count){
+                CppToken etok = expanded->data[ei];
+                if(etok.type == CPP_STRING){
+                    quote = 1;
+                    header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
+                    ei++;
                 }
-                if(ei >= expanded->count){
-                    err = cpp_error(cpp, directive_loc, "Unterminated < in macro-expanded #include");
+                else if(etok.type == CPP_PUNCTUATOR && etok.punct == '<'){
+                    quote = 0;
+                    msb_reset(&header_sb);
+                    for(ei++; ei < expanded->count; ei++){
+                        CppToken t = expanded->data[ei];
+                        if(t.type == CPP_PUNCTUATOR && t.punct == '>') break;
+                        msb_write_str(&header_sb, t.txt.text, t.txt.length);
+                    }
+                    if(ei == expanded->count){
+                        err = cpp_error(cpp, directive_loc, "Unterminated < in macro-expanded #include");
+                        goto cleanup3;
+                    }
+                    ei++;
+                    header_name = msb_borrow_sv(&header_sb);
+                }
+                else {
+                    err = cpp_error(cpp, directive_loc, "Expected header name in #include after macro expansion");
                     goto cleanup3;
                 }
-                header_name = msb_borrow_sv(&header_sb);
-            }
-            else {
-                err = cpp_error(cpp, directive_loc, "Expected header name in #include after macro expansion");
-                goto cleanup3;
+                if(!header_name.length){
+                    err = cpp_error(cpp, directive_loc, "Empty header name in #include");
+                    goto cleanup3;
+                }
+                err = cpp_find_include(cpp, source_file, quote, is_next ? &source_pos : NULL, header_name, &inc_pos);
+                if(!err){
+                    cpp_release_scratch(cpp, expanded);
+                    goto include_found;
+                }
+                if(err == CPP_OOM_ERROR) goto cleanup3;
+                while(ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE) ei++;
             }
             cpp_release_scratch(cpp, expanded);
-            if(!header_name.length){
-                msb_destroy(&header_sb);
-                err = cpp_error(cpp, directive_loc, "Empty header name in #include");
-                goto cleanup;
-            }
-            err = cpp_find_include(cpp, source_file, quote, is_next ? &source_pos : NULL, header_name, &inc_pos);
-            if(err){
-                if(is_optional){
-                    msb_destroy(&header_sb);
-                    return 0;
-                }
-                err = cpp_error(cpp, directive_loc, "'%.*s' file not found", (int)header_name.length, header_name.text);
-                goto cleanup;
-            }
-            goto include_found;
         }
         {
             if(is_optional){
@@ -3644,12 +3679,27 @@ cpp_substitute_and_paste(
                 cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
                 // GNU extension: , ## __VA_ARGS__
                 // When left is comma and right is __VA_ARGS__:
-                //   empty: suppress both comma and args
+                //   omitted: suppress both comma and args
                 //   non-empty: emit comma then args (no pasting)
                 if(pidx == (uint64_t)macro->nparams && macro->is_variadic && left.type == CPP_PUNCTUATOR && left.punct == ','){
-                    if(arg_count > 0){
+                    _Bool supplied = macro->nparams ? arg_seps->count >= macro->nparams : arg_count != 0;
+                    if(supplied){
                         err = cpp_push_tok(cpp, out, left);
                         if(err) return err;
+                        if(!raw_only && arg_count){
+                            if(!expanded_args[pidx]){
+                                CppTokens* ea = cpp_get_scratch(cpp);
+                                if(!ea) return CPP_OOM_ERROR;
+                                err = cpp_expand_argument(cpp, arg_start, arg_count, ea);
+                                if(err){
+                                    cpp_release_scratch(cpp, ea);
+                                    return err;
+                                }
+                                expanded_args[pidx] = ea;
+                            }
+                            arg_start = expanded_args[pidx]->data;
+                            arg_count = expanded_args[pidx]->count;
+                        }
                         for(size_t m = 0; m < arg_count; m++){
                             err = cpp_push_tok(cpp, out, arg_start[m]);
                             if(err) return err;
@@ -6656,7 +6706,8 @@ cpp_add_search_path_from_pragma(CppPreprocessor* cpp, uint32_t source_file, CppT
             StringView dir = path_dirname(CSV_to_SV(file_path), 0);
             if(sv_equals(path, SV("."))){
                 msb_reset(&decoded);
-                msb_write_str(&decoded, dir.text, dir.length);
+                if(dir.length) msb_write_str(&decoded, dir.text, dir.length);
+                else msb_write_char(&decoded, '.');
             }
             else {
                 if(dir.length){
@@ -7526,6 +7577,8 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 // "header" form — strip quotes
                 quote = 1;
                 header_name = (StringView){next.txt.length - 2, next.txt.text + 1};
+                if(!header_name.length)
+                    return cpp_error(cpp, tok.loc, "Empty header name in %.*s", sv_p(name));
             }
             else if(next.type == CPP_PUNCTUATOR && next.punct == '<'){
                 // <header> form — collect tokens until >
@@ -7542,6 +7595,10 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                     msb_write_str(&sb, next.txt.text, next.txt.length);
                 }
                 header_name = msb_borrow_sv(&sb);
+                if(!header_name.length){
+                    msb_destroy(&sb);
+                    return cpp_error(cpp, tok.loc, "Empty header name in %.*s", sv_p(name));
+                }
                 CppIncludePosition dummy;
                 _Bool result = cpp_find_include(cpp, source_file, quote, is_next ? &source_pos : NULL, header_name, &dummy) == 0;
                 if(result) msb_reset(fc_path_builder(cpp->fc));
@@ -7592,6 +7649,10 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 if(etok.type == CPP_STRING){
                     quote = 1;
                     header_name = (StringView){etok.txt.length - 2, etok.txt.text + 1};
+                    if(!header_name.length){
+                        err = cpp_error(cpp, tok.loc, "Empty header name in %.*s", sv_p(name));
+                        goto finish_has_include_exp;
+                    }
                     for(ei++; ei < expanded->count && expanded->data[ei].type == CPP_WHITESPACE; ei++)
                         ;
                     if(ei != expanded->count){
@@ -7628,6 +7689,11 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                         goto finish_has_include_exp;
                     }
                     header_name = msb_borrow_sv(&hsb);
+                    if(!header_name.length){
+                        err = cpp_error(cpp, tok.loc, "Empty header name in %.*s", sv_p(name));
+                        msb_destroy(&hsb);
+                        goto finish_has_include_exp;
+                    }
                     CppIncludePosition dummy3;
                     _Bool result = cpp_find_include(cpp, source_file, quote, is_next ? &source_pos : NULL, header_name, &dummy3) == 0;
                     if(result) msb_reset(fc_path_builder(cpp->fc));
