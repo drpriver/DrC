@@ -1472,7 +1472,9 @@ yet, but a man can dream.
 ### Native FFI
 
 Functions declared but not defined are automatically resolved against
-loaded native libraries at call time using libffi.
+loaded native libraries at call time using the target's native calling convention.
+Interpreted functions can be passed as native callbacks, including variadic
+functions. The interpreter's `va_list` uses the native target layout.
 
 
 This means you can write a script that `#include`s a library's

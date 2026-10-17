@@ -50,11 +50,183 @@ TestFunction(test_interpreter){
         StringView program;
         int exit_code;
         _Bool skip;
+        _Bool procedural_macros;
+        _Bool sysv_bitfields; // Requires tight packing across bitfield storage units.
         _Bool no_toplevel_ops;
         _Bool embed_files;
         _Bool builtin_headers;
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
+        {
+            "procmacro: file-scope static aggregate and scalar initialization", __LINE__,
+            SVI("static struct {short pad; char digits[5];} table={0,\"0123\"};\n"
+                "static char separator='.';\n"
+                "int probe(void){return table.digits[2]+separator;}\n"
+                "#pragma procmacro PROBE probe\n"
+                "int parsed=PROBE();\n"
+                "return parsed==('2'+'.') && probe()==parsed;\n"),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: file-scope static initialization runs once", __LINE__,
+            SVI("static int count=40;\n"
+                "int next(void){return ++count;}\n"
+                "#pragma procmacro NEXT next\n"
+                "int a=NEXT(); int b=NEXT();\n"
+                "return a==41 && b==42 && next()==43;\n"),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: address of a previously prepared function", __LINE__,
+            SVI("int leaf(int n){return n+1;}\n"
+                "int first(int n){return leaf(n);}\n"
+                "#pragma procmacro first\n"
+                "int second(int n){static int (*p)(int)=leaf; return p(n);}\n"
+                "#pragma procmacro second\n"
+                "return first(2)+second(3);\n"),
+            .exit_code = 7,
+            .procedural_macros = 1,
+        },
+        {
+            "module: unused eager body does not resolve externs", __LINE__,
+            SVI("_Module m=__compile(\"int missing_dvm_dep(void); int unused(void){return missing_dvm_dep();} int used(void){return 9;} return used();\", \"\");\n"
+                "return m.run();\n"),
+            .exit_code = 9,
+        },
+        {
+            "procmacro: transitive dependencies without resolve", __LINE__,
+            SVI("int g;\n"
+                "int leaf(int n){return n ? leaf(n-1)+1 : ++g;}\n"
+                "int middle(int n){static int (*p)(int)=leaf; return p(n);}\n"
+                "int macro(int n){return middle(n);}\n"
+                "#pragma procmacro macro\n"
+                "return macro(5);\n"),
+            .exit_code = 6,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: argument dependencies without resolve", __LINE__,
+            SVI("int g; int helper(void){return ++g;}\n"
+                "int identity(int n){return n;}\n"
+                "#pragma procmacro identity\n"
+                "return identity(helper());\n"),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: any string literal result", __LINE__,
+            SVI(
+                "_Any text(void){return \"hello\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='h' && s[4]=='o' && s[5]==0;\n"
+            ),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: any char array result respects its bound", __LINE__,
+            SVI(
+                "_Any text(void){return *(char(*)[2])\"xyzz\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='x' && s[1]=='y' && s[2]==0;\n"
+            ),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: any const char array result", __LINE__,
+            SVI(
+                "_Any text(void){return *(const char(*)[3])\"ok\";}\n"
+                "#pragma procmacro text\n"
+                "const char* s=text();\n"
+                "return s[0]=='o' && s[1]=='k' && s[2]==0;\n"
+            ),
+            .exit_code = 1,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: any result", __LINE__,
+            SVI("_Any boxed(int x){return x+1;}\n"
+                "#pragma procmacro boxed\n"
+                "return boxed(41);\n"),
+            .exit_code = 42,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: any result-2", __LINE__,
+            SVI("_Any a(void){return \"x\\0y\";}\n" // embedded nul -> short string
+                "int x = 42;\n"
+                "#pragma procmacro a\n"
+                "return __mixin(a());\n"),
+            .exit_code = 42,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: aggregate argument", __LINE__,
+            SVI("struct S { int a[5]; };\n"
+                "int sum(struct S s){ return s.a[0]+s.a[4]; }\n"
+                "#pragma procmacro sum\n"
+                "return sum(((struct S){{3,0,0,0,4}}));\n"),
+            .exit_code = 7,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: void result", __LINE__,
+            SVI("void nothing(int x){}\n"
+                "#pragma procmacro nothing\n"
+                "nothing(3)\n"
+                "return 7;\n"),
+            .exit_code = 7,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro", __LINE__,
+            SVI("int add(int x, int y){return x + y;}\n"
+                "#pragma procmacro add\n"
+                "#if add(1, 2) == 3\n"
+                "return add(1, 2);\n"
+                "#endif"),
+            .exit_code = 3,
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro with name", __LINE__,
+            SVI("int add(int x, int y){return x + y;}\n"
+                "#pragma procmacro ADD add\n"
+                "#if ADD(1, 2) == 3\n"
+                "return add(1, 2);\n"
+                "#endif"),
+            .exit_code = 3,
+            .procedural_macros = 1,
+        },
+        {
+            "append lib", __LINE__,
+            SVI("#pragma lib_path \"/hope/this/does/not/exist\"\n"
+                "return 0;\n"),
+            .exit_code = 0,
+        },
+        {
+            "plain char follows target signedness", __LINE__,
+            SVI("char c = (char)200;\n"
+                "#ifdef __CHAR_UNSIGNED__\n"
+                "return c > 0;\n"
+                "#else\n"
+                "return c < 0;\n"
+                "#endif\n"),
+            .exit_code = 1,
+        },
+        {
+            "ABI: aligned variadic values through direct and indirect calls", __LINE__,
+            SVI("int f(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "__int128 x=__builtin_va_arg(ap,__int128);long double y=__builtin_va_arg(ap,long double);"
+                "__builtin_va_end(ap);return x==(((__int128)1<<100)+7)&&y==3.5L;}"
+                "int(*p)(int,...)=f;return f(0,((__int128)1<<100)+7,3.5L)&&p(0,((__int128)1<<100)+7,3.5L);"),
+            .exit_code=1,
+        },
         {
             "integer operations read packed signed and unsigned frame operands", __LINE__,
             SVI("int f(void){struct __attribute__((packed)) S{char c;short s;unsigned short u;"
@@ -97,7 +269,6 @@ TestFunction(test_interpreter){
             SVI("typedef int I __attribute__((aligned(16)));"
                 "__forceinline int f(char a,I b,int c){return a==3&&b==17&&c==29&&((unsigned long long)&b%16)==0;}"
                 "int g(void){int(*p)(char,int,int)=f;return f(3,17,29)&&p(3,17,29);}return g();"),
-            .skip=1, // TODO: reconcile call-buffer and aligned parameter object layouts.
             .exit_code=1,
         },
         {
@@ -115,7 +286,6 @@ TestFunction(test_interpreter){
             "aligned typedef parameter receives its argument", __LINE__,
             SVI("typedef int I __attribute__((aligned(16)));"
                 "int f(char a,I b){return a==3 && b==17;}return f(3,17);"),
-            .skip=1, // TODO: reconcile call-buffer and aligned parameter object layouts.
             .exit_code=1,
         },
         {
@@ -207,6 +377,7 @@ TestFunction(test_interpreter){
                 "constexpr union U{struct B b;unsigned char bytes[5];} u={.b={0,0xffffffffu}};"
                 "static unsigned char tail=u.bytes[4];return tail==127;"),
             .exit_code=1,
+            .sysv_bitfields = 1,
         },
         {
             "interlocked 128-bit CAS accepts aligned storage through its pointer parameter", __LINE__,
@@ -1671,7 +1842,7 @@ TestFunction(test_interpreter){
         },
         {
             "memcpy: a user-defined function keeps its behavior", __LINE__,
-            SVI("void* memcpy(void* d,const void* s,unsigned long n){*(char*)d=99;return (void*)s;}\n"
+            SVI("void* memcpy(void* d,const void* s,__SIZE_TYPE__ n){*(char*)d=99;return (void*)s;}\n"
                 "char src=42,dst=0;void* result=memcpy(&dst,&src,1);return result==&src&&dst==99;\n"),
             .exit_code = 1,
         },
@@ -1704,13 +1875,13 @@ TestFunction(test_interpreter){
         },
         {
             "integer relocations preserve nested addends and scalar initializer storage", __LINE__,
-            SVI("static int target; static const long base={(long)&target};\n"
-                "constexpr struct S {long address;} s={(long)&target};\n"
-                "static long braced=base+4; static long field=s.address+4;\n"
-                "static long nested=3+(2+((long)&target-1));\n"
-                "static long text=(long)\"ab\"+1;\n"
+            SVI("static int target; static const __INTPTR_TYPE__ base={(__INTPTR_TYPE__)&target};\n"
+                "constexpr struct S {__INTPTR_TYPE__ address;} s={(__INTPTR_TYPE__)&target};\n"
+                "static __INTPTR_TYPE__ braced=base+4; static __INTPTR_TYPE__ field=s.address+4;\n"
+                "static __INTPTR_TYPE__ nested=3+(2+((__INTPTR_TYPE__)&target-1));\n"
+                "static __INTPTR_TYPE__ text=(__INTPTR_TYPE__)\"ab\"+1;\n"
                 "static short absolute=(short)(int*)0xffff; static unsigned __int128 wide=(unsigned __int128)(void*)6;\n"
-                "return braced==(long)&target+4&&field==braced&&nested==braced&&*(const char*)text=='b'&&absolute==-1&&wide==6;\n"),
+                "return braced==(__INTPTR_TYPE__)&target+4&&field==braced&&nested==braced&&*(const char*)text=='b'&&absolute==-1&&wide==6;\n"),
             .exit_code = 1,
         },
         {
@@ -1718,7 +1889,7 @@ TestFunction(test_interpreter){
             SVI("constexpr _Bool a=256,b=0.5,c=-0.5,d=-0.0;\n"
                 "static _Bool x=a,y=b,z=c,w=d; static int target;\n"
                 "constexpr _Bool pointer=(_Bool)&target; static _Bool p=pointer;\n"
-                "constexpr union U {unsigned char byte; struct B {unsigned char pad:7; _Bool flag:1;} b;} bits={.byte=128};\n"
+                "constexpr union U {unsigned char byte; struct B {_Bool a:1,b:1,c:1,d:1,e:1,f:1,g:1,flag:1;} b;} bits={.byte=128};\n"
                 "static _Bool packed=bits.b.flag;\n"
                 "return x==1&&y==1&&z==1&&w==0&&p==1&&packed==1;\n"),
             .exit_code = 1,
@@ -1745,12 +1916,12 @@ TestFunction(test_interpreter){
         },
         {
             "static arithmetic preserves wrapping, skipped branches and address addends", __LINE__,
-            SVI("static int target; static long address=(long)&target+4;\n"
-                "static long reversed=4+(long)&target; static long before=(long)&target-4;\n"
+            SVI("static int target; static __INTPTR_TYPE__ address=(__INTPTR_TYPE__)&target+4;\n"
+                "static __INTPTR_TYPE__ reversed=4+(__INTPTR_TYPE__)&target; static __INTPTR_TYPE__ before=(__INTPTR_TYPE__)&target-4;\n"
                 "static int a=1?7:(1/0); static int b=0&&(1/0);\n"
                 "static unsigned wrapped=~0U*2U;\n"
                 "static __int128 wide=((__int128)1<<100)*2;\n"
-                "return address==(long)&target+4&&reversed==address&&before==(long)&target-4\n"
+                "return address==(__INTPTR_TYPE__)&target+4&&reversed==address&&before==(__INTPTR_TYPE__)&target-4\n"
                 "&&a==7&&b==0&&wrapped==~1U&&wide==((__int128)1<<101);\n"),
             .exit_code = 1,
         },
@@ -2081,6 +2252,7 @@ TestFunction(test_interpreter){
                 "struct W* p=&w; (v,p->b)+=2;\n"
                 "return sizeof(w)==2&&p->b==-5&&w.guard==0x5a;\n"),
             .exit_code=1,
+            .sysv_bitfields = 1,
         },
         {
             "crossing signed bitfields use byte ops in dynamic array initializers", __LINE__,
@@ -2115,6 +2287,7 @@ TestFunction(test_interpreter){
                 "w.b.a=c.a; w.b.b=v; w.b.b++;\n"
                 "return sizeof(struct B)==9&&w.b.a==c.a&&w.b.b==0xa6&&w.guard==0x5a;\n"),
             .exit_code=1,
+            .sysv_bitfields = 1,
         },
         {
             "packed bitfields: full-width unaligned integer", __LINE__,
@@ -2123,6 +2296,7 @@ TestFunction(test_interpreter){
                 "w.b.a=7; w.b.b=0xfedcba9876543210ULL;\n"
                 "return sizeof(struct B)==9&&w.b.a==7&&w.b.b==0xfedcba9876543210ULL&&w.guard==0x5a;\n"),
             .exit_code=1,
+            .sysv_bitfields = 1,
         },
         {
             "packed bitfields: full-width unaligned int128", __LINE__,
@@ -2132,6 +2306,7 @@ TestFunction(test_interpreter){
                 "w.b.a=7; w.b.b=value;\n"
                 "return sizeof(struct B)==17&&w.b.a==7&&w.b.b==value&&w.guard==0x5a;\n"),
             .exit_code=1,
+            .sysv_bitfields = 1,
         },
         {
             "numeric reinterpretation: typed copies retain omitted opaque values", __LINE__,
@@ -2582,7 +2757,7 @@ TestFunction(test_interpreter){
         },
         {
             "static union: floating views reinterpret numeric storage", __LINE__,
-            SVI("constexpr union U {unsigned long bits; double d;} u={.bits=0x3ff0000000000000ul};\n"
+            SVI("constexpr union U {unsigned long long bits; double d;} u={.bits=0x3ff0000000000000ull};\n"
                 "static const double d=u.d; static union U copy={.d=d}; return d==1.0&&copy.bits==u.bits;\n"),
             .exit_code = 1,
         },
@@ -2641,7 +2816,7 @@ TestFunction(test_interpreter){
         },
         {
             "constexpr union: zero metadata and final type overwrite", __LINE__,
-            SVI("constexpr union U {_Type t; unsigned long bits;} zero={.bits=0};\n"
+            SVI("constexpr union U {_Type t; __UINTPTR_TYPE__ bits;} zero={.bits=0};\n"
                 "_Static_assert(zero.t.is_invalid); static _Type none=zero.t;\n"
                 "constexpr union U u={.bits=4096,.t=int}; _Static_assert(u.t==int);\n"
                 "constexpr union U v={.t=int,.bits=0}; _Static_assert(v.t.is_invalid);\n"
@@ -8249,8 +8424,12 @@ TestFunction(test_interpreter){
         },
         {
             "sizeof L string element", __LINE__,
-            SVI("return sizeof(L\"x\"[0]);\n"),
-            .exit_code = 4, // sizeof(int)
+            SVI("#ifdef _WIN32\n"
+                "return sizeof(L\"x\"[0]) == 2;\n"
+                "#else\n"
+                "return sizeof(L\"x\"[0]) == 4;\n"
+                "#endif\n"),
+            .exit_code = 1,
         },
         {
             "sizeof u string element", __LINE__,
@@ -8269,8 +8448,12 @@ TestFunction(test_interpreter){
         },
         {
             "sizeof L string", __LINE__,
-            SVI("return sizeof(L\"hello\");\n"),
-            .exit_code = 24, // 6 * 4
+            SVI("#ifdef _WIN32\n"
+                "return sizeof(L\"hello\") == 12;\n"
+                "#else\n"
+                "return sizeof(L\"hello\") == 24;\n"
+                "#endif\n"),
+            .exit_code = 1,
         },
         {
             "sizeof u string", __LINE__,
@@ -8309,7 +8492,7 @@ TestFunction(test_interpreter){
         },
         {
             "L string array init", __LINE__,
-            SVI("int arr[] = L\"AB\";\n"
+            SVI("__WCHAR_TYPE__ arr[] = L\"AB\";\n"
                "return arr[0] + arr[1];\n"),
             .exit_code = 'A' + 'B',
         },
@@ -8363,7 +8546,7 @@ TestFunction(test_interpreter){
         },
         {
             "L string array truncation", __LINE__,
-            SVI("int t[3] = L\"abc\";\n"
+            SVI("__WCHAR_TYPE__ t[3] = L\"abc\";\n"
                "return t[2];\n"),
             .exit_code = 'c',
         },
@@ -8426,7 +8609,7 @@ TestFunction(test_interpreter){
         // Cast: sign extension
         {
             "cast: sign extend char to int", __LINE__,
-            SVI("char c = -1;\n"
+            SVI("signed char c = -1;\n"
                "int x = (int)c;\n"
                "return x;\n"),
             .exit_code = -1,
@@ -10254,9 +10437,9 @@ TestFunction(test_interpreter){
         {
             "struct with union copy", __LINE__,
             SVI("typedef struct {\n"
-                "  union { unsigned long _bits; struct { unsigned type: 4; unsigned long _pad: 60; }; };\n"
-                "  union { struct { const char* text; unsigned long len; }; };\n"
-                "  unsigned long loc;\n"
+                "  union { unsigned long long _bits; struct { unsigned type: 4; unsigned long long _pad: 60; }; };\n"
+                "  union { struct { const char* text; unsigned long long len; }; };\n"
+                "  unsigned long long loc;\n"
                 "} Tok;\n"
                 "Tok arr[2] = {{._bits=1, .text=\"hi\", .len=2, .loc=10},\n"
                 "              {._bits=2, .text=\"yo\", .len=2, .loc=20}};\n"
@@ -10417,6 +10600,7 @@ TestFunction(test_interpreter){
                 "}\n"
                 "return sum(3, 10, 20, 30);\n"),
             .exit_code = 60,
+            .target = &cc_target_x86_64_windows_msvc,
         },
         {
             "_InterlockedExchange", __LINE__,
@@ -13123,7 +13307,7 @@ TestFunction(test_interpreter){
         },
         {
             "string init wchar array", __LINE__,
-            SVI("int s[] = L\"abc\";\n"
+            SVI("__WCHAR_TYPE__ s[] = L\"abc\";\n"
                "return s[0] + s[2];\n"),
             .exit_code = 'a' + 'c',
         },
@@ -13334,7 +13518,7 @@ TestFunction(test_interpreter){
         },
         {
             "L string with unicode escape", __LINE__,
-            SVI("int s[] = L\"\\u00E9\";\n"
+            SVI("__WCHAR_TYPE__ s[] = L\"\\u00E9\";\n"
                "return s[0];\n"),
             .exit_code = 0xE9,
         },
@@ -14175,7 +14359,7 @@ TestFunction(test_interpreter){
         },
         {
             "L string multi-char", __LINE__,
-            SVI("int s[] = L\"\\u00E9\\u1234\";\n"
+            SVI("__WCHAR_TYPE__ s[] = L\"\\u00E9\\u1234\";\n"
                "return s[0] == 0xE9 && s[1] == 0x1234;\n"),
             .exit_code = 1,
         },
@@ -14217,7 +14401,7 @@ TestFunction(test_interpreter){
         },
         {
             "wchar string hex content", __LINE__,
-            SVI("int s[] = L\"\\x41\\x42\";\n"
+            SVI("__WCHAR_TYPE__ s[] = L\"\\x41\\x42\";\n"
                "return s[0] == 0x41 && s[1] == 0x42;\n"),
             .exit_code = 1,
         },
@@ -15448,6 +15632,27 @@ TestFunction(test_interpreter){
             .exit_code = 1, .target = &cc_target_aarch64_linux,
         },
         {
+            "TEST ABI: scalar, aggregate, and variadic results", __LINE__,
+            SVI("struct Small { long long a, b; };\n"
+                "struct Large { long long a, b, c; };\n"
+                "signed char small_int(signed char x) { return x; }\n"
+                "double scalar(double x) { return x + 0.5; }\n"
+                "struct Small small(struct Small x) { x.b += x.a; return x; }\n"
+                "struct Large large(struct Large x) { x.c += x.a + x.b; return x; }\n"
+                "long long sum(int n, ...) {\n"
+                "    __builtin_va_list ap; __builtin_va_start(ap, n);\n"
+                "    long long value = 0;\n"
+                "    for(int i = 0; i < n; i++) value += __builtin_va_arg(ap, long long);\n"
+                "    __builtin_va_end(ap); return value;\n"
+                "}\n"
+                "struct Small a = small((struct Small){3, 5});\n"
+                "struct Large b = large((struct Large){7, 11, 13});\n"
+                "return small_int(-7) == -7 && scalar(2.5) == 3.0\n"
+                "    && a.a == 3 && a.b == 8 && b.a == 7 && b.b == 11 && b.c == 31\n"
+                "    && sum(3, 17LL, 19LL, 23LL) == 59;\n"),
+            .exit_code = 1, .target = &cc_target_test,
+        },
+        {
             "review: static x87 bool conversion", __LINE__,
             SVI("static _Bool value=0.5L; return value;\n"),
             .exit_code = 1, .target = &cc_target_x86_64_linux,
@@ -16056,6 +16261,23 @@ TestFunction(test_interpreter){
             .exit_code = 8,
             .target = &cc_target_x86_64_windows_msvc,
         },
+        {
+            "backtrace capture", __LINE__,
+            SVI("int n=0; void* capture[256] = {};\n"
+                "int expected_lines[32]={__LINE__+4, __LINE__+2, __LINE__+3, __LINE__+5};\n"
+                "void foo(void);\n"
+                "void bar(void){foo();}\n"
+                "void baz(void){bar();}\n"
+                "void foo(void){n=__builtin_capture_backtrace(capture, _Countof capture);}\n"
+                "baz();\n"
+                "for(int i = 0; i < n; i++){\n"
+                "   _SrcLoc loc; __builtin_symbolicate(capture[i], &loc);\n"
+                "   if(loc.line != expected_lines[i]) return (i+1)*100000+loc.line;\n"
+                "}\n"
+                "return 0;\n"
+            ),
+            .exit_code = 0,
+        },
         // abi smoke tests... don't have a direct way to test them in the cross interpreter
         {
             "sysv", __LINE__,
@@ -16124,11 +16346,16 @@ TestFunction(test_interpreter){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         size_t opt_idx = i % countof(optimization_options);
-        size_t test_idx = i / countof(optimization_options);
+        size_t target_idx = (i / countof(optimization_options)) % CC_TARGET_COUNT;
+        size_t test_idx = i / (countof(optimization_options) * CC_TARGET_COUNT);
         const struct opt* o = &optimization_options[opt_idx];
         const struct tc* tc = &testcases[test_idx];
+        const CcTargetConfig* target = cc_targets[target_idx];
+        if(tc->target && tc->target != target) continue;
+        if(tc->sysv_bitfields && target->bitfield_abi != CC_BITFIELD_SYSV) continue;
+        size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -16145,6 +16372,7 @@ TestFunction(test_interpreter){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .procedural_macros = tc->procedural_macros,
             .opt_noinline = o->noinline,
             .exit_code = -1,
             .parser = {
@@ -16154,7 +16382,7 @@ TestFunction(test_interpreter){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = tc->target ? (const CcTargetConfig*_Nonnull)tc->target : cc_targets[CC_TARGET_TEST],
+                    .target = target,
                 },
                 .current = &interp.parser.global,
             },
@@ -16231,6 +16459,9 @@ TestFunction(test_interpreter){
             TestPrintf("%.*s\n", sv_p(sv));
         }
         if(err) TEST_stats.failures++;
+        if(TEST_stats.failures != failures_before)
+            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d]\n", __FILE__, tc->line, tc->name,
+                sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
@@ -16241,7 +16472,7 @@ TestFunction(test_interpreter){
     TESTEND();
 }
 
-TestFunction(test_interpreter_runtime_errors){
+TestFunction(test_interpreter_diagnostics){
     TESTBEGIN();
     ArenaAllocator arena = {0};
     Allocator al = allocator_from_arena(&arena);
@@ -16250,9 +16481,99 @@ TestFunction(test_interpreter_runtime_errors){
         StringView program;
         StringView expect;
         _Bool skip;
+        _Bool procedural_macros;
+        _Bool diagnostic_only; // Emit the expected text without trapping.
         _Bool lowering_error;
         _Bool parser_error;
     } testcases[] = {
+        {
+            "backtrace", __LINE__,
+            SVI("void foo(void);\n"
+                "void bar(void){foo();}\n"
+                "void baz(void){bar();}\n"
+                "void foo(void){__bt();}\n"
+                "baz();\n"),
+            SVI("(test):4:16: error: foo: 0\n"
+                "(test):2:19: error: bar: 1\n"
+                "(test):3:19: error: baz: 2\n"
+                "(test):5:4: error: (top level): 3\n"),
+            .diagnostic_only = 1,
+        },
+        {
+            "backtrace indirect", __LINE__,
+            SVI("void a(int x);\n"
+                "void b(int x);\n"
+                "void c(int x);\n"
+                "void(*fp)(int) = a;\n"
+                "fp(11);\n"
+                "void a(int x){\n"
+                "    if(x & 1){\n"
+                "        fp = b;\n"
+                "    }\n"
+                "    else {\n"
+                "        fp = c;\n"
+                "    }\n"
+                "    fp(x-1);\n"
+                "}\n"
+                "void b(int x){\n"
+                "    fp = c;\n"
+                "    fp(x-1);\n"
+                "}\n"
+                "void c(int x){\n"
+                "    if(x > 3){\n"
+                "        fp = a;\n"
+                "        fp(x-1);\n"
+                "    }\n"
+                "    else {\n"
+                "        __bt();\n"
+                "    }\n"
+                "}\n"
+            ),
+            SVI("(test):25:9: error: c: 0\n"
+                "(test):13:7: error: a: 1\n"
+                "(test):22:11: error: c: 2\n"
+                "(test):13:7: error: a: 3\n"
+                "(test):22:11: error: c: 4\n"
+                "(test):13:7: error: a: 5\n"
+                "(test):22:11: error: c: 6\n"
+                "(test):17:7: error: b: 7\n"
+                "(test):13:7: error: a: 8\n"
+                "(test):5:3: error: (top level): 9\n"),
+            .diagnostic_only = 1,
+        },
+        {
+            "_Module.symbol lazy parse failure", __LINE__,
+            SVI("void bad(void){ nope; }\n"
+                "__root_module().symbol(\"bad\", void(void))();\n"),
+            SVI("(test):1:17: error: undeclared identifier 'nope'\n"),
+        },
+        {
+            "_Type expression rejects declarator name", __LINE__,
+            SVI("_Type T = int name;\n"),
+            SVI("(test):1:11: error: unexpected declarator name 'name' in type expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "procmacro: argument with side effects", __LINE__,
+            SVI("int n;\n"
+                "int identity(int x){ return x; }\n"
+                "#pragma procmacro identity\n"
+                "return identity(++n) + identity(++n);\n"),
+            SVI("asd"),
+            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
+            .procedural_macros = 1,
+        },
+        {
+            "procmacro: argument is alloca", __LINE__,
+            SVI("char* p;\n"
+                "const char* identity(const char* s){ return s; }\n"
+                "#pragma procmacro identity\n"
+                "const char* s = identity((p = __builtin_alloca(3), p[0] = 111, p[1] = 107, p[2] = 0, p));\n"
+                "return s[0] == 111 && s[1] == 107 && s[2] == 0;\n"),
+            SVI("asd"),
+            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
+            .procedural_macros = 1,
+        },
         {
             "backtrace: positive capacity needs a buffer", __LINE__,
             SVI("__builtin_capture_backtrace(nullptr, 1);\n"),
@@ -16271,7 +16592,7 @@ TestFunction(test_interpreter_runtime_errors){
             "call layout rejects argument alignment overflow", __LINE__,
             SVI("struct S {char data[0xffffffffu];}; void (*f)(struct S, int)=0;\n"
                 "f(*(struct S*)0, 1);\n"),
-            SVI("(test):2:2: error: object size exceeds 32-bit layout limit\n"),
+            SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
             .lowering_error = 1,
         },
         {
@@ -16285,7 +16606,7 @@ TestFunction(test_interpreter_runtime_errors){
             "call layout rejects final buffer alignment overflow", __LINE__,
             SVI("struct S {char data[0xfffffffdu];}; void (*f)(struct S)=0;\n"
                 "f(*(struct S*)0);\n"),
-            SVI("(test):2:2: error: object size exceeds 32-bit layout limit\n"),
+            SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
             .lowering_error = 1,
         },
         {
@@ -16653,7 +16974,7 @@ TestFunction(test_interpreter_runtime_errors){
         },
         {
             "static union: numeric slice pointers reject partial overwrites", __LINE__,
-            SVI("constexpr union U {int s[:]; struct B {unsigned long count; unsigned bit:1;} b; struct V {unsigned long count; int* p;} v;} u={.s=((int*)6)[:2],.b.bit=1};\n"
+            SVI("constexpr union U {int s[:]; struct B {__SIZE_TYPE__ count; unsigned bit:1;} b; struct V {__SIZE_TYPE__ count; int* p;} v;} u={.s=((int*)6)[:2],.b.bit=1};\n"
                 "static struct V copy=u.v; return 0;\n"),
             SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
             .parser_error = 1,
@@ -16967,36 +17288,6 @@ TestFunction(test_interpreter_runtime_errors){
             .parser_error = 1,
         },
         {
-            "varargs: reject over-aligned int128", __LINE__,
-            SVI("__int128 x=1;\nint f(int n,...){return n;}\nf(0,\nx);\n"),
-            SVI("(test):4:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
-            .lowering_error = 1,
-        },
-        {
-            "varargs: reject over-aligned indirect argument", __LINE__,
-            SVI("__int128 x=1;\nint f(int n,...){return n;}\nint (*p)(int,...)=f;\np(0,\nx);\n"),
-            SVI("(test):5:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
-            .lowering_error = 1,
-        },
-        {
-            "varargs: reject over-aligned long double", __LINE__,
-            SVI("long double x=1;\nint f(int n,...){return n;}\nf(0,\nx);\n"),
-            SVI("(test):4:1: error: variadic arguments requiring alignment greater than 8 bytes are not supported\n"),
-            .lowering_error = 1,
-        },
-        {
-            "va_arg: reject over-aligned int128", __LINE__,
-            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,__int128);\n"),
-            SVI("(test):2:1: error: va_arg types requiring alignment greater than 8 bytes are not supported\n"),
-            .lowering_error = 1,
-        },
-        {
-            "va_arg: reject over-aligned long double", __LINE__,
-            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,long double);\n"),
-            SVI("(test):2:1: error: va_arg types requiring alignment greater than 8 bytes are not supported\n"),
-            .lowering_error = 1,
-        },
-        {
             "recursion: deep error unwinds frames", __LINE__,
             SVI("int fail(int n){\n"
                 "  int *p = __builtin_alloca(sizeof(int)); *p = n;\n"
@@ -17292,8 +17583,10 @@ TestFunction(test_interpreter_runtime_errors){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
-        struct tc* tc = &testcases[i];
+    for(size_t i = test_atomic_increment(&idx); i < CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
+        struct tc* tc = &testcases[i / CC_TARGET_COUNT];
+        const CcTargetConfig* target = cc_targets[i % CC_TARGET_COUNT];
+        size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -17308,6 +17601,7 @@ TestFunction(test_interpreter_runtime_errors){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .procedural_macros = tc->procedural_macros,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -17316,7 +17610,7 @@ TestFunction(test_interpreter_runtime_errors){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_targets[CC_TARGET_TEST],
+                    .target = target,
                 },
                 .current = &interp.parser.global,
             },
@@ -17351,7 +17645,12 @@ TestFunction(test_interpreter_runtime_errors){
             trapped = err != 0;
             goto check_error;
         }
-        if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        if(err){
+            StringView log = msb_borrow_sv(&log_sb);
+            TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); 
+            TestPrintf("    %.*s", sv_p(log));
+            goto finally;
+        }
         // Expected lowering failures must be diagnosed before executing code.
         err = ci_prepare_toplevel(&interp);
         if(err) trapped = 1;
@@ -17363,15 +17662,19 @@ TestFunction(test_interpreter_runtime_errors){
         check_error:
         err = 0; // the trap is the expected outcome, not a harness failure
         TEST_stats.executed++;
-        if(!trapped){
+        if(trapped == tc->diagnostic_only){
             TEST_stats.failures++;
-            TestPrintf("%s:%d: %s: expected runtime error but program succeeded\n", __FILE__, tc->line, tc->name);
+            TestPrintf("%s:%d: %s: expected %s, got %s\n", __FILE__, tc->line, tc->name,
+                tc->diagnostic_only ? "nonfatal diagnostic" : "error",
+                trapped ? "error" : "successful execution");
         }
         StringView log = msb_borrow_sv(&log_sb);
         test_expect_equals_sv(tc->expect, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, tc->line);
 
         finally:
         if(err) TEST_stats.failures++;
+        if(TEST_stats.failures != failures_before)
+            TestPrintf("%s:%d: %s [target=%.*s]\n", __FILE__, tc->line, tc->name, sv_p(cc_target_names[target->target]));
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
@@ -17454,9 +17757,11 @@ TestFunction(test_ci_call_main){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         const struct opt* o = &optimization_options[i % countof(optimization_options)];
-        struct tc* tc = &testcases[i / countof(optimization_options)];
+        struct tc* tc = &testcases[i / (countof(optimization_options) * CC_TARGET_COUNT)];
+        const CcTargetConfig* target = cc_targets[(i / countof(optimization_options)) % CC_TARGET_COUNT];
+        size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -17481,7 +17786,7 @@ TestFunction(test_ci_call_main){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_targets[CC_TARGET_NATIVE],
+                    .target = target,
                 },
                 .current = &interp.parser.global,
             },
@@ -17547,6 +17852,9 @@ TestFunction(test_ci_call_main){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        if(TEST_stats.failures != failures_before)
+            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d]\n", __FILE__, tc->line, tc->name,
+                sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
@@ -17580,6 +17888,7 @@ TestFunction(test_ci_call_by_name){
         int expect_err;
         StringView expected_msg;
         _Bool skip;
+        const CcTargetConfig* _Nullable target;
     } testcases[] = {
         {
             "no args", __LINE__,
@@ -17608,14 +17917,14 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("compact"),
             .args = {{CCBT_int, .i=3}, {CCBT_double, .d=5.}, {CCBT_int, .i=4}},
             .expected_ret = 354,
-            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+            .target = &cc_target_aarch64_macos,
         },
         {
             "compact argv with every parameter omitted", __LINE__,
             SVI("struct E {unsigned:7;};int compact(struct E p,struct E q){return 42;}\n"),
             .func_name = SVI("compact"),
             .expected_ret = 42,
-            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+            .target = &cc_target_aarch64_macos,
         },
         {
             "compact argv rejects extra arguments", __LINE__,
@@ -17624,7 +17933,7 @@ TestFunction(test_ci_call_by_name){
             .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}, {CCBT_int, .i=3}},
             .expect_err = _cc_runtime_error,
             .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': expected 2 args, got 3\n"),
-            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+            .target = &cc_target_aarch64_macos,
         },
         {
             "compact argv reports type mismatch at the compact index", __LINE__,
@@ -17633,7 +17942,7 @@ TestFunction(test_ci_call_by_name){
             .args = {{CCBT_int, .i=1}, {CCBT_int, .i=2}},
             .expect_err = _cc_runtime_error,
             .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': arg 1 type mismatch\n"),
-            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+            .target = &cc_target_aarch64_macos,
         },
         {
             "compact argv validates the buffer after an omitted parameter", __LINE__,
@@ -17642,7 +17951,7 @@ TestFunction(test_ci_call_by_name){
             .args = {{CCBT_double, .d=5., .size=4}},
             .expect_err = _cc_runtime_error,
             .expected_msg = SVI("(test):1:28: error: ci_call_by_name 'compact': arg 0 buffer too small\n"),
-            .skip = CC_TARGET_NATIVE != CC_TARGET_AARCH64_MACOS,
+            .target = &cc_target_aarch64_macos,
         },
         {
             "subtract", __LINE__,
@@ -17708,9 +18017,12 @@ TestFunction(test_ci_call_by_name){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options)*countof(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         const struct opt* o = &optimization_options[i % countof(optimization_options)];
-        struct tc* tc = &testcases[i / countof(optimization_options)];
+        struct tc* tc = &testcases[i / (countof(optimization_options) * CC_TARGET_COUNT)];
+        const CcTargetConfig* target = cc_targets[(i / countof(optimization_options)) % CC_TARGET_COUNT];
+        size_t failures_before = TEST_stats.failures;
+        if(tc->target && tc->target != target) continue;
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -17735,7 +18047,7 @@ TestFunction(test_ci_call_by_name){
                     .at = &at,
                     .logger = logger,
                     .env = &env,
-                    .target = cc_targets[CC_TARGET_NATIVE],
+                    .target = target,
                 },
                 .current = &interp.parser.global,
             },
@@ -17816,6 +18128,9 @@ TestFunction(test_ci_call_by_name){
         }
         cleanup:
         if(err) TEST_stats.failures++;
+        if(TEST_stats.failures != failures_before)
+            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d]\n", __FILE__, tc->line, tc->name,
+                sv_p(cc_target_names[target->target]), o->noinline);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&at.arena);
@@ -17831,7 +18146,7 @@ int main(int argc, char** argv){
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interpreter, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_interpreter_runtime_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
+    RegisterTestFlags(test_interpreter_diagnostics, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_main, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_ci_call_by_name, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
@@ -17850,7 +18165,7 @@ int main(int argc, char** argv){
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
-#include "native_call.c"
+#include "nc_native_call.c"
 
 
 #ifdef __DRC__

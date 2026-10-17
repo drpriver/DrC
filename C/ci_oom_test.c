@@ -676,4 +676,4 @@ int main(int argc, char** argv){
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
-#include "native_call.c"
+#include "nc_native_call.c"

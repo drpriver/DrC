@@ -2863,7 +2863,7 @@ TestFunction(test_embed_file_queries){
             fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
             TestExpectEquals(int, fc_intern_path(fc, &id), 0);
             TestExpectTrue(int, fc->map.data[id].data_cached);
-            StringView full;
+            StringView full = {0};
             fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
             TestExpectEquals(int, fc_read_file(fc, &full, &id), 0);
             TestExpectTrue(size_t, full.length > 8);

@@ -23,10 +23,9 @@
 #include "Drp/path_util.h"
 #include "Drp/MStringBuilder.h"
 #include "Drp/file_util.h"
+// For capture table size
+#include "C/asm/nc_capture_config.h"
 
-#define LIBFFI_RELEASE_URL "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2-x86-64bit-msvc-binaries.zip"
-#define LIBFFI_LIB "libffi-8.lib"
-#define LIBFFI_DLL "libffi-8.dll"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -37,10 +36,9 @@ enum {
 
 static int mkfile(BuildCtx*, BuildTarget*);
 static int do_install(BuildCtx*, BuildTarget*);
-static int fetch_libffi(BuildCtx*, BuildTarget*);
-static int copy_libffi_dll(BuildCtx*, BuildTarget*);
-static void link_libffi(BuildCtx*, BuildTarget*, enum OS, BuildTarget* _Null_unspecified);
 static BuildTarget* build_soft_float(BuildCtx*);
+static BuildTarget* build_native_capture(BuildCtx*);
+static void link_native_capture(BuildCtx*,BuildTarget*,BuildTarget*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
@@ -48,6 +46,7 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* all = b_phony_target(ctx, "all");
     all->description = b_atomize(ctx, "Build all binaries (including tests).");
     BuildTarget* soft_float = build_soft_float(ctx);
+    BuildTarget* native_capture = build_native_capture(ctx);
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
@@ -65,24 +64,7 @@ int main(int argc, char** argv, char** envp){
     if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, cc, "-lsynchronization");
     b_get_target(ctx, "drc")->description = cc->description;
-    BuildTarget* ffi_lib = NULL;
-    BuildTarget* ffi_dll = NULL;
-    BuildTarget* fetch_ffi = b_coro_target(ctx, "fetch-libffi", fetch_libffi, NULL);
-    fetch_ffi->description = b_atomize(ctx, "Fetch libffi from github (only for windows builds).");
-    if(BUILD_OS == OS_WINDOWS){
-        ffi_lib = b_targeta(ctx, b_atomize(ctx, "Fetched/libffi/" LIBFFI_LIB));
-        b_add_dep(ctx, ffi_lib, fetch_ffi);
-        b_add_out(ctx, fetch_ffi, ffi_lib);
-        ffi_dll = b_bin_target(ctx, LIBFFI_DLL);
-        BuildTarget* copy_ffi = b_script_target(ctx, "copy-libffi-dll", copy_libffi_dll, NULL);
-        b_add_dep(ctx, copy_ffi, ffi_lib);
-        b_add_dep(ctx, ffi_dll, copy_ffi);
-        b_add_out(ctx, copy_ffi, ffi_dll);
-    }
-    else {
-        fetch_ffi->is_phony = 1;
-    }
-    link_libffi(ctx, cc, ctx->target.os, ffi_lib);
+    link_native_capture(ctx,cc,native_capture);
     b_add_dep(ctx, all, cc);
     b_linkinp(ctx, cc, soft_float);
 
@@ -117,7 +99,7 @@ int main(int argc, char** argv, char** envp){
             cc_opt->description = b_atomize(ctx, "Optimized C interpreter for self-hosted tests.");
             b_get_target(ctx, "cc_opt")->description = cc_opt->description;
             b_add_dep(ctx, all, cc_opt);
-            link_libffi(ctx, cc_opt, ctx->target.os, ffi_lib);
+            link_native_capture(ctx, cc_opt, native_capture);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_opt, "-lsynchronization");
             b_linkinp(ctx, cc_opt, soft_float);
@@ -138,7 +120,7 @@ int main(int argc, char** argv, char** envp){
                     b_arg(ctx, cc_cov, "-fprofile-update=atomic");
                 }
             }
-            link_libffi(ctx, cc_cov, ctx->target.os, ffi_lib);
+            link_native_capture(ctx, cc_cov, native_capture);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_cov, "-lsynchronization");
             b_linkinp(ctx, cc_cov, soft_float);
@@ -148,7 +130,7 @@ int main(int argc, char** argv, char** envp){
         const char* file;
         const char* name;
         const char* cmd_name;
-        _Bool needs_lffi;
+        _Bool needs_native_bridge;
         _Bool skip_self_hosted;
         _Bool needs_drc_path;
     } test_files[] = {
@@ -158,6 +140,7 @@ int main(int argc, char** argv, char** envp){
         {"C/ci_test.c", "ci_test", "run-ci_test", 0, 0, 0},
         {"C/ci_oom_test.c", "ci_oom_test", "run-ci_oom_test", 0, 1, 0},
         {"C/ci_native_test.c", "ci_native_test", "run-ci_native_test", 1, 0, 0},
+        {"C/nc_test.c", "nc_test", "run-nc_test", 1, 0, 0},
         {"C/ci_concurrent_test.c", "ci_concurrent_test", "run-ci_concurrent_test", 1, 0, 0},
         {"drc_test.c", "drc_test", "run-drc_test", 0, 0, 1},
     };
@@ -172,16 +155,14 @@ int main(int argc, char** argv, char** envp){
                 b_linkarg(ctx, bin, "-lsynchronization");
                 b_linkarg(ctx, bin, "-ldbghelp");
             }
-            if(test_files[i].needs_lffi)
-                link_libffi(ctx, bin, ctx->target.os, ffi_lib);
+            if(test_files[i].needs_native_bridge)
+                link_native_capture(ctx, bin, native_capture);
             b_linkinp(ctx, bin, soft_float);
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
             cmd->is_phony = 1;
             if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
                 cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
-            if(test_files[i].needs_lffi && ffi_dll)
-                b_add_dep(ctx, cmd, ffi_dll);
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cmd, "--drc", cc_opt);
                 if(ctx->target.os != OS_WINDOWS && ctx->target.runner->length)
@@ -209,15 +190,13 @@ int main(int argc, char** argv, char** envp){
                     b_arg(ctx, cov_bin, "-fprofile-update=atomic");
                 }
             }
-            if(test_files[i].needs_lffi)
-                link_libffi(ctx, cov_bin, ctx->target.os, ffi_lib);
+            if(test_files[i].needs_native_bridge)
+                link_native_capture(ctx, cov_bin, native_capture);
             b_linkinp(ctx, cov_bin, soft_float);
             Atom cov_cmd_name = b_atomize_f(ctx, "run-coverage-%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
             cov_cmd->is_phony = 1;
             cov_cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
-            if(test_files[i].needs_lffi && ffi_dll)
-                b_add_dep(ctx, cov_cmd, ffi_dll);
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cov_cmd, "--drc", cc_cov);
                 if(ctx->target.os != OS_WINDOWS && ctx->target.runner->length)
@@ -288,7 +267,6 @@ int main(int argc, char** argv, char** envp){
         selfhost->is_phony = 1;
         if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
             cmd_set_envvar(&selfhost->cmd, SV("MallocNanoZone"), SV("0"));
-        if(ffi_dll) b_add_dep(ctx, selfhost, ffi_dll);
         b_args(ctx, selfhost, "cc.c", "Samples/hello.c");
         if(BUILD_OS != OS_WINDOWS)
             b_add_dep(ctx, self_tests, selfhost);
@@ -300,8 +278,6 @@ int main(int argc, char** argv, char** envp){
             cmd->is_phony = 1;
             if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
                 cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
-            if(test_files[i].needs_lffi && ffi_lib)
-                b_arg(ctx, cmd, "-IFetched/libffi");
             b_arg(ctx, cmd, test_files[i].file);
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cmd, "--drc", cc_opt);
@@ -328,8 +304,6 @@ int main(int argc, char** argv, char** envp){
             Atom run_name = b_atomize_f(ctx, "run-%s", name);
             BuildTarget* run = b_exec_target(ctx, run_name->data, bin);
             run->is_phony = 1;
-            if(ffi_dll && bin == cc)
-                b_add_dep(ctx, run, ffi_dll);
             for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                 b_aarg(ctx, run, ctx->dash_dash_args.data[j]);
 
@@ -431,78 +405,6 @@ do_install(BuildCtx* ctx, BuildTarget* tgt){
 
 static
 int
-fetch_libffi(BuildCtx* ctx, BuildTarget* tgt){
-    BCoro* coro = &tgt->coro;
-    BSTATE(fetch_libffi,
-        char _pad;
-    );
-    CmdBuilder* cmd = &tgt->cmd;
-    switch(coro->step){ BGO(BFINISHED); BGO(0); BGO(1); BGO(2); default: b_debug_break(ctx, "Invalid coro step");}
-    L0:;
-    if(b_file_info_uncached(ctx, "Fetched/libffi/" LIBFFI_LIB, sizeof "Fetched/libffi/" LIBFFI_LIB - 1)->exists)
-        goto finish;
-    if(!b_file_info_uncached(ctx, "Fetched", sizeof "Fetched" - 1)->exists){
-        b_log(ctx, "mkdir Fetched\n");
-        int err = b_mkdir_if_not_exists(ctx, "Fetched");
-        if(err) return BERROR;
-    }
-    {
-        int err = b_mkdir_if_not_exists(ctx, "Fetched/libffi");
-        if(err) return BERROR;
-    }
-    {
-        cmd_clear(cmd);
-        cmd_prog(cmd, CSV("curl"));
-        cmd_cargs(cmd, "-L", LIBFFI_RELEASE_URL, "-f", "-s", "-o", "Fetched/libffi.zip");
-        int err = b_run_cmd_async(ctx, tgt, cmd);
-        if(err) return BERROR;
-        BYIELD(1);
-    }
-    {
-        cmd_clear(cmd);
-        cmd_prog(cmd, CSV("tar"));
-        cmd_cargs(cmd, "-xf", "Fetched/libffi.zip", "-C", "Fetched/libffi");
-        int err = b_run_cmd_async(ctx, tgt, cmd);
-        if(err) return BERROR;
-        BYIELD(2);
-    }
-    {
-        b_log(ctx, "rm Fetched/libffi.zip\n");
-        int err = b_rm_file(ctx, "Fetched/libffi.zip");
-        if(err) return BERROR;
-    }
-    finish:
-    BFINISH();
-}
-
-static
-int
-copy_libffi_dll(BuildCtx* ctx, BuildTarget* tgt){
-    (void)tgt;
-    Atom dst = b_atomize_f(ctx, "%s/" LIBFFI_DLL, ctx->bin_dir->data);
-    b_log(ctx, "cp Fetched/libffi/" LIBFFI_DLL " %s\n", dst->data);
-    int err = b_copy_file(ctx, "Fetched/libffi/" LIBFFI_DLL, dst->data);
-    if(err)
-        b_loglvl(BLOG_ERROR, ctx, "Failed to copy " LIBFFI_DLL "\n");
-    return err;
-}
-
-static
-void
-link_libffi(BuildCtx* ctx, BuildTarget* tgt, enum OS os, BuildTarget* _Null_unspecified ffi_lib){
-    if(ffi_lib && (os == OS_WINDOWS || (os == OS_NATIVE && BUILD_OS == OS_WINDOWS))){
-        b_arg(ctx, tgt, "-IFetched/libffi");
-        b_linkinp(ctx, tgt, ffi_lib);
-    }
-    else {
-        if(os == OS_LINUX || (os == OS_NATIVE && BUILD_OS == OS_LINUX))
-            b_linkarg(ctx, tgt, "-ldl");
-        b_linkarg(ctx, tgt, "-lffi");
-    }
-}
-
-static
-int
 mkfile(BuildCtx* ctx, BuildTarget* _tgt){
     MStringBuilder sb = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
     AtomMapItems items = AM_items(&ctx->targets);
@@ -561,6 +463,40 @@ mkfile(BuildCtx* ctx, BuildTarget* _tgt){
         return 1;
     }
     return 0;
+}
+
+static
+void
+link_native_capture(BuildCtx* ctx, BuildTarget* target, BuildTarget* object){
+    b_linkinp(ctx, target, object);
+    enum OS os = ctx->target.os == OS_NATIVE ? BUILD_OS : ctx->target.os;
+    if(os == OS_LINUX){
+        b_linkarg(ctx, target, "-ldl");
+    }
+    if(os != OS_WINDOWS) return;
+    if(target->compiler_flavor == COMPILER_GCC_MINGW)
+        b_linkarg(ctx, target, "-lonecore");
+}
+
+static
+BuildTarget*
+build_native_capture(BuildCtx* ctx){
+    enum CompilerFlavor flavor = ctx->target.os == OS_NATIVE ? ctx->build_compiler_flavor : ctx->target.compiler_flavor;
+    if(flavor != COMPILER_CL && flavor != COMPILER_CLANG_CL){
+        BuildTarget* obj = b_obj_target(ctx, "native_capture", "C/asm/nc_capture.S", ctx->target.os, B_COMPILE_NO_SANITIZE|B_COMPILE_DEBUG_INFO);
+        CStringView source = obj->cmd.args.data[--obj->cmd.args.count];
+        b_args(ctx, obj, "-x", "assembler-with-cpp");
+        cmd_arg(&obj->cmd, source);
+        return obj;
+    }
+    Atom path = b_atomize_f(ctx, "%s/native_capture.obj", ctx->obj_dir->data);
+    BuildTarget* obj = b_cmd_target(ctx, path->data, "ml64");
+    obj->is_binary = 1;
+    b_args(ctx, obj, "/nologo", "/c");
+    b_argf(ctx, obj, "/DNC_CAPTURE_TABLE_SIZE=%d", NC_CAPTURE_X64_TABLE_SIZE);
+    b_argf(ctx, obj, "/Fo%s", path->data);
+    b_src_inp(ctx, obj, "C/asm/nc_capture_win64.asm");
+    return obj;
 }
 
 static

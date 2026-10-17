@@ -1,6 +1,9 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#if defined __linux__ && !defined _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
 #include "../Drp/compiler_warnings.h"
@@ -445,7 +448,7 @@ int main(int argc, char** argv){
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
-#include "native_call.c"
+#include "nc_native_call.c"
 
 #ifdef __DRC__
 #include "../Vendored/softfloat/softfloat_unity.c"

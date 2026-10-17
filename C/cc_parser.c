@@ -1906,7 +1906,6 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
             CcStruct* record = Allocator_alloc(cc_allocator(p), sizeof *record);
             if(!record) return CC_OOM_ERROR;
             *record = *b;
-            record->ffi_cache = NULL;
             record->methods.capacity = record->methods.count;
             record->methods.data = NULL;
             if(b->methods.count){

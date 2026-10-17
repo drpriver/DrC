@@ -24,20 +24,22 @@
 #endif
 
 typedef struct CiInterpFrame CiInterpFrame;
+typedef union NcCallState NcCallState;
 struct CiInterpFrame {
     _Alignas(16) CiInterpFrame*_Null_unspecified parent;
     Atom name;
     size_t pc;
     size_t op_count;
-    const CiOp*_Null_unspecified ops;
-    void*_Null_unspecified slots; // params/locals/temps storage; the frame's
+    const CiOp *_Null_unspecified ops;
+    void *_Null_unspecified slots; // params/locals/temps storage; the frame's
                                   // trailing data for call frames, an
                                   // interpreter-owned buffer for the top frame
     void* return_buf;
     size_t return_size;
     size_t data_length;
-    void*_Null_unspecified varargs_buf; // either borrowed buffer or trailing data.
-    CiStack*_Null_unspecified stack;
+    NcCallState * _Null_unspecified incoming;
+    NcCallPlan *_Null_unspecified abi;
+    CiStack *_Null_unspecified stack;
     CiStackMark stack_mark; // rewind point before this frame's allocation
 };
 _Static_assert(_Alignof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
@@ -50,6 +52,7 @@ struct CiVirtualLib {
 
 typedef struct CiModule CiModule;
 typedef struct CiTlsThread CiTlsThread;
+typedef struct CiClosureData CiClosureData;
 
 typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
@@ -62,6 +65,7 @@ struct CiInterpreter {
     uint32_t toplevel_slot_size; // bytes of slot storage the toplevel ops need
     uint32_t toplevel_slots_cap;
     void*_Null_unspecified toplevel_slots;
+    void* _Null_unspecified toplevel_storage;
     union {
         uint32_t flags;
         struct {
@@ -77,8 +81,8 @@ struct CiInterpreter {
     AtomMap opened_libs;
     AtomMap lib_paths;
     PointerMap(CiModule*, CiModule*) modules;
-    PointerMap(CcFunction*, NativeCallCache*) ffi_cache;
     BidiPointerMap(CcFunc*, void(*)(void)) closure_map;
+    CiClosureData* _Nullable closures;
     LOCK_T error_lock,
            atom_lock,
            resolve_lock;
@@ -104,7 +108,6 @@ struct CiArg {
 static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
 static int ci_interp_run(CiInterpreter*, CiInterpFrame*);
 static int ci_prepare_toplevel(CiInterpreter*);
-static int ci_link_ops(CiInterpreter*, const CiOp*, size_t);
 static int ci_append_lib_path(CiInterpreter*, StringView);
 static int ci_register_pragmas(CiInterpreter*);
 static int ci_preload_system_libs(CiInterpreter*);

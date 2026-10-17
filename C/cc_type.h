@@ -314,7 +314,6 @@ struct CC_ALIGN(8) CcStruct {
         uint32_t count, capacity;
         CcField* _Null_unspecified data;
     } methods;
-    void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;
         CcArm64Aggregate arm64;
@@ -347,7 +346,6 @@ struct CC_ALIGN(8) CcUnion {
         uint32_t count, capacity;
         CcField* _Null_unspecified data;
     } methods;
-    void*_Null_unspecified ffi_cache; // opaque, managed by native_call.c
     union {
         CcSysvAggregate sysv;
         CcArm64Aggregate arm64;

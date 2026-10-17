@@ -93,8 +93,9 @@ purely convenience.
 
 <details><summary>Dependencies</summary>
 
-Depends on libffi. On Linux/macOS, assumes you can just do `-lffi` and
-that just works. On Windows, the build system fetches libffi binaries.
+We have no dependencies besides a working C toolchain (compiler and assembler).
+We used to depend on libffi (shout-out to them), but we now roll our own
+native dynamic FFI system.
 
 </details>
 

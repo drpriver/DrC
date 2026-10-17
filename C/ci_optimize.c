@@ -27,15 +27,13 @@ ci_inline_cleanup(Marray(CiOp)* code, Allocator al){
 
 typedef struct CiInlineSlots CiInlineSlots;
 struct CiInlineSlots {
-    uint32_t base,
-             args_slot,
-             args_size;
+    uint32_t base;
 };
 
 static
 uint32_t
 ci_inline_slot(const CiInlineSlots* slots, uint32_t slot){
-    return slot < slots->args_size ? slots->args_slot+slot : slots->base+slot;
+    return slots->base + slot;
 }
 
 static
@@ -44,6 +42,12 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
 #define CI_REMAP(slot) ((slot) = ci_inline_slot(slots, (slot)))
     switch(op->kind){
         DRP_CASES_EXHAUSTED;
+        case CI_OP_ABI_INIT:
+        case CI_OP_ABI_ARG:
+        case CI_OP_ABI_RESULT:
+            if(op->abi.slot != UINT32_MAX) CI_REMAP(op->abi.slot);
+            if(!op->abi.incoming) CI_REMAP(op->abi.state);
+            break;
         case CI_OP_CONST:
             CI_REMAP(op->constant.slot);
             break;
@@ -291,12 +295,7 @@ ci_inline_expand(CiInterpreter* ci, Marray(CiOp)* out, const CiOp* call, CcFunc*
     uint32_t* map = Allocator_alloc(al, (body->count+1)*sizeof *map);
     if(!map) return CI_OOM_ERROR;
     int err = 0;
-    CiCallDescriptor* d = call->call.descrip;
-    CiInlineSlots slots = {
-        .base=base-(d->fixed_size & ~15u),
-        .args_slot=call->call.args_slot,
-        .args_size=d->fixed_size,
-    };
+    CiInlineSlots slots = {.base = base};
     uint32_t pc = (uint32_t)out->count;
     for(size_t i = 0; i < body->count; i++){
         map[i] = pc;
@@ -307,15 +306,29 @@ ci_inline_expand(CiInterpreter* ci, Marray(CiOp)* out, const CiOp* call, CcFunc*
         CiOp op = body->data[i];
         if(op.kind == CI_OP_RETURN || op.kind == CI_OP_RETURN_SLOT){
             if(op.kind == CI_OP_RETURN_SLOT && call->call.ret_size){
-                CiOp copy = {.copy = {.kind=CI_OP_COPY, .slot=call->call.ret_slot,
-                    .slot_size=op.return_slot.src_size, .src=ci_inline_slot(&slots, op.return_slot.src),
-                    .src_size=op.return_slot.src_size, .loc=op.loc}};
-                if(ma_push(CiOp)(out, al, copy)){ err = CI_OOM_ERROR; goto cleanup; }
+                CiOp copy = {.abi = {
+                    .kind = CI_OP_ABI_RESULT,
+                    .write = 1,
+                    .slot = ci_inline_slot(&slots, op.return_slot.src),
+                    .state = call->call.args_slot,
+                    .plan = f->interp_ops->abi,
+                    .loc = op.loc,
+                }};
+                err = ma_push(CiOp)(out, al, copy);
+                if(err) goto cleanup;
             }
             if(i+1 != body->count){
                 CiOp jump = {.jump = {.kind=CI_OP_JUMP, .jump=end, .loc=op.loc}};
-                if(ma_push(CiOp)(out, al, jump)){ err = CI_OOM_ERROR; goto cleanup; }
+                err = ma_push(CiOp)(out, al, jump);
+                if(err) goto cleanup;
             }
+        }
+        else if(op.kind == CI_OP_ABI_ARG && op.abi.incoming){
+            op.abi.incoming = 0;
+            op.abi.state = call->call.args_slot;
+            op.abi.slot = ci_inline_slot(&slots, op.abi.slot);
+            err = ma_push(CiOp)(out, al, op);
+            if(err) goto cleanup;
         }
         else {
             err = ci_inline_append(ci, out, op, &slots, map);
@@ -346,8 +359,8 @@ ci_inline_code(CiInterpreter* ci, Marray(CiOp)* code, uint32_t* frame_size, size
         map[i] = (uint32_t)count;
         CcFunc* f = i >= start ? ci_inline_candidate(&code->data[i]) : NULL;
         if(f){
-            uint32_t prefix = code->data[i].call.descrip->fixed_size & ~15u;
-            if(base+f->frame_size-prefix > size) size = base+f->frame_size-prefix;
+            if(base + f->frame_size > size)
+                size = base + f->frame_size;
             for(size_t j = 0; j < f->interp_ops->code.count; j++)
                 count += ci_inline_op_size(&f->interp_ops->code.data[j], &code->data[i], j+1 == f->interp_ops->code.count);
         }
@@ -459,13 +472,16 @@ ci_inline_toplevel(CiInterpreter* ci){
     if(err) return err;
     if(ci->toplevel_slot_size > ci->toplevel_slots_cap){
         uint32_t cap = ci->toplevel_slot_size;
-        void* slots = Allocator_zalloc(ci_allocator(ci), cap);
-        if(!slots) return CI_OOM_ERROR;
+        // FIXME: allocators need alignment argument
+        void* storage = Allocator_zalloc(ci_allocator(ci), (size_t)cap + 63);
+        if(!storage) return CI_OOM_ERROR;
+        void* slots = (void*)(((uintptr_t)storage + 63) & ~(uintptr_t)63);
         if(ci->toplevel_slots){
             memcpy(slots, ci->toplevel_slots, ci->toplevel_slots_cap);
-            Allocator_free(ci_allocator(ci), ci->toplevel_slots, ci->toplevel_slots_cap);
+            Allocator_free(ci_allocator(ci), ci->toplevel_storage, (size_t)ci->toplevel_slots_cap + 63);
         }
         ci->toplevel_slots = slots;
+        ci->toplevel_storage = storage;
         ci->toplevel_slots_cap = cap;
     }
     ci->toplevel_inlined = ci->toplevel_ops.count;

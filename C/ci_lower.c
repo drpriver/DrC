@@ -9,6 +9,7 @@
 #include "ci_op.h"
 #include "cc_errors.h"
 #include "srcloc.h"
+#include "nc_native_call.h"
 #include "../Drp/atom.h"
 #include "../Drp/merge_sort.h"
 #include "../Drp/ckdint.h"
@@ -1585,11 +1586,35 @@ ci_preserve_value(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerVal* val
     return 0;
 }
 
+// FIXME: Storage and ABI transfers preserve bfloat16 bits without arithmetic support.
+// but we should have arithmetic support
+static
+_Bool
+ci_bfloat_storage_expr(const CcExpr* e){
+    switch((uint32_t)e->kind){
+        case CC_EXPR_VARIABLE:
+        case CC_EXPR_DEREF:
+        case CC_EXPR_ARROW:
+        case CC_EXPR_DOT:
+        case CC_EXPR_SUBSCRIPT:
+        case CC_EXPR_CALL:
+        case CC_EXPR_ASSIGN:
+        case CC_EXPR_COMMA:
+        case CC_EXPR_TERNARY:
+        case CC_EXPR_OBJECT_VIEW:
+            return 1;
+        case CC_EXPR_CAST:
+            return ccqt_unaligned(e->type).unqual == ccqt_unaligned(e->lhs->type).unqual;
+        default:
+            return 0;
+    }
+}
+
 static
 int
 ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     int err;
-    if(ccqt_bt_eq(e->type, CCBT_bfloat16)){
+    if(ccqt_bt_eq(e->type, CCBT_bfloat16) && !ci_bfloat_storage_expr(e)){
         ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
     }
@@ -3955,48 +3980,15 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         err = ci_lower_expr_dest(ci, ctx, e, &dest, ret_size);
         if(err) return err;
     }
-    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d + nargs * 3 * sizeof d->arg_sizes[0]);
+    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d);
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
     d->nargs = nargs;
-    d->arg_offsets = d->arg_sizes + nargs;
-    d->native_arg_offsets = d->arg_offsets + nargs;
-    uint32_t buffer_align = 16;
     for(uint32_t i = 0; i < nargs; i++){
-        uint32_t asz, align;
-        err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &asz);
+        uint32_t size;
+        err = cc_sizeof_as_uint(p, e->values[i]->type, e->values[i]->loc, &size);
         if(err) return err;
-        d->arg_sizes[i] = asz;
-        if(i < ftype->param_count){
-            err = cc_alignof_as_uint(p, ccqt_unaligned(ftype->params[i]), e->loc, &align);
-            if(err) return err;
-        }
-        else {
-            err = cc_alignof_as_uint(p, ccqt_unaligned(e->values[i]->type), e->values[i]->loc, &align);
-            if(err) return err;
-            if(align > CI_ASSUMED_VARARG_ALIGN)
-                return ci_error(ci, e->values[i]->loc, "variadic arguments requiring alignment greater than 8 bytes are not supported");
-            align = CI_ASSUMED_VARARG_ALIGN; // Variadic values occupy whole 8-byte slots.
-        }
-        if(align > buffer_align) buffer_align = align;
-        err = cc_align_to(p, e->loc, d->args_size, align, &d->args_size);
-        if(err) return err;
-        d->arg_offsets[i] = d->args_size;
-        CcQualType arg_type = i < ftype->param_count ? ftype->params[i] : e->values[i]->type;
-        if(!ci_arg_is_ignored(ci_target(ci)->target, arg_type))
-            d->native_arg_offsets[d->native_nargs++] = d->args_size;
-        if(i == ftype->param_count) d->varargs_offset = d->args_size;
-        uint32_t storage_size = i >= ftype->param_count && asz < 8 ? 8 : asz;
-        if(add_overflow(d->args_size, storage_size, &d->args_size))
-            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
-        if(i < ftype->param_count) d->fixed_size = d->args_size;
-        else {
-            err = cc_align_to(p, e->loc, d->args_size, CI_ASSUMED_VARARG_ALIGN, &d->args_size);
-            if(err) return err;
-        }
     }
-    if(nargs <= ftype->param_count)
-        d->varargs_offset = d->args_size;
     d->call_type = ftype;
     if(ftype->is_variadic && nargs > ftype->param_count){
         CcQualType* types = Allocator_alloc(ctx->a, nargs * sizeof *types);
@@ -4008,39 +4000,52 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         if(!call_type) return CI_OOM_ERROR;
         d->call_type = call_type;
     }
-    err = ci_lower_native_signature(ci, ctx->a, d->call_type, &d->native_call_type);
-    if(err) return err;
-    uint32_t prefix = func ? 0 : buffer_align;
-    uint32_t buffer_size;
-    err = cc_align_to(p, e->loc, d->args_size, ctx->ptr_size, &buffer_size);
-    if(err) return err;
-    // TODO: Native calls need a buffer for libffi calls (which takes an array
-    //       of pointers to the args).
-    //       Allocate it on our frame for now, when we write our own ffi
-    //       backend we can generate a thunk or something instead.
-    if(!func || !func->defined){
-        uint32_t native_size;
-        if(mul_overflow(d->native_nargs, ctx->ptr_size, &native_size)
-            || add_overflow(buffer_size, native_size, &buffer_size))
-            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
+    err = nc_plan_create(ctx->a, ci_target(ci), d->call_type, &d->abi);
+    if(err == _cc_overflow_error)
+        return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
+    if(err == _cc_unimplemented_error){
+        ci_error(ci, e->loc, "call argument failed to lower");
+        return _cc_unimplemented_error;
     }
-    if(add_overflow(buffer_size, prefix, &buffer_size))
+    if(err) return err;
+    size_t state_size = nc_state_size(d->abi);
+    if(state_size > UINT32_MAX - 64)
         return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
     uint32_t args_slot;
-    err = ci_alloc_slot(ctx, buffer_size, buffer_align, &args_slot);
+    err = ci_alloc_slot(ctx, (uint32_t)state_size + 64, 64, &args_slot);
     if(err) return err;
+    args_slot += 64; // room before the state for an indirect function pointer
     if(!func){
         CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, callee, args_slot + prefix - 8, &v);
-        if(err) return err;
-        args_slot += prefix;
-    }
-    for(uint32_t i = 0; i < nargs; i++){
-        CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, e->values[i], args_slot + d->arg_offsets[i], &v);
+        err = ci_lower_expr(ci, ctx, callee, args_slot - 8, &v);
         if(err) return err;
     }
     CiOp* op;
+    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){.abi = {
+        .kind = CI_OP_ABI_INIT,
+        .state = args_slot,
+        .slot = ret_size ? dest : CI_NO_SLOT,
+        .plan = d->abi,
+        .loc = e->loc,
+    }};
+    for(uint32_t i = 0; i < nargs; i++){
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, e->values[i], CI_NO_SLOT, &v);
+        if(err) return err;
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.abi = {
+            .kind = CI_OP_ABI_ARG,
+            .write = 1,
+            .state = args_slot,
+            .slot = v.slot,
+            .index = i,
+            .plan = d->abi,
+            .loc = e->loc,
+        }};
+    }
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
@@ -4054,6 +4059,17 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             .loc = e->loc,
         }
     };
+    if(ret_size){
+        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.abi={
+            .kind = CI_OP_ABI_RESULT,
+            .state = args_slot,
+            .slot = dest,
+            .plan = d->abi,
+            .loc = e->loc,
+        }};
+    }
     ctx->temp = temp;
     return 0;
 }
@@ -5388,8 +5404,6 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         uint32_t size, align;
         err = cc_alignof_as_uint(p, ccqt_unaligned(e->type), e->loc, &align);
         if(err) return err;
-        if(align > CI_ASSUMED_VARARG_ALIGN)
-            return ci_error(ci, e->loc, "va_arg types requiring alignment greater than %d bytes are not supported", CI_ASSUMED_VARARG_ALIGN);
         err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
         if(err) return err;
         err = ci_lower_dest(ctx, &dest, size, align);
@@ -5399,21 +5413,24 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         CiLowerVal ap;
         err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &ap);
         if(err) return err;
-        _Bool is_fp = ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type));
+        NcAbiType type;
+        err = nc_abi_type(ci_target(ci), e->type, NC_ABI_VARIADIC_ARGUMENT, &type);
+        if(err) return err;
         CiOp* op;
         err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
         if(err) return err;
-        *op = (CiOp){
-            .va_arg_ = {
-                .kind = CI_OP_VA_ARG,
-                .is_fp = is_fp,
-                .slot = dest,
-                .slot_size = size,
-                .src = ap.slot,
-                .loc = e->loc,
-                .target = ci_target(ci)->target,
-            },
-        };
+        *op = (CiOp){.va_arg_={
+            .kind = CI_OP_VA_ARG,
+            .align_log2 = type.align_log2,
+            .count = type.count,
+            .mode = type.mode,
+            .pieces = {type.pieces[0], type.pieces[1], type.pieces[2], type.pieces[3]},
+            .slot = dest,
+            .size = type.size,
+            .src = ap.slot,
+            .loc = e->loc,
+            .target = ci_target(ci)->target,
+        }};
         ctx->temp = temp;
         return 0;
     }
@@ -5428,10 +5445,10 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
             break;
         case CC_TARGET_X86_64_LINUX:
         case CC_TARGET_X86_64_MACOS:
-            n = sizeof(CiSysvVaListTag);
+            n = sizeof(NcSysvVaListTag);
             break;
         case CC_TARGET_AARCH64_LINUX:
-            n = sizeof(CiAapcs64VaList);
+            n = sizeof(NcAapcs64VaList);
             break;
         case CC_TARGET_COUNT:
             return ci_error(ci, e->loc, "va_copy: unsupported target");
@@ -5586,7 +5603,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         ctx->temp = temp;
         return err;
     }
-    if(ccqt_bt_eq(e->type, CCBT_bfloat16)){
+    if(ccqt_bt_eq(e->type, CCBT_bfloat16) && !ci_bfloat_storage_expr(e)){
         ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
     }
@@ -7093,12 +7110,26 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     err = ci_constexpr_dependencies(ci, &ctx, &storage);
     if(err) goto finally;
     pa_cleanup(&storage, al);
+    err = nc_plan_create(al, t, f->type, &ops->abi);
+    if(err) goto finally;
+    for(size_t i = 0; i < f->params.count; i++){
+        CiOp param = {.abi = {
+            .kind = CI_OP_ABI_ARG,
+            .incoming = 1,
+            .index = (uint32_t)i,
+            .plan = ops->abi,
+            .loc = f->loc,
+        }};
+        err = ma_push(CiOp)(&ops->code, al, param);
+        if(err) goto finally;
+    }
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
     if(err) goto finally;
     uint32_t native_index = 0;
     for(size_t i = 0; i < f->params.count; i++){
         CcVariable* var = f->body_tree->decls.data[i];
         f->params.data[i].offset = (uint32_t)var->frame_offset;
+        ops->code.data[i].abi.slot = (uint32_t)var->frame_offset;
         f->params.data[i].native_index = ci_arg_is_ignored(t->target, var->type) ? UINT32_MAX : native_index++;
         err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &f->params.data[i].sz);
         if(err) goto finally;
@@ -7201,11 +7232,14 @@ ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
     if(err) return err;
     if(ci->toplevel_slot_size > ci->toplevel_slots_cap){
         uint32_t new_cap = ci->toplevel_slot_size * 2;
-        void* slots = Allocator_zalloc(ci_allocator(ci), new_cap);
-        if(!slots) return CI_OOM_ERROR;
+        // FIXME: allocators need alignment param, overallocate and align ourselves.
+        void* storage = Allocator_zalloc(ci_allocator(ci), (size_t)new_cap + 63);
+        if(!storage) return CI_OOM_ERROR;
+        void* slots = (void*)(((uintptr_t)storage + 63) & ~(uintptr_t)63);
         if(ci->toplevel_slots)
-            Allocator_free(ci_allocator(ci), ci->toplevel_slots, ci->toplevel_slots_cap);
+            Allocator_free(ci_allocator(ci), ci->toplevel_storage, (size_t)ci->toplevel_slots_cap + 63);
         ci->toplevel_slots = slots;
+        ci->toplevel_storage = storage;
         ci->toplevel_slots_cap = new_cap;
     }
     ci->top_frame.ops = ci->toplevel_ops.data;

@@ -1,6 +1,9 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#if defined __linux__ && !defined _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #include "Drp/windowsheader.h"
 #include <stdlib.h>
 #include <inttypes.h>
@@ -22,12 +25,12 @@
 #include "C/cc_tok.h"
 #include "C/cc_errors.h"
 #include "C/cc_parser.h"
-#include "C/native_call.h"
 #include "C/ci_interp.h"
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
 #include "C/ci_op_printer.h"
 #include "C/cc_printer.h"
+#include "C/nc_asm_bridge.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -348,6 +351,23 @@ int main(int argc, char** argv, char** envp){
             err = ci_register_sym(&cc_interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
             if(err) goto stringify_error;
         }
+        #ifndef NO_NATIVE_CALL
+        // Temporary self-hosting bridge: expose assembly addresses through the
+        // interpreter's symbol table without exporting them from the executable.
+        static const struct {
+            StringView symname; const void* sym;
+        } bridge_syms[] = {
+            { SVI("nc_abi_invoke"), (void*)&nc_abi_invoke },
+            { SVI("nc_capture_slots"), nc_capture_slots },
+            { SVI("nc_capture_slots_end"), nc_capture_slots_end },
+            { SVI("nc_capture_entry"), (void*)&nc_capture_entry },
+        };
+        for(size_t i = 0; i < countof(bridge_syms); i++){
+            err = ci_register_sym(&cc_interp, SV("native_bridge"), bridge_syms[i].symname,
+                (void*)(uintptr_t)bridge_syms[i].sym);
+            if(err) goto stringify_error;
+        }
+        #endif
     }
     err = cc_register_pragmas(&cc_interp.parser);
     if(err) goto stringify_error;
@@ -1038,7 +1058,7 @@ cc_stringify_error(int err){
 #include "C/cpp_preprocessor.c"
 #include "C/cc_parser.c"
 #include "Drp/get_input.c"
-#include "C/native_call.c"
+#include "C/nc_native_call.c"
 #include "C/ci_interp.c"
 #include "Drp/dre.c"
 

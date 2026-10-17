@@ -10,6 +10,7 @@
 #include "cc_expr.h"
 #include "cc_memory_order.h"
 #include "cc_target.h"
+#include "nc_native_call.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
 
@@ -89,6 +90,9 @@ enum CiRuntimeOp TYPED_ENUM(uint32_t){
 TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
 
 enum CiOpKind TYPED_ENUM(uint32_t){
+    CI_OP_ABI_INIT,
+    CI_OP_ABI_ARG,
+    CI_OP_ABI_RESULT,
     CI_OP_CONST,
     CI_OP_COPY,
     CI_OP_ALU_IMM32,
@@ -158,15 +162,10 @@ TYPEDEF_ENUM(CiOpKind, uint32_t);
 
 typedef struct CiCallDescriptor CiCallDescriptor;
 struct CiCallDescriptor {
+    NcCallPlan* _Nonnull abi;
     CcFunc* _Nonnull func;
     CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
-    CcFunction*_Nonnull native_call_type; // lowered ABI signature, excluding ignored arguments
     uint32_t nargs;
-    uint32_t native_nargs;
-    uint32_t fixed_size, varargs_offset, args_size;
-    uint32_t* _Nonnull arg_offsets;
-    uint32_t* _Nonnull native_arg_offsets; // ABI argument order, excluding ignored arguments
-    uint32_t arg_sizes[];
 };
 
 typedef struct CiSwitchTable CiSwitchTable;
@@ -178,6 +177,13 @@ struct CiSwitchTable {
 typedef struct CiOp CiOp;
 struct CiOp {
     union {
+        struct {
+            CiOpKind kind : 8;
+            uint32_t write : 1, incoming : 1, _pad : 22;
+            uint32_t slot, state, index;
+            NcCallPlan* _Nonnull plan;
+            SrcLoc loc;
+        } abi; // incoming selects the incoming call state; otherwise state is a slot offset
         struct {
             CiOpKind kind: 8;
             uint32_t _bitpad: 24;
@@ -598,11 +604,12 @@ struct CiOp {
         } va_start_;
         struct {
             CiOpKind kind: 8; // CI_OP_VA_ARG
-            uint32_t is_fp: 1,
-                     _bitpad: 23;
-            uint32_t slot, slot_size,
+            uint32_t target : 8, align_log2 : 5, count : 3;
+            NcAbiMode mode : 2;
+            uint32_t _bitpad : 6;
+            uint32_t slot, size,
                      src;
-            CcTarget target;
+            NcAbiPiece pieces[4];
             SrcLoc loc;
         } va_arg_;
     };
@@ -618,7 +625,7 @@ _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump),
 #include "../Drp/Marray.h"
 #endif
 
-enum CiInlineState TYPED_ENUM(uint8_t) {
+enum CiInlineState TYPED_ENUM(uint8_t){
     CI_INLINE_UNVISITED,
     CI_INLINE_VISITING,
     CI_INLINE_FINISHED,
@@ -628,8 +635,9 @@ TYPEDEF_ENUM(CiInlineState, uint8_t);
 // The lowered code of one function, hung off CcFunc.interp_ops.
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
+    NcCallPlan* _Nonnull abi;
     Marray(CiOp) code;
-    CcFunction*_Nonnull native_type; // lowered callback ABI signature
+    CcFunction* _Nonnull native_type; // embedding API signature, excluding ignored arguments
     uint32_t frame_alignment;
     CiInlineState inline_state; // 0: unvisited, 1: visiting, 2: prepared for execution
     _Bool inline_blocked; // Recursive cycle or an operation requiring its own frame.

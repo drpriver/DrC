@@ -138,6 +138,20 @@ static
 void
 ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
     switch(op->kind){
+        case CI_OP_ABI_INIT:
+            msb_sprintf(out, "abi.%s%s", "init", op->abi.write ? ".write" : ".read");
+            goto op_abi;
+        case CI_OP_ABI_ARG:
+            msb_sprintf(out, "abi.%s%s", "arg", op->abi.write ? ".write" : ".read");
+            goto op_abi;
+            break;
+        case CI_OP_ABI_RESULT:
+            msb_sprintf(out, "abi.%s%s", "result", op->abi.write ? ".write" : ".read");
+            op_abi:;
+            if(op->abi.incoming) msb_write_literal(out, " state=incoming");
+            else msb_sprintf(out, " state=%u", op->abi.state);
+            msb_sprintf(out, " slot=%u index=%u", op->abi.slot, op->abi.index);
+            break;
         case CI_OP_RT_CALL:
             if(op->rt_call.slot_size){
                 ci_op_print_range(out, op->rt_call.slot, op->rt_call.slot_size);
@@ -540,10 +554,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                     msb_write_literal(out, " = ");
                 }
                 msb_sprintf(out, "call *[%u](", op->call.args_slot - 8);
-                for(uint32_t i = 0; i < d->nargs; i++){
-                    if(i) msb_write_literal(out, ", ");
-                    ci_op_print_range(out, op->call.args_slot + d->arg_offsets[i], d->arg_sizes[i]);
-                }
+                msb_sprintf(out, "ABI state @%u", op->call.args_slot);
                 msb_write_char(out, ')');
             }else {
                 Atom name = d->func->name;
@@ -553,10 +564,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                     msb_write_literal(out, " = ");
                 }
                 msb_sprintf(out, "call %s(", s);
-                for(uint32_t i = 0; i < d->nargs; i++){
-                    if(i) msb_write_literal(out, ", ");
-                    ci_op_print_range(out, op->call.args_slot + d->arg_offsets[i], d->arg_sizes[i]);
-                }
+                msb_sprintf(out, "ABI state @%u", op->call.args_slot);
                 msb_write_char(out, ')');
             }
         } break;
@@ -663,8 +671,8 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, "va_start(*[%u])", op->va_start_.slot);
             break;
         case CI_OP_VA_ARG:
-            ci_op_print_range(out, op->va_arg_.slot, op->va_arg_.slot_size);
-            msb_sprintf(out, " = va_arg(*[%u])%s", op->va_arg_.src, op->va_arg_.is_fp?" (fp)":"");
+            ci_op_print_range(out, op->va_arg_.slot, op->va_arg_.size);
+            msb_sprintf(out, " = va_arg(*[%u])", op->va_arg_.src);
             break;
     }
 }

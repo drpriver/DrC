@@ -9,17 +9,15 @@ let pkgs = import <nixpkgs> {
                 includeSep = if host.isWindows then ";" else ":";
                 includePath = final.lib.concatStringsSep includeSep [
                     "${final.lib.getDev libc}/include"
-                    "${final.lib.getDev final.libffi}/include"
                 ];
                 compilerIncludeHook = final.lib.optionalString (host.isWindows && self.drc.stdenv.cc.isGNU) ''
                     export DRC_INCLUDE_PATH="$DRC_INCLUDE_PATH;$("$CC" -print-file-name=include)"
                 '';
                 winePath = final.lib.concatStringsSep ";" [
-                    "${final.lib.getLib final.libffi}/bin"
                     "${ccLib}/${host.config}/lib"
                     "${final.threads.package}/bin"
                 ];
-                libraryPath = final.lib.makeLibraryPath [ final.libffi ccLib ];
+                libraryPath = final.lib.makeLibraryPath [ ccLib ];
             in {
                 drc = self.callPackage ./package.nix {};
                 tests =

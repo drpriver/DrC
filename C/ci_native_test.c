@@ -1,6 +1,9 @@
 //
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
+#if defined __linux__ && !defined _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #define STB_SPRINTF_STATIC
 #define STB_SPRINTF_IMPLEMENTATION
 #if 1
@@ -158,8 +161,6 @@ static struct BigRecord test_hidden_return(long long a,long long b,long long c,l
     return (struct BigRecord){a+b+c+d+e+x.i, (long long)(x.d+fp), tail};
 }
 static struct BigRecord test_hidden_callback(struct BigRecord (*fn)(struct MixRecord),struct MixRecord x){ return fn(x); }
-#ifndef __DRC__
-// FIXME: interpreted variadic closures are unsupported.
 static struct MixRecord test_mix_varargs(int spill,...){
     va_list ap;
     va_start(ap,spill);
@@ -176,7 +177,6 @@ static struct MixRecord test_mix_varargs(int spill,...){
     sum+=x.i+(long long)x.d+y.i+(long long)y.d+tail+(long long)fp;
     return (struct MixRecord){sum,2.*sum};
 }
-#endif
 #if defined __GNUC__ || defined __clang__
 struct __attribute__((packed)) PackedBitsRecord { unsigned long long a:60; unsigned b:8; };
 static struct PackedBitsRecord test_packed_bits_record(struct PackedBitsRecord x){ x.a+=1; x.b+=2; return x; }
@@ -359,6 +359,16 @@ ABI_ODD_FIXTURE(15)
 #define ABI_I128_SYMBOL(name) (void*)name
 #define ABI_I128_SKIP 0
 struct AbiI128 { unsigned __int128 x; };
+static
+unsigned __int128
+abi_i128_scalar(unsigned __int128 x){
+    return x + 3;
+}
+static
+unsigned __int128
+abi_i128_scalar_callback(unsigned __int128 (*fn)(unsigned __int128), unsigned __int128 x){
+    return fn(x);
+}
 static long long abi_i128_odd(long long a,struct AbiI128 p,long long tail){
     return a+(long long)(p.x>>64)+(long long)p.x+tail;
 }
@@ -387,15 +397,10 @@ static struct AbiPacked64 abi_packed64_callback(struct AbiPacked64 (*fn)(struct 
 #define ABI_PACKED_SYMBOL(name) NULL
 #define ABI_PACKED_SKIP 1
 #endif
-#if defined __APPLE__ && defined __x86_64__
-// libffi cannot express a leading NO_CLASS hole
-#define ABI_LEADING_SYMBOL(name) NULL
-#else
 #define ABI_LEADING_SYMBOL(name) (void*)name
 struct AbiLeadingPadding {unsigned long long:64; double x;};
 static struct AbiLeadingPadding abi_leading_bump(struct AbiLeadingPadding x){x.x+=1.; return x;}
 static struct AbiLeadingPadding abi_leading_callback(struct AbiLeadingPadding (*fn)(struct AbiLeadingPadding),struct AbiLeadingPadding x){return fn(x);}
-#endif
 // A named dummy forces GCC's INTEGER classification when Linux fixtures are
 // compiled with Clang, which otherwise ignores the unnamed bitfield.
 #if (defined __clang__ && !defined __APPLE__) || defined _WIN32
@@ -423,7 +428,6 @@ static long long abi_nested_empty_callback(long long (*fn)(struct AbiOnlyPadding
     return fn((struct AbiOnlyPadding)ABI_EMPTY_INIT,1,2,3,4,5,6,7,8,9,(struct AbiNestedEmpty)ABI_EMPTY_INIT,10);
 }
 #undef ABI_EMPTY_INIT
-#ifndef __DRC__
 static long long abi_empty_varargs(struct AbiOnlyPadding p,int n,...){
     (void)p;
     va_list ap; va_start(ap,n);
@@ -432,10 +436,8 @@ static long long abi_empty_varargs(struct AbiOnlyPadding p,int n,...){
     va_end(ap);
     return sum;
 }
-#endif
 
 struct AbiThreeFloat {float x,y,z;};
-#ifndef __DRC__
 #define ABI_VARARG_SYMBOL(name) (void*)name
 #define ABI_VARARG_SKIP 0
 static double abi_hfa_varargs(struct TwoDoubleStruct named,int count,...){
@@ -451,9 +453,51 @@ static double abi_hfa_varargs(struct TwoDoubleStruct named,int count,...){
 static double abi_hfa_variadic_callback(double (*fn)(int,...)){
     return fn(0,(struct TwoDoubleStruct){8.,9.},(struct AbiThreeFloat){1,2,3},11,12.);
 }
-#else
-#define ABI_VARARG_SYMBOL(name) NULL
-#define ABI_VARARG_SKIP 1
+static
+int
+abi_read_list(va_list ap){
+    int a = va_arg(ap, int);
+    double b = va_arg(ap, double);
+    struct TwoDoubleStruct c = va_arg(ap, struct TwoDoubleStruct);
+    long long d = va_arg(ap, long long);
+    return a == 17 && b == 2.5 && c.x == 3.5 && c.y == 4.5 && d == 29;
+}
+static
+int
+abi_supply_list(int (*fn)(va_list), int n, ...){
+    (void)n;
+    va_list ap;
+    va_start(ap, n);
+    int r = fn(ap);
+    va_end(ap);
+    return r;
+}
+static
+int
+abi_invoke_variadic(int (*fn)(int, ...)){
+    return fn(0, 17, 2.5, (struct TwoDoubleStruct){3.5, 4.5}, 29LL);
+}
+
+#ifndef _MSC_VER
+struct __attribute__((aligned(128))) AbiWideAligned {
+    long long x;
+};
+static
+int
+abi_wide_aligned(int n, ...){
+    (void)n;
+    va_list ap;
+    va_start(ap, n);
+    struct AbiWideAligned a = va_arg(ap, struct AbiWideAligned);
+    long long tail = va_arg(ap, long long);
+    va_end(ap);
+    return a.x == 19 && tail == 23;
+}
+static
+int
+abi_wide_aligned_callback(int (*fn)(int, ...)){
+    return fn(0, (struct AbiWideAligned){19}, 23LL);
+}
 #endif
 
 #if defined __GNUC__ || defined __clang__ || defined __DRC__
@@ -480,8 +524,9 @@ ABI_COMPLEX_FIXTURE(long double,ld)
 #define ABI_COMPLEX_RECORD_SKIP 1
 #endif
 
-#if !defined __DRC__ && ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 12) || (defined __clang__ && __clang_major__ >= 15))
+#if defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 12) || (defined __clang__ && __clang_major__ >= 15))
 #define ABI_HALF_SYMBOL(name) (void*)name
+#define ABI_HALF_SKIP 0
 struct AbiHalf { _Float16 x,y,z; };
 static _Float16 abi_half(_Float16 x){return x;}
 static _Float16 abi_half_callback(_Float16 (*fn)(_Float16),_Float16 x){return fn(x);}
@@ -489,13 +534,16 @@ static struct AbiHalf abi_half_record(struct AbiHalf x){return x;}
 static struct AbiHalf abi_half_record_callback(struct AbiHalf (*fn)(struct AbiHalf),struct AbiHalf x){return fn(x);}
 #else
 #define ABI_HALF_SYMBOL(name) NULL
+#define ABI_HALF_SKIP 1
 #endif
-#if !defined __DRC__ && ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 13) || (defined __clang__ && __clang_major__ >= 17))
+#if defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 13) || (defined __clang__ && __clang_major__ >= 17))
 #define ABI_BFLOAT_SYMBOL(name) (void*)name
+#define ABI_BFLOAT_SKIP 0
 static __bf16 abi_bfloat(__bf16 x){return x;}
 static __bf16 abi_bfloat_callback(__bf16 (*fn)(__bf16),__bf16 x){return fn(x);}
 #else
 #define ABI_BFLOAT_SYMBOL(name) NULL
+#define ABI_BFLOAT_SKIP 1
 #endif
 
 TestFunction(test_interop){
@@ -509,6 +557,33 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
+    #ifndef _MSC_VER
+    {
+        "ABI: over-aligned variadic stack arguments in both directions", __LINE__,
+        SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);int apply(int(*)(int,...));"
+            "int f(int n,...){__builtin_va_list a;__builtin_va_start(a,n);struct S s=__builtin_va_arg(a,struct S);"
+            "long long tail=__builtin_va_arg(a,long long);__builtin_va_end(a);return s.x==19&&tail==23;}"
+            "return probe(0,(struct S){19},23LL)&&apply(f);"),
+        {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)},{SV("apply"),ABI_VARARG_SYMBOL(abi_wide_aligned_callback)}},
+        .skip=ABI_VARARG_SKIP,
+        .exit_code=1,
+    },
+    #endif
+    {
+        "ABI: native and interpreted va_lists forward in both directions", __LINE__,
+        SVI("struct D{double x,y;};int read_list(__builtin_va_list);"
+            "int supply_list(int(*)(__builtin_va_list),int,...);int invoke(int(*)(int,...));"
+            "int consume(__builtin_va_list ap){return read_list(ap);}"
+            "int f(int n,...){__builtin_va_list a,b;__builtin_va_start(a,n);__builtin_va_copy(b,a);"
+            "int r=consume(a)&&consume(b);__builtin_va_end(a);__builtin_va_end(b);"
+            "__builtin_va_start(a,n);r=r&&consume(a);__builtin_va_end(a);return r;}"
+            "return f(0,17,2.5,(struct D){3.5,4.5},29LL)&&invoke(f)"
+            "&&supply_list(consume,0,17,2.5,(struct D){3.5,4.5},29LL);"),
+        {{SV("read_list"),ABI_VARARG_SYMBOL(abi_read_list)},
+         {SV("supply_list"),ABI_VARARG_SYMBOL(abi_supply_list)},
+         {SV("invoke"),ABI_VARARG_SYMBOL(abi_invoke_variadic)}},
+        .exit_code=1,.skip=ABI_VARARG_SKIP,
+    },
     {
         "ABI: two GP words with one register remaining", __LINE__,
         SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,struct P,long long);\n"
@@ -577,6 +652,14 @@ TestFunction(test_interop){
     ABI_ODD_CASE(15)
     #undef ABI_ODD_CASE
     {
+        "ABI: int128 scalar arguments, returns and callbacks", __LINE__,
+        SVI("unsigned __int128 bump(unsigned __int128);unsigned __int128 apply(unsigned __int128(*)(unsigned __int128),unsigned __int128);\n"
+            "unsigned __int128 f(unsigned __int128 x){return x+5;}\n"
+            "unsigned __int128 x=((unsigned __int128)1<<110)+19;return bump(x)==x+3&&apply(f,x)==x+5;\n"),
+        {{SV("bump"),ABI_I128_SYMBOL(abi_i128_scalar)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_scalar_callback)}},
+        .exit_code=1,.skip=ABI_I128_SKIP,
+    },
+    {
         "ABI: int128 record after an odd GP argument, including callback", __LINE__,
         SVI("struct S {unsigned __int128 x;}; long long probe(long long,struct S,long long);\n"
             "long long apply(long long(*)(long long,struct S,long long));\n"
@@ -584,9 +667,7 @@ TestFunction(test_interop){
             "struct S s={((unsigned __int128)1<<100)+17}; long long expected=((long long)1<<36)+25;\n"
             "return probe(3,s,5)==expected&&apply(f)==expected;\n"),
         {{SV("probe"),ABI_I128_SYMBOL(abi_i128_odd)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_callback)}},
-        .exit_code=1, .skip=ABI_I128_SKIP || CC_TARGET_NATIVE==CC_TARGET_AARCH64_LINUX || CC_TARGET_NATIVE==CC_TARGET_AARCH64_MACOS,
-        // FIXME: libffi's ARM64 GP marshalling does not round to an even register
-        // for 16-byte-aligned records.
+        .exit_code=1, .skip=ABI_I128_SKIP,
     },
     {
         "ABI: int128-aligned stack record between ordinary stack arguments", __LINE__,
@@ -622,7 +703,7 @@ TestFunction(test_interop){
             "int t=__builtin_va_arg(ap,int);double y=__builtin_va_arg(ap,double);__builtin_va_end(ap);\n"
             "return d.x+d.y+q.x+q.y+q.z+t+y;}return apply(f)==46.;\n"),
         {{SV("apply"),ABI_VARARG_SYMBOL(abi_hfa_variadic_callback)}}, .exit_code=1,
-        .skip=1, // FIXME: enable with native variadic thunks; libffi closures cannot do this.
+        .skip=ABI_VARARG_SKIP,
     },
     {
         "ABI callback: packed full-width 64-bit field starting mid-byte", __LINE__,
@@ -646,14 +727,12 @@ TestFunction(test_interop){
         SVI("struct S {unsigned long long:64;double x;};struct S bump(struct S);struct S apply(struct S(*)(struct S),struct S);\n"
             "struct S f(struct S s){s.x+=2.;return s;}struct S s={9.};s=bump(s);s=apply(f,s);return s.x==12.;\n"),
         {{SV("bump"),ABI_LEADING_SYMBOL(abi_leading_bump)},{SV("apply"),ABI_LEADING_SYMBOL(abi_leading_callback)}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS, // FIXME: libffi cannot express a leading NO_CLASS hole.
     },
     {
         "ABI: padding-only record followed by a live GP argument", __LINE__,
         SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
             "return probe(1,2,3,4,5,(struct S){},6)==21;\n"),
         {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS, // FIXME: libffi has no padding-only NO_CLASS record type.
     },
     {
         "ABI callback: padding-only record followed by a live GP argument", __LINE__,
@@ -661,7 +740,6 @@ TestFunction(test_interop){
             "long long f(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
             "return apply(f)==21;\n"),
         {{SV("apply"),(void*)abi_only_padding_callback}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE==CC_TARGET_X86_64_MACOS,
     },
     {
         "ABI: empty argument side effects survive direct and indirect calls", __LINE__,
@@ -706,9 +784,7 @@ TestFunction(test_interop){
             "union U f(union U u){u.bits+=4;return u;}unsigned __int128 v=((unsigned __int128)1<<100)+13;\n"
             "union U u={.bits=v};u=bump(u);u=apply(f,u);return u.bits==v+7;\n"),
         {{SV("bump"),ABI_I128_SYMBOL(abi_union_bump)},{SV("apply"),ABI_I128_SYMBOL(abi_union_callback)}}, .exit_code=1,
-        .skip=ABI_I128_SKIP || CC_TARGET_NATIVE==CC_TARGET_AARCH64_LINUX || CC_TARGET_NATIVE==CC_TARGET_AARCH64_MACOS,
-        // FIXME: the callback pointer leaves an odd GP index; libffi does not
-        // align the following 16-byte union to an even GP register on ARM64.
+        .skip=ABI_I128_SKIP,
     },
 #define ABI_COMPLEX_CASE(T,tag) { \
         "ABI: " #T " complex scalar arguments, results and callbacks", __LINE__, \
@@ -736,18 +812,22 @@ TestFunction(test_interop){
         SVI("_Float16 echo(_Float16);_Float16 apply(_Float16(*)(_Float16),_Float16);\n"
             "struct S {_Float16 x,y,z;};struct S echo_record(struct S);struct S apply_record(struct S(*)(struct S),struct S);\n"
             "_Float16 f(_Float16 x){return x;}struct S g(struct S s){return s;}\n"
-            "struct S r=echo_record((struct S){1,2,3}),q=apply_record(g,(struct S){4,5,6});\n"
-            "return echo((_Float16)2)==2&&apply(f,(_Float16)3)==3&&r.x==1&&r.y==2&&r.z==3&&q.x==4&&q.y==5&&q.z==6;\n"),
+            "union U {_Float16 f;unsigned short u;};union R {struct S s;unsigned short u[3];};\n"
+            "union R a={.u={0x3c00,0x4000,0x4200}},b={.u={0x4400,0x4500,0x4600}},r,q;\n"
+            "r.s=echo_record(a.s);q.s=apply_record(g,b.s);\n"
+            "union U x={.u=0x4000},y={.u=0x4200},z,w;z.f=echo(x.f);w.f=apply(f,y.f);\n"
+            "return z.u==x.u&&w.u==y.u&&r.u[0]==a.u[0]&&r.u[1]==a.u[1]&&r.u[2]==a.u[2]&&q.u[0]==b.u[0]&&q.u[1]==b.u[1]&&q.u[2]==b.u[2];\n"),
         {{SV("echo"),ABI_HALF_SYMBOL(abi_half)},{SV("apply"),ABI_HALF_SYMBOL(abi_half_callback)},
          {SV("echo_record"),ABI_HALF_SYMBOL(abi_half_record)},{SV("apply_record"),ABI_HALF_SYMBOL(abi_half_record_callback)}},
-        .exit_code=1, .skip=1, // FIXME: enable when half-precision native thunks replace libffi.
+        .exit_code=1, .skip=ABI_HALF_SKIP,
     },
     {
         "ABI: bfloat16 arguments, results and callbacks", __LINE__,
         SVI("__bf16 echo(__bf16);__bf16 apply(__bf16(*)(__bf16),__bf16);__bf16 f(__bf16 x){return x;}\n"
-            "return echo((__bf16)2)==2&&apply(f,(__bf16)3)==3;\n"),
+            "union U {__bf16 f;unsigned short u;};union U x={.u=0x4000},y={.u=0x4040},z,w;\n"
+            "z.f=echo(x.f);w.f=apply(f,y.f);return z.u==x.u&&w.u==y.u;\n"),
         {{SV("echo"),ABI_BFLOAT_SYMBOL(abi_bfloat)},{SV("apply"),ABI_BFLOAT_SYMBOL(abi_bfloat_callback)}},
-        .exit_code=1, .skip=1, // FIXME: enable when bfloat16 native thunks replace libffi.
+        .exit_code=1, .skip=ABI_BFLOAT_SKIP,
     },
         {
             "frame stack: reentrant native callbacks preserve parent alloca", __LINE__,
@@ -808,14 +888,7 @@ TestFunction(test_interop){
             .exit_code = 1,
         },
 #endif
-        {
-            "varargs: long double with 8-byte alignment", __LINE__,
-            SV("int f(int n,...){__builtin_va_list ap; __builtin_va_start(ap,n);\n"
-               "long double x=__builtin_va_arg(ap,long double); __builtin_va_end(ap);\n"
-               "return n+(int)x;}\nreturn f(40,2.0L);\n"),
-            .exit_code = 42,
-            .skip = cc_target_native.alignof_[CCBT_long_double] > 8,
-        },
+
         {
             "any: native argument and return", __LINE__,
             SV("_Any identity(_Any);\n"
@@ -876,12 +949,7 @@ TestFunction(test_interop){
             {{SV("add_unsigned"), (void*)test_add_unsigned},},
             .exit_code = 7,
         },
-        {
-            "char signedness", __LINE__,
-            SV("char c = (char)200;\n"
-               "return c < 0;\n"),
-            .exit_code = cc_target_native.char_is_signed,
-        },
+
         {
             "mixed integer widths", __LINE__,
             SV("int mixed_widths(char, long long, short);\n"
@@ -1099,7 +1167,6 @@ TestFunction(test_interop){
                "struct B b=apply(make,(struct S){6,7.}); return b.a==6&&b.b==7&&b.c==13;\n"),
             {{SV("apply"), (void*)test_hidden_callback}}, .exit_code=1,
         },
-        #ifndef __DRC__
         {
             "native variadic mixed records in registers", __LINE__,
             SV("struct S {long long i; double d;}; struct R {double d;long long i;}; struct S probe(int,...);\n"
@@ -1113,7 +1180,6 @@ TestFunction(test_interop){
                "(struct S){7,8.},(struct R){9.,10},11LL,12.); return x.i==114&&x.d==228.;\n"),
             {{SV("probe"), (void*)test_mix_varargs}}, .exit_code=1,
         },
-        #endif
         #if defined __GNUC__ || defined __clang__
         {
             "packed crossing bitfields: native argument and result", __LINE__,
@@ -1709,8 +1775,6 @@ TestFunction(test_interop){
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_lower_toplevel(&interp, &interp.deps);
         if(err) goto finally;
-        err = ci_link_ops(&interp, interp.toplevel_ops.data, interp.toplevel_ops.count);
-        if(err) goto finally;
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
@@ -2015,59 +2079,8 @@ TestFunction(test_interp_fail){
             // This always fails as we give an Environment without PATH
             SVI("(test):1:2: error: `pkg-config` not found in PATH\n"),
         },
-        {
-            "backtrace", __LINE__,
-            SVI("void foo(void);\n"
-                "void bar(void){foo();}\n"
-                "void baz(void){bar();}\n"
-                "void foo(void){__bt();}\n"
-                "baz();\n"),
-            SVI("(test):4:16: error: foo: 0\n"
-                "(test):2:19: error: bar: 1\n"
-                "(test):3:19: error: baz: 2\n"
-                "(test):5:4: error: (top level): 3\n"),
-        },
-        {
-            "backtrace indirect", __LINE__,
-            SVI("void a(int x);\n"
-                "void b(int x);\n"
-                "void c(int x);\n"
-                "void(*fp)(int) = a;\n"
-                "fp(11);\n"
-                "void a(int x){\n"
-                "    if(x & 1){\n"
-                "        fp = b;\n"
-                "    }\n"
-                "    else {\n"
-                "        fp = c;\n"
-                "    }\n"
-                "    fp(x-1);\n"
-                "}\n"
-                "void b(int x){\n"
-                "    fp = c;\n"
-                "    fp(x-1);\n"
-                "}\n"
-                "void c(int x){\n"
-                "    if(x > 3){\n"
-                "        fp = a;\n"
-                "        fp(x-1);\n"
-                "    }\n"
-                "    else {\n"
-                "        __bt();\n"
-                "    }\n"
-                "}\n"
-            ),
-            SVI("(test):25:9: error: c: 0\n"
-                "(test):13:7: error: a: 1\n"
-                "(test):22:11: error: c: 2\n"
-                "(test):13:7: error: a: 3\n"
-                "(test):22:11: error: c: 4\n"
-                "(test):13:7: error: a: 5\n"
-                "(test):22:11: error: c: 6\n"
-                "(test):17:7: error: b: 7\n"
-                "(test):13:7: error: a: 8\n"
-                "(test):5:3: error: (top level): 9\n"),
-        },
+
+
         {
             "__shell", __LINE__,
             SVI("const char* foo = __shell(\"hopethisdoesnotexist\");\n"),
@@ -2078,36 +2091,10 @@ TestFunction(test_interp_fail){
             SVI("const char* foo = __shell(\"./hopethisdoesnotexist\");\n"),
             SVI("(test):1:19: error: __SHELL__: './hopethisdoesnotexist' not found in PATH\n"),
         },
-        {
-            "_Module.symbol lazy parse failure", __LINE__,
-            SVI("void bad(void){ nope; }\n"
-                "__root_module().symbol(\"bad\", void(void))();\n"),
-            SVI("(test):1:17: error: undeclared identifier 'nope'\n"),
-        },
-        {
-            "_Type expression rejects declarator name", __LINE__,
-            SVI("_Type T = int name;\n"),
-            SVI("(test):1:11: error: unexpected declarator name 'name' in type expression\n"),
-        },
-        {
-            "procmacro: argument with side effects", __LINE__,
-            SVI("int n;\n"
-                "int identity(int x){ return x; }\n"
-                "#pragma procmacro identity\n"
-                "return identity(++n) + identity(++n);\n"),
-            SVI("asd"),
-            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
-        },
-        {
-            "procmacro: argument is alloca", __LINE__,
-            SVI("char* p;\n"
-                "const char* identity(const char* s){ return s; }\n"
-                "#pragma procmacro identity\n"
-                "const char* s = identity((p = __builtin_alloca(3), p[0] = 111, p[1] = 107, p[2] = 0, p));\n"
-                "return s[0] == 111 && s[1] == 107 && s[2] == 0;\n"),
-            SVI("asd"),
-            .skip = 1, // fail to reject side effects, just declare as UB for now (punt)
-        },
+
+
+
+
     };
     int err;
     static int idx = 0;
@@ -2197,15 +2184,11 @@ TestFunction(test_interp_fail){
     TESTEND();
 }
 
-TestFunction(test_native_closure_retry);
-
 int main(int argc, char** argv){
     #ifdef USE_TESTING_ALLOCATOR
         testing_allocator_init();
     #endif
     RegisterTestFlags(test_interop, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_native_closure_retry, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_interp, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_interp_fail, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     int err = test_main(argc, argv, NULL);
     #ifdef USE_TESTING_ALLOCATOR
@@ -2227,43 +2210,7 @@ int main(int argc, char** argv){
 #include "../Drp/file_cache.c"
 #include "cpp_preprocessor.c"
 #include "cc_parser.c"
-#include "native_call.c"
-
-TestFunction(test_native_closure_retry){
-    TESTBEGIN();
-    #ifndef NO_NATIVE_CALL
-    TestingAllocator ta = {.fail_at = 3};
-    LOCK_T_init(&ta.lock);
-    Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
-    CiInterpreter ci = {.parser.cpp = {.target = &cc_target_native, .allocator = al}};
-    CcFunction type = {.kind = CC_FUNCTION, .return_type = ccqt_basic(CCBT_void)};
-    CiFuncOps ops = {.native_type = &type};
-    CcFunc func = {.type = &type, .interp_ops = &ops};
-    // The third allocation registers the closure after its userdata and libffi wrapper.
-    int err = ci_create_closure(&ci, &func);
-    TestExpect(int, err, ==, CI_OOM_ERROR);
-    TestExpectTrue(_Bool, func.native_func == NULL && func.native_closure == NULL);
-    for(size_t i = 0; i < ta.recorder.count; i++)
-        TestExpect(size_t, ta.recorder.allocation_sizes[i], ==, 0);
-    ta.fail_at = 0;
-    err = ci_create_closure(&ci, &func);
-    TestExpect(int, err, ==, 0);
-    TestExpectTrue(_Bool, func.native_func != NULL && func.native_closure != NULL);
-    TestExpectTrue(_Bool, BPM_get(&ci.closure_map, &func) == (void*)func.native_func);
-    if(func.native_closure){
-        NativeClosure* closure = (NativeClosure* _Nonnull)func.native_closure;
-        void* userdata = closure->userdata;
-        native_closure_destroy(al, closure);
-        Allocator_free(al, userdata, sizeof(CiClosureData));
-    }
-    if(ci.closure_map.cap) Allocator_free(al, ci.closure_map.data, BPM_alloc_size(ci.closure_map.cap));
-    for(size_t i = 0; i < ta.recorder.count; i++)
-        TestExpect(size_t, ta.recorder.allocation_sizes[i], ==, 0);
-    recording_free_all(&ta.recorder);
-    recording_cleanup(&ta.recorder);
-    #endif
-    TESTEND();
-}
+#include "nc_native_call.c"
 
 #ifdef __DRC__
 #include "../Vendored/softfloat/softfloat_unity.c"

@@ -168,7 +168,6 @@ base64_encode(char* restrict dst, size_t dst_length, const void* restrict src, s
         "wxyz012345"
         "6789+/";
 
-
     size_t i = 0;
     uint8_t* d = (uint8_t*) dst;
     const uint8_t* str = src;

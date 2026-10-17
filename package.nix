@@ -1,4 +1,4 @@
-{ stdenv, buildPackages, lib, libffi, }:
+{ stdenv, buildPackages, lib, }:
 let
     host = stdenv.hostPlatform;
     hostOS = if host.isDarwin then "macos"
@@ -66,9 +66,7 @@ in stdenv.mkDerivation (self: {
             ./cpp_args.h
         ] ++ lib.optional self.doCheck ./Samples);
     };
-    nativeCheckInputs = lib.optional self.doCheck buildPackages.libffi;
     depsBuildBuild = [ buildPackages.stdenv.cc ];
-    buildInputs = [libffi];
     optimize = true;
     debugInfo = false;
     dontStrip = self.debugInfo;
