@@ -918,6 +918,47 @@ TestFunction(test_interpreter){
             .exit_code=43,
         },
         {
+            "implicit constexpr: external integers and chained local constants", __LINE__,
+            SVI("extern const int n; const int n=4; static_assert(n==4);\n"
+                "int f(void){const int m=n+2; int a[m]={}; static_assert(sizeof(a)==24); return m;} return f();"),
+            .exit_code=6,
+        },
+        {
+            "implicit constexpr: floating aggregates arrays and pointers", __LINE__,
+            SVI("const double d=1.5; const int a[3]={2,4,6};\n"
+                "const struct S {double x; int y;} s={d,7};\n"
+                "const int* const p=&a[1]; static_assert(*p==4 && s.y==7 && d*2==3);\n"
+                "int f(void){const struct S copy=s; const int b[2]={copy.y, a[2]};"
+                "static_assert(b[0]+b[1]==13); return b[0]+b[1];} return f();"),
+            .exit_code=13,
+        },
+        {
+            "implicit constexpr: runtime initializers retain effects and storage", __LINE__,
+            SVI("int calls=0; int next(void){return ++calls;}\n"
+                "int f(int n){const int x=next(); const struct S {int a;} s={n};"
+                "const _Atomic int a=n; const int* const p=&n; n++;"
+                "return x+s.a+a+*p;} return f(3)+calls;"),
+            .exit_code=12,
+        },
+        {
+            "implicit constexpr: automatic addresses retain object identity", __LINE__,
+            SVI("int f(const int* prev,int depth){const int n=7; if(!depth)return n==*prev && &n!=prev; return f(&n,0);} return f(nullptr,1);"),
+            .exit_code=1,
+        },
+        {
+            "implicit constexpr: strings slices and empty initializers", __LINE__,
+            SVI("const char text[]=\"abc\"; const auto part=text[1:3];\n"
+                "const int zero={}; const union U {int n;} u={};\n"
+                "static_assert(part.count==2 && part[0]=='b' && zero==0 && u.n==0); return part[1];"),
+            .exit_code=99,
+        },
+        {
+            "implicit constexpr: static and thread local constants", __LINE__,
+            SVI("thread_local const int n=3; static const double d=2.5;\n"
+                "int f(void){static thread_local const int m=n+1; static_assert(m==4 && d==2.5); return m;} return f();"),
+            .exit_code=4,
+        },
+        {
             "fold: arrow and bitfield reads", __LINE__,
             SVI("struct S{unsigned a:3; int b;}; int f(void){static constexpr struct S s={5,37};"
                 "return (&s)->a+(&s)->b;} return f();"),
@@ -14857,6 +14898,54 @@ TestFunction(test_interpreter_runtime_errors){
             SVI("(test):1:1: error: __builtin_capture_backtrace buffer must not be NULL\n"),
         },
         {
+            "implicit constexpr: volatile const remains runtime", __LINE__,
+            SVI("const volatile int n=7;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: runtime const atomic remains runtime", __LINE__,
+            SVI("int x=7; const _Atomic int n=x;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: constant initialized atomic remains runtime", __LINE__,
+            SVI("const _Atomic int n=7;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: const atomic pointee remains runtime", __LINE__,
+            SVI("const _Atomic int n=7; const _Atomic int* const p=&n;\nstatic_assert(*p==7);"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "static data: reject atomic member read from const aggregate", __LINE__,
+            SVI("const struct S {_Atomic(int) x;} s={7};\nstatic int x=s.x; return x;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "symbolic pointers: reject atomic const pointer alias", __LINE__,
+            SVI("static int a; _Atomic(int*) const p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: runtime aggregate remains runtime", __LINE__,
+            SVI("int x=7; const struct S {int n;} s={x};\nstatic_assert(s.n==7);"),
+            SVI("(test):2:15: error: expression 's' is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: mutable pointee remains runtime", __LINE__,
+            SVI("int x=7; int* const p=&x;\nstatic_assert(*p==7);"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .parser_error = 1,
+        },
+        {
             "backtrace: symbolication needs an output", __LINE__,
             SVI("__builtin_symbolicate(nullptr, nullptr);\n"),
             SVI("(test):1:1: error: __builtin_symbolicate output must not be NULL\n"),
@@ -15342,12 +15431,6 @@ TestFunction(test_interpreter_runtime_errors){
             .parser_error = 1,
         },
         {
-            "static data: reject atomic member read from const aggregate", __LINE__,
-            SVI("const struct S {_Atomic(int) x;} s={7};\nstatic int x=s.x; return x;\n"),
-            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
-            .parser_error = 1,
-        },
-        {
             "static data: reject volatile pointer member read", __LINE__,
             SVI("static int a; const struct S {int* volatile p;} s={&a};\nstatic int* p=s.p; return p==&a;\n"),
             SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
@@ -15384,12 +15467,6 @@ TestFunction(test_interpreter_runtime_errors){
             .parser_error = 1,
         },
         {
-            "symbolic pointers: reject atomic const pointer alias", __LINE__,
-            SVI("static int a; _Atomic(int*) const p=&a;\nstatic long d=p-&a; return d;\n"),
-            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
-            .parser_error = 1,
-        },
-        {
             "symbolic pointers: reject runtime member read masquerading as an address", __LINE__,
             SVI("static int a; struct S {int* p;} s={&a};\nstatic long d=s.p-&a; return d;\n"),
             SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
@@ -15417,6 +15494,12 @@ TestFunction(test_interpreter_runtime_errors){
             "static data: reject signed conversion below the truncated range", __LINE__,
             SVI("static signed char x=(signed char)-129.0; return x;\n"),
             SVI("(test):1:22: error: static initializer conversion is out of range\n"),
+            .parser_error = 1,
+        },
+        {
+            "implicit constexpr: preserve invalid initializer diagnostic", __LINE__,
+            SVI("const signed char x=(signed char)-129.0; return x;\n"),
+            SVI("(test):1:21: error: static initializer conversion is out of range\n"),
             .parser_error = 1,
         },
         {

@@ -15164,6 +15164,16 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;
+                if(initializer && !var->constexpr_){
+                    CcQualType object_type = type;
+                    while(ccqt_kind(object_type) == CC_ARRAY)
+                        object_type = ccqt_as_array(object_type)->element;
+                    if(object_type.is_const && !object_type.is_volatile && !object_type.is_atomic){
+                        int constant_err = cc_check_linktime_expr(p, initializer, 0, 0);
+                        if(constant_err && constant_err != CC_NOT_CONSTANT_ERROR) return constant_err;
+                        if(!constant_err) var->constexpr_ = 1;
+                    }
+                }
                 if(initializer && (var->static_ || var->constexpr_ || var->thread_local_)){
                     err = cc_check_linktime_expr(p, initializer, 0, 0);
                     if(err == CC_NOT_CONSTANT_ERROR)

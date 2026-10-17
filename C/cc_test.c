@@ -5810,7 +5810,7 @@ TestFunction(test_parse_decls){
                 "const _Type T3 = T2\n"),
             .vars = {
                 {SVI("T"), SVI("const _Type"), SVI("int")},
-                {SVI("T2"), SVI("_Type"), SVI("(_Type)T")},
+                {SVI("T2"), SVI("_Type"), SVI("int")},
                 {SVI("T3"), SVI("const _Type"), SVI("T2")},
             },
         },
