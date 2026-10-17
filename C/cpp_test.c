@@ -319,6 +319,12 @@ TestFunction(test_func_macros){
         {"no_space_after_rparen",SV("#define F(x)x*x\nF(2)"), SV("\n2*2"), __LINE__},
         {"multi_param_macro",SV("#define ADD(a,b) a+b\nADD(1, 2)"), SV("\n1+2"), __LINE__},
         {"stringify",SV("#define STR(x) #x\nSTR(hello)"), SV("\n\"hello\""), __LINE__},
+        {"object hash preserves whitespace", SV(
+            "#define HASH # word\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
+            "EXPAND(HASH)"), SV("\n\n\n\"# word\""), __LINE__},
+        {"object digraph hash preserves whitespace", SV(
+            "#define HASH %: word\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
+            "EXPAND(HASH)"), SV("\n\n\n\"%: word\""), __LINE__},
         {"stringify_with_spaces",SV("#define STR(x) #x\nSTR(hello world)"),SV("\n\"hello world\""),__LINE__},
         {"stringify_digraphs", SV("#define STR(x) #x\nSTR(<: :> <% %> %: %:%:)"),
             SV("\n\"<: :> <% %> %: %:%:\""), __LINE__},
@@ -1727,6 +1733,14 @@ TestFunction(test_erroneous_condition){
     struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
+        {"unterminated active if", __LINE__,
+            SV("#if 1\nyes"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+        {"unterminated active if at eof", __LINE__,
+            SV("#if 1"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+        {"unterminated active else", __LINE__,
+            SV("#if 0\n#else\nyes\n"), SV("(test):1:2: error: Unterminated conditional directive\n")},
+        {"unterminated outer active if", __LINE__,
+            SV("#if 1\n#if 0\n#endif\n"), SV("(test):1:2: error: Unterminated conditional directive\n")},
         {"endif without if", __LINE__,
             SV("#endif"), SV("(test):1:2: error: #endif outside of #if (or similar construct)\n")},
         {"else without if", __LINE__,
@@ -1859,6 +1873,15 @@ TestFunction(test_erroneous_condition){
             SV("#define X 1\n#define X 2\n"),
             SV("(test):2:12: error: Duplicate object-like macro (X) with different definitions (0 different content)\n"
                "(test):1:9: error: ... previously defined here\n")},
+        {"named variadic parameter duplicates fixed parameter", __LINE__,
+            SV("#define F(x, x...) x\n"),
+            SV("(test):1:14: error: Duplicate macro param name\n")},
+        {"duplicate fixed macro parameters", __LINE__,
+            SV("#define F(x, x) x\n"),
+            SV("(test):1:14: error: Duplicate macro param name\n")},
+        {"named variadic parameter duplicates later fixed parameter", __LINE__,
+            SV("#define F(a, b, b...) b\n"),
+            SV("(test):1:17: error: Duplicate macro param name\n")},
         {"type builtin replacement cannot redef again", __LINE__,
             SV("#define __int64 1\n#define __int64 2\n"),
             SV("(test):2:18: error: Duplicate object-like macro (__int64) with different definitions (0 different content)\n"

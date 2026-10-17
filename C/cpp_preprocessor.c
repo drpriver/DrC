@@ -835,14 +835,14 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
             cpp->at_line_start = 1;
             continue;
         }
+        if(tok.type == CPP_END_OF_INPUT && cpp->if_stack.count)
+            return cpp_error(cpp, ma_tail(cpp->if_stack).start, "Unterminated conditional directive");
         if(cpp->if_stack.count && !ma_tail(cpp->if_stack).is_active){
             if(tok.type == CPP_NEWLINE){
                 cpp->at_line_start = 1;
                 *ptok = tok;
                 return 0;
             }
-            if(tok.type == CPP_END_OF_INPUT)
-                return cpp_error(cpp, ma_tail(cpp->if_stack).start, "Unterminated conditional directive");
             if(tok.type == CPP_PUNCTUATOR && cpp->at_line_start && tok.punct == '#'){
                 cpp->at_line_start = 0;
                 err = cpp_handle_directive_in_inactive_region(cpp);
@@ -1811,6 +1811,12 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = cpp_error(cpp, tok.loc, "expected macro param name");
                     goto finish_func_macro;
                 }
+                for(size_t i = 0; i < names->count; i++){
+                    if(sv_equals(names->data[i].txt, tok.txt)){
+                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name");
+                        goto finish_func_macro;
+                    }
+                }
                 // GCC extension: name... (named varargs)
                 {
                     CppToken peek;
@@ -1939,12 +1945,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     err = CPP_OOM_ERROR;
                     goto finish_func_macro;
                 }
-                for(size_t j = 0; j < i; j++){
-                    if(params[j] == a){
-                        err = cpp_error(cpp, names->data[i].loc, "Duplicate macro param name");
-                        goto finish_func_macro;
-                    }
-                }
                 params[i] = a;
             }
             MARRAY_FOR_EACH(CppToken, t, *repl){
@@ -2014,8 +2014,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_WHITESPACE){
                     // coalesce whitespace in #defines
                 }
-                else if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && (ma_tail(*repl).punct == '##' || ma_tail(*repl).punct == '#')){
-                    // elide whitespace after ## and #
+                else if(tok.type == CPP_WHITESPACE && repl->count && ma_tail(*repl).type == CPP_PUNCTUATOR && ma_tail(*repl).punct == '##'){
+                    // In object-like macros, # is an ordinary token.
                 }
                 else {
                     // elide whitespace before ##
