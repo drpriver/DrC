@@ -17542,6 +17542,20 @@ TestFunction(test_interpreter_diagnostics){
             SVI("(test):2:2: error: _Type.param_type: not a function type: int\n"),
         },
         {
+            "reflection: runtime VLA count explains unavailable bounds", __LINE__,
+            SVI("int n=3; int a[n]; _Type t=typeof(a);\n"
+                "size_t s = t.count;\n"),
+            SVI("(test):2:13: error: _Type.count: VLA bounds are unavailable through a runtime _Type value\n"),
+        },
+        {
+            "reflection: runtime VLA size explains unavailable bounds", __LINE__,
+            SVI("size_t size(_Type t){\n"
+                "return t.sizeof_;\n"
+                "}\n"
+                "int n=3; int a[n]; size(typeof(a));\n"),
+            SVI("(test):2:9: error: _Type.sizeof_: VLA bounds are unavailable through a runtime _Type value\n"),
+        },
+        {
             "reflection: field validation before name", __LINE__,
             SVI("_Type t = int;\n"
                 "t.field((__builtin_trap(), \"x\"[:1]));\n"),

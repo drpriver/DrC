@@ -807,6 +807,8 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_SIZEOF: {
+            if(ccqt_kind(qt) == CC_VLA)
+                return ci_error(ci, loc, "_Type.sizeof_: VLA bounds are unavailable through a runtime _Type value");
             uint32_t sz;
             err = cc_sizeof_as_uint(&ci->parser, qt, loc, &sz);
             if(err) return err;
@@ -875,6 +877,8 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_COUNT: {
+            if(ccqt_kind(qt) == CC_VLA)
+                return ci_error(ci, loc, "_Type.count: VLA bounds are unavailable through a runtime _Type value");
             if(ccqt_kind(qt) != CC_ARRAY){
                 MStringBuilder* sb = ci_start_error(ci, loc, "_Type.count: not an array type: ");
                 cc_print_type(sb, qt);
