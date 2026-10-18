@@ -4078,6 +4078,14 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "call: unprototyped function argument decays to pointer", __LINE__,
+            SVI("int target(void); int call();\n"
+                "int r = call(target);\n"),
+            .vars = {
+                { SVI("r"), SVI("int"), .init = SVI("call((int (*)(void))target)") },
+            },
+        },
+        {
             "call: variadic, extra args get default promotions", __LINE__,
             SVI("int f(int x, ...);\n"
                "float g(void);\n"
@@ -6288,6 +6296,19 @@ TestFunction(test_parse_decls){
             .tags = {
                 { SVI("S"), CC_STRUCT, 1, 1},
             },
+        },
+        {
+            "gh-issue #1", __LINE__,
+            SVI(
+                "struct S {\n"
+                "  int i;\n"
+                "};\n"
+                "\n"
+                "int main() {\n"
+                "  struct S s[1] = {3};\n"
+                "  return s->i;\n"
+                "}\n"
+            ),
         },
     };
     static int idx = 0;

@@ -9051,6 +9051,29 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "array comparison with integer null constant", __LINE__,
+            SVI("int a[1] = {0};\n"
+                "return (a != 0) + (0 != a) + (a == 0) + (0 == a);\n"),
+            .exit_code = 2,
+        },
+        {
+            "variadic function argument decays to pointer", __LINE__,
+            SVI("int target(void) { return 42; }\n"
+                "int call(int unused, ...) {\n"
+                "  __builtin_va_list ap; __builtin_va_start(ap, unused);\n"
+                "  int (*fn)(void) = __builtin_va_arg(ap, int (*)(void));\n"
+                "  __builtin_va_end(ap); return fn();\n"
+                "}\n"
+                "return call(0, target);\n"),
+            .exit_code = 42,
+        },
+        {
+            "function comparison with integer null constant", __LINE__,
+            SVI("int f(void) { return 3; }\n"
+                "return (f != 0) + (0 != f) + (f == 0) + (0 == f);\n"),
+            .exit_code = 2,
+        },
+        {
             "function pointer != null", __LINE__,
             SVI("auto fp = int(void){ return 1; };\n"
                "return fp != 0;\n"),
@@ -14195,6 +14218,15 @@ TestFunction(test_interpreter){
                "long double b = 2.5L;\n"
                "return (int)(a + b);\n"),
             .exit_code = 6,
+        },
+        {
+            "array of structs arrow access", __LINE__,
+            SVI("struct S { int i; };\n"
+               "struct S s[1] = {3};\n"
+               "int before = s->i;\n"
+               "s->i = 7;\n"
+               "return before + s[0].i;\n"),
+            .exit_code = 10,
         },
         {
             "array of structs init", __LINE__,

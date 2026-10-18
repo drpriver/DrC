@@ -1150,18 +1150,26 @@ cc_decay_array(CcParser* p, CcExpr*_Nullable*_Nonnull expr){
 
 static
 int
-cc_require_scalar(CcParser* p, CcExpr*_Nullable*_Nonnull expr, SrcLoc loc, const char* context){
+cc_decay(CcParser* p, CcExpr*_Nullable*_Nonnull expr){
     CcExpr* e = *expr;
-    CcTypeKind k = ccqt_kind(e->type);
-    // Scalar contexts use array/function decay, not the object's contents.
     if(ccqt_is_array(e->type))
         return cc_decay_array(p, expr);
-    if(k == CC_FUNCTION){
+    if(ccqt_kind(e->type) == CC_FUNCTION){
         CcQualType pointer;
         int err = cc_pointer_of(p, e->type, &pointer);
         if(err) return err;
         return cc_implicit_cast(p, e, pointer, expr);
     }
+    return 0;
+}
+
+static
+int
+cc_require_scalar(CcParser* p, CcExpr*_Nullable*_Nonnull expr, SrcLoc loc, const char* context){
+    int err = cc_decay(p, expr);
+    if(err) return err;
+    CcExpr* e = *expr;
+    CcTypeKind k = ccqt_kind(e->type);
     if(k == CC_POINTER || k == CC_ENUM) return 0;
     if(ccqt_is_basic(e->type)
         && (ccbt_is_arithmetic(ccqt_basic_kind(e->type)) || ccqt_bt_eq(e->type, CCBT_nullptr_t)))
@@ -2545,32 +2553,12 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
         _Bool tptr = (ccqt_is_pointer_like(then_expr->type) && !ccqt_bt_eq(then_expr->type, CCBT_nullptr_t)) || tk == CC_FUNCTION;
         _Bool eptr = (ccqt_is_pointer_like(else_expr->type) && !ccqt_bt_eq(else_expr->type, CCBT_nullptr_t)) || ek == CC_FUNCTION;
         if(tptr && eptr){
+            err = cc_decay(p, &then_expr);
+            if(err) return err;
+            err = cc_decay(p, &else_expr);
+            if(err) return err;
             CcQualType ttype = then_expr->type;
             CcQualType etype = else_expr->type;
-            if(ccqt_is_array(ttype)){
-                err = cc_pointer_of(p, cc_array_element_type(ttype), &ttype);
-                if(err) return err;
-                err = cc_implicit_cast(p, then_expr, ttype, &then_expr);
-                if(err) return err;
-            }
-            if(tk == CC_FUNCTION){
-                err = cc_pointer_of(p, ttype, &ttype);
-                if(err) return err;
-                err = cc_implicit_cast(p, then_expr, ttype, &then_expr);
-                if(err) return err;
-            }
-            if(ccqt_is_array(etype)){
-                err = cc_pointer_of(p, cc_array_element_type(etype), &etype);
-                if(err) return err;
-                err = cc_implicit_cast(p, else_expr, etype, &else_expr);
-                if(err) return err;
-            }
-            if(ek == CC_FUNCTION){
-                err = cc_pointer_of(p, etype, &etype);
-                if(err) return err;
-                err = cc_implicit_cast(p, else_expr, etype, &else_expr);
-                if(err) return err;
-            }
             _Bool tnull, enull;
             err = cc_is_null_pointer_constant(p, then_expr, &tnull);
             if(err) return err;
@@ -2610,15 +2598,9 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             if(err) return err;
             if(!is_npc)
                 return cc_error(p, tok.loc, "incompatible operand types for ternary");
-            if(ccqt_is_array(then_expr->type)){
-                err = cc_pointer_of(p, cc_array_element_type(then_expr->type), &common);
-                if(err) return err;
-            }
-            else if(tk == CC_FUNCTION){
-                err = cc_pointer_of(p, then_expr->type, &common);
-                if(err) return err;
-            }
-            else common = then_expr->type;
+            err = cc_decay(p, &then_expr);
+            if(err) return err;
+            common = then_expr->type;
         }
         else if(eptr && (ccqt_is_basic(then_expr->type) || tk == CC_ENUM)){
             _Bool is_npc;
@@ -2626,15 +2608,9 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             if(err) return err;
             if(!is_npc)
                 return cc_error(p, tok.loc, "incompatible operand types for ternary");
-            if(ccqt_is_array(else_expr->type)){
-                err = cc_pointer_of(p, cc_array_element_type(else_expr->type), &common);
-                if(err) return err;
-            }
-            else if(ek == CC_FUNCTION){
-                err = cc_pointer_of(p, else_expr->type, &common);
-                if(err) return err;
-            }
-            else common = else_expr->type;
+            err = cc_decay(p, &else_expr);
+            if(err) return err;
+            common = else_expr->type;
         }
         else if(ccqt_bt_eq(then_expr->type, CCBT_nullptr_t) && ccqt_bt_eq(else_expr->type, CCBT_nullptr_t)){
             common = ccqt_basic(CCBT_nullptr_t);
@@ -2742,34 +2718,10 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     if(err) return err;
                 }
                 else if(lp && rp){
-                    if(ccqt_is_array(left->type)){
-                        CcQualType ptr_type;
-                        err = cc_pointer_of(p, cc_array_element_type(left->type), &ptr_type);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, left, ptr_type, &left);
-                        if(err) return err;
-                    }
-                    if(ccqt_is_array(right->type)){
-                        CcQualType ptr_type;
-                        err = cc_pointer_of(p, cc_array_element_type(right->type), &ptr_type);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, right, ptr_type, &right);
-                        if(err) return err;
-                    }
-                    if(ccqt_kind(left->type) == CC_FUNCTION){
-                        CcQualType ptr_type;
-                        err = cc_pointer_of(p, left->type, &ptr_type);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, left, ptr_type, &left);
-                        if(err) return err;
-                    }
-                    if(ccqt_kind(right->type) == CC_FUNCTION){
-                        CcQualType ptr_type;
-                        err = cc_pointer_of(p, right->type, &ptr_type);
-                        if(err) return err;
-                        err = cc_implicit_cast(p, right, ptr_type, &right);
-                        if(err) return err;
-                    }
+                    err = cc_decay(p, &left);
+                    if(err) return err;
+                    err = cc_decay(p, &right);
+                    if(err) return err;
                     if(!ccqt_bt_eq(left->type, CCBT_nullptr_t) && !ccqt_bt_eq(right->type, CCBT_nullptr_t)){
                         CcQualType lpointee, rpointee;
                         err = cc_deref_type(p, left->type, &lpointee, tok.loc, 0);
@@ -2783,10 +2735,14 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     }
                 }
                 else if(lp){
+                    err = cc_decay(p, &left);
+                    if(err) return err;
                     err = cc_implicit_cast(p, right, left->type, &right);
                     if(err) return err;
                 }
                 else {
+                    err = cc_decay(p, &right);
+                    if(err) return err;
                     err = cc_implicit_cast(p, left, right->type, &left);
                     if(err) return err;
                 }
@@ -5675,6 +5631,10 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
             case CC_dot:
             case CC_arrow: {
                 CcExprKind mkind = tok.punct.punct == CC_dot ? CC_EXPR_DOT : CC_EXPR_ARROW;
+                if(mkind == CC_EXPR_ARROW){
+                    err = cc_decay_array(p, &operand);
+                    if(err) return err;
+                }
                 CcToken member;
                 err = cc_next_token(p, &member);
                 if(err) return err;
@@ -6593,11 +6553,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     }
                     else {
                         CcQualType at = cc_arithmetic_operand_type(p, *argp);
-                        if(ccqt_is_array(at)){
-                            CcQualType ptr_type;
-                            err = cc_pointer_of(p, cc_array_element_type(at), &ptr_type);
-                            if(err) goto call_cleanup;
-                            err = cc_implicit_cast(p, *argp, ptr_type, argp);
+                        if(ccqt_is_array(at) || ccqt_kind(at) == CC_FUNCTION){
+                            err = cc_decay(p, argp);
                             if(err) goto call_cleanup;
                         }
                         else {
